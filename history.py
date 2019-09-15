@@ -1,10 +1,12 @@
-#from ib_insync.ib.connect import IB_connection
+from datetime import datetime
+# from ib_insync.ib.connect import IB_connection
 from ib_insync.contract import Future, ContFuture
-from ib_insync import IB
+from ib_insync import IB, util
 import asyncio
 
+
 ib = IB()
-ib.connect('127.0.0.1', 4002, clientId=1)
+ib.connect('127.0.0.1', 4002, clientId=2)
 
 
 async def get_chunk(contract,
@@ -47,7 +49,7 @@ async def get_history(contract):
 
 
 async def main(*args):
-    await tasks  # asyncio.gather(*args)
+    await asyncio.gather(*args)
 
 """
 
@@ -66,12 +68,12 @@ df = util.df(allBars)
 dt = ''
 contracts = ['ES', 'NQ', 'YM']
 
-tasks = [
+tasks = (
     get_history(contract=Future(contract,
                                 exchange='GLOBEX',
                                 currency='USD',
                                 lastTradeDateOrContractMonth='201909')
                 ) for contract in contracts
-]
-
-asyncio.run(main(tasks))
+)
+# print(asyncio.get_event_loop())
+asyncio.run(*tasks)
