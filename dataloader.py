@@ -7,9 +7,11 @@ import functools
 import pandas as pd
 from ib_insync import IB, util
 from ib_insync.contract import Future, ContFuture
+from datastore_pytables import Store
 
 
 from connect import IB_connection
+from config import max_number_of_workers
 
 """
 Modelled on example here:
@@ -28,7 +30,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 async def get_history(contract):
     await ib.qualifyContractsAsync(contract)
-    print(f'contract {contract.localSymbol} qualified')
+    print(f'contract {contract} qualified')
     dt = min(
         datetime.strptime(contract.lastTradeDateOrContractMonth, '%Y%m%d'),
         now)
@@ -38,7 +40,7 @@ async def get_history(contract):
         # print('getting bars for {}'.format(contract.contract))
         chunk = await ib.reqHistoricalDataAsync(contract,
                                                 endDateTime=dt,
-                                                durationStr='2 D',
+                                                durationStr='5 D',
                                                 barSizeSetting='1 min',
                                                 whatToShow='TRADES',
                                                 useRTH=False,
@@ -49,12 +51,13 @@ async def get_history(contract):
         if not chunk:
             print('finished downloading for ', contract.localSymbol)
             break
-        chunks.append(chunk)
+        # chunks.append(chunk)
         dt = chunk[0].date  # - timedelta(minutes=1)
         print('downloaded data chunk for: ', contract.localSymbol, dt)
-
-    all_chunks = [c for chunk in reversed(chunks) for c in chunks]
-    df = util.df(all_chunks)
+        store.write(util.df(chunk))
+        print('saved data chunk for: ', contract.localSymbol)
+    #all_chunks = [c for chunk in reversed(chunks) for c in chunks]
+    #df = util.df(all_chunks)
 
 
 def lookup_contracts(symbols):
@@ -67,15 +70,6 @@ def lookup_contracts(symbols):
 
 def lookup_continuous_contracts(symbols):
     return [ContFuture(**s) for s in symbols]
-
-
-def check_data_availability(symbol):
-    return ib.reqHeadTimeStamp(symbol, whatToShow='TRADES', useRTH=False, formatDate=1)
-
-
-async def qualifier(contract, q):
-    await q.put(functools.partial(ib.qualifyContractsAsync, contract))
-    print(f'contract qualified: {contract.localSymbol}')
 
 
 async def schedule_tasks(contract, queue):
@@ -112,12 +106,13 @@ async def main(contracts, number_of_workers):
     await asyncio.gather(*workers, return_exceptions=True)
 
 
+store = Store()
 now = datetime.now()
 symbols = pd.read_csv(os.path.join(
     BASE_DIR, 'contracts.csv')).to_dict('records')
 
 contracts = [*lookup_continuous_contracts(symbols), *lookup_contracts(symbols)]
-max_number_of_workers = 45
+
 number_of_workers = min(len(contracts), max_number_of_workers)
 ib.run(main(contracts, number_of_workers))
 ib.disconnect()
