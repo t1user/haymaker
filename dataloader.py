@@ -2,16 +2,19 @@ from datetime import datetime, timedelta
 import itertools
 import asyncio
 import os
+import sys
 import functools
 
 import pandas as pd
 from ib_insync import IB, util
 from ib_insync.contract import Future, ContFuture
-from datastore_pytables import Store
+from logbook import Logger, StreamHandler, FileHandler
 
 
 from connect import IB_connection
 from config import max_number_of_workers
+from datastore_pytables import Store
+
 
 """
 Modelled on example here:
@@ -22,42 +25,30 @@ https://realpython.com/async-io-python/#using-a-queue
 """
 
 
-ib = IB_connection().ib
-# ib.connect('127.0.0.1', 4002, clientId=2)
+async def get_history(contract, dt):
+    log.debug(f'loading {contract.localSymbol} ending {dt}')
+    chunk = await ib.reqHistoricalDataAsync(contract,
+                                            endDateTime=dt,
+                                            durationStr='5 D',
+                                            barSizeSetting='1 min',
+                                            whatToShow='TRADES',
+                                            useRTH=False,
+                                            formatDate=1,
+                                            keepUpToDate=False,
+                                            )
+    if not chunk:
+        log.debug(f'Completed loading for {contract.localSymbol}')
+        return None
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-async def get_history(contract):
-    await ib.qualifyContractsAsync(contract)
-    print(f'contract {contract} qualified')
-    dt = min(
-        datetime.strptime(contract.lastTradeDateOrContractMonth, '%Y%m%d'),
-        now)
-    print(f'starting at {dt}')
-    chunks = []
-    while True:
-        # print('getting bars for {}'.format(contract.contract))
-        chunk = await ib.reqHistoricalDataAsync(contract,
-                                                endDateTime=dt,
-                                                durationStr='5 D',
-                                                barSizeSetting='1 min',
-                                                whatToShow='TRADES',
-                                                useRTH=False,
-                                                formatDate=1,
-                                                keepUpToDate=False,
-                                                )
-
-        if not chunk:
-            print('finished downloading for ', contract.localSymbol)
-            break
-        # chunks.append(chunk)
-        dt = chunk[0].date  # - timedelta(minutes=1)
-        print('downloaded data chunk for: ', contract.localSymbol, dt)
-        store.write(util.df(chunk))
-        print('saved data chunk for: ', contract.localSymbol)
-    #all_chunks = [c for chunk in reversed(chunks) for c in chunks]
-    #df = util.df(all_chunks)
+    next_chunk = {'dt': chunk[0].date, 'contract': contract}
+    log.debug(
+        f'downloaded data chunk for: {contract.localSymbol} ending: {dt}')
+    df = util.df(chunk)
+    df.date = df.date.astype('datetime64')
+    df.set_index('date', inplace=True)
+    store.write(contract, df)
+    log.debug(f'saved data chunk for: {contract.localSymbol}')
+    return next_chunk
 
 
 def lookup_contracts(symbols):
@@ -72,28 +63,43 @@ def lookup_continuous_contracts(symbols):
     return [ContFuture(**s) for s in symbols]
 
 
-async def schedule_tasks(contract, queue):
-    print(f'schedulling task for contract {contract.localSymbol}')
-    await queue.put(functools.partial(get_history, contract))
+async def schedule_task(contract, dt, queue):
+    log.debug(f'schedulling task for contract {contract.localSymbol}')
+    await queue.put(functools.partial(get_history, contract, dt))
+
+
+def initial_schedule(contract, now):
+    latest = store.check_latest(contract)
+    if latest:
+        print(latest)
+    dt = min(
+        datetime.strptime(contract.lastTradeDateOrContractMonth, '%Y%m%d'),
+        now)
+    return {'contract': contract, 'dt': dt}
 
 
 async def worker(name, queue):
     while True:
-        print(f'worker {name} started')
+        log.debug(f'{name} started')
         task = await queue.get()
-        await task()
+        next_chunk = await task()
+        if next_chunk:
+            await schedule_task(**next_chunk, queue=queue)
         queue.task_done()
-        print(f'worker {name} done')
+        log.debug(f'{name} done')
 
 
-async def main(contracts, number_of_workers):
-    print('main function started')
-    queue = asyncio.Queue()
-    producers = [asyncio.create_task(schedule_tasks(c, queue))
-                 for c in contracts]
-    workers = [asyncio.create_task(worker(f'worker-{i}', queue))
+async def main(contracts, number_of_workers, now=datetime.now()):
+    log.debug('main function started')
+    await asyncio.gather(*[ib.qualifyContractsAsync(c) for c in contracts])
+    log.debug('contracts qualified')
+    queue = asyncio.LifoQueue()
+    producers = [asyncio.create_task(
+        schedule_task(**initial_schedule(c, now), queue=queue))
+        for c in contracts]
+    workers = [asyncio.create_task(worker(f'worker {i}', queue))
                for i in range(number_of_workers)]
-    await asyncio.gather(*producers)
+    await asyncio.gather(*producers)  # , return_exceptions=True)
 
     # wait until the queue is fully processed (implicitly awaits workers)
     await queue.join()
@@ -106,13 +112,30 @@ async def main(contracts, number_of_workers):
     await asyncio.gather(*workers, return_exceptions=True)
 
 
-store = Store()
-now = datetime.now()
-symbols = pd.read_csv(os.path.join(
-    BASE_DIR, 'contracts.csv')).to_dict('records')
+if __name__ == '__main__':
 
-contracts = [*lookup_continuous_contracts(symbols), *lookup_contracts(symbols)]
+    # logging
+    StreamHandler(sys.stdout, bubble=True).push_application()
+    FileHandler(
+        f'logs/{__file__[:-3]}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}',
+        bubble=True, delay=True).push_application()
+    log = Logger(__name__)
 
-number_of_workers = min(len(contracts), max_number_of_workers)
-ib.run(main(contracts, number_of_workers))
-ib.disconnect()
+    # get connection to Gateway
+    ib = IB_connection().ib
+    # ib.connect('127.0.0.1', 4002, clientId=2)
+
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    # object where data is stored
+    store = Store()
+
+    # now = datetime.now()
+    symbols = pd.read_csv(os.path.join(
+        BASE_DIR, 'contracts.csv')).to_dict('records')
+
+    contracts = [
+        *lookup_continuous_contracts(symbols), *lookup_contracts(symbols)]
+    number_of_workers = min(len(contracts), max_number_of_workers)
+    ib.run(main(contracts, number_of_workers))
+    ib.disconnect()

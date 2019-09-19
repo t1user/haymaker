@@ -1,6 +1,6 @@
 # downloader
-max_number_of_workers = 5
+max_number_of_workers = 40
 
 
 # datastore
-default_path = '~/ib_datastore'
+default_path = '~/datastore'
