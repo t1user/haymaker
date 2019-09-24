@@ -18,13 +18,13 @@ class Store:
 
     def check_earliest(self, symbol, freq='min'):
         try:
-            return self.read(symbol, freq=freq).index[0]
+            return self.read(symbol, freq=freq).index.min()
         except KeyError:
             return None
 
     def check_latest(self, symbol, freq='min'):
         try:
-            return self.read(symbol, freq=freq).index[-1]
+            return self.read(symbol, freq=freq).index.max()
         except KeyError:
             return None
 
@@ -35,3 +35,13 @@ class Store:
             return f'cont/{freq}/{s.symbol}'
         else:
             return s
+
+    def clean(self):
+        for key in self.store.keys():
+            df = self.read(key).sort_index(ascending=False)
+            df.drop(index=df[df.index.duplicated()].index, inplace=True)
+            self.store.remove(key)
+            self.write(key, df)
+
+    def keys(self):
+        return self.store.keys()

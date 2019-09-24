@@ -43,10 +43,11 @@ async def get_history(contract, dt):
     next_chunk = {'dt': chunk[0].date, 'contract': contract}
     log.debug(
         f'downloaded data chunk for: {contract.localSymbol} ending: {dt}')
-    df = util.df(chunk)
+    df = util.df(reversed(chunk))
     df.date = df.date.astype('datetime64')
     df.set_index('date', inplace=True)
     store.write(contract, df)
+    # print(df)
     log.debug(f'saved data chunk for: {contract.localSymbol}')
     return next_chunk
 
@@ -69,12 +70,13 @@ async def schedule_task(contract, dt, queue):
 
 
 def initial_schedule(contract, now):
-    latest = store.check_latest(contract)
-    if latest:
-        print(latest)
-    dt = min(
-        datetime.strptime(contract.lastTradeDateOrContractMonth, '%Y%m%d'),
-        now)
+    earliest = store.check_earliest(contract)
+    if earliest:
+        dt = earliest
+    else:
+        dt = min(
+            datetime.strptime(contract.lastTradeDateOrContractMonth, '%Y%m%d'),
+            now)
     return {'contract': contract, 'dt': dt}
 
 
@@ -91,8 +93,9 @@ async def worker(name, queue):
 
 async def main(contracts, number_of_workers, now=datetime.now()):
     log.debug('main function started')
-    await asyncio.gather(*[ib.qualifyContractsAsync(c) for c in contracts])
+    await ib.qualifyContractsAsync(*contracts)
     log.debug('contracts qualified')
+
     queue = asyncio.LifoQueue()
     producers = [asyncio.create_task(
         schedule_task(**initial_schedule(c, now), queue=queue))
@@ -134,8 +137,8 @@ if __name__ == '__main__':
     symbols = pd.read_csv(os.path.join(
         BASE_DIR, 'contracts.csv')).to_dict('records')
 
-    contracts = [
-        *lookup_continuous_contracts(symbols), *lookup_contracts(symbols)]
+    contracts = [*lookup_contracts(symbols),
+                 *lookup_continuous_contracts(symbols)]
     number_of_workers = min(len(contracts), max_number_of_workers)
     ib.run(main(contracts, number_of_workers))
     ib.disconnect()
