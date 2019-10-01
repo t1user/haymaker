@@ -1,9 +1,10 @@
 import pandas as pd
+import numpy as np
 from pprint import pprint
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 
 from ib_insync import IB, util, MarketOrder, StopOrder
-from ib_insync.contract import ContFuture
+from ib_insync.contract import ContFuture, Future
 from eventkit import Event
 from eventkit.ops.op import Op
 
@@ -17,6 +18,9 @@ ib.connect('127.0.0.1', 4002, clientId=20)
 
 contract = ContFuture('NQ', 'GLOBEX')
 ib.qualifyContracts(contract)
+id = contract.conId
+contract = Future(conId=id)
+ib.qualifyContracts(contract)
 print(contract)
 
 print('starting to load bars')
@@ -24,8 +28,8 @@ print('starting to load bars')
 bars = ib.reqHistoricalData(
     contract,
     endDateTime='',
-    durationStr='410 S',
-    barSizeSetting='5 secs',
+    durationStr='2700 S',
+    barSizeSetting='10 secs',
     whatToShow='TRADES',
     useRTH=False,
     formatDate=1,
@@ -43,6 +47,7 @@ class VolumeCandle(Consolidator):
         self.bars = bars
         self.aggregator = 0
         self.reset_volume()
+        # self.minTick = ib.reqContractDetails[0].minTick
         super().__init__(bars)
 
     @classmethod
@@ -69,9 +74,11 @@ class VolumeCandle(Consolidator):
         self.new_bars = []
         df.date = df.date.astype('datetime64')
         df.set_index('date', inplace=True)
+        df['backfill'] = True
         df['volume_weighted'] = (df.close + df.open)/2 * df.volume
         weighted_price = df.volume_weighted.sum() / df.volume.sum()
-        self.newCandle.emit({'date': df.index[-1],
+        self.newCandle.emit({'backfill': self.backfill,
+                             'date': df.index[-1],
                              'open': df.open[0],
                              'high': df.high.max(),
                              'low': df.low.min(),
@@ -84,12 +91,13 @@ class Candle():
 
     periods = [10, 20, 40, 80, 160, ]
     ema_fast = 80  # number of periods for moving average filter
-    sl_atr = 1  # stop loss in ATRs
+    sl_atr = 5  # stop loss in ATRs
     atr_periods = 80  # number of periods to calculate ATR on
     time_int = 30  # interval in minutes to be used to define volume candle
 
     def __init__(self):
         print('candle init')
+        print('contract: ', self.contract)
         self.candles = []
         self.counter = 0
 
@@ -100,7 +108,6 @@ class Candle():
 
     def append(self, candle):
         self.candles.append(candle)
-        print('current contract: ', self.contract)
         self.get_indicators()
 
     def get_indicators(self):
@@ -109,21 +116,24 @@ class Candle():
         self.df['ema_fast'] = self.df.price.ewm(span=self.ema_fast).mean()
         self.df['atr'] = get_ATR(self.df, self.atr_periods)
         self.df['signal'] = get_signals(self.df.price, self.periods)
-        # print(self.df.iloc[-1])
-        # self.process()
-        print('candle emitting event signal')
         print('>>>>>>>>>positions>>>>>>>>>')
         print(ib.positions())
         print('>>>>>>>>>orders>>>>>>>>>')
         print(ib.orders())
-        signal(1)
+        print('>>>>>>>>>last row<<<<<<<<<')
+        print(self.df.iloc[-1])
+        # signal(1)
+        self.process()
 
     def process(self):
+        if self.df.backfill[-1]:
+            return
         if self.df.signal[-1]:
-            if self.df.signal[-1] * (self.df.price[-1] - self.df.ema_fast[-1]):
-                signal.entry(self.contract, self.df.signal[1], self.df.atr)
+            if self.df.signal[-1] * (self.df.price[-1] - self.df.ema_fast[-1]) > 0:
+                signal.entry(
+                    self.contract, self.df.signal[-1], self.df.atr[-1])
             elif self.df.signal[-1]:
-                signal.breakout(self.contract)
+                signal.breakout(self.contract, self.df.singnal[-1])
 
 
 class SignalProcessor:
@@ -131,36 +141,59 @@ class SignalProcessor:
         self._createEvents()
 
     def positions(self):
-        positions = ib.reqPositions()
+        positions = ib.positions()
         return {p.contract: p.position for p in positions}
 
     def _createEvents(self):
         self.entrySignal = Event('entrySignal')
         self.closeSignal = Event('closeSignal')
 
-    def entry(contract, signal, atr):
+    def entry(self, contract, signal, atr):
         positions = self.positions()
-        if contract in positions:
-            pass
+        if not positions.get(contract):
+            print('entry signal emitted')
+            print(f'contract: {contract}, signal: {signal}, atr: {atr}')
+            self.entrySignal.emit(contract, signal, atr)
+        else:
+            self.breakout(contract, signal)
+
+    def breakout(self, contract, signal):
+        positions = self.positions()
+        if positions.get(contract):
+            if positions.get(contract) * signal < 0:
+                print('close signal emitted')
+                self.closeSignal.emit(contract, signal)
 
 
 class Trader:
 
     def __init__(self):
-        pass
+        self.atr_dict = {}
 
-    def onSignal(self, signal):
-        print(signal)
+    def onEntry(self, contract, signal, atr):
+        print('entry singnal handled for: ', contract, signal, atr)
+        self.atr_dict[contract] = atr
+        trade = self.trade(contract, signal)
+        trade.filledEvent += self.attach_sl
+        print('entry order placed')
+
+    def onClose(self, contract, signal):
+        print('close signal handled for: ', contract, signal)
+        positions = {p.contract: p.position for p in ib.positions()}
+        if contract in positions:
+            trade = self.trade(contract, signal)
+            trade.filledEvent += self.remove_sl
+            print('closing order placed')
+
+    def trade(self, contract, signal):
         if signal == 1:
+            print('entering buy order')
             order = MarketOrder('BUY', 1)
         elif signal == -1:
+            print('entering sell order')
             order = MarketOrder('Sell', 1)
         trade = ib.placeOrder(contract, order)
-        trade.filledEvent += self.attach_sl
-        print('order placed')
-
-    def onExit(self, signal):
-        pass
+        return trade
 
     def attach_sl(self, trade):
         side = {'BUY': 'SELL', 'SELL': 'BUY'}
@@ -170,8 +203,9 @@ class Trader:
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
         print('TRADE PRICE: ', price)
-        sl_points = 20
-        sl_price = price + sl_points * direction[action]
+        sl_points = self.atr_dict[contract]
+        # TODO round to the nearest tick
+        sl_price = round(price + sl_points * direction[action])
         print('STOP LOSS PRICE: ', sl_price)
         order = StopOrder(side[action], amount, sl_price,
                           outsideRth=True, tif='GTC')
@@ -179,13 +213,20 @@ class Trader:
         print('stop loss attached')
 
     def remove_sl(self, trade):
-        pass
+        contract = trade.contract
+        open_trades = ib.trades()
+        orders = defaultdict(list)
+        for t in open_trades:
+            orders[t.contract].append(t.order)
+        for order in orders[contract]:
+            if order.orderType == 'STP':
+                ib.cancelOrder(order)
+                print('stop loss removed')
 
 
-signal = Event()
-
-c = VolumeCandle.create(contract)(bars)
 candle = Candle.create(contract)
+c = VolumeCandle.create(contract)(bars)
+signal = SignalProcessor()
 t = Trader()
 
 
@@ -194,7 +235,8 @@ print('bars loaded')
 
 
 c += candle.append
-signal += t.onSignal
+signal.entrySignal += t.onEntry
+signal.closeSignal += t.onClose
 # signal += print
 
 
@@ -204,5 +246,5 @@ class Strategy(BaseStrategy):
 
 strategy = Strategy(ib)
 
-# util.patchAsyncio()
+util.patchAsyncio()
 ib.run()
