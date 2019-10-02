@@ -9,7 +9,8 @@ def get_ATR(data, periods):
                        'C': (data['low'] - data['close']).abs()
                        })
     TR['TR'] = TR.max(axis=1)
-    TR['ATR'] = TR['TR'].rolling(periods).mean()
+    TR['ATR'] = TR['TR'].ewm(span=periods).mean()
+    #TR['ATR'] = TR['TR'].rolling(periods).mean()
     return TR.ATR
 
 

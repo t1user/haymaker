@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import functools
+import logging
 
 import pandas as pd
 from ib_insync import IB, util
@@ -29,7 +30,7 @@ async def get_history(contract, dt):
     log.debug(f'loading {contract.localSymbol} ending {dt}')
     chunk = await ib.reqHistoricalDataAsync(contract,
                                             endDateTime=dt,
-                                            durationStr='5 D',
+                                            durationStr='10 D',
                                             barSizeSetting='1 min',
                                             whatToShow='TRADES',
                                             useRTH=False,
@@ -124,6 +125,7 @@ if __name__ == '__main__':
         bubble=True, delay=True).push_application()
     log = Logger(__name__)
 
+    util.logToConsole()
     # get connection to Gateway
     ib = IB_connection().ib
     # ib.connect('127.0.0.1', 4002, clientId=2)

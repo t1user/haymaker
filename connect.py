@@ -7,7 +7,7 @@ class IB_connection:
         self.connect()
 
     def connect(self):
-        for i in range(20):
+        for i in range(1, 20):
             try:
                 self.ib.connect('127.0.0.1', 4002, clientId=i)
                 break
@@ -17,13 +17,10 @@ class IB_connection:
 
         self.ib.errorEvent += self.onErrorEvent
 
-    def onErrorEvent(self, reqId, error_code, error_string, contract, *args, **kwargs):
+    def onErrorEvent(self, *args, **kwargs):
         # 1.0 Network disconnect
         # if error_code in [10182, 1102]:
-        print('Handling Error ', error_code, error_string)
-
-        # 2.0 Historical data
-        if error_code in [162]:
-            logger.info('Cancelled historical data.  Making new bars...')
-            self.run()
-        self.ib.disconnect()
+        print('------------------')
+        print('Handling Error')
+        print(args, kwargs)
+        print('------------------')

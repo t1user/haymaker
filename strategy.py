@@ -13,7 +13,7 @@ from trader import Consolidator, BaseStrategy
 
 
 ib = IB()
-ib.connect('127.0.0.1', 4002, clientId=20)
+ib.connect('127.0.0.1', 4002, clientId=0)
 
 
 contract = ContFuture('NQ', 'GLOBEX')
@@ -28,8 +28,8 @@ print('starting to load bars')
 bars = ib.reqHistoricalData(
     contract,
     endDateTime='',
-    durationStr='2700 S',
-    barSizeSetting='10 secs',
+    durationStr='2 D',
+    barSizeSetting='30 secs',
     whatToShow='TRADES',
     useRTH=False,
     formatDate=1,
@@ -41,11 +41,12 @@ bars = ib.reqHistoricalData(
 
 class VolumeCandle(Consolidator):
 
-    def __init__(self, bars, avg_periods=3, span=80):
+    def __init__(self, bars, avg_periods=30, span=5500):
         self.span = span
         self.avg_periods = avg_periods
         self.bars = bars
         self.aggregator = 0
+        print(len(self.bars))
         self.reset_volume()
         # self.minTick = ib.reqContractDetails[0].minTick
         super().__init__(bars)
@@ -59,6 +60,11 @@ class VolumeCandle(Consolidator):
         self.volume = util.df(self.bars).volume \
             .rolling(self.avg_periods).sum() \
             .ewm(span=self.span).mean().iloc[-1].round()
+        """
+        self.volume = util.df(self.bars).volume \
+            .rolling(self.avg_periods).sum() \
+            .mean().round()
+        """
         print(f'volume: {self.volume}')
 
     def aggregate(self, bar):
@@ -119,7 +125,8 @@ class Candle():
         print('>>>>>>>>>positions>>>>>>>>>')
         print(ib.positions())
         print('>>>>>>>>>orders>>>>>>>>>')
-        print(ib.orders())
+        print('number of orders: ', len(ib.orders()))
+        print('trades: ', ib.openTrades())
         print('>>>>>>>>>last row<<<<<<<<<')
         print(self.df.iloc[-1])
         # signal(1)
@@ -133,7 +140,7 @@ class Candle():
                 signal.entry(
                     self.contract, self.df.signal[-1], self.df.atr[-1])
             elif self.df.signal[-1]:
-                signal.breakout(self.contract, self.df.singnal[-1])
+                signal.breakout(self.contract, self.df.signal[-1])
 
 
 class SignalProcessor:
@@ -214,7 +221,8 @@ class Trader:
 
     def remove_sl(self, trade):
         contract = trade.contract
-        open_trades = ib.trades()
+        open_trades = ib.openTrades()
+        # open_orders = ib.reqAllOpenOrders()
         orders = defaultdict(list)
         for t in open_trades:
             orders[t.contract].append(t.order)
@@ -226,18 +234,14 @@ class Trader:
 
 candle = Candle.create(contract)
 c = VolumeCandle.create(contract)(bars)
+c += candle.append
+
+
 signal = SignalProcessor()
 t = Trader()
 
-
-# print(util.df(bars))
-print('bars loaded')
-
-
-c += candle.append
 signal.entrySignal += t.onEntry
 signal.closeSignal += t.onClose
-# signal += print
 
 
 class Strategy(BaseStrategy):
