@@ -36,7 +36,7 @@ def get_contract(*args):
 
 
 contract = get_contract('NQ', 'GLOBEX')
-trader = Trader()
+trader = Trader(ib)
 #candle = Candle(contract, trader, ib)
 
 candles = [Candle(get_contract(*contract), trader, ib)

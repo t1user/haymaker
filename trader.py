@@ -83,7 +83,7 @@ class VolumeCandle(BarStreamer):
     def aggregate(self, bar):
         self.aggregator += bar.volume
         log.debug(
-            f'{bar.date}{self.contract.localSymbol}vol:{self.aggregator}')
+            f'{bar.date} {self.contract.localSymbol} v:{self.aggregator}')
         if self.aggregator >= self.volume:
             self.aggregator -= self.volume
             self.create_candle()
@@ -96,7 +96,7 @@ class VolumeCandle(BarStreamer):
         df['backfill'] = True
         df['volume_weighted'] = (df.close + df.open)/2 * df.volume
         weighted_price = df.volume_weighted.sum() / df.volume.sum()
-        log.debug('new candle created')
+        log.debug(f'new candle created for {self.contract.localSymbol}')
         self.append({'backfill': self.backfill,
                      'date': df.index[-1],
                      'open': df.open[0],
@@ -109,6 +109,7 @@ class VolumeCandle(BarStreamer):
 class SignalProcessor:
 
     def __init__(self, ib):
+        self.ib = ib
         self._createEvents()
 
     def positions(self):
@@ -150,14 +151,14 @@ class Candle(VolumeCandle):
         log.debug(f'candle init for contract {self.contract}')
         self.candles = []
         self.counter = 0
-        processor = SignalProcessor(ib)
-        processor.entrySignal += trader.onEntry
-        processor.closeSignal += trader.onClose
+        self.processor = SignalProcessor(ib)
+        self.processor.entrySignal += trader.onEntry
+        self.processor.closeSignal += trader.onClose
         super().__init__()
 
     def freeze(self):
         if self.counter == 0:
-            self.df.to_pickle('notebooks/freeze_df.pickle')
+            self.df.to_pickle(f'notebooks/freeze_df_{self.contract.localSymbol}.pickle')
             log.debug('freezed data saved')
             self.counter += 1
 
@@ -177,8 +178,9 @@ class Candle(VolumeCandle):
         self.df['atr'] = get_ATR(self.df, self.atr_periods)
         self.df['signal'] = get_signals(self.df.price, self.periods)
         log.debug('>>>>>>>>>positions>>>>>>>>>')
-        log.debug(self.ib.positions())
-        log.debug(self.df.iloc[-1])
+        log.debug(
+            f'Positions: {[(p.contract.localSymbol, p.position) for p in self.ib.positions()]}')
+        log.debug(f'{self.df.iloc[-1]} {self.contract.localSymbol}')
         # signal(1)
         self.process()
 
@@ -197,7 +199,8 @@ class Candle(VolumeCandle):
 
 class Trader:
 
-    def __init__(self):
+    def __init__(self, ib):
+        self.ib = ib
         self.atr_dict = {}
 
     def onEntry(self, contract, signal, atr):
@@ -253,21 +256,3 @@ class Trader:
             if order.orderType == 'STP':
                 self.ib.cancelOrder(order)
                 log.debug('stop loss removed')
-
-
-if __name__ == '__main__':
-
-    """
-    # logging
-    set_datetime_format('local')
-    StreamHandler(sys.stdout, bubble=True).push_application()
-    FileHandler(
-        f'logs/{__file__[:-3]}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}',
-        bubble=True, delay=True).push_application()
-    log = Logger(__name__)
-    """
-
-    ib = IB()
-    ib.connect('127.0.0.1', 4002, clientId=0)
-
-    trader = Trader()
