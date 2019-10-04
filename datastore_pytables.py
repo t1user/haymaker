@@ -29,10 +29,11 @@ class Store:
             return None
 
     def _symbol(self, s, freq):
-        if isinstance(s, (Future, Contract)):
+        if isinstance(s, ContFuture):
+            return f'cont/{freq}/{s.symbol}_{s.lastTradeDateOrContractMonth}_{s.exchange}_{s.currency}'
+        elif isinstance(s, (Future, Contract)):
             return f'{freq}/{s.symbol}_{s.lastTradeDateOrContractMonth}_{s.exchange}_{s.currency}'
-        elif isinstance(s, ContFuture):
-            return f'cont/{freq}/{s.symbol}'
+
         else:
             return s
 

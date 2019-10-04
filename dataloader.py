@@ -8,8 +8,8 @@ import logging
 
 import pandas as pd
 from ib_insync import IB, util
-from ib_insync.contract import Future, ContFuture
-from logbook import Logger, StreamHandler, FileHandler
+from ib_insync.contract import Future, ContFuture, Contract
+from logbook import Logger, StreamHandler, FileHandler, set_datetime_format
 
 
 from connect import IB_connection
@@ -108,6 +108,7 @@ async def main(contracts, number_of_workers, now=datetime.now()):
     # wait until the queue is fully processed (implicitly awaits workers)
     await queue.join()
 
+    log.debug('cancelling workers')
     # cancel all workers
     for w in workers:
         w.cancel()
@@ -119,6 +120,7 @@ async def main(contracts, number_of_workers, now=datetime.now()):
 if __name__ == '__main__':
 
     # logging
+    set_datetime_format("local")
     StreamHandler(sys.stdout, bubble=True).push_application()
     FileHandler(
         f'logs/{__file__[:-3]}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}',
@@ -135,12 +137,12 @@ if __name__ == '__main__':
     # object where data is stored
     store = Store()
 
-    # now = datetime.now()
     symbols = pd.read_csv(os.path.join(
-        BASE_DIR, 'contracts.csv')).to_dict('records')
+        BASE_DIR, '_contracts.csv')).to_dict('records')
 
-    contracts = [*lookup_contracts(symbols),
-                 *lookup_continuous_contracts(symbols)]
+    # *lookup_contracts(symbols),
+    contracts = [*lookup_continuous_contracts(symbols)]
     number_of_workers = min(len(contracts), max_number_of_workers)
     ib.run(main(contracts, number_of_workers))
+    log.debug('script finished, about to disconnect')
     ib.disconnect()

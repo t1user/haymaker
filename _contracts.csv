@@ -1,2 +1,6 @@
 symbol,exchange,currency
+ES,GLOBEX,USD
 NQ,GLOBEX,USD
+YM,ECBOT,USD
+NKD,GLOBEX,USD
+CL,NYMEX,USD
