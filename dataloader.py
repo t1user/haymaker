@@ -18,7 +18,7 @@ from datastore_pytables import Store
 
 
 """
-Modelled on example here:
+Modelled (loosely) on example here:
 https://docs.python.org/3/library/asyncio-queue.html#examples
 
 and here:
@@ -93,6 +93,9 @@ async def worker(name, queue):
 
 
 async def main(contracts, number_of_workers, now=datetime.now()):
+
+    asyncio.get_event_loop().set_debug(True)
+
     log.debug('main function started')
     await ib.qualifyContractsAsync(*contracts)
     log.debug('contracts qualified')
@@ -103,7 +106,7 @@ async def main(contracts, number_of_workers, now=datetime.now()):
         for c in contracts]
     workers = [asyncio.create_task(worker(f'worker {i}', queue))
                for i in range(number_of_workers)]
-    await asyncio.gather(*producers)  # , return_exceptions=True)
+    await asyncio.gather(*producers, return_exceptions=True)
 
     # wait until the queue is fully processed (implicitly awaits workers)
     await queue.join()
@@ -127,7 +130,7 @@ if __name__ == '__main__':
         bubble=True, delay=True).push_application()
     log = Logger(__name__)
 
-    util.logToConsole()
+    # util.logToConsole()
     # get connection to Gateway
     ib = IB_connection().ib
     # ib.connect('127.0.0.1', 4002, clientId=2)
@@ -138,7 +141,7 @@ if __name__ == '__main__':
     store = Store()
 
     symbols = pd.read_csv(os.path.join(
-        BASE_DIR, '_contracts.csv')).to_dict('records')
+        BASE_DIR, 'contracts.csv')).to_dict('records')
 
     # *lookup_contracts(symbols),
     contracts = [*lookup_continuous_contracts(symbols)]

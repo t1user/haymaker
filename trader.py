@@ -83,7 +83,7 @@ class VolumeCandle(BarStreamer):
     def aggregate(self, bar):
         self.aggregator += bar.volume
         log.debug(
-            f'{bar.date} {self.contract.localSymbol} v:{self.aggregator}')
+            f'{bar.date} {self.aggregator}/{self.volume} {self.contract.localSymbol}')
         if self.aggregator >= self.volume:
             self.aggregator -= self.volume
             self.create_candle()
@@ -158,7 +158,7 @@ class Candle(VolumeCandle):
 
     def freeze(self):
         if self.counter == 0:
-            self.df.to_pickle(f'notebooks/freeze_df_{self.contract.localSymbol}.pickle')
+            self.df.to_pickle(f'notebooks/freeze/freeze_df_{self.contract.localSymbol}.pickle')
             log.debug('freezed data saved')
             self.counter += 1
 
@@ -169,6 +169,7 @@ class Candle(VolumeCandle):
 
     def append(self, candle):
         self.candles.append(candle)
+        log.debug(f'{self.contract.localSymbol} {candle}')
         self.get_indicators()
 
     def get_indicators(self):
@@ -177,11 +178,8 @@ class Candle(VolumeCandle):
         self.df['ema_fast'] = self.df.price.ewm(span=self.ema_fast).mean()
         self.df['atr'] = get_ATR(self.df, self.atr_periods)
         self.df['signal'] = get_signals(self.df.price, self.periods)
-        log.debug('>>>>>>>>>positions>>>>>>>>>')
         log.debug(
             f'Positions: {[(p.contract.localSymbol, p.position) for p in self.ib.positions()]}')
-        log.debug(f'{self.df.iloc[-1]} {self.contract.localSymbol}')
-        # signal(1)
         self.process()
 
     def process(self):

@@ -4,3 +4,6 @@
 __pycache__
 logs/
 temp/
+credentials.py
+notebooks/data/
+notebooks/freeze/
