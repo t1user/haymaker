@@ -35,10 +35,14 @@ class BarStreamer:
     def subscribe(self):
         def onNewBar(bars, hasNewBar):
             if hasNewBar:
-                self.new_bars.append(bars[-2])
                 self.aggregate(bars[-2])
-
         self.bars.updateEvent += onNewBar
+
+    def process_back_data(self):
+        self.backfill = True
+        for bar in self.bars[:-2]:
+            self.aggregate(bar)
+        self.backfill = False
 
     def aggregate(self, bar):
         raise NotImplementedError
@@ -55,18 +59,6 @@ class VolumeCandle(BarStreamer):
         self.process_back_data()
         self.subscribe()
 
-    @classmethod
-    def create(cls, contract):
-        cls.contract = contract
-        return cls
-
-    def process_back_data(self):
-        self.backfill = True
-        for bar in self.bars[:-2]:
-            self.new_bars.append(bar)
-            self.aggregate(bar)
-        self.backfill = False
-
     def reset_volume(self):
         """
         self.volume = util.df(self.bars).volume \
@@ -78,14 +70,16 @@ class VolumeCandle(BarStreamer):
             .rolling(self.avg_periods).sum() \
             .mean().round()
 
-        log.debug(f'volume: {self.volume} {self.contract.localSymbol}')
-
     def aggregate(self, bar):
+        self.new_bars.append(bar)
         self.aggregator += bar.volume
-        log.debug(
-            f'{bar.date} {self.aggregator}/{self.volume} {self.contract.localSymbol}')
+        if not self.backfill:
+            message = (f'{bar.date} {self.aggregator}/{self.volume}'
+                       f' {self.contract.localSymbol}')
+            log.debug(message)
         if self.aggregator >= self.volume:
-            self.aggregator -= self.volume
+            self.aggregator = 0
+            #self.aggregator -= self.volume
             self.create_candle()
 
     def create_candle(self):
@@ -96,14 +90,16 @@ class VolumeCandle(BarStreamer):
         df['backfill'] = True
         df['volume_weighted'] = (df.close + df.open)/2 * df.volume
         weighted_price = df.volume_weighted.sum() / df.volume.sum()
-        log.debug(f'new candle created for {self.contract.localSymbol}')
+        if not self.backfill:
+            log.debug(f'new candle created for {self.contract.localSymbol}')
         self.append({'backfill': self.backfill,
                      'date': df.index[-1],
                      'open': df.open[0],
                      'high': df.high.max(),
                      'low': df.low.min(),
                      'close': df.close[-1],
-                     'price': weighted_price})
+                     'price': weighted_price,
+                     'volume': df.volume.sum()})
 
 
 class SignalProcessor:
@@ -123,8 +119,9 @@ class SignalProcessor:
     def entry(self, contract, signal, atr):
         positions = self.positions()
         if not positions.get(contract):
-            log.debug('entry signal emitted')
-            log.debug(f'contract: {contract}, signal: {signal}, atr: {atr}')
+            message = (f'entry signal emitted for {contract.localSymbol},'
+                       f'signal: {signal}, atr: {atr}')
+            log.debug(message)
             self.entrySignal.emit(contract, signal, atr)
         else:
             self.breakout(contract, signal)
@@ -148,28 +145,30 @@ class Candle(VolumeCandle):
     def __init__(self, contract, trader, ib):
         self.contract = contract
         self.ib = ib
-        log.debug(f'candle init for contract {self.contract}')
+        log.debug(f'candle init for contract {self.contract.localSymbol}')
         self.candles = []
         self.counter = 0
         self.processor = SignalProcessor(ib)
+        #self.processor.entrySignal.connect(trader.onEntry, keep_ref=True)
+        #self.processor.closeSignal.connect(trader.onClose, keep_ref=True)
         self.processor.entrySignal += trader.onEntry
         self.processor.closeSignal += trader.onClose
+        self.processor.entrySignal += print
+        self.processor.closeSignal += print
+        log.debug(self.processor.entrySignal._slots)
+        log.debug(self.processor.closeSignal._slots)
+
         super().__init__()
 
     def freeze(self):
         if self.counter == 0:
-            self.df.to_pickle(f'notebooks/freeze/freeze_df_{self.contract.localSymbol}.pickle')
-            log.debug('freezed data saved')
+            self.df.to_pickle(
+                f'notebooks/freeze/freeze_df_{self.contract.localSymbol}.pickle')
+            log.debug(f'freezed data saved for {self.contract.localSymbol}')
             self.counter += 1
-
-    @classmethod
-    def create(cls, ib):
-        cls.ib = ib
-        return cls
 
     def append(self, candle):
         self.candles.append(candle)
-        log.debug(f'{self.contract.localSymbol} {candle}')
         self.get_indicators()
 
     def get_indicators(self):
@@ -178,8 +177,13 @@ class Candle(VolumeCandle):
         self.df['ema_fast'] = self.df.price.ewm(span=self.ema_fast).mean()
         self.df['atr'] = get_ATR(self.df, self.atr_periods)
         self.df['signal'] = get_signals(self.df.price, self.periods)
-        log.debug(
-            f'Positions: {[(p.contract.localSymbol, p.position) for p in self.ib.positions()]}')
+        if not self.backfill:
+            positions = [(p.contract.localSymbol, p.position)
+                         for p in self.ib.positions()]
+            log.info(f'POSITIONS: {positions}')
+            log.debug(
+                f'{self.contract.localSymbol} {self.df.iloc[-1].to_dict()}')
+
         self.process()
 
     def process(self):
@@ -198,11 +202,12 @@ class Candle(VolumeCandle):
 class Trader:
 
     def __init__(self, ib):
+        log.debug('Trader initialized')
         self.ib = ib
         self.atr_dict = {}
 
     def onEntry(self, contract, signal, atr):
-        log.debug(f'entry singnal handled for: {contract} {signal} {atr}')
+        log.debug(f'entry signal handled for: {contract} {signal} {atr}')
         self.atr_dict[contract] = atr
         trade = self.trade(contract, signal)
         trade.filledEvent += self.attach_sl
@@ -218,10 +223,10 @@ class Trader:
 
     def trade(self, contract, signal):
         if signal == 1:
-            log.debug('entering buy order')
+            log.debug(f'entering buy order for {contract.localSymbol}')
             order = MarketOrder('BUY', 1)
         elif signal == -1:
-            log.debug('entering sell order')
+            log.debug('entering sell order for {contract.localSymbol')
             order = MarketOrder('Sell', 1)
         trade = self.ib.placeOrder(contract, order)
         return trade
@@ -233,15 +238,16 @@ class Trader:
         action = trade.order.action
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
-        log.debug(f'TRADE PRICE: {price}')
+        log.info(f'TRADE EXECUTED: {contract.localSymbol} {action} @{price}')
         sl_points = self.atr_dict[contract]
         # TODO round to the nearest tick
         sl_price = round(price + sl_points * direction[action])
-        log.debug(f'STOP LOSS PRICE: {sl_price}')
+        log.info(f'STOP LOSS PRICE: {sl_price}')
         order = StopOrder(side[action], amount, sl_price,
                           outsideRth=True, tif='GTC')
-        self.ib.placeOrder(contract, order)
-        log.debug('stop loss attached')
+        trade = self.ib.placeOrder(contract, order)
+        trade += self.report_stopout
+        log.debug('{contract.localSymbol} stop loss attached')
 
     def remove_sl(self, trade):
         contract = trade.contract
@@ -254,3 +260,10 @@ class Trader:
             if order.orderType == 'STP':
                 self.ib.cancelOrder(order)
                 log.debug('stop loss removed')
+
+    def report_stopout(self, trade):
+        message = (
+            f'STOP-OUT for {trade.contract}'
+            f'{trade.order.action} @{trade.orderStatus.avgFillPrice}'
+        )
+        log.info(message)
