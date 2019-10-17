@@ -12,9 +12,9 @@ class Store:
         # print(symbol)
         self.store.append(self._symbol(symbol, freq), data)
 
-    def read(self, symbol, freq='min', **kwargs):
+    def read(self, symbol, freq='min', *args, **kwargs):
         symbol = self._symbol(symbol, freq)
-        return self.store.select(symbol, **kwargs)
+        return self.store.select(symbol, *args, **kwargs)
 
     def check_earliest(self, symbol, freq='min'):
         try:
@@ -30,9 +30,14 @@ class Store:
 
     def _symbol(self, s, freq):
         if isinstance(s, ContFuture):
-            return f'cont/{freq}/{s.symbol}_{s.lastTradeDateOrContractMonth}_{s.exchange}_{s.currency}'
+            string = (f'cont/{freq}/{s.symbol}_'
+                      f'{s.lastTradeDateOrContractMonth}_{s.exchange}'
+                      f'_{s.currency}')
+            return string
         elif isinstance(s, (Future, Contract)):
-            return f'{freq}/{s.symbol}_{s.lastTradeDateOrContractMonth}_{s.exchange}_{s.currency}'
+            string = (f'{freq}/{s.symbol}_{s.lastTradeDateOrContractMonth}'
+                      f'_{s.exchange}_{s.currency}')
+            return string
 
         else:
             return s

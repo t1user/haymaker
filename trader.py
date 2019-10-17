@@ -1,6 +1,8 @@
 import sys
 from collections import defaultdict
 from datetime import datetime
+import csv
+from pprint import pprint
 
 import pandas as pd
 
@@ -40,8 +42,10 @@ class BarStreamer:
 
     def process_back_data(self):
         self.backfill = True
+        log.debug(f'generating startup data for {self.contract.localSymbol}')
         for bar in self.bars[:-2]:
             self.aggregate(bar)
+        log.debug(f'startup data generated for {self.contract.localSymbol}')
         self.backfill = False
 
     def aggregate(self, bar):
@@ -88,7 +92,9 @@ class VolumeCandle(BarStreamer):
         df.date = df.date.astype('datetime64')
         df.set_index('date', inplace=True)
         df['backfill'] = True
-        df['volume_weighted'] = (df.close + df.open)/2 * df.volume
+        # df['volume_weighted'] = (df.close + df.open)/2 * df.volume
+        # df['volume_weighted'] = df.close * df.volume
+        df['volume_weighted'] = df.average * df.volume
         weighted_price = df.volume_weighted.sum() / df.volume.sum()
         if not self.backfill:
             log.debug(f'new candle created for {self.contract.localSymbol}')
@@ -142,22 +148,16 @@ class Candle(VolumeCandle):
     atr_periods = 80  # number of periods to calculate ATR on
     time_int = 30  # interval in minutes to be used to define volume candle
 
-    def __init__(self, contract, trader, ib):
+    def __init__(self, contract, trader, ib, keep_ref=True):
         self.contract = contract
         self.ib = ib
         log.debug(f'candle init for contract {self.contract.localSymbol}')
         self.candles = []
         self.counter = 0
+        trader.register(self.get_details(), self.contract)
         self.processor = SignalProcessor(ib)
-        #self.processor.entrySignal.connect(trader.onEntry, keep_ref=True)
-        #self.processor.closeSignal.connect(trader.onClose, keep_ref=True)
-        self.processor.entrySignal += trader.onEntry
-        self.processor.closeSignal += trader.onClose
-        self.processor.entrySignal += print
-        self.processor.closeSignal += print
-        log.debug(self.processor.entrySignal._slots)
-        log.debug(self.processor.closeSignal._slots)
-
+        self.processor.entrySignal.connect(trader.onEntry, keep_ref=keep_ref)
+        self.processor.closeSignal.connect(trader.onClose, keep_ref=keep_ref)
         super().__init__()
 
     def freeze(self):
@@ -166,6 +166,14 @@ class Candle(VolumeCandle):
                 f'notebooks/freeze/freeze_df_{self.contract.localSymbol}.pickle')
             log.debug(f'freezed data saved for {self.contract.localSymbol}')
             self.counter += 1
+
+    def get_details(self):
+        return self.ib.reqContractDetails(self.contract)[0]
+
+    """
+    def get_trading_hours(self):
+        return ib.reqContractDetails(self.contract)[0].tradingHours.split(';')
+    """
 
     def append(self, candle):
         self.candles.append(candle)
@@ -183,7 +191,6 @@ class Candle(VolumeCandle):
             log.info(f'POSITIONS: {positions}')
             log.debug(
                 f'{self.contract.localSymbol} {self.df.iloc[-1].to_dict()}')
-
         self.process()
 
     def process(self):
@@ -201,10 +208,12 @@ class Candle(VolumeCandle):
 
 class Trader:
 
-    def __init__(self, ib):
+    def __init__(self, ib, blotter):
         log.debug('Trader initialized')
         self.ib = ib
+        self.blotter = blotter
         self.atr_dict = {}
+        self.contract_details = {}
 
     def onEntry(self, contract, signal, atr):
         log.debug(f'entry signal handled for: {contract} {signal} {atr}')
@@ -226,12 +235,14 @@ class Trader:
             log.debug(f'entering buy order for {contract.localSymbol}')
             order = MarketOrder('BUY', 1)
         elif signal == -1:
-            log.debug('entering sell order for {contract.localSymbol')
+            log.debug(f'entering sell order for {contract.localSymbol}')
             order = MarketOrder('Sell', 1)
         trade = self.ib.placeOrder(contract, order)
         return trade
 
     def attach_sl(self, trade):
+        pprint(f'EXECUTED TRADE: {trade}')
+        self.blotter.log_trade(trade, 'entry')
         side = {'BUY': 'SELL', 'SELL': 'BUY'}
         direction = {'BUY': -1, 'SELL': 1}
         contract = trade.contract
@@ -241,15 +252,19 @@ class Trader:
         log.info(f'TRADE EXECUTED: {contract.localSymbol} {action} @{price}')
         sl_points = self.atr_dict[contract]
         # TODO round to the nearest tick
-        sl_price = round(price + sl_points * direction[action])
+        sl_price = self.round_tick(price + sl_points * direction[action],
+                                   self.contract_details[contract].minTick)
+        # sl_price = round(price + sl_points * direction[action])
         log.info(f'STOP LOSS PRICE: {sl_price}')
         order = StopOrder(side[action], amount, sl_price,
                           outsideRth=True, tif='GTC')
         trade = self.ib.placeOrder(contract, order)
-        trade += self.report_stopout
-        log.debug('{contract.localSymbol} stop loss attached')
+        trade.filledEvent += self.report_stopout
+        trade.cancelledEvent += self.report_cancel
+        log.debug(f'{contract.localSymbol} stop loss attached')
 
     def remove_sl(self, trade):
+        self.blotter.log_trade(trade, 'close')
         contract = trade.contract
         open_trades = self.ib.openTrades()
         # open_orders = self.ib.reqAllOpenOrders()
@@ -261,9 +276,71 @@ class Trader:
                 self.ib.cancelOrder(order)
                 log.debug('stop loss removed')
 
+    @staticmethod
+    def round_tick(price, tick_size):
+        floor = price // tick_size
+        remainder = price % tick_size
+        if remainder > .5:
+            floor += 1
+        return floor * tick_size
+
+    def register(self, details, contract):
+        self.contract_details[contract] = details
+
     def report_stopout(self, trade):
         message = (
-            f'STOP-OUT for {trade.contract}'
+            f'STOP-OUT for {trade.contract.localSymbol}'
             f'{trade.order.action} @{trade.orderStatus.avgFillPrice}'
         )
         log.info(message)
+        self.blotter.log_trade(trade, 'stop-out')
+
+    def report_cancel(self, trade):
+        log.info('Stop loss order for {trade.contract.localSymbol} cancelled')
+
+
+class Blotter:
+    def __init__(self, save_to_file=True, path='blotter'):
+        filename = __file__.split('/')[-1][:-3]
+        self.file = (f'{path}/{filename}_'
+                     f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}')
+        self.save_to_file = save_to_file
+
+    def log_trade(self, trade, reason=''):
+        time = trade.log[-1].time
+        contract = trade.contract.localSymbol
+        action = trade.order.action
+        amount = trade.orderStatus.filled
+        price = trade.orderStatus.avgFillPrice
+        exec_ids = [fill.execution.execId for fill in trade.fills]
+        trade_id = trade.orderStatus.permId
+        reason = reason
+        row = {'time': time,
+               'contract': contract,
+               'action': action,
+               'amount': amount,
+               'price': price,
+               'exec_ids': exec_ids,
+               'trade_id': trade_id,
+               'exec_ids': exec_ids,
+               'reason': reason}
+        if self.save_to_file:
+            self.write_to_file(row)
+        print(row)
+
+    def write_to_file(self, data):
+        with open(self.file, 'w') as f:
+            writer = csv.writer(f)
+            writer.write(data)
+
+
+def get_contracts(contract_tuples, ib):
+    log.debug(f'initializing contract qualification')
+    cont_contracts = [ContFuture(*contract)
+                      for contract in contract_tuples]
+    ib.qualifyContracts(*cont_contracts)
+    ids = [contract.conId for contract in cont_contracts]
+    contracts = [Future(conId=id) for id in ids]
+    ib.qualifyContracts(*contracts)
+    log.debug(f'Contracts qualified: {contracts}')
+    return contracts

@@ -5,14 +5,14 @@ from pprint import pprint
 from ib_insync import IB, util
 from ib_insync.contract import ContFuture, Future
 from ib_insync.ibcontroller import IBC, Watchdog
+from eventkit import Event
 
+
+from trader import Candle, Trader, Blotter, get_contracts
 from logger import logger
-from trader import Candle, Trader
-from credentials import creds
+
 
 log = logger(__file__[:-3])
-
-#ib.connect('127.0.0.1', 4002, clientId=0)
 
 
 class WatchdogHandlers:
@@ -53,6 +53,50 @@ class WatchdogHandlers:
 
 class Strategy(WatchdogHandlers):
 
+    def __init__(self, ib, watchdog, trader, contracts):
+        self.contracts = contracts
+        ib.connectedEvent += self.onConnected
+        ib.errorEvent += self.onError
+        ib.updatePortfolioEvent += self.onUpdatePortfolioEvent
+        ib.pnlEvent += self.onPnlEvent
+        update = Event().timerange(60, None, 300)
+        update += self.onScheduledUpdate
+        self.ib = ib
+        self.trader = trader
+        super().__init__(watchdog)
+
+    def onConnected(self):
+        log.debug('connection established')
+
+    def onStartedEvent(self, *args):
+        log.debug('initializing strategy')
+        contracts = get_contracts(self.contracts, self.ib)
+        candles = [Candle(contract, self.trader, self.ib)
+                   for contract in contracts]
+
+    def onError(self, *args):
+        log.error(f'ERROR: {args}')
+
+    def onPnlEvent(self, pnl):
+        log.info(f'pnl: {pnl}')
+
+    def onUpdatePortfolioEvent(self, i):
+        report = (i.contract.localSymbol, int(i.realizedPNL), int(i.unrealizedPNL),
+                  int(i.realizedPNL + i.unrealizedPNL))
+        log.info(f'Portfolio item: {report}')
+
+    def onScheduledUpdate(self, time):
+        portfolio = ib.portfolio()
+        report = [(i.realizedPNL, i.unrealizedPNL,
+                   i.realizedPNL + i.unrealizedPNL)
+                  for i in portfolio]
+        totals = [int(sum(x)) for x in zip(*report)]
+        message = (f'PNL REPORT: realized: {totals[0]}, '
+                   f'unrealized: {totals[1]}, total: {totals[2]}')
+        log.info(message)
+
+
+if __name__ == '__main__':
     contracts = [
         ('NQ', 'GLOBEX'),
         ('ES', 'GLOBEX'),
@@ -60,44 +104,8 @@ class Strategy(WatchdogHandlers):
         ('CL', 'NYMEX'),
         ('GC', 'NYMEX'),
     ]
-
-    def __init__(self, ib, watchdog, trader):
-        ib.connectedEvent += self.onConnected
-        ib.errorEvent += self.onError
-        self.ib = ib
-        self.trader = trader
-        super().__init__(watchdog)
-
-    def onConnected(self):
-        log.debug('connection established')
-        #contract = get_contract('NQ', 'GLOBEX')
-
-    def onStartedEvent(self, *args):
-        log.debug('initializing strategy')
-        # trader = Trader(self.ib)
-        #candle = Candle(contract, trader, ib)
-        futures = self.get_contracts(self.contracts)
-        candles = [Candle(contract, self.trader, self.ib)
-                   for contract in futures]
-
-    def get_contracts(self, contract_tuples):
-        log.debug(f'initializing contract qualification')
-        cont_contracts = [ContFuture(*contract)
-                          for contract in contract_tuples]
-        self.ib.qualifyContracts(*cont_contracts)
-        ids = [contract.conId for contract in cont_contracts]
-        contracts = [Future(conId=id) for id in ids]
-        self.ib.qualifyContracts(*contracts)
-        log.debug(f'Contracts qualified: {contracts}')
-        return contracts
-
-    def onError(self, *args):
-        log.error(f'ERROR: {args}')
-
-
-if __name__ == '__main__':
     util.patchAsyncio()
-    util.logToConsole()
+    # util.logToConsole()
     ibc = IBC(twsVersion=978,
               gateway=True,
               tradingMode='paper',
@@ -108,10 +116,10 @@ if __name__ == '__main__':
                         port='4002',
                         clientId=0,
                         )
-    #handlers = WatchdogHandlers(watchdog)
-    trader = Trader(ib)
-    asyncio.get_event_loop().set_debug(True)
-    strategy = Strategy(ib, watchdog, trader)
+
+    blotter = Blotter()
+    trader = Trader(ib, blotter)
+    # asyncio.get_event_loop().set_debug(True)
+    strategy = Strategy(ib, watchdog, trader, contracts)
     watchdog.start()
     ib.run()
-    print('enabling debug')

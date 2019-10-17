@@ -7,3 +7,6 @@ temp/
 credentials.py
 notebooks/data/
 notebooks/freeze/
+b_temp/
+#*
+.#*
