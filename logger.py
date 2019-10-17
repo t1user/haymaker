@@ -8,6 +8,6 @@ def logger(name):
     StreamHandler(sys.stdout, bubble=True).push_application()
     filename = __file__.split('/')[-1][:-3]
     FileHandler(
-        f'logs/{name}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}',
+        f'logs/{name}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}.log',
         bubble=True, delay=True).push_application()
     return Logger(name)

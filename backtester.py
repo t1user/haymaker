@@ -1,4 +1,5 @@
 from datetime import datetime
+from itertools import count
 
 import pandas as pd
 from logbook import Logger
@@ -31,16 +32,21 @@ def ib_decorator(func):
 class IB:
     path = 'b_temp'
 
-    events = ('barUpdateEvent', )
+    events = ('barUpdateEvent', 'newOrderEvent', 'orderModifyEvent',
+              'cancelOrderEvent', 'orderStatusEvent')
 
     def __init__(self, start_date, end_date=datetime.today()):
         self._createEvents()
         self.start_date = pd.to_datetime(start_date, format='%Y%m%d')
         self.end_date = pd.to_datetime(end_date, format='%Y%m%d')
         self.store = Store()
+        self.id = count(1, 1)
 
     def _createEvents(self):
         self.barUpdateEvent = Event('barUpdateEvent')
+        self.newOrderEvent = Event('newOrderEvent')
+        self.orderModifyEvent = Event('orderModifyEvent')
+        self.orderStatusEvent = Event('orderStatusEvent')
 
     def reqContractDetails(self, contract):
         try:
@@ -78,19 +84,63 @@ class IB:
         return d['time_string']
 
     def positions(self):
-        return Market().positions
+        # TODO
+        return self.market.positions.values()
 
     def openTrades(self):
-        return Market().orders
+        return [v for v in self.market.trades.values()
+                if v.orderStatus.status not in OrderStatus.DoneStates]
 
     def placeOrder(self, contract, order):
-        Market().orders.append(order)
+        """
+        Trade(contract, order, orderStatus, fills, log)
+        """
+
+        orderId = order.orderId or next(self.id)
+        now = self.market.date
+        trade = self.market.trades.get(order)
+        if trade:
+            # this is a modification of an existing order
+            assert trade.orderStatus.status not in OrderStatus.DoneStates
+            logEntry = TradeLogEntry(now, trade.orderStatus.status, 'Modify')
+            trade.log.append(logEntry)
+            trade.modifyEvent.emit(trade)
+            self.orderModifyEvent.emit(trade)
+        else:
+            order.orderId = orderId
+            orderStatus = OrderStatus(status=OrderStatus.PendingSubmit)
+            logEntry = TradeLogEntry(now, orderStatus, '')
+            trade = Trade(contract, order, orderStatus, [], [logEntry])
+            self.newOrderEvent.emit(trade)
+        self.market.trades[order] = trade
+        return trade
 
     def cancelOrder(self, order):
-        Market().orders.remove(order)
+        now = self.market.date
+        trade = self.market.get(order)
+        if trade:
+            if not trade.isDone():
+                status = trade.orderStatus.status
+                if (status == OrderStatus.PendingSubmit and not order.transmit
+                        or status == OrderStatus.Inactive):
+                    newStatus = OrderStatus.Cancelled
+                else:
+                    newStatus = OrderStatus.PendingCancel
+                logEntry = TradeLogEntry(now, newStatus, '')
+                trade.log.append(logEntry)
+                trade.orderStatus.status = newStatus
+                trade.cancelEvent.emit(trade)
+                trade.statusEvent.emit(trade)
+                self.canceOrderEvent.emit(trade)
+                self.orderStatusEvent.emit(trade)
+                if newStatus == OrderStatus.Cancelled:
+                    trade.cancelledEvent.emit(trade)
+        else:
+            log.error(f'cancelOrder: Unknown orderId {order.orderId}')
 
     def run(self):
-        Market().run()
+        self.market = Market()
+        self.market.run()
 
 
 class DataSource:
@@ -156,35 +206,67 @@ class DataSource:
 
     def emit(self, date):
         if self.last_bar is None:
-            self.last_bar = self.data.pop()
-        if self.last_bar.date == date:
-            self.bars.append(self.last_bar)
-            self.bars.updateEvent.emit(self.bars, True)
-            self.last_bar = None
+            try:
+                self.last_bar = self.data[-1]
+            except IndexError:
+                pass
+        else:
+            if self.last_bar.date == date:
+                self.bars.append(self.last_bar)
+                self.bars.updateEvent.emit(self.bars, True)
+                self.data.pop()
+            else:
+                self.last_bar = None
 
 
 class Market:
     class __Market:
         def __init__(self):
-            self.objects = []
-            self.orders = []
+            self.objects = {}
+            self.trades = []
             self.positions = []
             self.index = None
+            self.date = None
 
         def register(self, source):
             if self.index is None:
                 self.index = source.index
             else:
                 self.index.join(source.index, how='outer')
-            self.objects.append(source)
+            self.objects[source.contract] = source
 
         def run(self):
             self.index = self.index.sort_values()
             for date in self.index:
                 log.debug(f'current date: {date}')
-                for o in self.objects:
+                self.date = date
+                self.run_orders()
+                for o in self.objects.values():
                     o.emit(date)
-                # execute orders
+
+        def run_orders(self):
+            for trade in trades:
+                if not trade.isDone:
+                    if trade.order.orderType == 'MKT':
+                        self.execute_order(trade)
+                    elif trade.order.orderType == 'STP':
+                        self.validate_stop(trade)
+                    elif trade.order.orderType == 'LMT':
+                        self.validate_limit(trade)
+
+        def validate_stop(self, trade):
+            pass
+
+        def validate_limit(self, trade):
+            pass
+
+        def execute_order(self, trade):
+            p = Position(account='',
+                         contract=trade.contract,
+                         position=(trade.order.totalQuantity
+                                   if trade.order.action == 'BUY'
+                                   else -trade.order.totalQuantity)
+                         avgCost=self.objects[trade.contract].last_bar.open)
 
     instance = None
 

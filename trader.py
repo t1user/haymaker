@@ -303,8 +303,13 @@ class Blotter:
     def __init__(self, save_to_file=True, path='blotter'):
         filename = __file__.split('/')[-1][:-3]
         self.file = (f'{path}/{filename}_'
-                     f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}')
+                     f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}.csv')
         self.save_to_file = save_to_file
+        self.fieldnames = ['time', 'contract', 'action', 'amount', 'price',
+                           'exec_ids', 'trade_id', 'reason']
+        with open(self.file, 'w') as f:
+            writer = csv.DictWriter(f, fieldnames=self.fieldnames)
+            writer.writeheader()
 
     def log_trade(self, trade, reason=''):
         time = trade.log[-1].time
@@ -315,23 +320,16 @@ class Blotter:
         exec_ids = [fill.execution.execId for fill in trade.fills]
         trade_id = trade.orderStatus.permId
         reason = reason
-        row = {'time': time,
-               'contract': contract,
-               'action': action,
-               'amount': amount,
-               'price': price,
-               'exec_ids': exec_ids,
-               'trade_id': trade_id,
-               'exec_ids': exec_ids,
-               'reason': reason}
+        var_names = locals()
+        row = {f: var_names[f] for f in self.fieldnames}
         if self.save_to_file:
             self.write_to_file(row)
         print(row)
 
     def write_to_file(self, data):
-        with open(self.file, 'w') as f:
-            writer = csv.writer(f)
-            writer.write(data)
+        with open(self.file, 'a') as f:
+            writer = csv.DictWriter(f, fieldnames=self.fieldnames)
+            writer.writerow(data)
 
 
 def get_contracts(contract_tuples, ib):
