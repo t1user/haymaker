@@ -1,5 +1,6 @@
 import sys
 from collections import defaultdict
+from functools import partialmethod
 from datetime import datetime
 import csv
 from pprint import pprint
@@ -306,10 +307,13 @@ class Blotter:
                      f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}.csv')
         self.save_to_file = save_to_file
         self.fieldnames = ['time', 'contract', 'action', 'amount', 'price',
-                           'exec_ids', 'trade_id', 'reason']
+                           'exec_ids', 'order_id', 'reason', 'com_exec_id',
+                           'commission', 'currency', 'realizedPNL']
         with open(self.file, 'w') as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writeheader()
+
+        self.unsaved_trades = {}
 
     def log_trade(self, trade, reason=''):
         time = trade.log[-1].time
@@ -318,13 +322,29 @@ class Blotter:
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
         exec_ids = [fill.execution.execId for fill in trade.fills]
-        trade_id = trade.orderStatus.permId
+        order_id = trade.order.orderId
         reason = reason
-        var_names = locals()
-        row = {f: var_names[f] for f in self.fieldnames}
+        row = {'time': time,
+               'contract': contract,
+               'action': action,
+               'amount': amount,
+               'price': price,
+               'exec_ids': exec_ids,
+               'order_id': order_id,
+               'reason': reason}
+        self.unsaved_trades[order_id] = row
+        trade.commissionReportEvent += self.update_commission
+
+    def update_commission(self, trade, fill, report):
+        self.unsaved_trades[trade.order.orderId].update(
+            {'com_exec_id': report.execId,
+             'commission': report.commission,
+             'currency': report.currency,
+             'realizedPNL': report.realizedPNL}
+        )
         if self.save_to_file:
-            self.write_to_file(row)
-        print(row)
+            self.write_to_file(self.unsaved_trades[trade.order.orderId])
+        del self.unsaved_trades[trade.order.orderId]
 
     def write_to_file(self, data):
         with open(self.file, 'a') as f:

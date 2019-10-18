@@ -84,18 +84,13 @@ class IB:
         return d['time_string']
 
     def positions(self):
-        # TODO
-        return self.market.positions.values()
+        return self.market.positions
 
     def openTrades(self):
         return [v for v in self.market.trades.values()
                 if v.orderStatus.status not in OrderStatus.DoneStates]
 
     def placeOrder(self, contract, order):
-        """
-        Trade(contract, order, orderStatus, fills, log)
-        """
-
         orderId = order.orderId or next(self.id)
         now = self.market.date
         trade = self.market.trades.get(order)
@@ -205,6 +200,15 @@ class DataSource:
         return bars
 
     def emit(self, date):
+        try:
+            if self.data[-1] == date:
+                self.bars.append(self.last_bar)
+                self.bars.updateEvent.emit(self.bars, True)
+                self.last_bar = self.data.pop()
+        except IndexError:
+            pass
+
+        """
         if self.last_bar is None:
             try:
                 self.last_bar = self.data[-1]
@@ -217,6 +221,7 @@ class DataSource:
                 self.data.pop()
             else:
                 self.last_bar = None
+        """
 
 
 class Market:
@@ -227,6 +232,7 @@ class Market:
             self.positions = []
             self.index = None
             self.date = None
+            self.exec_id = count(1, 1)
 
         def register(self, source):
             if self.index is None:
@@ -245,7 +251,8 @@ class Market:
                     o.emit(date)
 
         def run_orders(self):
-            for trade in trades:
+            for trade in self.trades:
+                self.price = trade.contract.data[-1]
                 if not trade.isDone:
                     if trade.order.orderType == 'MKT':
                         self.execute_order(trade)
@@ -255,18 +262,67 @@ class Market:
                         self.validate_limit(trade)
 
         def validate_stop(self, trade):
-            pass
+            order = trade.order
+            if order.action == 'BUY' and order.auxPrice >= self.price:
+                self.execute_order(trade)
+            if order.action == 'SELL' and order.auxPrice <= self.price:
+                self.execute_order(trade)
 
         def validate_limit(self, trade):
-            pass
+            order = trade.order
+            if order.action == 'BUY' and order.lmtPrice <= self.price:
+                self.execute_order(trade)
+            if order.action == 'SELL' and order.lmtPrice >= self.price:
+                self.execute_order(trade)
 
         def execute_order(self, trade):
-            p = Position(account='',
-                         contract=trade.contract,
-                         position=(trade.order.totalQuantity
-                                   if trade.order.action == 'BUY'
-                                   else -trade.order.totalQuantity)
-                         avgCost=self.objects[trade.contract].last_bar.open)
+            quantity = trade.order.totalQuantity
+            exec_id = next(self.exec_id)
+            position = Position(
+                account='',
+                contract=trade.contract,
+                position=(quantity
+                          if trade.order.action == 'BUY'
+                          else -quantity),
+                avgCost=(self.price
+                         if not isinstance(trade.contract, (Future, ContFuture))
+                         else self.price * trade.contract.multiplier)
+            )
+            execution = Execution(execId=x,
+                                  time=self.date,
+                                  acctNumber='',
+                                  exchange=trade.contract.exchange,
+                                  side=trade.order.action,
+                                  shares=quantity,
+                                  price=self.price,
+                                  permId=exec_id,
+                                  orderId=trade.order.orderId,
+                                  cumQty=quantity,
+                                  avgPrice=self.price,
+                                  lastLiquidity=quantity)
+            # TODO fix commission levels
+            # TODO get realized PNL
+            commission = CommissionReport(exec_id=exec_id,
+                                          commission=1.3,
+                                          currency=trade.contract.currency,
+                                          # realizedPNL
+                                          )
+            fill = Fill(contract=trade.contract,
+                        execution=execution,
+                        commissionReport=commission)
+            trade.fills.append(fill)
+            trade.status = OrderStatus.Filled(filled=quantity,
+                                              avgFillPrice=self.price,
+                                              lastFillPrice=self.price)
+            trade.log = TradeLogEntry(time=self.date,
+                                      status='Filled',
+                                      message=f'Fill @{self.price}')
+
+            trade.statusEvent.emit(trade)
+            trade.fillEvent.emit(trade, fill)
+            trade.commissionReportEvent.emit(trade, fill, commission)
+            trade.filledEvent.emit(trade)
+            self.positions.append(position)
 
     instance = None
 

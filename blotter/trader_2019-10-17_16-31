@@ -1,3 +1,0 @@
-time,contract,action,amount,price,exec_ids,trade_id,reason
-2019-10-17 14:37:32.129690+00:00,CLX9,BUY,1.0,53.19,['0000e1a7.5da7ff41.01.01'],361265991,entry
-2019-10-17 14:38:00.783986+00:00,NQZ9,SELL,1.0,7954.0,['0000e1a7.5da7ff55.01.01'],361265993,entry

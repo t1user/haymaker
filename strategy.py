@@ -58,7 +58,7 @@ class Strategy(WatchdogHandlers):
         ib.connectedEvent += self.onConnected
         ib.errorEvent += self.onError
         ib.updatePortfolioEvent += self.onUpdatePortfolioEvent
-        ib.pnlEvent += self.onPnlEvent
+        ib.accountSummaryEvent += self.onAccountSummaryEvent
         update = Event().timerange(60, None, 300)
         update += self.onScheduledUpdate
         self.ib = ib
@@ -67,6 +67,9 @@ class Strategy(WatchdogHandlers):
 
     def onConnected(self):
         log.debug('connection established')
+        self.account = ib.client.getAccounts()[0]
+        self.ib.accountSummary()
+        self.ib.reqPnL(self.account)
 
     def onStartedEvent(self, *args):
         log.debug('initializing strategy')
@@ -77,23 +80,22 @@ class Strategy(WatchdogHandlers):
     def onError(self, *args):
         log.error(f'ERROR: {args}')
 
-    def onPnlEvent(self, pnl):
-        log.info(f'pnl: {pnl}')
-
     def onUpdatePortfolioEvent(self, i):
         report = (i.contract.localSymbol, int(i.realizedPNL), int(i.unrealizedPNL),
                   int(i.realizedPNL + i.unrealizedPNL))
         log.info(f'Portfolio item: {report}')
 
     def onScheduledUpdate(self, time):
-        portfolio = ib.portfolio()
-        report = [(i.realizedPNL, i.unrealizedPNL,
-                   i.realizedPNL + i.unrealizedPNL)
-                  for i in portfolio]
-        totals = [int(sum(x)) for x in zip(*report)]
-        message = (f'PNL REPORT: realized: {totals[0]}, '
-                   f'unrealized: {totals[1]}, total: {totals[2]}')
-        log.info(message)
+        log.info(f'pnl: {self.ib.pnl()}')
+
+    def onAccountSummaryEvent(self, value):
+        tags = ['UnrealizedPnL', 'RealizedPnL', 'FuturesPNL',
+                'NetLiquidationByCurrency']
+        if value.tag in tags:
+            log.info(f'{value.tag}: {value.value}')
+
+    def onCommissionReportEvent(self, trade, fill, report):
+        pprint(report)
 
 
 if __name__ == '__main__':
