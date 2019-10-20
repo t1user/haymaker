@@ -2,13 +2,16 @@ from datetime import datetime
 from itertools import count
 
 import pandas as pd
+import numpy as np
 from logbook import Logger
 
 from ib_insync import IB as master_IB
 import pickle
 from ib_insync import IB as master_IB
 from ib_insync.contract import Future, ContFuture
-from ib_insync.objects import BarData, BarDataList, ContractDetails
+from ib_insync.objects import (BarData, BarDataList, ContractDetails,
+                               TradeLogEntry, Position, CommissionReport,
+                               Execution, Fill)
 from ib_insync.order import Order, OrderStatus, Trade, LimitOrder, StopOrder
 from eventkit import Event
 
@@ -47,6 +50,7 @@ class IB:
         self.newOrderEvent = Event('newOrderEvent')
         self.orderModifyEvent = Event('orderModifyEvent')
         self.orderStatusEvent = Event('orderStatusEvent')
+        self.cancelOrderEvent = Event('cancelOrderEvent')
 
     def reqContractDetails(self, contract):
         try:
@@ -84,16 +88,16 @@ class IB:
         return d['time_string']
 
     def positions(self):
-        return self.market.positions
+        return self.market.positions.values()
 
     def openTrades(self):
-        return [v for v in self.market.trades.values()
+        return [v for v in self.market.trades
                 if v.orderStatus.status not in OrderStatus.DoneStates]
 
     def placeOrder(self, contract, order):
         orderId = order.orderId or next(self.id)
         now = self.market.date
-        trade = self.market.trades.get(order)
+        trade = self.market.get_trade(order)
         if trade:
             # this is a modification of an existing order
             assert trade.orderStatus.status not in OrderStatus.DoneStates
@@ -107,12 +111,12 @@ class IB:
             logEntry = TradeLogEntry(now, orderStatus, '')
             trade = Trade(contract, order, orderStatus, [], [logEntry])
             self.newOrderEvent.emit(trade)
-        self.market.trades[order] = trade
+            self.market.trades.append(trade)
         return trade
 
     def cancelOrder(self, order):
         now = self.market.date
-        trade = self.market.get(order)
+        trade = self.market.get_trade(order)
         if trade:
             if not trade.isDone():
                 status = trade.orderStatus.status
@@ -120,13 +124,13 @@ class IB:
                         or status == OrderStatus.Inactive):
                     newStatus = OrderStatus.Cancelled
                 else:
-                    newStatus = OrderStatus.PendingCancel
+                    newStatus = OrderStatus.Cancelled
                 logEntry = TradeLogEntry(now, newStatus, '')
                 trade.log.append(logEntry)
                 trade.orderStatus.status = newStatus
                 trade.cancelEvent.emit(trade)
                 trade.statusEvent.emit(trade)
-                self.canceOrderEvent.emit(trade)
+                self.cancelOrderEvent.emit(trade)
                 self.orderStatusEvent.emit(trade)
                 if newStatus == OrderStatus.Cancelled:
                     trade.cancelledEvent.emit(trade)
@@ -148,14 +152,17 @@ class DataSource:
         self.start_date = start_date
         self.end_date = end_date
         self.contract = self.validate_contract(contract)
-        self.df = self.get_df()
+        # this is all available data as df
+        df = self.get_df()
         self.startup_end_point = self.start_date + pd.Timedelta(duration, 'D')
-        log.debug(f'startup end point: {self.startup_end_point}')
-        data_df = self.df.loc[:self.startup_end_point]
+        # this is data for emissions as df
+        data_df = self.get_data_df(df)
+        # this index will be available for emissions
         self.index = data_df.index
+        # this is data for emissions as bars list
         self.data = self.get_BarDataList(data_df)
-        self.bars = self.startup
-        self.last_bar = None
+        self.bars = self.startup(df)
+        # self.last_bar = None
         Market().register(self)
 
     @classmethod
@@ -164,16 +171,27 @@ class DataSource:
         cls.end_date = end_date
         return cls
 
+    def get_data_df(self, df):
+        """
+        Set index of data available post startup period.
+        """
+        log.debug(f'startup end point: {self.startup_end_point}')
+        data_df = df.loc[:self.startup_end_point]
+        return data_df
+
     def get_df(self):
         start_date = self.start_date.strftime('%Y%m%d')
         end_date = self.end_date.strftime('%Y%m%d')
         date_string = f'index > {start_date} & index < {end_date}'
         return self.store.read(self.contract, 'min', date_string)
 
-    @property
-    def startup(self):
+    def startup(self, df):
+        """
+        Create bars list that will be available pre-emissions (startup).
+        Index is sorted: ascending.
+        """
         log.debug(f'generating startup data for {self.contract.localSymbol}')
-        startup_chunk = self.df.loc[self.startup_end_point:].sort_index(
+        startup_chunk = df.loc[self.startup_end_point:].sort_index(
             ascending=True)
         log.debug(f'startup chunk length: {len(startup_chunk)}')
         return self.get_BarDataList(startup_chunk)
@@ -199,29 +217,17 @@ class DataSource:
             bars.append(bar)
         return bars
 
+    def __repr__(self):
+        return f'data source for {self.contract.localSymbol}'
+
     def emit(self, date):
         try:
-            if self.data[-1] == date:
-                self.bars.append(self.last_bar)
-                self.bars.updateEvent.emit(self.bars, True)
-                self.last_bar = self.data.pop()
-        except IndexError:
-            pass
-
-        """
-        if self.last_bar is None:
-            try:
-                self.last_bar = self.data[-1]
-            except IndexError:
-                pass
-        else:
-            if self.last_bar.date == date:
-                self.bars.append(self.last_bar)
+            if self.data[-1].date == date:
+                self.bars.append(self.data[-1])
                 self.bars.updateEvent.emit(self.bars, True)
                 self.data.pop()
-            else:
-                self.last_bar = None
-        """
+        except IndexError:
+            pass
 
 
 class Market:
@@ -229,10 +235,18 @@ class Market:
         def __init__(self):
             self.objects = {}
             self.trades = []
-            self.positions = []
+            self.positions = {}
             self.index = None
             self.date = None
             self.exec_id = count(1, 1)
+
+        def get_trade(self, order):
+            for trade in self.trades:
+                if trade.order == order:
+                    return trade
+
+        def get_open_trades(self):
+            trades = [trade for trade in self.trades if not trade.isDone]
 
         def register(self, source):
             if self.index is None:
@@ -240,6 +254,7 @@ class Market:
             else:
                 self.index.join(source.index, how='outer')
             self.objects[source.contract] = source
+            log.debug(f'object {source} registered with Market')
 
         def run(self):
             self.index = self.index.sort_values()
@@ -252,8 +267,8 @@ class Market:
 
         def run_orders(self):
             for trade in self.trades:
-                self.price = trade.contract.data[-1]
-                if not trade.isDone:
+                self.price = self.objects[trade.contract].data[-1].average
+                if not trade.isDone():
                     if trade.order.orderType == 'MKT':
                         self.execute_order(trade)
                     elif trade.order.orderType == 'STP':
@@ -263,32 +278,23 @@ class Market:
 
         def validate_stop(self, trade):
             order = trade.order
-            if order.action == 'BUY' and order.auxPrice >= self.price:
+            if order.action.upper() == 'BUY' and order.auxPrice <= self.price:
                 self.execute_order(trade)
-            if order.action == 'SELL' and order.auxPrice <= self.price:
+            if order.action.upper() == 'SELL' and order.auxPrice >= self.price:
                 self.execute_order(trade)
 
         def validate_limit(self, trade):
             order = trade.order
-            if order.action == 'BUY' and order.lmtPrice <= self.price:
+            if order.action.upper() == 'BUY' and order.lmtPrice >= self.price:
                 self.execute_order(trade)
-            if order.action == 'SELL' and order.lmtPrice >= self.price:
+            if order.action.upper() == 'SELL' and order.lmtPrice <= self.price:
                 self.execute_order(trade)
 
         def execute_order(self, trade):
+            print(f'executing order {trade.order}')
             quantity = trade.order.totalQuantity
             exec_id = next(self.exec_id)
-            position = Position(
-                account='',
-                contract=trade.contract,
-                position=(quantity
-                          if trade.order.action == 'BUY'
-                          else -quantity),
-                avgCost=(self.price
-                         if not isinstance(trade.contract, (Future, ContFuture))
-                         else self.price * trade.contract.multiplier)
-            )
-            execution = Execution(execId=x,
+            execution = Execution(execId=exec_id,
                                   time=self.date,
                                   acctNumber='',
                                   exchange=trade.contract.exchange,
@@ -300,29 +306,90 @@ class Market:
                                   cumQty=quantity,
                                   avgPrice=self.price,
                                   lastLiquidity=quantity)
-            # TODO fix commission levels
-            # TODO get realized PNL
-            commission = CommissionReport(exec_id=exec_id,
-                                          commission=1.3,
-                                          currency=trade.contract.currency,
-                                          # realizedPNL
-                                          )
-            fill = Fill(contract=trade.contract,
+            commission = CommissionReport()
+            fill = Fill(time=self.date,
+                        contract=trade.contract,
                         execution=execution,
                         commissionReport=commission)
             trade.fills.append(fill)
-            trade.status = OrderStatus.Filled(filled=quantity,
-                                              avgFillPrice=self.price,
-                                              lastFillPrice=self.price)
-            trade.log = TradeLogEntry(time=self.date,
-                                      status='Filled',
-                                      message=f'Fill @{self.price}')
+            trade.orderStatus = OrderStatus(status='Filled',
+                                            filled=quantity,
+                                            avgFillPrice=self.price,
+                                            lastFillPrice=self.price)
+            trade.log.append(TradeLogEntry(time=self.date,
+                                           status=trade.orderStatus,
+                                           message=f'Fill @{self.price}'))
 
             trade.statusEvent.emit(trade)
             trade.fillEvent.emit(trade, fill)
-            trade.commissionReportEvent.emit(trade, fill, commission)
             trade.filledEvent.emit(trade)
-            self.positions.append(position)
+            self.update_positions(trade)
+
+        def update_positions(self, trade):
+            quantity = trade.fills[-1].execution.shares
+            price = trade.fills[-1].execution.price
+            side = trade.fills[-1].execution.side.upper()
+            position = quantity if side == 'BUY' else -quantity
+            avgCost = (price * quantity
+                       if not isinstance(trade.contract, (Future, ContFuture))
+                       else price * int(trade.contract.multiplier) * quantity)
+            pnl = 0
+
+            if trade.contract in self.positions:
+                # trade corresponds to an open position
+                old_position = self.positions[trade.contract]
+                new_position = old_position.position + position
+                if new_position != 0:
+                    if np.sign(new_position * old_position.position) == 1:
+                        # fraction of the position has been liqidated
+                        log.error("we shouldn't be here: fraction liquidated")
+                        cost_base = (1 - new_position/old_position.position) \
+                            * old_position.avgCost
+                        pnl = (old_position.position - new_position) * price \
+                            - cost_base * -np.sign(position)
+                        position = Position(
+                            account='',
+                            contract=trade.contract,
+                            position=new_position,
+                            avgCost=old_position.avgCost - cost_base
+                        )
+                        self.positions[trade.contract] = position
+
+                    else:
+                        # position has been reversed
+                        log.error("we shouldn't be here: position reversed")
+                        closing_value = (old_position.position /
+                                         position) * avgCost
+                        pnl = (closing_value - old_position.avgCost) * \
+                            -np.sign(position)
+                        position = Position(
+                            account='',
+                            contract=trade.contract,
+                            position=position,
+                            avgCost=avgCost
+                        )
+                        self.positions[trade.contract] = position
+                else:
+                    # postion has been closed
+                    pnl = (avgCost - old_position.avgCost) * -np.sign(position)
+                    del self.positions[trade.contract]
+            else:
+                # this is a new position
+                position = Position(
+                    account='',
+                    contract=trade.contract,
+                    position=position,
+                    avgCost=avgCost
+                )
+                self.positions[trade.contract] = position
+
+            commission = CommissionReport(execId=trade.fills[-1].execution.execId,
+                                          commission=1.3,
+                                          currency=trade.contract.currency,
+                                          realizedPNL=round(pnl, 2)
+                                          )
+            trade.commissionReportEvent.emit(
+                trade, trade.fills[-1], commission)
 
     instance = None
 

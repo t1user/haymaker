@@ -217,14 +217,14 @@ class Trader:
         self.contract_details = {}
 
     def onEntry(self, contract, signal, atr):
-        log.debug(f'entry signal handled for: {contract} {signal} {atr}')
+        log.debug(f'entry signal handled for: {contract.localSymbol} {signal} {atr}')
         self.atr_dict[contract] = atr
         trade = self.trade(contract, signal)
         trade.filledEvent += self.attach_sl
         log.debug('entry order placed')
 
     def onClose(self, contract, signal):
-        log.debug(f'close signal handled for: {contract} {signal}')
+        log.debug(f'close signal handled for: {contract.localSymbol} {signal}')
         positions = {p.contract: p.position for p in self.ib.positions()}
         if contract in positions:
             trade = self.trade(contract, signal)
@@ -237,7 +237,7 @@ class Trader:
             order = MarketOrder('BUY', 1)
         elif signal == -1:
             log.debug(f'entering sell order for {contract.localSymbol}')
-            order = MarketOrder('Sell', 1)
+            order = MarketOrder('SELL', 1)
         trade = self.ib.placeOrder(contract, order)
         return trade
 
@@ -275,7 +275,7 @@ class Trader:
         for order in orders[contract]:
             if order.orderType == 'STP':
                 self.ib.cancelOrder(order)
-                log.debug('stop loss removed')
+                log.debug(f'stop loss removed for {contract.localSymbol}')
 
     @staticmethod
     def round_tick(price, tick_size):
@@ -290,7 +290,7 @@ class Trader:
 
     def report_stopout(self, trade):
         message = (
-            f'STOP-OUT for {trade.contract.localSymbol}'
+            f'STOP-OUT for {trade.contract.localSymbol} '
             f'{trade.order.action} @{trade.orderStatus.avgFillPrice}'
         )
         log.info(message)

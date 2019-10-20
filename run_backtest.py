@@ -14,9 +14,9 @@ ib = IB(start_date='20170901')
 
 contracts = [
     ('NQ', 'GLOBEX'),
-    ('ES', 'GLOBEX'),
-    ('NKD', 'GLOBEX'),
-    ('CL', 'NYMEX'),
+    #('ES', 'GLOBEX'),
+    #('NKD', 'GLOBEX'),
+    #('CL', 'NYMEX'),
     ('GC', 'NYMEX'),
 ]
 
