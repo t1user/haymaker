@@ -64,6 +64,7 @@ class Strategy(WatchdogHandlers):
         self.ib = ib
         self.trader = trader
         super().__init__(watchdog)
+        self.portfolio_items = {}
 
     def onConnected(self):
         log.debug('connection established')
@@ -81,16 +82,31 @@ class Strategy(WatchdogHandlers):
         log.error(f'ERROR: {args}')
 
     def onUpdatePortfolioEvent(self, i):
-        report = (i.contract.localSymbol, int(i.realizedPNL), int(i.unrealizedPNL),
-                  int(i.realizedPNL + i.unrealizedPNL))
+        realized = round(i.realizedPNL, 2)
+        unrealized = round(irealizedPNL, 2)
+        total = round(realized + unrealized)
+        report = (i.contract.localSymbol, realized, unrealized, total)
         log.info(f'Portfolio item: {report}')
+        self.portfolio_items[i.contract.localSymbol] = (
+            realized, unrealized, total)
 
     def onScheduledUpdate(self, time):
         log.info(f'pnl: {self.ib.pnl()}')
+        summary = ()
+        for contract, value in self.portfolio_items.items():
+            summary[0] += value[0]
+            summary[1] += value[1]
+            summary[2] += value[2]
+        message = (f'realized: {summary[0]}, '
+                   f'unrealized: {summary[1]}, total: {summary[2]}')
+        log.info(message)
 
     def onAccountSummaryEvent(self, value):
+        """
         tags = ['UnrealizedPnL', 'RealizedPnL', 'FuturesPNL',
                 'NetLiquidationByCurrency']
+        """
+        tags = ['NetLiquidationByCurrency']
         if value.tag in tags:
             log.info(f'{value.tag}: {value.value}')
 

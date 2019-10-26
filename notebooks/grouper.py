@@ -13,7 +13,8 @@ class VolumeGrouper:
         self.volume += vol
         self.accumulator.append(vol)
         if self.volume >= self.avg_vol:
-            self.volume -= self.avg_vol
+            #self.volume -= self.avg_vol
+            self.volume = 0
             self.counter += 1
             if self.dynamic:
                 self.adjust_avg()
@@ -37,7 +38,7 @@ def group_by_volume(df, volume=1000, dynamic=False):
                                                     'low': 'min',
                                                     'close': 'last',
                                                     'barCount': 'sum',
-                                                    'volume': 'sum'})
+                                                    'volume': 'sum', })
     return vol_candles
 
 

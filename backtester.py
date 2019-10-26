@@ -106,6 +106,7 @@ class IB:
             trade.modifyEvent.emit(trade)
             self.orderModifyEvent.emit(trade)
         else:
+            # this is a new order
             order.orderId = orderId
             orderStatus = OrderStatus(status=OrderStatus.PendingSubmit)
             logEntry = TradeLogEntry(now, orderStatus, '')
@@ -119,6 +120,7 @@ class IB:
         trade = self.market.get_trade(order)
         if trade:
             if not trade.isDone():
+                # this is a placeholder for implementation of further methods
                 status = trade.orderStatus.status
                 if (status == OrderStatus.PendingSubmit and not order.transmit
                         or status == OrderStatus.Inactive):
@@ -160,7 +162,7 @@ class DataSource:
         # this index will be available for emissions
         self.index = data_df.index
         # this is data for emissions as bars list
-        self.data = self.get_BarDataList(data_df)
+        self.data = self.get_dict(data_df)
         self.bars = self.startup(df)
         # self.last_bar = None
         Market().register(self)
@@ -173,7 +175,8 @@ class DataSource:
 
     def get_data_df(self, df):
         """
-        Set index of data available post startup period.
+        Create bars list that will be available for emissions.
+        Index is sorted: descending (but in current implementation, it doesn't matter)
         """
         log.debug(f'startup end point: {self.startup_end_point}')
         data_df = df.loc[:self.startup_end_point]
@@ -217,17 +220,28 @@ class DataSource:
             bars.append(bar)
         return bars
 
+    @staticmethod
+    def get_dict(chunk):
+        """
+        Return a dict of:
+        {'Timestamp': BarData(...)}
+        """
+        source = chunk.to_dict('index')
+        return {k: BarData(date=k).update(**v) for k, v in source.items()}
+
     def __repr__(self):
         return f'data source for {self.contract.localSymbol}'
 
     def emit(self, date):
-        try:
-            if self.data[-1].date == date:
-                self.bars.append(self.data[-1])
-                self.bars.updateEvent.emit(self.bars, True)
-                self.data.pop()
-        except IndexError:
-            pass
+        bar = self.data.get(date)
+        if bar:
+            self.bars.append(bar)
+            self.bars.updateEvent.emit(self.bars, True)
+        else:
+            log.error(f'missing data bar {date} for {self.contract.localSymbol}')
+
+    def bar(self, date):
+        return self.data.get(date)
 
 
 class Market:
@@ -258,6 +272,7 @@ class Market:
 
         def run(self):
             self.index = self.index.sort_values()
+            log.info(f'index duplicates: {self.index[self.index.duplicated()]}')
             for date in self.index:
                 log.debug(f'current date: {date}')
                 self.date = date
@@ -267,7 +282,10 @@ class Market:
 
         def run_orders(self):
             for trade in self.trades:
-                self.price = self.objects[trade.contract].data[-1].average
+                if self.objects[trade.contract].bar(self.date) is None:
+                    continue
+                self.price = self.objects[trade.contract].bar(
+                    self.date).average
                 if not trade.isDone():
                     if trade.order.orderType == 'MKT':
                         self.execute_order(trade)
@@ -291,7 +309,6 @@ class Market:
                 self.execute_order(trade)
 
         def execute_order(self, trade):
-            print(f'executing order {trade.order}')
             quantity = trade.order.totalQuantity
             exec_id = next(self.exec_id)
             execution = Execution(execId=exec_id,

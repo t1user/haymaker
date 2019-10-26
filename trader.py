@@ -3,7 +3,6 @@ from collections import defaultdict
 from functools import partialmethod
 from datetime import datetime
 import csv
-from pprint import pprint
 
 import pandas as pd
 
@@ -242,7 +241,6 @@ class Trader:
         return trade
 
     def attach_sl(self, trade):
-        pprint(f'EXECUTED TRADE: {trade}')
         self.blotter.log_trade(trade, 'entry')
         side = {'BUY': 'SELL', 'SELL': 'BUY'}
         direction = {'BUY': -1, 'SELL': 1}
@@ -301,19 +299,24 @@ class Trader:
 
 
 class Blotter:
-    def __init__(self, save_to_file=True, path='blotter'):
-        filename = __file__.split('/')[-1][:-3]
+    def __init__(self, save_to_file=True, filename=None, path='blotter'):
+        if filename is None:
+            filename = __file__.split('/')[-1][:-3]
         self.file = (f'{path}/{filename}_'
                      f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}.csv')
         self.save_to_file = save_to_file
         self.fieldnames = ['time', 'contract', 'action', 'amount', 'price',
                            'exec_ids', 'order_id', 'reason', 'com_exec_id',
                            'commission', 'currency', 'realizedPNL']
+        self.unsaved_trades = {}
+        self.blotter = []
+        if self.save_to_file:
+            self.create_header()
+
+    def create_header(self):
         with open(self.file, 'w') as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writeheader()
-
-        self.unsaved_trades = {}
 
     def log_trade(self, trade, reason=''):
         time = trade.log[-1].time
@@ -344,12 +347,21 @@ class Blotter:
         )
         if self.save_to_file:
             self.write_to_file(self.unsaved_trades[trade.order.orderId])
+        else:
+            self.blotter.append(self.unsaved_trades[trade.order.orderId])
         del self.unsaved_trades[trade.order.orderId]
 
     def write_to_file(self, data):
         with open(self.file, 'a') as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writerow(data)
+
+    def save(self):
+        self.create_header()
+        with open(self.file, 'a') as f:
+            writer = csv.DictWriter(f, fieldnames=self.fieldnames)
+            for item in self.blotter:
+                writer.writerow(item)
 
 
 def get_contracts(contract_tuples, ib):
