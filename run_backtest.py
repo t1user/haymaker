@@ -16,10 +16,10 @@ ib = IB(start_date='20180201')
 
 contracts = [
     ('NQ', 'GLOBEX'),
-    ('ES', 'GLOBEX'),
-    ('NKD', 'GLOBEX'),
-    ('CL', 'NYMEX'),
-    ('GC', 'NYMEX'),
+    #('ES', 'GLOBEX'),
+    #('NKD', 'GLOBEX'),
+    #('CL', 'NYMEX'),
+    #('GC', 'NYMEX'),
 ]
 
 # util.patchAsyncio()
@@ -27,9 +27,9 @@ util.logToConsole()
 asyncio.get_event_loop().set_debug(True)
 blotter = Blotter(False, 'backtest')
 trader = Trader(ib, blotter)
-#futures = get_contracts(contracts, ib)
-with open('contracts.pickle', 'rb') as f:
-    futures = pickle.load(f)
+futures = get_contracts(contracts, ib)
+# with open('contracts.pickle', 'rb') as f:
+#    futures = pickle.load(f)
 candles = [Candle(contract, trader, ib)
            for contract in futures]
 

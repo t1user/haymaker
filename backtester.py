@@ -59,14 +59,34 @@ class IB:
         except (FileNotFoundError, EOFError):
             c = dict()
         try:
-            return c[contract]
+            return c[contract.conId]
         except KeyError:
             with master_IB().connect(port=4002) as ib:
                 details = ib.reqContractDetails(contract)
-            c[contract] = details
+            c[contract.conId] = details
             with open(f'{self.path}/details.pickle', 'wb') as f:
                 pickle.dump(c, f)
             return details
+
+    def qualifyContracts(self, *contracts):
+        detailsLists = (self.reqContractDetails(c) for c in contracts)
+        result = []
+        for contract, detailsList in zip(contracts, detailsLists):
+            if not detailsList:
+                log.error(f'unknown contract {contract}')
+            else:
+                c = detailsList[0].contract
+                expiry = c.lastTradeDateOrContractMonth
+                if expiry:
+                    # remove time and timezone part as it will cuse problems
+                    expiry = expiry.split()[0]
+                    c.lastTradeDateOrContractMonth = expiry
+                if contract.exchange == 'SMART':
+                    # overwriting 'SMART' exchange can create invalid contract
+                    c.exchange = contract.exchange
+                contract.update(**c.dict())
+                result.append(contract)
+        return result
 
     def reqHistoricalData(self, contract, durationStr, barSizeSetting,
                           *args, **kwargs):
