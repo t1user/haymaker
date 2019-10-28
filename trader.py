@@ -258,6 +258,9 @@ class Trader:
         order = StopOrder(side[action], amount, sl_price,
                           outsideRth=True, tif='GTC')
         trade = self.ib.placeOrder(contract, order)
+        self.attach_events(trade)
+
+    def attach_events(self, trade):
         trade.filledEvent += self.report_stopout
         trade.cancelledEvent += self.report_cancel
         log.debug(f'{contract.localSymbol} stop loss attached')
@@ -274,6 +277,18 @@ class Trader:
             if order.orderType == 'STP':
                 self.ib.cancelOrder(order)
                 log.debug(f'stop loss removed for {contract.localSymbol}')
+
+    def reconcile_stops(self):
+        """
+        To be executed on restart. For all existing stop-outs attach reporting
+        events for the blotter.
+        """
+        # required to fill open trades list
+        ib.reqAllOpenOrders()
+        trades = ib.openTrades()
+        for trade in trades:
+            if trade.order.orderType == 'STP' and trade.orderStatus.remaining != 0:
+                self.attach_events(trade)
 
     @staticmethod
     def round_tick(price, tick_size):

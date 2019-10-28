@@ -74,6 +74,7 @@ class Strategy(WatchdogHandlers):
 
     def onStartedEvent(self, *args):
         log.debug('initializing strategy')
+        self.trader.reconcile_stops()
         contracts = get_contracts(self.contracts, self.ib)
         candles = [Candle(contract, self.trader, self.ib)
                    for contract in contracts]
