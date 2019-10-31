@@ -142,9 +142,11 @@ if __name__ == '__main__':
 
     symbols = pd.read_csv(os.path.join(
         BASE_DIR, 'contracts.csv')).to_dict('records')
+    print(symbols)
 
     # *lookup_contracts(symbols),
     contracts = [*lookup_continuous_contracts(symbols)]
+    print(contracts)
     number_of_workers = min(len(contracts), max_number_of_workers)
     ib.run(main(contracts, number_of_workers))
     log.debug('script finished, about to disconnect')

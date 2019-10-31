@@ -36,3 +36,5 @@ candles = [Candle(contract, trader, ib)
 
 ib.run()
 blotter.save()
+for candle in candles:
+    candle.freeze()

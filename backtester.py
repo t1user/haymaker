@@ -1,12 +1,12 @@
 from datetime import datetime
 from itertools import count
+import pickle
 
 import pandas as pd
 import numpy as np
 from logbook import Logger
 
 from ib_insync import IB as master_IB
-import pickle
 from ib_insync import IB as master_IB
 from ib_insync.contract import Future, ContFuture
 from ib_insync.objects import (BarData, BarDataList, ContractDetails,
@@ -206,7 +206,11 @@ class DataSource:
         start_date = self.start_date.strftime('%Y%m%d')
         end_date = self.end_date.strftime('%Y%m%d')
         date_string = f'index > {start_date} & index < {end_date}'
-        return self.store.read(self.contract, 'min', date_string)
+        df = pd.read_pickle('notebooks/data/minute_NQ_cont_non_active_included.pickle'
+                            ).loc['20180201':].sort_index(ascending=False)
+        print(df)
+        return df
+        # return self.store.read(self.contract, 'min', date_string)
 
     def startup(self, df):
         """
@@ -440,3 +444,11 @@ class Market:
 
     def __setattr__(self, name):
         return setattr(self.instance, name)
+
+
+class Positions:
+    def __init__(self):
+        self._positions = {}
+
+    def update(self, trade):
+        pass

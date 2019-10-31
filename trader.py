@@ -104,7 +104,8 @@ class VolumeCandle(BarStreamer):
                      'high': df.high.max(),
                      'low': df.low.min(),
                      'close': df.close[-1],
-                     'price': weighted_price,
+                     # 'price': weighted_price,
+                     'price': df.close[-1],
                      'volume': df.volume.sum()})
 
 
@@ -113,6 +114,7 @@ class SignalProcessor:
     def __init__(self, ib):
         self.ib = ib
         self._createEvents()
+        self.trade_counter = 0
 
     def positions(self):
         positions = self.ib.positions()
@@ -128,6 +130,8 @@ class SignalProcessor:
             message = (f'entry signal emitted for {contract.localSymbol},'
                        f'signal: {signal}, atr: {atr}')
             log.debug(message)
+            self.trade_counter += 1
+            log.debug(f'number of entry trades: {self.trade_counter}')
             self.entrySignal.emit(contract, signal, atr)
         else:
             self.breakout(contract, signal)
@@ -161,11 +165,9 @@ class Candle(VolumeCandle):
         super().__init__()
 
     def freeze(self):
-        if self.counter == 0:
-            self.df.to_pickle(
-                f'notebooks/freeze/freeze_df_{self.contract.localSymbol}.pickle')
-            log.debug(f'freezed data saved for {self.contract.localSymbol}')
-            self.counter += 1
+        self.df.to_pickle(
+            f'notebooks/freeze/freeze_df_{self.contract.localSymbol}.pickle')
+        log.debug(f'freezed data saved for {self.contract.localSymbol}')
 
     def get_details(self):
         return self.ib.reqContractDetails(self.contract)[0]
@@ -197,7 +199,10 @@ class Candle(VolumeCandle):
         if self.df.backfill[-1]:
             return
         else:
-            self.freeze()
+            if self.counter == 0:
+                self.freeze()
+                self.counter += 1
+
         if self.df.signal[-1]:
             if self.df.signal[-1] * (self.df.price[-1] - self.df.ema_fast[-1]) > 0:
                 self.processor.entry(
@@ -263,7 +268,7 @@ class Trader:
     def attach_events(self, trade):
         trade.filledEvent += self.report_stopout
         trade.cancelledEvent += self.report_cancel
-        log.debug(f'{contract.localSymbol} stop loss attached')
+        log.debug(f'{trade.contract.localSymbol} stop loss attached')
 
     def remove_sl(self, trade):
         self.blotter.log_trade(trade, 'close')
@@ -320,9 +325,9 @@ class Blotter:
         self.file = (f'{path}/{filename}_'
                      f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}.csv')
         self.save_to_file = save_to_file
-        self.fieldnames = ['time', 'contract', 'action', 'amount', 'price',
+        self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount', 'price',
                            'exec_ids', 'order_id', 'reason', 'com_exec_id',
-                           'commission', 'currency', 'realizedPNL']
+                           'commission', 'currency', 'realizedPNL', 'com_sys_time']
         self.unsaved_trades = {}
         self.blotter = []
         if self.save_to_file:
@@ -334,6 +339,7 @@ class Blotter:
             writer.writeheader()
 
     def log_trade(self, trade, reason=''):
+        sys_time = str(datetime.now())
         time = trade.log[-1].time
         contract = trade.contract.localSymbol
         action = trade.order.action
@@ -342,7 +348,8 @@ class Blotter:
         exec_ids = [fill.execution.execId for fill in trade.fills]
         order_id = trade.order.orderId
         reason = reason
-        row = {'time': time,
+        row = {'sys_time': sys_time,
+               'time': time,
                'contract': contract,
                'action': action,
                'amount': amount,
@@ -358,7 +365,8 @@ class Blotter:
             {'com_exec_id': report.execId,
              'commission': report.commission,
              'currency': report.currency,
-             'realizedPNL': report.realizedPNL}
+             'realizedPNL': report.realizedPNL,
+             'com_sys_time': str(datetime.now())}
         )
         if self.save_to_file:
             self.write_to_file(self.unsaved_trades[trade.order.orderId])
