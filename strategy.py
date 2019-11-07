@@ -101,6 +101,9 @@ class Strategy(WatchdogHandlers):
         message = (f'realized: {summary[0]}, '
                    f'unrealized: {summary[1]}, total: {summary[2]}')
         log.info(message)
+        positions = [(p.contract.localSymbol, p.position)
+                     for p in self.ib.positions()]
+        log.info(f'POSITIONS: {positions}')
 
     def onAccountSummaryEvent(self, value):
         """

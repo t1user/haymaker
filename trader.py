@@ -114,7 +114,6 @@ class SignalProcessor:
     def __init__(self, ib):
         self.ib = ib
         self._createEvents()
-        self.trade_counter = 0
 
     def positions(self):
         positions = self.ib.positions()
@@ -130,8 +129,6 @@ class SignalProcessor:
             message = (f'entry signal emitted for {contract.localSymbol},'
                        f'signal: {signal}, atr: {atr}')
             log.debug(message)
-            self.trade_counter += 1
-            log.debug(f'number of entry trades: {self.trade_counter}')
             self.entrySignal.emit(contract, signal, atr)
         else:
             self.breakout(contract, signal)
@@ -188,9 +185,6 @@ class Candle(VolumeCandle):
         self.df['atr'] = get_ATR(self.df, self.atr_periods)
         self.df['signal'] = get_signals(self.df.price, self.periods)
         if not self.backfill:
-            positions = [(p.contract.localSymbol, p.position)
-                         for p in self.ib.positions()]
-            log.info(f'POSITIONS: {positions}')
             log.debug(
                 f'{self.contract.localSymbol} {self.df.iloc[-1].to_dict()}')
         self.process()
