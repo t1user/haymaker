@@ -21,28 +21,15 @@ from datastore_pytables import Store
 log = Logger(__name__)
 
 
-def ib_decorator(func):
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except FileNotFoundError:
-            with master_IB().connect(port=4002) as ib:
-                func = getattr(ib, func.__name__)
-                return func(*args, **kwargs)
-    return wrapper
-
-
 class IB:
     path = 'b_temp'
 
     events = ('barUpdateEvent', 'newOrderEvent', 'orderModifyEvent',
               'cancelOrderEvent', 'orderStatusEvent')
 
-    def __init__(self, start_date, end_date=datetime.today()):
+    def __init__(self, datasource):
+        self.datasource = datasource
         self._createEvents()
-        self.start_date = pd.to_datetime(start_date, format='%Y%m%d')
-        self.end_date = pd.to_datetime(end_date, format='%Y%m%d')
-        self.store = Store()
         self.id = count(1, 1)
 
     def _createEvents(self):
@@ -59,16 +46,24 @@ class IB:
         except (FileNotFoundError, EOFError):
             c = dict()
         try:
-            return c[contract.conId]
+            details = c[repr(contract)]
+            log.debug(f'details for contract {repr(contract)} read from file')
+            return details
         except KeyError:
-            with master_IB().connect(port=4002) as ib:
-                details = ib.reqContractDetails(contract)
-            c[contract.conId] = details
+            with master_IB().connect(port=4002) as conn:
+                details = conn.reqContractDetails(contract)
+                log.debug(f'details for contract {repr(contract)} read from ib')
+            c[repr(contract)] = details
             with open(f'{self.path}/details.pickle', 'wb') as f:
+                log.debug(f'contract details saved to file')
                 pickle.dump(c, f)
             return details
 
     def qualifyContracts(self, *contracts):
+        """
+        Modified copy of:
+        https://ib-insync.readthedocs.io/_modules/ib_insync/ib.html#IB.qualifyContractsAsync
+        """
         detailsLists = (self.reqContractDetails(c) for c in contracts)
         result = []
         for contract, detailsList in zip(contracts, detailsLists):
@@ -91,8 +86,7 @@ class IB:
     def reqHistoricalData(self, contract, durationStr, barSizeSetting,
                           *args, **kwargs):
         duration = int(durationStr.split(' ')[0]) * 2
-        source = DataSource(self.store, contract,
-                            duration, self.start_date, self.end_date)
+        source = self.datasource(contract, duration)
         return source.bars
 
     @staticmethod
@@ -168,14 +162,13 @@ class DataSource:
 
     start_date = None
     end_date = None
+    store = None
 
-    def __init__(self, store, contract, duration, start_date, end_date):
-        self.store = store
-        self.start_date = start_date
-        self.end_date = end_date
+    def __init__(self, contract, duration):
         self.contract = self.validate_contract(contract)
         # this is all available data as df
-        df = self.get_df()
+        df = self.store.read(self.contract, start_date=self.start_date,
+                             end_date=self.end_date)
         self.startup_end_point = self.start_date + pd.Timedelta(duration, 'D')
         # this is data for emissions as df
         data_df = self.get_data_df(df)
@@ -188,9 +181,10 @@ class DataSource:
         Market().register(self)
 
     @classmethod
-    def set_dates(cls, start_date, end_date=datetime.now()):
-        cls.start_date = start_date
-        cls.end_date = end_date
+    def initialize(cls, datastore, start_date, end_date=datetime.now()):
+        cls.start_date = pd.to_datetime(start_date, format='%Y%m%d')
+        cls.end_date = pd.to_datetime(end_date, format='%Y%m%d')
+        cls.store = datastore
         return cls
 
     def get_data_df(self, df):
@@ -201,16 +195,6 @@ class DataSource:
         log.debug(f'startup end point: {self.startup_end_point}')
         data_df = df.loc[:self.startup_end_point]
         return data_df
-
-    def get_df(self):
-        start_date = self.start_date.strftime('%Y%m%d')
-        end_date = self.end_date.strftime('%Y%m%d')
-        date_string = f'index > {start_date} & index < {end_date}'
-        df = pd.read_pickle('notebooks/data/minute_NQ_cont_non_active_included.pickle'
-                            ).loc['20180201':].sort_index(ascending=False)
-        print(df)
-        return df
-        # return self.store.read(self.contract, 'min', date_string)
 
     def startup(self, df):
         """
@@ -382,7 +366,7 @@ class Market:
                 new_position = old_position.position + position
                 if new_position != 0:
                     if np.sign(new_position * old_position.position) == 1:
-                        # fraction of the position has been liqidated
+                        # fraction of position has been liqidated
                         log.error("we shouldn't be here: fraction liquidated")
                         cost_base = (1 - new_position/old_position.position) \
                             * old_position.avgCost

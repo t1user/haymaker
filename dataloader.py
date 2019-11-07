@@ -48,7 +48,6 @@ async def get_history(contract, dt):
     df.date = df.date.astype('datetime64')
     df.set_index('date', inplace=True)
     store.write(contract, df)
-    # print(df)
     log.debug(f'saved data chunk for: {contract.localSymbol}')
     return next_chunk
 
@@ -113,8 +112,8 @@ async def main(contracts, number_of_workers, now=datetime.now()):
     # wait until the queue is fully processed (implicitly awaits workers)
     await queue.join()
 
-    log.debug('cancelling workers')
     # cancel all workers
+    log.debug('cancelling workers')
     for w in workers:
         w.cancel()
 

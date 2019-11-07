@@ -207,12 +207,14 @@ class Candle(VolumeCandle):
 
 class Trader:
 
-    def __init__(self, ib, blotter):
-        log.debug('Trader initialized')
+    def __init__(self, ib, blotter=None):
+        if blotter is None:
+            blotter = Blotter()
         self.ib = ib
         self.blotter = blotter
         self.atr_dict = {}
         self.contract_details = {}
+        log.debug('Trader initialized')
 
     def onEntry(self, contract, signal, atr):
         log.debug(f'entry signal handled for: {contract.localSymbol} {signal} {atr}')
@@ -382,7 +384,6 @@ class Blotter:
 
 
 def get_contracts(contract_tuples, ib):
-    log.debug(f'initializing contract qualification')
     cont_contracts = [ContFuture(*contract)
                       for contract in contract_tuples]
     ib.qualifyContracts(*cont_contracts)

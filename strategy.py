@@ -139,8 +139,8 @@ if __name__ == '__main__':
                         clientId=0,
                         )
 
-    blotter = Blotter()
-    trader = Trader(ib, blotter)
+    #blotter = Blotter()
+    trader = Trader(ib)  # , blotter)
     # asyncio.get_event_loop().set_debug(True)
     strategy = Strategy(ib, watchdog, trader, contracts)
     watchdog.start()
