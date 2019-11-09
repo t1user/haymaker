@@ -8,7 +8,7 @@ from logger import logger
 from trader import Candle, Trader, Blotter, get_contracts
 from datastore_pytables import Store
 
-log = logger(__file__[:-3])  # , ERROR, ERROR)
+log = logger(__file__[:-3], ERROR, ERROR)
 
 start_date = '20180201'
 store = Store()
@@ -20,13 +20,13 @@ contracts = [
     ('NQ', 'GLOBEX'),
     ('ES', 'GLOBEX'),
     ('YM', 'ECBOT'),
-    ('NKD', 'GLOBEX'),
+    #('NKD', 'GLOBEX'),
     ('CL', 'NYMEX'),
     ('GC', 'NYMEX'),
-    ('GE', 'GLOBEX'),
-    ('ZB', 'ECBOT'),
-    ('ZF', 'ECBOT'),
-    ('ZN', 'ECBOT'),
+    #('GE', 'GLOBEX'),
+    #('ZB', 'ECBOT'),
+    #('ZF', 'ECBOT'),
+    #('ZN', 'ECBOT'),
 ]
 
 # util.patchAsyncio()

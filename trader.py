@@ -104,8 +104,8 @@ class VolumeCandle(BarStreamer):
                      'high': df.high.max(),
                      'low': df.low.min(),
                      'close': df.close[-1],
-                     # 'price': weighted_price,
-                     'price': df.close[-1],
+                     'price': weighted_price,
+                     # 'price': df.close[-1],
                      'volume': df.volume.sum()})
 
 
