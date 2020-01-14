@@ -1,13 +1,11 @@
-import sys
 from collections import defaultdict
-from functools import partialmethod
 from datetime import datetime
 import csv
 
 import pandas as pd
 
 from eventkit import Event
-from ib_insync import IB, util, MarketOrder, StopOrder
+from ib_insync import util, MarketOrder, StopOrder
 from ib_insync.contract import ContFuture, Future
 
 from logbook import Logger
@@ -217,7 +215,8 @@ class Trader:
         log.debug('Trader initialized')
 
     def onEntry(self, contract, signal, atr):
-        log.debug(f'entry signal handled for: {contract.localSymbol} {signal} {atr}')
+        log.debug(
+            f'entry signal handled for: {contract.localSymbol} {signal} {atr}')
         self.atr_dict[contract] = atr
         trade = self.trade(contract, signal)
         trade.filledEvent += self.attach_sl

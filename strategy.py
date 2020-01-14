@@ -84,7 +84,7 @@ class Strategy(WatchdogHandlers):
 
     def onUpdatePortfolioEvent(self, i):
         realized = round(i.realizedPNL, 2)
-        unrealized = round(irealizedPNL, 2)
+        unrealized = round(i.unrealizedPNL, 2)
         total = round(realized + unrealized)
         report = (i.contract.localSymbol, realized, unrealized, total)
         log.info(f'Portfolio item: {report}')

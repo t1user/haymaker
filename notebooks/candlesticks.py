@@ -1,46 +1,47 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 
-def barplot(bars, title='', upColor='blue', downColor='red'):
+
+def candlesticks(df, title='', upColor='blue', downColor='red'):
     """
-    Create candlestick plot for the given bars. The bars can be given as
-    a DataFrame or as a list of bar objects.
+    Create candlestick plot for the given bars. The bars have to  be given as
+    a DataFrame.
     """
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Rectangle
 
-    if isinstance(bars, pd.DataFrame):
-        ohlc = bars[['open', 'high', 'low', 'close']]
-        ohlcTups = [tuple(v) for v in ohlc.iterrows()]
-        print(ohlcTups)
-    else:
-        raise Exception('Not a DataFrame')
+    if 'date' not in df.columns:
+        df = df.reset_index()
 
-    fig, ax = plt.subplots()
+    df = df[['date', 'open', 'high', 'low', 'close']].copy()
+
+    fig = plt.figure(figsize=(20, 10))
+    ax = fig.add_subplot(1, 1, 1)
     ax.set_title(title)
     ax.grid(True)
-    fig.set_size_inches(18, 6)
-    for (date, open_, high, low, close) in ohlcTups:
-        if close >= open_:
+    ax.margins(0)
+
+    for row in df.itertuples():
+        if row.close >= row.open:
             color = upColor
-            bodyHi, bodyLo = close, open_
+            bodyHi, bodyLo = row.close, row.open
         else:
             color = downColor
-            bodyHi, bodyLo = open_, close
+            bodyHi, bodyLo = row.open, row.close
         line = Line2D(
-            xdata=(date, date),
-            ydata=(low, bodyLo),
+            xdata=(row.Index, row.Index),
+            ydata=(row.low, bodyLo),
             color=color,
             linewidth=1)
         ax.add_line(line)
         line = Line2D(
-            xdata=(date, date),
-            ydata=(high, bodyHi),
+            xdata=(row.Index, row.Index),
+            ydata=(row.high, bodyHi),
             color=color,
             linewidth=1)
         ax.add_line(line)
         rect = Rectangle(
-            xy=(date - 0.3, bodyLo),
+            xy=(row.Index - 0.3, bodyLo),
             width=0.6,
             height=bodyHi - bodyLo,
             edgecolor=color,
@@ -51,4 +52,4 @@ def barplot(bars, title='', upColor='blue', downColor='red'):
         ax.add_patch(rect)
 
     ax.autoscale_view()
-    return fig
+    plt.show()
