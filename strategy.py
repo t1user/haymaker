@@ -80,7 +80,9 @@ class Strategy(WatchdogHandlers):
                    for contract in contracts]
 
     def onError(self, *args):
-        log.error(f'ERROR: {args}')
+        error = args[1]
+        if error not in (2158, 2119, 2104, 2106, 165):
+            log.error(f'ERROR: {args}')
 
     def onUpdatePortfolioEvent(self, i):
         realized = round(i.realizedPNL, 2)
@@ -93,7 +95,7 @@ class Strategy(WatchdogHandlers):
 
     def onScheduledUpdate(self, time):
         log.info(f'pnl: {self.ib.pnl()}')
-        summary = ()
+        summary = [0, 0, 0]
         for contract, value in self.portfolio_items.items():
             summary[0] += value[0]
             summary[1] += value[1]
@@ -121,15 +123,15 @@ class Strategy(WatchdogHandlers):
 if __name__ == '__main__':
     contracts = [
         ('NQ', 'GLOBEX'),
-        ('ES', 'GLOBEX'),
-        ('NKD', 'GLOBEX'),
+        #('ES', 'GLOBEX'),
+        #('NKD', 'GLOBEX'),
         ('CL', 'NYMEX'),
         ('GC', 'NYMEX'),
     ]
     util.patchAsyncio()
     # util.logToConsole()
     ibc = IBC(twsVersion=978,
-              gateway=True,
+              gateway=False,
               tradingMode='paper',
               )
     ib = IB()
@@ -139,8 +141,7 @@ if __name__ == '__main__':
                         clientId=0,
                         )
 
-    #blotter = Blotter()
-    trader = Trader(ib)  # , blotter)
+    trader = Trader(ib)
     # asyncio.get_event_loop().set_debug(True)
     strategy = Strategy(ib, watchdog, trader, contracts)
     watchdog.start()

@@ -66,7 +66,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--exchange', nargs='?', type=str)
     parser.add_argument('-c', '--currency', nargs='?', type=str)
     parser.add_argument('-o', '--includeExpired', action='store_false',
-                        help='only active contracts (exclude expiered)')
+                        help='only active contracts (exclude expired)')
 
     args = vars(parser.parse_args())
     symbol = args['symbol']

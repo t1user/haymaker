@@ -5,7 +5,7 @@ import csv
 import pandas as pd
 
 from eventkit import Event
-from ib_insync import util, MarketOrder, StopOrder
+from ib_insync import util, Order, MarketOrder, StopOrder
 from ib_insync.contract import ContFuture, Future
 
 from logbook import Logger
@@ -25,7 +25,7 @@ class BarStreamer:
         return self.ib.reqHistoricalData(
             contract,
             endDateTime='',
-            durationStr='4 D',
+            durationStr='1 D',
             barSizeSetting='30 secs',
             whatToShow='TRADES',
             useRTH=False,
@@ -52,7 +52,7 @@ class BarStreamer:
 
 class VolumeCandle(BarStreamer):
 
-    def __init__(self, avg_periods=30, span=5500):
+    def __init__(self, avg_periods=2, span=5500):
         super().__init__()
         self.span = span
         self.avg_periods = avg_periods
@@ -65,7 +65,7 @@ class VolumeCandle(BarStreamer):
         """
         self.volume = util.df(self.bars).volume \
             .rolling(self.avg_periods).sum() \
-            .ewm(span=self.span).mean().iloc[-1].round()
+            .ewm(span=self.span, min_periods=self.span).mean().iloc[-1].round()
         """
 
         self.volume = util.df(self.bars).volume \
@@ -81,7 +81,7 @@ class VolumeCandle(BarStreamer):
             log.debug(message)
         if self.aggregator >= self.volume:
             self.aggregator = 0
-            #self.aggregator -= self.volume
+            # self.aggregator -= self.volume
             self.create_candle()
 
     def create_candle(self):
@@ -141,8 +141,8 @@ class SignalProcessor:
 
 class Candle(VolumeCandle):
 
-    periods = [5, 10, 20, 40, 80, ]  # 160, ]
-    ema_fast = 120  # number of periods for moving average filter
+    periods = [5, 10, 20, ]  # 40, 80, ]  # 160, ]
+    ema_fast = 10  # number of periods for moving average filter
     sl_atr = 1  # stop loss in ATRs
     atr_periods = 80  # number of periods to calculate ATR on
     time_int = 30  # interval in minutes to be used to define volume candle
@@ -240,30 +240,42 @@ class Trader:
         trade = self.ib.placeOrder(contract, order)
         return trade
 
-    def attach_sl(self, trade):
+    def attach_sl(self, trade, trailing=True):
         self.blotter.log_trade(trade, 'entry')
-        side = {'BUY': 'SELL', 'SELL': 'BUY'}
-        direction = {'BUY': -1, 'SELL': 1}
         contract = trade.contract
         action = trade.order.action
+        assert action in ('BUY', 'SELL')
+        reverseAction = 'BUY' if action == 'SELL' else 'SELL'
+        direction = 1 if reverseAction == 'BUY' else -1
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
         log.info(f'TRADE EXECUTED: {contract.localSymbol} {action} @{price}')
         sl_points = self.atr_dict[contract]
-        # TODO round to the nearest tick
-        sl_price = self.round_tick(price + sl_points * direction[action],
-                                   self.contract_details[contract].minTick)
-        # sl_price = round(price + sl_points * direction[action])
-        log.info(f'STOP LOSS PRICE: {sl_price}')
-        order = StopOrder(side[action], amount, sl_price,
+        if not trailing:
+            log.debug('fixed stop loss')
+            sl_price = self.round_tick(price + sl_points * direction,
+                                       self.contract_details[contract].minTick)
+            log.info(f'STOP LOSS PRICE: {sl_price}')
+            order = StopOrder(reverseAction, amount, sl_price,
+                              outsideRth=True, tif='GTC')
+        else:
+            log.debug('trailing stop')
+            distance = self.round_tick(sl_points,
+                                       self.contract_details[contract].minTick)
+            log.info(f'STOP LOSS DISTANCE: {distance}')
+            order = Order(orderType='TRAIL', action=reverseAction,
+                          totalQuantity=amount, auxPrice=distance,
                           outsideRth=True, tif='GTC')
         trade = self.ib.placeOrder(contract, order)
+        log.debug(f'stop loss attached for {trade.contract.localSymbol}')
         self.attach_events(trade)
 
     def attach_events(self, trade):
         trade.filledEvent += self.report_stopout
         trade.cancelledEvent += self.report_cancel
-        log.debug(f'{trade.contract.localSymbol} stop loss attached')
+        log.debug(f'Reporting events attached for {trade.contract.localSymbol} '
+                  f'{trade.order.action} {trade.order.totalQuantity} '
+                  f'{trade.order.orderType}')
 
     def remove_sl(self, trade):
         self.blotter.log_trade(trade, 'close')
@@ -284,8 +296,8 @@ class Trader:
         events for the blotter.
         """
         # required to fill open trades list
-        ib.reqAllOpenOrders()
-        trades = ib.openTrades()
+        self.ib.reqAllOpenOrders()
+        trades = self.ib.openTrades()
         for trade in trades:
             if trade.order.orderType == 'STP' and trade.orderStatus.remaining != 0:
                 self.attach_events(trade)
@@ -320,9 +332,10 @@ class Blotter:
         self.file = (f'{path}/{filename}_'
                      f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}.csv')
         self.save_to_file = save_to_file
-        self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount', 'price',
-                           'exec_ids', 'order_id', 'reason', 'com_exec_id',
-                           'commission', 'currency', 'realizedPNL', 'com_sys_time']
+        self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount',
+                           'price', 'exec_ids', 'order_id', 'reason',
+                           'com_exec_id', 'commission', 'currency',
+                           'realizedPNL', 'com_sys_time']
         self.unsaved_trades = {}
         self.blotter = []
         if self.save_to_file:

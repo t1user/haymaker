@@ -504,7 +504,8 @@ def breakout_strategy(contract: pd.DataFrame,
                       trailing_sl: bool = True,
                       active_close: bool = True,
                       block_stop: bool = False,
-                      stop_loss: int = 0) -> pd.DataFrame:
+                      stop_loss: float = 0,
+                      take_profit: float = 0) -> pd.DataFrame:
     """
     Implementation of breakout strategy.
 
@@ -534,7 +535,7 @@ def breakout_strategy(contract: pd.DataFrame,
                         trailing_sl=trailing_sl,
                         active_close=active_close,
                         block_stop=block_stop,
-                        take_profit=0)
+                        take_profit=take_profit)
 
 
 def bootstrap(data, start=None, end=None, period_length=3, paths=100,
