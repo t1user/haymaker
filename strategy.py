@@ -1,14 +1,11 @@
-import sys
-import asyncio
 from pprint import pprint
 
 from ib_insync import IB, util
-from ib_insync.contract import ContFuture, Future
 from ib_insync.ibcontroller import IBC, Watchdog
 from eventkit import Event
 
-
-from trader import Candle, Trader, Blotter, get_contracts
+from trader import Manager
+from params import contracts
 from logger import logger
 
 
@@ -53,7 +50,7 @@ class WatchdogHandlers:
 
 class Strategy(WatchdogHandlers):
 
-    def __init__(self, ib, watchdog, trader, contracts):
+    def __init__(self, ib, watchdog, manager):
         self.contracts = contracts
         ib.connectedEvent += self.onConnected
         ib.errorEvent += self.onError
@@ -62,7 +59,7 @@ class Strategy(WatchdogHandlers):
         update = Event().timerange(60, None, 300)
         update += self.onScheduledUpdate
         self.ib = ib
-        self.trader = trader
+        self.manager = manager
         super().__init__(watchdog)
         self.portfolio_items = {}
 
@@ -74,14 +71,11 @@ class Strategy(WatchdogHandlers):
 
     def onStartedEvent(self, *args):
         log.debug('initializing strategy')
-        self.trader.reconcile_stops()
-        contracts = get_contracts(self.contracts, self.ib)
-        candles = [Candle(contract, self.trader, self.ib)
-                   for contract in contracts]
+        self.manager.onConnected()
 
     def onError(self, *args):
         error = args[1]
-        if error not in (2158, 2119, 2104, 2106, 165):
+        if error not in (2158, 2119, 2104, 2106, 165, 2108):
             log.error(f'ERROR: {args}')
 
     def onUpdatePortfolioEvent(self, i):
@@ -117,17 +111,20 @@ class Strategy(WatchdogHandlers):
             log.info(f'{value.tag}: {value.value}')
 
     def onCommissionReportEvent(self, trade, fill, report):
+        # !!!WARNING!!!
+        print('This is commission report event')
         pprint(report)
 
 
 if __name__ == '__main__':
-    contracts = [
-        ('NQ', 'GLOBEX'),
+
+    # contracts = [
+        #('NQ', 'GLOBEX'),
         #('ES', 'GLOBEX'),
         #('NKD', 'GLOBEX'),
-        ('CL', 'NYMEX'),
-        ('GC', 'NYMEX'),
-    ]
+        #('CL', 'NYMEX'),
+        #('GC', 'NYMEX'),
+    # ]
     util.patchAsyncio()
     # util.logToConsole()
     ibc = IBC(twsVersion=978,
@@ -141,8 +138,9 @@ if __name__ == '__main__':
                         clientId=0,
                         )
 
-    trader = Trader(ib)
+    #trader = Trader(ib)
+    manager = Manager(ib, contracts, leverage=15)
     # asyncio.get_event_loop().set_debug(True)
-    strategy = Strategy(ib, watchdog, trader, contracts)
+    strategy = Strategy(ib, watchdog, manager)
     watchdog.start()
     ib.run()

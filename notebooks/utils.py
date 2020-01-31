@@ -425,11 +425,6 @@ def c_backtester(data: pd.DataFrame,
                 if np.sign(data.loc[item.Index, 'position']) != np.sign(item.signal):
                     data.loc[item.Index, 'mark'] = True
                     data.loc[item.Index, 'reason'] = 'close'
-        else:
-            if data.loc[item.Index, 'position'] != 0 \
-               and item.signal != data.loc[item.Index, 'position']:
-                data.loc[item.Index, 'mark'] = True
-                data.loc[item.Index, 'reason'] = 'close'
         # check for stop-loss signal
         # long positions
         if data.loc[item.Index, 'position'] > 0:
