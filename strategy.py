@@ -117,14 +117,6 @@ class Strategy(WatchdogHandlers):
 
 
 if __name__ == '__main__':
-
-    # contracts = [
-        #('NQ', 'GLOBEX'),
-        #('ES', 'GLOBEX'),
-        #('NKD', 'GLOBEX'),
-        #('CL', 'NYMEX'),
-        #('GC', 'NYMEX'),
-    # ]
     util.patchAsyncio()
     # util.logToConsole()
     ibc = IBC(twsVersion=978,
@@ -137,8 +129,6 @@ if __name__ == '__main__':
                         port='4002',
                         clientId=0,
                         )
-
-    #trader = Trader(ib)
     manager = Manager(ib, contracts, leverage=15)
     # asyncio.get_event_loop().set_debug(True)
     strategy = Strategy(ib, watchdog, manager)

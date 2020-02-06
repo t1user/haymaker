@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import List, Tuple, Any
+from typing import List, Tuple, Union
 from datetime import datetime
 import csv
 
@@ -9,7 +9,7 @@ import numpy as np
 
 from eventkit import Event
 from ib_insync import util, Order, MarketOrder, StopOrder, IB
-from ib_insync.objects import OrderStatus
+from ib_insync.order import OrderStatus
 from ib_insync.contract import ContFuture, Future
 
 from logbook import Logger
@@ -22,14 +22,16 @@ log = Logger(__name__)
 class BarStreamer:
 
     def __init__(self):
+        log.debug(f'Requesting bars for {self.contract.localSymbol}')
         self.bars = self.get_bars(self.contract)
+        log.debug(f'Bars received for {self.contract.localSymbol}')
         self.new_bars = []
 
     def get_bars(self, contract):
         return self.ib.reqHistoricalData(
             contract,
             endDateTime='',
-            durationStr='5 D',
+            durationStr='10 D',
             barSizeSetting='30 secs',
             whatToShow='TRADES',
             useRTH=False,
@@ -45,10 +47,19 @@ class BarStreamer:
     def process_back_data(self):
         self.backfill = True
         log.debug(f'generating startup data for {self.contract.localSymbol}')
-        for bar in self.bars[:-2]:
+        for counter, bar in enumerate(self.bars[:-2]):
             self.aggregate(bar)
+            if counter % 10000 == 0:
+                log.debug(
+                    f'startup generator for {self.contract.localSymbol} giving up control')
+                self.ib.sleep(0)
         log.debug(f'startup data generated for {self.contract.localSymbol}')
-        assert not self.df.iloc[-1].isna().any(), 'Not enough data for indicators'
+
+        assert not self.df.iloc[-1].isna().any(), (
+            f'Not enough data for indicators for instrument'
+            f' {self.contract.localSymbol} '
+            f'values: {self.df.iloc[-1].to_dict()}')
+
         self.backfill = False
         self.freeze()
 
@@ -153,7 +164,7 @@ class Candle(VolumeCandle):
         self.get_indicators()
         if not self.backfill:
             self.process()
-            self.freeze()
+            # self.freeze()
 
     def get_indicators(self):
         df = pd.DataFrame(self.candles)
@@ -192,12 +203,14 @@ class Candle(VolumeCandle):
 
 class Manager:
 
-    def __init__(self, ib, contracts, leverage, trailing=True):
+    def __init__(self, ib, contracts, leverage, trailing=True, blotter=None):
+        if blotter is None:
+            blotter = Blotter()
         self.ib = ib
         self.contracts = contracts
         self.portfolio = Portfolio(ib, leverage)
-        self.trader = Trader(ib, self.portfolio, trailing)
-        alloc = sum([c.alloc for c in contracts])
+        self.trader = Trader(ib, self.portfolio, trailing, blotter)
+        alloc = round(sum([c.alloc for c in contracts]), 5)
         assert alloc == 1, "Portfolio allocations don't add-up to 1"
 
     def onConnected(self):
@@ -247,8 +260,6 @@ class Portfolio:
 class Trader:
 
     def __init__(self, ib, portfolio, trailing=True, blotter=None):
-        if blotter is None:
-            blotter = Blotter()
         self.ib = ib
         self.portfolio = portfolio
         self.blotter = blotter
@@ -346,10 +357,12 @@ class Trader:
         events for the blotter.
         """
         # required to fill open trades list
-        self.ib.reqAllOpenOrders()
+        # self.ib.reqAllOpenOrders()
         trades = self.ib.openTrades()
+        log.debug(f'open trades on re-connect: {trades}')
         for trade in trades:
-            if trade.order.orderType == 'STP' and trade.orderStatus.remaining != 0:
+            if trade.order.orderType in ('STP', 'TRAIL'
+                                         ) and trade.orderStatus.remaining != 0:
                 self.attach_events(trade)
 
     @staticmethod
@@ -388,8 +401,7 @@ class Blotter:
         self.save_to_file = save_to_file
         self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount',
                            'price', 'exec_ids', 'order_id', 'reason',
-                           'com_exec_id', 'commission', 'currency',
-                           'realizedPNL', 'com_sys_time']
+                           'commission', 'realizedPNL', 'reports']
         self.unsaved_trades = {}
         self.blotter = []
         if self.save_to_file:
@@ -418,26 +430,30 @@ class Blotter:
                'price': price,
                'exec_ids': exec_ids,
                'order_id': order_id,
-               'reason': reason}
+               'reason': reason,
+               'commission': 0,
+               'realizedPNL': 0,
+               'reports': 0}
         self.unsaved_trades[order_id] = row
         trade.commissionReportEvent += self.update_commission
 
     def update_commission(self, trade, fill, report):
-        # commission report might be for partial fill, those are ignored
-        if trade.orderStatus not in OrderStatus.DoneStates:
-            return
-
-        comm_report = defaultdict(int)
-        for fill in trade.fills:
-            comm_report['commission'] += fill.commissionReport.commision
-            comm_report['realizedPNL'] += fill.commissionReport.realizedPNL
-        self.unsaved_trades[trade.order.orderId].update(comm_report)
+        # commission report might be for partial fill
+        try:
+            report = self.unsaved_trades[trade.order.orderId]
+        except KeyError:
+            log.error('Failed to update commission for trade: {trade}')
+        report['commission'] += fill.commissionReport.commission
+        report['realizedPNL'] += fill.commissionReport.realizedPNL
+        report['reports'] += 1
 
         if self.save_to_file:
             self.write_to_file(self.unsaved_trades[trade.order.orderId])
         else:
             self.blotter.append(self.unsaved_trades[trade.order.orderId])
-        del self.unsaved_trades[trade.order.orderId]
+
+        if report['reports'] == len(report['exec_ids']):
+            self.unsaved_trades[trade.order.orderId]
 
     def write_to_file(self, data):
         with open(self.file, 'a') as f:
@@ -466,7 +482,8 @@ class Params:
     volume: int = None
 
 
-def get_contracts(contracts: Any, ib: IB):
+def get_contracts(params: Params, ib: IB):
+
     def convert(contract_tuples: List[tuple]):
         cont_contracts = [ContFuture(*contract)
                           for contract in contract_tuples]
@@ -482,10 +499,9 @@ def get_contracts(contracts: Any, ib: IB):
         log.debug(f'Contracts qualified: {contracts}')
         return contracts
 
-    if type(contracts[0]) is not tuple:
-        conts = convert([contract.contract for contract in contracts])
-        for contract, cont in zip(contracts, conts):
-            contract.contract = cont
-        return contracts
-    else:
-        return convert(contracts)
+    if type(params[0].contract) not in (Future, ContFuture):
+        contracts = [param.contract for param in params]
+        for param, contract in zip(params, convert(contracts)):
+            param.contract = contract
+
+    return params

@@ -1,48 +1,31 @@
-import pickle
 import asyncio
 from ib_insync import util
 from logbook import ERROR
 
 from backtester import IB, DataSource
 from logger import logger
-from trader import Candle, Trader, Blotter, get_contracts
+from trader import Blotter
 from datastore_pytables import Store
+from trader import Manager
+from params import contracts
 
-log = logger(__file__[:-3], ERROR, ERROR)
 
-start_date = '20180201'
+log = logger(__file__[:-3],)  # ERROR, ERROR)
+
+start_date = '20190101'
+end_date = '20190131'
+cash = 1e+5
 store = Store()
-source = DataSource.initialize(store, start_date)
-ib = IB(source)
-
-
-contracts = [
-    ('NQ', 'GLOBEX'),
-    ('ES', 'GLOBEX'),
-    ('YM', 'ECBOT'),
-    #('NKD', 'GLOBEX'),
-    ('CL', 'NYMEX'),
-    ('GC', 'NYMEX'),
-    #('GE', 'GLOBEX'),
-    #('ZB', 'ECBOT'),
-    #('ZF', 'ECBOT'),
-    #('ZN', 'ECBOT'),
-]
+source = DataSource.initialize(store, start_date, end_date)
+ib = IB(source, cash)
 
 # util.patchAsyncio()
 util.logToConsole()
 asyncio.get_event_loop().set_debug(True)
 
 blotter = Blotter(False, 'backtest')
-trader = Trader(ib, blotter)
-futures = get_contracts(contracts, ib)
-# with open('contracts.pickle', 'rb') as f:
-#    futures = pickle.load(f)
-candles = [Candle(contract, trader, ib)
-           for contract in futures]
-
-
+manager = Manager(ib, contracts, leverage=15)
+manager.onConnected()
 ib.run()
 blotter.save()
-for candle in candles:
-    candle.freeze()
+manager.freeze()
