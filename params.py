@@ -28,7 +28,7 @@ gc = Params(
     sl_atr=1,
     atr_periods=180,
     avg_periods=45,
-    alloc=0.3)
+    alloc=0.35)
 
 cl = Params(
     contract=('CL', 'NYMEX'),
@@ -38,6 +38,6 @@ cl = Params(
     sl_atr=3,
     atr_periods=180,
     avg_periods=90,
-    alloc=0.1)
+    alloc=0.05)
 
 contracts = [nq, es, gc, cl]

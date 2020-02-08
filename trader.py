@@ -203,13 +203,13 @@ class Candle(VolumeCandle):
 
 class Manager:
 
-    def __init__(self, ib, contracts, leverage, trailing=True, blotter=None):
+    def __init__(self, ib, contracts, leverage, blotter=None, trailing=True):
         if blotter is None:
             blotter = Blotter()
         self.ib = ib
         self.contracts = contracts
         self.portfolio = Portfolio(ib, leverage)
-        self.trader = Trader(ib, self.portfolio, trailing, blotter)
+        self.trader = Trader(ib, self.portfolio, blotter, trailing)
         alloc = round(sum([c.alloc for c in contracts]), 5)
         assert alloc == 1, "Portfolio allocations don't add-up to 1"
 
@@ -259,7 +259,7 @@ class Portfolio:
 
 class Trader:
 
-    def __init__(self, ib, portfolio, trailing=True, blotter=None):
+    def __init__(self, ib, portfolio, blotter, trailing=True):
         self.ib = ib
         self.portfolio = portfolio
         self.blotter = blotter
@@ -443,17 +443,18 @@ class Blotter:
             report = self.unsaved_trades[trade.order.orderId]
         except KeyError:
             log.error('Failed to update commission for trade: {trade}')
+
         report['commission'] += fill.commissionReport.commission
         report['realizedPNL'] += fill.commissionReport.realizedPNL
         report['reports'] += 1
 
-        if self.save_to_file:
-            self.write_to_file(self.unsaved_trades[trade.order.orderId])
-        else:
-            self.blotter.append(self.unsaved_trades[trade.order.orderId])
-
         if report['reports'] == len(report['exec_ids']):
-            self.unsaved_trades[trade.order.orderId]
+            if self.save_to_file:
+                self.write_to_file(self.unsaved_trades[trade.order.orderId])
+            else:
+                self.blotter.append(self.unsaved_trades[trade.order.orderId])
+
+            del self.unsaved_trades[trade.order.orderId]
 
     def write_to_file(self, data):
         with open(self.file, 'a') as f:
@@ -470,16 +471,15 @@ class Blotter:
 
 @dataclass
 class Params:
-    # = [5, 10, 20, 40, 80, ]  # 160, ]
-    contract: Tuple[str]
-    periods: List[int]
-    ema_fast: int  # = 120  # number of periods for moving average filter
-    ema_slow: int
-    sl_atr: int  # = 1  # stop loss in ATRs
-    atr_periods: int  # = 80  # number of periods to calculate ATR on
-    alloc: float
-    avg_periods: int = None
-    volume: int = None
+    contract: Tuple[str]  # contract given as tuple of params given to Future()
+    periods: List[int]  # periods for breakout calculation
+    ema_fast: int  # number of periods for moving average filter
+    ema_slow: int  # number of periods for moving average filter
+    sl_atr: int  # stop loss in ATRs
+    atr_periods: int  # number of periods to calculate ATR on
+    alloc: float  # fraction of capital to be allocated to instrument
+    avg_periods: int = None  # candle volume to be calculated as average of x periods
+    volume: int = None  # candle volume given directly
 
 
 def get_contracts(params: Params, ib: IB):

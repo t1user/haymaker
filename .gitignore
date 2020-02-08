@@ -5,6 +5,7 @@ __pycache__
 logs/
 blotter/
 temp/
+backtests/
 credentials.py
 notebooks/data/
 notebooks/freeze/

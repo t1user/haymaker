@@ -100,6 +100,7 @@ class Strategy(WatchdogHandlers):
         positions = [(p.contract.localSymbol, p.position)
                      for p in self.ib.positions()]
         log.info(f'POSITIONS: {positions}')
+        self.manager.freeze()
 
     def onAccountSummaryEvent(self, value):
         """
