@@ -110,16 +110,16 @@ class VolumeCandle(BarStreamer):
         df['backfill'] = True
         # df['volume_weighted'] = (df.close + df.open)/2 * df.volume
         # df['volume_weighted'] = df.close * df.volume
-        df['volume_weighted'] = df.average * df.volume
-        weighted_price = df.volume_weighted.sum() / df.volume.sum()
+        #df['volume_weighted'] = df.average * df.volume
+        #weighted_price = df.volume_weighted.sum() / df.volume.sum()
         self.append({'backfill': self.backfill,
                      'date': df.index[-1],
                      'open': df.open[0],
                      'high': df.high.max(),
                      'low': df.low.min(),
                      'close': df.close[-1],
-                     'price': weighted_price,
-                     # 'price': df.close[-1],
+                     # 'price': weighted_price,
+                     'price': df.close[-1],
                      'volume': df.volume.sum()})
 
     def append(self, candle):
@@ -190,10 +190,16 @@ class Candle(VolumeCandle):
                        f' signal: {self.df.filtered_signal[-1]},'
                        f' atr: {self.df.atr[-1]}')
             log.debug(message)
-            self.entrySignal.emit(
-                self.contract, self.df.signal[-1], self.df.atr[-1],
-                self.portfolio.number_of_contracts(
-                    self.params, self.df.price[-1]))
+            number_of_contracts = self.portfolio.number_of_contracts(
+                self.params, self.df.price[-1])
+            if number_of_contracts:
+                self.entrySignal.emit(
+                    self.contract, self.df.signal[-1], self.df.atr[-1],
+                    number_of_contracts)
+            else:
+                message = (f'Not enough equity to open position for: '
+                           f'{self.contract.localSymbol}')
+                log.warning(message)
         elif self.df.signal[-1] and position:
             if position * self.df.signal[-1] < 0:
                 log.debug(
@@ -341,7 +347,6 @@ class Trader:
                   f'{trade.order.orderType}')
 
     def remove_sl(self, contract):
-        log.debug('inside remove_sl')
         open_trades = self.ib.openTrades()
         orders = defaultdict(list)
         for t in open_trades:
@@ -393,11 +398,11 @@ class Trader:
 
 
 class Blotter:
-    def __init__(self, save_to_file=True, filename=None, path='blotter'):
+    def __init__(self, save_to_file=True, filename=None, path='blotter', note=''):
         if filename is None:
             filename = __file__.split('/')[-1][:-3]
         self.file = (f'{path}/{filename}_'
-                     f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}.csv')
+                     f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}{note}.csv')
         self.save_to_file = save_to_file
         self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount',
                            'price', 'exec_ids', 'order_id', 'reason',

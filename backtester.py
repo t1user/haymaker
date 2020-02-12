@@ -163,6 +163,7 @@ class IB:
             self.orderModifyEvent.emit(trade)
         else:
             # this is a new order
+            assert order.totalQuantity != 0, 'Order quantity cannot be zero'
             order.orderId = orderId
             orderStatus = OrderStatus(status=OrderStatus.PendingSubmit)
             logEntry = TradeLogEntry(now, orderStatus, '')
@@ -233,6 +234,10 @@ class DataSource:
     def initialize(cls, datastore, start_date, end_date=datetime.now()):
         cls.start_date = pd.to_datetime(start_date, format='%Y%m%d')
         cls.end_date = pd.to_datetime(end_date, format='%Y%m%d')
+        if cls.start_date > cls.end_date:
+            message = (f'End date: {cls.end_date} is before start date: '
+                       f'{cls.start_date}')
+            raise(ValueError(message))
         cls.store = datastore
         return cls
 
@@ -306,6 +311,7 @@ class Market:
     class __Market:
         def __init__(self):
             self.objects = {}
+            self.prices = {}
             self.trades = []
             self.index = None
             self.date = None
@@ -339,9 +345,11 @@ class Market:
                 self.run_orders()
 
         def extract_prices(self):
-            self.prices = {}
             for contract, bars in self.objects.items():
                 if bars.bar(self.date) is None:
+                    message = (f'missing data point {self.date} '
+                               f'for contract {contract.symbol}')
+                    log.warning(message)
                     continue
                 else:
                     self.prices[contract.symbol] = bars.bar(self.date).average
@@ -370,9 +378,9 @@ class Market:
             quantity = trade.order.totalQuantity
             commission = self.commissions[contract] * quantity
             self.account.update_cash(-commission)
-            pnl = self.account.update_positions(executed_trade)
+            pnl, new_position = self.account.update_positions(executed_trade)
             self.account.update_cash(pnl)
-            net_pnl = pnl - (2 * commission) if pnl != 0 else 0
+            net_pnl = pnl - (2 * commission) if not new_position else 0
             self.update_commission(executed_trade, net_pnl, commission)
 
         @staticmethod
@@ -391,7 +399,7 @@ class Market:
 
         @staticmethod
         def validate_trail(order, price):
-            # set trail price on a new order (with default trailStopPrice)
+            # set trail price on a new order (ie. with default trailStopPrice)
             if order.trailStopPrice == 1.7976931348623157e+308:
                 if order.action.upper() == 'BUY':
                     order.trailStopPrice = price + order.auxPrice
@@ -525,16 +533,18 @@ class Account:
         params = self.extract_params(trade)
         if trade.contract in self.positions:
             pnl = self.update_existing_position(params)
+            new = False
         else:
             self.open_new_position(params)
             pnl = 0
-        return pnl
+            new = True
+        return (pnl, new)
 
     def update_existing_position(self, params):
         old_position = self.positions[params.contract]
         new_position = old_position.position + params.position
         log.debug(
-            f'updating position for {params.contract}, old: {old_position}, new: {new_position}')
+            f'updating existing position for {params.contract}, old: {old_position}, new: {new_position}')
         if new_position != 0:
             if np.sign(new_position * old_position.position) == 1:
                 # fraction of position has been liqidated
@@ -554,13 +564,13 @@ class Account:
                 # position has been reversed
                 log.error("we shouldn't be here: position reversed")
                 closing_value = (old_position.position /
-                                 position) * params.avgCost
+                                 params.position) * params.avgCost
                 pnl = (closing_value - old_position.avgCost) * \
-                    -np.sign(position)
+                    -np.sign(params.position)
                 position = Position(
                     account='',
                     contract=params.contract,
-                    position=position,
+                    position=params.position,
                     avgCost=params.avgCost
                 )
                 self.positions[params.contract] = position
@@ -570,7 +580,6 @@ class Account:
             # postion has been closed
             pnl = (params.avgCost - old_position.avgCost) * - \
                 np.sign(params.position)
-            log.debug(f'pnl: {pnl}')
             del self.positions[params.contract]
         log.debug(f'updating cash by: {pnl}')
         return pnl
