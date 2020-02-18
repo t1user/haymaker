@@ -4,7 +4,7 @@ from ib_insync import IB, util
 from ib_insync.ibcontroller import IBC, Watchdog
 from eventkit import Event
 
-from trader import Manager
+from trader import Manager, VolumeStreamer
 from params import contracts
 from logger import logger
 
@@ -56,7 +56,7 @@ class Strategy(WatchdogHandlers):
         ib.errorEvent += self.onError
         ib.updatePortfolioEvent += self.onUpdatePortfolioEvent
         ib.accountSummaryEvent += self.onAccountSummaryEvent
-        update = Event().timerange(60, None, 300)
+        update = Event().timerange(180, None, 600)
         update += self.onScheduledUpdate
         self.ib = ib
         self.manager = manager
@@ -112,9 +112,7 @@ class Strategy(WatchdogHandlers):
             log.info(f'{value.tag}: {value.value}')
 
     def onCommissionReportEvent(self, trade, fill, report):
-        # !!!WARNING!!!
-        print('This is commission report event')
-        pprint(report)
+        log.debug('Commission report: {report}')
 
 
 if __name__ == '__main__':
@@ -130,7 +128,7 @@ if __name__ == '__main__':
                         port='4002',
                         clientId=0,
                         )
-    manager = Manager(ib, contracts, leverage=15)
+    manager = Manager(ib, contracts, VolumeStreamer, leverage=15)
     # asyncio.get_event_loop().set_debug(True)
     strategy = Strategy(ib, watchdog, manager)
     watchdog.start()

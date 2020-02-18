@@ -425,6 +425,7 @@ def c_backtester(data: pd.DataFrame,
                 if np.sign(data.loc[item.Index, 'position']) != np.sign(item.signal):
                     data.loc[item.Index, 'mark'] = True
                     data.loc[item.Index, 'reason'] = 'close'
+
         # check for stop-loss signal
         # long positions
         if data.loc[item.Index, 'position'] > 0:
@@ -443,8 +444,8 @@ def c_backtester(data: pd.DataFrame,
                 if block_stop:
                     block = -1
 
+        # check for take profit
         if take_profit:
-            # check for take profit
             # long positions
             if data.loc[item.Index, 'position'] > 0:
                 if item.close >= (
@@ -459,6 +460,7 @@ def c_backtester(data: pd.DataFrame,
                     data.loc[item.Index, 'mark'] = True
                     data.loc[item.Index, 'reason'] = 'take-profit'
                     block = -1
+
         # check for entry signal
         if data.loc[item.Index, 'position'] == 0:
             if item.filtered_signal != 0 and item.filtered_signal != block:

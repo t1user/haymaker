@@ -51,10 +51,11 @@ class IB:
         except (FileNotFoundError, EOFError):
             c = dict()
         try:
-            details = c[repr(obj)]
+            details = c[obj.symbol]
             log.debug(f'{filename} for {repr(obj)} read from file')
             return details
         except KeyError:
+            print(f'attempting to retrieve: {obj}')
             with self.ib.connect(port=4002) as conn:
                 f = getattr(conn, method)
                 if args:
@@ -63,7 +64,7 @@ class IB:
                     details = f(obj)
                 log.debug(
                     f'{filename} for {repr(obj)} read from ib')
-            c[repr(obj)] = details
+            c[obj.symbol] = details
             with open(f'{self.path}/{filename}.pickle', 'wb') as f:
                 log.debug(f'{filename} saved to file')
                 pickle.dump(c, f)
@@ -121,24 +122,11 @@ class IB:
         source = self.datasource(contract, duration)
         return source.bars
 
-    @staticmethod
-    def translate_time_string(time_string):
-        # not in use
-        d = {
-            'secs': 's',
-            'mins': 'm',
-            'hours': 'h',
-            'day': 'D',
-            # 'week': 'W',
-            # 'month': 'M'
-        }
-        return d['time_string']
-
     def positions(self):
         return self.account.positions.values()
 
     def accountValues(self):
-        log.debug(f'cash: {self.account.cash}')
+        log.info(f'cash: {self.account.cash}')
         return [
             AccountValue(tag='TotalCashBalance',
                          value=self.account.cash),
@@ -197,10 +185,12 @@ class IB:
             log.error(f'cancelOrder: Unknown orderId {order.orderId}')
 
     def run(self):
-        commissions = self.reqCommissions(
-            self.market.objects.keys())
+        commissions = self.reqCommissions(self.market.objects.keys())
         self.market.commissions = {cont: comm.commission
                                    for cont, comm in commissions.items()}
+        self.market.ticks = {cont.symbol: self.reqContractDetails(cont)[0].minTick
+                             for cont in self.market.objects.keys()}
+
         self.market.run()
 
     def sleep(self, *args):
@@ -217,7 +207,22 @@ class DataSource:
     def __init__(self, contract, duration):
         self.contract = self.validate_contract(contract)
         # this is all available data as df
-        df = self.store.read(self.contract, start_date=self.start_date,
+        # THIS IS A MONKEY PATCH TO BE FIXED
+        cont_dict = {
+            'CL': '/cont/min/CL_20191120_NYMEX_USD',
+            'ES': '/cont/min/ES_20191220_GLOBEX_USD',
+            'GC': '/cont/min/GC_20191227_NYMEX_USD',
+            'GE': '/cont/min/GE_20191216_GLOBEX_USD',
+            'NKD': '/cont/min/NKD_20191212_GLOBEX_USD',
+            'NQ': '/cont/min/NQ_20191220_GLOBEX_USD',
+            'YN': '/cont/min/YM_20191220_ECBOT_USD',
+            'ZB': '/cont/min/ZB_20191219_ECBOT_USD',
+            'ZF': '/cont/min/ZF_20191231_ECBOT_USD',
+            'ZN': '/cont/min/ZN_20191219_ECBOT_USD'
+        }
+
+        df = self.store.read(cont_dict[self.contract.symbol],
+                             start_date=self.start_date,
                              end_date=self.end_date)
         self.startup_end_point = self.start_date + pd.Timedelta(duration, 'D')
         # this is data for emissions as df
@@ -300,7 +305,7 @@ class DataSource:
             self.bars.append(bar)
             self.bars.updateEvent.emit(self.bars, True)
         else:
-            log.error(
+            log.warning(
                 f'missing data bar {date} for {self.contract.localSymbol}')
 
     def bar(self, date):
@@ -335,6 +340,7 @@ class Market:
             log.info(
                 f'index duplicates: {self.index[self.index.duplicated()]}')
             log.debug(f'commision levels for instruments: {self.commissions}')
+            log.debug(f'minTicks for instruments: {self.ticks}')
             for date in self.index:
                 log.debug(f'current date: {date}')
                 self.date = date
@@ -346,12 +352,7 @@ class Market:
 
         def extract_prices(self):
             for contract, bars in self.objects.items():
-                if bars.bar(self.date) is None:
-                    message = (f'missing data point {self.date} '
-                               f'for contract {contract.symbol}')
-                    log.warning(message)
-                    continue
-                else:
+                if bars.bar(self.date) is not None:
                     self.prices[contract.symbol] = bars.bar(self.date).average
 
         def run_orders(self):
@@ -370,10 +371,13 @@ class Market:
             return funcs[order.orderType](order, price)
 
         def execute_trade(self, trade):
+            price = self.apply_slippage(self.prices[trade.contract.symbol],
+                                        self.ticks[trade.contract],
+                                        trade.order.action.upper())
             executed_trade = self.fill_trade(trade,
                                              next(self.exec_id),
                                              self.date,
-                                             self.prices[trade.contract.symbol])
+                                             price)
             contract = trade.contract.symbol
             quantity = trade.order.totalQuantity
             commission = self.commissions[contract] * quantity
@@ -382,6 +386,10 @@ class Market:
             self.account.update_cash(pnl)
             net_pnl = pnl - (2 * commission) if not new_position else 0
             self.update_commission(executed_trade, net_pnl, commission)
+
+        @staticmethod
+        def apply_slippage(price, tick, action):
+            return price + tick/2 if action == 'BUY' else price - tick/2
 
         @staticmethod
         def validate_stop(order, price):
@@ -542,44 +550,42 @@ class Account:
 
     def update_existing_position(self, params):
         old_position = self.positions[params.contract]
-        new_position = old_position.position + params.position
-        log.debug(
-            f'updating existing position for {params.contract}, old: {old_position}, new: {new_position}')
-        if new_position != 0:
-            if np.sign(new_position * old_position.position) == 1:
+        # quantities are signed avgCost is not
+        # avgCost is a notional of one contract
+        old_quantity = old_position.position
+        new_quantity = old_quantity + params.position
+        message = (f'updating existing position for {params.contract}, '
+                   f'old: {old_position}, new: {new_quantity}')
+        log.debug(message)
+        if new_quantity != 0:
+            if np.sign(new_quantity * old_quantity) == 1:
                 # fraction of position has been liqidated
                 log.error("we shouldn't be here: fraction liquidated")
-                cost_base = (1 - new_position/old_position.position) \
-                    * old_position.avgCost
-                pnl = (old_position.position - new_position) * params.price \
-                    - cost_base * -np.sign(params.position)
+                pnl = ((params.avgCost - old_position.avgCost) *
+                       (new_quantity - old_quantity))
                 position = Position(
                     account='',
                     contract=params.contract,
-                    position=new_position,
-                    avgCost=old_position.avgCost - cost_base
-                )
+                    position=new_quantity,
+                    avgCost=old_position.avgCost)
                 self.positions[params.contract] = position
             else:
                 # position has been reversed
                 log.error("we shouldn't be here: position reversed")
-                closing_value = (old_position.position /
-                                 params.position) * params.avgCost
-                pnl = (closing_value - old_position.avgCost) * \
-                    -np.sign(params.position)
+                pnl = ((params.avgCost - old_position.avgCost) *
+                       old_quantity)
                 position = Position(
                     account='',
                     contract=params.contract,
-                    position=params.position,
-                    avgCost=params.avgCost
-                )
+                    position=new_quantity,
+                    avgCost=params.avgCost)
                 self.positions[params.contract] = position
         else:
             log.debug(f'closing position for {params.contract}')
             log.debug(f'params: {params}')
             # postion has been closed
-            pnl = (params.avgCost - old_position.avgCost) * - \
-                np.sign(params.position)
+            pnl = ((params.avgCost - old_position.avgCost) *
+                   old_quantity)
             del self.positions[params.contract]
         log.debug(f'updating cash by: {pnl}')
         return pnl

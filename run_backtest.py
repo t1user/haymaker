@@ -6,13 +6,14 @@ from backtester import IB, DataSource
 from logger import logger
 from trader import Blotter
 from datastore_pytables import Store
-from trader import Manager
-from params import contracts
+from trader import Manager, VolumeStreamer, ResampledStreamer
+#from params import contracts
+from params_backtest import contracts
 
 
-log = logger(__file__[:-3], INFO, INFO)  # ERROR, ERROR)
+log = logger(__file__[:-3])  # , ERROR, ERROR)
 
-start_date = '20190201'
+start_date = '20190101'
 end_date = '20191031'
 cash = 1e+5
 store = Store()
@@ -22,8 +23,10 @@ ib = IB(source, cash)
 util.logToConsole()
 asyncio.get_event_loop().set_debug(True)
 
-blotter = Blotter(save_to_file=False, filename='backtest', path='backtests')
-manager = Manager(ib, contracts, leverage=15, blotter=blotter)
+blotter = Blotter(save_to_file=False, filename='backtest', path='backtests',
+                  note=f'_{start_date}_{end_date}')
+manager = Manager(ib, contracts, VolumeStreamer,
+                  leverage=15, blotter=blotter)
 manager.onConnected()
 ib.run()
 blotter.save()

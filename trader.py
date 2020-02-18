@@ -2,7 +2,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import List, Tuple, Union
 from datetime import datetime
+from abc import ABC, abstractmethod
 import csv
+
 
 import pandas as pd
 import numpy as np
@@ -44,6 +46,22 @@ class BarStreamer:
                 self.aggregate(bars[-2])
         self.bars.updateEvent += onNewBar
 
+    def aggregate(self):
+        raise NotImplementedError
+
+
+class StreamAggregator(BarStreamer, ABC):
+    def __init__(self, ib, **kwargs):
+        self.__dict__.update(kwargs)
+        self.ib = ib
+        self._createEvents()
+        super().__init__()
+        # self.process_back_data()
+        self.subscribe()
+
+    def _createEvents(self):
+        self.newCandle = Event('newCandle')
+
     def process_back_data(self):
         self.backfill = True
         log.debug(f'generating startup data for {self.contract.localSymbol}')
@@ -54,36 +72,40 @@ class BarStreamer:
                     f'startup generator for {self.contract.localSymbol} giving up control')
                 self.ib.sleep(0)
         log.debug(f'startup data generated for {self.contract.localSymbol}')
-
-        assert not self.df.iloc[-1].isna().any(), (
-            f'Not enough data for indicators for instrument'
-            f' {self.contract.localSymbol} '
-            f'values: {self.df.iloc[-1].to_dict()}')
-
         self.backfill = False
-        self.freeze()
 
-    def aggregate(self, bar):
+    def create_candle(self):
+        df = util.df(self.new_bars)
+        self.new_bars = []
+        df.date = df.date.astype('datetime64')
+        df.set_index('date', inplace=True)
+        # df['backfill'] = True
+        # df['volume_weighted'] = (df.close + df.open)/2 * df.volume
+        # df['volume_weighted'] = df.close * df.volume
+        # df['volume_weighted'] = df.average * df.volume
+        # weighted_price = df.volume_weighted.sum() / df.volume.sum()
+        self.newCandle.emit({'backfill': self.backfill,
+                             'date': df.index[-1],
+                             'open': df.open[0],
+                             'high': df.high.max(),
+                             'low': df.low.min(),
+                             'close': df.close[-1],
+                             # 'price': weighted_price,
+                             'price': df.close[-1],
+                             'volume': df.volume.sum()})
+
+    @abstractmethod
+    def aggregate(self):
         raise NotImplementedError
 
-    def create_candle(self, bar):
-        raise NotImplementedError
 
-    def freeze(self):
-        raise NotImplementedError
+class VolumeStreamer(StreamAggregator):
 
-
-class VolumeCandle(BarStreamer):
-
-    def __init__(self, avg_periods=60):
-        super().__init__()
+    def __init__(self, ib, **kwargs):
+        super().__init__(ib, **kwargs)
         self.aggregator = 0
         if not self.volume:
-            if not self.avg_periods:
-                self.avg_periods = avg_periods
             self.volume = self.reset_volume()
-        self.process_back_data()
-        self.subscribe()
 
     def reset_volume(self):
         return util.df(self.bars).volume \
@@ -102,33 +124,27 @@ class VolumeCandle(BarStreamer):
             # self.aggregator -= self.volume
             self.create_candle()
 
-    def create_candle(self):
-        df = util.df(self.new_bars)
-        self.new_bars = []
-        df.date = df.date.astype('datetime64')
-        df.set_index('date', inplace=True)
-        df['backfill'] = True
-        # df['volume_weighted'] = (df.close + df.open)/2 * df.volume
-        # df['volume_weighted'] = df.close * df.volume
-        #df['volume_weighted'] = df.average * df.volume
-        #weighted_price = df.volume_weighted.sum() / df.volume.sum()
-        self.append({'backfill': self.backfill,
-                     'date': df.index[-1],
-                     'open': df.open[0],
-                     'high': df.high.max(),
-                     'low': df.low.min(),
-                     'close': df.close[-1],
-                     # 'price': weighted_price,
-                     'price': df.close[-1],
-                     'volume': df.volume.sum()})
-
     def append(self, candle):
         raise NotImplementedError
 
 
-class Candle(VolumeCandle):
+class ResampledStreamer(StreamAggregator):
 
-    def __init__(self, params, trader, portfolio, ib, keep_ref=True):
+    def __init__(self, ib, **kwargs):
+        super().__init__(ib, **kwargs)
+        self.counter = 0
+
+    def aggregate(self, bar):
+        self.new_bars.append(bar)
+        self.counter += 1
+        if self.counter == self.avg_periods:
+            self.create_candle()
+            self.counter = 0
+
+
+class Candle():
+
+    def __init__(self, params, streamer, trader, portfolio, ib, keep_ref=True):
         self.__dict__.update(params.__dict__)
         self.params = params
         self.ib = ib
@@ -138,9 +154,14 @@ class Candle(VolumeCandle):
         self.params.details = self.get_details()
         trader.register(self.params, self.contract.symbol)
         self._createEvents()
+        streamer = streamer(self.ib, **params.__dict__)
+        streamer.newCandle.connect(
+            self.append, keep_ref=keep_ref)
         self.entrySignal.connect(trader.onEntry, keep_ref=keep_ref)
         self.closeSignal.connect(trader.onClose, keep_ref=keep_ref)
-        super().__init__()
+        streamer.process_back_data()
+        self.get_indicators()
+        self.freeze()
 
     def _createEvents(self):
         self.entrySignal = Event('entrySignal')
@@ -161,10 +182,13 @@ class Candle(VolumeCandle):
 
     def append(self, candle):
         self.candles.append(candle)
-        self.get_indicators()
-        if not self.backfill:
+        if not candle['backfill']:
+            self.get_indicators()
+            assert not self.df.iloc[-1].isna().any(), (
+                f'Not enough data for indicators for instrument'
+                f' {self.contract.localSymbol} '
+                f'values: {self.df.iloc[-1].to_dict()}')
             self.process()
-            # self.freeze()
 
     def get_indicators(self):
         df = pd.DataFrame(self.candles)
@@ -209,20 +233,25 @@ class Candle(VolumeCandle):
 
 class Manager:
 
-    def __init__(self, ib, contracts, leverage, blotter=None, trailing=True):
+    def __init__(self, ib, contracts, streamer, leverage, blotter=None,
+                 trailing=True):
         if blotter is None:
             blotter = Blotter()
         self.ib = ib
         self.contracts = contracts
+        self.streamer = streamer
         self.portfolio = Portfolio(ib, leverage)
         self.trader = Trader(ib, self.portfolio, blotter, trailing)
         alloc = round(sum([c.alloc for c in contracts]), 5)
         assert alloc == 1, "Portfolio allocations don't add-up to 1"
+        log.debug('manager initiated')
 
     def onConnected(self):
         self.trader.reconcile_stops()
         contracts = get_contracts(self.contracts, self.ib)
-        self.candles = [Candle(contract, self.trader, self.portfolio, self.ib)
+        log.debug(f'initializing candles')
+        self.candles = [Candle(contract, self.streamer, self.trader,
+                               self.portfolio, self.ib)
                         for contract in contracts]
 
     def freeze(self):
@@ -258,7 +287,8 @@ class Portfolio:
                     pass
 
     def number_of_contracts(self, params, price):
-        return int((self.account_value * self.leverage *
+        # self.account_value
+        return int((100000 * self.leverage *
                     params.alloc) / (float(params.contract.multiplier) *
                                      price))
 
@@ -418,6 +448,7 @@ class Blotter:
             writer.writeheader()
 
     def log_trade(self, trade, reason=''):
+        log.debug(f'logging trade: {trade}, reason: {reason}')
         sys_time = str(datetime.now())
         time = trade.log[-1].time
         contract = trade.contract.localSymbol
@@ -443,6 +474,8 @@ class Blotter:
         trade.commissionReportEvent += self.update_commission
 
     def update_commission(self, trade, fill, report):
+        log.debug(
+            f'updating commission for trade: {trade}, fill: {fill}, report: {report}')
         # commission report might be for partial fill
         try:
             report = self.unsaved_trades[trade.order.orderId]
@@ -460,6 +493,7 @@ class Blotter:
                 self.blotter.append(self.unsaved_trades[trade.order.orderId])
 
             del self.unsaved_trades[trade.order.orderId]
+            log.debug(f'unsaved trades: {self.unsaved_trades}')
 
     def write_to_file(self, data):
         with open(self.file, 'a') as f:
@@ -493,7 +527,7 @@ def get_contracts(params: Params, ib: IB):
         cont_contracts = [ContFuture(*contract)
                           for contract in contract_tuples]
         ib.qualifyContracts(*cont_contracts)
-        #log.debug(f'Contracts qualified: {cont_contracts}')
+        # log.debug(f'Contracts qualified: {cont_contracts}')
 
         # Converting to Futures potentially unnecessary
         # But removing below likely breaks the backtester
