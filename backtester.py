@@ -357,7 +357,7 @@ class Market:
 
         def execute_trade(self, trade):
             price = self.apply_slippage(self.prices[trade.contract.symbol],
-                                        self.ticks[trade.contract],
+                                        self.ticks[trade.contract.symbol],
                                         trade.order.action.upper())
             executed_trade = self.fill_trade(trade,
                                              next(self.exec_id),
@@ -374,7 +374,8 @@ class Market:
 
         @staticmethod
         def apply_slippage(price, tick, action):
-            return price + tick/2 if action == 'BUY' else price - tick/2
+            # return price + tick/2 if action == 'BUY' else price - tick/2
+            return price
 
         @staticmethod
         def validate_stop(order, price):

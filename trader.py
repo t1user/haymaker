@@ -435,8 +435,8 @@ class Blotter:
                      f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}{note}.csv')
         self.save_to_file = save_to_file
         self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount',
-                           'price', 'exec_ids', 'order_id', 'reason',
-                           'commission', 'realizedPNL', 'reports']
+                           'price', 'exec_ids', 'order_id', 'perm_id',
+                           'reason', 'commission', 'realizedPNL', 'com_reports']
         self.unsaved_trades = {}
         self.blotter = []
         if self.save_to_file:
@@ -448,7 +448,7 @@ class Blotter:
             writer.writeheader()
 
     def log_trade(self, trade, reason=''):
-        log.debug(f'logging trade: {trade}, reason: {reason}')
+        log.debug(f'logging trade (fills only): {trade.fills}')
         sys_time = str(datetime.now())
         time = trade.log[-1].time
         contract = trade.contract.localSymbol
@@ -457,6 +457,7 @@ class Blotter:
         price = trade.orderStatus.avgFillPrice
         exec_ids = [fill.execution.execId for fill in trade.fills]
         order_id = trade.order.orderId
+        perm_id = trade.order.permId
         reason = reason
         row = {'sys_time': sys_time,
                'time': time,
@@ -466,11 +467,12 @@ class Blotter:
                'price': price,
                'exec_ids': exec_ids,
                'order_id': order_id,
+               'perm_id': perm_id,
                'reason': reason,
                'commission': 0,
                'realizedPNL': 0,
-               'reports': 0}
-        self.unsaved_trades[order_id] = row
+               'com_reports': []}
+        self.unsaved_trades[perm_id] = row
         trade.commissionReportEvent += self.update_commission
 
     def update_commission(self, trade, fill, report):
@@ -478,21 +480,23 @@ class Blotter:
             f'updating commission for trade: {trade}, fill: {fill}, report: {report}')
         # commission report might be for partial fill
         try:
-            report = self.unsaved_trades[trade.order.orderId]
+            report = self.unsaved_trades[trade.order.permId]
         except KeyError:
             log.error('Failed to update commission for trade: {trade}')
 
-        report['commission'] += fill.commissionReport.commission
-        report['realizedPNL'] += fill.commissionReport.realizedPNL
-        report['reports'] += 1
+        report['com_reports'].append(report)
 
-        if report['reports'] == len(report['exec_ids']):
+        if len(report['com_reports']) == len(report['exec_ids']):
+            for rep in report['com_reports']:
+                report['commission'] += rep.commission
+                report['realizedPNL'] += rep.realizedPNL
+
             if self.save_to_file:
-                self.write_to_file(self.unsaved_trades[trade.order.orderId])
+                self.write_to_file(self.unsaved_trades[trade.order.permId])
             else:
-                self.blotter.append(self.unsaved_trades[trade.order.orderId])
+                self.blotter.append(self.unsaved_trades[trade.order.permId])
 
-            del self.unsaved_trades[trade.order.orderId]
+            del self.unsaved_trades[trade.order.permId]
             log.debug(f'unsaved trades: {self.unsaved_trades}')
 
     def write_to_file(self, data):
