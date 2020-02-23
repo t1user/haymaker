@@ -1,21 +1,22 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import itertools
 import asyncio
 import os
 import sys
 import functools
-import logging
 
 import pandas as pd
-from ib_insync import IB, util
-from ib_insync.contract import Future, ContFuture, Contract
+from ib_insync import util
+from ib_insync.contract import Future, ContFuture
 from logbook import Logger, StreamHandler, FileHandler, set_datetime_format
 
-
+from logger import logger
 from connect import IB_connection
 from config import max_number_of_workers
 from datastore_pytables import Store
 
+
+log = logger(__file__[:-3])
 
 """
 Modelled (loosely) on example here:
@@ -124,15 +125,16 @@ async def main(contracts, number_of_workers, now=datetime.now()):
 if __name__ == '__main__':
 
     # logging
-    set_datetime_format("local")
-    StreamHandler(sys.stdout, bubble=True).push_application()
-    FileHandler(
-        f'logs/{__file__[:-3]}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}',
-        bubble=True, delay=True).push_application()
-    log = Logger(__name__)
+    # set_datetime_format("local")
+    # StreamHandler(sys.stdout, bubble=True).push_application()
+    # FileHandler(
+    #    f'logs/{__file__[:-3]}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}',
+    #    bubble=True, delay=True).push_application()
+    # log = Logger(__name__)
 
     # util.logToConsole()
     # get connection to Gateway
+
     ib = IB_connection().ib
     # ib.connect('127.0.0.1', 4002, clientId=2)
 
@@ -142,7 +144,7 @@ if __name__ == '__main__':
     store = Store()
 
     symbols = pd.read_csv(os.path.join(
-        BASE_DIR, 'contracts.csv')).to_dict('records')
+        BASE_DIR, '_contracts.csv')).to_dict('records')
 
     # *lookup_contracts(symbols),
     contracts = [*lookup_continuous_contracts(symbols)]

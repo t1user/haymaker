@@ -1,4 +1,8 @@
 from ib_insync import IB
+from logbook import Logger
+
+
+log = Logger(__name__)
 
 
 class IB_connection:
@@ -10,17 +14,14 @@ class IB_connection:
         for i in range(1, 20):
             try:
                 self.ib.connect('127.0.0.1', 4002, clientId=i)
+                log.info(f'connected with clientId: {i}')
                 break
             except Exception as exc:
-                print('connection {} busy... up to the next one'.format(i))
-                pass
+                message = (f'exception {exc} for connection {i}... '
+                           'moving up to the next one')
+                log.debug(message)
 
         self.ib.errorEvent += self.onErrorEvent
 
-    def onErrorEvent(self, *args, **kwargs):
-        # 1.0 Network disconnect
-        # if error_code in [10182, 1102]:
-        print('------------------')
-        print('Handling Error')
-        print(args, kwargs)
-        print('------------------')
+    def onErrorEvent(self, *args):
+        log.error(f'IB error: {args}')

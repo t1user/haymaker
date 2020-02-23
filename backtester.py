@@ -51,12 +51,12 @@ class IB:
         except (FileNotFoundError, EOFError):
             c = dict()
         try:
-            details = c[obj.symbol]
+            details = c[repr(obj)]
             log.debug(f'{filename} for {repr(obj)} read from file')
             return details
         except KeyError:
             print(f'attempting to retrieve: {obj}')
-            with self.ib.connect(port=4002) as conn:
+            with self.ib.connect(port=4002, clientId=2) as conn:
                 f = getattr(conn, method)
                 if args:
                     details = f(obj, *args)
@@ -64,7 +64,7 @@ class IB:
                     details = f(obj)
                 log.debug(
                     f'{filename} for {repr(obj)} read from ib')
-            c[obj.symbol] = details
+            c[repr(obj)] = details
             with open(f'{self.path}/{filename}.pickle', 'wb') as f:
                 log.debug(f'{filename} saved to file')
                 pickle.dump(c, f)
@@ -206,22 +206,7 @@ class DataSource:
 
     def __init__(self, contract, duration):
         self.contract = self.validate_contract(contract)
-        # this is all available data as df
-        # THIS IS A MONKEY PATCH TO BE FIXED
-        cont_dict = {
-            'CL': '/cont/min/CL_20191120_NYMEX_USD',
-            'ES': '/cont/min/ES_20191220_GLOBEX_USD',
-            'GC': '/cont/min/GC_20191227_NYMEX_USD',
-            'GE': '/cont/min/GE_20191216_GLOBEX_USD',
-            'NKD': '/cont/min/NKD_20191212_GLOBEX_USD',
-            'NQ': '/cont/min/NQ_20191220_GLOBEX_USD',
-            'YN': '/cont/min/YM_20191220_ECBOT_USD',
-            'ZB': '/cont/min/ZB_20191219_ECBOT_USD',
-            'ZF': '/cont/min/ZF_20191231_ECBOT_USD',
-            'ZN': '/cont/min/ZN_20191219_ECBOT_USD'
-        }
-
-        df = self.store.read(cont_dict[self.contract.symbol],
+        df = self.store.read(self.contract,
                              start_date=self.start_date,
                              end_date=self.end_date)
         self.startup_end_point = self.start_date + pd.Timedelta(duration, 'D')
