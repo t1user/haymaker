@@ -372,6 +372,7 @@ class Trader:
     def attach_events(self, trade):
         trade.filledEvent += self.report_stopout
         trade.cancelledEvent += self.report_cancel
+        trade.commissionReportEvent += self.report_commission
         log.debug(f'Reporting events attached for {trade.contract.localSymbol} '
                   f'{trade.order.action} {trade.order.totalQuantity} '
                   f'{trade.order.orderType}')
@@ -426,6 +427,10 @@ class Trader:
         log.info(message)
         self.blotter.log_trade(trade, 'close')
 
+    def report_commission(self, trade, fill, report):
+        log.info(f'storing comm report for {report.execId}')
+        self.blotter.store_comm_report(report)
+
 
 class Blotter:
     def __init__(self, save_to_file=True, filename=None, path='blotter', note=''):
@@ -436,9 +441,10 @@ class Blotter:
         self.save_to_file = save_to_file
         self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount',
                            'price', 'exec_ids', 'order_id', 'perm_id',
-                           'reason', 'commission', 'realizedPNL', 'com_reports']
+                           'reason', 'commission', 'realizedPNL', 'reports']
         self.unsaved_trades = {}
         self.blotter = []
+        self.com_reports = {}
         if self.save_to_file:
             self.create_header()
 
@@ -459,45 +465,48 @@ class Blotter:
         order_id = trade.order.orderId
         perm_id = trade.order.permId
         reason = reason
-        row = {'sys_time': sys_time,
-               'time': time,
-               'contract': contract,
-               'action': action,
-               'amount': amount,
+        row = {'sys_time': sys_time,  # actual system time
+               'time': time,  # what ib considers to be current time
+               'contract': contract,  # 4 letter symbol string
+               'action': action,  # buy or sell
+               'amount': amount,  # unsigned amount
                'price': price,
-               'exec_ids': exec_ids,
-               'order_id': order_id,
-               'perm_id': perm_id,
-               'reason': reason,
-               'commission': 0,
-               'realizedPNL': 0,
-               'com_reports': []}
+               'exec_ids': exec_ids,  # list of execution ids
+               'order_id': order_id,  # non unique
+               'perm_id': perm_id,  # unique trade it
+               'reason': reason,  # note passed by the trading system
+               'commission': 0,  # to be updated subsequently by event
+               'realizedPNL': 0,  # to be updated subsequently by event
+               'reports': 0  # for debugging only (number of comm reports)
+               }
         self.unsaved_trades[perm_id] = row
-        trade.commissionReportEvent += self.update_commission
+        for exec_id in row['exec_ids']:
+            self.update_commission(exec_id, row)
 
-    def update_commission(self, trade, fill, report):
+    def update_commission(self, exec_id, row):
         log.debug(
-            f'updating commission for trade: {trade}, fill: {fill}, report: {report}')
-        # commission report might be for partial fill
-        try:
-            report = self.unsaved_trades[trade.order.permId]
-        except KeyError:
-            log.error('Failed to update commission for trade: {trade}')
+            f'updating commission for trade: {row}, exec_id: {exec_id}')
 
-        report['com_reports'].append(report)
-
-        if len(report['com_reports']) == len(report['exec_ids']):
-            for rep in report['com_reports']:
-                report['commission'] += rep.commission
-                report['realizedPNL'] += rep.realizedPNL
-
-            if self.save_to_file:
-                self.write_to_file(self.unsaved_trades[trade.order.permId])
+        while True:
+            report = self.com_reports.get(exec_id)
+            if report:
+                row['commission'] += report.commission
+                row['realizedPNL'] += report.realizedPNL
+                row['reports'] += 1
+                break
             else:
-                self.blotter.append(self.unsaved_trades[trade.order.permId])
+                util.sleep()
 
-            del self.unsaved_trades[trade.order.permId]
-            log.debug(f'unsaved trades: {self.unsaved_trades}')
+        if self.save_to_file:
+            self.write_to_file(row)
+        else:
+            self.blotter.append(row)
+
+        del self.com_reports[exec_id]
+        log.debug(f'unsaved trades: {self.com_reports.values()}')
+
+    def store_comm_report(self, report):
+        self.com_reports[report.execId] = report
 
     def write_to_file(self, data):
         with open(self.file, 'a') as f:

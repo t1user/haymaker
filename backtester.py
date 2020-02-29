@@ -153,6 +153,7 @@ class IB:
             # this is a new order
             assert order.totalQuantity != 0, 'Order quantity cannot be zero'
             order.orderId = orderId
+            order.permId = orderId
             orderStatus = OrderStatus(status=OrderStatus.PendingSubmit)
             logEntry = TradeLogEntry(now, orderStatus, '')
             trade = Trade(contract, order, orderStatus, [], [logEntry])
@@ -322,8 +323,9 @@ class Market:
 
         def run(self):
             self.index = self.index.sort_values()
-            log.info(
-                f'index duplicates: {self.index[self.index.duplicated()]}')
+            duplicates = self.index[self.index.duplicated()]
+            if len(duplicates) != 0:
+                log.error(f'index duplicates: {duplicates}')
             log.debug(f'commision levels for instruments: {self.commissions}')
             log.debug(f'minTicks for instruments: {self.ticks}')
             for date in self.index:
@@ -374,8 +376,8 @@ class Market:
 
         @staticmethod
         def apply_slippage(price, tick, action):
-            # return price + tick/2 if action == 'BUY' else price - tick/2
-            return price
+            return price + tick/2 if action == 'BUY' else price - tick/2
+            # return price
 
         @staticmethod
         def validate_stop(order, price):

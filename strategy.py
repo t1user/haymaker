@@ -58,7 +58,7 @@ class Strategy(WatchdogHandlers):
         ib.commissionReportEvent += self.onCommissionReportEvent
         ib.positionEvent += self.onPositionEvent
         ib.accountSummaryEvent += self.onAccountSummaryEvent
-        update = Event().timerange(180, None, 600)
+        update = Event().timerange(300, None, 600)
         update += self.onScheduledUpdate
         self.ib = ib
         self.manager = manager
@@ -114,10 +114,10 @@ class Strategy(WatchdogHandlers):
             log.info(f'{value.tag}: {value.value}')
 
     def onCommissionReportEvent(self, trade, fill, report):
-        log.debug('Commission report: {report}')
+        log.debug(f'Commission report: {report}')
 
     def onPositionEvent(self, position):
-        log.info('Position update: {position}')
+        log.info(f'Position update: {position}')
 
 
 if __name__ == '__main__':
