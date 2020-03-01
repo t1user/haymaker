@@ -13,7 +13,7 @@ from ib_insync.contract import Future, ContFuture, Contract
 from ib_insync.objects import (BarData, BarDataList, ContractDetails,
                                TradeLogEntry, Position, CommissionReport,
                                Execution, Fill)
-from ib_insync.order import OrderStatus, Trade, MarketOrder
+from ib_insync.order import OrderStatus, Trade, MarketOrder, Order
 from eventkit import Event
 
 
@@ -154,7 +154,8 @@ class IB:
             assert order.totalQuantity != 0, 'Order quantity cannot be zero'
             order.orderId = orderId
             order.permId = orderId
-            orderStatus = OrderStatus(status=OrderStatus.PendingSubmit)
+            orderStatus = OrderStatus(status=OrderStatus.PendingSubmit,
+                                      remaining=order.totalQuantity)
             logEntry = TradeLogEntry(now, orderStatus, '')
             trade = Trade(contract, order, orderStatus, [], [logEntry])
             self.newOrderEvent.emit(trade)
@@ -189,8 +190,9 @@ class IB:
         commissions = self.reqCommissions(self.market.objects.keys())
         self.market.commissions = {cont: comm.commission
                                    for cont, comm in commissions.items()}
-        self.market.ticks = {cont.symbol: self.reqContractDetails(cont)[0].minTick
-                             for cont in self.market.objects.keys()}
+        self.market.ticks = {
+            cont.symbol: self.reqContractDetails(cont)[0].minTick
+            for cont in self.market.objects.keys()}
 
         util.run(self.market.run())
 
@@ -337,6 +339,7 @@ class Market:
             log.debug(f'object {source} registered with Market')
 
         async def run(self):
+            # has to be coroutine to allow Trader to release control
             log.debug(f'commision levels for instruments: {self.commissions}')
             log.debug(f'minTicks for instruments: {self.ticks}')
             for date in self.index:
@@ -351,7 +354,7 @@ class Market:
         def extract_prices(self):
             for contract, bars in self.objects.items():
                 if bars.bar(self.date) is not None:
-                    self.prices[contract.symbol] = bars.bar(self.date).average
+                    self.prices[contract.symbol] = bars.bar(self.date)
 
         def run_orders(self):
             open_trades = [
@@ -361,17 +364,18 @@ class Market:
                                        self.prices[trade.contract.symbol]):
                     self.execute_trade(trade)
 
-        def validate_order(self, order, price):
+        def validate_order(self, order: Order, price: BarData):
             funcs = {'MKT': lambda x, y: True,
                      'STP': self.validate_stop,
                      'LMT': self.validate_limit,
                      'TRAIL': self.validate_trail}
             return funcs[order.orderType](order, price)
 
-        def execute_trade(self, trade):
-            price = self.apply_slippage(self.prices[trade.contract.symbol],
-                                        self.ticks[trade.contract.symbol],
-                                        trade.order.action.upper())
+        def execute_trade(self, trade: Trade):
+            price = self.apply_slippage(
+                self.prices[trade.contract.symbol].average,
+                self.ticks[trade.contract.symbol],
+                trade.order.action.upper())
             executed_trade = self.fill_trade(trade,
                                              next(self.exec_id),
                                              self.date,
@@ -386,37 +390,41 @@ class Market:
             self.update_commission(executed_trade, net_pnl, commission)
 
         @staticmethod
-        def apply_slippage(price, tick, action):
+        def apply_slippage(price: float, tick: float, action: str):
             return price + tick/2 if action == 'BUY' else price - tick/2
             # return price
 
         @staticmethod
-        def validate_stop(order, price):
-            if order.action.upper() == 'BUY' and order.auxPrice <= price:
+        def validate_stop(order: Order, price: BarData):
+            price = (price.open, price.high, price.low, price.close)
+            if order.action.upper() == 'BUY' and order.auxPrice <= min(price):
                 return True
-            if order.action.upper() == 'SELL' and order.auxPrice >= price:
+            if order.action.upper() == 'SELL' and order.auxPrice >= max(price):
                 return True
 
         @staticmethod
-        def validate_limit(order, price):
+        def validate_limit(order: Order, price: BarData):
+            price = price.average
             if order.action.upper() == 'BUY' and order.lmtPrice >= price:
                 return True
             if order.action.upper() == 'SELL' and order.lmtPrice <= price:
                 return True
 
         @staticmethod
-        def validate_trail(order, price):
+        def validate_trail(order: Order, price: BarData):
+            price = (price.open, price.high, price.low, price.close)
             # set trail price on a new order (ie. with default trailStopPrice)
             if order.trailStopPrice == 1.7976931348623157e+308:
                 if order.action.upper() == 'BUY':
-                    order.trailStopPrice = price + order.auxPrice
+                    order.trailStopPrice = min(price) + order.auxPrice
                 else:
-                    order.trailStopPrice = price - order.auxPrice
+                    order.trailStopPrice = max(price) - order.auxPrice
                 log.debug(
                     f'Trail price for {order} set at {order.trailStopPrice}')
 
             # check if order hit
             if order.action.upper() == 'BUY':
+                price = min(price)
                 if order.trailStopPrice <= price:
                     return True
                 else:
@@ -425,6 +433,7 @@ class Market:
                     return False
 
             if order.action.upper() == 'SELL':
+                price = max(price)
                 if order.trailStopPrice >= price:
                     return True
                 else:
@@ -433,7 +442,8 @@ class Market:
                     return False
 
         @staticmethod
-        def fill_trade(trade, exec_id, date, price):
+        def fill_trade(trade: Trade, exec_id: int, date: pd.datetime,
+                       price: float):
             quantity = trade.order.totalQuantity
             execution = Execution(execId=exec_id,
                                   time=date,
@@ -468,7 +478,7 @@ class Market:
             return trade
 
         @staticmethod
-        def update_commission(trade, pnl, commission):
+        def update_commission(trade: Trade, pnl: float, commission: float):
             old_fill = trade.fills.pop()
             commission = CommissionReport(execId=old_fill.execution.execId,
                                           commission=commission,
@@ -521,13 +531,12 @@ class Account:
 
     def mark_to_market(self, prices):
         self.mtm = {}
-        log.debug(f'prices: {prices}')
         positions = [(contract.symbol, position.position, position.avgCost)
                      for contract, position in self.positions.items()]
         log.debug(f'positions: {positions}')
         for contract, position in self.positions.items():
             self.mtm[contract.symbol] = position.position * (
-                prices[contract.symbol] * int(contract.multiplier)
+                prices[contract.symbol].average * int(contract.multiplier)
                 - position.avgCost)
             log.debug(f'mtm: {contract.symbol} {self.mtm[contract.symbol]}')
 

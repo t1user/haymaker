@@ -414,7 +414,7 @@ class Trader:
         self.blotter.log_trade(trade, reason)
 
     def report_cancel(self, trade: Trade):
-        message = (f'{trade.order.orderType} order {trade.order.action}'
+        message = (f'{trade.order.orderType} order {trade.order.action} '
                    f'{trade.orderStatus.remaining} (of '
                    f'{trade.order.totalQuantity}) for '
                    f'{trade.contract.localSymbol} cancelled')
