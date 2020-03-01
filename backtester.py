@@ -1,7 +1,6 @@
 from datetime import datetime
 from itertools import count
 import pickle
-from collections import namedtuple
 from typing import NamedTuple, List, Any
 
 import pandas as pd
@@ -9,6 +8,7 @@ import numpy as np
 from logbook import Logger
 
 from ib_insync import IB as master_IB
+from ib_insync import util
 from ib_insync.contract import Future, ContFuture, Contract
 from ib_insync.objects import (BarData, BarDataList, ContractDetails,
                                TradeLogEntry, Position, CommissionReport,
@@ -18,6 +18,7 @@ from eventkit import Event
 
 
 log = Logger(__name__)
+util.patchAsyncio()
 
 
 class IB:
@@ -28,8 +29,8 @@ class IB:
 
     ib = master_IB()
 
-    def __init__(self, datasource, cash):
-        self.datasource = datasource
+    def __init__(self, datasource_manager, cash):
+        self.datasource = datasource_manager.get_history
         self.account = Account(cash)
         self.market = Market()
         self.market.account = self.account
@@ -119,8 +120,7 @@ class IB:
     def reqHistoricalData(self, contract, durationStr, barSizeSetting,
                           *args, **kwargs):
         duration = int(durationStr.split(' ')[0]) * 2
-        source = self.datasource(contract, duration)
-        return source.bars
+        return self.datasource(contract, duration)
 
     def positions(self):
         return self.account.positions.values()
@@ -192,11 +192,27 @@ class IB:
         self.market.ticks = {cont.symbol: self.reqContractDetails(cont)[0].minTick
                              for cont in self.market.objects.keys()}
 
-        self.market.run()
+        util.run(self.market.run())
 
     def sleep(self, *args):
         # this makes sense only if run in asyncio
-        pass
+        util.sleep()
+
+
+class DataSourceManager:
+
+    def __init__(self, store, start_date, end_date):
+        self.sources = {}
+        self.DataSource = DataSource.initialize(store, start_date, end_date)
+
+    def source(self, contract, duration):
+        if not self.sources.get(repr(contract)):
+            self.sources[repr(contract)] = self.DataSource(contract, duration)
+        return self.sources[repr(contract)]
+
+    def get_history(self, contract, duration):
+        return self.source(contract, duration).get_history(
+            Market().date, duration)
 
 
 class DataSource:
@@ -207,19 +223,33 @@ class DataSource:
 
     def __init__(self, contract, duration):
         self.contract = self.validate_contract(contract)
-        df = self.store.read(self.contract,
-                             start_date=self.start_date,
-                             end_date=self.end_date)
-        self.startup_end_point = self.start_date + pd.Timedelta(duration, 'D')
-        # this is data for emissions as df
-        data_df = self.get_data_df(df)
-        # this index will be available for emissions
-        self.index = data_df.index
+        self.duration = duration
+        start_date = self.start_date - pd.tseries.offsets.BDay(duration)
+        #pd.Timedelta(duration, 'D')
+        self.df = self.store.read(self.contract,
+                                  start_date=start_date,
+                                  end_date=self.end_date).sort_index(
+                                      ascending=True)
+        # this is index of data available for emissions
+        self.index = self.df.loc[self.start_date: self.end_date].index
         # this is data for emissions as bars list
-        self.data = self.get_dict(data_df)
-        self.bars = self.startup(df)
-        # self.last_bar = None
+        self.data = self.get_dict(self.df.loc[self.start_date: self.end_date])
         Market().register(self)
+
+    def get_history(self, end_date, duration):
+        """
+        Create bars list that will be available as history.
+        Index is sorted: ascending.
+        """
+        start_date = end_date - pd.tseries.offsets.BDay(duration)
+        #pd.Timedelta(self.duration, 'D')
+        if start_date < self.df.index[0]:
+            self.df = self.store.read(self.contract,
+                                      start_date=start_date,
+                                      end_date=self.end_date)
+        log.debug(f'history data from {start_date} to {end_date}')
+        self.bars = self.get_BarDataList(self.df.loc[start_date: end_date])
+        return self.bars
 
     @classmethod
     def initialize(cls, datastore, start_date, end_date=datetime.now()):
@@ -231,26 +261,6 @@ class DataSource:
             raise(ValueError(message))
         cls.store = datastore
         return cls
-
-    def get_data_df(self, df):
-        """
-        Create bars list that will be available for emissions.
-        Index is sorted: descending (but in current implementation, it doesn't matter)
-        """
-        log.debug(f'startup end point: {self.startup_end_point}')
-        data_df = df.loc[:self.startup_end_point]
-        return data_df
-
-    def startup(self, df):
-        """
-        Create bars list that will be available pre-emissions (startup).
-        Index is sorted: ascending.
-        """
-        log.debug(f'generating startup data for {self.contract.localSymbol}')
-        startup_chunk = df.loc[self.startup_end_point:].sort_index(
-            ascending=True)
-        log.debug(f'startup chunk length: {len(startup_chunk)}')
-        return self.get_BarDataList(startup_chunk)
 
     def validate_contract(self, contract):
         if isinstance(contract, ContFuture):
@@ -318,14 +328,15 @@ class Market:
                 self.index = source.index
             else:
                 self.index.join(source.index, how='outer')
-            self.objects[source.contract] = source
-            log.debug(f'object {source} registered with Market')
-
-        def run(self):
             self.index = self.index.sort_values()
             duplicates = self.index[self.index.duplicated()]
             if len(duplicates) != 0:
                 log.error(f'index duplicates: {duplicates}')
+            self.date = self.index[0]
+            self.objects[source.contract] = source
+            log.debug(f'object {source} registered with Market')
+
+        async def run(self):
             log.debug(f'commision levels for instruments: {self.commissions}')
             log.debug(f'minTicks for instruments: {self.ticks}')
             for date in self.index:
@@ -444,6 +455,7 @@ class Market:
             trade.fills.append(fill)
             trade.orderStatus = OrderStatus(status='Filled',
                                             filled=quantity,
+                                            remaining=0,
                                             avgFillPrice=price,
                                             lastFillPrice=price)
             trade.log.append(TradeLogEntry(time=date,
@@ -469,6 +481,7 @@ class Market:
                             commissionReport=commission)
             trade.fills.append(new_fill)
             trade.commissionReportEvent.emit(trade, new_fill, commission)
+            log.debug(f'commission report event emited')
 
     instance = None
 

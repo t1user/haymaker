@@ -1,21 +1,21 @@
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import List, Tuple, Union
-from datetime import datetime
+from functools import partial
+from typing import List
 from abc import ABC, abstractmethod
-import csv
-
 
 import pandas as pd
 import numpy as np
 
 from eventkit import Event
 from ib_insync import util, Order, MarketOrder, StopOrder, IB
-from ib_insync.order import OrderStatus
+from ib_insync.objects import Fill, CommissionReport
+from ib_insync.order import Trade
 from ib_insync.contract import ContFuture, Future
-
 from logbook import Logger
+
 from indicators import get_ATR, get_signals
+from objects import Params
+from blotter import Blotter
 
 
 log = Logger(__name__)
@@ -233,8 +233,9 @@ class Candle():
 
 class Manager:
 
-    def __init__(self, ib, contracts, streamer, leverage, blotter=None,
-                 trailing=True):
+    def __init__(self, ib: IB, contracts: List[Params],
+                 streamer: BarStreamer, leverage: int,
+                 blotter: Blotter = None, trailing: bool = True):
         if blotter is None:
             blotter = Blotter()
         self.ib = ib
@@ -288,7 +289,7 @@ class Portfolio:
 
     def number_of_contracts(self, params, price):
         # self.account_value
-        return int((100000 * self.leverage *
+        return int((1e+5 * self.leverage *
                     params.alloc) / (float(params.contract.multiplier) *
                                      price))
 
@@ -310,7 +311,7 @@ class Trader:
         self.atr_dict[contract.symbol] = atr
         trade = self.trade(contract, signal, amount)
         trade.filledEvent += self.attach_sl
-        log.debug('entry order placed')
+        self.attach_events(trade, 'ENTRY')
 
     def onClose(self, contract, signal):
         message = (f'close signal handled for: {contract.localSymbol}'
@@ -322,23 +323,17 @@ class Trader:
             if contract in self.portfolio.positions:
                 trade = self.trade(contract, signal,
                                    abs(self.portfolio.positions[contract]))
-                trade.filledEvent += self.report_close
-                log.debug('closing order placed')
+                self.attach_events(trade, 'CLOSE')
 
     def trade(self, contract, signal, amount):
-        if signal == 1:
-            log.debug(
-                f'entering buy order for {amount} {contract.localSymbol}')
-            order = MarketOrder('BUY', amount)
-        elif signal == -1:
-            log.debug(
-                f'entering sell order for {amount} {contract.localSymbol}')
-            order = MarketOrder('SELL', amount)
-        trade = self.ib.placeOrder(contract, order)
-        return trade
+        direction = {1: 'BUY', -1: 'SELL'}
+        order = MarketOrder(direction[signal], amount)
+        message = (f'entering {direction[signal]} order for {amount} '
+                   f'{contract.localSymbol}')
+        log.debug(message)
+        return self.ib.placeOrder(contract, order)
 
-    def attach_sl(self, trade):
-        self.blotter.log_trade(trade, 'entry')
+    def attach_sl(self, trade: Trade):
         contract = trade.contract
         action = trade.order.action
         assert action in ('BUY', 'SELL')
@@ -346,8 +341,6 @@ class Trader:
         direction = 1 if reverseAction == 'BUY' else -1
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
-        log.info(
-            f'TRADE EXECUTED: {contract.localSymbol} {action} {amount} @{price}')
         sl_points = self.atr_dict[contract.symbol]
         if not self.trailing:
             sl_price = self.round_tick(
@@ -367,15 +360,7 @@ class Trader:
                           outsideRth=True, tif='GTC')
         trade = self.ib.placeOrder(contract, order)
         log.debug(f'stop loss attached for {trade.contract.localSymbol}')
-        self.attach_events(trade)
-
-    def attach_events(self, trade):
-        trade.filledEvent += self.report_stopout
-        trade.cancelledEvent += self.report_cancel
-        trade.commissionReportEvent += self.report_commission
-        log.debug(f'Reporting events attached for {trade.contract.localSymbol} '
-                  f'{trade.order.action} {trade.order.totalQuantity} '
-                  f'{trade.order.orderType}')
+        self.attach_events(trade, 'STOP-LOSS')
 
     def remove_sl(self, contract):
         open_trades = self.ib.openTrades()
@@ -399,139 +384,46 @@ class Trader:
         for trade in trades:
             if trade.order.orderType in ('STP', 'TRAIL'
                                          ) and trade.orderStatus.remaining != 0:
-                self.attach_events(trade)
+                self.attach_events(trade, 'STOP-LOSS')
 
     @staticmethod
-    def round_tick(price, tick_size):
+    def round_tick(price: float, tick_size: float):
         floor = price // tick_size
         remainder = price % tick_size
         if remainder > .5:
             floor += 1
         return floor * tick_size
 
-    def register(self, params, symbol):
+    def register(self, params: Params, symbol: str):
         self.contracts[symbol] = params
 
-    def report_stopout(self, trade):
-        message = (f'STOP-OUT for {trade.contract.localSymbol} '
-                   f'{trade.order.action} @{trade.orderStatus.avgFillPrice}')
+    def attach_events(self, trade: Trade, reason: str):
+        report_trade = partial(self.report_trade, reason)
+        trade.filledEvent += report_trade
+        trade.cancelledEvent += self.report_cancel
+        trade.commissionReportEvent += self.report_commission
+        log.debug(f'Reporting events attached for {trade.contract.localSymbol} '
+                  f'{trade.order.action} {trade.order.totalQuantity} '
+                  f'{trade.order.orderType}')
+
+    def report_trade(self, reason: str, trade: Trade):
+        message = (f'{reason}: {trade.contract.localSymbol} '
+                   f'{trade.order.action} {trade.orderStatus.filled}'
+                   f'@{trade.orderStatus.avgFillPrice}')
         log.info(message)
-        self.blotter.log_trade(trade, 'stop-out')
+        self.blotter.log_trade(trade, reason)
 
-    def report_cancel(self, trade):
-        log.info(f'Stop loss order for {trade.contract.localSymbol} cancelled')
-
-    def report_close(self, trade):
-        message = (f'CLOSE for {trade.contract.localSymbol} '
-                   f'{trade.order.action} @{trade.orderStatus.avgFillPrice}')
+    def report_cancel(self, trade: Trade):
+        message = (f'{trade.order.orderType} order {trade.order.action}'
+                   f'{trade.orderStatus.remaining} (of '
+                   f'{trade.order.totalQuantity}) for '
+                   f'{trade.contract.localSymbol} cancelled')
         log.info(message)
-        self.blotter.log_trade(trade, 'close')
 
-    def report_commission(self, trade, fill, report):
-        log.info(f'storing comm report for {report.execId}')
-        self.blotter.store_comm_report(report)
-
-
-class Blotter:
-    def __init__(self, save_to_file=True, filename=None, path='blotter', note=''):
-        if filename is None:
-            filename = __file__.split('/')[-1][:-3]
-        self.file = (f'{path}/{filename}_'
-                     f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}{note}.csv')
-        self.save_to_file = save_to_file
-        self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount',
-                           'price', 'exec_ids', 'order_id', 'perm_id',
-                           'reason', 'commission', 'realizedPNL', 'reports']
-        self.unsaved_trades = {}
-        self.blotter = []
-        self.com_reports = {}
-        if self.save_to_file:
-            self.create_header()
-
-    def create_header(self):
-        with open(self.file, 'w') as f:
-            writer = csv.DictWriter(f, fieldnames=self.fieldnames)
-            writer.writeheader()
-
-    def log_trade(self, trade, reason=''):
-        log.debug(f'logging trade (fills only): {trade.fills}')
-        sys_time = str(datetime.now())
-        time = trade.log[-1].time
-        contract = trade.contract.localSymbol
-        action = trade.order.action
-        amount = trade.orderStatus.filled
-        price = trade.orderStatus.avgFillPrice
-        exec_ids = [fill.execution.execId for fill in trade.fills]
-        order_id = trade.order.orderId
-        perm_id = trade.order.permId
-        reason = reason
-        row = {'sys_time': sys_time,  # actual system time
-               'time': time,  # what ib considers to be current time
-               'contract': contract,  # 4 letter symbol string
-               'action': action,  # buy or sell
-               'amount': amount,  # unsigned amount
-               'price': price,
-               'exec_ids': exec_ids,  # list of execution ids
-               'order_id': order_id,  # non unique
-               'perm_id': perm_id,  # unique trade it
-               'reason': reason,  # note passed by the trading system
-               'commission': 0,  # to be updated subsequently by event
-               'realizedPNL': 0,  # to be updated subsequently by event
-               'reports': 0  # for debugging only (number of comm reports)
-               }
-        self.unsaved_trades[perm_id] = row
-        for exec_id in row['exec_ids']:
-            self.update_commission(exec_id, row)
-
-    def update_commission(self, exec_id, row):
-        log.debug(
-            f'updating commission for trade: {row}, exec_id: {exec_id}')
-
-        while True:
-            report = self.com_reports.get(exec_id)
-            if report:
-                row['commission'] += report.commission
-                row['realizedPNL'] += report.realizedPNL
-                row['reports'] += 1
-                break
-            else:
-                util.sleep()
-
-        if self.save_to_file:
-            self.write_to_file(row)
-        else:
-            self.blotter.append(row)
-
-        del self.com_reports[exec_id]
-        log.debug(f'unsaved trades: {self.com_reports.values()}')
-
-    def store_comm_report(self, report):
-        self.com_reports[report.execId] = report
-
-    def write_to_file(self, data):
-        with open(self.file, 'a') as f:
-            writer = csv.DictWriter(f, fieldnames=self.fieldnames)
-            writer.writerow(data)
-
-    def save(self):
-        self.create_header()
-        with open(self.file, 'a') as f:
-            writer = csv.DictWriter(f, fieldnames=self.fieldnames)
-            for item in self.blotter:
-                writer.writerow(item)
-
-
-@dataclass
-class Params:
-    contract: Tuple[str]  # contract given as tuple of params given to Future()
-    periods: List[int]  # periods for breakout calculation
-    ema_fast: int  # number of periods for moving average filter
-    ema_slow: int  # number of periods for moving average filter
-    sl_atr: int  # stop loss in ATRs
-    atr_periods: int  # number of periods to calculate ATR on
-    alloc: float  # fraction of capital to be allocated to instrument
-    avg_periods: int = None  # candle volume to be calculated as average of x periods
-    volume: int = None  # candle volume given directly
+    def report_commission(self, trade: Trade, fill: Fill,
+                          report: CommissionReport):
+        log.info(f'sending commission report {report}')
+        self.blotter.update_commission(trade, fill, report)
 
 
 def get_contracts(params: Params, ib: IB):
