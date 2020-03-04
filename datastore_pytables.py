@@ -19,11 +19,11 @@ class Store:
         if start_date:
             if isinstance(start_date, pd.Timestamp):
                 start_date = start_date.strftime('%Y%m%d')
-            dates.append(f'index > {start_date}')
+            dates.append(f'index >= {start_date}')
         if end_date:
             if isinstance(end_date, pd.Timestamp):
                 end_date = end_date.strftime('%Y%m%d')
-            dates.append(f'index < {end_date}')
+            dates.append(f'index <= {end_date}')
         if len(dates) == 2:
             return ' & '.join(dates)
         else:

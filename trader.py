@@ -150,7 +150,6 @@ class Candle():
     def __init__(self, params: Params, streamer: Type[BarStreamer],
                  trader: Type[Trader], portfolio: Type[Portfolio],
                  ib: Type[IB], freeze_path: str, keep_ref: bool = True):
-        print(locals())
         self.__dict__.update(params.__dict__)
         self.params = params
         self.ib = ib
@@ -399,9 +398,9 @@ class Trader:
     def round_tick(price: float, tick_size: float) -> float:
         floor = price // tick_size
         remainder = price % tick_size
-        if remainder > .5:
+        if remainder > (tick_size / 2):
             floor += 1
-        return floor * tick_size
+        return round(floor * tick_size, 4)
 
     def register(self, params: Params, symbol: str):
         self.contracts[symbol] = params
