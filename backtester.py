@@ -210,11 +210,17 @@ class DataSourceManager:
     def source(self, contract, duration):
         if not self.sources.get(repr(contract)):
             self.sources[repr(contract)] = self.DataSource(contract, duration)
+        log.debug(f'source: {self.sources[repr(contract)]}')
+        log.debug(f'source type: {type(self.sources[repr(contract)])}')
         return self.sources[repr(contract)]
 
     def get_history(self, contract, duration):
-        return self.source(contract, duration).get_history(
+        log.debug(f'getting history for {contract} for duration {duration}')
+        log.debug(f'date: {Market().date}')
+
+        data = self.source(contract, duration).get_history(
             Market().date, duration)
+        log.debug(data)
 
 
 class DataSource:
@@ -364,7 +370,7 @@ class Market:
                                        self.prices[trade.contract.symbol]):
                     self.execute_trade(trade)
 
-        def validate_order(self, order: Order, price: BarData):
+        def validate_order(self, order: Order, price: BarData) -> bool:
             funcs = {'MKT': lambda x, y: True,
                      'STP': self.validate_stop,
                      'LMT': self.validate_limit,
@@ -395,7 +401,7 @@ class Market:
             # return price
 
         @staticmethod
-        def validate_stop(order: Order, price: BarData):
+        def validate_stop(order: Order, price: BarData) -> bool:
             price = (price.open, price.high, price.low, price.close)
             if order.action.upper() == 'BUY' and order.auxPrice <= min(price):
                 return True
@@ -411,7 +417,7 @@ class Market:
                 return True
 
         @staticmethod
-        def validate_trail(order: Order, price: BarData):
+        def validate_trail(order: Order, price: BarData) -> bool:
             price = (price.open, price.high, price.low, price.close)
             # set trail price on a new order (ie. with default trailStopPrice)
             if order.trailStopPrice == 1.7976931348623157e+308:
@@ -443,7 +449,7 @@ class Market:
 
         @staticmethod
         def fill_trade(trade: Trade, exec_id: int, date: pd.datetime,
-                       price: float):
+                       price: float) -> Trade:
             quantity = trade.order.totalQuantity
             execution = Execution(execId=exec_id,
                                   time=date,
@@ -478,7 +484,8 @@ class Market:
             return trade
 
         @staticmethod
-        def update_commission(trade: Trade, pnl: float, commission: float):
+        def update_commission(trade: Trade, pnl: float,
+                              commission: float) -> None:
             old_fill = trade.fills.pop()
             commission = CommissionReport(execId=old_fill.execution.execId,
                                           commission=commission,

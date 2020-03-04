@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from collections import defaultdict
 from functools import partial
-from typing import List
+from typing import List, Type
 from abc import ABC, abstractmethod
+
 
 import pandas as pd
 import numpy as np
@@ -144,11 +147,15 @@ class ResampledStreamer(StreamAggregator):
 
 class Candle():
 
-    def __init__(self, params, streamer, trader, portfolio, ib, keep_ref=True):
+    def __init__(self, params: Params, streamer: Type[BarStreamer],
+                 trader: Type[Trader], portfolio: Type[Portfolio],
+                 ib: Type[IB], freeze_path: str, keep_ref: bool = True):
+        print(locals())
         self.__dict__.update(params.__dict__)
         self.params = params
         self.ib = ib
         self.portfolio = portfolio
+        self.path = freeze_path
         log.debug(f'candle init for contract {self.contract.localSymbol}')
         self.candles = []
         self.params.details = self.get_details()
@@ -169,7 +176,7 @@ class Candle():
 
     def freeze(self):
         self.df.to_pickle(
-            f'notebooks/freeze/freeze_df_{self.contract.localSymbol}.pickle')
+            f'{self.path}/freeze_df_{self.contract.localSymbol}.pickle')
         log.debug(f'freezed data saved for {self.contract.localSymbol}')
 
     def get_details(self):
@@ -235,13 +242,15 @@ class Manager:
 
     def __init__(self, ib: IB, contracts: List[Params],
                  streamer: BarStreamer, leverage: int,
-                 blotter: Blotter = None, trailing: bool = True):
+                 blotter: Blotter = None, trailing: bool = True,
+                 freeze_path: str = 'notebooks/freeze/live'):
         if blotter is None:
             blotter = Blotter()
         self.ib = ib
         self.contracts = contracts
         self.streamer = streamer
         self.portfolio = Portfolio(ib, leverage)
+        self.path = freeze_path
         self.trader = Trader(ib, self.portfolio, blotter, trailing)
         alloc = round(sum([c.alloc for c in contracts]), 5)
         assert alloc == 1, "Portfolio allocations don't add-up to 1"
@@ -252,7 +261,7 @@ class Manager:
         contracts = get_contracts(self.contracts, self.ib)
         log.debug(f'initializing candles')
         self.candles = [Candle(contract, self.streamer, self.trader,
-                               self.portfolio, self.ib)
+                               self.portfolio, self.ib, self.path)
                         for contract in contracts]
 
     def freeze(self):
@@ -305,7 +314,7 @@ class Trader:
         self.contracts = {}
         log.debug('Trader initialized')
 
-    def onEntry(self, contract, signal, atr, amount):
+    def onEntry(self, contract, signal, atr, amount) -> None:
         log.debug(
             f'entry signal handled for: {contract.localSymbol} {signal} {atr}')
         self.atr_dict[contract.symbol] = atr
@@ -313,7 +322,7 @@ class Trader:
         trade.filledEvent += self.attach_sl
         self.attach_events(trade, 'ENTRY')
 
-    def onClose(self, contract, signal):
+    def onClose(self, contract, signal) -> None:
         message = (f'close signal handled for: {contract.localSymbol}'
                    f' signal: {signal}')
         log.debug(message)
@@ -325,7 +334,7 @@ class Trader:
                                    abs(self.portfolio.positions[contract]))
                 self.attach_events(trade, 'CLOSE')
 
-    def trade(self, contract, signal, amount):
+    def trade(self, contract, signal, amount) -> Trade:
         direction = {1: 'BUY', -1: 'SELL'}
         order = MarketOrder(direction[signal], amount)
         message = (f'entering {direction[signal]} order for {amount} '
@@ -333,7 +342,7 @@ class Trader:
         log.debug(message)
         return self.ib.placeOrder(contract, order)
 
-    def attach_sl(self, trade: Trade):
+    def attach_sl(self, trade: Trade) -> None:
         contract = trade.contract
         action = trade.order.action
         assert action in ('BUY', 'SELL')
@@ -362,7 +371,7 @@ class Trader:
         log.debug(f'stop loss attached for {trade.contract.localSymbol}')
         self.attach_events(trade, 'STOP-LOSS')
 
-    def remove_sl(self, contract):
+    def remove_sl(self, contract) -> None:
         open_trades = self.ib.openTrades()
         orders = defaultdict(list)
         for t in open_trades:
@@ -372,7 +381,7 @@ class Trader:
                 self.ib.cancelOrder(order)
                 log.debug(f'stop loss removed for {contract.localSymbol}')
 
-    def reconcile_stops(self):
+    def reconcile_stops(self) -> None:
         """
         To be executed on restart. For all existing stop-outs attach reporting
         events for the blotter.
@@ -387,7 +396,7 @@ class Trader:
                 self.attach_events(trade, 'STOP-LOSS')
 
     @staticmethod
-    def round_tick(price: float, tick_size: float):
+    def round_tick(price: float, tick_size: float) -> float:
         floor = price // tick_size
         remainder = price % tick_size
         if remainder > .5:
@@ -397,7 +406,7 @@ class Trader:
     def register(self, params: Params, symbol: str):
         self.contracts[symbol] = params
 
-    def attach_events(self, trade: Trade, reason: str):
+    def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
         trade.filledEvent += report_trade
         trade.cancelledEvent += self.report_cancel
@@ -406,14 +415,14 @@ class Trader:
                   f'{trade.order.action} {trade.order.totalQuantity} '
                   f'{trade.order.orderType}')
 
-    def report_trade(self, reason: str, trade: Trade):
+    def report_trade(self, reason: str, trade: Trade) -> None:
         message = (f'{reason}: {trade.contract.localSymbol} '
                    f'{trade.order.action} {trade.orderStatus.filled}'
                    f'@{trade.orderStatus.avgFillPrice}')
         log.info(message)
         self.blotter.log_trade(trade, reason)
 
-    def report_cancel(self, trade: Trade):
+    def report_cancel(self, trade: Trade) -> None:
         message = (f'{trade.order.orderType} order {trade.order.action} '
                    f'{trade.orderStatus.remaining} (of '
                    f'{trade.order.totalQuantity}) for '
@@ -421,12 +430,12 @@ class Trader:
         log.info(message)
 
     def report_commission(self, trade: Trade, fill: Fill,
-                          report: CommissionReport):
+                          report: CommissionReport) -> None:
         log.info(f'sending commission report {report}')
         self.blotter.update_commission(trade, fill, report)
 
 
-def get_contracts(params: Params, ib: IB):
+def get_contracts(params: List[Params], ib: IB) -> List[Params]:
 
     def convert(contract_tuples: List[tuple]):
         cont_contracts = [ContFuture(*contract)
