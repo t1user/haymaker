@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 from datetime import datetime
 from itertools import count
 import pickle
-from typing import NamedTuple, List, Any, Union
+from typing import NamedTuple, List, Any, Union, Tuple, Type
 
 import pandas as pd
 import numpy as np
@@ -16,6 +18,7 @@ from ib_insync.objects import (BarData, BarDataList, ContractDetails,
 from ib_insync.order import OrderStatus, Trade, MarketOrder, Order
 from eventkit import Event
 
+from datastore_pytables import Store
 
 log = Logger(__name__)
 util.patchAsyncio()
@@ -29,7 +32,8 @@ class IB:
 
     ib = master_IB()
 
-    def __init__(self, datasource_manager, cash):
+    def __init__(self, datasource_manager: DataSourceManager,
+                 cash: Union[float, int]) -> None:
         self.datasource = datasource_manager.get_history
         self.account = Account(cash)
         self.market = Market()
@@ -37,7 +41,7 @@ class IB:
         self._createEvents()
         self.id = count(1, 1)
 
-    def _createEvents(self):
+    def _createEvents(self) -> None:
         self.barUpdateEvent = Event('barUpdateEvent')
         self.newOrderEvent = Event('newOrderEvent')
         self.orderModifyEvent = Event('orderModifyEvent')
@@ -71,7 +75,7 @@ class IB:
                 pickle.dump(c, f)
             return details
 
-    def reqContractDetails(self, contract):
+    def reqContractDetails(self, contract: Type[Contract]):
         return self.read_from_file_or_ib('details', 'reqContractDetails',
                                          contract)
 
@@ -203,16 +207,16 @@ class IB:
 
 class DataSourceManager:
 
-    def __init__(self, store, start_date, end_date):
+    def __init__(self, store: Store, start_date: datetime, end_date: datetime):
         self.sources = {}
         self.DataSource = DataSource.initialize(store, start_date, end_date)
 
-    def source(self, contract, duration):
+    def source(self, contract: Type[Contract], duration: int) -> dict:
         if not self.sources.get(repr(contract)):
             self.sources[repr(contract)] = self.DataSource(contract, duration)
         return self.sources[repr(contract)]
 
-    def get_history(self, contract, duration):
+    def get_history(self, contract: Type[Contract], duration: int) -> None:
         return self.source(contract, duration).get_history(
             Market().date, duration)
 
@@ -223,7 +227,7 @@ class DataSource:
     end_date = None
     store = None
 
-    def __init__(self, contract, duration):
+    def __init__(self, contract: Type[Contract], duration: int) -> None:
         self.contract = self.validate_contract(contract)
         self.duration = duration
         start_date = self.start_date - pd.Timedelta(duration, 'D')
@@ -233,7 +237,7 @@ class DataSource:
         self.index = self.df.loc[self.start_date: self.end_date].index
         Market().register(self)
 
-    def pull_data(self, start_date=None):
+    def pull_data(self, start_date: pd.Datetime = None) -> None:
         start_date = self.start_date if start_date is None else start_date
         self.df = self.store.read(self.contract,
                                   start_date=start_date,
@@ -243,10 +247,9 @@ class DataSource:
         # this is data for emissions as bars list
         self.data = self.get_dict(self.df.loc[self.start_date: self.end_date])
 
-    def get_history(self, end_date, duration):
+    def get_history(self, end_date: pd.Datetime, duration: int) -> BarDataList:
         """
-        Create bars list that will be available as history.
-        Index is sorted: ascending.
+        Convert df into bars list that will be available as history.
         """
         start_date = end_date - pd.Timedelta(duration, 'D')
         # pd.tseries.offsets.BDay(duration)
@@ -323,12 +326,12 @@ class Market:
             self.date = None
             self.exec_id = count(1, 1)
 
-        def get_trade(self, order):
+        def get_trade(self, order: Order) -> Union[Trade, None]:
             for trade in self.trades:
                 if trade.order == order:
                     return trade
 
-        def register(self, source):
+        def register(self, source: DataSource) -> None:
             if self.index is None:
                 self.index = source.index
             else:
@@ -340,12 +343,12 @@ class Market:
             self.date = self.index[0]
             self.objects[source.contract] = source
 
-        def append_trade(self, trade):
+        def append_trade(self, trade: Trade) -> None:
             if trade.order.orderType == 'TRAIL':
                 trade = self.set_trail_price(trade)
             self.trades.append(trade)
 
-        def set_trail_price(self, trade):
+        def set_trail_price(self, trade: Trade) -> Trade:
             position = self.account.positions.get(trade.contract)
             if position:
                 avgCost = position.avgCost
@@ -365,7 +368,7 @@ class Market:
                 f'initial trail price set at {trade.order.trailStopPrice}')
             return trade
 
-        async def run(self):
+        async def run(self) -> None:
             # has to be coroutine to allow Trader to release control
             log.debug(f'commision levels for instruments: {self.commissions}')
             log.debug(f'minTicks for instruments: {self.ticks}')
@@ -375,12 +378,10 @@ class Market:
                 for o in self.objects.values():
                     o.emit(date)
                 self.extract_prices()
-                for contract, price in self.prices.items():
-                    log.debug(f'{contract} {price}')
                 self.account.mark_to_market(self.prices)
                 self.run_orders()
 
-        def extract_prices(self):
+        def extract_prices(self) -> None:
             for contract, bars in self.objects.items():
                 if bars.bar(self.date) is not None:
                     self.prices[contract.symbol] = bars.bar(self.date)
@@ -403,7 +404,7 @@ class Market:
                      'TRAIL': self.validate_trail}
             return funcs[order.orderType](order, price)
 
-        def execute_trade(self, trade: Trade, price: float = None):
+        def execute_trade(self, trade: Trade, price: float = None) -> None:
             """
             Execution price are passed as argument for limit, stop, stop-limit
             orders. For market orders True is passed and price has to be read
@@ -435,7 +436,7 @@ class Market:
             self.update_commission(executed_trade, net_pnl, commission)
 
         @staticmethod
-        def apply_slippage(price: float, tick: float, action: str):
+        def apply_slippage(price: float, tick: float, action: str) -> float:
             return price + tick if action == 'BUY' else price - tick
             # return price
 
@@ -541,16 +542,16 @@ class Market:
 
 
 class Account:
-    def __init__(self, cash):
+    def __init__(self, cash) -> None:
         self.cash = cash
         self.mtm = {}
         self.positions = {}
 
-    def update_cash(self, cash):
+    def update_cash(self, cash) -> None:
         self.cash += cash
 
     @staticmethod
-    def extract_params(trade):
+    def extract_params(trade) -> TradeParams:
         contract = trade.contract
         quantity = trade.fills[-1].execution.shares
         price = trade.fills[-1].execution.price
@@ -562,7 +563,7 @@ class Account:
         return TradeParams(contract, quantity, price, side, position,
                            avgCost)
 
-    def mark_to_market(self, prices):
+    def mark_to_market(self, prices) -> None:
         self.mtm = {}
         positions = [(contract.symbol, position.position, position.avgCost)
                      for contract, position in self.positions.items()]
@@ -574,12 +575,12 @@ class Account:
             log.debug(f'mtm: {contract.symbol} {self.mtm[contract.symbol]}')
 
     @property
-    def unrealizedPnL(self):
+    def unrealizedPnL(self) -> float:
         pnl = sum(self.mtm.values())
         log.debug(f'UnrealizedPnL: {pnl}')
         return pnl
 
-    def update_positions(self, trade):
+    def update_positions(self, trade: Trade) -> Tuple[float, bool]:
         log.debug(f'Account updating positions by trade: {trade}')
         params = self.extract_params(trade)
         if trade.contract in self.positions:
@@ -591,7 +592,7 @@ class Account:
             new = True
         return (pnl, new)
 
-    def update_existing_position(self, params):
+    def update_existing_position(self, params: TradeParams) -> float:
         old_position = self.positions[params.contract]
         # quantities are signed avgCost is not
         # avgCost is a notional of one contract
@@ -633,7 +634,7 @@ class Account:
         log.debug(f'updating cash by: {pnl}')
         return pnl
 
-    def open_new_position(self, params):
+    def open_new_position(self, params: TradeParams) -> None:
         position = Position(
             account='',
             contract=params.contract,
@@ -644,7 +645,7 @@ class Account:
 
 
 class TradeParams(NamedTuple):
-    contract: Contract
+    contract: Type[Contract]
     quantity: int
     price: float
     side: str
