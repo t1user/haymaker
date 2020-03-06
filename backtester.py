@@ -19,6 +19,7 @@ from ib_insync.order import OrderStatus, Trade, MarketOrder, Order
 from eventkit import Event
 
 from datastore_pytables import Store
+from trader import Manager
 
 log = Logger(__name__)
 util.patchAsyncio()
@@ -33,11 +34,9 @@ class IB:
     ib = master_IB()
 
     def __init__(self, datasource_manager: DataSourceManager,
-                 cash: Union[float, int]) -> None:
+                 ) -> None:
         self.datasource = datasource_manager.get_history
-        self.account = Account(cash)
         self.market = Market()
-        self.market.account = self.account
         self._createEvents()
         self.id = count(1, 1)
 
@@ -60,7 +59,6 @@ class IB:
             log.debug(f'{filename} for {repr(obj)} read from file')
             return details
         except KeyError:
-            print(f'attempting to retrieve: {obj}')
             with self.ib.connect(port=4002, clientId=2) as conn:
                 f = getattr(conn, method)
                 if args:
@@ -127,15 +125,15 @@ class IB:
         return self.datasource(contract, duration)
 
     def positions(self):
-        return self.account.positions.values()
+        return self.market.account.positions.values()
 
     def accountValues(self):
-        log.info(f'cash: {self.account.cash}')
+        log.info(f'cash: {self.market.account.cash}')
         return [
             AccountValue(tag='TotalCashBalance',
-                         value=self.account.cash),
+                         value=self.market.account.cash),
             AccountValue(tag='UnrealizedPnL',
-                         value=self.account.unrealizedPnL)
+                         value=self.market.account.unrealizedPnL)
         ]
 
     def openTrades(self):
@@ -197,6 +195,10 @@ class IB:
         self.market.ticks = {
             cont.symbol: self.reqContractDetails(cont)[0].minTick
             for cont in self.market.objects.keys()}
+        log.debug(f'market.object.keys: {self.market.objects.keys()}')
+        log.debug(f'properties set on Market: {self.market}')
+        log.debug(f'commissions: {self.market.commissions}')
+        log.debug(f'ticks: {self.market.ticks}')
 
         util.run(self.market.run())
 
@@ -206,6 +208,10 @@ class IB:
 
 
 class DataSourceManager:
+    """
+    Holds initilized DataSource objects. Responds to history requests by
+    providing appropriate source object.
+    """
 
     def __init__(self, store: Store, start_date: datetime, end_date: datetime):
         self.sources = {}
@@ -231,7 +237,6 @@ class DataSource:
         self.contract = self.validate_contract(contract)
         self.duration = duration
         start_date = self.start_date - pd.Timedelta(duration, 'D')
-        # - pd.tseries.offsets.BDay(duration)
         self.pull_data(start_date=start_date)
         # this is index of data available for emissions
         self.index = self.df.loc[self.start_date: self.end_date].index
@@ -252,7 +257,6 @@ class DataSource:
         Convert df into bars list that will be available as history.
         """
         start_date = end_date - pd.Timedelta(duration, 'D')
-        # pd.tseries.offsets.BDay(duration)
         if start_date < self.df.index[0]:
             self.pull_data(start_date)
         log.debug(f'history data from {start_date} to {end_date}')
@@ -343,6 +347,52 @@ class Market:
             self.date = self.index[0]
             self.objects[source.contract] = source
 
+        def date_generator(self):
+            for date in self.index:
+                try:
+                    yield(date)
+                except StopIteration:
+                    return
+
+        async def run(self) -> None:
+            # has to be coroutine to allow Trader to release control
+            log.debug(f'Market initialized with reboot={self._reboot}')
+            log.debug(f'Market object: {self}')
+            log.debug(f'commision levels for instruments: {self.commissions}')
+            log.debug(f'minTicks for instruments: {self.ticks}')
+            try:
+                getattr(self, 'manager')
+            except AttributeError:
+                raise AttributeError(
+                    'No manager object provided to the Market')
+
+            date = self.date_generator()
+            day = None
+            while True:
+                self.date = next(date)
+                print(self.date)
+                if self.date is None:
+                    break
+                if day:
+                    if self.date.day != day and self._reboot:
+                        self.reboot()
+                        day = None
+                else:
+                    day = self.date.day
+                log.debug(f'current date: {self.date}')
+                for o in self.objects.values():
+                    o.emit(self.date)
+                self.extract_prices()
+                self.account.mark_to_market(self.prices)
+                self.run_orders()
+
+        def reboot(self):
+            # pending events must be cancelled on reboot to mimick real app
+            for trade in self.trades:
+                for event in trade.events:
+                    getattr(trade, event).clear()
+            self.manager.onConnected()
+
         def append_trade(self, trade: Trade) -> None:
             if trade.order.orderType == 'TRAIL':
                 trade = self.set_trail_price(trade)
@@ -367,19 +417,6 @@ class Market:
             log.debug(
                 f'initial trail price set at {trade.order.trailStopPrice}')
             return trade
-
-        async def run(self) -> None:
-            # has to be coroutine to allow Trader to release control
-            log.debug(f'commision levels for instruments: {self.commissions}')
-            log.debug(f'minTicks for instruments: {self.ticks}')
-            for date in self.index:
-                log.debug(f'current date: {date}')
-                self.date = date
-                for o in self.objects.values():
-                    o.emit(date)
-                self.extract_prices()
-                self.account.mark_to_market(self.prices)
-                self.run_orders()
 
         def extract_prices(self) -> None:
             for contract, bars in self.objects.items():
@@ -529,9 +566,17 @@ class Market:
 
     instance = None
 
-    def __new__(cls):
+    def __new__(cls, cash=None, manager=None, reboot=False):
         if not Market.instance:
             Market.instance = Market.__Market()
+        else:
+            if manager:
+                Market.instance.manager = manager
+                Market.instance.reboot()
+            if reboot:
+                Market.instance._reboot = reboot
+            if cash:
+                Market.instance.account = Account(cash)
         return Market.instance
 
     def __getattr__(self, name):
@@ -542,16 +587,16 @@ class Market:
 
 
 class Account:
-    def __init__(self, cash) -> None:
+    def __init__(self, cash: Union[int, float]) -> None:
         self.cash = cash
         self.mtm = {}
         self.positions = {}
 
-    def update_cash(self, cash) -> None:
+    def update_cash(self, cash: Union[int, float]) -> None:
         self.cash += cash
 
     @staticmethod
-    def extract_params(trade) -> TradeParams:
+    def extract_params(trade: Trade) -> TradeParams:
         contract = trade.contract
         quantity = trade.fills[-1].execution.shares
         price = trade.fills[-1].execution.price

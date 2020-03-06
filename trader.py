@@ -253,7 +253,7 @@ class Manager:
         self.trader = Trader(ib, self.portfolio, blotter, trailing)
         alloc = round(sum([c.alloc for c in contracts]), 5)
         assert alloc == 1, "Portfolio allocations don't add-up to 1"
-        log.debug('manager initiated')
+        log.debug(f'manager object initiated: {self}')
 
     def onConnected(self):
         self.trader.reconcile_stops()
@@ -262,6 +262,7 @@ class Manager:
         self.candles = [Candle(contract, self.streamer, self.trader,
                                self.portfolio, self.ib, self.path)
                         for contract in contracts]
+        log.debug(f'onConnected run, candles: {self.candles}')
 
     def freeze(self):
         for candle in self.candles:
