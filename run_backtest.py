@@ -14,7 +14,7 @@ from params_backtest import contracts
 log = logger(__file__[:-3])  # , INFO, INFO)
 
 start_date = '20180401'
-end_date = '20181231'
+end_date = '20180414'
 cash = 1e+5
 store = Store()
 source = DataSourceManager(store, start_date, end_date)

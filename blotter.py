@@ -1,7 +1,7 @@
 import csv
 from datetime import datetime
+from typing import List
 
-from ib_insync import util
 from ib_insync.order import Trade
 from ib_insync.objects import Fill, CommissionReport
 from logbook import Logger
@@ -32,15 +32,18 @@ class Blotter:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writeheader()
 
-    def log_trade(self, trade: Trade, reason: str = ''):
-        log.debug(f'logging trade (fills only): {trade.fills}')
+    def log_trade(self, trade: Trade, comms: List[CommissionReport],
+                  reason: str = ''):
+        log.debug(f'logging trade: {trade}')
         sys_time = str(datetime.now())
         time = trade.log[-1].time
         contract = trade.contract.localSymbol
         action = trade.order.action
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
-        exec_ids = [fill.execution.execId for fill in trade.fills]
+        # ib_insync issue: sometimes fills relate to wrong transaction
+        exec_ids = [fill.execution.execId for fill in trade.fills
+                    if fill.contract == trade.contract]
         order_id = trade.order.orderId
         perm_id = trade.order.permId
         reason = reason
@@ -55,35 +58,38 @@ class Blotter:
             'order_id': order_id,  # non unique
             'perm_id': perm_id,  # unique trade id
             'reason': reason,  # note passed by the trading system
-            'commission': 0,  # to be updated subsequently by event
-            'realizedPNL': 0,  # to be updated subsequently by event
-            'comm_reports': []  # comm reports added as they're being emited
+            'commission': sum([comm.commission for comm in comms]),
+            'realizedPNL': sum([comm.realizedPNL for comm in comms]),
+            'comm_reports': comms
         }
-        self.unsaved_trades[perm_id] = row
+        self.save_report(row)
 
-    def update_commission(self, trade: Trade, fill: Fill,
-                          comm_report: CommissionReport):
-        log.debug(f'updating commission for trade: {trade}')
-        while True:
-            report = self.unsaved_trades.get(trade.order.permId)
-            if report:
-                report['comm_reports'].append(comm_report)
-                break
-            else:
-                util.sleep()
+    def log_commission(self, trade: Trade, fill: Fill,
+                       comm_report: CommissionReport, reason: str):
+        """
+        Get trades that have all CommissionReport filled and log them.
+        """
+        log.debug(f'logging commission for trade: {trade}')
+        log.debug(f'trade isDone: {trade.isDone()}')
+        # bug in ib_insync sometimes causes trade to have fills for
+        # unrelated transactions
+        comms = [fill.commissionReport for fill in trade.fills
+                 if fill.commissionReport.execId != ''
+                 and fill.contract == trade.contract]
+        log.debug(f'comms: {comms}')
+        log.debug(
+            f'len(comms): {len(comms)}, len(trade.fills): {len(trade.fills)}')
 
-        if len(report['comm_reports']) == len(report['exec_ids']):
-            for comm_report in report['comm_reports']:
-                report['commission'] += comm_report.commission
-                report['realizedPNL'] += comm_report.realizedPNL
+        if trade.isDone() and (len(comms) == len(trade.fills)):
+            self.log_trade(trade, comms, reason)
 
-            if self.save_to_file:
-                self.write_to_file(report)
-            else:
-                self.blotter.append(report)
+    def save_report(self, report):
+        if self.save_to_file:
+            self.write_to_file(report)
+        else:
+            self.blotter.append(report)
 
-            log.debug(f'trade {report} saved')
-            del self.unsaved_trades[trade.order.permId]
+        log.debug(f'trade {report} saved')
 
     def write_to_file(self, data: dict):
         with open(self.file, 'a') as f:

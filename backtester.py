@@ -322,7 +322,8 @@ class DataSource:
 
 class Market:
     class __Market:
-        def __init__(self):
+        def __init__(self, reboot=False):
+            self._reboot = reboot
             self.objects = {}
             self.prices = {}
             self.trades = []
@@ -349,10 +350,7 @@ class Market:
 
         def date_generator(self):
             for date in self.index:
-                try:
-                    yield(date)
-                except StopIteration:
-                    return
+                yield(date)
 
         async def run(self) -> None:
             # has to be coroutine to allow Trader to release control
@@ -365,12 +363,14 @@ class Market:
             except AttributeError:
                 raise AttributeError(
                     'No manager object provided to the Market')
-
             date = self.date_generator()
             day = None
+
             while True:
-                self.date = next(date)
-                print(self.date)
+                try:
+                    self.date = next(date)
+                except StopIteration:
+                    return
                 if self.date is None:
                     break
                 if day:

@@ -408,19 +408,19 @@ class Trader:
 
     def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
+        report_commission = partial(self.report_commission, reason)
         trade.filledEvent += report_trade
         trade.cancelledEvent += self.report_cancel
-        trade.commissionReportEvent += self.report_commission
+        trade.commissionReportEvent += report_commission
         log.debug(f'Reporting events attached for {trade.contract.localSymbol} '
                   f'{trade.order.action} {trade.order.totalQuantity} '
                   f'{trade.order.orderType}')
 
     def report_trade(self, reason: str, trade: Trade) -> None:
-        message = (f'{reason}: {trade.contract.localSymbol} '
+        message = (f'{reason} trade filled: {trade.contract.localSymbol} '
                    f'{trade.order.action} {trade.orderStatus.filled}'
                    f'@{trade.orderStatus.avgFillPrice}')
         log.info(message)
-        self.blotter.log_trade(trade, reason)
 
     def report_cancel(self, trade: Trade) -> None:
         message = (f'{trade.order.orderType} order {trade.order.action} '
@@ -429,10 +429,10 @@ class Trader:
                    f'{trade.contract.localSymbol} cancelled')
         log.info(message)
 
-    def report_commission(self, trade: Trade, fill: Fill,
+    def report_commission(self, reason: str, trade: Trade, fill: Fill,
                           report: CommissionReport) -> None:
         log.info(f'sending commission report {report}')
-        self.blotter.update_commission(trade, fill, report)
+        self.blotter.log_commission(trade, fill, report, reason)
 
 
 def get_contracts(params: List[Params], ib: IB) -> List[Params]:
