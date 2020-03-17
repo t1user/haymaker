@@ -1,19 +1,15 @@
 from datetime import datetime
-import itertools
 import asyncio
 import os
-import sys
 import functools
 
-import pandas as pd
 from ib_insync import util
-from ib_insync.contract import Future, ContFuture
-from logbook import Logger, StreamHandler, FileHandler, set_datetime_format
 
 from logger import logger
 from connect import IB_connection
 from config import max_number_of_workers
 from datastore_pytables import Store
+from objects import ObjectSelector
 
 
 log = logger(__file__[:-3])
@@ -51,20 +47,6 @@ async def get_history(contract, dt):
     store.write(contract, df)
     log.debug(f'saved data chunk for: {contract.localSymbol}')
     return next_chunk
-
-
-def lookup_contracts(symbols):
-    futures = []
-    for s in symbols:
-        futures.append(
-            [Future(**c.contract.dict())
-             for c in ib.reqContractDetails(Future(**s, includeExpired=True))]
-        )
-    return list(itertools.chain(*futures))
-
-
-def lookup_continuous_contracts(symbols):
-    return [ContFuture(**s) for s in symbols]
 
 
 async def schedule_task(contract, dt, queue):
@@ -131,11 +113,7 @@ if __name__ == '__main__':
     # object where data is stored
     store = Store()
 
-    symbols = pd.read_csv(os.path.join(
-        BASE_DIR, '_contracts.csv')).to_dict('records')
-
-    # *lookup_contracts(symbols),
-    contracts = [*lookup_continuous_contracts(symbols)]
+    contracts = ObjectSelector('_contracts').cont_list
     number_of_workers = min(len(contracts), max_number_of_workers)
     ib.run(main(contracts, number_of_workers))
     log.debug('script finished, about to disconnect')
