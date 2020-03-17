@@ -124,6 +124,8 @@ class IB:
         duration = int(durationStr.split(' ')[0]) * 2
         return self.datasource(contract, duration)
 
+    reqHistoricalDataAsync = reqHistoricalData
+
     def positions(self):
         return self.market.account.positions.values()
 

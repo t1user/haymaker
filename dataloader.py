@@ -124,19 +124,7 @@ async def main(contracts, number_of_workers, now=datetime.now()):
 
 if __name__ == '__main__':
 
-    # logging
-    # set_datetime_format("local")
-    # StreamHandler(sys.stdout, bubble=True).push_application()
-    # FileHandler(
-    #    f'logs/{__file__[:-3]}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}',
-    #    bubble=True, delay=True).push_application()
-    # log = Logger(__name__)
-
-    # util.logToConsole()
-    # get connection to Gateway
-
     ib = IB_connection().ib
-    # ib.connect('127.0.0.1', 4002, clientId=2)
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -152,3 +140,4 @@ if __name__ == '__main__':
     ib.run(main(contracts, number_of_workers))
     log.debug('script finished, about to disconnect')
     ib.disconnect()
+    log.debug(f'disconnected')

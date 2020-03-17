@@ -20,7 +20,8 @@ class Blotter:
         self.fieldnames = ['sys_time', 'time', 'contract', 'action', 'amount',
                            'price', 'exec_ids', 'order_id', 'perm_id',
                            'reason', 'commission', 'realizedPNL',
-                           'comm_reports']
+                           # 'comm_reports'
+                           ]
         self.blotter = []
         self.unsaved_trades = {}
         self.com_reports = {}
@@ -34,7 +35,6 @@ class Blotter:
 
     def log_trade(self, trade: Trade, comms: List[CommissionReport],
                   reason: str = ''):
-        log.debug(f'logging trade: {trade}')
         sys_time = str(datetime.now())
         time = trade.log[-1].time
         contract = trade.contract.localSymbol
@@ -42,6 +42,7 @@ class Blotter:
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
         # ib_insync issue: sometimes fills relate to wrong transaction
+        # fill.contract == trade.contract to prevent that
         exec_ids = [fill.execution.execId for fill in trade.fills
                     if fill.contract == trade.contract]
         order_id = trade.order.orderId
@@ -60,25 +61,21 @@ class Blotter:
             'reason': reason,  # note passed by the trading system
             'commission': sum([comm.commission for comm in comms]),
             'realizedPNL': sum([comm.realizedPNL for comm in comms]),
-            'comm_reports': comms
+            # 'comm_reports': comms
         }
         self.save_report(row)
+        log.info(f'trade report saved: {row}')
 
     def log_commission(self, trade: Trade, fill: Fill,
                        comm_report: CommissionReport, reason: str):
         """
         Get trades that have all CommissionReport filled and log them.
         """
-        log.debug(f'logging commission for trade: {trade}')
-        log.debug(f'trade isDone: {trade.isDone()}')
         # bug in ib_insync sometimes causes trade to have fills for
         # unrelated transactions
         comms = [fill.commissionReport for fill in trade.fills
                  if fill.commissionReport.execId != ''
                  and fill.contract == trade.contract]
-        log.debug(f'comms: {comms}')
-        log.debug(
-            f'len(comms): {len(comms)}, len(trade.fills): {len(trade.fills)}')
 
         if trade.isDone() and (len(comms) == len(trade.fills)):
             self.log_trade(trade, comms, reason)
@@ -88,8 +85,6 @@ class Blotter:
             self.write_to_file(report)
         else:
             self.blotter.append(report)
-
-        log.debug(f'trade {report} saved')
 
     def write_to_file(self, data: dict):
         with open(self.file, 'a') as f:

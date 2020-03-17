@@ -60,7 +60,7 @@ def chart_price(price_series, signal_series, threshold=0):
     chart_data['long'] = (signal_series > threshold) * price_series
     chart_data['short'] = (signal_series < -threshold) * price_series
     chart_data.replace(0, np.nan, inplace=True)
-    chart_data.plot(figsize=(20, 10), grid=True)
+    return chart_data.plot(figsize=(20, 10), grid=True)
 
 
 def daily_returns(pnl, start=0):

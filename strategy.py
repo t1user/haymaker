@@ -1,5 +1,3 @@
-from pprint import pprint
-
 from ib_insync import IB, util
 from ib_insync.ibcontroller import IBC, Watchdog
 from eventkit import Event

@@ -11,10 +11,10 @@ from trader import Manager, VolumeStreamer, ResampledStreamer
 from params_backtest import contracts
 
 
-log = logger(__file__[:-3])  # , INFO, INFO)
+log = logger(__file__[:-3], ERROR, ERROR)
 
 start_date = '20180401'
-end_date = '20180414'
+end_date = '20181231'
 cash = 1e+5
 store = Store()
 source = DataSourceManager(store, start_date, end_date)
@@ -28,7 +28,7 @@ blotter = Blotter(save_to_file=False, filename='backtest', path='backtests',
 manager = Manager(ib, contracts, VolumeStreamer,
                   leverage=15, blotter=blotter,
                   freeze_path='notebooks/freeze/backtest')
-market = Market(cash, manager, True)
+market = Market(cash, manager, False)
 ib.run()
 blotter.save()
 manager.freeze()

@@ -27,8 +27,13 @@ log = Logger(__name__)
 class BarStreamer:
 
     def __init__(self):
-        log.debug(f'Requesting bars for {self.contract.localSymbol}')
-        self.bars = self.get_bars(self.contract)
+        while True:
+            log.debug(f'Requesting bars for {self.contract.localSymbol}')
+            self.bars = self.get_bars(self.contract)
+            if self.bars is not None:
+                break
+            else:
+                util.sleep(5)
         log.debug(f'Bars received for {self.contract.localSymbol}')
         self.new_bars = []
 
@@ -111,9 +116,10 @@ class VolumeStreamer(StreamAggregator):
             self.volume = self.reset_volume()
 
     def reset_volume(self):
-        return util.df(self.bars).volume \
-            .rolling(self.avg_periods).sum() \
-            .mean().round()
+        if self.bars:
+            return util.df(self.bars).volume \
+                .rolling(self.avg_periods).sum() \
+                .mean().round()
 
     def aggregate(self, bar):
         self.new_bars.append(bar)
@@ -205,6 +211,8 @@ class Candle():
             span=self.ema_slow, min_periods=int(self.ema_slow*.8)).mean()
         df['atr'] = get_ATR(df, self.atr_periods)
         df['signal'] = get_signals(df.price, self.periods)
+        # df['signal'] = round(get_signals(
+        #    df.price, self.periods).rolling(3).mean(), 0)
         df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
         df['filtered_signal'] = df['signal'] * \
             ((df['signal'] * df['filter']) == 1)
@@ -252,7 +260,7 @@ class Manager:
         self.path = freeze_path
         self.trader = Trader(ib, self.portfolio, blotter, trailing)
         alloc = round(sum([c.alloc for c in contracts]), 5)
-        assert alloc == 1, "Portfolio allocations don't add-up to 1"
+        # assert alloc == 1, "Portfolio allocations don't add-up to 1"
         log.debug(f'manager object initiated: {self}')
 
     def onConnected(self):
@@ -298,9 +306,12 @@ class Portfolio:
 
     def number_of_contracts(self, params, price):
         # self.account_value
-        return int((1e+5 * self.leverage *
-                    params.alloc) / (float(params.contract.multiplier) *
-                                     price))
+        d = {'NQ': 2, 'ES': 2, 'GC': 2, 'CL': 1}
+        return d[params.contract.symbol]
+
+        # return int((1e+5 * self.leverage *
+        #            params.alloc) / (float(params.contract.multiplier) *
+        #                             price))
 
 
 class Trader:
@@ -431,7 +442,6 @@ class Trader:
 
     def report_commission(self, reason: str, trade: Trade, fill: Fill,
                           report: CommissionReport) -> None:
-        log.info(f'sending commission report {report}')
         self.blotter.log_commission(trade, fill, report, reason)
 
 

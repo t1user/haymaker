@@ -27,7 +27,8 @@ def get_min_max(data, period):
 
 
 def majority_function(data):
-    return (0.5 + ((data.sum(axis=1) - 0.5) / data.count(axis=1))).apply(np.floor)
+    return (
+        0.5 + ((data.sum(axis=1) - 0.5) / data.count(axis=1))).apply(np.floor)
 
 
 def get_min_max_df(data, periods, func=get_min_max):
