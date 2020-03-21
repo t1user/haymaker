@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from functools import partial
-from typing import List, Type
+from typing import List, Any, TypeVar
 from abc import ABC, abstractmethod
-
 
 import pandas as pd
 import numpy as np
@@ -59,7 +58,7 @@ class BarStreamer:
 
 
 class StreamAggregator(BarStreamer, ABC):
-    def __init__(self, ib, **kwargs):
+    def __init__(self, ib: IB, **kwargs: Any):
         self.__dict__.update(kwargs)
         self.ib = ib
         self._createEvents()
@@ -109,7 +108,7 @@ class StreamAggregator(BarStreamer, ABC):
 
 class VolumeStreamer(StreamAggregator):
 
-    def __init__(self, ib, **kwargs):
+    def __init__(self, ib: IB, **kwargs: Any):
         super().__init__(ib, **kwargs)
         self.aggregator = 0
         if not self.volume:
@@ -139,7 +138,7 @@ class VolumeStreamer(StreamAggregator):
 
 class ResampledStreamer(StreamAggregator):
 
-    def __init__(self, ib, **kwargs):
+    def __init__(self, ib: IB, **kwargs: Any):
         super().__init__(ib, **kwargs)
         self.counter = 0
 
@@ -151,11 +150,14 @@ class ResampledStreamer(StreamAggregator):
             self.counter = 0
 
 
+Streamer = TypeVar('Streamer', bound=BarStreamer)
+
+
 class Candle():
 
-    def __init__(self, params: Params, streamer: Type[BarStreamer],
-                 trader: Type[Trader], portfolio: Type[Portfolio],
-                 ib: Type[IB], freeze_path: str, keep_ref: bool = True):
+    def __init__(self, params: Params, streamer: Streamer,
+                 trader: Trader, portfolio: Portfolio,
+                 ib: IB, freeze_path: str, keep_ref: bool = True):
         self.__dict__.update(params.__dict__)
         self.params = params
         self.ib = ib
@@ -266,6 +268,7 @@ class Manager:
     def onConnected(self):
         self.trader.reconcile_stops()
         contracts = get_contracts(self.contracts, self.ib)
+        log.debug(f'contracts obtained: {contracts}')
         log.debug(f'initializing candles')
         self.candles = [Candle(contract, self.streamer, self.trader,
                                self.portfolio, self.ib, self.path)
@@ -448,9 +451,11 @@ class Trader:
 def get_contracts(params: List[Params], ib: IB) -> List[Params]:
 
     def convert(contract_tuples: List[tuple]):
+        log.debug(f'converting contract tuples: {contract_tuples}')
         cont_contracts = [ContFuture(*contract)
                           for contract in contract_tuples]
         ib.qualifyContracts(*cont_contracts)
+        log.debug(f'contracts qualified: {cont_contracts}')
         # log.debug(f'Contracts qualified: {cont_contracts}')
 
         # Converting to Futures potentially unnecessary
@@ -462,9 +467,15 @@ def get_contracts(params: List[Params], ib: IB) -> List[Params]:
         log.debug(f'Contracts qualified: {contracts}')
         return contracts
 
+    log.debug(f'params received: {params}')
     if type(params[0].contract) not in (Future, ContFuture):
+        log.debug(f'obtaining contract objects')
         contracts = [param.contract for param in params]
-        for param, contract in zip(params, convert(contracts)):
-            param.contract = contract
+    else:
+        contracts = [(param.contract.symbol, param.contract.exchange)
+                     for param in params]
+
+    for param, contract in zip(params, convert(contracts)):
+        param.contract = contract
 
     return params

@@ -1,14 +1,14 @@
 from datetime import datetime
 import asyncio
-import os
 import functools
+from typing import List, Type
 
-from ib_insync import util
+from ib_insync import util, Contract
 
 from logger import logger
 from connect import IB_connection
 from config import max_number_of_workers
-from datastore_pytables import Store
+from datastore import Store
 from objects import ObjectSelector
 
 
@@ -54,17 +54,6 @@ async def schedule_task(contract, dt, queue):
     await queue.put(functools.partial(get_history, contract, dt))
 
 
-def initial_schedule(contract, now):
-    earliest = store.check_earliest(contract)
-    if earliest:
-        dt = earliest
-    else:
-        dt = min(
-            datetime.strptime(contract.lastTradeDateOrContractMonth, '%Y%m%d'),
-            now)
-    return {'contract': contract, 'dt': dt}
-
-
 async def worker(name, queue):
     while True:
         log.debug(f'{name} started')
@@ -76,13 +65,13 @@ async def worker(name, queue):
         log.debug(f'{name} done')
 
 
-async def main(contracts, number_of_workers, now=datetime.now()):
+async def main(contracts: List[Type[Contract]], number_of_workers: int,
+               now: datetime = datetime.now()):
 
     asyncio.get_event_loop().set_debug(True)
 
-    log.debug('main function started')
-    await ib.qualifyContractsAsync(*contracts)
-    log.debug('contracts qualified')
+    log.debug(f'main function started, '
+              f'retrieving data for {len(contracts)} instruments')
 
     queue = asyncio.LifoQueue()
     producers = [asyncio.create_task(
@@ -108,14 +97,12 @@ if __name__ == '__main__':
 
     ib = IB_connection().ib
 
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
     # object where data is stored
     store = Store()
 
-    contracts = ObjectSelector('_contracts').cont_list
+    contracts = ObjectSelector(ib, '_contracts.csv').cont_list
     number_of_workers = min(len(contracts), max_number_of_workers)
-    ib.run(main(contracts, number_of_workers))
+    ib.run(main(contracts, number_of_workers), debug=True)
     log.debug('script finished, about to disconnect')
     ib.disconnect()
     log.debug(f'disconnected')

@@ -5,7 +5,7 @@ from logbook import ERROR, INFO, WARNING
 from backtester import IB, DataSourceManager, Market
 from logger import logger
 from trader import Blotter
-from datastore_pytables import Store
+from datastore import Store
 from trader import Manager, VolumeStreamer, ResampledStreamer
 #from params import contracts
 from params_backtest import contracts

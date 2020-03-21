@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from itertools import count
 import pickle
-from typing import NamedTuple, List, Any, Union, Tuple, Type
+from typing import (NamedTuple, List, Any, Union, Tuple, Type, Optional,
+                    ClassVar)
 
 import pandas as pd
 import numpy as np
@@ -73,7 +74,7 @@ class IB:
                 pickle.dump(c, f)
             return details
 
-    def reqContractDetails(self, contract: Type[Contract]):
+    def reqContractDetails(self, contract: Contract):
         return self.read_from_file_or_ib('details', 'reqContractDetails',
                                          contract)
 
@@ -219,23 +220,23 @@ class DataSourceManager:
         self.sources = {}
         self.DataSource = DataSource.initialize(store, start_date, end_date)
 
-    def source(self, contract: Type[Contract], duration: int) -> dict:
+    def source(self, contract: Contract, duration: int) -> dict:
         if not self.sources.get(repr(contract)):
             self.sources[repr(contract)] = self.DataSource(contract, duration)
         return self.sources[repr(contract)]
 
-    def get_history(self, contract: Type[Contract], duration: int) -> None:
+    def get_history(self, contract: Contract, duration: int) -> None:
         return self.source(contract, duration).get_history(
             Market().date, duration)
 
 
 class DataSource:
 
-    start_date = None
-    end_date = None
-    store = None
+    start_date: ClassVar[Optional[str]] = None
+    end_date: ClassVar[Optional[str]] = None
+    store: ClassVar[Optional[Store]] = None
 
-    def __init__(self, contract: Type[Contract], duration: int) -> None:
+    def __init__(self, contract: Contract, duration: int) -> None:
         self.contract = self.validate_contract(contract)
         self.duration = duration
         start_date = self.start_date - pd.Timedelta(duration, 'D')
@@ -244,7 +245,7 @@ class DataSource:
         self.index = self.df.loc[self.start_date: self.end_date].index
         Market().register(self)
 
-    def pull_data(self, start_date: pd.Datetime = None) -> None:
+    def pull_data(self, start_date: Optional[pd.Datetime] = None) -> None:
         start_date = self.start_date if start_date is None else start_date
         self.df = self.store.read(self.contract,
                                   start_date=start_date,
@@ -266,7 +267,9 @@ class DataSource:
         return self.bars
 
     @classmethod
-    def initialize(cls, datastore, start_date, end_date=datetime.now()):
+    def initialize(cls, datastore: Store, start_date: str,
+                   end_date: Union[str, datetime] = datetime.now()
+                   ) -> Type[DataSource]:
         cls.start_date = pd.to_datetime(start_date, format='%Y%m%d')
         cls.end_date = pd.to_datetime(end_date, format='%Y%m%d')
         if cls.start_date > cls.end_date:
@@ -443,7 +446,8 @@ class Market:
                      'TRAIL': self.validate_trail}
             return funcs[order.orderType](order, price)
 
-        def execute_trade(self, trade: Trade, price: float = None) -> None:
+        def execute_trade(self, trade: Trade,
+                          price: Optional[float] = None) -> None:
             """
             Execution price are passed as argument for limit, stop, stop-limit
             orders. For market orders True is passed and price has to be read
@@ -568,7 +572,8 @@ class Market:
 
     instance = None
 
-    def __new__(cls, cash=None, manager=None, reboot=False):
+    def __new__(cls, cash: Optional[float] = None,
+                manager: Optional[Manager] = None, reboot: bool = False):
         if not Market.instance:
             Market.instance = Market.__Market()
         else:
@@ -589,12 +594,12 @@ class Market:
 
 
 class Account:
-    def __init__(self, cash: Union[int, float]) -> None:
+    def __init__(self, cash: float) -> None:
         self.cash = cash
         self.mtm = {}
         self.positions = {}
 
-    def update_cash(self, cash: Union[int, float]) -> None:
+    def update_cash(self, cash: float) -> None:
         self.cash += cash
 
     @staticmethod
@@ -692,7 +697,7 @@ class Account:
 
 
 class TradeParams(NamedTuple):
-    contract: Type[Contract]
+    contract: Contract
     quantity: int
     price: float
     side: str

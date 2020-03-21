@@ -32,7 +32,7 @@ class IB_connection:
                 log.debug(message)
 
     def connect(self):
-        self.ib.connect(self.host, self.port, self.clientId)
+        self.ib.connect(self.host, self.port, self.id)
 
     def run_watchdog(self):
         ibc = IBC(twsVersion=978,

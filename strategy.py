@@ -75,7 +75,7 @@ class Strategy(WatchdogHandlers):
 
     def onError(self, *args):
         error = args[1]
-        if error not in (2158, 2119, 2104, 2106, 165, 2108):
+        if error not in (2158, 2119, 2104, 2106, 165, 2108, 2103):
             log.error(f'ERROR: {args}')
 
     def onUpdatePortfolioEvent(self, i):

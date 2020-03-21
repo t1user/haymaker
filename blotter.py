@@ -72,12 +72,14 @@ class Blotter:
         Get trades that have all CommissionReport filled and log them.
         """
         # bug in ib_insync sometimes causes trade to have fills for
-        # unrelated transactions
+        # unrelated transactions, permId uniquely identifies order
         comms = [fill.commissionReport for fill in trade.fills
                  if fill.commissionReport.execId != ''
-                 and fill.contract == trade.contract]
+                 and fill.execution.permId == trade.order.permId]
+        fills = [fill for fill in trade.fills
+                 if fill.execution.permId == trade.order.permId]
 
-        if trade.isDone() and (len(comms) == len(trade.fills)):
+        if trade.isDone() and (len(comms) == len(fills)):
             self.log_trade(trade, comms, reason)
 
     def save_report(self, report):
