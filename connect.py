@@ -12,8 +12,8 @@ class IB_connection:
         self.host = '127.0.0.1'
         self.port = 4002
         self.ib = IB()
-        self.find_connection()
         self.ib.errorEvent += self.onErrorEvent
+        self.find_connection()
 
     def find_connection(self):
         for i in range(1, 20):

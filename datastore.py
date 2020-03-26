@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Type, List, Union
+from typing import List, Union
 from abc import ABC, abstractmethod
 import pickle
 
@@ -9,8 +9,11 @@ from arctic import Arctic
 from arctic.exceptions import NoDataFoundException
 from arctic.store.versioned_item import VersionedItem
 from arctic.date import DateRange
+from logbook import Logger
 
 from config import default_path
+
+log = Logger(__name__)
 
 
 class AbstractBaseStore(ABC):
@@ -44,7 +47,7 @@ class AbstractBaseStore(ABC):
 
     @staticmethod
     def _clean(df):
-        df = df.sort_index(ascending=False)
+        df = df.sort_index(ascending=True)
         df.drop(index=df[df.index.duplicated()].index, inplace=True)
         return df
 
@@ -64,19 +67,29 @@ class AbstractBaseStore(ABC):
 class ArcticStore(AbstractBaseStore):
 
     def __init__(self, lib: str, host: str = 'localhost') -> None:
+        """
+        Library name is whatToShow + barSize, eg.
+        TRADES_1_min
+        BID_ASK_1_hour
+        MIDPOINT_30_secs
+        """
+        lib = lib.replace(' ', '_')
         self.db = Arctic(host)
-        self.store = self.db.initialize_library(lib)
+        self.db.initialize_library(lib)
+        self.store = self.db[lib]
 
     def write(self, symbol: Union[str, Contract],
-              data: pd.DataFrame, meta: dict) -> VersionedItem:
+              data: pd.DataFrame, meta: dict = {}) -> VersionedItem:
+        metadata = self._metadata(symbol)
+        metadata.update(meta)
         return self.store.write(
             self._symbol(symbol),
             self._clean(data),
-            metadata=self._metadata(symbol).update(meta))
+            metadata=metadata)
 
     def read(self, symbol: Union[str, Contract]):
         try:
-            return self.read(self._symbol(symbol)).data
+            return self.store.read(self._symbol(symbol)).data
         except (NoDataFoundException, AttributeError):
             return None
 
@@ -91,9 +104,46 @@ class ArcticStore(AbstractBaseStore):
 
     def _metadata(self, obj: Union[Contract, str]):
         if isinstance(obj, Contract):
-            return super()._metadata(obj).update({'object': pickle.dumps(obj)})
-        else:
-            super()._metadata(obj)
+            meta = super()._metadata(obj)
+            #meta.update({'object': pickle.dumps(obj)})
+            meta.update({'object': None})
+        return meta
+
+
+class PyTablesStore(AbstractBaseStore):
+
+    def __init__(self, lib: str, path: str = default_path) -> None:
+        lib = lib.replace(' ', '_')
+        path = f'{path}/{lib}.h5'
+        self.store = partial(pd.HDFStore, path)
+
+    def write(self, symbol: Union[str, Contract],
+              data: pd.DataFrame, meta: dict = {}) -> None:
+        with self.store() as store:
+            store.append(self._symbol(symbol),
+                         self._clean(data))
+
+    def read(self, symbol: Union[str, Contract]):
+        with self.store() as store:
+            data = store.select(self._symbol(symbol))
+        return data
+
+    def keys(self) -> List[str]:
+        with self.store() as store:
+            keys = store.keys()
+        return keys
+
+
+class PickleStore(AbstractBaseStore):
+
+    def __init__(self, lib: str, path: str = default_path) -> None:
+        lib = lib.replace(' ', '_')
+        pass
+
+
+# ==================================================================
+# DEPRECATED
+# ==================================================================
 
 
 class Store:
