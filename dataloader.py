@@ -6,15 +6,16 @@ from dataclasses import dataclass, field
 import itertools
 import asyncio
 from typing import List, Union, Type, Optional
+from functools import partial
 
 import pandas as pd
 from ib_insync import IB, Contract, Future, ContFuture, BarDataList, util
 from eventkit import Event
 
 from logger import logger
-from connect import IB_connection
+from connect import Connection
 from config import max_number_of_workers
-from datastore import ArcticStore
+from datastore import ArcticStore, AbstractBaseStore
 
 
 """
@@ -86,9 +87,11 @@ class ContractObjectSelector:
 class DataWriter:
     """Interface between dataloader and datastore"""
 
-    def __init__(self, contract: Contract, head: datetime,
+    def __init__(self, store: AbstractBaseStore, contract: Contract,
+                 head: datetime,
                  barSize: str, wts: str, aggression: float = 2,
                  now: datetime = datetime.now()) -> None:
+        self.store = store
         self.contract = contract
         self.head = head
         self.barSize = bar_size_validator(barSize)
@@ -104,14 +107,8 @@ class DataWriter:
         self.next_date = ''
         self._objects = []
         self._queue = []
-        self.df = pd.DataFrame()
         self._current_object = None
         self.schedule_tasks()
-
-    @classmethod
-    def create(cls, store) -> Type[DataWriter]:
-        cls.store = store
-        return cls
 
     def onPulse(self, time: datetime):
         self.write_to_store()
@@ -164,6 +161,8 @@ class DataWriter:
             data = data.append(_data)
             version = self.store.write(self.contract, data)
             log.debug(f'data written to datastore as {version}')
+            if version:
+                self._current_object.clear()
 
     def backfill(self) -> Optional[datetime]:
         """
@@ -283,13 +282,63 @@ class DownloadContainer:
                 return df
             log.debug(f'cannot write data')
 
-        # else:
-        #    new_to_date = self.df.index.min()
-        #    self.to_date = new_to_date
-        #    return new_to_date
+    def clear(self):
+        self.bars = []
 
     def __repr__(self):
         return f'{self.from_date} - {self.to_date}, update: {self.update}'
+
+
+class ContractHolder:
+    """Singleton class ensuring contract list kept after re-connect"""
+
+    @dataclass
+    class __ContractHolder:
+        ib: IB
+        source: str
+        store: AbstractBaseStore
+        wts: str
+        barSize: str
+        cont_only: bool = False
+        aggression: int = 1
+        items: Optional[List[DataWriter]] = None
+
+        def get_items(self):
+            objects = ContractObjectSelector(self.ib, self.source)
+            if self.cont_only:
+                objects = objects.cont_list
+            else:
+                objects = objects.list
+
+            self.items = [
+                DataWriter(store,
+                           o,
+                           self.ib.reqHeadTimeStamp(
+                               o, whatToShow=self.wts, useRTH=False),
+                           barSize=self.barSize,
+                           wts=self.wts,
+                           aggression=self.aggression)
+                for o in objects
+            ]
+
+        def __call__(self):
+            if self.items is None:
+                self.get_items()
+            return self.items
+
+    __instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not ContractHolder.__instance:
+            ContractHolder.__instance = ContractHolder.__ContractHolder(
+                *args, **kwargs)
+        return ContractHolder.__instance
+
+    def __getattr__(self, name):
+        return getattr(self.instance, name)
+
+    def __setattr__(self, name):
+        return setattr(self.instance, name)
 
 
 def bar_size_validator(s):
@@ -400,7 +449,10 @@ async def worker(name: str, queue: asyncio.Queue):
         queue.task_done()
 
 
-async def main(contracts: List[DataWriter], number_of_workers: int):
+async def main(holder: ContractHolder):
+
+    contracts = holder()
+    number_of_workers = min(len(contracts), max_number_of_workers)
 
     asyncio.get_event_loop().set_debug(True)
 
@@ -424,36 +476,33 @@ async def main(contracts: List[DataWriter], number_of_workers: int):
     await asyncio.gather(*workers, return_exceptions=True)
 
 
-def onDisconnectedEvent():
-    log.debug(f'Disconnected!')
-    for contract in contracts:
-        contract.write_to_store()
-
-
 if __name__ == '__main__':
-    ib = IB_connection().ib
-    ib.disconnectedEvent += onDisconnectedEvent
+    util.patchAsyncio()
+    ib = IB()
     barSize = '1 min'
     wts = 'TRADES'
-
     # object where data is stored
     store = ArcticStore(f'{wts}_{barSize}')
-    Writer = DataWriter.create(store)
 
-    contracts = [
-        Writer(c,
-               ib.reqHeadTimeStamp(c, whatToShow=wts, useRTH=False),
-               barSize,
-               wts,
-               aggression=3)
-        for c in ContractObjectSelector(ib, '_contracts.csv').cont_list
-    ]
-
-    number_of_workers = min(len(contracts), max_number_of_workers)
+    holder = ContractHolder(ib, '_contracts.csv',
+                            store, wts, barSize, True, 3)
 
     asyncio.get_event_loop().set_debug(True)
+    Connection(ib, partial(main, holder), watchdog=False)
 
-    ib.run(main(contracts, number_of_workers))
     log.debug('script finished, about to disconnect')
     ib.disconnect()
     log.debug(f'disconnected')
+
+
+"""
+    contracts = [
+        DataWriter(store,
+                   c,
+                   ib.reqHeadTimeStamp(c, whatToShow=wts, useRTH=False),
+                   barSize,
+                   wts,
+                   aggression=3)
+        for c in ContractObjectSelector(ib, '_contracts.csv').cont_list
+    ]
+"""

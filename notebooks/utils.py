@@ -286,6 +286,7 @@ def v_backtester(price: pd.Series,
                  threshold: float,) -> pd.DataFrame:
     """
     Vector backtester.
+
     Run a quick and dirty backtest for a system that goes long
     when indicator is above threshold and short when indicator
     is below minus threshold. Commissions and spreads are not accounted for.

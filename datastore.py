@@ -1,5 +1,5 @@
 from functools import partial
-from typing import List, Union
+from typing import List, Dict, Union, Optional
 from abc import ABC, abstractmethod
 import pickle
 
@@ -82,18 +82,22 @@ class ArcticStore(AbstractBaseStore):
               data: pd.DataFrame, meta: dict = {}) -> VersionedItem:
         metadata = self._metadata(symbol)
         metadata.update(meta)
-        return self.store.write(
+        version = self.store.write(
             self._symbol(symbol),
             self._clean(data),
             metadata=metadata)
+        if version:
+            return f'symbol: {version.symbol} version: {version.version}'
+        return version
 
-    def read(self, symbol: Union[str, Contract]):
+    def read(self, symbol: Union[str, Contract]) -> Optional[pd.DataFrame]:
         try:
-            return self.store.read(self._symbol(symbol)).data
-        except (NoDataFoundException, AttributeError):
+            return self.read_object(symbol).data
+        except AttributeError:
             return None
 
-    def read_object(self, symbol: Union[str, Contract]):
+    def read_object(self, symbol: Union[str, Contract]
+                    ) -> Optional[VersionedItem]:
         try:
             return self.store.read(self._symbol(symbol))
         except NoDataFoundException:
@@ -102,36 +106,65 @@ class ArcticStore(AbstractBaseStore):
     def keys(self) -> List[str]:
         return self.store.list_symbols()
 
-    def _metadata(self, obj: Union[Contract, str]):
+    def read_metadata(self, symbol) -> Optional[Dict[str, Dict[str, str]]]:
+        try:
+            return self.read_object(symbol).metadata
+        except AttributeError:
+            return
+
+    def _metadata(self, obj: Union[Contract, str]) -> Dict[str, Dict[str, str]]:
         if isinstance(obj, Contract):
             meta = super()._metadata(obj)
-            #meta.update({'object': pickle.dumps(obj)})
+            # meta.update({'object': pickle.dumps(obj)})
             meta.update({'object': None})
+        else:
+            meta = {}
         return meta
 
 
 class PyTablesStore(AbstractBaseStore):
+    """Pandas HDFStore fixed format."""
 
     def __init__(self, lib: str, path: str = default_path) -> None:
         lib = lib.replace(' ', '_')
         path = f'{path}/{lib}.h5'
         self.store = partial(pd.HDFStore, path)
+        self.metastore = f'{path}/meta.pickle'
 
     def write(self, symbol: Union[str, Contract],
-              data: pd.DataFrame, meta: dict = {}) -> None:
+              data: pd.DataFrame, meta: dict = {}) -> str:
+        _symbol = self._symbol(symbol)
         with self.store() as store:
-            store.append(self._symbol(symbol),
-                         self._clean(data))
+            store.put(_symbol,
+                      self._clean(data))
+        self._write_meta(_symbol, self._metadata(symbol))
+        return f'{_symbol}'
 
-    def read(self, symbol: Union[str, Contract]):
+    def read(self, symbol: Union[str, Contract]) -> Optional[pd.DataFrame]:
         with self.store() as store:
-            data = store.select(self._symbol(symbol))
+            data = store.get(self._symbol(symbol))
         return data
 
     def keys(self) -> List[str]:
         with self.store() as store:
             keys = store.keys()
         return keys
+
+    def read_metadata(self, symbol):
+        """Return metadata for given symbol"""
+        return self._read_meta()[self._symbol(symbol)]
+
+    def _read_meta(self):
+        """Return full metadata dictionary"""
+        with open(self.metastore, 'rb') as metastore:
+            meta = pickle.load(metastore)
+        return meta
+
+    def _write_meta(self, symbol, data):
+        meta = self._read_meta()
+        meta[symbol] = data
+        with open(self.metastore, 'wb') as metastore:
+            pickle.dump(meta, metastore)
 
 
 class PickleStore(AbstractBaseStore):
@@ -147,6 +180,7 @@ class PickleStore(AbstractBaseStore):
 
 
 class Store:
+    """Pandas HDFStore table format"""
 
     def __init__(self, path=default_path, what='cont_fut_only'):
         path = f'{default_path}/{what}.h5'
