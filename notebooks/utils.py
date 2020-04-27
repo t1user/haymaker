@@ -66,6 +66,7 @@ def chart_price(price_series, signal_series, threshold=0):
 def daily_returns(pnl, start=0):
     """
     Calculate daily returns from a series of intra-day pnl data.
+
     Pnl can be given in points or in dollars. Start is either initial
     portfolio value or first price in the series.
     """
@@ -176,14 +177,16 @@ def perf(df: pd.DataFrame,
 
     Args:
         df:         must have columns: 'price', 'position', all the information
+                    about when and at what price position if entered and closed
                     is extracted from those two columns
         multiplier: futures multiplier to be used in fixed capital simulation,
-                    if not given or zero simulation will be variable capital without
-                    leverage
+                    if not given or zero simulation will be variable capital
+                    without leverage
         output:     whether output is to be printed out
         compound:   for fixed capital simulation whether position size should
                     be adjusted based on current balance, ignored for variable
                     capital simulation
+        price_column_name: which column in df contains price data
 
     Returns:
         Named tuple of resulting DataFrames for inspection:
@@ -194,7 +197,7 @@ def perf(df: pd.DataFrame,
         df: source df with signals (for debugging really)
     """
     df = df.copy()
-    if price_column_name is not 'price':
+    if price_column_name != 'price':
         df.rename(columns={price_column_name: 'price'}, inplace=True)
 
     df['transaction'] = ((df['position'] - df['position'].shift(1)
@@ -276,6 +279,14 @@ def perf_var(df: pd.DataFrame,
     """
     Shortcut interface function for perf to generate variable capital
     simulation.
+
+    Args:
+        df:         must have columns: 'price', 'position', all the information
+                    about when and at what price position if entered and closed
+                    is extracted from those two columns
+        output:     whether output is to be printed out
+        price_column_name: which column in df contains price data
+
     """
 
     return perf(df, output=output, price_column_name=price_column_name)

@@ -1,138 +1,80 @@
-from ib_insync import IB, util
-from ib_insync.ibcontroller import IBC, Watchdog
-from eventkit import Event
+from logbook import Logger
 
-from trader import Manager, VolumeStreamer
+import pandas as pd
+import numpy as np
+from ib_insync import Contract
+
+
+from streamers import VolumeStreamer
+from trader import Candle, Portfolio
 from params import contracts
-from logger import logger
+from indicators import get_ATR, get_signals
 
 
-log = logger(__file__[:-3])
+log = Logger(__name__)
 
 
-class WatchdogHandlers:
+class BreakoutCandle(Candle):
 
-    def __init__(self, dog):
-        dog.startingEvent += self.onStartingEvent
-        dog.startedEvent += self.onStartedEvent
-        dog.stoppingEvent += self.onStoppingEvent
-        dog.stoppedEvent += self.onStoppedEvent
-        dog.softTimeoutEvent += self.onSoftTimeoutEvent
-        dog.hardTimeoutEvent += self.onHardTimeoutEvent
-        self.dog = dog
+    def get_indicators(self, df: pd.DataFrame):
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.8)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.8)).mean()
+        df['atr'] = get_ATR(df, self.atr_periods)
+        df['signal'] = get_signals(df.price, self.periods)
+        # df['signal'] = round(get_signals(
+        #    df.price, self.periods).rolling(3).mean(), 0)
+        df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['filtered_signal'] = df['signal'] * \
+            ((df['signal'] * df['filter']) == 1)
+        return df
 
-    @staticmethod
-    def onStartingEvent(*args):
-        log.debug(f'StartingEvent {args}')
-
-    @staticmethod
-    def onStartedEvent(*args):
-        log.debug(f'StartedEvent {args}')
-
-    @staticmethod
-    def onStoppingEvent(*args):
-        log.debug(f'StoppingEvent {args}')
-
-    @staticmethod
-    def onStoppedEvent(*args):
-        log.debug(f'StoppedEvent {args}')
-
-    @staticmethod
-    def onSoftTimeoutEvent(*args):
-        log.debug(f'SoftTimeoutEvent {args}')
-
-    @staticmethod
-    def onHardTimeoutEvent(*args):
-        log.debug(f'HardTimeoutEvent {args}')
+    def process(self):
+        message = (f'New candle for {self.contract.localSymbol} '
+                   f'{self.df.iloc[-1].to_dict()}')
+        log.debug(message)
+        if self.df.signal[-1]:
+            self.signal.emit(self)
 
 
-class Strategy(WatchdogHandlers):
+class FixedPortfolio(Portfolio):
 
-    def __init__(self, ib, watchdog, manager):
-        self.contracts = contracts
-        ib.connectedEvent += self.onConnected
-        ib.errorEvent += self.onError
-        ib.updatePortfolioEvent += self.onUpdatePortfolioEvent
-        ib.commissionReportEvent += self.onCommissionReportEvent
-        ib.positionEvent += self.onPositionEvent
-        ib.accountSummaryEvent += self.onAccountSummaryEvent
-        update = Event().timerange(300, None, 600)
-        update += self.onScheduledUpdate
-        self.ib = ib
-        self.manager = manager
-        super().__init__(watchdog)
-        self.portfolio_items = {}
+    def number_of_contracts(self, contract: Contract, price: float):
+        # self.account_value
+        d = {'NQ': 1, 'ES': 1, 'GC': 1, 'CL': 1}
+        return d[contract.symbol]
 
-    def onConnected(self):
-        log.debug('connection established')
-        self.account = ib.client.getAccounts()[0]
-        self.ib.accountSummary()
-        self.ib.reqPnL(self.account)
+        # return int((1e+5 * self.leverage *
+        #            params.alloc) / (float(params.contract.multiplier) *
+        #                             price))
 
-    def onStartedEvent(self, *args):
-        log.debug('initializing strategy')
-        self.manager.onConnected()
-
-    def onError(self, *args):
-        error = args[1]
-        if error not in (2157, 2158, 2119, 2104, 2106, 165, 2108, 2103, 2105):
-            log.error(f'ERROR: {args}')
-
-    def onUpdatePortfolioEvent(self, i):
-        realized = round(i.realizedPNL, 2)
-        unrealized = round(i.unrealizedPNL, 2)
-        total = round(realized + unrealized)
-        report = (i.contract.localSymbol, realized, unrealized, total)
-        log.info(f'Portfolio item: {report}')
-        self.portfolio_items[i.contract.localSymbol] = (
-            realized, unrealized, total)
-
-    def onScheduledUpdate(self, time):
-        log.info(f'pnl: {self.ib.pnl()}')
-        summary = [0, 0, 0]
-        for contract, value in self.portfolio_items.items():
-            summary[0] += value[0]
-            summary[1] += value[1]
-            summary[2] += value[2]
-        message = (f'realized: {summary[0]}, '
-                   f'unrealized: {summary[1]}, total: {summary[2]}')
-        log.info(message)
-        positions = [(p.contract.localSymbol, p.position)
-                     for p in self.ib.positions()]
-        log.info(f'POSITIONS: {positions}')
-        self.manager.freeze()
-
-    def onAccountSummaryEvent(self, value):
-        """
-        tags = ['UnrealizedPnL', 'RealizedPnL', 'FuturesPNL',
-                'NetLiquidationByCurrency']
-        """
-        tags = ['NetLiquidationByCurrency']
-        if value.tag in tags:
-            log.info(f'{value.tag}: {value.value}')
-
-    def onCommissionReportEvent(self, trade, fill, report):
-        log.debug(f'Commission report: {report}')
-
-    def onPositionEvent(self, position):
-        log.info(f'Position update: {position}')
+    def onSignal(self, obj: Candle):
+        position = self.positions.get(obj.contract)
+        if obj.df.filtered_signal[-1] and not position:
+            message = (f'entry signal emitted for {obj.contract.localSymbol},'
+                       f' signal: {obj.df.filtered_signal[-1]},'
+                       f' atr: {obj.df.atr[-1]}')
+            log.debug(message)
+            number_of_contracts = self.number_of_contracts(
+                obj.contract, obj.df.price[-1])
+            if number_of_contracts:
+                self.entrySignal.emit(
+                    obj, obj.df.signal[-1], obj.df.atr[-1],
+                    number_of_contracts)
+            else:
+                message = (f'Not enough equity to open position for: '
+                           f'{obj.contract.localSymbol}')
+                log.warning(message)
+        elif obj.df.signal[-1] and position:
+            if position * obj.df.signal[-1] < 0:
+                log.debug(
+                    f'close signal emitted for {obj.contract.localSymbol}')
+                self.closeSignal.emit(obj, obj.df.signal[-1],
+                                      abs(self.positions[obj.contract]))
 
 
-if __name__ == '__main__':
-    util.patchAsyncio()
-    # util.logToConsole()
-    ibc = IBC(twsVersion=978,
-              gateway=False,
-              tradingMode='paper',
-              )
-    ib = IB()
-
-    watchdog = Watchdog(ibc, ib,
-                        port='4002',
-                        clientId=0,
-                        )
-    manager = Manager(ib, contracts, VolumeStreamer, leverage=15)
-    # asyncio.get_event_loop().set_debug(True)
-    strategy = Strategy(ib, watchdog, manager)
-    watchdog.start()
-    ib.run()
+candles = [BreakoutCandle(VolumeStreamer(params.volume,
+                                         params.avg_periods),
+                          **params.__dict__)
+           for params in contracts]

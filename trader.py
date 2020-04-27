@@ -1,21 +1,14 @@
-from __future__ import annotations
-
 from collections import defaultdict
 from functools import partial
-from typing import List, Any, TypeVar
+from typing import List, Dict, Any
 from abc import ABC, abstractmethod
 
 import pandas as pd
-import numpy as np
-
-from eventkit import Event
-from ib_insync import util, Order, MarketOrder, StopOrder, IB
-from ib_insync.objects import Fill, CommissionReport
-from ib_insync.order import Trade
-from ib_insync.contract import ContFuture, Future
+from ib_insync import (Order, MarketOrder, StopOrder, IB, Event, Fill,
+                       CommissionReport, Trade, ContFuture, Future, Contract)
 from logbook import Logger
 
-from indicators import get_ATR, get_signals
+
 from objects import Params
 from blotter import Blotter
 
@@ -23,269 +16,68 @@ from blotter import Blotter
 log = Logger(__name__)
 
 
-class BarStreamer:
+class Candle(ABC):
 
-    def __init__(self):
-        while True:
-            log.debug(f'Requesting bars for {self.contract.localSymbol}')
-            self.bars = self.get_bars(self.contract)
-            if self.bars is not None:
-                break
-            else:
-                util.sleep(5)
-        log.debug(f'Bars received for {self.contract.localSymbol}')
-        self.new_bars = []
-
-    def get_bars(self, contract):
-        return self.ib.reqHistoricalData(
-            contract,
-            endDateTime='',
-            durationStr='10 D',
-            barSizeSetting='30 secs',
-            whatToShow='TRADES',
-            useRTH=False,
-            formatDate=1,
-            keepUpToDate=True)
-
-    def subscribe(self):
-        def onNewBar(bars, hasNewBar):
-            if hasNewBar:
-                self.aggregate(bars[-2])
-        self.bars.updateEvent += onNewBar
-
-    def aggregate(self):
-        raise NotImplementedError
-
-
-class StreamAggregator(BarStreamer, ABC):
-    def __init__(self, ib: IB, **kwargs: Any):
+    def __init__(self, streamer, **kwargs):
         self.__dict__.update(kwargs)
-        self.ib = ib
-        self._createEvents()
-        super().__init__()
-        # self.process_back_data()
-        self.subscribe()
-
-    def _createEvents(self):
-        self.newCandle = Event('newCandle')
-
-    def process_back_data(self):
-        self.backfill = True
-        log.debug(f'generating startup data for {self.contract.localSymbol}')
-        for counter, bar in enumerate(self.bars[:-2]):
-            self.aggregate(bar)
-            if counter % 10000 == 0:
-                log.debug(
-                    f'startup generator for {self.contract.localSymbol} giving up control')
-                self.ib.sleep(0)
-        log.debug(f'startup data generated for {self.contract.localSymbol}')
-        self.backfill = False
-
-    def create_candle(self):
-        df = util.df(self.new_bars)
-        self.new_bars = []
-        df.date = df.date.astype('datetime64')
-        df.set_index('date', inplace=True)
-        # df['backfill'] = True
-        # df['volume_weighted'] = (df.close + df.open)/2 * df.volume
-        # df['volume_weighted'] = df.close * df.volume
-        # df['volume_weighted'] = df.average * df.volume
-        # weighted_price = df.volume_weighted.sum() / df.volume.sum()
-        self.newCandle.emit({'backfill': self.backfill,
-                             'date': df.index[-1],
-                             'open': df.open[0],
-                             'high': df.high.max(),
-                             'low': df.low.min(),
-                             'close': df.close[-1],
-                             # 'price': weighted_price,
-                             'price': df.close[-1],
-                             'volume': df.volume.sum()})
-
-    @abstractmethod
-    def aggregate(self):
-        raise NotImplementedError
-
-
-class VolumeStreamer(StreamAggregator):
-
-    def __init__(self, ib: IB, **kwargs: Any):
-        super().__init__(ib, **kwargs)
-        self.aggregator = 0
-        if not self.volume:
-            self.volume = self.reset_volume()
-
-    def reset_volume(self):
-        if self.bars:
-            return util.df(self.bars).volume \
-                .rolling(self.avg_periods).sum() \
-                .mean().round()
-
-    def aggregate(self, bar):
-        self.new_bars.append(bar)
-        self.aggregator += bar.volume
-        if not self.backfill:
-            message = (f'{bar.date} {self.aggregator}/{self.volume}'
-                       f' {self.contract.localSymbol}')
-            log.debug(message)
-        if self.aggregator >= self.volume:
-            self.aggregator = 0
-            # self.aggregator -= self.volume
-            self.create_candle()
-
-    def append(self, candle):
-        raise NotImplementedError
-
-
-class ResampledStreamer(StreamAggregator):
-
-    def __init__(self, ib: IB, **kwargs: Any):
-        super().__init__(ib, **kwargs)
-        self.counter = 0
-
-    def aggregate(self, bar):
-        self.new_bars.append(bar)
-        self.counter += 1
-        if self.counter == self.avg_periods:
-            self.create_candle()
-            self.counter = 0
-
-
-Streamer = TypeVar('Streamer', bound=BarStreamer)
-
-
-class Candle():
-
-    def __init__(self, params: Params, streamer: Streamer,
-                 trader: Trader, portfolio: Portfolio,
-                 ib: IB, freeze_path: str, keep_ref: bool = True):
-        self.__dict__.update(params.__dict__)
-        self.params = params
-        self.ib = ib
-        self.portfolio = portfolio
-        self.path = freeze_path
-        log.debug(f'candle init for contract {self.contract.localSymbol}')
+        self.streamer = streamer
+        self.streamer.newCandle.connect(self.append, keep_ref=True)
+        self.df = None
+        log.debug(f'candle init for contract: {kwargs}')
         self.candles = []
-        self.params.details = self.get_details()
-        trader.register(self.params, self.contract.symbol)
         self._createEvents()
-        streamer = streamer(self.ib, **params.__dict__)
-        streamer.newCandle.connect(
-            self.append, keep_ref=keep_ref)
-        self.entrySignal.connect(trader.onEntry, keep_ref=keep_ref)
-        self.closeSignal.connect(trader.onClose, keep_ref=keep_ref)
-        streamer.process_back_data()
-        self.get_indicators()
-        self.freeze()
 
     def _createEvents(self):
+        self.signal = Event('signal')
         self.entrySignal = Event('entrySignal')
         self.closeSignal = Event('closeSignal')
 
-    def freeze(self):
-        self.df.to_pickle(
-            f'{self.path}/freeze_df_{self.contract.localSymbol}.pickle')
-        log.debug(f'freezed data saved for {self.contract.localSymbol}')
+    def __call__(self, ib: IB):
+        log.debug(
+            f'Candle {self.contract.localSymbol} initializing data stream...')
+        self.details = ib.reqContractDetails(self.contract)[0]
+        date = self.df.index[-1] if self.df is not None \
+            and self.contract == self._contract else None
+        log.debug(f'date for streamer {self.contract.localSymbol}: {date}')
+        self.streamer(ib, self.contract, date)
+        # keep track when contract changed
+        self._contract = self.contract
 
-    def get_details(self):
-        return self.ib.reqContractDetails(self.contract)[0]
-
-    """
-    def get_trading_hours(self):
-        return ib.reqContractDetails(self.contract)[0].tradingHours.split(';')
-    """
-
-    def append(self, candle):
+    def append(self, candle: Dict[str, Any]):
         self.candles.append(candle)
         if not candle['backfill']:
-            self.get_indicators()
+            df = pd.DataFrame(self.candles)
+            df.set_index('date', inplace=True)
+            self.df = self.get_indicators(df)
             assert not self.df.iloc[-1].isna().any(), (
                 f'Not enough data for indicators for instrument'
                 f' {self.contract.localSymbol} '
                 f'values: {self.df.iloc[-1].to_dict()}')
             self.process()
 
-    def get_indicators(self):
-        df = pd.DataFrame(self.candles)
-        df.set_index('date', inplace=True)
-        df['ema_fast'] = df.price.ewm(
-            span=self.ema_fast, min_periods=int(self.ema_fast*.8)).mean()
-        df['ema_slow'] = df.price.ewm(
-            span=self.ema_slow, min_periods=int(self.ema_slow*.8)).mean()
-        df['atr'] = get_ATR(df, self.atr_periods)
-        df['signal'] = get_signals(df.price, self.periods)
-        # df['signal'] = round(get_signals(
-        #    df.price, self.periods).rolling(3).mean(), 0)
-        df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
-        df['filtered_signal'] = df['signal'] * \
-            ((df['signal'] * df['filter']) == 1)
-        self.df = df
+    @abstractmethod
+    def get_indicators(self, df):
+        return df
 
+    @abstractmethod
     def process(self):
-        message = (f'New candle for {self.contract.localSymbol} '
-                   f'{self.df.iloc[-1].to_dict()}')
-        log.debug(message)
-        position = self.portfolio.positions.get(self.contract)
-        if self.df.filtered_signal[-1] and not position:
-            message = (f'entry signal emitted for {self.contract.localSymbol},'
-                       f' signal: {self.df.filtered_signal[-1]},'
-                       f' atr: {self.df.atr[-1]}')
-            log.debug(message)
-            number_of_contracts = self.portfolio.number_of_contracts(
-                self.params, self.df.price[-1])
-            if number_of_contracts:
-                self.entrySignal.emit(
-                    self.contract, self.df.signal[-1], self.df.atr[-1],
-                    number_of_contracts)
-            else:
-                message = (f'Not enough equity to open position for: '
-                           f'{self.contract.localSymbol}')
-                log.warning(message)
-        elif self.df.signal[-1] and position:
-            if position * self.df.signal[-1] < 0:
-                log.debug(
-                    f'close signal emitted for {self.contract.localSymbol}')
-                self.closeSignal.emit(self.contract, self.df.signal[-1])
+        self.signal.emit(self)
+        self.entrySignal.emit(self)
+        self.closeSignal.emit(self)
 
 
-class Manager:
+class Portfolio(ABC):
 
-    def __init__(self, ib: IB, contracts: List[Params],
-                 streamer: BarStreamer, leverage: int,
-                 blotter: Blotter = None, trailing: bool = True,
-                 freeze_path: str = 'notebooks/freeze/live'):
-        if blotter is None:
-            blotter = Blotter()
-        self.ib = ib
-        self.contracts = contracts
-        self.streamer = streamer
-        self.portfolio = Portfolio(ib, leverage)
-        self.path = freeze_path
-        self.trader = Trader(ib, self.portfolio, blotter, trailing)
-        alloc = round(sum([c.alloc for c in contracts]), 5)
-        # assert alloc == 1, "Portfolio allocations don't add-up to 1"
-        log.debug(f'manager object initiated: {self}')
-
-    def onConnected(self):
-        self.trader.reconcile_stops()
-        contracts = get_contracts(self.contracts, self.ib)
-        log.debug(f'contracts obtained: {contracts}')
-        log.debug(f'initializing candles')
-        self.candles = [Candle(contract, self.streamer, self.trader,
-                               self.portfolio, self.ib, self.path)
-                        for contract in contracts]
-        log.debug(f'onConnected run, candles: {self.candles}')
-
-    def freeze(self):
-        for candle in self.candles:
-            candle.freeze()
-
-
-class Portfolio:
-
-    def __init__(self, ib, leverage):
-        self.leverage = leverage
+    def __init__(self, ib: IB):
         self.ib = ib
         self.values = {}
+        self._createEvents()
+        # alloc = round(sum([c.alloc for c in contracts]), 5)
+        # assert alloc == 1, "Portfolio allocations don't add-up to 1"
+
+    def _createEvents(self):
+        self.entrySignal = Event('entrySignal')
+        self.closeSignal = Event('closeSignal')
 
     @property
     def account_value(self):
@@ -307,48 +99,117 @@ class Portfolio:
                 except ValueError:
                     pass
 
-    def number_of_contracts(self, params, price):
-        # self.account_value
-        d = {'NQ': 2, 'ES': 2, 'GC': 2, 'CL': 1}
-        return d[params.contract.symbol]
+    def onEntry(self, signal):
+        raise NotImplementedError
 
-        # return int((1e+5 * self.leverage *
-        #            params.alloc) / (float(params.contract.multiplier) *
-        #                             price))
+    def onClose(self, signal):
+        raise NotImplementedError
+
+    def onSignal(self, signal):
+        raise NotImplementedError
+
+
+class Manager:
+
+    def __init__(self, ib: IB, candles: List[Candle],
+                 portfolio_class: Portfolio,
+                 blotter: Blotter = None, trailing: bool = True,
+                 freeze_path: str = 'notebooks/freeze/live',
+                 keep_ref: bool = True):
+
+        log.debug(f'Manager args: ib: {ib}, candles: {candles}, '
+                  f'portfolio: {portfolio_class}, blotter: {blotter}, '
+                  f'trailing: {trailing}, freeze_path: {freeze_path} '
+                  f'keep_ref: {keep_ref}')
+        if blotter is None:
+            blotter = Blotter()
+        self.ib = ib
+        self.candles = candles
+        self.path = freeze_path
+        self.trader = Trader(ib, blotter, trailing)
+        self.keep_ref = keep_ref
+        log.debug(f'manager object initiated: {self}')
+        self.connect_portfolio(portfolio_class)
+
+    def connect_portfolio(self, portfolio_class: Portfolio):
+        self.portfolio = portfolio_class(self.ib)
+        self.portfolio.entrySignal += self.trader.onEntry
+        self.portfolio.closeSignal += self.trader.onClose
+
+    def onStarted(self, *args):
+        log.debug(f'manager onStarted')
+        self.trader.reconcile_stops()
+        self.candles = get_contracts(self.candles, self.ib)
+        self.connect_candles()
+
+    def onScheduledUpdate(self):
+        self.freeze()
+
+    def freeze(self):
+        for candle in self.candles:
+            if candle.df is not None:
+                candle.df.to_pickle(
+                    f'{self.path}/freeze_df_{candle.contract.localSymbol}'
+                    f'.pickle')
+                log.debug(
+                    f'freezed data saved for {candle.contract.localSymbol}')
+            else:
+                log.warning(
+                    f'missing df for candle {candle.contract}')
+
+    def connect_candles(self):
+        for candle in self.candles:
+            # register candles with Trader
+            self.trader.register(candle)
+            # make sure no previous events connected
+            candle.entrySignal.clear()
+            candle.closeSignal.clear()
+            candle.signal.clear()
+            # connect trade signals
+            candle.entrySignal.connect(self.portfolio.onEntry,
+                                       keep_ref=self.keep_ref)
+            candle.closeSignal.connect(self.portfolio.onClose,
+                                       keep_ref=self.keep_ref)
+            candle.signal.connect(self.portfolio.onSignal,
+                                  keep_ref=self.keep_ref)
+            # run candle logic
+            candle(self.ib)
 
 
 class Trader:
 
-    def __init__(self, ib, portfolio, blotter, trailing=True):
+    def __init__(self, ib: IB, blotter: Blotter, trailing: bool = True):
         self.ib = ib
-        self.portfolio = portfolio
         self.blotter = blotter
         self.trailing = trailing
-        self.atr_dict = {}
         self.contracts = {}
         log.debug('Trader initialized')
 
-    def onEntry(self, contract, signal, atr, amount) -> None:
+    def register(self, obj: Candle):
+        self.contracts[obj.contract] = obj
+
+    def onEntry(self, obj: Candle, signal: int,
+                atr: float, amount: int) -> None:
         log.debug(
-            f'entry signal handled for: {contract.localSymbol} {signal} {atr}')
-        self.atr_dict[contract.symbol] = atr
-        trade = self.trade(contract, signal, amount)
+            f'entry signal handled for: {obj.contract.localSymbol} '
+            f'{signal} {atr}')
+        self.contracts[obj.contract].atr = atr
+        trade = self.trade(obj.contract, signal, amount)
         trade.filledEvent += self.attach_sl
         self.attach_events(trade, 'ENTRY')
 
-    def onClose(self, contract, signal) -> None:
-        message = (f'close signal handled for: {contract.localSymbol}'
+    def onClose(self, obj: Candle, signal: int, amount: int) -> None:
+        message = (f'close signal handled for: {obj.contract.localSymbol}'
                    f' signal: {signal}')
         log.debug(message)
-        if contract in self.portfolio.positions:
-            self.remove_sl(contract)
-            # make sure sl didn't close the position before being removed
-            if contract in self.portfolio.positions:
-                trade = self.trade(contract, signal,
-                                   abs(self.portfolio.positions[contract]))
-                self.attach_events(trade, 'CLOSE')
+        self.remove_sl(obj.contract)
+        # TODO can sl close position before being removed?
+        # make sure sl didn't close the position before being removed
+        trade = self.trade(obj.contract, signal, amount)
+        self.attach_events(trade, 'CLOSE')
 
-    def trade(self, contract, signal, amount) -> Trade:
+    def trade(self, contract: Contract, signal: int,
+              amount: int) -> Trade:
         direction = {1: 'BUY', -1: 'SELL'}
         order = MarketOrder(direction[signal], amount)
         message = (f'entering {direction[signal]} order for {amount} '
@@ -364,19 +225,19 @@ class Trader:
         direction = 1 if reverseAction == 'BUY' else -1
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
-        sl_points = self.atr_dict[contract.symbol]
+        sl_points = self.contracts[contract].atr
         if not self.trailing:
             sl_price = self.round_tick(
                 price + sl_points * direction *
-                self.contracts[contract.symbol].sl_atr,
-                self.contracts[contract.symbol].details.minTick)
+                self.contracts[contract].sl_atr,
+                self.contracts[contract].details.minTick)
             log.info(f'STOP LOSS PRICE: {sl_price}')
             order = StopOrder(reverseAction, amount, sl_price,
                               outsideRth=True, tif='GTC')
         else:
             distance = self.round_tick(
-                sl_points * self.contracts[contract.symbol].sl_atr,
-                self.contracts[contract.symbol].details.minTick)
+                sl_points * self.contracts[contract].sl_atr,
+                self.contracts[contract].details.minTick)
             log.info(f'TRAILING STOP LOSS DISTANCE: {distance}')
             order = Order(orderType='TRAIL', action=reverseAction,
                           totalQuantity=amount, auxPrice=distance,
@@ -385,7 +246,7 @@ class Trader:
         log.debug(f'stop loss attached for {trade.contract.localSymbol}')
         self.attach_events(trade, 'STOP-LOSS')
 
-    def remove_sl(self, contract) -> None:
+    def remove_sl(self, contract: Contract) -> None:
         open_trades = self.ib.openTrades()
         orders = defaultdict(list)
         for t in open_trades:
@@ -416,9 +277,6 @@ class Trader:
         if remainder > (tick_size / 2):
             floor += 1
         return round(floor * tick_size, 4)
-
-    def register(self, params: Params, symbol: str):
-        self.contracts[symbol] = params
 
     def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
