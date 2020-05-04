@@ -6,12 +6,11 @@ from backtester import IB, DataSourceManager, Market
 from logger import logger
 from trader import Blotter
 from datastore import Store
-from trader import Manager, VolumeStreamer, ResampledStreamer
-#from params import contracts
-from params_backtest import contracts
+from trader import Manager
+from strategy import candles, FixedPortfolio
 
 
-log = logger(__file__[:-3], ERROR, ERROR)
+log = logger(__file__[:-3])
 
 start_date = '20180401'
 end_date = '20181231'
@@ -25,8 +24,7 @@ asyncio.get_event_loop().set_debug(True)
 
 blotter = Blotter(save_to_file=False, filename='backtest', path='backtests',
                   note=f'_{start_date}_{end_date}')
-manager = Manager(ib, contracts, VolumeStreamer,
-                  leverage=15, blotter=blotter,
+manager = Manager(ib, candles, FixedPortfolio, blotter=blotter,
                   freeze_path='notebooks/freeze/backtest')
 market = Market(cash, manager, False)
 ib.run()

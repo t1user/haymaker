@@ -19,7 +19,7 @@ from ib_insync.objects import (BarData, BarDataList, ContractDetails,
 from ib_insync.order import OrderStatus, Trade, MarketOrder, Order
 from eventkit import Event
 
-from datastore_pytables import Store
+from datastore import Store
 from trader import Manager
 
 log = Logger(__name__)
@@ -396,7 +396,7 @@ class Market:
             for trade in self.trades:
                 for event in trade.events:
                     getattr(trade, event).clear()
-            self.manager.onConnected()
+            self.manager.onStarted()
 
         def append_trade(self, trade: Trade) -> None:
             if trade.order.orderType == 'TRAIL':
