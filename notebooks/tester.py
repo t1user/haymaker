@@ -1,12 +1,12 @@
 from datetime import timedelta
 from functools import partial
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 import pandas as pd
 
 from grouper import group_by_volume
 
 
-TIME_INT = 30
+TIME_INT = 120
 VOL_LOOKBACK = 200
 PERIODS = [5, 10, 20, 40, 80, 160]
 SMOOTH = partial(lambda x, y: x.ewm(span=max((int(y), 1))).mean())
@@ -38,20 +38,28 @@ def get_vol(data, vol_lookback):
     return data['vol_price']
 
 
-def calibrate(data, ind,  vols, periods=PERIODS, adjustment=None,
-              smooth=SMOOTH):
+def calibrate(data: pd.DataFrame, ind: Callable,  vols: pd.Series,
+              periods: List = PERIODS, adjustment: Optional[pd.Series] = None,
+              multiplier: Optional[float] = None, smooth: int = SMOOTH
+              ) -> Tuple[pd.Series, pd.Series, float, pd.DataFrame]:
+
     inds = pd.DataFrame([ind(data, p, smooth, vols)
                          for p in periods]).T.dropna()
+
     if adjustment is not None:
         adjustments = pd.Series([adjustment]*len(periods), index=inds.columns)
     else:
         adjustments = 10/inds.abs().mean()
+
     scaled_inds = (inds * adjustments).clip(lower=-20, upper=20)
     target_vol = scaled_inds.abs().std().mean()
     corr = scaled_inds.corr()
     weights = (1/corr.mean()) / (1/corr.mean()).sum()
     scaled_inds_combined = (scaled_inds * weights).sum(axis=1)
-    multiplier = target_vol / scaled_inds_combined.abs().std()
+
+    if multiplier is None:
+        multiplier = target_vol / scaled_inds_combined.abs().std()
+
     return weights, adjustments, multiplier, corr
 
 
@@ -60,6 +68,7 @@ def simulate(data: pd.DataFrame, ind: Callable,
              adjustments: pd.Series,
              multiplier: float, periods: List[int] = PERIODS,
              smooth: int = SMOOTH) -> pd.DataFrame:
+
     inds = pd.DataFrame([ind(data, p, smooth, vols)
                          for p in periods]).T
     scaled_inds = (inds * adjustments).clip(lower=-20, upper=20)
@@ -72,7 +81,7 @@ def simulate(data: pd.DataFrame, ind: Callable,
 def run(contract: str,
         ind: Callable[[pd.DataFrame, List[int], int, pd.Series], pd.Series],
         periods: List[int] = PERIODS,
-        adjustment: Optional[float] = None,
+        adjustment: Optional[float] = None, multiplier: Optional[float] = None,
         vol_lookback: int = VOL_LOOKBACK,
         start_date: str = START_DATE, end_date: str = END_DATE,
         calibration_months: int = CALIBRATION_MONTHS,
@@ -89,7 +98,7 @@ def run(contract: str,
     cal_candles = candles.loc[:cal_data_end]
     weights, adjustments, multiplier, corr = calibrate(
         cal_candles, ind, get_vol(cal_candles, vol_lookback), periods,
-        adjustment, smooth)
+        adjustment, multiplier, smooth)
     forecasts = simulate(candles, ind, get_vol(candles, vol_lookback), weights,
                          adjustments, multiplier, periods, smooth)
     if output:

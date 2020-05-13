@@ -64,7 +64,7 @@ class Blotter:
             # 'comm_reports': comms
         }
         self.save_report(row)
-        log.info(f'trade report saved: {row}')
+        log.debug(f'trade report saved: {row}')
 
     def log_commission(self, trade: Trade, fill: Fill,
                        comm_report: CommissionReport, reason: str):
@@ -78,7 +78,9 @@ class Blotter:
                  and fill.execution.permId == trade.order.permId]
         fills = [fill for fill in trade.fills
                  if fill.execution.permId == trade.order.permId]
-
+        log.debug(f'comms: {comms}')
+        log.debug(f'fills: {fills}')
+        log.debug(f'trade.isDone: {trade.isDone()}')
         if trade.isDone() and (len(comms) == len(fills)):
             self.log_trade(trade, comms, reason)
 

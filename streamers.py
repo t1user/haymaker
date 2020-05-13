@@ -144,12 +144,12 @@ class VolumeStreamer(StreamAggregator):
                  date: Optional[datetime] = None) -> None:
         BarStreamer.__call__(self, ib, contract, date)
         self.volume = self.volume or self.reset_volume(self.avg_periods)
+        log.info(f'Volume for {contract.localSymbol}: {self.volume}')
         StreamAggregator.process_back_data(self)
 
     def reset_volume(self, avg_periods) -> int:
         if self.bars:
-            return util.df(self.bars).volume \
-                .rolling(avg_periods).sum() \
+            return util.df(self.bars).volume.rolling(avg_periods).sum() \
                 .mean().round()
         else:
             raise ValueError('No bars in VolumeStreamer')
