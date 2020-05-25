@@ -281,7 +281,8 @@ class DataSource:
         """Warn (TODO: convert) of requested data frequency descrepancy."""
         barSize_timedelta = self.barSizeSetting_to_timedelta(barSizeSetting)
         if self.freq_multiplier(barSize_timedelta, self.freq) != 1:
-            log.warning(f'Requested data frequency: '
+            log.warning(f'Requested data frequency for contract '
+                        f'{self.contract.localSymbol}: '
                         f'{barSize_timedelta.seconds} secs '
                         f'is different than data frequency in data store: '
                         f'{self.freq.seconds} secs')

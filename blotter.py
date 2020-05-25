@@ -78,9 +78,6 @@ class Blotter:
                  and fill.execution.permId == trade.order.permId]
         fills = [fill for fill in trade.fills
                  if fill.execution.permId == trade.order.permId]
-        log.debug(f'comms: {comms}')
-        log.debug(f'fills: {fills}')
-        log.debug(f'trade.isDone: {trade.isDone()}')
         if trade.isDone() and (len(comms) == len(fills)):
             self.log_trade(trade, comms, reason)
 

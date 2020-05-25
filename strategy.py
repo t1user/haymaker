@@ -16,7 +16,7 @@ log = Logger(__name__)
 
 class BreakoutCandle(Candle):
 
-    def get_indicators(self, df: pd.DataFrame):
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df['ema_fast'] = df.price.ewm(
             span=self.ema_fast, min_periods=int(self.ema_fast*.8)).mean()
         df['ema_slow'] = df.price.ewm(
@@ -30,9 +30,9 @@ class BreakoutCandle(Candle):
             ((df['signal'] * df['filter']) == 1)
         return df
 
-    def process(self):
-        message = (f'New candle for {self.contract.localSymbol} '
-                   f'{self.df.iloc[-1].to_dict()}')
+    def process(self) -> None:
+        message = (f"New candle for {self.contract.localSymbol} "
+                   f"{self.df.index[-1]}: {self.df.iloc[-1].to_dict()}")
         log.debug(message)
         if self.df.signal[-1]:
             self.signal.emit(self)

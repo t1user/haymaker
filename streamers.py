@@ -16,6 +16,7 @@ class BarStreamer(ABC):
     barSizeSetting = '30 secs'
     whatToShow = 'TRADES'
     useRTH = False
+    contract = None
 
     def __call__(self, ib, contract: Contract,
                  start_date: Optional[datetime] = None) -> None:
@@ -36,6 +37,7 @@ class BarStreamer(ABC):
 
     @staticmethod
     def date_to_delta(date: datetime) -> int:
+        # THIS WILL NOT WORK IN BACKTESTER
         return (datetime.now() - date).seconds
 
     def get_bars(self) -> BarDataList:
@@ -54,7 +56,7 @@ class BarStreamer(ABC):
     def subscribe(self) -> None:
         self.bars.updateEvent += self.onNewBar
 
-    def onNewBar(self, bars: BarData, hasNewBar: bool) -> None:
+    def onNewBar(self, bars: BarDataList, hasNewBar: bool) -> None:
         if hasNewBar:
             self.aggregate(bars[-2])
 
@@ -69,23 +71,23 @@ class StreamAggregator(BarStreamer):
         self._createEvents()
         self.buffer = deque()
         self.new_bars = []
+        self.backfill = True
         super().__init__()
 
     def _createEvents(self) -> None:
         self.newCandle = Event('newCandle')
 
-    def __call__(self, ib: IB, contract: Contract,
-                 date: Optional[datetime] = None) -> None:
+    def __call__(self, ib: IB, contract: Contract) -> None:
+        date = self.all_bars[-1].date if contract == self.contract else None
         super().__call__(ib, contract, date)
         self.process_back_data(date)
 
     def process_back_data(self, date: Optional[datetime] = None) -> None:
         # flag needed on re-connect
         self.backfill = True
-        log.debug(f'generating startup data for {self.contract.localSymbol}')
-        for counter, bar in enumerate(self.bars[:-2]):
+        for counter, bar in enumerate(self.bars[:-1]):
             # date given on reconnect only
-            if (date and bar.date >= date) or not date:
+            if (date and (bar.date > date)) or not date:
                 self.aggregate(bar)
                 # prevent from blocking too long
                 if counter % 10000 == 0:
@@ -97,7 +99,6 @@ class StreamAggregator(BarStreamer):
 
     def create_candle(self) -> None:
         df = util.df(self.new_bars)
-        self.new_bars = []
         df.date = df.date.astype('datetime64')
         df.set_index('date', inplace=True)
         # df['backfill'] = True
@@ -115,7 +116,7 @@ class StreamAggregator(BarStreamer):
                              'price': df.close[-1],
                              'volume': df.volume.sum()})
 
-    def onNewBar(self, bars: BarData, hasNewBar: bool) -> None:
+    def onNewBar(self, bars: BarDataList, hasNewBar: bool) -> None:
         if hasNewBar:
             if self.backfill:
                 log.debug(f'buffering bar for {self.contract.localSymbol}')
@@ -125,7 +126,7 @@ class StreamAggregator(BarStreamer):
                 self.aggregate(bars[-2])
 
     def clear_buffer(self) -> None:
-        """Utilize bars that have been buffered during processing back data"""
+        """Utilize bars that have been buffered while processing back data."""
         while self.buffer:
             log.debug(f'clearing buffer for {self.contract.localSymbol}')
             self.aggregate(self.buffer.popleft())
@@ -136,26 +137,32 @@ class VolumeStreamer(StreamAggregator):
     def __init__(self, volume: Optional[float] = None,
                  avg_periods: Optional[float] = None) -> None:
         super().__init__()
+        self.all_bars = []
         self.volume = volume
         self.avg_periods = avg_periods
         self.aggregator = 0
 
-    def __call__(self, ib: IB, contract: Contract,
-                 date: Optional[datetime] = None) -> None:
+    def __call__(self, ib: IB, contract: Contract) -> None:
+        date = self.all_bars[-1].date if contract == self.contract else None
         BarStreamer.__call__(self, ib, contract, date)
-        self.volume = self.volume or self.reset_volume(self.avg_periods)
+        self.volume = self.reset_volume(self.avg_periods) or self.volume
         log.info(f'Volume for {contract.localSymbol}: {self.volume}')
-        StreamAggregator.process_back_data(self)
+        StreamAggregator.process_back_data(self, date)
 
     def reset_volume(self, avg_periods) -> int:
-        if self.bars:
-            return util.df(self.bars).volume.rolling(avg_periods).sum() \
-                .mean().round()
-        else:
-            raise ValueError('No bars in VolumeStreamer')
+        # TODO: make span adjust to length of requested data
+        bars = self.all_bars or self.bars
+        if bars == self.bars:
+            self.span = len(self.bars)
+        df = util.df(bars)
+        volume = df.iloc[-self.span:].volume.rolling(avg_periods).sum() \
+            .mean().round()
+        log.debug(f'volume: {volume}')
+        return volume
 
-    def aggregate(self, bar) -> None:
+    def aggregate(self, bar: BarData) -> None:
         self.new_bars.append(bar)
+        self.all_bars.append(bar)
         self.aggregator += bar.volume
         if not self.backfill:
             message = (f'{bar.date} {self.aggregator}/{self.volume}'
@@ -165,6 +172,14 @@ class VolumeStreamer(StreamAggregator):
             self.aggregator = 0
             # self.aggregator -= self.volume
             self.create_candle()
+            self.new_bars.clear()
+
+    @property
+    def all_bars_df(self):
+        df = util.df(self.all_bars)
+        df.date = df.date.astype('datetime64')
+        df.set_index('date', inplace=True)
+        return df
 
 
 class ResampledStreamer(StreamAggregator):

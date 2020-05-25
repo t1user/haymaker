@@ -36,12 +36,7 @@ class Candle(ABC):
         log.debug(
             f'Candle {self.contract.localSymbol} initializing data stream...')
         self.details = ib.reqContractDetails(self.contract)[0]
-        date = self.df.index[-1] if self.df is not None \
-            and self.contract == self._contract else None
-        log.debug(f'date for streamer {self.contract.localSymbol}: {date}')
-        self.streamer(ib, self.contract, date)
-        # keep track when contract changed
-        self._contract = self.contract
+        self.streamer(ib, self.contract)
 
     def append(self, candle: Dict[str, Any]):
         self.candles.append(candle)
@@ -54,6 +49,15 @@ class Candle(ABC):
                 f' {self.contract.localSymbol} '
                 f'values: {self.df.iloc[-1].to_dict()}')
             self.process()
+
+    def save(self, path):
+        if self.df is not None:
+            self.df.to_pickle(
+                f'{path}/freeze_df_{self.contract.localSymbol}'
+                f'.pickle')
+        self.streamer.all_bars_df.to_pickle(
+            f'{path}/all_bars_df_{self.contract.localSymbol}'
+            f'.pickle')
 
     @abstractmethod
     def get_indicators(self, df):
@@ -146,16 +150,10 @@ class Manager:
         self.freeze()
 
     def freeze(self):
+        """Function called periodically to keep record of system data"""
         for candle in self.candles:
-            if candle.df is not None:
-                candle.df.to_pickle(
-                    f'{self.path}/freeze_df_{candle.contract.localSymbol}'
-                    f'.pickle')
-                log.debug(
-                    f'freezed data saved for {candle.contract.localSymbol}')
-            else:
-                log.warning(
-                    f'missing df for candle {candle.contract}')
+            candle.save(self.path)
+        log.debug('Freezed data saved')
 
     def connect_candles(self):
         for candle in self.candles:
