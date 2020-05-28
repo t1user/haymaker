@@ -26,7 +26,7 @@ blotter = Blotter(save_to_file=False, filename='backtest', path='backtests',
                   note=f'_{start_date}_{end_date}')
 manager = Manager(ib, candles, FixedPortfolio, blotter=blotter,
                   freeze_path='notebooks/freeze/backtest')
-market = Market(cash, manager, reboot=True)
+market = Market(cash, manager, reboot=False)
 ib.run()
 blotter.save()
 manager.freeze()

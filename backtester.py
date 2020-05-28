@@ -210,8 +210,7 @@ class IB:
         log.debug(f'commissions: {self.market.commissions}')
         log.debug(f'ticks: {self.market.ticks}')
 
-        util.run(self.market.run())
-        self.market.post_mortem()
+        self.market.run()
 
     def sleep(self, *args):
         # this makes sense only if run in asyncio
@@ -228,9 +227,11 @@ class DataSourceManager:
     object to determine date range of the data returned.
 
     DataSourceManager ensures DataSource for every contract is a singleton.
+    It prevents unnecessary calls to the datastore - the call usually happens
+    only at DataSource initialization, while at the same time simulating
+    access to broker every time get_history is called by the strategy.
 
     TODO: multiple objects for the same contract for different barSizeSetting
-    TODO: use defaultdict instead of dict
     """
 
     def __init__(self, store: Store, start_date: datetime, end_date: datetime):
@@ -271,14 +272,14 @@ class DataSource:
 
     def set_start(self, durationStr: str) -> pd.Timedelta:
         """
-        Endure appropriate back-data is available to start simulation
+        Ensure appropriate back-data is available to start simulation
         at self.start_date.
         """
         return min(self.start_date - self.durationStr_to_timedelta(durationStr),
                    self.start_date)
 
     def handle_freq(self, barSizeSetting: str) -> None:
-        """Warn (TODO: convert) of requested data frequency descrepancy."""
+        """Warn (TODO: convert) of requested data frequency mismatch."""
         barSize_timedelta = self.barSizeSetting_to_timedelta(barSizeSetting)
         if self.freq_multiplier(barSize_timedelta, self.freq) != 1:
             log.warning(f'Requested data frequency for contract '
@@ -399,7 +400,7 @@ class DataSource:
         elif isinstance(contract, Future):
             return ContFuture().update(**contract.dict())
 
-    def get_BarDataList(self, chunk):
+    def get_BarDataList(self, chunk: pd.DataFrame) -> BarDataList:
         bars = BarDataList()
         tuples = list(chunk.itertuples())
         for t in tuples:
@@ -483,7 +484,6 @@ class _Market:
         All DataSource objects must be registered so that Market can
         preemptively get contract parameters like min tick, commission, etc.
         """
-
         if self.index is None:
             self.index = source.index
         else:
@@ -497,51 +497,69 @@ class _Market:
 
     def date_generator(self):
         """
-        Keep track of last used date. Helper function used by self.run
+        Keep track of last used date. Helper generator method used by self._run
         """
-
         for date in self.index:
             yield(date)
 
-    async def run(self) -> None:
+    def run(self) -> None:
+        """Interface method, providing entry point to run simulations."""
+        log.debug(f'Market initialized with reboot={self._reboot}')
+        log.debug(f'commision levels for instruments: {self.commissions}')
+        log.debug(f'minTicks for instruments: {self.ticks}')
+
+        try:
+            getattr(self, 'manager')
+        except AttributeError:
+            raise AttributeError('No manager object provided to Market')
+
+        util.run(self._run())
+        self.post_mortem()
+
+    async def _run(self) -> None:
         """
         Main loop that iterates through all data points and provides
         prices to other components.
 
         Has to be a coroutine to allow Trader to release control.
         """
-
-        log.debug(f'Market initialized with reboot={self._reboot}')
-        log.debug(f'Market object: {self}')
-        log.debug(f'commision levels for instruments: {self.commissions}')
-        log.debug(f'minTicks for instruments: {self.ticks}')
-        try:
-            getattr(self, 'manager')
-        except AttributeError:
-            raise AttributeError('No manager object provided to the Market')
         date = self.date_generator()
         day = None
-
         while True:
             # TODO: why two different conditions?
             try:
                 self.date = next(date)
+                log.debug(f'next date: {self.date}')
             except StopIteration:
+                log.debug('Stop iteration reached')
                 return
             if self.date is None:
+                # Test if this condition can be removed
+                raise(AttributeError('Date is None'))
+                log.error('Date is None. Breaking out of while loop')
                 break
+
+            self.simulate_data_point()
+
+            # check for new day to simulate reboot
             if day:
                 if self.date.day != day and self._reboot:
                     self.reboot()
                     day = None
             else:
                 day = self.date.day
-            log.debug(f'current date: {self.date}')
-            for o in self.objects.values():
-                o.emit(self.date)
-            self.extract_prices()
-            self.account.mark_to_market(self.prices)
-            self.run_orders()
+
+    def simulate_data_point(self):
+        """
+        Emit prices available at given data point.
+        Test if any orders should be executed. Mark to market.
+        """
+        for o in self.objects.values():
+            o.emit(self.date)
+        self.extract_prices()
+        self.account.mark_to_market(self.prices)
+        self.run_orders()
+        log.debug(f'current date: {self.date}')
 
     def post_mortem(self):
         """Summary after simulation"""
@@ -557,7 +575,7 @@ class _Market:
         for trade in self.trades:
             for event in trade.events:
                 getattr(trade, event).clear()
-        self.manager.onStarted()
+        self.manager.onStarted(now=self.date)
 
     def append_trade(self, trade: Trade) -> None:
         """Put new trade on the list of open trades for further processing."""

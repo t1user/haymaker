@@ -24,7 +24,8 @@ class BarStreamer(ABC):
         self.contract = contract
         log.debug(f'start_date: {start_date}')
         if start_date:
-            self.durationStr = f'{self.date_to_delta(start_date) + 10} S'
+            # 30s time-window to retrieve data
+            self.durationStr = f'{self.date_to_delta(start_date) + 30} S'
         while True:
             log.debug(f'Requesting bars for {self.contract.localSymbol}')
             self.bars = self.get_bars()
@@ -35,10 +36,8 @@ class BarStreamer(ABC):
         log.debug(f'Bars received for {self.contract.localSymbol}')
         self.subscribe()
 
-    @staticmethod
-    def date_to_delta(date: datetime) -> int:
-        # THIS WILL NOT WORK IN BACKTESTER
-        return (datetime.now() - date).seconds
+    def date_to_delta(self, date: datetime) -> int:
+        return (self.now - date).seconds
 
     def get_bars(self) -> BarDataList:
         log.debug(f'reqHistoricalData params for {self.contract.localSymbol} '

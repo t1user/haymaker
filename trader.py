@@ -2,6 +2,7 @@ from collections import defaultdict
 from functools import partial
 from typing import List, Dict, Any
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 import pandas as pd
 from ib_insync import (Order, MarketOrder, StopOrder, IB, Event, Fill,
@@ -58,6 +59,9 @@ class Candle(ABC):
         self.streamer.all_bars_df.to_pickle(
             f'{path}/all_bars_df_{self.contract.localSymbol}'
             f'.pickle')
+
+    def set_now(self, now):
+        self.streamer.now = now
 
     @abstractmethod
     def get_indicators(self, df):
@@ -140,11 +144,13 @@ class Manager:
         self.portfolio.entrySignal += self.trader.onEntry
         self.portfolio.closeSignal += self.trader.onClose
 
-    def onStarted(self, *args):
+    def onStarted(self, *args, **kwargs):
         log.debug(f'manager onStarted')
         self.trader.reconcile_stops()
         self.candles = get_contracts(self.candles, self.ib)
-        self.connect_candles()
+        # allow backtester to convey simulation time
+        now = kwargs.get('now') or datetime.now()
+        self.connect_candles(now)
 
     def onScheduledUpdate(self):
         self.freeze()
@@ -155,7 +161,7 @@ class Manager:
             candle.save(self.path)
         log.debug('Freezed data saved')
 
-    def connect_candles(self):
+    def connect_candles(self, now):
         for candle in self.candles:
             # register candles with Trader
             self.trader.register(candle)
@@ -170,6 +176,7 @@ class Manager:
                                        keep_ref=self.keep_ref)
             candle.signal.connect(self.portfolio.onSignal,
                                   keep_ref=self.keep_ref)
+            candle.set_now(now)
             # run candle logic
             candle(self.ib)
 
