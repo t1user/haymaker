@@ -1,11 +1,10 @@
 from typing import Set
-import asyncio
 
-from ib_insync import (IB, util, Trade, Fill, Contract, CommissionReport,
+from ib_insync import (IB, Trade, Fill, Contract, CommissionReport,
                        BarDataList, PortfolioItem, AccountValue, PnL,
                        PnLSingle, Ticker, NewsTick, NewsBulletin,
                        ScanData, Position, Event)
-from ib_insync.ibcontroller import IBC, Watchdog
+from ib_insync.ibcontroller import Watchdog
 from logbook import Logger
 
 
@@ -180,27 +179,3 @@ class Handlers(WatchdogHandlers, IBHandlers):
     def __init__(self, ib, dog):
         IBHandlers.__init__(self, ib)
         WatchdogHandlers.__init__(self, dog)
-
-
-class Start(Handlers):
-
-    def __init__(self, ib, manager):
-        util.patchAsyncio()
-        # asyncio.get_event_loop().set_debug(True)
-        # util.logToConsole()
-        self.manager = manager
-        ibc = IBC(twsVersion=978,
-                  gateway=False,
-                  tradingMode='paper',
-                  )
-        watchdog = Watchdog(ibc, ib,
-                            port='4002',
-                            clientId=0,
-                            )
-        log.debug('attaching handlers...')
-        super().__init__(ib, watchdog)
-        watchdog.startedEvent += manager.onStarted
-        log.debug('initializing watchdog...')
-        watchdog.start()
-        log.debug('watchdog initialized')
-        ib.run()

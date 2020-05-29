@@ -295,11 +295,12 @@ class ContractHolder:
     @dataclass
     class __ContractHolder:
         ib: IB
-        source: str
+        source: str  # csv file name with contract list
         store: AbstractBaseStore
-        wts: str
-        barSize: str
-        cont_only: bool = False
+        wts: str  # whatToShow ib api parameter
+        barSize: str  # ib api parameter
+        cont_only: bool = False  # retrieve continuous contracts only
+        # how big series request at each call (1 = normal, 2 = double, etc.)
         aggression: int = 1
         items: Optional[List[DataWriter]] = None
 
@@ -479,30 +480,17 @@ async def main(holder: ContractHolder):
 if __name__ == '__main__':
     util.patchAsyncio()
     ib = IB()
-    barSize = '1 min'
+    barSize = '30 secs'
     wts = 'TRADES'
     # object where data is stored
     store = ArcticStore(f'{wts}_{barSize}')
 
-    holder = ContractHolder(ib, '_contracts.csv',
-                            store, wts, barSize, True, 3)
+    holder = ContractHolder(ib, 'contracts.csv',
+                            store, wts, barSize, True)
 
-    asyncio.get_event_loop().set_debug(True)
-    Connection(ib, partial(main, holder), watchdog=False)
+    # asyncio.get_event_loop().set_debug(True)
+    Connection(ib, partial(main, holder), watchdog=True)
 
     log.debug('script finished, about to disconnect')
     ib.disconnect()
     log.debug(f'disconnected')
-
-
-"""
-    contracts = [
-        DataWriter(store,
-                   c,
-                   ib.reqHeadTimeStamp(c, whatToShow=wts, useRTH=False),
-                   barSize,
-                   wts,
-                   aggression=3)
-        for c in ContractObjectSelector(ib, '_contracts.csv').cont_list
-    ]
-"""

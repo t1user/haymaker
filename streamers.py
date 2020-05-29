@@ -3,7 +3,7 @@ from typing import Optional
 from collections import deque
 from datetime import datetime
 
-
+import pandas as pd
 from logbook import Logger
 from ib_insync import IB, util, Event, Contract, BarData, BarDataList
 
@@ -175,9 +175,12 @@ class VolumeStreamer(StreamAggregator):
 
     @property
     def all_bars_df(self):
-        df = util.df(self.all_bars)
-        df.date = df.date.astype('datetime64')
-        df.set_index('date', inplace=True)
+        if self.all_bars:
+            df = util.df(self.all_bars)
+            df.date = df.date.astype('datetime64')
+            df.set_index('date', inplace=True)
+        else:
+            df = pd.DataFrame()
         return df
 
 
