@@ -252,9 +252,11 @@ class DownloadContainer:
         if bars:
             self.bars.append(bars)
             self.current_date = bars[0].date
-        else:
+        elif self.current_date:
             # might be a bank holiday
             self.current_date -= timedelta(days=1)
+        else:
+            return
         if self.from_date < self.current_date < self.to_date:
             return self.current_date
 
@@ -455,8 +457,6 @@ async def main(holder: ContractHolder):
     contracts = holder()
     number_of_workers = min(len(contracts), max_number_of_workers)
 
-    asyncio.get_event_loop().set_debug(True)
-
     log.debug(f'main function started, '
               f'retrieving data for {len(contracts)} instruments')
 
@@ -474,7 +474,7 @@ async def main(holder: ContractHolder):
         w.cancel()
 
     # wait until all worker tasks are cancelled
-    await asyncio.gather(*workers, return_exceptions=True)
+    await asyncio.gather(*workers)
 
 
 if __name__ == '__main__':

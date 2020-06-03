@@ -257,7 +257,7 @@ def perf(df: pd.DataFrame,
     else:
         p = pos(df['price'], df['transaction'], df['position'], cost=cost)
     positions = p.positions
-    assert positions.pnl.sum() == df.pnl.sum(), \
+    assert round(positions.pnl.sum(), 4) == round(df.pnl.sum(), 4), \
         f'Dubious pnl calcs... {positions.pnl.sum()} vs. {df.pnl.sum()}'
 
     if multiplier:
