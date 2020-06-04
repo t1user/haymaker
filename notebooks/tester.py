@@ -6,7 +6,7 @@ import pandas as pd
 from grouper import group_by_volume
 
 
-TIME_INT = 60
+TIME_INT = 120
 VOL_LOOKBACK = 200
 PERIODS = [5, 10, 20, 40, 80, 160]
 SMOOTH = partial(lambda x, y: x.ewm(span=max((int(y), 1))).mean())
@@ -38,16 +38,13 @@ def get_vol(data, vol_lookback):
     return data['vol_price']
 
 
-def calibrate(data: pd.DataFrame, ind: Callable,  vols: pd.Series,
-              periods: List = PERIODS, adjustment: Optional[pd.Series] = None,
-              multiplier: Optional[float] = None, smooth: int = SMOOTH
+def calibrate(inds: pd.DataFrame, adjustment: Optional[float] = None,
+              multiplier: Optional[float] = None
               ) -> Tuple[pd.Series, pd.Series, float, pd.DataFrame]:
 
-    inds = pd.DataFrame([ind(data, p, smooth, vols)
-                         for p in periods]).T.dropna()
-
     if adjustment is not None:
-        adjustments = pd.Series([adjustment]*len(periods), index=inds.columns)
+        adjustments = pd.Series([adjustment]*len(inds.columns),
+                                index=inds.columns)
     else:
         adjustments = 10/inds.abs().mean()
     scaled_inds = (inds * adjustments).clip(lower=-20, upper=20)
@@ -68,19 +65,38 @@ def calibrate(data: pd.DataFrame, ind: Callable,  vols: pd.Series,
     return weights, adjustments, multiplier, corr
 
 
-def simulate(data: pd.DataFrame, ind: Callable,
-             vols: pd.Series, weights: pd.Series,
-             adjustments: pd.Series,
-             multiplier: float, periods: List[int] = PERIODS,
-             smooth: int = SMOOTH) -> pd.DataFrame:
+def _simulate(inds: pd.DataFrame, weights: pd.Series, adjustments: pd.Series,
+              multiplier: float) -> pd.DataFrame:
 
-    inds = pd.DataFrame([ind(data, p, smooth, vols)
-                         for p in periods]).T
     scaled_inds = (inds * adjustments).clip(lower=-20, upper=20)
     scaled_inds_combined = (scaled_inds * weights).sum(axis=1)
     forecasts = (
         multiplier*scaled_inds_combined).clip(lower=-20, upper=20)
     return forecasts
+
+
+def _data(contract: str,
+          ind: Callable[[pd.DataFrame, List[int], int, pd.Series], pd.Series],
+          periods: List[int] = PERIODS,
+          vol_lookback: int = VOL_LOOKBACK,
+          start_date: str = START_DATE,
+          end_date: str = END_DATE,
+          time_int: int = TIME_INT,
+          smooth: Callable = SMOOTH,
+          ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+
+    data = get_data(contract, start_date, end_date)
+    # using all data to get candle size -> avg out over the period
+    candles = get_candles(data, get_avg_vol(data, time_int)).set_index('date')
+    vols = get_vol(candles, vol_lookback).dropna()
+    inds = pd.DataFrame([ind(candles, p, smooth, vols)
+                         for p in periods]).T.dropna()
+    start_date = max(vols.index[0], inds.index[0], candles.index[0])
+    data = data.loc[start_date:]
+    candles = candles.loc[start_date:]
+    vols = inds.loc[start_date:]
+    inds = inds.loc[start_date:]
+    return data, candles, vols, inds
 
 
 def calibrate_multiple(
@@ -92,35 +108,29 @@ def calibrate_multiple(
         start_date: str = START_DATE, end_date: str = END_DATE,
         calibration_months: int = CALIBRATION_MONTHS,  # only to keep api consistent
         time_int: int = TIME_INT,
-        smooth: int = SMOOTH,
+        smooth: Callable = SMOOTH,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
 
-    data = get_data(contract, start_date, end_date)
-    months = [g for n, g in data.groupby(pd.Grouper(freq='M'))]
-    candles = get_candles(data, get_avg_vol(
-        data, time_int)).set_index('date')
+    data, candles, vols, inds = _data(contract, ind, periods, vol_lookback,
+                                      start_date, end_date, time_int, smooth)
+
     weights = {}
     adjustments = {}
     multipliers = {}
+
+    months = [g for n, g in inds.groupby(pd.Grouper(freq='M'))]
 
     for month in months:
         start = month.index[0]
         end = month.index[-1]
 
-        # skip initial months where not enough data available
-        vols = get_vol(candles, vol_lookback)
-        vols_period = vols.loc[start:end]
-        if len(vols_period) - len(vols_period.dropna()) > 3:
-            continue
-
         # skip partial months
-        if (end-start).days < 19:
+        if (end - start).days < 19:
             continue
 
-        period = candles.loc[start:end]
+        period = inds.loc[start:end]
         _weights, _adjustments, _multiplier, _corr = calibrate(
-            period, ind, vols, periods, adjustment,
-            multiplier, smooth)
+            period, adjustment, multiplier)
         weights[start] = _weights
         adjustments[start] = _adjustments
         multipliers[start] = _multiplier
@@ -143,21 +153,21 @@ def run(contract: str,
         smooth: int = SMOOTH,
         output: bool = False) -> pd.DataFrame:
 
-    data = get_data(contract, start_date, end_date)
-    cal_data_start = data.index[0]
-    cal_data_end = data.resample('M').last(
+    data, candles, vols, inds = _data(contract, ind, periods, vol_lookback,
+                                      start_date, end_date, time_int, smooth)
+
+    # data for calibration
+    cal_data_end = inds.resample('M').last(
     ).index[calibration_months] + timedelta(days=1)
-    # using all data to get candle size -> avg out over the period
-    candles = get_candles(data, get_avg_vol(data, time_int)).set_index('date')
-    vols = get_vol(candles, vol_lookback).dropna()
-    vols_start = vols.index[0]
-    offset = vols_start - cal_data_start
-    cal_data_end += offset
-    cal_candles = candles.loc[:cal_data_end]
+    cal_inds = inds.loc[:cal_data_end]
+
+    # calibrate
     weights, adjustments, multiplier, corr = calibrate(
-        cal_candles, ind, vols, periods, adjustment, multiplier, smooth)
-    forecasts = simulate(
-        candles, ind, vols, weights, adjustments, multiplier, periods, smooth)
+        cal_inds, adjustment, multiplier)
+
+    # simulate (exclude calibration period)
+    sim_inds = inds.loc[cal_data_end:]
+    forecasts = _simulate(sim_inds, weights, adjustments, multiplier)
     if output:
         print(
             f'weights: \n{weights.to_string()}\n\nadjustments:'
@@ -167,3 +177,27 @@ def run(contract: str,
     return pd.DataFrame({'open': candles.open,
                          'close': candles.close,
                          'forecast': forecasts}).loc[cal_data_end:]
+
+
+def simulate(
+    params: Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    contract: str,
+    ind: Callable[[pd.DataFrame, List[int], int, pd.Series], pd.Series],
+    periods: List[int] = PERIODS,
+    adjustment: Optional[float] = None, multiplier: Optional[float] = None,
+    vol_lookback: int = VOL_LOOKBACK,
+    start_date: str = START_DATE, end_date: str = END_DATE,
+    calibration_months: int = CALIBRATION_MONTHS,
+    time_int: int = TIME_INT,
+    smooth: int = SMOOTH,
+) -> pd.DataFrame:
+
+    data, candles, vols, inds = _data(contract, ind, periods, vol_lookback,
+                                      start_date, end_date, time_int, smooth)
+
+    weights, adjustments, multiplier = params
+
+    forecasts = _simulate(inds, weights, adjustments, multiplier)
+    return pd.DataFrame({'open': candles.open,
+                         'close': candles.close,
+                         'forecast': forecasts})
