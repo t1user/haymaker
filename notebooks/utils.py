@@ -128,7 +128,7 @@ def pos(price: pd.Series,
         closes['reason'] = (_closes.reset_index())['reason']
 
     positions = opens.join(closes, how='outer', lsuffix='_o', rsuffix='_c')
-    positions['pnl'] = -(positions['open'] + positions['close']) - cost
+    positions['pnl'] = -(positions['open'] + positions['close']) - cost*2
     positions['duration'] = positions['date_c'] - positions['date_o']
     Results = namedtuple('Result', 'positions, opens, closes, transactions')
     return Results(positions, opens, closes, transactions)
@@ -225,9 +225,9 @@ def perf(df: pd.DataFrame,
     df['transaction'] = ((df['position'] - df['position'].shift(1)
                           ).fillna(0)).astype('int')
 
-    df['slippage'] = df['transaction'].abs() * cost/2
+    df['slippage'] = df['transaction'].abs() * cost
     if (df.position[-1] != 0):  # & (df.transaction[-1] == 0):
-        df.slippage[-1] += np.abs(df.position[-1]) * cost/2
+        df.slippage[-1] += np.abs(df.position[-1]) * cost
 
     df['curr_price'] = (df['position'] - df['transaction']) * df['price']
 

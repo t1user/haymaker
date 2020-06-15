@@ -1,12 +1,12 @@
 from datetime import timedelta
 from functools import partial
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple, Union
 import pandas as pd
 
 from grouper import group_by_volume
 
 
-TIME_INT = 120
+TIME_INT = 60
 VOL_LOOKBACK = 200
 PERIODS = [5, 10, 20, 40, 80, 160]
 SMOOTH = partial(lambda x, y: x.ewm(span=max((int(y), 1))).mean())
@@ -151,7 +151,10 @@ def run(contract: str,
         calibration_months: int = CALIBRATION_MONTHS,
         time_int: int = TIME_INT,
         smooth: int = SMOOTH,
-        output: bool = False) -> pd.DataFrame:
+        output: bool = False,
+        save_params: bool = False
+        ) -> Union[pd.DataFrame,
+                   Tuple[pd.DataFrame, Tuple[pd.Series, pd.Series, float]]]:
 
     data, candles, vols, inds = _data(contract, ind, periods, vol_lookback,
                                       start_date, end_date, time_int, smooth)
@@ -174,9 +177,12 @@ def run(contract: str,
             f'\n{adjustments.to_string()}\n\n'
             f'multiplier:\n{multiplier}\n\ncorrelations:\n{corr}')
         print(f'\nsimulation start date: {cal_data_end}')
-    return pd.DataFrame({'open': candles.open,
-                         'close': candles.close,
-                         'forecast': forecasts}).loc[cal_data_end:]
+    sim = pd.DataFrame({'open': candles.open,
+                        'close': candles.close,
+                        'forecast': forecasts}).loc[cal_data_end:]
+    if save_params:
+        return sim, (weights, adjustments, multiplier, corr)
+    return sim
 
 
 def simulate(
@@ -198,6 +204,7 @@ def simulate(
     weights, adjustments, multiplier = params
 
     forecasts = _simulate(inds, weights, adjustments, multiplier)
+
     return pd.DataFrame({'open': candles.open,
                          'close': candles.close,
                          'forecast': forecasts})
