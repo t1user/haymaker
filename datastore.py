@@ -1,18 +1,19 @@
-from functools import partial
-from typing import List, Dict, Union, Optional, Tuple, Any, DefaultDict
 from abc import ABC, abstractmethod
-import pickle
+from typing import List, Dict, Union, Optional, Tuple, Any, DefaultDict
+from functools import partial
 from collections import defaultdict
+import pickle
 
 import pandas as pd
-from ib_insync.contract import Future, ContFuture, Contract
-from arctic import Arctic
-from arctic.exceptions import NoDataFoundException
-from arctic.store.versioned_item import VersionedItem
-from arctic.date import DateRange
 from logbook import Logger
+from arctic.date import DateRange
+from arctic.store.versioned_item import VersionedItem
+from arctic.exceptions import NoDataFoundException
+from arctic import Arctic
+from ib_insync.contract import Future, ContFuture, Contract
 
 from config import default_path
+
 
 log = Logger(__name__)
 
@@ -32,7 +33,7 @@ class AbstractBaseStore(ABC):
         string or Contract was passed, extract metadata and save it in
         implementation specific format. Implementation is responsible
         for veryfying and cleaning data. In principle, if symbol exists
-        in store data is to be overriden (other behaviour possible in
+        in store data is to be overriden (different behaviour possible in
         implementations).
         """
         pass
@@ -89,6 +90,14 @@ class AbstractBaseStore(ABC):
         """
         pass
 
+    @abstractmethod
+    def write_metadata(self, symbol: Union[Contract, str], meta: Dict) -> Any:
+        """
+        Public method for writing metadata for given symbol.
+        Implementation must distinguish between str and Contract.
+        """
+        pass
+
     @staticmethod
     def _clean(df: pd.DataFrame) -> pd.DataFrame:
         """Ensure no duplicates and ascending sorting of diven df."""
@@ -118,6 +127,26 @@ class AbstractBaseStore(ABC):
         range = {key: (self.check_earliest(key), self.check_latest(key))
                  for key in self.keys()}
         return pd.DataFrame(range).T.rename(columns={0: 'from', 1: 'to'})
+
+    def review(self, *field: str) -> pd.DataFrame:
+        """
+        Return df with date_range together with some contract details.
+        """
+        fields = ['symbol', 'tradingClass',
+                  'currency', 'min_tick', 'expiry', 'name']
+        if field:
+            fields.extend(field)
+        df = self.date_range()
+        details = defaultdict(list)
+        for key in df.to_dict('index').keys():
+            meta = self.read_metadata(key)
+            if meta is None:
+                continue
+            for f in fields:
+                details[f].append(meta.get(f))
+        for k, v in details.items():
+            df[k] = v
+        return df
 
     def _contfutures(self) -> List[str]:
         """Return keys that correspond to contfutures"""
@@ -200,6 +229,8 @@ class ArcticStore(AbstractBaseStore):
         It's keys are: secType, conId, symbol,
         lastTradeDateOrContractMonth, multiplier, exchange, currency,
         localSymbol, tradingClass, repr, object.
+        It can also be updated by utils function to contain additional
+        details.
 
         Repr is __repr__() of ib contract object.
         Object is the actual ib contract object.
@@ -221,6 +252,14 @@ class ArcticStore(AbstractBaseStore):
             return self.store.read_metadata(self._symbol(symbol)).metadata
         except AttributeError:
             return
+
+    def write_metadata(self, symbol: Union[Contract, str], meta: Dict[str, Any]
+                       ) -> Optional[VersionedItem]:
+        existing_meta = self.read_metadata(symbol)
+        if existing_meta:
+            new_meta = existing_meta.update(meta)
+            print(new_meta)
+            return self.store.write_metadata(self._symbol(symbol), new_meta)
 
     def _metadata(self, obj: Union[Contract, str]) -> Dict[str, Dict[str, str]]:
         if isinstance(obj, Contract):

@@ -560,6 +560,7 @@ class _Market:
         self.account.mark_to_market(self.prices)
         self.run_orders()
         log.debug(f'current date: {self.date}')
+        log.debug(f'current prices: {self.prices}')
 
     def post_mortem(self):
         """Summary after simulation"""

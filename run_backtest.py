@@ -10,10 +10,10 @@ from trader import Manager
 from strategy import candles, FixedPortfolio
 
 
-log = logger(__file__[:-3])
+log = logger(__file__[:-3], ERROR, ERROR)
 
-start_date = '20190101'
-end_date = '20190131'
+start_date = '20180601'
+end_date = '20191231'
 cash = 1e+5
 store = Store()
 source = DataSourceManager(store, start_date, end_date)
@@ -26,7 +26,7 @@ blotter = Blotter(save_to_file=False, filename='backtest', path='backtests',
                   note=f'_{start_date}_{end_date}')
 manager = Manager(ib, candles, FixedPortfolio, blotter=blotter,
                   freeze_path='notebooks/freeze/backtest')
-market = Market(cash, manager, reboot=False)
+market = Market(cash, manager, reboot=True)
 ib.run()
 blotter.save()
 manager.freeze()

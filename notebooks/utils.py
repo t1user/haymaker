@@ -1,7 +1,7 @@
 from multiprocessing import Pool, cpu_count
 import sys
 from collections import namedtuple
-from typing import NamedTuple, List, Union, Optional
+from typing import NamedTuple, List, Union, Optional, Dict
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,8 @@ from indicators import get_ATR, get_signals  # noqa
 
 def plot(*data):
     """
-    Plot every Series or column of given DataFrame on a separate vertical sub-plot.
+    Plot every Series or column of given DataFrame on a separate vertical
+    sub-plot.
 
     Args:
         Must be one or more Series or one DataFrame.
@@ -30,7 +31,7 @@ def plot(*data):
         elif isinstance(d, pd.DataFrame):
             columns.extend([d[c] for c in d.columns])
         else:
-            raise ValueError('Arguments must be Series or Dataframes')
+            raise ValueError('Arguments must be Series or a Dataframe')
     # plot the charts
     fig = plt.figure(figsize=(20, 16))
     num_plots = len(columns)
@@ -81,6 +82,24 @@ def daily_returns(pnl, start=0):
     daily = pd.DataFrame({'balance': daily})
     daily['returns'] = daily.balance.pct_change().fillna(0)
     daily['path'] = (daily.returns + 1).cumprod() - 1
+    return daily
+
+
+def daily_returns_pct_based(pnl: pd.Series, price: pd.Series) -> pd.DataFrame:
+    data = pd.DataFrame({'pnl': pnl, 'price': price})
+    daily = data.resample('B').agg({'pnl': 'sum', 'price': 'first'}).dropna()
+    daily['returns'] = daily['pnl'] / daily['price']
+    daily['balance'] = (daily['returns'] + 1).cumprod()
+    return daily
+
+
+def daily_returns_log_based(df: pd.DataFrame) -> pd.DataFrame:
+    data = pd.DataFrame({'pnl': df.pnl, 'price': df.price,
+                         'lreturn': df.lreturn})
+    daily = data.resample('B').agg({'pnl': 'sum', 'price': 'first',
+                                    'lreturn': 'sum'}).dropna()
+    daily['returns'] = np.exp(daily['lreturn']) - 1
+    daily['balance'] = (daily['returns'] + 1).cumprod()
     return daily
 
 
@@ -177,7 +196,7 @@ def get_min_tick(data: pd.Series) -> float:
     ps = data.sort_values().diff().abs().dropna()
     ps = ps[ps != 0]
     min_tick = ps.mode()[0]
-    #print(f'estimated min-tick: {min_tick}')
+    # print(f'estimated min-tick: {min_tick}')
     return min_tick
 
 
@@ -193,7 +212,7 @@ def perf(df: pd.DataFrame,
 
     Args:
         df:         must have columns: 'price', 'position', all the information
-                    about when and at what price position if entered and closed
+                    about when and at what price position is entered and closed
                     is extracted from those two columns
         multiplier: futures multiplier to be used in fixed capital simulation,
                     if not given or zero simulation will be variable capital
@@ -222,8 +241,8 @@ def perf(df: pd.DataFrame,
     else:
         cost = 0
 
-    df['transaction'] = ((df['position'] - df['position'].shift(1)
-                          ).fillna(0)).astype('int')
+    df['transaction'] = (df['position'] - df['position'].shift(1)
+                         .fillna(0)).astype('int')
 
     df['slippage'] = df['transaction'].abs() * cost
     if (df.position[-1] != 0):  # & (df.transaction[-1] == 0):
@@ -234,6 +253,11 @@ def perf(df: pd.DataFrame,
     df['base_price'] = (df['price'].shift(
         1) * df['position'].shift(1)).fillna(0)
     df['pnl'] = df['curr_price'] - df['base_price'] - df['slippage']
+
+    slip_return = np.log((-df['slippage'] / df['price']) + 1).fillna(0)
+    price_return = np.log(((df['curr_price'] - df['base_price'])
+                           / abs(df['base_price'])) + 1).fillna(0)
+    df['lreturn'] = slip_return + price_return
 
     # get daily returns
     if multiplier:
@@ -248,7 +272,7 @@ def perf(df: pd.DataFrame,
         else:
             daily = daily_returns(df['pnl_dollars'], bankroll)
     else:
-        daily = daily_returns(df['pnl'], df.price[0])
+        daily = daily_returns_log_based(df)
 
     # get position stats
     if 'reason' in df.columns:
@@ -667,12 +691,16 @@ def m_proc(dfs, func):
 
 out = NamedTuple('Out', [('stats', pd.DataFrame),
                          ('dailys', pd.DataFrame),
-                         ('returns', pd.DataFrame)])
+                         ('returns', pd.DataFrame),
+                         ('positions', Dict[float, pd.DataFrame]),
+                         ('dfs', pd.DataFrame),
+                         ])
 
 
 def summary(price: Union[pd.Series, pd.DataFrame],
             indicator: Optional[pd.Series] = None,
-            slip: float = 0) -> out:
+            slip: float = 0,
+            threshold: Optional[Union[List, float]] = None) -> out:
     """
     Return stats summary of strategy for various thresholds
     run on the indicator. The strategy is long when indicator > threshold
@@ -685,10 +713,18 @@ def summary(price: Union[pd.Series, pd.DataFrame],
     if isinstance(price, pd.DataFrame) and indicator is None:
         indicator = price.forecast
         price = price.open
+
+    if threshold is None:
+        threshold = [0, 3, 5, 6, 7, 10, 15, 17, 19, 20]
+    elif isinstance(threshold, (int, float)):
+        threshold = [threshold]
+
     stats = pd.DataFrame()
     dailys = pd.DataFrame()
     returns = pd.DataFrame()
-    for i in [0, 3, 5, 6, 7, 10, 15, 17, 19, 20]:
+    positions = {}
+    dfs = {}
+    for i in threshold:
         try:
             b = v_backtester(price, indicator, i)
             r = perf_var(b, False, slippage=slip)
@@ -697,4 +733,6 @@ def summary(price: Union[pd.Series, pd.DataFrame],
         stats[i] = r.stats
         dailys[i] = r.daily.balance
         returns[i] = r.daily['returns']
-    return out(stats, dailys, returns)
+        positions[i] = r.positions
+        dfs[i] = r.df
+    return out(stats, dailys, returns, positions, dfs)

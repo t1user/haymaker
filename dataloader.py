@@ -313,16 +313,24 @@ class ContractHolder:
             else:
                 objects = objects.list
 
-            self.items = [
-                DataWriter(store,
-                           o,
-                           self.ib.reqHeadTimeStamp(
-                               o, whatToShow=self.wts, useRTH=False),
-                           barSize=self.barSize,
-                           wts=self.wts,
-                           aggression=self.aggression)
-                for o in objects
-            ]
+            self.items = []
+            for o in objects:
+                headTimeStamp = self.ib.reqHeadTimeStamp(
+                    o, whatToShow=self.wts, useRTH=False)
+                if headTimeStamp == []:
+                    log.warning(
+                        (f'Unavailable headTimeStamp for {o.localSymbol}. '
+                         f'No data will be downloaded')
+                    )
+                    continue
+                self.items.append(
+                    DataWriter(store,
+                               o,
+                               headTimeStamp,
+                               barSize=self.barSize,
+                               wts=self.wts,
+                               aggression=self.aggression)
+                )
 
         def __call__(self):
             if self.items is None:
@@ -382,7 +390,7 @@ def duration_in_secs(barSize: str):
 def duration_str(duration_in_secs: int, aggression: float,
                  from_bar: bool = True):
     """
-    Given duration in seconds return acceptable duration str. 
+    Given duration in seconds return acceptable duration str.
 
     :from_bar:
     if True it's assumed that the duration_in_secs number comes from barSize

@@ -12,7 +12,7 @@ log = Logger(__name__)
 
 class BarStreamer(ABC):
 
-    durationStr = '10 D'
+    durationStr = '13 D'
     barSizeSetting = '30 secs'
     whatToShow = 'TRADES'
     useRTH = False
@@ -144,7 +144,7 @@ class VolumeStreamer(StreamAggregator):
     def __call__(self, ib: IB, contract: Contract) -> None:
         date = self.all_bars[-1].date if contract == self.contract else None
         BarStreamer.__call__(self, ib, contract, date)
-        self.volume = self.reset_volume(self.avg_periods) or self.volume
+        self.volume = self.volume or self.reset_volume(self.avg_periods)
         log.info(f'Volume for {contract.localSymbol}: {self.volume}')
         StreamAggregator.process_back_data(self, date)
 
@@ -169,7 +169,6 @@ class VolumeStreamer(StreamAggregator):
             log.debug(message)
         if self.aggregator >= self.volume:
             self.aggregator = 0
-            # self.aggregator -= self.volume
             self.create_candle()
             self.new_bars.clear()
 

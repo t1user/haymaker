@@ -7,11 +7,10 @@ from datetime import datetime
 import pandas as pd
 from ib_insync import (Order, MarketOrder, StopOrder, IB, Event, Fill,
                        CommissionReport, Trade, ContFuture, Future, Contract)
-from logbook import Logger
-
 
 from objects import Params
 from blotter import Blotter
+from logger import Logger, log_assert
 
 
 log = Logger(__name__)
@@ -45,10 +44,12 @@ class Candle(ABC):
             df = pd.DataFrame(self.candles)
             df.set_index('date', inplace=True)
             self.df = self.get_indicators(df)
-            assert not self.df.iloc[-1].isna().any(), (
+            log_assert(not self.df.iloc[-1].isna().any(), (
                 f'Not enough data for indicators for instrument'
                 f' {self.contract.localSymbol} '
-                f'values: {self.df.iloc[-1].to_dict()}')
+                f' index: {df.index[-1]}'
+                f'values: {self.df.iloc[-1].to_dict()}'
+                f'{self.df}'), __name__)
             self.process()
 
     def save(self, path):

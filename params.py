@@ -7,8 +7,8 @@ nq = Params(
     ema_slow=120,
     sl_atr=1,
     atr_periods=180,
-    avg_periods=30,
-    # volume=10000,
+    # avg_periods=30,
+    volume=10000,
     alloc=0.3)
 
 es = Params(
@@ -18,8 +18,8 @@ es = Params(
     ema_slow=320,
     sl_atr=3,
     atr_periods=180,
-    avg_periods=30,
-    # volume=33000,
+    # avg_periods=30,
+    volume=33000,
     alloc=0.3)
 
 gc = Params(
@@ -44,4 +44,4 @@ cl = Params(
     # volume=11500,
     alloc=0.05)
 
-contracts = [nq, es, gc, cl]
+contracts = [nq, es]

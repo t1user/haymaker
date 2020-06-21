@@ -3,10 +3,11 @@ from functools import partial
 from typing import Callable, List, Optional, Tuple, Union
 import pandas as pd
 
-from grouper import group_by_volume
+from grouper import group_by_volume, VolumeGrouper
+from datastore import Store
 
 
-TIME_INT = 60
+TIME_INT = 30
 VOL_LOOKBACK = 200
 PERIODS = [5, 10, 20, 40, 80, 160]
 SMOOTH = partial(lambda x, y: x.ewm(span=max((int(y), 1))).mean())
@@ -14,19 +15,39 @@ START_DATE = '20180901'
 END_DATE = '20191231'
 CALIBRATION_MONTHS = 3
 
+symbol_dict = {
+    'CL': '/cont/min/CL_20200320_NYMEX_USD',
+    'ES': '/cont/min/ES_20200320_GLOBEX_USD',
+    'GC': '/cont/min/GC_20200428_NYMEX_USD',
+    'NQ': '/cont/min/NQ_20200320_GLOBEX_USD',
+}
+
+store = Store()
+
+vol_dict = {'NQ': 10000, 'ES': 33000, 'GC': 5500, 'CL': 11500}
+
+min_dict = {'NQ': 30, 'ES': 120, 'GC': 30, 'CL': 30}
+
 
 def get_data(contract, start_date=START_DATE, end_date=END_DATE):
-    return pd.read_pickle(
-        f'data/minute_{contract}_cont_non_active_included.pickle'
-    ).loc[start_date:end_date]
+    return store.read(symbol_dict[contract]
+                      ).sort_index().loc[start_date: end_date]
+
+    # return pd.read_pickle(
+    #    f'data/minute_{contract}_cont_non_active_included.pickle'
+    # ).loc[start_date:end_date]
+
+
+def get_fixed_vol(symbol: str) -> float:
+    return vol_dict[symbol]
 
 
 def get_avg_vol(data, time_int=TIME_INT):
     return data.volume.rolling(time_int).sum().mean()
 
 
-def get_candles(data, avg_vol):
-    return group_by_volume(data, avg_vol)
+def get_candles(data, volume):
+    return group_by_volume(data, volume)
 
 
 def get_vol(data, vol_lookback):
@@ -70,9 +91,9 @@ def _simulate(inds: pd.DataFrame, weights: pd.Series, adjustments: pd.Series,
 
     scaled_inds = (inds * adjustments).clip(lower=-20, upper=20)
     scaled_inds_combined = (scaled_inds * weights).sum(axis=1)
-    forecasts = (
+    scaled_inds['forecast'] = (
         multiplier*scaled_inds_combined).clip(lower=-20, upper=20)
-    return forecasts
+    return scaled_inds
 
 
 def _data(contract: str,
@@ -83,11 +104,18 @@ def _data(contract: str,
           end_date: str = END_DATE,
           time_int: int = TIME_INT,
           smooth: Callable = SMOOTH,
+          candle_volume: str = 'fixed'  # fixed, rolling, average
           ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
     data = get_data(contract, start_date, end_date)
     # using all data to get candle size -> avg out over the period
-    candles = get_candles(data, get_avg_vol(data, time_int)).set_index('date')
+    if candle_volume == 'fixed':
+        candles = get_candles(data, get_fixed_vol(contract))
+    elif candle_volume == 'average':
+        candles = get_candles(data, get_avg_vol(data, time_int))
+    else:
+        candles = VolumeGrouper(
+            data, dynamic=True, multiple=min_dict[contract]).df
     vols = get_vol(candles, vol_lookback).dropna()
     inds = pd.DataFrame([ind(candles, p, smooth, vols)
                          for p in periods]).T.dropna()
@@ -177,9 +205,12 @@ def run(contract: str,
             f'\n{adjustments.to_string()}\n\n'
             f'multiplier:\n{multiplier}\n\ncorrelations:\n{corr}')
         print(f'\nsimulation start date: {cal_data_end}')
-    sim = pd.DataFrame({'open': candles.open,
-                        'close': candles.close,
-                        'forecast': forecasts}).loc[cal_data_end:]
+
+    prices = pd.DataFrame({'open': candles.open,
+                           'close': candles.close,
+                           })
+    sim = pd.concat([prices, forecasts], axis=1).loc[cal_data_end:]
+
     if save_params:
         return sim, (weights, adjustments, multiplier, corr)
     return sim
@@ -204,7 +235,8 @@ def simulate(
     weights, adjustments, multiplier = params
 
     forecasts = _simulate(inds, weights, adjustments, multiplier)
+    prices = pd.DataFrame({'open': candles.open,
+                           'close': candles.close,
+                           })
 
-    return pd.DataFrame({'open': candles.open,
-                         'close': candles.close,
-                         'forecast': forecasts})
+    return pd.concat([prices, forecasts], axis=1)
