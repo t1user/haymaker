@@ -18,6 +18,14 @@ from config import default_path
 log = Logger(__name__)
 
 
+def symbol_extractor(func):
+    def wrapper(symbol, *args, **kwargs):
+        if isinstance(symbol, Contract):
+            symbol = f'{"_".join(symbol.localSymbol.split())}_{symbol.secType}'
+        return func(symbol, *args, **kwargs)
+    return wrapper
+
+
 class AbstractBaseStore(ABC):
     """
     Interface for accessing datastores. To be inherited by particular store
@@ -68,6 +76,20 @@ class AbstractBaseStore(ABC):
             return f'{"_".join(sym.localSymbol.split())}_{sym.secType}'
         else:
             return sym
+
+    def _update_metadata(self, symbol: Union[Contract, str],
+                         meta: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        To be used in implementations that override metadata. Read existing
+        metadata, update by meta and return updated dictionary. Relies on
+        implementation to actually write the updated metadata.
+        """
+        _meta = self.read_metadata(symbol)
+        if _meta:
+            _meta.update(meta)
+        else:
+            _meta = meta
+        return _meta
 
     def _metadata(self, obj: Union[Contract, str]) -> Dict[str, Any]:
         """
@@ -133,17 +155,16 @@ class AbstractBaseStore(ABC):
         Return df with date_range together with some contract details.
         """
         fields = ['symbol', 'tradingClass',
-                  'currency', 'min_tick', 'expiry', 'name']
+                  'currency', 'min_tick', 'lastTradeDateOrContractMonth',
+                  'name']
         if field:
             fields.extend(field)
         df = self.date_range()
         details = defaultdict(list)
         for key in df.to_dict('index').keys():
             meta = self.read_metadata(key)
-            if meta is None:
-                continue
             for f in fields:
-                details[f].append(meta.get(f))
+                details[f].append('' if meta is None else meta.get(f))
         for k, v in details.items():
             df[k] = v
         return df
@@ -206,10 +227,9 @@ class ArcticStore(AbstractBaseStore):
         version = self.store.write(
             self._symbol(symbol),
             self._clean(data),
-            metadata=metadata)
+            metadata=self._update_metadata(symbol, metadata))
         if version:
             return f'symbol: {version.symbol} version: {version.version}'
-        return version
 
     def read(self, symbol: Union[str, Contract]) -> Optional[pd.DataFrame]:
         try:
@@ -255,16 +275,14 @@ class ArcticStore(AbstractBaseStore):
 
     def write_metadata(self, symbol: Union[Contract, str], meta: Dict[str, Any]
                        ) -> Optional[VersionedItem]:
-        existing_meta = self.read_metadata(symbol)
-        if existing_meta:
-            new_meta = existing_meta.update(meta)
-            print(new_meta)
-            return self.store.write_metadata(self._symbol(symbol), new_meta)
+        return self.store.write_metadata(self._symbol(symbol),
+                                         self._update_metadata(symbol, meta))
 
     def _metadata(self, obj: Union[Contract, str]) -> Dict[str, Dict[str, str]]:
         if isinstance(obj, Contract):
             meta = super()._metadata(obj)
             meta.update({'object': pickle.dumps(obj)})
+            # Unconmment following line if pickled object is not to be saved
             # meta.update({'object': None})
         else:
             meta = {}
@@ -272,7 +290,10 @@ class ArcticStore(AbstractBaseStore):
 
 
 class PyTablesStore(AbstractBaseStore):
-    """Pandas HDFStore fixed format."""
+    """
+    Pandas HDFStore fixed format.
+    THIS HAS NOT BEEN TESTED AND LIKELY DOESN'T WORK PROPERLY. TODO.
+    """
 
     def __init__(self, lib: str, path: str = default_path) -> None:
         lib = lib.replace(' ', '_')

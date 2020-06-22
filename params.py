@@ -27,10 +27,10 @@ gc = Params(
     periods=[5, 10, 20, 40, 80, 160],
     ema_fast=5,
     ema_slow=120,
-    sl_atr=1,
+    sl_atr=3,
     atr_periods=180,
-    avg_periods=30,
-    # volume=5400,
+    # avg_periods=30,
+    volume=5400,
     alloc=0.35)
 
 cl = Params(

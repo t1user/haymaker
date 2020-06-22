@@ -40,5 +40,5 @@ def update_details(ib: IB, store: AbstractBaseStore,
     for c, d in details.items():
         _d = {'name': d.longName,
               'min_tick': d.minTick,
-              'expiry': d.realExpirationDate}
+              }
         store.write_metadata(c, _d)

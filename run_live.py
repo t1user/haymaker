@@ -17,7 +17,7 @@ class Start(Handlers):
         # asyncio.get_event_loop().set_debug(True)
         # util.logToConsole()
         self.manager = manager
-        ibc = IBC(twsVersion=978,
+        ibc = IBC(twsVersion=979,
                   gateway=False,
                   tradingMode='paper',
                   )
