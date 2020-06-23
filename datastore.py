@@ -47,11 +47,15 @@ class AbstractBaseStore(ABC):
         pass
 
     @abstractmethod
-    def read(self, symbol: Union[str, Contract]):
+    def read(self, symbol: Union[str, Contract],
+             start_date: Optional[str] = None, end_date: Optional[str] = None
+             ) -> Optional[pd.DataFrame]:
         """
         Read data from store for a given symbol. Implementation has to
         recognize whether str or Contract was passed and read metadata
         in implementation specific manner.
+
+        Return df with data or None if the symbol is not in datastore.
         """
         pass
 
@@ -231,13 +235,17 @@ class ArcticStore(AbstractBaseStore):
         if version:
             return f'symbol: {version.symbol} version: {version.version}'
 
-    def read(self, symbol: Union[str, Contract]) -> Optional[pd.DataFrame]:
+    def read(self, symbol: Union[str, Contract],
+             start_date: Optional[str] = None, end_date: Optional[str] = None
+             ) -> Optional[pd.DataFrame]:
         try:
-            return self.read_object(symbol).data
-        except AttributeError:
+            return self.read_object(symbol, start_date, end_date).data
+        except (AttributeError, NoDataFoundException):
             return None
 
-    def read_object(self, symbol: Union[str, Contract]
+    def read_object(self, symbol: Union[str, Contract],
+                    start_date: Optional[str] = None,
+                    end_date: Optional[str] = None
                     ) -> Optional[VersionedItem]:
         """
         Return Arctic object, which contains data and full metadata.
@@ -255,8 +263,9 @@ class ArcticStore(AbstractBaseStore):
         Repr is __repr__() of ib contract object.
         Object is the actual ib contract object.
         """
+        date_range = DateRange(start_date, end_date)
         try:
-            return self.store.read(self._symbol(symbol))
+            return self.store.read(self._symbol(symbol), date_range=date_range)
         except NoDataFoundException:
             return None
 
@@ -270,7 +279,7 @@ class ArcticStore(AbstractBaseStore):
                       ) -> Optional[Dict[str, Dict[str, str]]]:
         try:
             return self.store.read_metadata(self._symbol(symbol)).metadata
-        except AttributeError:
+        except (AttributeError, NoDataFoundException):
             return
 
     def write_metadata(self, symbol: Union[Contract, str], meta: Dict[str, Any]
