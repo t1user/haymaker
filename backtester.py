@@ -35,9 +35,11 @@ class IB:
     ib = master_IB()
 
     def __init__(self, datasource_manager: DataSourceManager,
-                 ) -> None:
+                 mode: str = 'use_ib', index: int = -1) -> None:
         self.datasource = datasource_manager.get_history
         self.store = datasource_manager.store
+        self.mode = mode
+        self.index = index
         self.market = Market()
         self._createEvents()
         self.id = count(1, 1)
@@ -76,14 +78,25 @@ class IB:
             return details
 
     def reqContractDetails(self, contract: Contract):
-        return self.read_from_file_or_ib('details', 'reqContractDetails',
-                                         contract)
+        if self.mode == 'use_ib':
+            return self.read_from_file_or_ib('details', 'reqContractDetails',
+                                             contract)
+        elif self.mode == 'db_only':
+            contfuture_object = self.store.contfuture_contract_object(
+                contract.symbol, self.index)
+            meta = self.store.read_metadata(contfuture_object)
+            details = ContractDetails(**{'contract': contfuture_object,
+                                         'minTick': meta['min_tick'],
+                                         'longName': meta['name']})
+            log.debug(f'details for {contfuture_object}: {details}')
+            return [details]
 
     def qualifyContracts(self, *contracts):
         """
         Modified copy of:
         https://ib-insync.readthedocs.io/_modules/ib_insync/ib.html#IB.qualifyContractsAsync
         """
+        log.debug(f'qualifying contracts: {contracts}')
         detailsLists = (self.reqContractDetails(c) for c in contracts)
         result = []
         for contract, detailsList in zip(contracts, detailsLists):
@@ -591,7 +604,7 @@ class _Market:
 
     def set_trail_price(self, trade: Trade) -> Trade:
         """Keep track of trailing price for trailStop orders."""
-        position = self.account.positions.get(trade.contract)
+        position = self.account.positions.get(trade.contract.symbol)
         if position:
             avgCost = position.avgCost
             if isinstance(trade.contract, (Future, ContFuture)):
@@ -799,14 +812,14 @@ class Account:
 
     def mark_to_market(self, prices) -> None:
         self.mtm = {}
-        positions = [(contract.symbol, position.position, position.avgCost)
+        positions = [(contract, position.position, position.avgCost)
                      for contract, position in self.positions.items()]
         log.debug(f'positions: {positions}')
         for contract, position in self.positions.items():
-            self.mtm[contract.symbol] = position.position * (
-                prices[contract.symbol].average * int(contract.multiplier)
+            self.mtm[contract] = position.position * (
+                prices[contract].average * int(position.contract.multiplier)
                 - position.avgCost)
-            log.debug(f'mtm: {contract.symbol} {self.mtm[contract.symbol]}')
+            log.debug(f'mtm: {contract} {self.mtm[contract]}')
 
     @property
     def unrealizedPnL(self) -> float:
@@ -817,7 +830,7 @@ class Account:
     def update_positions(self, trade: Trade) -> Tuple[float, bool]:
         log.debug(f'Account updating positions by trade: {trade}')
         params = self.extract_params(trade)
-        if trade.contract in self.positions:
+        if trade.contract.symbol in self.positions:
             pnl = self.update_existing_position(params)
             new = False
         else:
@@ -828,12 +841,12 @@ class Account:
         return (pnl, new)
 
     def update_existing_position(self, params: TradeParams) -> float:
-        old_position = self.positions[params.contract]
+        old_position = self.positions[params.contract.symbol]
         # quantities are signed, avgCost is not
         # avgCost is a notional of one contract
         old_quantity = old_position.position
         new_quantity = old_quantity + params.position
-        message = (f'updating existing position for {params.contract}, '
+        message = (f'updating existing position for {params.contract.symbol}, '
                    f'old: {old_position}, new: {new_quantity}')
         log.debug(message)
         if new_quantity != 0:
@@ -847,7 +860,7 @@ class Account:
                     contract=params.contract,
                     position=new_quantity,
                     avgCost=old_position.avgCost)
-                self.positions[params.contract] = position
+                self.positions[params.contract.symbol] = position
             else:
                 # position has been reversed
                 log.error("we shouldn't be here: position reversed")
@@ -858,14 +871,14 @@ class Account:
                     contract=params.contract,
                     position=new_quantity,
                     avgCost=params.avgCost)
-                self.positions[params.contract] = position
+                self.positions[params.contract.symbol] = position
         else:
-            log.debug(f'closing position for {params.contract}')
+            log.debug(f'closing position for {params.contract.symbol}')
             log.debug(f'params: {params}')
             # postion has been closed
             pnl = ((params.avgCost - old_position.avgCost) *
                    old_quantity)
-            del self.positions[params.contract]
+            del self.positions[params.contract.symbol]
         log.debug(f'updating cash by: {pnl}')
         return pnl
 
@@ -876,7 +889,7 @@ class Account:
             position=params.position,
             avgCost=params.avgCost
         )
-        self.positions[params.contract] = position
+        self.positions[params.contract.symbol] = position
 
 
 class TradeParams(NamedTuple):

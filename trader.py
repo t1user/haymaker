@@ -97,7 +97,7 @@ class Portfolio(ABC):
     @property
     def positions(self):
         positions = self.ib.positions()
-        return {p.contract: p.position for p in positions}
+        return {p.contract.symbol: p.position for p in positions}
 
     def update_value(self):
         tags = self.ib.accountValues()
@@ -192,14 +192,14 @@ class Trader:
         log.debug('Trader initialized')
 
     def register(self, obj: Candle):
-        self.contracts[obj.contract] = obj
+        self.contracts[obj.contract.symbol] = obj
 
     def onEntry(self, obj: Candle, signal: int,
                 atr: float, amount: int) -> None:
         log.debug(
             f'entry signal handled for: {obj.contract.localSymbol} '
             f'{signal} {atr}')
-        self.contracts[obj.contract].atr = atr
+        self.contracts[obj.contract.symbol].atr = atr
         trade = self.trade(obj.contract, signal, amount)
         trade.filledEvent += self.attach_sl
         self.attach_events(trade, 'ENTRY')
@@ -231,19 +231,19 @@ class Trader:
         direction = 1 if reverseAction == 'BUY' else -1
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
-        sl_points = self.contracts[contract].atr
+        sl_points = self.contracts[contract.symbol].atr
         if not self.trailing:
             sl_price = self.round_tick(
                 price + sl_points * direction *
-                self.contracts[contract].sl_atr,
+                self.contracts[contract.symbol].sl_atr,
                 self.contracts[contract].details.minTick)
             log.info(f'STOP LOSS PRICE: {sl_price}')
             order = StopOrder(reverseAction, amount, sl_price,
                               outsideRth=True, tif='GTC')
         else:
             distance = self.round_tick(
-                sl_points * self.contracts[contract].sl_atr,
-                self.contracts[contract].details.minTick)
+                sl_points * self.contracts[contract.symbol].sl_atr,
+                self.contracts[contract.symbol].details.minTick)
             log.info(f'TRAILING STOP LOSS DISTANCE: {distance}')
             order = Order(orderType='TRAIL', action=reverseAction,
                           totalQuantity=amount, auxPrice=distance,
@@ -256,8 +256,8 @@ class Trader:
         open_trades = self.ib.openTrades()
         orders = defaultdict(list)
         for t in open_trades:
-            orders[t.contract].append(t.order)
-        for order in orders[contract]:
+            orders[t.contract.localSymbol].append(t.order)
+        for order in orders[contract.localSymbol]:
             if order.orderType in ('STP', 'TRAIL'):
                 self.ib.cancelOrder(order)
                 log.debug(f'stop loss removed for {contract.localSymbol}')
@@ -314,6 +314,31 @@ class Trader:
 
 def get_contracts(params: List[Params], ib: IB) -> List[Params]:
 
+    def qualify(contract_tuples: List[tuple]):
+        log.debug(f'converting contract tuples: {contract_tuples}')
+        cont_contracts = [ContFuture(*contract)
+                          for contract in contract_tuples]
+        ib.qualifyContracts(*cont_contracts)
+        log.debug(f'contracts qualified: {cont_contracts}')
+        return cont_contracts
+
+    log.debug(f'params received: {params}')
+    if type(params[0].contract) not in (Future, ContFuture):
+        log.debug(f'obtaining contract objects')
+        contracts = [param.contract for param in params]
+    else:
+        contracts = [(param.contract.symbol, param.contract.exchange)
+                     for param in params]
+
+    for param, contract in zip(params, qualify(contracts)):
+        param.contract = contract
+    log.debug(f'get_contracts returning params: {params}')
+    return params
+
+
+"""
+def get_contracts(params: List[Params], ib: IB) -> List[Params]:
+
     def convert(contract_tuples: List[tuple]):
         log.debug(f'converting contract tuples: {contract_tuples}')
         cont_contracts = [ContFuture(*contract)
@@ -324,7 +349,7 @@ def get_contracts(params: List[Params], ib: IB) -> List[Params]:
 
         # Converting to Futures potentially unnecessary
         # But removing below likely breaks the backtester
-        # TODO
+        # Not any more? TODO
         ids = [contract.conId for contract in cont_contracts]
         contracts = [Future(conId=id) for id in ids]
         ib.qualifyContracts(*contracts)
@@ -343,3 +368,4 @@ def get_contracts(params: List[Params], ib: IB) -> List[Params]:
         param.contract = contract
 
     return params
+"""

@@ -50,7 +50,7 @@ class FixedPortfolio(Portfolio):
         #                             price))
 
     def onSignal(self, obj: Candle):
-        position = self.positions.get(obj.contract)
+        position = self.positions.get(obj.contract.symbol)
         if obj.df.filtered_signal[-1] and not position:
             message = (f'entry signal emitted for {obj.contract.localSymbol},'
                        f' signal: {obj.df.filtered_signal[-1]},'
@@ -71,7 +71,7 @@ class FixedPortfolio(Portfolio):
                 log.debug(
                     f'close signal emitted for {obj.contract.localSymbol}')
                 self.closeSignal.emit(obj, obj.df.signal[-1],
-                                      abs(self.positions[obj.contract]))
+                                      abs(self.positions[obj.contract.symbol]))
 
 
 candles = [BreakoutCandle(VolumeStreamer(params.volume,
