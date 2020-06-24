@@ -5,17 +5,18 @@ from logbook import ERROR, INFO, WARNING
 from backtester import IB, DataSourceManager, Market
 from logger import logger
 from trader import Blotter
-from datastore import Store
+from datastore import Store, ArcticStore
 from trader import Manager
 from strategy import candles, FixedPortfolio
 
 
-log = logger(__file__[:-3], ERROR, ERROR)
+log = logger(__file__[:-3])
 
 start_date = '20180601'
 end_date = '20191231'
 cash = 1e+5
-store = Store()
+store = ArcticStore('TRADES_30_secs')
+#store = Store()
 source = DataSourceManager(store, start_date, end_date)
 ib = IB(source)
 
@@ -26,7 +27,7 @@ blotter = Blotter(save_to_file=False, filename='backtest', path='backtests',
                   note=f'_{start_date}_{end_date}')
 manager = Manager(ib, candles, FixedPortfolio, blotter=blotter,
                   freeze_path='notebooks/freeze/backtest')
-market = Market(cash, manager, reboot=True)
+market = Market(cash, manager, reboot=False)
 ib.run()
 blotter.save()
 manager.freeze()

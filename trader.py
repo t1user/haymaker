@@ -48,7 +48,7 @@ class Candle(ABC):
                 f'Not enough data for indicators for instrument'
                 f' {self.contract.localSymbol} '
                 f' index: {df.index[-1]}'
-                f'values: {self.df.iloc[-1].to_dict()}'
+                f' values: {self.df.iloc[-1].to_dict()}'
                 f'{self.df}'), __name__)
             self.process()
 

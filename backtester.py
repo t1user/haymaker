@@ -37,6 +37,7 @@ class IB:
     def __init__(self, datasource_manager: DataSourceManager,
                  ) -> None:
         self.datasource = datasource_manager.get_history
+        self.store = datasource_manager.store
         self.market = Market()
         self._createEvents()
         self.id = count(1, 1)
@@ -199,12 +200,12 @@ class IB:
             log.error(f'cancelOrder: Unknown orderId {order.orderId}')
 
     def run(self):
-        commissions = self.reqCommissions(self.market.objects.keys())
+        commissions = self.reqCommissions(self.market.ib_objects.values())
         self.market.commissions = {cont: comm.commission
                                    for cont, comm in commissions.items()}
         self.market.ticks = {
             cont.symbol: self.reqContractDetails(cont)[0].minTick
-            for cont in self.market.objects.keys()}
+            for cont in self.market.ib_objects.values()}
         log.debug(f'market.object.keys: {self.market.objects.keys()}')
         log.debug(f'properties set on Market: {self.market}')
         log.debug(f'commissions: {self.market.commissions}')
@@ -236,6 +237,7 @@ class DataSourceManager:
 
     def __init__(self, store: Store, start_date: datetime, end_date: datetime):
         self.sources = {}
+        self.store = store
         self.DataSource = DataSource.initialize(store, start_date, end_date)
 
     def _source(self, contract: Contract, durationStr: str,
@@ -338,6 +340,7 @@ class DataSource:
         Datastore accessed only first time df is requested. Df is the basis for
         all other data formats.
         """
+
         if self._df is None:
             self._df = self.store.read(self.contract,
                                        start_date=self._true_start,
@@ -380,9 +383,9 @@ class DataSource:
                    end_date: Union[str, datetime] = datetime.now()
                    ) -> Type[DataSource]:
         """
-        Used outside of backtester module to set class attributes
-        ahead of instantiation. Start and end dates are dates of actual
-        simulation. Instantiation will handle setting appropriate instrument
+        Used to set class attributes ahead of instantiation.
+        Start and end dates are dates of actual simulation.
+        Instantiation will handle setting appropriate instrument
         and deal with any back-data requirements.
         """
         cls.start_date = pd.to_datetime(start_date, format='%Y%m%d')
@@ -398,7 +401,7 @@ class DataSource:
         if isinstance(contract, ContFuture):
             return contract
         elif isinstance(contract, Future):
-            return ContFuture().update(**contract.dict())
+            return ContFuture(**contract.dict()).update(secType='CONTFUT')
 
     def get_BarDataList(self, chunk: pd.DataFrame) -> BarDataList:
         bars = BarDataList()
@@ -468,6 +471,7 @@ class _Market:
     def __init__(self, reboot=False):
         self._reboot = reboot
         self.objects = {}
+        self.ib_objects = {}
         self.prices = {}
         self.trades = []
         self.index = None
@@ -493,7 +497,8 @@ class _Market:
         if len(duplicates) != 0:
             log.error(f'index duplicates: {duplicates}')
         self.date = self.index[0]
-        self.objects[source.contract] = source
+        self.objects[source.contract.tradingClass] = source
+        self.ib_objects[source.contract.tradingClass] = source.contract
 
     def date_generator(self):
         """
@@ -505,7 +510,7 @@ class _Market:
     def run(self) -> None:
         """Interface method, providing entry point to run simulations."""
         log.debug(f'Market initialized with reboot={self._reboot}')
-        log.debug(f'commision levels for instruments: {self.commissions}')
+        log.debug(f'commission levels for instruments: {self.commissions}')
         log.debug(f'minTicks for instruments: {self.ticks}')
 
         try:
@@ -595,7 +600,7 @@ class _Market:
                 price = avgCost
         else:
             log.warning(f'trail order without corresponding position')
-            price = self.prices[trade.contract.symbol].open
+            price = self.prices[trade.contract.tradingClass].open
 
         if trade.order.action.upper() == 'BUY':
             trade.order.trailStopPrice = price + trade.order.auxPrice
@@ -609,14 +614,14 @@ class _Market:
         """Extract 'current' prices for every instrument."""
         for contract, bars in self.objects.items():
             if bars.bar(self.date) is not None:
-                self.prices[contract.symbol] = bars.bar(self.date)
+                self.prices[contract] = bars.bar(self.date)
 
     def run_orders(self) -> None:
         open_trades = [trade for trade in self.trades if not trade.isDone()]
         for trade in open_trades.copy():
             price_or_bool = self.validate_order(
                 trade.order,
-                self.prices[trade.contract.symbol])
+                self.prices[trade.contract.tradingClass])
             if price_or_bool:
                 self.execute_trade(trade, price_or_bool)
 
