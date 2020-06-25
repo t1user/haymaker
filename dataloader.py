@@ -489,7 +489,7 @@ if __name__ == '__main__':
     util.patchAsyncio()
     ib = IB()
     barSize = '30 secs'
-    wts = 'TRADES'
+    wts = 'MIDPOINT'
     # object where data is stored
     store = ArcticStore(f'{wts}_{barSize}')
 

@@ -35,11 +35,13 @@ class IB:
     ib = master_IB()
 
     def __init__(self, datasource_manager: DataSourceManager,
-                 mode: str = 'use_ib', index: int = -1) -> None:
+                 mode: str = 'use_ib', index: int = -1,
+                 field: str = 'symbol') -> None:
         self.datasource = datasource_manager.get_history
         self.store = datasource_manager.store
         self.mode = mode
         self.index = index
+        self.field = field
         self.market = Market()
         self._createEvents()
         self.id = count(1, 1)
@@ -83,7 +85,7 @@ class IB:
                                              contract)
         elif self.mode == 'db_only':
             contfuture_object = self.store.contfuture_contract_object(
-                contract.symbol, self.index)
+                contract.symbol, self.index, self.field)
             meta = self.store.read_metadata(contfuture_object)
             details = ContractDetails(**{'contract': contfuture_object,
                                          'minTick': meta['min_tick'],
@@ -116,7 +118,7 @@ class IB:
                 result.append(contract)
         return result
 
-    def reqCommissions(self, contracts: List) -> Dict:
+    def reqCommissionsFromIB(self, contracts: List) -> Dict:
         order = MarketOrder('BUY', 1)
         commissions = {contract.symbol: self.read_from_file_or_ib(
             'commission',  'whatIfOrder', contract, order)
@@ -133,6 +135,11 @@ class IB:
         with open(f'{self.path}/commissions_by_symbol.pickle', 'rb') as f:
             c = pickle.load(f)
         return {comm: c.get(comm) for comm in commissions}
+
+    def reqCommissionsFromDB(self, contracts: List) -> Dict:
+        return {contract.symbol: self.store.read_metadata(contract
+                                                          )['commission']
+                for contract in contracts}
 
     def reqHistoricalData(self,
                           contract: Contract,
@@ -213,9 +220,19 @@ class IB:
             log.error(f'cancelOrder: Unknown orderId {order.orderId}')
 
     def run(self):
-        commissions = self.reqCommissions(self.market.ib_objects.values())
-        self.market.commissions = {cont: comm.commission
-                                   for cont, comm in commissions.items()}
+        # This is a monkey fucking patch, needs to be redone TODO
+        if self.mode == 'use_ib':
+            commissions = self.reqCommissionsFromIB(
+                self.market.ib_objects.values())
+            commissions = {k: v.commission for k, v in commissions.items()}
+        elif self.mode == 'db_only':
+            commissions = self.reqCommissionsFromDB(
+                self.market.ib_objects.values())
+        else:
+            raise ValueError(f'Mode should be one of "use_ib" or "db_only"')
+
+        self.market.commissions = commissions
+
         self.market.ticks = {
             cont.symbol: self.reqContractDetails(cont)[0].minTick
             for cont in self.market.ib_objects.values()}

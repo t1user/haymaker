@@ -169,7 +169,7 @@ class AbstractBaseStore(ABC):
 
     def date_range(self) -> pd.DataFrame:
         """
-        For every key in library return start date and end date of
+        For every key in datastore return start date and end date of
         available data.
         """
         range = {}
@@ -201,10 +201,19 @@ class AbstractBaseStore(ABC):
         """Return keys that correspond to contfutures"""
         return [c for c in self.keys() if c.endswith('CONTFUT')]
 
-    def _contfutures_dict(self) -> DefaultDict[str, Dict[pd.datetime, str]]:
+    def _contfutures_dict(self, field: str = 'tradingClass'
+                          ) -> DefaultDict[str, Dict[pd.datetime, str]]:
         """
-        Return a dictionary, where:
-              keys: trading class (exchange symbol) for every contfuture
+        Args:
+        ----------
+        field: which metadata field is to be used as a key in returned dict
+
+        Returns:
+        ----------
+        dictionary, where:
+              keys: field (default: 'tradingClass') for every contfuture,
+                    if to be used to lookup future in ib, 'symbol' should be
+                    used
               values: dict of expiry date: symbol sorted ascending by expiry
                       date
         """
@@ -212,7 +221,7 @@ class AbstractBaseStore(ABC):
         for cf in self._contfutures():
             meta = self.read_metadata(cf)
             date = pd.to_datetime(meta['lastTradeDateOrContractMonth'])
-            contfutures[meta['tradingClass']].update({date: cf})
+            contfutures[meta[field]].update({date: cf})
 
         # sorting
         ordered_contfutures = defaultdict(dict)
@@ -224,36 +233,61 @@ class AbstractBaseStore(ABC):
         #    contfutures[k] = sorted(v, key=lambda x: x[0])
         return ordered_contfutures
 
-    def latest_contfutures(self, index: int = -1) -> Dict[str, str]:
+    def latest_contfutures(self, index: int = -1,
+                           field: str = 'tradingClass') -> Dict[str, str]:
         """
         Return a dictionary of contfutures for every tradingClass
-        {tradingClass: symbol}.
-        Index -1 means most recent contract for every tradingClass,
-        -2 second most recent, etc. Oldest available contract if index
-        is lower than the number of available contracts.
-        Relies on self._contfutures_dict.values() sorted ascending.
+        {tradingClass: symbol}. Relies on self._contfutures_dict.values()
+        sorted ascending.
+
+        Args:
+        ----------
+        index: -1 means most recent contract, -2 second most recent, etc.
+                Oldest available contract if index is lower than the number of
+                available contracts.
+        field: which field of metadata dict is to be searched
+
+        Returns:
+        ----------
+        Dictionary of {symbol: datastore key}
+
         """
         if index > 0:
             raise ValueError('index must be <= 0')
 
         _latest_contfutures = {}
-        for c, d in self._contfutures_dict().items():
+        for c, d in self._contfutures_dict(field).items():
             keys_list = list(d.keys())
             if len(keys_list) + index < 0:
                 index = 0
             _latest_contfutures[c] = d[keys_list[index]]
         return _latest_contfutures
 
-    def contfuture(self, symbol: str, start_date: Optional[str] = None,
+    def contfuture(self, symbol: str, index: int = -1,
+                   field: str = 'tradingClass',
+                   start_date: Optional[str] = None,
                    end_date: Optional[str] = None) -> pd.DataFrame:
         """
-        Return data for latest contfuture for given exchange symbol
-        (tradingClass).
+        Return data for latest contfuture for symbol
+
+        Args:
+        ----------
+        symbol: symbol to look-up
+        field (default: 'tradingClass'): which field of metadata dict is to be
+              looked-up
+        index: -1 for latest contract, -2 for second latest, etc.
+        start_date:
+        end_date:
+
+        Returns:
+        ----------
+        DataFrame with price/volume data for given contract.
         """
-        return self.read(self.latest_contfutures()[symbol],
+        return self.read(self.latest_contfutures(index, field)[symbol],
                          start_date, end_date)
 
-    def contfuture_contract_object(self, symbol: str, index: int = -1
+    def contfuture_contract_object(self, symbol: str, index: int = -1,
+                                   field: str = 'tradingClass'
                                    ) -> Optional[Contract]:
         """
         Return ib_insync object for latest contfuture for given exchange symbol
@@ -267,7 +301,8 @@ class AbstractBaseStore(ABC):
         exchange='GLOBEX', currency='USD', localSymbol='NQU0',
         tradingClass='NQ')
         """
-        meta = self.read_metadata(self.latest_contfutures(index).get(symbol))
+        meta = self.read_metadata(
+            self.latest_contfutures(index, field).get(symbol))
         if meta:
             try:
                 return pickle.loads(meta['object'])

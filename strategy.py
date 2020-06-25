@@ -43,7 +43,7 @@ class FixedPortfolio(Portfolio):
     def number_of_contracts(self, contract: Contract, price: float):
         # self.account_value
         d = {'NQ': 1, 'ES': 1, 'GC': 1, 'CL': 1}
-        return d[contract.symbol]
+        return 1
 
         # return int((1e+5 * self.leverage *
         #            params.alloc) / (float(params.contract.multiplier) *

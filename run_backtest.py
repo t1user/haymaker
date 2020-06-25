@@ -10,11 +10,11 @@ from trader import Manager
 from strategy import candles, FixedPortfolio
 
 
-log = logger(__file__[:-3], ERROR, ERROR)
+log = logger(__file__[:-3])
 
 start_date = '20180601'
 end_date = '20191231'
-cash = 1e+5
+cash = 2e+5
 store = ArcticStore('TRADES_30_secs')
 #store = Store()
 source = DataSourceManager(store, start_date, end_date)

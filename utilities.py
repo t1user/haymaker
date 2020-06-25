@@ -1,6 +1,6 @@
 from typing import Optional, Union, List
 
-from ib_insync import *
+from ib_insync import IB, ContFuture, MarketOrder
 from logbook import Logger
 
 from datastore import AbstractBaseStore
@@ -37,8 +37,14 @@ def update_details(ib: IB, store: AbstractBaseStore,
     ib.qualifyContracts(*contracts.values())
     details = {k: ib.reqContractDetails(v)[0] for k, v in contracts.items()}
 
+    # get commission levels
+    order = MarketOrder('BUY', 1)
+    commissions = {k: ib.whatIfOrder(v, order).commission
+                   for k, v in contracts.items()}
+
     for c, d in details.items():
         _d = {'name': d.longName,
               'min_tick': d.minTick,
+              'commission': commissions[c]
               }
         store.write_metadata(c, _d)
