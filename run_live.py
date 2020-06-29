@@ -3,7 +3,7 @@ from ib_insync.ibcontroller import IBC, Watchdog
 
 from handlers import Handlers
 from trader import Manager
-from strategy import candles, FixedPortfolio
+from strategy import candles, FixedPortfolio, AdjustedPortfolio
 from logger import logger
 
 
@@ -37,5 +37,7 @@ class Start(Handlers):
 
 log.debug(f'candles: {candles}')
 ib = IB()
-manager = Manager(ib, candles, FixedPortfolio)
+manager = Manager(ib, candles, AdjustedPortfolio,
+                  contract_fields=['contract', 'micro_contract'],
+                  portfolio_params={'target_vol': .5})
 start = Start(ib, manager)

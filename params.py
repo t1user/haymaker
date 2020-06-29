@@ -1,38 +1,50 @@
 from trader import Params
+from ib_insync import ContFuture
+
 
 nq = Params(
-    contract=('NQ', 'GLOBEX'),
-    periods=[5, 10, 20, 40, 80, 160],
-    ema_fast=5,
-    ema_slow=120,
-    sl_atr=1,
-    atr_periods=180,
+    contract=ContFuture('NQ', 'GLOBEX'),
+    micro_contract=ContFuture('MNQ', 'GLOBEX'),
+    trades_per_day=4.5,
     # avg_periods=60,
-    volume=13000,
-    alloc=0.3)
+    volume=12000,
+)
 
 es = Params(
-    contract=('ES', 'GLOBEX'),
-    periods=[5, 10, 20, 40, 80, 160],
+    contract=ContFuture('ES', 'GLOBEX'),
+    micro_contract=ContFuture('MES', 'GLOBEX'),
+    trades_per_day=.8,
     ema_fast=120,
     ema_slow=320,
     sl_atr=3,
-    atr_periods=180,
     # avg_periods=60,
     volume=43000,
-    alloc=0.3)
+)
 
 gc = Params(
-    contract=('GC', 'NYMEX'),
-    periods=[5, 10, 20, 40, 80, 160],
-    ema_fast=5,
-    ema_slow=120,
-    sl_atr=3,
+    contract=ContFuture('GC', 'NYMEX'),
+    micro_contract=ContFuture('MGC', 'NYMEX'),
+    trades_per_day=3,
+    sl_atr=2,
     atr_periods=180,
     # avg_periods=30,
-    volume=6000,
-    alloc=0.35)
+    volume=5500,
+)
 
+ym = Params(
+    contract=ContFuture('YM', 'ECBOT'),
+    micro_contract=ContFuture('MYM', 'ECBOT'),
+    trades_per_day=1.5,
+    sl_atr=2,
+    # avg_periods=30,
+    volume=8000,
+)
+
+
+contracts = [nq, es, gc, ym]
+
+
+"""
 cl = Params(
     contract=('CL', 'NYMEX'),
     periods=[5, 10, 20, 40, 80, 160],
@@ -44,6 +56,16 @@ cl = Params(
     # volume=11500,
     alloc=0.05)
 
+
+rty = Params(
+    contract=ContFuture('RTY', 'GLOBEX'),
+    micro_contract=ContFuture('M2K', 'GLOBEX'),
+    sl_atr=1,
+    # avg_periods=30,
+    volume=12000,
+)
+
+
 eur = Params(
     contract=('EUR', 'GLOBEX'),
     periods=[5, 10, 20, 40, 80, 160],
@@ -52,7 +74,7 @@ eur = Params(
     sl_atr=2,
     atr_periods=180,
     # avg_periods=30,
-    volume=4000,
+    volume=6000,
     alloc=0.05)
 
 jpy = Params(
@@ -63,33 +85,9 @@ jpy = Params(
     sl_atr=2,
     atr_periods=180,
     # avg_periods=30,
-    volume=2600,
+    volume=5500,
     alloc=0.05)
-
-rty = Params(
-    contract=('RTY', 'GLOBEX'),
-    periods=[5, 10, 20, 40, 80, 160],
-    ema_fast=5,
-    ema_slow=120,
-    sl_atr=2,
-    atr_periods=180,
-    # avg_periods=30,
-    volume=4200,
-    alloc=0.05)
-
-ym = Params(
-    contract=('YM', 'ECBOT'),
-    periods=[5, 10, 20, 40, 80, 160],
-    ema_fast=5,
-    ema_slow=120,
-    sl_atr=2,
-    atr_periods=180,
-    # avg_periods=30,
-    volume=6100,
-    alloc=0.05)
-
-
-contracts = [nq, es, eur, jpy, gc, rty, ym]
+"""
 
 
 """

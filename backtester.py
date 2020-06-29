@@ -43,6 +43,7 @@ class IB:
         self.index = index
         self.field = field
         self.market = Market()
+        self._contracts = []
         self._createEvents()
         self.id = count(1, 1)
 
@@ -116,6 +117,8 @@ class IB:
                     c.exchange = contract.exchange
                 contract.update(**c.dict())
                 result.append(contract)
+        # keep track of all contracts for which details must be obtained
+        self._contracts.extend(result)
         return result
 
     def reqCommissionsFromIB(self, contracts: List) -> Dict:
@@ -131,12 +134,15 @@ class IB:
         commissions.update(self.getCommissionBySymbol(missing_commissions))
         return commissions
 
-    def getCommissionBySymbol(self, commissions: List) -> Dict:
+    def getCommissionBySymbol(self, commissions: List[Contract]
+                              ) -> Dict[str, Any]:
         with open(f'{self.path}/commissions_by_symbol.pickle', 'rb') as f:
             c = pickle.load(f)
         return {comm: c.get(comm) for comm in commissions}
 
-    def reqCommissionsFromDB(self, contracts: List) -> Dict:
+    def reqCommissionsFromDB(self, contracts: List[Contract]
+                             ) -> Dict[str, Any]:
+        log.debug(f'requesting metadata for contracts: {contracts}')
         return {contract.symbol: self.store.read_metadata(contract
                                                           )['commission']
                 for contract in contracts}
@@ -223,11 +229,12 @@ class IB:
         # This is a monkey fucking patch, needs to be redone TODO
         if self.mode == 'use_ib':
             commissions = self.reqCommissionsFromIB(
-                self.market.ib_objects.values())
+                self._contracts)
             commissions = {k: v.commission for k, v in commissions.items()}
         elif self.mode == 'db_only':
+            log.debug(f'About to request commissions for {self._contracts}')
             commissions = self.reqCommissionsFromDB(
-                self.market.ib_objects.values())
+                self._contracts)
         else:
             raise ValueError(f'Mode should be one of "use_ib" or "db_only"')
 
@@ -235,7 +242,7 @@ class IB:
 
         self.market.ticks = {
             cont.symbol: self.reqContractDetails(cont)[0].minTick
-            for cont in self.market.ib_objects.values()}
+            for cont in self._contracts}
         log.debug(f'market.object.keys: {self.market.objects.keys()}')
         log.debug(f'properties set on Market: {self.market}')
         log.debug(f'commissions: {self.market.commissions}')
@@ -527,8 +534,8 @@ class _Market:
         if len(duplicates) != 0:
             log.error(f'index duplicates: {duplicates}')
         self.date = self.index[0]
-        self.objects[source.contract.tradingClass] = source
-        self.ib_objects[source.contract.tradingClass] = source.contract
+        self.objects[source.contract.symbol] = source
+        self.ib_objects[source.contract.symbol] = source.contract
 
     def date_generator(self):
         """
@@ -625,12 +632,12 @@ class _Market:
         if position:
             avgCost = position.avgCost
             if isinstance(trade.contract, (Future, ContFuture)):
-                price = avgCost / int(trade.contract.multiplier)
+                price = avgCost / float(trade.contract.multiplier)
             else:
                 price = avgCost
         else:
             log.warning(f'trail order without corresponding position')
-            price = self.prices[trade.contract.tradingClass].open
+            price = self.prices[trade.contract.symbol].open
 
         if trade.order.action.upper() == 'BUY':
             trade.order.trailStopPrice = price + trade.order.auxPrice
@@ -645,13 +652,16 @@ class _Market:
         for contract, bars in self.objects.items():
             if bars.bar(self.date) is not None:
                 self.prices[contract] = bars.bar(self.date)
+                # dirty hack to include micro contracts
+                # TODO fix
+                self.prices[f'M{contract}'] = bars.bar(self.date)
 
     def run_orders(self) -> None:
         open_trades = [trade for trade in self.trades if not trade.isDone()]
         for trade in open_trades.copy():
             price_or_bool = self.validate_order(
                 trade.order,
-                self.prices[trade.contract.tradingClass])
+                self.prices[trade.contract.symbol])
             if price_or_bool:
                 self.execute_trade(trade, price_or_bool)
 
@@ -823,7 +833,7 @@ class Account:
         position = quantity if side == 'BUY' else -quantity
         avgCost = (price
                    if not isinstance(contract, (Future, ContFuture))
-                   else price * int(contract.multiplier))
+                   else price * float(contract.multiplier))
         return TradeParams(contract, quantity, price, side, position,
                            avgCost)
 
@@ -834,7 +844,7 @@ class Account:
         log.debug(f'positions: {positions}')
         for contract, position in self.positions.items():
             self.mtm[contract] = position.position * (
-                prices[contract].average * int(position.contract.multiplier)
+                prices[contract].average * float(position.contract.multiplier)
                 - position.avgCost)
             log.debug(f'mtm: {contract} {self.mtm[contract]}')
 

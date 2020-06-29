@@ -497,7 +497,7 @@ if __name__ == '__main__':
                             store, wts, barSize, True)
 
     # asyncio.get_event_loop().set_debug(True)
-    Connection(ib, partial(main, holder), watchdog=False)
+    Connection(ib, partial(main, holder), watchdog=True)
 
     log.debug('script finished, about to disconnect')
     ib.disconnect()

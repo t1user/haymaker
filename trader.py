@@ -1,6 +1,6 @@
 from collections import defaultdict
 from functools import partial
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 from abc import ABC, abstractmethod
 from datetime import datetime
 
@@ -77,8 +77,11 @@ class Candle(ABC):
 
 class Portfolio(ABC):
 
-    def __init__(self, ib: IB):
+    def __init__(self, ib: IB, candles: List[Candle],
+                 portfolio_params: Dict[Any, Any]):
         self.ib = ib
+        self.candles = candles
+        self.potfolio_params = portfolio_params
         self.values = {}
         self._createEvents()
         # alloc = round(sum([c.alloc for c in contracts]), 5)
@@ -124,11 +127,14 @@ class Manager:
                  portfolio_class: Portfolio,
                  blotter: Blotter = None, trailing: bool = True,
                  freeze_path: str = 'notebooks/freeze/live',
+                 contract_fields: Union[List[str], str] = 'contract',
+                 portfolio_params: Dict[Any, Any] = {},
                  keep_ref: bool = True):
 
         log.debug(f'Manager args: ib: {ib}, candles: {candles}, '
                   f'portfolio: {portfolio_class}, blotter: {blotter}, '
-                  f'trailing: {trailing}, freeze_path: {freeze_path} '
+                  f'trailing: {trailing}, freeze_path: {freeze_path}, '
+                  f'contract_fields: {contract_fields}, '
                   f'keep_ref: {keep_ref}')
         if blotter is None:
             blotter = Blotter()
@@ -136,19 +142,23 @@ class Manager:
         self.candles = candles
         self.path = freeze_path
         self.trader = Trader(ib, blotter, trailing)
+        self.contract_fields = contract_fields
+        self.portfolio_params = portfolio_params
         self.keep_ref = keep_ref
         log.debug(f'manager object initiated: {self}')
         self.connect_portfolio(portfolio_class)
 
     def connect_portfolio(self, portfolio_class: Portfolio):
-        self.portfolio = portfolio_class(self.ib)
+        self.portfolio = portfolio_class(self.ib, self.candles,
+                                         self.portfolio_params)
         self.portfolio.entrySignal += self.trader.onEntry
         self.portfolio.closeSignal += self.trader.onClose
 
     def onStarted(self, *args, **kwargs):
         log.debug(f'manager onStarted')
         self.trader.reconcile_stops()
-        self.candles = get_contracts(self.candles, self.ib)
+        self.candles = get_contracts(
+            self.candles, self.ib, self.contract_fields)
         # allow backtester to convey simulation time
         now = kwargs.get('now') or datetime.now()
         self.connect_candles(now)
@@ -165,7 +175,11 @@ class Manager:
     def connect_candles(self, now):
         for candle in self.candles:
             # register candles with Trader
-            self.trader.register(candle)
+            for field in self.contract_fields:
+                self.trader.register(getattr(candle, field), candle)
+            log.debug(
+                f'contracts for candle {candle.contract.tradingClass}: '
+                f'{[getattr(candle, field) for field in self.contract_fields]}')
             # make sure no previous events connected
             candle.entrySignal.clear()
             candle.closeSignal.clear()
@@ -191,27 +205,28 @@ class Trader:
         self.contracts = {}
         log.debug('Trader initialized')
 
-    def register(self, obj: Candle):
-        self.contracts[obj.contract.symbol] = obj
+    def register(self, contract: Contract, obj: Candle):
+        log.debug(f'Registering: {contract.symbol}: {obj}')
+        self.contracts[contract.symbol] = obj
 
-    def onEntry(self, obj: Candle, signal: int,
+    def onEntry(self, contract: Contract, signal: int,
                 atr: float, amount: int) -> None:
         log.debug(
-            f'entry signal handled for: {obj.contract.localSymbol} '
-            f'{signal} {atr}')
-        self.contracts[obj.contract.symbol].atr = atr
-        trade = self.trade(obj.contract, signal, amount)
+            f'entry signal handled for: {contract.localSymbol} '
+            f'signal: {signal} atr: {atr}')
+        self.contracts[contract.symbol].atr = atr
+        trade = self.trade(contract, signal, amount)
         trade.filledEvent += self.attach_sl
         self.attach_events(trade, 'ENTRY')
 
-    def onClose(self, obj: Candle, signal: int, amount: int) -> None:
-        message = (f'close signal handled for: {obj.contract.localSymbol}'
+    def onClose(self, contract: Contract, signal: int, amount: int) -> None:
+        message = (f'close signal handled for: {contract.localSymbol}'
                    f' signal: {signal}')
         log.debug(message)
-        self.remove_sl(obj.contract)
+        self.remove_sl(contract)
         # TODO can sl close position before being removed?
         # make sure sl didn't close the position before being removed
-        trade = self.trade(obj.contract, signal, amount)
+        trade = self.trade(contract, signal, amount)
         self.attach_events(trade, 'CLOSE')
 
     def trade(self, contract: Contract, signal: int,
@@ -312,6 +327,21 @@ class Trader:
         self.blotter.log_commission(trade, fill, report, reason)
 
 
+def get_contracts(params: List[Params], ib: IB,
+                  contract_fields: Union[List[str], str] = 'contract'
+                  ) -> List[Params]:
+
+    if isinstance(contract_fields, str):
+        contract_fields = [contract_fields]
+
+    ib.qualifyContracts(*[getattr(param, field) for field in contract_fields
+                          for param in params])
+    log.debug(f'contracts qualified: '
+              f'{[getattr(contract, field) for field in contract_fields for contract in params]}')
+    return params
+
+
+"""
 def get_contracts(params: List[Params], ib: IB) -> List[Params]:
 
     def qualify(contract_tuples: List[tuple]):
@@ -334,7 +364,7 @@ def get_contracts(params: List[Params], ib: IB) -> List[Params]:
         param.contract = contract
     log.debug(f'get_contracts returning params: {params}')
     return params
-
+"""
 
 """
 def get_contracts(params: List[Params], ib: IB) -> List[Params]:

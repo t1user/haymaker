@@ -12,7 +12,7 @@ log = Logger(__name__)
 
 class BarStreamer(ABC):
 
-    durationStr = '15 D'
+    durationStr = '17 D'
     barSizeSetting = '30 secs'
     whatToShow = 'TRADES'
     useRTH = False
@@ -158,7 +158,7 @@ class VolumeStreamer(StreamAggregator):
             self.span = len(self.bars)
         df = util.df(bars)
         # last 5 days
-        volume = df.iloc[-7125:].volume.rolling(avg_periods).sum() \
+        volume = df.iloc[-14100:].volume.rolling(avg_periods).sum() \
             .mean().round()
         log.debug(f'volume: {volume}')
         return volume
