@@ -12,7 +12,7 @@ from strategy import candles, FixedPortfolio, AdjustedPortfolio
 
 log = logger(__file__[:-3], ERROR, ERROR)
 
-start_date = '20180601'
+start_date = '20190101'
 end_date = '20191231'
 cash = 80000
 store = ArcticStore('TRADES_30_secs')
@@ -25,7 +25,7 @@ asyncio.get_event_loop().set_debug(True)
 
 blotter = Blotter(save_to_file=False, filename='backtest', path='backtests',
                   note=f'_{start_date}_{end_date}')
-manager = Manager(ib, candles, AdjustedPortfolio, blotter=blotter,
+manager = Manager(ib, candles, FixedPortfolio, blotter=blotter,
                   freeze_path='notebooks/freeze/backtest',
                   contract_fields=['contract', 'micro_contract'],
                   portfolio_params={'target_vol': .5})

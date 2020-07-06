@@ -81,11 +81,9 @@ class Portfolio(ABC):
                  portfolio_params: Dict[Any, Any]):
         self.ib = ib
         self.candles = candles
-        self.potfolio_params = portfolio_params
+        self.__dict__.update(portfolio_params)
         self.values = {}
         self._createEvents()
-        # alloc = round(sum([c.alloc for c in contracts]), 5)
-        # assert alloc == 1, "Portfolio allocations don't add-up to 1"
 
     def _createEvents(self):
         self.entrySignal = Event('entrySignal')
@@ -336,66 +334,7 @@ def get_contracts(params: List[Params], ib: IB,
 
     ib.qualifyContracts(*[getattr(param, field) for field in contract_fields
                           for param in params])
-    log.debug(f'contracts qualified: '
-              f'{[getattr(contract, field) for field in contract_fields for contract in params]}')
+    contract_list = [getattr(contract, field)
+                     for field in contract_fields for contract in params]
+    log.debug(f'contracts qualified: {contract_list}')
     return params
-
-
-"""
-def get_contracts(params: List[Params], ib: IB) -> List[Params]:
-
-    def qualify(contract_tuples: List[tuple]):
-        log.debug(f'converting contract tuples: {contract_tuples}')
-        cont_contracts = [ContFuture(*contract)
-                          for contract in contract_tuples]
-        ib.qualifyContracts(*cont_contracts)
-        log.debug(f'contracts qualified: {cont_contracts}')
-        return cont_contracts
-
-    log.debug(f'params received: {params}')
-    if type(params[0].contract) not in (Future, ContFuture):
-        log.debug(f'obtaining contract objects')
-        contracts = [param.contract for param in params]
-    else:
-        contracts = [(param.contract.symbol, param.contract.exchange)
-                     for param in params]
-
-    for param, contract in zip(params, qualify(contracts)):
-        param.contract = contract
-    log.debug(f'get_contracts returning params: {params}')
-    return params
-"""
-
-"""
-def get_contracts(params: List[Params], ib: IB) -> List[Params]:
-
-    def convert(contract_tuples: List[tuple]):
-        log.debug(f'converting contract tuples: {contract_tuples}')
-        cont_contracts = [ContFuture(*contract)
-                          for contract in contract_tuples]
-        ib.qualifyContracts(*cont_contracts)
-        log.debug(f'contracts qualified: {cont_contracts}')
-        # log.debug(f'Contracts qualified: {cont_contracts}')
-
-        # Converting to Futures potentially unnecessary
-        # But removing below likely breaks the backtester
-        # Not any more? TODO
-        ids = [contract.conId for contract in cont_contracts]
-        contracts = [Future(conId=id) for id in ids]
-        ib.qualifyContracts(*contracts)
-        log.debug(f'Contracts qualified: {contracts}')
-        return contracts
-
-    log.debug(f'params received: {params}')
-    if type(params[0].contract) not in (Future, ContFuture):
-        log.debug(f'obtaining contract objects')
-        contracts = [param.contract for param in params]
-    else:
-        contracts = [(param.contract.symbol, param.contract.exchange)
-                     for param in params]
-
-    for param, contract in zip(params, convert(contracts)):
-        param.contract = contract
-
-    return params
-"""

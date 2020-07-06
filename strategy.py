@@ -43,13 +43,7 @@ class BreakoutCandle(Candle):
 class FixedPortfolio(Portfolio):
 
     def number_of_contracts(self, contract: Contract, price: float):
-        # self.account_value
-        d = {'NQ': 1, 'ES': 1, 'GC': 1, 'CL': 1}
         return 1
-
-        # return int((1e+5 * self.leverage *
-        #            params.alloc) / (float(params.contract.multiplier) *
-        #                             price))
 
     def onSignal(self, obj: Candle):
         position = self.positions.get(obj.contract.symbol)
@@ -72,7 +66,7 @@ class FixedPortfolio(Portfolio):
             if position * obj.df.signal[-1] < 0:
                 log.debug(
                     f'close signal emitted for {obj.contract.localSymbol}')
-                self.closeSignal.emit(obj, obj.df.signal[-1],
+                self.closeSignal.emit(obj.contract, obj.df.signal[-1],
                                       abs(self.positions[obj.contract.symbol]))
 
 
@@ -82,7 +76,6 @@ class AdjustedPortfolio(Portfolio):
 
     def __init__(self, ib, candles: List[Candle],
                  portfolio_params: Dict[Any, Any]):
-        self.target_vol = portfolio_params['target_vol']
         self.div_multiplier = self.multiplier_dict[len(candles)]
         super().__init__(ib, candles, portfolio_params)
 
@@ -123,7 +116,10 @@ class AdjustedPortfolio(Portfolio):
                 self.entrySignal.emit(
                     obj.contract, obj.df.signal[-1], obj.df.atr[-1],
                     major_contracts)
-            if minor_contracts:
+            # and part because minor contract might have not been stopped out
+            # on previous position, even though major contract was
+            if minor_contracts and not self.positions.get(
+                    obj.micro_contract.symbol):
                 log.debug(f'emitting signal for minor contract: '
                           f'{obj.micro_contract.symbol}: {minor_contracts}')
                 self.entrySignal.emit(

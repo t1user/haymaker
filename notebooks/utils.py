@@ -557,7 +557,11 @@ def true_sharpe(ret):
     """
     r = pd.Series()
     df = pd.DataFrame({'returns': ret})
+    df['cummulative_return'] = (df['returns'] + 1).cumprod()
     df['log_returns'] = np.log(df['returns']+1)
+    r['cummulative_return'] = df['cummulative_return'][-1] - 1
+    r['annual_return'] = ((r['cummulative_return'] + 1)
+                          ** (252 / len(df.index))) - 1
     r['mean'] = df['returns'].mean() * 252
     r['mean_log'] = df['log_returns'].mean() * 252
     r['vol'] = df['returns'].std() * np.sqrt(252)
@@ -565,6 +569,27 @@ def true_sharpe(ret):
     r['sharpe'] = r['mean'] / r['vol']
     r['sharpe_log'] = r['mean_log'] / r['vol_log']
     return r
+
+
+def rolling_sharpe(returns: pd.Series, months: float) -> pd.DataFrame:
+    ret = pd.DataFrame({'returns': returns})
+    ret['mean'] = ret['returns'].rolling(22*months).mean() * 252
+    ret['vol'] = ret['returns'].rolling(22*months).std() * np.sqrt(252)
+    ret['sharpe'] = (ret['mean'] / ret['vol'])
+    ret = ret.dropna()
+    return ret
+
+
+def plot_rolling_sharpe(returns: pd.Series, months: float) -> None:
+    rolling = rolling_sharpe(returns, months)
+    rolling['mean_sharpe'] = rolling['sharpe'].mean()
+    rolling[['sharpe', 'mean_sharpe']].plot(figsize=(20, 5), grid=True)
+
+
+def plot_rolling_vol(returns: pd.Series, months: float) -> None:
+    rolling = rolling_sharpe(returns, months)
+    rolling['mean_vol'] = rolling['vol'].mean()
+    rolling[['vol', 'mean_vol']].plot(figsize=(20, 5), grid=True)
 
 
 def breakout_strategy(contract: pd.DataFrame,

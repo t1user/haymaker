@@ -24,9 +24,10 @@ es = Params(
 gc = Params(
     contract=ContFuture('GC', 'NYMEX'),
     micro_contract=ContFuture('MGC', 'NYMEX'),
-    trades_per_day=3,
+    trades_per_day=2,
+    ema_fast=60,
+    ema_slow=120,
     sl_atr=2,
-    atr_periods=180,
     # avg_periods=30,
     volume=5500,
 )
@@ -35,13 +36,15 @@ ym = Params(
     contract=ContFuture('YM', 'ECBOT'),
     micro_contract=ContFuture('MYM', 'ECBOT'),
     trades_per_day=1.5,
+    ema_fast=60,
+    ema_slow=120,
     sl_atr=2,
     # avg_periods=30,
     volume=8000,
 )
 
 
-contracts = [nq, es, gc, ym]
+contracts = [nq, es, ym, gc]
 
 
 """
