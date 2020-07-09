@@ -21,6 +21,9 @@ log = Logger(__name__)
 def symbol_extractor(func):
     """
     Not in use. TODO.
+
+    Decorator that handles checking if method received Contract object or
+    string. If Contract received convert it to approriate string.
     """
     def wrapper(symbol, *args, **kwargs):
         if isinstance(symbol, Contract):

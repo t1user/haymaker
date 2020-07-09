@@ -9,7 +9,7 @@ from ib_insync import (Order, MarketOrder, StopOrder, IB, Event, Fill,
                        CommissionReport, Trade, ContFuture, Future, Contract)
 
 from objects import Params
-from blotter import Blotter
+from blotter import AbstractBaseBlotter, CsvBlotter
 from logger import Logger, log_assert
 
 
@@ -123,7 +123,7 @@ class Manager:
 
     def __init__(self, ib: IB, candles: List[Candle],
                  portfolio_class: Portfolio,
-                 blotter: Blotter = None, trailing: bool = True,
+                 blotter: AbstractBaseBlotter = None, trailing: bool = True,
                  freeze_path: str = 'notebooks/freeze/live',
                  contract_fields: Union[List[str], str] = 'contract',
                  portfolio_params: Dict[Any, Any] = {},
@@ -135,7 +135,7 @@ class Manager:
                   f'contract_fields: {contract_fields}, '
                   f'keep_ref: {keep_ref}')
         if blotter is None:
-            blotter = Blotter()
+            blotter = CsvBlotter()
         self.ib = ib
         self.candles = candles
         self.path = freeze_path
@@ -196,7 +196,7 @@ class Manager:
 
 class Trader:
 
-    def __init__(self, ib: IB, blotter: Blotter, trailing: bool = True):
+    def __init__(self, ib: IB, blotter: AbstractBaseBlotter, trailing: bool = True):
         self.ib = ib
         self.blotter = blotter
         self.trailing = trailing

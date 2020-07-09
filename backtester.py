@@ -591,7 +591,7 @@ class _Market:
             else:
                 day = self.date.day
 
-    def simulate_data_point(self):
+    def simulate_data_point(self) -> None:
         """
         Emit prices available at given data point.
         Test if any orders should be executed. Mark to market.
@@ -604,12 +604,22 @@ class _Market:
         log.debug(f'current date: {self.date}')
         log.debug(f'current prices: {self.prices}')
 
-    def post_mortem(self):
+    def close_all_positions(self) -> None:
+        """
+        Run after finalizing the simulation to account for mark to market
+        impact of final open positions.
+        TODO
+        """
+        pass
+
+    def post_mortem(self) -> None:
         """Summary after simulation"""
         log.debug(f'Final cash position: {self.account.cash}')
+        log.debug(f'Mark to market on open positions: '
+                  f'{sum(self.account.mtm.values())}')
         log.debug(f'Open positions: {self.account.positions}')
 
-    def reboot(self):
+    def reboot(self) -> None:
         """
         Simulate system reboot. Typically performed at the end of each day.
         All pending events are cancelled on reboot to mimick real app.

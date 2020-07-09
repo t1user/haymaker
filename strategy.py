@@ -92,9 +92,11 @@ class AdjustedPortfolio(Portfolio):
         points_alloc_per_trade = (cash_alloc_per_trade /
                                   float(contract.contract.multiplier))
         log.debug(f'points allocation per trade: {points_alloc_per_trade}')
+        # 1.4 is atr to vol 'translation'
         contracts = (points_alloc_per_trade /
-                     ((contract.df.atr[-1] / 1.5) * contract.sl_atr))
-        log.debug(f'contracts: {contracts}')
+                     ((max(contract.df.atr[-1], contract.min_atr) / 1.4)
+                      * contract.sl_atr))
+        log.debug(f'contracts pre diversification adjustment: {contracts}')
         return round(contracts * self.div_multiplier, 1)
 
     def onSignal(self, obj: Candle):
@@ -116,8 +118,8 @@ class AdjustedPortfolio(Portfolio):
                 self.entrySignal.emit(
                     obj.contract, obj.df.signal[-1], obj.df.atr[-1],
                     major_contracts)
-            # and part because minor contract might have not been stopped out
-            # on previous position, even though major contract was
+            # 'and not' part because minor contract might have not been
+            # stopped out on previous position, even though major contract was
             if minor_contracts and not self.positions.get(
                     obj.micro_contract.symbol):
                 log.debug(f'emitting signal for minor contract: '

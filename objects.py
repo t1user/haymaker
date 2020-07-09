@@ -24,3 +24,4 @@ class Params:
     # candle volume to be calculated as average of x periods
     avg_periods: Optional[int] = None
     volume: Optional[int] = None  # candle volume given directly
+    min_atr: float = 0

@@ -8,6 +8,7 @@ nq = Params(
     trades_per_day=4.5,
     # avg_periods=60,
     volume=12000,
+    min_atr=14,
 )
 
 es = Params(
@@ -19,6 +20,7 @@ es = Params(
     sl_atr=3,
     # avg_periods=60,
     volume=43000,
+    min_atr=5,
 )
 
 gc = Params(
@@ -30,6 +32,7 @@ gc = Params(
     sl_atr=2,
     # avg_periods=30,
     volume=5500,
+    min_atr=1.9,
 )
 
 ym = Params(
@@ -41,6 +44,7 @@ ym = Params(
     sl_atr=2,
     # avg_periods=30,
     volume=8000,
+    min_atr=55,
 )
 
 
