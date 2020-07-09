@@ -10,6 +10,7 @@ from ib_insync import (Order, MarketOrder, StopOrder, IB, Event, Fill,
 
 from objects import Params
 from blotter import AbstractBaseBlotter, CsvBlotter
+from saver import AbstractBaseSaver, PickleSaver
 from logger import Logger, log_assert
 
 
@@ -52,14 +53,11 @@ class Candle(ABC):
                 f'{self.df}'), __name__)
             self.process()
 
-    def save(self, path):
+    def save(self, saver):
         if self.df is not None:
-            self.df.to_pickle(
-                f'{path}/freeze_df_{self.contract.localSymbol}'
-                f'.pickle')
-        self.streamer.all_bars_df.to_pickle(
-            f'{path}/all_bars_df_{self.contract.localSymbol}'
-            f'.pickle')
+            saver.save(self.df, 'candles', self.contract.localSymbol)
+            saver.save(self.streamer.all_bars_df, 'all_bars',
+                       self.contract.localSymbol)
 
     def set_now(self, now):
         self.streamer.now = now
@@ -123,28 +121,28 @@ class Manager:
 
     def __init__(self, ib: IB, candles: List[Candle],
                  portfolio_class: Portfolio,
-                 blotter: AbstractBaseBlotter = None, trailing: bool = True,
-                 freeze_path: str = 'notebooks/freeze/live',
+                 blotter: AbstractBaseBlotter = CsvBlotter(),
+                 saver: AbstractBaseSaver = PickleSaver(),
+                 trailing: bool = True,
                  contract_fields: Union[List[str], str] = 'contract',
                  portfolio_params: Dict[Any, Any] = {},
                  keep_ref: bool = True):
 
         log.debug(f'Manager args: ib: {ib}, candles: {candles}, '
                   f'portfolio: {portfolio_class}, blotter: {blotter}, '
-                  f'trailing: {trailing}, freeze_path: {freeze_path}, '
+                  f'saver: {saver}, '
+                  f'trailing: {trailing} '
                   f'contract_fields: {contract_fields}, '
                   f'keep_ref: {keep_ref}')
-        if blotter is None:
-            blotter = CsvBlotter()
         self.ib = ib
         self.candles = candles
-        self.path = freeze_path
+        self.saver = saver
         self.trader = Trader(ib, blotter, trailing)
         self.contract_fields = contract_fields
         self.portfolio_params = portfolio_params
         self.keep_ref = keep_ref
-        log.debug(f'manager object initiated: {self}')
         self.connect_portfolio(portfolio_class)
+        log.debug(f'manager object initiated: {self}')
 
     def connect_portfolio(self, portfolio_class: Portfolio):
         self.portfolio = portfolio_class(self.ib, self.candles,
@@ -167,7 +165,7 @@ class Manager:
     def freeze(self):
         """Function called periodically to keep record of system data"""
         for candle in self.candles:
-            candle.save(self.path)
+            candle.save(self.saver)
         log.debug('Freezed data saved')
 
     def connect_candles(self, now):
@@ -201,6 +199,7 @@ class Trader:
         self.blotter = blotter
         self.trailing = trailing
         self.contracts = {}
+        self.sl_type = None
         log.debug('Trader initialized')
 
     def register(self, contract: Contract, obj: Candle):
@@ -249,7 +248,7 @@ class Trader:
             sl_price = self.round_tick(
                 price + sl_points * direction *
                 self.contracts[contract.symbol].sl_atr,
-                self.contracts[contract].details.minTick)
+                self.contracts[contract.symbol].details.minTick)
             log.info(f'STOP LOSS PRICE: {sl_price}')
             order = StopOrder(reverseAction, amount, sl_price,
                               outsideRth=True, tif='GTC')
@@ -264,6 +263,24 @@ class Trader:
         trade = self.ib.placeOrder(contract, order)
         log.debug(f'stop loss attached for {trade.contract.localSymbol}')
         self.attach_events(trade, 'STOP-LOSS')
+        if self.sl_type == 'trailingFixed':
+            sl = trade.order
+            sl.adjustedOrderType = 'STP'
+            sl.adjustedStopPrice = (
+                price + direction * 2 *
+                self.contracts[contract.symbol].details.minTick)
+            sl.triggerPrice = self.round_tick(
+                sl.adjustedStopPrice + sl_points * direction *
+                self.contracts[contract.symbol].sl_atr,
+                self.contracts[contract.symbol].details.minTick)
+            self.ib.placeOrder(contract, sl)
+            log.debug(f'stop loss for {contract.localSymbol} will be '
+                      f'fixed at {sl.triggerPrice}')
+            trade.modifyEvent += self.report_order_modification
+
+    def report_order_modification(self, trade):
+        log.info(f'Stop loss for {trade.contract.localSymbol} modified to '
+                 f'fixed price @{trade.order.auxPrice}')
 
     def remove_sl(self, contract: Contract) -> None:
         open_trades = self.ib.openTrades()

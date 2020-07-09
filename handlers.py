@@ -109,7 +109,8 @@ class IBHandlers:
 
     def onCommissionReport(self, trade: Trade, fill: Fill,
                            report: CommissionReport):
-        log.debug(f'Commission report: {report}')
+        #log.debug(f'Commission report: {report}')
+        pass
 
     def onUpdatePortfolio(self, item: PortfolioItem):
         realized = round(item.realizedPNL, 2)

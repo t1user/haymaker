@@ -1,4 +1,7 @@
 from typing import Optional, Union, List
+from pathlib import Path
+from os import makedirs, path
+
 
 from ib_insync import IB, ContFuture, MarketOrder
 from logbook import Logger
@@ -48,3 +51,16 @@ def update_details(ib: IB, store: AbstractBaseStore,
               'commission': commissions[c]
               }
         store.write_metadata(c, _d)
+
+
+def default_path(*dirnames: str) -> str:
+    """
+    Return path created by joining  ~/ib_data/ and recursively all dirnames
+    If the path doesn't exist create it.
+    Should also work in Windows but not tested.
+    """
+    home = Path.home()
+    dirnames_str = ' / '.join(dirnames)
+    if not Path.exists(home / 'ib_data' / dirnames_str):
+        makedirs(home.joinpath('ib_data', *dirnames))
+    return path.join(str(home), 'ib_data', *dirnames)

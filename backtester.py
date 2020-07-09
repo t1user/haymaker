@@ -614,10 +614,10 @@ class _Market:
 
     def post_mortem(self) -> None:
         """Summary after simulation"""
-        log.debug(f'Final cash position: {self.account.cash}')
-        log.debug(f'Mark to market on open positions: '
-                  f'{sum(self.account.mtm.values())}')
-        log.debug(f'Open positions: {self.account.positions}')
+        log.info(f'Final cash position: {self.account.cash}')
+        log.info(f'Mark to market on open positions: '
+                 f'{sum(self.account.mtm.values())}')
+        log.info(f'Open positions: {self.account.positions}')
 
     def reboot(self) -> None:
         """
@@ -646,7 +646,7 @@ class _Market:
             else:
                 price = avgCost
         else:
-            log.warning(f'trail order without corresponding position')
+            log.error(f'trail order without corresponding position')
             price = self.prices[trade.contract.symbol].open
 
         if trade.order.action.upper() == 'BUY':

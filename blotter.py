@@ -1,7 +1,7 @@
 import csv
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from ib_insync.order import Trade
 from ib_insync.objects import Fill, CommissionReport
@@ -11,6 +11,8 @@ from pymongo import MongoClient
 import motor.motor_asyncio
 from arctic import TICK_STORE, Arctic
 import pandas as pd
+
+from utilities import default_path
 
 log = Logger(__name__)
 
@@ -114,7 +116,9 @@ class CsvBlotter(AbstractBaseBlotter):
     fieldnames = None
 
     def __init__(self, save_to_file: bool = True, filename: str = None,
-                 path: str = 'blotter', note: str = ''):
+                 path: Optional[str] = None, note: str = ''):
+        if path is None:
+            path = default_path('blotter')
         if filename is None:
             filename = __file__.split('/')[-1][:-3]
         self.file = (f'{path}/{filename}_'

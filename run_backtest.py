@@ -6,6 +6,7 @@ from backtester import IB, DataSourceManager, Market
 from logger import logger
 from trader import CsvBlotter
 from datastore import Store, ArcticStore
+from saver import PickleSaver
 from trader import Manager
 from strategy import candles, FixedPortfolio, AdjustedPortfolio
 
@@ -25,8 +26,9 @@ asyncio.get_event_loop().set_debug(True)
 
 blotter = CsvBlotter(save_to_file=False, filename='backtest', path='backtests',
                      note=f'_{start_date}_{end_date}')
+saver = PickleSaver('notebooks/freeze/backtest')
 manager = Manager(ib, candles, AdjustedPortfolio, blotter=blotter,
-                  freeze_path='notebooks/freeze/backtest',
+                  saver=saver, trailing=False,
                   contract_fields=['contract', 'micro_contract'],
                   portfolio_params={'target_vol': .5})
 market = Market(cash, manager, reboot=False)
