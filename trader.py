@@ -123,7 +123,7 @@ class Manager:
                  portfolio_class: Portfolio,
                  blotter: AbstractBaseBlotter = CsvBlotter(),
                  saver: AbstractBaseSaver = PickleSaver(),
-                 trailing: bool = True,
+                 sl_type: str = 'trailing',  # 'trailing', 'fixed', 'trailingFixed'
                  contract_fields: Union[List[str], str] = 'contract',
                  portfolio_params: Dict[Any, Any] = {},
                  keep_ref: bool = True):
@@ -131,13 +131,13 @@ class Manager:
         log.debug(f'Manager args: ib: {ib}, candles: {candles}, '
                   f'portfolio: {portfolio_class}, blotter: {blotter}, '
                   f'saver: {saver}, '
-                  f'trailing: {trailing} '
+                  f'sl_type: {sl_type} '
                   f'contract_fields: {contract_fields}, '
                   f'keep_ref: {keep_ref}')
         self.ib = ib
         self.candles = candles
         self.saver = saver
-        self.trader = Trader(ib, blotter, trailing)
+        self.trader = Trader(ib, blotter, sl_type)
         self.contract_fields = contract_fields
         self.portfolio_params = portfolio_params
         self.keep_ref = keep_ref
@@ -194,12 +194,13 @@ class Manager:
 
 class Trader:
 
-    def __init__(self, ib: IB, blotter: AbstractBaseBlotter, trailing: bool = True):
+    # sl_type: Literal['fixed', 'trailing', 'trailingFixed']
+    def __init__(self, ib: IB, blotter: AbstractBaseBlotter,
+                 sl_type: str = 'trailing'):
         self.ib = ib
         self.blotter = blotter
-        self.trailing = trailing
         self.contracts = {}
-        self.sl_type = None
+        self.sl_type = sl_type
         log.debug('Trader initialized')
 
     def register(self, contract: Contract, obj: Candle):
@@ -244,7 +245,7 @@ class Trader:
         amount = trade.orderStatus.filled
         price = trade.orderStatus.avgFillPrice
         sl_points = self.contracts[contract.symbol].atr
-        if not self.trailing:
+        if self.sl_type == 'fixed':
             sl_price = self.round_tick(
                 price + sl_points * direction *
                 self.contracts[contract.symbol].sl_atr,
@@ -252,7 +253,7 @@ class Trader:
             log.info(f'STOP LOSS PRICE: {sl_price}')
             order = StopOrder(reverseAction, amount, sl_price,
                               outsideRth=True, tif='GTC')
-        else:
+        elif self.sl_type == 'trailing' or self.sl_type == 'trailingFixed':
             distance = self.round_tick(
                 sl_points * self.contracts[contract.symbol].sl_atr,
                 self.contracts[contract.symbol].details.minTick)
@@ -265,14 +266,14 @@ class Trader:
         self.attach_events(trade, 'STOP-LOSS')
         if self.sl_type == 'trailingFixed':
             sl = trade.order
+            log.debug(sl)
             sl.adjustedOrderType = 'STP'
             sl.adjustedStopPrice = (
-                price + direction * 2 *
+                price - direction * 2 *
                 self.contracts[contract.symbol].details.minTick)
-            sl.triggerPrice = self.round_tick(
-                sl.adjustedStopPrice + sl_points * direction *
-                self.contracts[contract.symbol].sl_atr,
-                self.contracts[contract.symbol].details.minTick)
+            log.debug(f'adjusted stop price: {sl.adjustedStopPrice}')
+            log.debug(f'DISTANCE: {distance}')
+            sl.triggerPrice = sl.adjustedStopPrice - direction * distance
             self.ib.placeOrder(contract, sl)
             log.debug(f'stop loss for {contract.localSymbol} will be '
                       f'fixed at {sl.triggerPrice}')

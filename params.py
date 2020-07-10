@@ -30,7 +30,7 @@ gc = Params(
     ema_fast=60,
     ema_slow=120,
     sl_atr=2,
-    # avg_periods=30,
+    # avg_periods=60,
     volume=5500,
     min_atr=1.9,
 )
@@ -42,7 +42,7 @@ ym = Params(
     ema_fast=60,
     ema_slow=120,
     sl_atr=2,
-    # avg_periods=30,
+    # avg_periods=60,
     volume=8000,
     min_atr=55,
 )

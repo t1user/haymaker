@@ -2,7 +2,7 @@ from ib_insync import IB, util
 from ib_insync.ibcontroller import IBC, Watchdog
 
 from handlers import Handlers
-from savers import PickleSaver
+from saver import PickleSaver
 from trader import Manager
 from strategy import candles, FixedPortfolio, AdjustedPortfolio
 from logger import logger
@@ -40,7 +40,7 @@ log.debug(f'candles: {candles}')
 ib = IB()
 saver = PickleSaver('notebooks/freeze/live')
 manager = Manager(ib, candles, AdjustedPortfolio,
-                  saver=saver,
+                  saver=saver, sl_type='trailingFixed',
                   contract_fields=['contract', 'micro_contract'],
                   portfolio_params={'target_vol': .5})
 start = Start(ib, manager)

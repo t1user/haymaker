@@ -5,13 +5,10 @@ import numpy as np
 from ib_insync import Contract
 from typing import List, Dict, Any
 
-
 from streamers import VolumeStreamer
 from trader import Candle, Portfolio
 from params import contracts
 from indicators import get_ATR, get_signals
-from objects import Params
-
 
 log = Logger(__name__)
 
@@ -20,9 +17,9 @@ class BreakoutCandle(Candle):
 
     def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df['ema_fast'] = df.price.ewm(
-            span=self.ema_fast, min_periods=int(self.ema_fast*.8)).mean()
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
         df['ema_slow'] = df.price.ewm(
-            span=self.ema_slow, min_periods=int(self.ema_slow*.8)).mean()
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
         df['atr'] = get_ATR(df, self.atr_periods)
         df['signal'] = get_signals(df.price, self.periods)
         # df['signal'] = round(get_signals(
@@ -97,6 +94,9 @@ class AdjustedPortfolio(Portfolio):
                      ((max(contract.df.atr[-1], contract.min_atr) / 1.4)
                       * contract.sl_atr))
         log.debug(f'contracts pre diversification adjustment: {contracts}')
+        log.debug(f'div multiplier: {self.div_multiplier}')
+        log.debug(
+            f'contracts post div multiplier: {contracts * self.div_multiplier}')
         return round(contracts * self.div_multiplier, 1)
 
     def onSignal(self, obj: Candle):

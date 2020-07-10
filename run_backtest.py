@@ -28,10 +28,10 @@ blotter = CsvBlotter(save_to_file=False, filename='backtest', path='backtests',
                      note=f'_{start_date}_{end_date}')
 saver = PickleSaver('notebooks/freeze/backtest')
 manager = Manager(ib, candles, AdjustedPortfolio, blotter=blotter,
-                  saver=saver, trailing=False,
+                  saver=saver,
                   contract_fields=['contract', 'micro_contract'],
                   portfolio_params={'target_vol': .5})
-market = Market(cash, manager, reboot=False)
+market = Market(cash, manager, reboot=True)
 ib.run()
 blotter.save()
 manager.freeze()

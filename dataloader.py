@@ -488,13 +488,13 @@ async def main(holder: ContractHolder):
 if __name__ == '__main__':
     util.patchAsyncio()
     ib = IB()
-    barSize = '30 secs'
-    wts = 'MIDPOINT'
+    barSize = '1 day'
+    wts = 'TRADES'
     # object where data is stored
     store = ArcticStore(f'{wts}_{barSize}')
 
     holder = ContractHolder(ib, 'contracts.csv',
-                            store, wts, barSize, True)
+                            store, wts, barSize, False)
 
     # asyncio.get_event_loop().set_debug(True)
     Connection(ib, partial(main, holder), watchdog=False)
