@@ -14,7 +14,7 @@ class Params:
     contract: Tuple[str]  # contract given as tuple of params given to Future()
     micro_contract: Tuple[str]  # (1/10) contract corresponding to contract
     # periods for breakout calculation
-    periods: Tuple[int] = (5, 10, 20, 40, 80, 160)
+    periods: int = 40
     ema_fast: int = 5  # number of periods for moving average filter
     ema_slow: int = 120  # number of periods for moving average filter
     sl_atr: int = 1  # stop loss in ATRs

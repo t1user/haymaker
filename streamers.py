@@ -100,17 +100,15 @@ class StreamAggregator(BarStreamer):
         df = util.df(self.new_bars)
         df.date = df.date.astype('datetime64')
         df.set_index('date', inplace=True)
-        # df['backfill'] = True
-        # df['volume_weighted'] = (df.close + df.open)/2 * df.volume
-        # df['volume_weighted'] = df.close * df.volume
-        # df['volume_weighted'] = df.average * df.volume
-        # weighted_price = df.volume_weighted.sum() / df.volume.sum()
+        df['volume_weighted'] = df.average * df.volume
+        weighted_price = df.volume_weighted.sum() / df.volume.sum()
         self.newCandle.emit({'backfill': self.backfill,
                              'date': df.index[-1],
                              'open': df.open[0],
                              'high': df.high.max(),
                              'low': df.low.min(),
                              'close': df.close[-1],
+                             'weighted_price': weighted_price,
                              # 'price': weighted_price,
                              'price': df.close[-1],
                              'volume': df.volume.sum()})

@@ -602,7 +602,9 @@ class _Market:
         self.account.mark_to_market(self.prices)
         self.run_orders()
         log.debug(f'current date: {self.date}')
-        log.debug(f'current prices: {self.prices}')
+        for k, v in self.prices.items():
+            log.debug(f'current price: {k}: open: {v.open}, high: {v.high}, '
+                      f'low: {v.low}, close: {v.close}')
 
     def close_all_positions(self) -> None:
         """
@@ -669,11 +671,35 @@ class _Market:
     def run_orders(self) -> None:
         open_trades = [trade for trade in self.trades if not trade.isDone()]
         for trade in open_trades.copy():
+            self.validate_order_trigger(
+                trade.order, self.prices[trade.contract.symbol])
             price_or_bool = self.validate_order(
                 trade.order,
                 self.prices[trade.contract.symbol])
             if price_or_bool:
                 self.execute_trade(trade, price_or_bool)
+
+    @staticmethod
+    def validate_order_trigger(order: Order, price: BarData) -> None:
+        """
+        Verify if adjustable order triggered modification. If so
+        modify order in place.
+        """
+        # order doesn't have a trigger price (default value)
+        if order.triggerPrice == 1.7976931348623157e+308:
+            log.debug('validate_order_trigger returned')
+            return
+
+        if (
+            (order.action.upper() == 'BUY' and order.triggerPrice >= price.low)
+                or
+            (order.action.upper() == 'SELL' and order.triggerPrice <= price.high)
+        ):
+            order.orderType = order.adjustedOrderType
+            order.auxPrice = order.adjustedStopPrice
+            # prevent future trigger verification
+            order.triggerPrice = 1.7976931348623157e+308
+            log.debug(f'Order adjusted: {order}')
 
     def validate_order(self, order: Order, price: BarData
                        ) -> Union[bool, float]:
@@ -748,9 +774,9 @@ class _Market:
     @staticmethod
     def validate_limit(order: Order, price: BarData) -> Union[bool, float]:
         price = (price.open, price.high, price.low, price.close)
-        if order.action.upper() == 'BUY' and order.lmtPrice <= min(price):
+        if order.action.upper() == 'BUY' and order.lmtPrice >= min(price):
             return order.lmtPrice
-        if order.action.upper() == 'SELL' and order.lmtPrice >= max(price):
+        if order.action.upper() == 'SELL' and order.lmtPrice <= max(price):
             return order.lmtPrice
         return False
 

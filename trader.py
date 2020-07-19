@@ -1,120 +1,20 @@
 from collections import defaultdict
 from functools import partial
 from typing import List, Dict, Any, Union
-from abc import ABC, abstractmethod
 from datetime import datetime
 
-import pandas as pd
-from ib_insync import (Order, MarketOrder, StopOrder, IB, Event, Fill,
-                       CommissionReport, Trade, ContFuture, Future, Contract)
+from ib_insync import (Order, MarketOrder, StopOrder, IB, Fill,
+                       CommissionReport, Trade, Contract)
 
+from portfolio import Portfolio
+from candle import Candle
 from objects import Params
 from blotter import AbstractBaseBlotter, CsvBlotter
 from saver import AbstractBaseSaver, PickleSaver
-from logger import Logger, log_assert
+from logger import Logger
 
 
 log = Logger(__name__)
-
-
-class Candle(ABC):
-
-    def __init__(self, streamer, **kwargs):
-        self.__dict__.update(kwargs)
-        self.streamer = streamer
-        self.streamer.newCandle.connect(self.append, keep_ref=True)
-        self.df = None
-        log.debug(f'candle init for contract: {kwargs}')
-        self.candles = []
-        self._createEvents()
-
-    def _createEvents(self):
-        self.signal = Event('signal')
-        self.entrySignal = Event('entrySignal')
-        self.closeSignal = Event('closeSignal')
-
-    def __call__(self, ib: IB):
-        log.debug(
-            f'Candle {self.contract.localSymbol} initializing data stream...')
-        self.details = ib.reqContractDetails(self.contract)[0]
-        self.streamer(ib, self.contract)
-
-    def append(self, candle: Dict[str, Any]):
-        self.candles.append(candle)
-        if not candle['backfill']:
-            df = pd.DataFrame(self.candles)
-            df.set_index('date', inplace=True)
-            self.df = self.get_indicators(df)
-            log_assert(not self.df.iloc[-1].isna().any(), (
-                f'Not enough data for indicators for instrument'
-                f' {self.contract.localSymbol} '
-                f' index: {df.index[-1]}'
-                f' values: {self.df.iloc[-1].to_dict()}'
-                f'{self.df}'), __name__)
-            self.process()
-
-    def save(self, saver):
-        if self.df is not None:
-            saver.save(self.df, 'candles', self.contract.localSymbol)
-            saver.save(self.streamer.all_bars_df, 'all_bars',
-                       self.contract.localSymbol)
-
-    def set_now(self, now):
-        self.streamer.now = now
-
-    @abstractmethod
-    def get_indicators(self, df):
-        return df
-
-    @abstractmethod
-    def process(self):
-        self.signal.emit(self)
-        self.entrySignal.emit(self)
-        self.closeSignal.emit(self)
-
-
-class Portfolio(ABC):
-
-    def __init__(self, ib: IB, candles: List[Candle],
-                 portfolio_params: Dict[Any, Any]):
-        self.ib = ib
-        self.candles = candles
-        self.__dict__.update(portfolio_params)
-        self.values = {}
-        self._createEvents()
-
-    def _createEvents(self):
-        self.entrySignal = Event('entrySignal')
-        self.closeSignal = Event('closeSignal')
-
-    @property
-    def account_value(self):
-        self.update_value()
-        return self.values['TotalCashBalance'] + min(
-            self.values['UnrealizedPnL'], 0)
-
-    @property
-    def positions(self):
-        positions = self.ib.positions()
-        return {p.contract.symbol: p.position for p in positions}
-
-    def update_value(self):
-        tags = self.ib.accountValues()
-        for item in tags:
-            if item.currency == 'USD':
-                try:
-                    self.values[item.tag] = float(item.value)
-                except ValueError:
-                    pass
-
-    def onEntry(self, signal):
-        raise NotImplementedError
-
-    def onClose(self, signal):
-        raise NotImplementedError
-
-    def onSignal(self, signal):
-        raise NotImplementedError
 
 
 class Manager:
@@ -269,19 +169,17 @@ class Trader:
             log.debug(sl)
             sl.adjustedOrderType = 'STP'
             sl.adjustedStopPrice = (
-                price - direction * 2 *
-                self.contracts[contract.symbol].details.minTick)
+                price - direction * 2 * distance)
+            # self.contracts[contract.symbol].details.minTick)
             log.debug(f'adjusted stop price: {sl.adjustedStopPrice}')
             log.debug(f'DISTANCE: {distance}')
             sl.triggerPrice = sl.adjustedStopPrice - direction * distance
             self.ib.placeOrder(contract, sl)
             log.debug(f'stop loss for {contract.localSymbol} will be '
                       f'fixed at {sl.triggerPrice}')
-            trade.modifyEvent += self.report_order_modification
 
     def report_order_modification(self, trade):
-        log.info(f'Stop loss for {trade.contract.localSymbol} modified to '
-                 f'fixed price @{trade.order.auxPrice}')
+        log.debug(f'Order modified: {trade.order}')
 
     def remove_sl(self, contract: Contract) -> None:
         open_trades = self.ib.openTrades()
@@ -321,6 +219,7 @@ class Trader:
         trade.filledEvent += report_trade
         trade.cancelledEvent += self.report_cancel
         trade.commissionReportEvent += report_commission
+        trade.modifyEvent += self.report_order_modification
         log.debug(f'Reporting events attached for {trade.contract.localSymbol} '
                   f'{trade.order.action} {trade.order.totalQuantity} '
                   f'{trade.order.orderType}')

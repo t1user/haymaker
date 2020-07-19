@@ -1,17 +1,53 @@
+from functools import partial
+from typing import List, Dict, Callable
+
 import pandas as pd
 import numpy as np
-from functools import partial
 
 
-def get_ATR(data, periods):
+def atr(data: pd.DataFrame, periods: List[int], exp: bool = True) -> pd.Series:
+    """
+    Return Series with ATRs.
+
+    Args:
+    ---------
+    data: must have columns: 'high', 'low', 'close'
+    periods: lookback period
+    exp: True - expotential mean, False - simple rolling mean 
+    """
     TR = pd.DataFrame({'A': (data['high'] - data['low']),
                        'B': (data['high'] - data['close']).abs(),
                        'C': (data['low'] - data['close']).abs()
                        })
     TR['TR'] = TR.max(axis=1)
-    TR['ATR'] = TR['TR'].ewm(span=periods).mean()
-    #TR['ATR'] = TR['TR'].rolling(periods).mean()
+    if exp:
+        TR['ATR'] = TR['TR'].ewm(span=periods).mean()
+    else:
+        TR['ATR'] = TR['TR'].rolling(periods).mean()
     return TR.ATR
+
+
+# depricated function name
+get_ATR = atr
+
+
+def min_max_signal(data: pd.Series, period: int) -> pd.Series:
+    """
+    Return Series of signals (one of: -1, 0 or 1) dependig on whether
+    price broke out above max (1) or below min (-1) over last period
+    observations.
+
+    Args:
+    ---------
+    data: price Series
+    period: lookback period
+    """
+    df = pd.DataFrame({
+        'max': ((data - data.shift(1).rolling(period).max()) > 0) * 1,
+        'min': ((data.shift(1).rolling(period).min() - data) > 0) * 1,
+    })
+    df['signal'] = df['max'] - df['min']
+    return df['signal']
 
 
 def get_std(data, periods):
@@ -26,12 +62,23 @@ def get_min_max(data, period):
     })
 
 
-def majority_function(data):
+def majority_function(data: pd.DataFrame) -> pd.Series:
+    """
+    Return a reduced Series where every row = True, if majority of values in
+    input row is True, else False.
+
+    Args:
+    ---------
+    data: every row contains bool values, on which majority function is applied
+    """
     return (
         0.5 + ((data.sum(axis=1) - 0.5) / data.count(axis=1))).apply(np.floor)
 
 
-def get_min_max_df(data, periods, func=get_min_max):
+def get_min_max_df(data: pd.DataFrame, periods: [List[int]],
+                   func: Callable[[pd.DataFrame, int],
+                                  pd.DataFrame] = get_min_max
+                   ) -> Dict[str, pd.DataFrame]:
     min_max_func = partial(func, data)
     mins = pd.DataFrame()
     maxs = pd.DataFrame()
@@ -43,10 +90,55 @@ def get_min_max_df(data, periods, func=get_min_max):
             'max': maxs}
 
 
-def get_signals(data, periods, func=get_min_max_df):
-    min_max = func(data, periods)
-    # return min_max['min']
-
+def get_signals(data: pd.Series, periods: List[int]) -> pd.DataFrame:
+    min_max = get_min_max_df(data, periods)
     return pd.DataFrame({
-        'signal': majority_function(min_max['max']) - majority_function(min_max['min'])
+        'signal': majority_function(
+            min_max['max']) - majority_function(min_max['min'])
     })
+
+
+def rsi(price: pd.Series, lookback: int) -> pd.Series:
+    df = pd.DataFrame({'price': price})
+    df['change'] = df['price'].diff().fillna(0)
+    df['up'] = ((df['change'] > 0) * df['change']).rolling(lookback).sum()
+    df['down'] = ((df['change'] < 0) * df['change'].abs()
+                  ).rolling(lookback).sum()
+    df['rs'] = df['up'] / df['down']
+    df['rsi'] = (100 - (100/(1+df['rs'])))
+    return df['rsi']
+
+
+def modified_rsi(rsi: pd.Series) -> pd.Series:
+    """
+    Rescale passed rsi to -100 to 100.
+    """
+    return 2*(rsi - 50)
+
+
+def carver(price: pd.Series, lookback: int) -> pd.Series:
+    """
+    Return modified version of price placing it on a min-max scale
+    over recent lookback periods expressed on scale -100 to 100
+    (modified stochastic oscilator, after Rob Carver:
+    https://qoppac.blogspot.com/2016/05/a-simple-breakout-trading-rule.html).
+    """
+    df = pd.DataFrame({'price': price})
+    df['max'] = df['price'].rolling(lookback).max()
+    df['min'] = df['price'].rolling(lookback).min()
+    df['mid'] = df[['min', 'max']].mean(axis=1)
+    df['carver'] = 200*((df['price'] - df['mid']) / (df['max'] - df['min']))
+    return df['carver']
+
+
+def range_crosser(ind: pd.Series, threshold: float) -> pd.Series:
+    """
+    For an ind like rsi, returns signal (-1, 0, 1) when ind crosses
+    threshold from above or -threshold from below.
+    """
+    df = pd.DataFrame({'ind': ind})
+    df['inside'] = (df['ind'].abs() < threshold)
+    df['ss'] = ~(df['inside'].shift().fillna(False)) & df['inside']
+    df['s'] = np.sign(df['ind'].diff())
+    df['signal'] = df['ss'] * df['s']
+    return df['signal']

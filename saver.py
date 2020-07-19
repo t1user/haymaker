@@ -29,12 +29,13 @@ class AbstractBaseSaver(ABC):
         passed by save method, timestamp and note associated with particular
         trading session/simulation are being added.
         """
+        contract_str = contract_str.replace('   ', '_').replace(' ', '_')
         return f'{what}_{self.timestamp}_{contract_str}{self.note}'
 
     @abstractmethod
     def save(self, df: pd.DataFrame, what: str, contract_str: str) -> None:
         """
-        Override existing data in store with df.
+        Overwrite existing data in store with df.
 
         Args:
         ---------
@@ -87,7 +88,7 @@ class ArcticSaver(AbstractBaseSaver):
 
     def save(self, df: pd.DataFrame, what: str, contract_str: str,
              note: str = '') -> None:
-        self.store.write(self.name_str(what, contract_str))
+        self.store.write(self.name_str(what, contract_str), df)
 
     def __str__(self):
         return (f'ArcticSaver(host={self.host}, library={self.library}, '

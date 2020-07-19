@@ -2,9 +2,11 @@ from ib_insync import IB, util
 from ib_insync.ibcontroller import IBC, Watchdog
 
 from handlers import Handlers
-from saver import PickleSaver
+from saver import ArcticSaver
+from blotter import MongoBlotter
 from trader import Manager
-from strategy import candles, FixedPortfolio, AdjustedPortfolio
+from strategy import candles
+from portfolio import AdjustedPortfolio
 from logger import logger
 
 
@@ -38,9 +40,10 @@ class Start(Handlers):
 
 log.debug(f'candles: {candles}')
 ib = IB()
-saver = PickleSaver('notebooks/freeze/live')
+blotter = MongoBlotter()
+saver = ArcticSaver()
 manager = Manager(ib, candles, AdjustedPortfolio,
-                  saver=saver, sl_type='trailingFixed',
+                  saver=saver, blotter=blotter,
                   contract_fields=['contract', 'micro_contract'],
                   portfolio_params={'target_vol': .5})
 start = Start(ib, manager)
