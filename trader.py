@@ -1,14 +1,13 @@
 from collections import defaultdict
 from functools import partial
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Type
 from datetime import datetime
 
 from ib_insync import (Order, MarketOrder, StopOrder, IB, Fill,
-                       CommissionReport, Trade, Contract)
+                       CommissionReport, Trade, Contract, TagValue)
 
 from portfolio import Portfolio
 from candle import Candle
-from objects import Params
 from blotter import AbstractBaseBlotter, CsvBlotter
 from saver import AbstractBaseSaver, PickleSaver
 from logger import Logger
@@ -130,7 +129,8 @@ class Trader:
     def trade(self, contract: Contract, signal: int,
               amount: int) -> Trade:
         direction = {1: 'BUY', -1: 'SELL'}
-        order = MarketOrder(direction[signal], amount)
+        order = MarketOrder(direction[signal], amount, algoStrategy='Adaptive',
+                            algoParams=[TagValue('adaptivePriority', 'Normal')])
         message = (f'entering {direction[signal]} order for {amount} '
                    f'{contract.localSymbol}')
         log.debug(message)
@@ -199,7 +199,9 @@ class Trader:
         # required to fill open trades list
         # self.ib.reqAllOpenOrders()
         trades = self.ib.openTrades()
-        log.debug(f'open trades on re-connect: {trades}')
+        log.info(f'open trades on re-connect: {len(trades)} '
+                 f'{[t.contract.localSymbol for t in trades]}')
+        log.debug(f'open orders on re-connect: {[o.order for o in trades]}')
         for trade in trades:
             if trade.order.orderType in ('STP', 'TRAIL'
                                          ) and trade.orderStatus.remaining != 0:
@@ -242,9 +244,9 @@ class Trader:
         self.blotter.log_commission(trade, fill, report, reason)
 
 
-def get_contracts(params: List[Params], ib: IB,
+def get_contracts(params: List[Type], ib: IB,
                   contract_fields: Union[List[str], str] = 'contract'
-                  ) -> List[Params]:
+                  ) -> List[Type]:
 
     if isinstance(contract_fields, str):
         contract_fields = [contract_fields]

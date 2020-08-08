@@ -119,7 +119,7 @@ def modified_rsi(rsi: pd.Series) -> pd.Series:
 def carver(price: pd.Series, lookback: int) -> pd.Series:
     """
     Return modified version of price placing it on a min-max scale
-    over recent lookback periods expressed on scale -100 to 100
+    over recent lookback periods expressed on a scale of -100 to 100
     (modified stochastic oscilator, after Rob Carver:
     https://qoppac.blogspot.com/2016/05/a-simple-breakout-trading-rule.html).
     """

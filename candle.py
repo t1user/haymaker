@@ -91,12 +91,40 @@ class BreakoutCandle(SingleSignalMixin, Candle):
         return df
 
 
+class RepeatBreakoutCandle(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['signal'] = indicators.min_max_signal(df.price, self.periods)
+        df['repeat_signal'] = df.signal.rolling(2).mean().round()
+        df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['filtered_signal'] = df['repeat_signal'] * \
+            ((df['signal'] * df['filter']) == 1)
+        return df
+
+
 class RsiCandle(SingleSignalMixin, Candle):
 
     def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df['rsi'] = indicators.rsi(df.price, 24)
-        df['carver_rsi'] = indicators.carver(df['rsi'], 90)
-        df['signal'] = indicators.range_crosser(df['carver_rsi'], 50)
+        df['carver_rsi'] = indicators.carver(df['rsi'], 100).rolling(15).mean()
+        df['signal'] = indicators.range_crosser(df['carver_rsi'], 70)
+
+        """
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['filtered_signal'] = df['signal'] * \
+            ((df['signal'] * df['filter']) == 1)
+        """
+
         df['filtered_signal'] = df['signal']
+
         df['atr'] = indicators.atr(df, self.atr_periods)
         return df

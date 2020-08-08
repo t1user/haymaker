@@ -1,10 +1,31 @@
-from trader import Params
+from typing import Tuple, Optional
+from dataclasses import dataclass
+
 from ib_insync import ContFuture
+
+
+@dataclass
+class Params:
+    contract: Tuple[str]  # contract given as tuple of params given to Future()
+    micro_contract: Tuple[str]  # (1/10) contract corresponding to contract
+    # periods for breakout calculation
+    periods: int = 40
+    ema_fast: int = 5  # number of periods for moving average filter
+    ema_slow: int = 120  # number of periods for moving average filter
+    sl_atr: int = 1  # stop loss in ATRs
+    atr_periods: int = 180  # number of periods to calculate ATR on
+    trades_per_day: int = 0
+    alloc: float = 0  # fraction of capital to be allocated to instrument
+    # candle volume to be calculated as average of x periods
+    avg_periods: Optional[int] = None
+    volume: Optional[int] = None  # candle volume given directly
+    min_atr: float = 0
 
 
 nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
+    sl_atr=1,
     trades_per_day=4.5,
     # avg_periods=60,
     volume=12000,
@@ -26,9 +47,10 @@ es = Params(
 gc = Params(
     contract=ContFuture('GC', 'NYMEX'),
     micro_contract=ContFuture('MGC', 'NYMEX'),
-    trades_per_day=2.1,
+    trades_per_day=1.9,  # 2.1
     ema_fast=60,
     ema_slow=120,
+    periods=60,
     sl_atr=2,
     atr_periods=90,
     # avg_periods=60,

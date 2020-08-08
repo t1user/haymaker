@@ -1,7 +1,7 @@
 from logbook import Logger
 
 from streamers import VolumeStreamer
-from candle import BreakoutCandle
+from candle import BreakoutCandle, RsiCandle, RepeatBreakoutCandle
 from params import contracts
 
 

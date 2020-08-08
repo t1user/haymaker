@@ -161,7 +161,17 @@ class VolumeStreamer(StreamAggregator):
         log.debug(f'volume: {volume}')
         return volume
 
+    @staticmethod
+    def verify(bar: BarData) -> bool:
+        """
+        Faulty bar often comes with volume = -1.
+        """
+        return (bar.volume >= 0)
+
     def aggregate(self, bar: BarData) -> None:
+        if not self.verify(bar):
+            log.warning(f'Faulty bar for: {self.contract.localSymbol} {bar}')
+            return
         self.new_bars.append(bar)
         self.all_bars.append(bar)
         self.aggregator += bar.volume

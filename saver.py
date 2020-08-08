@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from arctic import Arctic
 import pandas as pd
@@ -89,6 +89,12 @@ class ArcticSaver(AbstractBaseSaver):
     def save(self, df: pd.DataFrame, what: str, contract_str: str,
              note: str = '') -> None:
         self.store.write(self.name_str(what, contract_str), df)
+
+    def keys(self) -> List[str]:
+        return self.store.list_symbols()
+
+    def read(self, key: str) -> pd.DataFrame:
+        return self.store.read(key)
 
     def __str__(self):
         return (f'ArcticSaver(host={self.host}, library={self.library}, '

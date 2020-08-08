@@ -12,11 +12,11 @@ from portfolio import FixedPortfolio, AdjustedPortfolio
 from strategy import candles
 
 
-log = logger(__file__[:-3], ERROR, ERROR)
+log = logger(__file__[:-3], WARNING, WARNING)
 
 start_date = '20180601'
 end_date = '20191231'
-cash = 120000
+cash = 80000
 store = ArcticStore('TRADES_30_secs')
 #store = Store()
 source = DataSourceManager(store, start_date, end_date)
@@ -26,12 +26,12 @@ util.logToConsole()
 asyncio.get_event_loop().set_debug(True)
 
 blotter = CsvBlotter(save_to_file=False, filename='backtest', path='backtests',
-                     note=f'_{start_date}_{end_date}')
+                     note=f'_{start_date}_{end_date}_base_with_70vol')
 saver = PickleSaver('notebooks/freeze/backtest')
-manager = Manager(ib, candles, FixedPortfolio, blotter=blotter,
+manager = Manager(ib, candles, AdjustedPortfolio, blotter=blotter,
                   saver=saver, sl_type='trailing',
                   contract_fields=['contract', 'micro_contract'],
-                  portfolio_params={'target_vol': .5})
+                  portfolio_params={'target_vol': .7})
 market = Market(cash, manager, reboot=False)
 ib.run()
 blotter.save()

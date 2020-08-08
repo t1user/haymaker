@@ -163,9 +163,13 @@ class MongoBlotter(AbstractBaseBlotter):
     def save(self) -> None:
         self.collection.insert_many(self.blotter)
 
+    def read(self) -> pd.DataFrame:
+        return util.df([i for i in self.collection.find()])
+
 
 class AsyncMongoBlottter(AbstractBaseBlotter):
     """
+    NOT IN USE
     Currently doesn't work becasue importing motor causes segmentation fault
     at programme exit.
     """

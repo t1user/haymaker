@@ -124,7 +124,7 @@ class IBHandlers:
             realized, unrealized, total)
 
     def onPosition(self, position: Position):
-        log.info(f'Position update: {position}')
+        log.debug(f'Position update: {position}')
 
     def onAccountValue(self, value: AccountValue):
         pass
@@ -157,7 +157,7 @@ class IBHandlers:
                 contract: Contract):
         if errorCode not in (2157, 2158, 2119, 2104, 2106, 165, 2108,
                              2103, 2105):
-            log.error(f'ERROR: {errorCode} {errorString} {contract}')
+            log.warning(f'ERROR: {errorCode} {errorString} {contract}')
 
     def onTimeout(self, idlePeriod: float):
         pass
