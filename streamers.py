@@ -12,7 +12,7 @@ log = Logger(__name__)
 
 class BarStreamer(ABC):
 
-    durationStr = '17 D'
+    durationStr = '12 D'
     barSizeSetting = '30 secs'
     whatToShow = 'TRADES'
     useRTH = False
@@ -50,7 +50,8 @@ class BarStreamer(ABC):
             whatToShow=self.whatToShow,
             useRTH=self.useRTH,
             formatDate=1,
-            keepUpToDate=True)
+            keepUpToDate=True,
+            timeout=0)
 
     def subscribe(self) -> None:
         self.bars.updateEvent += self.onNewBar

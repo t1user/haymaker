@@ -13,9 +13,8 @@ from logbook import Logger
 from ib_insync import IB as master_IB
 from ib_insync import util
 from ib_insync.contract import Future, ContFuture, Contract
-from ib_insync.objects import (BarData, BarDataList, ContractDetails,
-                               TradeLogEntry, Position, CommissionReport,
-                               Execution, Fill)
+from ib_insync import (BarData, BarDataList, ContractDetails, TradeLogEntry,
+                       Position, CommissionReport, Execution, Fill)
 from ib_insync.order import OrderStatus, Trade, MarketOrder, Order
 from eventkit import Event
 
@@ -296,9 +295,9 @@ class DataSource:
     start_date: ClassVar[Optional[str]] = None
     end_date: ClassVar[Optional[str]] = None
     store: ClassVar[Optional[Store]] = None
-    _timedelta: ClassVar[Optional[pd.Timedelta]] = None
-    _df: ClassVar[Optional[pd.DataFrame]] = None
-    _data: ClassVar[Optional[Dict]] = None
+    _timedelta: Optional[pd.Timedelta] = None
+    _df: Optional[pd.DataFrame] = None
+    _data: Optional[Dict] = None
 
     def __init__(self, contract: Contract, durationStr: str,
                  barSizeSetting: str) -> None:

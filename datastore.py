@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Union, Optional, Tuple, Any, DefaultDict
+from typing import List, Dict, Union, Optional, Any, DefaultDict
 from functools import partial
+from datetime import datetime
 from collections import defaultdict
 import pickle
 
@@ -156,14 +157,14 @@ class AbstractBaseStore(ABC):
         df.drop(index=df[df.index.duplicated()].index, inplace=True)
         return df
 
-    def check_earliest(self, symbol: str) -> pd.datetime:
+    def check_earliest(self, symbol: str) -> datetime:
         """Return earliest date of available data for a given symbol."""
         try:
             return self.read(symbol).index.min()
         except (KeyError, AttributeError):
             return None
 
-    def check_latest(self, symbol: str) -> pd.datetime:
+    def check_latest(self, symbol: str) -> datetime:
         """Return earliest date of available data for a given symbol."""
         try:
             return self.read(symbol).index.max()
@@ -205,7 +206,7 @@ class AbstractBaseStore(ABC):
         return [c for c in self.keys() if c.endswith('CONTFUT')]
 
     def _contfutures_dict(self, field: str = 'tradingClass'
-                          ) -> DefaultDict[str, Dict[pd.datetime, str]]:
+                          ) -> DefaultDict[str, Dict[datetime, str]]:
         """
         Args:
         ----------

@@ -8,7 +8,7 @@ from ib_insync.objects import Fill, CommissionReport
 from ib_insync import util
 from logbook import Logger
 from pymongo import MongoClient
-#import motor.motor_asyncio
+import motor.motor_asyncio
 from arctic import TICK_STORE, Arctic
 import pandas as pd
 
@@ -169,9 +169,7 @@ class MongoBlotter(AbstractBaseBlotter):
 
 class AsyncMongoBlottter(AbstractBaseBlotter):
     """
-    NOT IN USE
-    Currently doesn't work becasue importing motor causes segmentation fault
-    at programme exit.
+    NOT TESTED
     """
 
     def __init__(self, save_to_file: bool = True, host: str = 'localhost',

@@ -83,8 +83,8 @@ class Connection:
                 log.debug(f'Connection error: {e}')
 
     def run_watchdog(self) -> None:
-        log.debug(f'Initializing watchdog')
-        ibc = IBC(twsVersion=978,
+        log.debug('Initializing watchdog')
+        ibc = IBC(twsVersion=979,
                   gateway=True,
                   tradingMode='paper',
                   )
@@ -94,25 +94,25 @@ class Connection:
                             )
         handlers = WatchdogHandlers(watchdog)
         watchdog.start()
-        log.debug(f'Watchdog started.')
+        log.debug('Watchdog started.')
         self.ib.run()
-        log.debug(f'ib run.')
+        log.debug('ib run.')
 
     def onEvent(self, *args):
         log.debug(f'logging event: {args}')
 
     def onConnectedEvent(self) -> None:
-        log.debug(f'Connected!')
+        log.debug('Connected!')
         self.run()
 
     def onDisconnectedEvent(self) -> None:
         """Initiate re-start when external watchdog manages api connection."""
-        log.debug(f'Disconnected!')
+        log.debug('Disconnected!')
         try:
             util.sleep(60)
         except Exception as e:
             log.debug(f'exception caught: {e}')
-        log.debug(f'will attempt reconnection')
+        log.debug('will attempt reconnection')
         self.connect()
 
     def onDisconnectedEventWatchdog(self, *args) -> None:

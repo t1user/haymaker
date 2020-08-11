@@ -8,8 +8,7 @@ from ib_insync import ContFuture
 class Params:
     contract: Tuple[str]  # contract given as tuple of params given to Future()
     micro_contract: Tuple[str]  # (1/10) contract corresponding to contract
-    # periods for breakout calculation
-    periods: int = 40
+    periods: int = 40  # periods for breakout calculation
     ema_fast: int = 5  # number of periods for moving average filter
     ema_slow: int = 120  # number of periods for moving average filter
     sl_atr: int = 1  # stop loss in ATRs

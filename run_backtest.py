@@ -14,7 +14,7 @@ from strategy import candles
 
 log = logger(__file__[:-3], WARNING, WARNING)
 
-start_date = '20180601'
+start_date = '20190701'
 end_date = '20191231'
 cash = 80000
 store = ArcticStore('TRADES_30_secs')
@@ -26,7 +26,7 @@ util.logToConsole()
 asyncio.get_event_loop().set_debug(True)
 
 blotter = CsvBlotter(save_to_file=False, filename='backtest', path='backtests',
-                     note=f'_{start_date}_{end_date}_base_with_70vol')
+                     note=f'_{start_date}_{end_date}')
 saver = PickleSaver('notebooks/freeze/backtest')
 manager = Manager(ib, candles, AdjustedPortfolio, blotter=blotter,
                   saver=saver, sl_type='trailing',

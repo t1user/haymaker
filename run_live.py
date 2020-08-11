@@ -16,6 +16,9 @@ from logger import logger
 
 log = logger(__file__[:-3])
 
+log.error('THIS IS LIVE')
+import sys
+sys.exit()
 
 @dataclass
 class Params:
@@ -105,7 +108,7 @@ class Start(Handlers):
                   tradingMode='live',
                   )
         watchdog = Watchdog(ibc, ib,
-                            port='4002',
+                            port='4001',
                             clientId=0,
                             )
         log.debug('attaching handlers...')
