@@ -90,21 +90,22 @@ class IBHandlers:
         pass
 
     def onNewOrder(self, trade: Trade):
-        log.info(f'New order: {trade.contract.localSymbol} {trade.order}')
+        log.debug(f'New order: {trade.contract.localSymbol} {trade.order}')
 
     def onOrderModify(self, trade: Trade):
-        log.info(f'Order modified: {trade.contract.localSymbol} {trade.order}')
+        log.debug(
+            f'Order modified: {trade.contract.localSymbol} {trade.order}')
 
     def onCancelledOrder(self, trade: Trade):
-        log.info(
+        log.debug(
             f'Order cancelled: {trade.contract.localSymbol} {trade.order}')
 
     def onOpenOrder(self, trade: Trade):
         pass
 
     def onOrderStatus(self, trade: Trade):
-        log.info(f'Order status {trade.contract.localSymbol} {trade.order} '
-                 f'{trade.orderStatus}')
+        log.debug(f'Order status {trade.contract.localSymbol} {trade.order} '
+                  f'{trade.orderStatus}')
 
     def onExecDetails(self, trade: Trade, fill: Fill):
         pass

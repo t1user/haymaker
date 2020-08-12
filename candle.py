@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Union, List
 
 from ib_insync import Event, IB
 import pandas as pd
@@ -14,7 +14,13 @@ log = Logger(__name__)
 
 class Candle(ABC):
 
-    def __init__(self, streamer, **kwargs):
+    def __init__(self, streamer,
+                 contract_fields: Union[List[str], str] = 'contract',
+                 **kwargs):
+        if isinstance(contract_fields, str):
+            self.contract_fields = [contract_fields]
+        else:
+            self.contract_fields = contract_fields
         self.__dict__.update(kwargs)
         self.streamer = streamer
         self.streamer.newCandle.connect(self.append, keep_ref=True)
@@ -66,6 +72,9 @@ class Candle(ABC):
         self.signal.emit(self)
         self.entrySignal.emit(self)
         self.closeSignal.emit(self)
+
+    def __repr__(self):
+        return f'Candle: {self.__dict__}'
 
 
 class SingleSignalMixin:

@@ -1,4 +1,4 @@
-from typing import List, Any, Dict
+from typing import List, Any
 from abc import ABC
 
 from ib_insync import IB, Contract, Event
@@ -12,17 +12,19 @@ log = Logger(__name__)
 
 class Portfolio(ABC):
 
-    def __init__(self, ib: IB, candles: List[Candle],
-                 portfolio_params: Dict[Any, Any]):
-        self.ib = ib
-        self.candles = candles
-        self.__dict__.update(portfolio_params)
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+        self.kwargs = kwargs
         self.values = {}
         self._createEvents()
 
     def _createEvents(self):
         self.entrySignal = Event('entrySignal')
         self.closeSignal = Event('closeSignal')
+
+    def register(self, ib: IB, candles: List[Candle]):
+        self.ib = ib
+        self.candles = candles
 
     @property
     def account_value(self):
@@ -44,14 +46,17 @@ class Portfolio(ABC):
                 except ValueError:
                     pass
 
-    def onEntry(self, signal):
+    def onEntry(self, signal: Any):
         raise NotImplementedError
 
-    def onClose(self, signal):
+    def onClose(self, signal: Any):
         raise NotImplementedError
 
-    def onSignal(self, signal):
+    def onSignal(self, signal: Any):
         raise NotImplementedError
+
+    def __str__(self):
+        return f'{self.__class__.__name__} with args: {self.kwargs}'
 
 
 class FixedPortfolio(Portfolio):
@@ -88,17 +93,14 @@ class AdjustedPortfolio(Portfolio):
 
     multiplier_dict = {2: 1.35, 3: 1.5, 4: 1.65}
 
-    def __init__(self, ib, candles: List[Candle],
-                 portfolio_params: Dict[Any, Any]):
+    def register(self, ib: IB, candles: List[Candle]):
+        super().register(ib, candles)
         self.div_multiplier = self.multiplier_dict[len(candles)]
-        super().__init__(ib, candles, portfolio_params)
-
-    def alloc(self):
-        return 1/len(self.candles)
+        self.alloc = 1/len(self.candles)
 
     def number_of_contracts(self, contract: Candle):
         daily_vol = self.target_vol / 16
-        daily_cash_alloc = daily_vol * self.account_value * self.alloc()
+        daily_cash_alloc = daily_vol * self.account_value * self.alloc
         cash_alloc_per_trade = daily_cash_alloc / \
             (contract.trades_per_day ** .5)
         points_alloc_per_trade = (cash_alloc_per_trade /

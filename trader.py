@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from collections import defaultdict
 from functools import partial
-from typing import List, Dict, Any, Union, Type
+from typing import List, Dict, Any, Union, Type, Optional, Literal
 from datetime import datetime
 
 from ib_insync import (Order, MarketOrder, StopOrder, IB, Fill,
@@ -9,6 +11,7 @@ from ib_insync import (Order, MarketOrder, StopOrder, IB, Fill,
 from portfolio import Portfolio
 from candle import Candle
 from blotter import AbstractBaseBlotter, CsvBlotter
+
 from saver import AbstractBaseSaver, PickleSaver
 from logger import Logger
 
@@ -19,41 +22,30 @@ log = Logger(__name__)
 class Manager:
 
     def __init__(self, ib: IB, candles: List[Candle],
-                 portfolio_class: Portfolio,
-                 blotter: AbstractBaseBlotter = CsvBlotter(),
+                 portfolio: Portfolio,
+                 trader: Optional[Trader] = None,
                  saver: AbstractBaseSaver = PickleSaver(),
-                 sl_type: str = 'trailing',  # 'trailing', 'fixed', 'trailingFixed'
                  contract_fields: Union[List[str], str] = 'contract',
-                 portfolio_params: Dict[Any, Any] = {},
                  keep_ref: bool = True):
 
-        log.debug(f'Manager args: ib: {ib}, candles: {candles}, '
-                  f'portfolio: {portfolio_class}, blotter: {blotter}, '
-                  f'saver: {saver}, '
-                  f'sl_type: {sl_type} '
-                  f'contract_fields: {contract_fields}, '
-                  f'keep_ref: {keep_ref}')
         self.ib = ib
         self.candles = candles
         self.saver = saver
-        self.trader = Trader(ib, blotter, sl_type)
-        self.contract_fields = contract_fields
-        self.portfolio_params = portfolio_params
+        self.trader = trader or Trader(ib)
         self.keep_ref = keep_ref
-        self.connect_portfolio(portfolio_class)
+        self.portfolio = portfolio
+        self.connect_portfolio(portfolio)
         log.debug(f'manager object initiated: {self}')
 
-    def connect_portfolio(self, portfolio_class: Portfolio):
-        self.portfolio = portfolio_class(self.ib, self.candles,
-                                         self.portfolio_params)
+    def connect_portfolio(self, portfolio: Portfolio):
+        self.portfolio.register(self.ib, self.candles)
         self.portfolio.entrySignal += self.trader.onEntry
         self.portfolio.closeSignal += self.trader.onClose
 
     def onStarted(self, *args, **kwargs):
         log.debug(f'manager onStarted')
         self.trader.reconcile_stops()
-        self.candles = get_contracts(
-            self.candles, self.ib, self.contract_fields)
+        self.candles = get_contracts(self.candles, self.ib)
         # allow backtester to convey simulation time
         now = kwargs.get('now') or datetime.now()
         self.connect_candles(now)
@@ -70,11 +62,11 @@ class Manager:
     def connect_candles(self, now):
         for candle in self.candles:
             # register candles with Trader
-            for field in self.contract_fields:
+            for field in candle.contract_fields:
                 self.trader.register(getattr(candle, field), candle)
             log.debug(
                 f'contracts for candle {candle.contract.tradingClass}: '
-                f'{[getattr(candle, field) for field in self.contract_fields]}')
+                f'{[getattr(candle, field) for field in candle.contract_fields]}')
             # make sure no previous events connected
             candle.entrySignal.clear()
             candle.closeSignal.clear()
@@ -90,12 +82,20 @@ class Manager:
             # run candle logic
             candle(self.ib)
 
+    def __str__(self):
+        return (f'Manager: ib: {self.ib}, candles: {self.candles}, '
+                f'portfolio: {self.portfolio}, '
+                f'trader: {self.trader}, '
+                f'saver: {self.saver}, '
+                f'keep_ref: {self.keep_ref}')
+
 
 class Trader:
 
-    # sl_type: Literal['fixed', 'trailing', 'trailingFixed']
-    def __init__(self, ib: IB, blotter: AbstractBaseBlotter,
-                 sl_type: str = 'trailing'):
+    def __init__(self,
+                 ib: IB, blotter: AbstractBaseBlotter = CsvBlotter(),
+                 sl_type: Literal['fixed', 'trailing',
+                                  'trailingFixed'] = 'trailing'):
         self.ib = ib
         self.blotter = blotter
         self.contracts = {}
@@ -243,17 +243,16 @@ class Trader:
                           report: CommissionReport) -> None:
         self.blotter.log_commission(trade, fill, report, reason)
 
+    def __str__(self):
+        return f'{self.__class__.__name__} with args: {self.__dict__}'
 
-def get_contracts(params: List[Type], ib: IB,
-                  contract_fields: Union[List[str], str] = 'contract'
-                  ) -> List[Type]:
 
-    if isinstance(contract_fields, str):
-        contract_fields = [contract_fields]
-
-    ib.qualifyContracts(*[getattr(param, field) for field in contract_fields
-                          for param in params])
-    contract_list = [getattr(contract, field)
-                     for field in contract_fields for contract in params]
+def get_contracts(params: List[Dict[str, Any]], ib: IB,
+                  ) -> List[Dict[str, Any]]:
+    contract_list = []
+    for candle in params:
+        for contract in candle.contract_fields:
+            contract_list.append(getattr(candle, contract))
+    ib.qualifyContracts(*contract_list)
     log.debug(f'contracts qualified: {contract_list}')
     return params

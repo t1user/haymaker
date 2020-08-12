@@ -1,24 +1,26 @@
-from typing import Tuple, List, Optional
+import sys
+from typing import Tuple, Optional
 from dataclasses import dataclass
 
 from ib_insync import IB, util, ContFuture
 from ib_insync.ibcontroller import IBC, Watchdog
+from logbook import DEBUG
 
 from handlers import Handlers
 from saver import ArcticSaver
 from blotter import MongoBlotter
-from trader import Manager
+from trader import Manager, Trader
 from streamers import VolumeStreamer
 from candle import BreakoutCandle
 from portfolio import AdjustedPortfolio
-from logger import logger
+from logger import rotating_logger
 
 
-log = logger(__file__[:-3])
+log = rotating_logger(__file__[:-3], DEBUG, folder='~/ib_data/live_logger')
 
 log.error('THIS IS LIVE')
-import sys
 sys.exit()
+
 
 @dataclass
 class Params:
@@ -87,12 +89,11 @@ ym = Params(
 
 
 contracts = [nq, es, ym, gc]
-
-
 candles = [BreakoutCandle(VolumeStreamer(params.volume,
                                          params.avg_periods),
                           **params.__dict__)
            for params in contracts]
+portfolio = AdjustedPortfolio(target_vol=.7)
 
 
 class Start(Handlers):
@@ -125,8 +126,8 @@ log.debug(f'candles: {candles}')
 ib = IB()
 blotter = MongoBlotter(collection='live_blotter')
 saver = ArcticSaver(library='live_log')
-manager = Manager(ib, candles, AdjustedPortfolio,
-                  saver=saver, blotter=blotter,
-                  contract_fields=['contract', 'micro_contract'],
-                  portfolio_params={'target_vol': .7})
+trader = Trader(ib, blotter)
+manager = Manager(ib, trader=Trader, saver=saver,
+                  candles=contracts, portfolio=portfolio)
+
 start = Start(ib, manager)

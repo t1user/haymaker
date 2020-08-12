@@ -6,8 +6,8 @@ from handlers import Handlers
 from saver import ArcticSaver
 from blotter import MongoBlotter
 from trader import Manager
-from strategy import candles
-from portfolio import AdjustedPortfolio
+from trader import Trader
+from strategy import strategy_kwargs
 from logger import logger, rotating_logger_with_shell
 from logbook import DEBUG
 
@@ -20,7 +20,7 @@ class Start(Handlers):
         util.patchAsyncio()
         self.manager = manager
         ibc = IBC(twsVersion=979,
-                  gateway=False,
+                  gateway=True,
                   tradingMode='paper',
                   )
         watchdog = Watchdog(ibc, ib,
@@ -37,15 +37,10 @@ class Start(Handlers):
         ib.run()
 
 
-log.debug(f'candles: {candles}')
 ib = IB()
-
 # util.logToConsole(DEBUG)
-
 blotter = MongoBlotter()
 saver = ArcticSaver()
-manager = Manager(ib, candles, AdjustedPortfolio,
-                  saver=saver, blotter=blotter,
-                  contract_fields=['contract', 'micro_contract'],
-                  portfolio_params={'target_vol': .5})
+trader = Trader(ib, blotter)
+manager = Manager(ib, trader=trader, saver=saver, **strategy_kwargs)
 start = Start(ib, manager)

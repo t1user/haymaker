@@ -12,7 +12,7 @@ log = Logger(__name__)
 
 class BarStreamer(ABC):
 
-    durationStr = '12 D'
+    durationStr = '17 D'
     barSizeSetting = '30 secs'
     whatToShow = 'TRADES'
     useRTH = False

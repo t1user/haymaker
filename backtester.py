@@ -154,7 +154,8 @@ class IB:
                           useRTH: str,
                           endDateTime: str = '',
                           formatDate: int = 1,
-                          keepUpToDate: bool = True
+                          keepUpToDate: bool = True,
+                          **kwargs
                           ):
         return self.datasource(contract, durationStr, barSizeSetting)
 
