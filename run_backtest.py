@@ -16,7 +16,7 @@ log = logger(__file__[:-3], WARNING, WARNING)
 
 start_date = '20180601'
 end_date = '20191231'
-cash = 80000
+cash = 12000
 store = ArcticStore('TRADES_30_secs')
 source = DataSourceManager(store, start_date, end_date)
 ib = IB(source, mode='db_only', index=-2)  # mode is: 'db_only' or 'use_ib'

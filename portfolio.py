@@ -154,3 +154,25 @@ class AdjustedPortfolio(Portfolio):
                                           obj.df.signal[-1],
                                           abs(self.positions[
                                               obj.micro_contract.symbol]))
+
+
+class WeightedAdjustedPortfolio(AdjustedPortfolio):
+
+    def register(self, ib: IB, candles: List[Candle]):
+        Portfolio.register(self, ib, candles)
+        self.div_multiplier = self.multiplier_dict[len(candles)]
+        allocs = [candle.alloc for candle in candles]
+        assert round(sum(allocs), 4) == 1, "Allocations don't add-up to 1"
+
+    def number_of_contracts(self, contract: Candle):
+        daily_vol = self.target_vol / 16
+        daily_cash_alloc = daily_vol * self.account_value * contract.alloc
+        cash_alloc_per_trade = daily_cash_alloc / \
+            (contract.trades_per_day ** .5)
+        points_alloc_per_trade = (cash_alloc_per_trade /
+                                  float(contract.contract.multiplier))
+        # 1.4 is atr to vol 'translation'
+        contracts = (points_alloc_per_trade /
+                     ((max(contract.df.atr[-1], contract.min_atr) / 1.4)
+                      * contract.sl_atr))
+        return round(contracts * self.div_multiplier, 1)

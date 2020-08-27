@@ -1,6 +1,5 @@
 from ib_insync import IB, util
 from ib_insync.ibcontroller import IBC, Watchdog
-import asyncio
 
 from handlers import Handlers
 from saver import ArcticSaver
@@ -20,7 +19,7 @@ class Start(Handlers):
         util.patchAsyncio()
         self.manager = manager
         ibc = IBC(twsVersion=979,
-                  gateway=True,
+                  gateway=False,
                   tradingMode='paper',
                   )
         watchdog = Watchdog(ibc, ib,

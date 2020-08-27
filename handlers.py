@@ -128,7 +128,8 @@ class IBHandlers:
         log.debug(f'Position update: {position}')
 
     def onAccountValue(self, value: AccountValue):
-        pass
+        if value.tag == 'NetLiquidation':
+            log.debug(value)
 
     def onAccountSummary(self, value: AccountValue):
         """

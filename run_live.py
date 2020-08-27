@@ -12,14 +12,16 @@ from blotter import MongoBlotter
 from trader import Manager, Trader
 from streamers import VolumeStreamer
 from candle import BreakoutCandle
-from portfolio import AdjustedPortfolio
-from logger import rotating_logger
+from portfolio import WeightedAdjustedPortfolio
+from logger import rotating_logger_with_shell
 
 
-log = rotating_logger(__file__[:-3], DEBUG, folder='~/ib_data/live_logger')
+log = rotating_logger_with_shell(__file__[:-3],
+                                 folder='/home/tomek/ib_data/live_logs')
 
-log.error('THIS IS LIVE')
-sys.exit()
+s = input('THIS IS LIVE. Continue? ').lower()
+if s != 'yes' and s != 'y':
+    sys.exit()
 
 
 @dataclass
@@ -47,18 +49,20 @@ nq = Params(
     # avg_periods=60,
     volume=12000,
     min_atr=14,
+    alloc=.4,
 )
 
 es = Params(
     contract=ContFuture('ES', 'GLOBEX'),
     micro_contract=ContFuture('MES', 'GLOBEX'),
-    trades_per_day=.8,
+    trades_per_day=1.5,
     ema_fast=120,
     ema_slow=320,
     sl_atr=3,
     # avg_periods=60,
     volume=43000,
     min_atr=5,
+    alloc=.125,
 )
 
 gc = Params(
@@ -73,6 +77,7 @@ gc = Params(
     # avg_periods=60,
     volume=5500,
     min_atr=1.9,
+    alloc=.225,
 )
 
 ym = Params(
@@ -85,15 +90,17 @@ ym = Params(
     # avg_periods=60,
     volume=8000,
     min_atr=55,
+    alloc=.25
 )
 
 
 contracts = [nq, es, ym, gc]
 candles = [BreakoutCandle(VolumeStreamer(params.volume,
                                          params.avg_periods),
+                          contract_fields=['contract', 'micro_contract'],
                           **params.__dict__)
            for params in contracts]
-portfolio = AdjustedPortfolio(target_vol=.7)
+portfolio = WeightedAdjustedPortfolio(target_vol=.6)
 
 
 class Start(Handlers):
@@ -105,7 +112,7 @@ class Start(Handlers):
         self.manager = manager
         ibc = IBC(twsVersion=979,
                   gateway=True,
-                  ibcIni='~/ibc/config_live.ini',
+                  ibcIni='/home/tomek/ibc/config_live.ini',
                   tradingMode='live',
                   )
         watchdog = Watchdog(ibc, ib,
@@ -127,7 +134,7 @@ ib = IB()
 blotter = MongoBlotter(collection='live_blotter')
 saver = ArcticSaver(library='live_log')
 trader = Trader(ib, blotter)
-manager = Manager(ib, trader=Trader, saver=saver,
-                  candles=contracts, portfolio=portfolio)
+manager = Manager(ib, trader=trader, saver=saver,
+                  candles=candles, portfolio=portfolio)
 
 start = Start(ib, manager)

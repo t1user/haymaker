@@ -100,11 +100,22 @@ class Trader:
         self.blotter = blotter
         self.contracts = {}
         self.sl_type = sl_type
+        self.ib.orderStatusEvent += self.verify_orders
         log.debug('Trader initialized')
 
-    def register(self, contract: Contract, obj: Candle):
+    def register(self, contract: Contract, obj: Candle) -> None:
         log.debug(f'Registering: {contract.symbol}: {obj}')
         self.contracts[contract.symbol] = obj
+
+    def verify_orders(self, trade: Trade) -> None:
+        """
+        Attempt to attach reporting events to the blotter for orders entered
+        outside of the framework. This will not work if framework is not
+        connected with clientId == 0.
+        """
+        if ((trade.order.orderId < 0)
+                and (trade.orderStatus.status == 'Inactive')):
+            self.attach_events(trade, 'MANUAL TRADE')
 
     def onEntry(self, contract: Contract, signal: int,
                 atr: float, amount: int) -> None:
@@ -130,7 +141,9 @@ class Trader:
               amount: int) -> Trade:
         direction = {1: 'BUY', -1: 'SELL'}
         order = MarketOrder(direction[signal], amount, algoStrategy='Adaptive',
-                            algoParams=[TagValue('adaptivePriority', 'Normal')])
+                            algoParams=[
+                                TagValue('adaptivePriority', 'Normal')],
+                            tif='Day')
         message = (f'entering {direction[signal]} order for {amount} '
                    f'{contract.localSymbol}')
         log.debug(message)
@@ -247,12 +260,12 @@ class Trader:
         return f'{self.__class__.__name__} with args: {self.__dict__}'
 
 
-def get_contracts(params: List[Dict[str, Any]], ib: IB,
-                  ) -> List[Dict[str, Any]]:
+def get_contracts(candles: List[Candle], ib: IB,
+                  ) -> List[Candle]:
     contract_list = []
-    for candle in params:
+    for candle in candles:
         for contract in candle.contract_fields:
             contract_list.append(getattr(candle, contract))
     ib.qualifyContracts(*contract_list)
     log.debug(f'contracts qualified: {contract_list}')
-    return params
+    return candles

@@ -74,7 +74,7 @@ class Candle(ABC):
         self.closeSignal.emit(self)
 
     def __repr__(self):
-        return f'Candle: {self.__dict__}'
+        return f'Candle: {self.contract}'
 
 
 class SingleSignalMixin:
