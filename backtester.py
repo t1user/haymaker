@@ -162,7 +162,11 @@ class IB:
     reqHistoricalDataAsync = reqHistoricalData
 
     def positions(self):
-        return self.market.account.positions.values()
+        try:
+            return self.market.account.positions.values()
+        except AttributeError:
+            # this is before Account has been instantiated
+            return {}
 
     def accountValues(self):
         log.info(f'cash: {self.market.account.cash}')

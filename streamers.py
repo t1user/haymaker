@@ -141,7 +141,10 @@ class VolumeStreamer(StreamAggregator):
         self.aggregator = 0
 
     def __call__(self, ib: IB, contract: Contract) -> None:
-        date = self.all_bars[-1].date if contract == self.contract else None
+        try:
+            date = self.all_bars[-1].date if contract == self.contract else None
+        except IndexError:
+            date = None
         BarStreamer.__call__(self, ib, contract, date)
         if self.avg_periods:
             self.volume = self.reset_volume(self.avg_periods)

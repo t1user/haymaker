@@ -7,6 +7,7 @@ from datetime import datetime
 
 from ib_insync import (Order, MarketOrder, StopOrder, IB, Fill,
                        CommissionReport, Trade, Contract, TagValue)
+import numpy as np
 
 from portfolio import Portfolio
 from candle import Candle
@@ -109,12 +110,13 @@ class Trader:
 
     def verify_orders(self, trade: Trade) -> None:
         """
-        Attempt to attach reporting events to the blotter for orders entered
+        Attempt to attach reporting events for orders entered
         outside of the framework. This will not work if framework is not
         connected with clientId == 0.
         """
-        if ((trade.order.orderId < 0)
-                and (trade.orderStatus.status == 'Inactive')):
+        if ((trade.order.orderId <= 0)
+                and (trade.orderStatus.status == 'PreSubmitted')):
+            log.debug(f'manual trade reporting event attached')
             self.attach_events(trade, 'MANUAL TRADE')
 
     def onEntry(self, contract: Contract, signal: int,
@@ -137,16 +139,22 @@ class Trader:
         trade = self.trade(contract, signal, amount)
         self.attach_events(trade, 'CLOSE')
 
+    def emergencyClose(self, contract: Contract, signal: int,
+                       amount: int) -> None:
+        log.warning(f'Emergency close on restart: {contract.localSymbol} '
+                    f'side: {signal} amount: {amount}')
+        trade = self.trade(contract, signal, amount)
+        self.attach_events(trade, 'EMERGENCY CLOSE')
+
     def trade(self, contract: Contract, signal: int,
               amount: int) -> Trade:
-        direction = {1: 'BUY', -1: 'SELL'}
-        order = MarketOrder(direction[signal], amount, algoStrategy='Adaptive',
+        assert signal in [-1, 1], 'Invalid trade signal'
+        order = MarketOrder('BUY' if signal == 1 else 'SELL',
+                            amount, algoStrategy='Adaptive',
                             algoParams=[
                                 TagValue('adaptivePriority', 'Normal')],
                             tif='Day')
-        message = (f'entering {direction[signal]} order for {amount} '
-                   f'{contract.localSymbol}')
-        log.debug(message)
+        log.debug(f'entering order for {contract.localSymbol}: {order}')
         return self.ib.placeOrder(contract, order)
 
     def attach_sl(self, trade: Trade) -> None:
@@ -206,21 +214,35 @@ class Trader:
 
     def reconcile_stops(self) -> None:
         """
-        To be executed on restart. For all existing stop-outs attach reporting
-        events for the blotter.
+        To be executed on restart. Make sure all positions have corresponding
+        stop-losses, if not send a closing order. For all existing
+        stop-losses attach reporting events for the blotter.
         """
-        # required to fill open trades list
-        # self.ib.reqAllOpenOrders()
+
         trades = self.ib.openTrades()
         log.info(f'open trades on re-connect: {len(trades)} '
                  f'{[t.contract.localSymbol for t in trades]}')
-        log.debug(f'open orders on re-connect: {[o.order for o in trades]}')
+        # attach reporting events
         for trade in trades:
             if trade.order.orderType in ('STP', 'TRAIL'
                                          ) and trade.orderStatus.remaining != 0:
                 self.attach_events(trade, 'STOP-LOSS')
+        # check for orphan positions
+        positions = self.ib.positions()
+        log.debug(f'positions on re-connect: {positions}')
+        trade_contracts = set([t.contract for t in trades])
+        position_contracts = set([p.contract for p in positions])
+        orphan_contracts = position_contracts - trade_contracts
+        orphan_positions = [position for position in positions
+                            if position.contract in orphan_contracts]
+        log.debug(f'orphan positions: {orphan_positions}')
+        if len(orphan_positions) != 0:
+            for p in orphan_positions:
+                self.ib.qualifyContracts(p.contract)
+                self.emergencyClose(
+                    p.contract, -np.sign(p.position), int(np.abs(p.position)))
 
-    @staticmethod
+    @ staticmethod
     def round_tick(price: float, tick_size: float) -> float:
         floor = price // tick_size
         remainder = price % tick_size

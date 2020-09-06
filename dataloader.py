@@ -71,7 +71,7 @@ class ContractObjectSelector:
         for o in obj:
             o.update(includeExpired=True)
             futures.append(
-                [Future(**c.contract.dict())
+                [Contract.create(**c.contract.dict())
                  for c in self.ib.reqContractDetails(o)]
             )
         return list(itertools.chain(*futures))
@@ -319,11 +319,11 @@ class ContractHolder:
         def get_items(self):
             log.debug('getting items')
             objects = ContractObjectSelector(self.ib, self.source)
-            log.debug(f'objects: {objects}')
             if self.cont_only:
                 objects = objects.cont_list
             else:
                 objects = objects.list
+            log.debug(f'objects: {objects}')
 
             self.items = []
             for o in objects:
@@ -476,9 +476,7 @@ async def worker(name: str, queue: asyncio.Queue):
 
 async def main(holder: ContractHolder):
 
-    log.debug('inside main')
     contracts = holder()
-    log.debug('past holder')
     number_of_workers = min(len(contracts), max_number_of_workers)
 
     log.debug(f'main function started, '
@@ -510,11 +508,11 @@ if __name__ == '__main__':
     store = ArcticStore(f'{wts}_{barSize}')
 
     holder = ContractHolder(ib, 'contracts.csv',
-                            store, wts, barSize, True, aggression=0.5)
+                            store, wts, barSize, True, aggression=1)
 
     asyncio.get_event_loop().set_debug(True)
     # util.logToConsole(DEBUG)
-    Connection(ib, partial(main, holder), watchdog=False)
+    Connection(ib, partial(main, holder), watchdog=True)
 
     log.debug('script finished, about to disconnect')
     ib.disconnect()

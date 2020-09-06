@@ -8,7 +8,6 @@ from datastore import ArcticStore
 from saver import PickleSaver
 from blotter import CsvBlotter
 from trader import Manager, Trader
-from portfolio import FixedPortfolio, AdjustedPortfolio
 from strategy import strategy_kwargs
 
 
@@ -16,7 +15,7 @@ log = logger(__file__[:-3], WARNING, WARNING)
 
 start_date = '20180601'
 end_date = '20191231'
-cash = 12000
+cash = 80000
 store = ArcticStore('TRADES_30_secs')
 source = DataSourceManager(store, start_date, end_date)
 ib = IB(source, mode='db_only', index=-2)  # mode is: 'db_only' or 'use_ib'

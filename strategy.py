@@ -5,7 +5,7 @@ from ib_insync import ContFuture
 from logbook import Logger
 
 from streamers import VolumeStreamer
-from candle import BreakoutCandle
+from candle import BreakoutCandle, RsiCandle, CarverCandle, BreakoutRsiCandle
 from portfolio import FixedPortfolio, AdjustedPortfolio, WeightedAdjustedPortfolio
 
 
@@ -27,18 +27,23 @@ class Params:
     avg_periods: Optional[int] = None
     volume: Optional[int] = None  # candle volume given directly
     min_atr: float = 0
+    rsi_threshold: float = 70
+    rsi_periods: float = 24
+    rsi_smooth: float = 5
 
 
 nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
     sl_atr=1,
-    periods=5,
     trades_per_day=4.5,
     # avg_periods=60,
     volume=12000,
     min_atr=14,
-    alloc=.4
+    alloc=.4,
+    rsi_threshold=60,
+    rsi_smooth=10,
+
 )
 
 es = Params(
@@ -51,7 +56,7 @@ es = Params(
     # avg_periods=60,
     volume=43000,
     min_atr=5,
-    alloc=.125
+    alloc=.125,
 )
 
 gc = Params(
@@ -60,13 +65,15 @@ gc = Params(
     trades_per_day=1.9,  # 2.1
     ema_fast=60,
     ema_slow=120,
-    periods=5,
+    periods=60,
     sl_atr=2,
     atr_periods=90,
     # avg_periods=60,
     volume=5500,
     min_atr=1.9,
-    alloc=.225
+    alloc=.225,
+    rsi_periods=12,
+    rsi_smooth=5,
 )
 
 ym = Params(
@@ -79,7 +86,7 @@ ym = Params(
     # avg_periods=60,
     volume=8000,
     min_atr=55,
-    alloc=.25
+    alloc=.25,
 )
 
 
@@ -143,12 +150,12 @@ jpy = Params(
 """
 
 
-candles = [BreakoutCandle(VolumeStreamer(params.volume,
-                                         params.avg_periods),
-                          contract_fields=['contract', 'micro_contract'],
-                          **params.__dict__)
+candles = [BreakoutRsiCandle(VolumeStreamer(params.volume,
+                                            params.avg_periods),
+                             contract_fields=['contract', 'micro_contract'],
+                             **params.__dict__)
            for params in contracts]
-portfolio = FixedPortfolio(target_vol=.6)
+portfolio = AdjustedPortfolio(target_vol=.6)
 
 strategy_kwargs = {'candles': candles,
                    'portfolio': portfolio}
