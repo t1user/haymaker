@@ -190,3 +190,35 @@ class BreakoutRsiCandle(SingleSignalMixin, Candle):
         df['filtered_signal'] = df['signal'] * \
             ((df['signal'] * df['filter']) == 1)
         return df
+
+
+class MultipleBreakoutCandle(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['signal'] = indicators.any_signal(df.price, self.periods)
+        df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['filtered_signal'] = df['signal'] * \
+            ((df['signal'] * df['filter']) == 1)
+        return df
+
+
+class BreakoutLockCandle(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['signal'] = indicators.min_max_signal(df.price, self.periods)
+        df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['lock'] = -1 * (df.signal.shift().rolling(self.lock_periods).max()
+                           - df.signal.shift().rolling(self.lock_periods).min())
+        df['filtered_signal'] = ((df['signal'] - df['lock']) *
+                                 ((df['signal'] * df['filter']) == 1))
+        return df

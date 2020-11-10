@@ -115,8 +115,13 @@ class Trader:
         connected with clientId == 0.
         """
         if ((trade.order.orderId <= 0)
-                and (trade.orderStatus.status == 'PreSubmitted')):
+            and (trade.order.orderType not in ('STP', 'TRAIL'))
+                and (trade.orderStatus.status in ['PreSubmitted', 'Inactive'])):
             log.debug(f'manual trade reporting event attached')
+            trade.filledEvent.clear()
+            trade.cancelledEvent.clear()
+            trade.commissionReportEvent.clear()
+            trade.modifyEvent.clear()
             self.attach_events(trade, 'MANUAL TRADE')
 
     def onEntry(self, contract: Contract, signal: int,
@@ -227,6 +232,7 @@ class Trader:
             if trade.order.orderType in ('STP', 'TRAIL'
                                          ) and trade.orderStatus.remaining != 0:
                 self.attach_events(trade, 'STOP-LOSS')
+
         # check for orphan positions
         positions = self.ib.positions()
         log.debug(f'positions on re-connect: {positions}')
@@ -235,14 +241,21 @@ class Trader:
         orphan_contracts = position_contracts - trade_contracts
         orphan_positions = [position for position in positions
                             if position.contract in orphan_contracts]
-        log.debug(f'orphan positions: {orphan_positions}')
-        if len(orphan_positions) != 0:
+        if orphan_positions:
+            log.warning(f'orphan positions: {orphan_positions}')
+            log.debug(f'len(orphan_positions): {len(orphan_positions)}')
+            log.debug(f'orphan contracts: {orphan_contracts}')
             for p in orphan_positions:
                 self.ib.qualifyContracts(p.contract)
                 self.emergencyClose(
                     p.contract, -np.sign(p.position), int(np.abs(p.position)))
+                log.error(f'emergencyClose position: {p.contract}, '
+                          f'{-np.sign(p.position)}, {int(np.abs(p.position))}')
+                t = self.ib.reqAllOpenOrders()
+                log.debug(f'reqAllOpenOrders: {t}')
+                log.debug(f'openTrades: {self.ib.openTrades()}')
 
-    @ staticmethod
+    @staticmethod
     def round_tick(price: float, tick_size: float) -> float:
         floor = price // tick_size
         remainder = price % tick_size
@@ -253,6 +266,7 @@ class Trader:
     def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
         report_commission = partial(self.report_commission, reason)
+        # make sure events are not duplicated
         trade.filledEvent += report_trade
         trade.cancelledEvent += self.report_cancel
         trade.commissionReportEvent += report_commission

@@ -158,7 +158,7 @@ class IBHandlers:
     def onError(self, reqId: int, errorCode: int, errorString: str,
                 contract: Contract):
         if errorCode not in (2157, 2158, 2119, 2104, 2106, 165, 2108,
-                             2103, 2105):
+                             2103, 2105, 10182, 1100):
             log.warning(f'ERROR: {errorCode} {errorString} {contract}')
 
     def onTimeout(self, idlePeriod: float):

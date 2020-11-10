@@ -44,7 +44,6 @@ class Params:
 nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
-    sl_atr=1,
     trades_per_day=4.5,
     # avg_periods=60,
     volume=12000,
@@ -68,9 +67,8 @@ es = Params(
 gc = Params(
     contract=ContFuture('GC', 'NYMEX'),
     micro_contract=ContFuture('MGC', 'NYMEX'),
-    trades_per_day=1.9,  # 2.1
+    trades_per_day=2.5,
     ema_fast=60,
-    ema_slow=120,
     periods=60,
     sl_atr=2,
     atr_periods=90,
@@ -85,7 +83,6 @@ ym = Params(
     micro_contract=ContFuture('MYM', 'ECBOT'),
     trades_per_day=1.5,
     ema_fast=60,
-    ema_slow=120,
     sl_atr=2,
     # avg_periods=60,
     volume=8000,
@@ -100,7 +97,7 @@ candles = [BreakoutCandle(VolumeStreamer(params.volume,
                           contract_fields=['contract', 'micro_contract'],
                           **params.__dict__)
            for params in contracts]
-portfolio = WeightedAdjustedPortfolio(target_vol=.6)
+portfolio = WeightedAdjustedPortfolio(target_vol=.5)
 
 
 class Start(Handlers):

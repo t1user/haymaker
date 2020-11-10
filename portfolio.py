@@ -112,7 +112,8 @@ class AdjustedPortfolio(Portfolio):
         return round(contracts * self.div_multiplier, 1)
 
     def onSignal(self, obj: Candle):
-        position = self.positions.get(obj.contract.symbol)
+        position = (self.positions.get(obj.contract.symbol)
+                    or self.positions.get(obj.micro_contract.symbol))
         if obj.df.filtered_signal[-1] and not position:
             message = (f'entry signal emitted for {obj.contract.localSymbol},'
                        f' signal: {obj.df.filtered_signal[-1]},'
@@ -147,8 +148,14 @@ class AdjustedPortfolio(Portfolio):
             if position * obj.df.signal[-1] < 0:
                 log.debug(
                     f'close signal emitted for {obj.contract.localSymbol}')
-                self.closeSignal.emit(obj.contract, obj.df.signal[-1],
-                                      abs(self.positions[obj.contract.symbol]))
+                # try except to cover case when position is only in
+                # micro_contract
+                try:
+                    self.closeSignal.emit(
+                        obj.contract, obj.df.signal[-1],
+                        abs(self.positions[obj.contract.symbol]))
+                except KeyError:
+                    pass
                 if self.positions.get(obj.micro_contract.symbol):
                     self.closeSignal.emit(obj.micro_contract,
                                           obj.df.signal[-1],

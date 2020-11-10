@@ -8,9 +8,9 @@ from trader import Manager
 from trader import Trader
 from strategy import strategy_kwargs
 from logger import logger, rotating_logger_with_shell
-from logbook import DEBUG
+from logbook import INFO
 
-log = rotating_logger_with_shell(__file__[:-3])
+log = rotating_logger_with_shell(__file__[:-3], INFO, INFO)
 
 
 class Start(Handlers):

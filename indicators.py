@@ -1,8 +1,9 @@
 from functools import partial
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Tuple
 
 import pandas as pd
 import numpy as np
+import sys
 
 
 def atr(data: pd.DataFrame, periods: List[int], exp: bool = True) -> pd.Series:
@@ -75,10 +76,13 @@ def majority_function(data: pd.DataFrame) -> pd.Series:
         0.5 + ((data.sum(axis=1) - 0.5) / data.count(axis=1))).apply(np.floor)
 
 
-def get_min_max_df(data: pd.DataFrame, periods: [List[int]],
+def get_min_max_df(data: pd.DataFrame, periods: Tuple[int],
                    func: Callable[[pd.DataFrame, int],
                                   pd.DataFrame] = get_min_max
                    ) -> Dict[str, pd.DataFrame]:
+    """
+    Given a list of periods, return func on each of those periods.
+    """
     min_max_func = partial(func, data)
     mins = pd.DataFrame()
     maxs = pd.DataFrame()
@@ -90,12 +94,17 @@ def get_min_max_df(data: pd.DataFrame, periods: [List[int]],
             'max': maxs}
 
 
-def get_signals(data: pd.Series, periods: List[int]) -> pd.DataFrame:
+def get_signals(data: pd.Series, periods: Tuple[int]) -> pd.Series:
     min_max = get_min_max_df(data, periods)
     return pd.DataFrame({
         'signal': majority_function(
             min_max['max']) - majority_function(min_max['min'])
     })
+
+
+def any_signal(data: pd.Series, periods: Tuple[int]) -> pd.Series:
+    min_max = get_min_max_df(data, periods)
+    return min_max['max'].any(axis=1) * 1 - min_max['min'].any(axis=1) * 1
 
 
 def rsi(price: pd.Series, lookback: int) -> pd.Series:
