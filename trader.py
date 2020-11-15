@@ -127,22 +127,12 @@ class Trader:
     def onEntry(self, contract: Contract, signal: int,
                 atr: float, amount: int) -> None:
         log.debug(
-            f'entry signal handled for: {contract.localSymbol} '
-            f'signal: {signal} atr: {atr}')
-        self.contracts[contract.symbol].atr = atr
-        trade = self.trade(contract, signal, amount)
-        trade.filledEvent += self.attach_sl
-        self.attach_events(trade, 'ENTRY')
+            f'{contract.localSymbol} entry signal: {signal} atr: {atr}')
+        self.execModel.onEntry(contract, signal, atr, amount)
 
     def onClose(self, contract: Contract, signal: int, amount: int) -> None:
-        message = (f'close signal handled for: {contract.localSymbol}'
-                   f' signal: {signal}')
-        log.debug(message)
-        self.remove_sl(contract)
-        # TODO can sl close position before being removed?
-        # make sure sl didn't close the position before being removed
-        trade = self.trade(contract, signal, amount)
-        self.attach_events(trade, 'CLOSE')
+        log.debug(f'{contract.localSymbol} close signal: {signal}')
+        self.execModel.onClose(contract, signal, amount)
 
     def emergencyClose(self, contract: Contract, signal: int,
                        amount: int) -> None:
@@ -151,71 +141,14 @@ class Trader:
         trade = self.trade(contract, signal, amount)
         self.attach_events(trade, 'EMERGENCY CLOSE')
 
-    def trade(self, contract: Contract, signal: int,
-              amount: int) -> Trade:
-        assert signal in [-1, 1], 'Invalid trade signal'
-        order = MarketOrder('BUY' if signal == 1 else 'SELL',
-                            amount, algoStrategy='Adaptive',
-                            algoParams=[
-                                TagValue('adaptivePriority', 'Normal')],
-                            tif='Day')
-        log.debug(f'entering order for {contract.localSymbol}: {order}')
-        return self.ib.placeOrder(contract, order)
-
-    def attach_sl(self, trade: Trade) -> None:
-        contract = trade.contract
-        action = trade.order.action
-        assert action in ('BUY', 'SELL')
-        reverseAction = 'BUY' if action == 'SELL' else 'SELL'
-        direction = 1 if reverseAction == 'BUY' else -1
-        amount = trade.orderStatus.filled
-        price = trade.orderStatus.avgFillPrice
-        sl_points = self.contracts[contract.symbol].atr
-        if self.sl_type == 'fixed':
-            sl_price = self.round_tick(
-                price + sl_points * direction *
-                self.contracts[contract.symbol].sl_atr,
-                self.contracts[contract.symbol].details.minTick)
-            log.info(f'STOP LOSS PRICE: {sl_price}')
-            order = StopOrder(reverseAction, amount, sl_price,
-                              outsideRth=True, tif='GTC')
-        elif self.sl_type == 'trailing' or self.sl_type == 'trailingFixed':
-            distance = self.round_tick(
-                sl_points * self.contracts[contract.symbol].sl_atr,
-                self.contracts[contract.symbol].details.minTick)
-            log.info(f'TRAILING STOP LOSS DISTANCE: {distance}')
-            order = Order(orderType='TRAIL', action=reverseAction,
-                          totalQuantity=amount, auxPrice=distance,
-                          outsideRth=True, tif='GTC')
+    def trade(self, contract: Contract, order: Order, reason: str) -> Trade:
         trade = self.ib.placeOrder(contract, order)
-        log.debug(f'stop loss attached for {trade.contract.localSymbol}')
-        self.attach_events(trade, 'STOP-LOSS')
-        if self.sl_type == 'trailingFixed':
-            sl = trade.order
-            log.debug(sl)
-            sl.adjustedOrderType = 'STP'
-            sl.adjustedStopPrice = (
-                price - direction * 2 * distance)
-            # self.contracts[contract.symbol].details.minTick)
-            log.debug(f'adjusted stop price: {sl.adjustedStopPrice}')
-            log.debug(f'DISTANCE: {distance}')
-            sl.triggerPrice = sl.adjustedStopPrice - direction * distance
-            self.ib.placeOrder(contract, sl)
-            log.debug(f'stop loss for {contract.localSymbol} will be '
-                      f'fixed at {sl.triggerPrice}')
+        self.attach_events(trade, reason)
+        log.debug(f'{contract.localSymbol} order placed: {order}')
+        return trade
 
     def report_order_modification(self, trade):
         log.debug(f'Order modified: {trade.order}')
-
-    def remove_sl(self, contract: Contract) -> None:
-        open_trades = self.ib.openTrades()
-        orders = defaultdict(list)
-        for t in open_trades:
-            orders[t.contract.localSymbol].append(t.order)
-        for order in orders[contract.localSymbol]:
-            if order.orderType in ('STP', 'TRAIL'):
-                self.ib.cancelOrder(order)
-                log.debug(f'stop loss removed for {contract.localSymbol}')
 
     def reconcile_stops(self) -> None:
         """
@@ -254,14 +187,6 @@ class Trader:
                 t = self.ib.reqAllOpenOrders()
                 log.debug(f'reqAllOpenOrders: {t}')
                 log.debug(f'openTrades: {self.ib.openTrades()}')
-
-    @staticmethod
-    def round_tick(price: float, tick_size: float) -> float:
-        floor = price // tick_size
-        remainder = price % tick_size
-        if remainder > (tick_size / 2):
-            floor += 1
-        return round(floor * tick_size, 4)
 
     def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
