@@ -12,7 +12,7 @@ import numpy as np
 from portfolio import Portfolio
 from candle import Candle
 from blotter import AbstractBaseBlotter, CsvBlotter
-
+from execution_models import BaseExecModel, EventDrivenExecModel
 from saver import AbstractBaseSaver, PickleSaver
 from logger import Logger
 
@@ -24,7 +24,7 @@ class Manager:
 
     def __init__(self, ib: IB, candles: List[Candle],
                  portfolio: Portfolio,
-                 trader: Optional[Trader] = None,
+                 exec_model: Optional[BaseExecModel] = None,
                  saver: AbstractBaseSaver = PickleSaver(),
                  contract_fields: Union[List[str], str] = 'contract',
                  keep_ref: bool = True):
@@ -32,7 +32,7 @@ class Manager:
         self.ib = ib
         self.candles = candles
         self.saver = saver
-        self.trader = trader or Trader(ib)
+        self.exec_model = exec_model or EventDrivenExecModel()
         self.keep_ref = keep_ref
         self.portfolio = portfolio
         self.connect_portfolio(portfolio)
@@ -40,12 +40,12 @@ class Manager:
 
     def connect_portfolio(self, portfolio: Portfolio):
         self.portfolio.register(self.ib, self.candles)
-        self.portfolio.entrySignal += self.trader.onEntry
-        self.portfolio.closeSignal += self.trader.onClose
+        self.portfolio.entrySignal += self.exec_model.onEntry
+        self.portfolio.closeSignal += self.exec_model.onClose
 
     def onStarted(self, *args, **kwargs):
-        log.debug(f'manager onStarted')
-        self.trader.reconcile_stops()
+        log.debug('manager onStarted')
+        self.exec_model.reconcile_stops()
         self.candles = get_contracts(self.candles, self.ib)
         # allow backtester to convey simulation time
         now = kwargs.get('now') or datetime.now()
@@ -62,12 +62,6 @@ class Manager:
 
     def connect_candles(self, now):
         for candle in self.candles:
-            # register candles with Trader
-            for field in candle.contract_fields:
-                self.trader.register(getattr(candle, field), candle)
-            log.debug(
-                f'contracts for candle {candle.contract.tradingClass}: '
-                f'{[getattr(candle, field) for field in candle.contract_fields]}')
             # make sure no previous events connected
             candle.entrySignal.clear()
             candle.closeSignal.clear()
@@ -117,29 +111,12 @@ class Trader:
         if ((trade.order.orderId <= 0)
             and (trade.order.orderType not in ('STP', 'TRAIL'))
                 and (trade.orderStatus.status in ['PreSubmitted', 'Inactive'])):
-            log.debug(f'manual trade reporting event attached')
+            log.debug('manual trade reporting event attached')
             trade.filledEvent.clear()
             trade.cancelledEvent.clear()
             trade.commissionReportEvent.clear()
             trade.modifyEvent.clear()
             self.attach_events(trade, 'MANUAL TRADE')
-
-    def onEntry(self, contract: Contract, signal: int,
-                atr: float, amount: int) -> None:
-        log.debug(
-            f'{contract.localSymbol} entry signal: {signal} atr: {atr}')
-        self.execModel.onEntry(contract, signal, atr, amount)
-
-    def onClose(self, contract: Contract, signal: int, amount: int) -> None:
-        log.debug(f'{contract.localSymbol} close signal: {signal}')
-        self.execModel.onClose(contract, signal, amount)
-
-    def emergencyClose(self, contract: Contract, signal: int,
-                       amount: int) -> None:
-        log.warning(f'Emergency close on restart: {contract.localSymbol} '
-                    f'side: {signal} amount: {amount}')
-        trade = self.trade(contract, signal, amount)
-        self.attach_events(trade, 'EMERGENCY CLOSE')
 
     def trade(self, contract: Contract, order: Order, reason: str) -> Trade:
         trade = self.ib.placeOrder(contract, order)
@@ -147,46 +124,15 @@ class Trader:
         log.debug(f'{contract.localSymbol} order placed: {order}')
         return trade
 
-    def report_order_modification(self, trade):
-        log.debug(f'Order modified: {trade.order}')
-
-    def reconcile_stops(self) -> None:
-        """
-        To be executed on restart. Make sure all positions have corresponding
-        stop-losses, if not send a closing order. For all existing
-        stop-losses attach reporting events for the blotter.
-        """
-
-        trades = self.ib.openTrades()
-        log.info(f'open trades on re-connect: {len(trades)} '
-                 f'{[t.contract.localSymbol for t in trades]}')
-        # attach reporting events
-        for trade in trades:
-            if trade.order.orderType in ('STP', 'TRAIL'
-                                         ) and trade.orderStatus.remaining != 0:
-                self.attach_events(trade, 'STOP-LOSS')
-
-        # check for orphan positions
-        positions = self.ib.positions()
-        log.debug(f'positions on re-connect: {positions}')
-        trade_contracts = set([t.contract for t in trades])
-        position_contracts = set([p.contract for p in positions])
-        orphan_contracts = position_contracts - trade_contracts
-        orphan_positions = [position for position in positions
-                            if position.contract in orphan_contracts]
-        if orphan_positions:
-            log.warning(f'orphan positions: {orphan_positions}')
-            log.debug(f'len(orphan_positions): {len(orphan_positions)}')
-            log.debug(f'orphan contracts: {orphan_contracts}')
-            for p in orphan_positions:
-                self.ib.qualifyContracts(p.contract)
-                self.emergencyClose(
-                    p.contract, -np.sign(p.position), int(np.abs(p.position)))
-                log.error(f'emergencyClose position: {p.contract}, '
-                          f'{-np.sign(p.position)}, {int(np.abs(p.position))}')
-                t = self.ib.reqAllOpenOrders()
-                log.debug(f'reqAllOpenOrders: {t}')
-                log.debug(f'openTrades: {self.ib.openTrades()}')
+    def remove_sl(self, contract: Contract) -> None:
+        open_trades = self.ib.openTrades()
+        orders = defaultdict(list)
+        for t in open_trades:
+            orders[t.contract.localSymbol].append(t.order)
+        for order in orders[contract.localSymbol]:
+            if order.orderType in ('STP', 'TRAIL'):
+                self.ib.cancelOrder(order)
+                log.debug(f'stop loss removed for {contract.localSymbol}')
 
     def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
@@ -195,7 +141,7 @@ class Trader:
         trade.filledEvent += report_trade
         trade.cancelledEvent += self.report_cancel
         trade.commissionReportEvent += report_commission
-        trade.modifyEvent += self.report_order_modification
+        trade.modifyEvent += self.report_modification
         log.debug(f'Reporting events attached for {trade.contract.localSymbol} '
                   f'{trade.order.action} {trade.order.totalQuantity} '
                   f'{trade.order.orderType}')
@@ -212,6 +158,9 @@ class Trader:
                    f'{trade.order.totalQuantity}) for '
                    f'{trade.contract.localSymbol} cancelled')
         log.info(message)
+
+    def report_modification(self, trade):
+        log.debug(f'Order modified: {trade.order}')
 
     def report_commission(self, reason: str, trade: Trade, fill: Fill,
                           report: CommissionReport) -> None:
