@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import datetime
 from itertools import count
 import pickle
@@ -9,17 +8,15 @@ from typing import (NamedTuple, List, Dict, Any, Union, Tuple, Type, Optional,
 import pandas as pd
 import numpy as np
 from logbook import Logger
-
 from ib_insync import IB as master_IB
 from ib_insync import util
 from ib_insync.contract import Future, ContFuture, Contract
 from ib_insync import (BarData, BarDataList, ContractDetails, TradeLogEntry,
-                       Position, CommissionReport, Execution, Fill)
-from ib_insync.order import OrderStatus, Trade, MarketOrder, Order
-from eventkit import Event
+                       Position, CommissionReport, Execution, Fill,
+                       OrderStatus, Trade, MarketOrder, Order, Event)
 
 from datastore import Store
-from trader import Manager
+from manager import Manager
 
 log = Logger(__name__)
 util.patchAsyncio()
@@ -606,9 +603,9 @@ class _Market:
         self.account.mark_to_market(self.prices)
         self.run_orders()
         log.debug(f'current date: {self.date}')
-        for k, v in self.prices.items():
-            log.debug(f'current price: {k}: open: {v.open}, high: {v.high}, '
-                      f'low: {v.low}, close: {v.close}')
+        # for k, v in self.prices.items():
+        #    log.debug(f'current price: {k}: open: {v.open}, high: {v.high}, '
+        #              f'low: {v.low}, close: {v.close}')
 
     def close_all_positions(self) -> None:
         """
@@ -691,7 +688,7 @@ class _Market:
         """
         # order doesn't have a trigger price (default value)
         if order.triggerPrice == 1.7976931348623157e+308:
-            log.debug('validate_order_trigger returned')
+            #log.debug('validate_order_trigger returned')
             return
 
         if (

@@ -4,13 +4,14 @@ from ib_insync.ibcontroller import IBC, Watchdog
 from handlers import Handlers
 from saver import ArcticSaver
 from blotter import MongoBlotter
-from trader import Manager
+from manager import Manager
 from trader import Trader
+from execution_models import EventDrivenExecModel
 from strategy import strategy_kwargs
-from logger import logger, rotating_logger_with_shell
+from logger import rotating_logger_with_shell
 from logbook import INFO
 
-log = rotating_logger_with_shell(__file__[:-3], INFO, INFO)
+log = rotating_logger_with_shell(__file__[:-3])
 
 
 class Start(Handlers):
@@ -41,5 +42,6 @@ ib = IB()
 blotter = MongoBlotter()
 saver = ArcticSaver()
 trader = Trader(ib, blotter)
-manager = Manager(ib, trader=trader, saver=saver, **strategy_kwargs)
+exec_model = EventDrivenExecModel(trader)
+manager = Manager(ib, exec_model=exec_model, saver=saver, **strategy_kwargs)
 start = Start(ib, manager)

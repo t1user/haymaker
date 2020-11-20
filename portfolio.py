@@ -75,8 +75,8 @@ class FixedPortfolio(Portfolio):
                 obj.contract, obj.df.price[-1])
             if number_of_contracts:
                 self.entrySignal.emit(
-                    obj.contract, obj.df.signal[-1],
-                    obj.df.atr[-1] * obj.sl_atr, number_of_contracts, obj)
+                    obj.contract, obj.df.signal[-1], number_of_contracts,
+                    obj.df.atr[-1] * obj.sl_atr,  obj)
             else:
                 message = (f'Not enough equity to open position for: '
                            f'{obj.contract.localSymbol}')
@@ -87,7 +87,7 @@ class FixedPortfolio(Portfolio):
                     f'close signal emitted for {obj.contract.localSymbol}')
                 self.closeSignal.emit(obj.contract, obj.df.signal[-1],
                                       abs(self.positions[obj.contract.symbol]),
-                                      obj)
+                                      )
 
 
 class AdjustedPortfolio(Portfolio):
@@ -130,8 +130,8 @@ class AdjustedPortfolio(Portfolio):
                 log.debug(f'emitting signal for major contract: '
                           f'{obj.contract.symbol}: {major_contracts}')
                 self.entrySignal.emit(
-                    obj.contract, obj.df.signal[-1],
-                    obj.df.atr[-1] * obj.sl_atr, major_contracts, obj)
+                    obj.contract, obj.df.signal[-1], major_contracts,
+                    obj.df.atr[-1] * obj.sl_atr,  obj)
             # 'and not' part because minor contract might have not been
             # stopped out on previous position, even though major contract was
             if minor_contracts and not self.positions.get(
@@ -139,8 +139,8 @@ class AdjustedPortfolio(Portfolio):
                 log.debug(f'emitting signal for minor contract: '
                           f'{obj.micro_contract.symbol}: {minor_contracts}')
                 self.entrySignal.emit(
-                    obj.micro_contract, obj.df.signal[-1],
-                    obj.df.atr[-1] * obj.sl_atr, minor_contracts, obj)
+                    obj.micro_contract, obj.df.signal[-1], minor_contracts,
+                    obj.df.atr[-1] * obj.sl_atr, obj)
             if not (major_contracts or minor_contracts):
                 message = (f'Not enough equity to open position for: '
                            f'{obj.contract.localSymbol}')
@@ -154,7 +154,7 @@ class AdjustedPortfolio(Portfolio):
                 try:
                     self.closeSignal.emit(
                         obj.contract, obj.df.signal[-1],
-                        abs(self.positions[obj.contract.symbol]), obj)
+                        abs(self.positions[obj.contract.symbol]))
                 except KeyError:
                     pass
                 if self.positions.get(obj.micro_contract.symbol):
@@ -162,7 +162,7 @@ class AdjustedPortfolio(Portfolio):
                                           obj.df.signal[-1],
                                           abs(self.positions[
                                               obj.micro_contract.symbol]),
-                                          obj)
+                                          )
 
 
 class WeightedAdjustedPortfolio(AdjustedPortfolio):

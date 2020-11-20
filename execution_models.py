@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from collection import defaultdict
 import numpy as np
 from typing import NamedTuple, Optional
 
 from trader import Trader
-from Candle import Candle
+from candle import Candle
 from ib_insync import Contract, Trade, Order, MarketOrder, StopOrder, TagValue
 from logger import Logger
 
@@ -97,10 +96,12 @@ class BaseExecModel:
     def __str__(self):
         return self.__class__.__name__
 
-    def entry_order(self) -> Order:
+    def entry_order(self, contract: Contract, signal: int, amount: int,
+                    *args, **kwargs) -> Order:
         raise NotImplementedError
 
-    def close_order(self) -> Order:
+    def close_order(self, contract: Contract, signal: int, amount: int,
+                    *args, **kwargs) -> Order:
         raise NotImplementedError
 
     def onEntry(self) -> None:
@@ -111,12 +112,6 @@ class BaseExecModel:
 
 
 class EventDrivenExecModel(BaseExecModel):
-
-    # TODO
-    # EACH ORDER TYPE PASSED TO INIT
-    # ??? RECONCILE ON RE-CONNECT ????
-
-    # is it done?
 
     def __init__(self, trader: Optional[Trader] = None,
                  stop: Stop = TrailingStop):
@@ -136,38 +131,33 @@ class EventDrivenExecModel(BaseExecModel):
 
     close_order = entry_order
 
-    def onEntry(self, contract: Contract, signal: int, sl_points: float,
-                amount: int, obj: Candle) -> None:
+    def onEntry(self, contract: Contract, signal: int, amount: int,
+                sl_points: float, obj: Candle) -> None:
         self.contracts[contract.symbol] = ContractMemo(
             sl_points=sl_points,
-            min_tick=obj.details.min_tick)
+            min_tick=obj.details.minTick)
         log.debug(
             f'{contract.localSymbol} entry signal: {signal} '
             'sl_distance: {sl_distance}')
-
-        trade = self.trade(contract, self.entry_order(signal, amount),
-                           'ENTRY')
+        trade = self.trade(contract, self.entry_order(signal, amount), 'ENTRY')
         trade.filledEvent += self.attach_sl
 
-    def onClose(self, contract: Contract, signal: int, atr: float,
-                amount: int) -> Trade:
+    def onClose(self, contract: Contract, signal: int, amount: int) -> None:
         # TODO can sl close position before being removed?
         # make sure sl didn't close the position before being removed
         log.debug(f'{contract.localSymbol} close signal: {signal}')
         self.remove_sl(contract)
-        trade = self.trade(contract, self.close_order(signal, amount),
-                           'CLOSE')
-        return trade
+        self.trade(contract, self.close_order(signal, amount), 'CLOSE')
 
     def emergencyClose(self, contract: Contract, signal: int,
                        amount: int) -> None:
         log.warning(f'Emergency close on restart: {contract.localSymbol} '
                     f'side: {signal} amount: {amount}')
-        trade = self.trade(contract, signal, amount)
-        self.attach_events(trade, 'EMERGENCY CLOSE')
+        self.trade(contract, self.close_order(
+            signal, amount), 'EMERGENCY CLOSE')
 
     def attach_sl(self, trade: Trade) -> None:
-        sl_points, min_tick = self.contracts[self.trade.contract.symbol]
+        sl_points, min_tick = self.contracts[trade.contract.symbol]
         order = self.stop(trade, sl_points, min_tick)
         self.trade(trade.contract, order, 'STOP-LOSS')
 
@@ -181,17 +171,17 @@ class EventDrivenExecModel(BaseExecModel):
         stop-losses attach reporting events for the blotter.
         """
 
-        trades = self.ib.openTrades()
+        trades = self._trader.trades()
         log.info(f'open trades on re-connect: {len(trades)} '
                  f'{[t.contract.localSymbol for t in trades]}')
         # attach reporting events
         for trade in trades:
-            if trade.order.orderType in ('STP', 'TRAIL'
-                                         ) and trade.orderStatus.remaining != 0:
+            if trade.order.orderType in (
+                    'STP', 'TRAIL') and trade.orderStatus.remaining != 0:
                 self.attach_events(trade, 'STOP-LOSS')
 
         # check for orphan positions
-        positions = self.ib.positions()
+        positions = self._trader.positions()
         log.debug(f'positions on re-connect: {positions}')
         trade_contracts = set([t.contract for t in trades])
         position_contracts = set([p.contract for p in positions])
@@ -203,11 +193,11 @@ class EventDrivenExecModel(BaseExecModel):
             log.debug(f'len(orphan_positions): {len(orphan_positions)}')
             log.debug(f'orphan contracts: {orphan_contracts}')
             for p in orphan_positions:
-                self.ib.qualifyContracts(p.contract)
+                self._trader.contracts(p.contract)
                 self.emergencyClose(
                     p.contract, -np.sign(p.position), int(np.abs(p.position)))
                 log.error(f'emergencyClose position: {p.contract}, '
                           f'{-np.sign(p.position)}, {int(np.abs(p.position))}')
-                t = self.ib.reqAllOpenOrders()
+                t = self._trader.ib.reqAllOpenOrders()
                 log.debug(f'reqAllOpenOrders: {t}')
-                log.debug(f'openTrades: {self.ib.openTrades()}')
+                log.debug(f'openTrades: {self._trader.ib.openTrades()}')
