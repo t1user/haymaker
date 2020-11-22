@@ -57,18 +57,17 @@ class Trader:
     def trade(self, contract: Contract, order: Order, reason: str) -> Trade:
         trade = self.ib.placeOrder(contract, order)
         self.attach_events(trade, reason)
-        log.debug(f'{contract.localSymbol} order placed: {order}')
+        log.info(f'{contract.localSymbol} order placed: {order}')
         return trade
 
-    def remove_sl(self, contract: Contract) -> None:
+    def remove_bracket(self, contract: Contract) -> None:
         open_trades = self.ib.openTrades()
         orders = defaultdict(list)
         for t in open_trades:
             orders[t.contract.localSymbol].append(t.order)
         for order in orders[contract.localSymbol]:
-            if order.orderType in ('STP', 'TRAIL'):
-                self.ib.cancelOrder(order)
-                log.debug(f'stop loss removed for {contract.localSymbol}')
+            self.ib.cancelOrder(order)
+            log.info(f'{order.orderType} removed for {contract.localSymbol}')
 
     def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
