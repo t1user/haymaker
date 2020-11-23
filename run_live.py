@@ -13,6 +13,7 @@ from trader import Manager, Trader
 from streamers import VolumeStreamer
 from candle import BreakoutCandle
 from portfolio import WeightedAdjustedPortfolio
+from exec_model import EventDrivenExecModel
 from logger import rotating_logger_with_shell
 
 
@@ -98,6 +99,7 @@ candles = [BreakoutCandle(VolumeStreamer(params.volume,
                           **params.__dict__)
            for params in contracts]
 portfolio = WeightedAdjustedPortfolio(target_vol=.5)
+exec_model = EventDrivenExecModel()
 
 
 class Start(Handlers):
@@ -130,8 +132,6 @@ log.debug(f'candles: {candles}')
 ib = IB()
 blotter = MongoBlotter(collection='live_blotter')
 saver = ArcticSaver(library='live_log')
-trader = Trader(ib, blotter)
-manager = Manager(ib, trader=trader, saver=saver,
-                  candles=candles, portfolio=portfolio)
-
+manager = Manager(ib, saver=saver, blotter=blotter,
+                  candles=candles, exec_model=exec_model, portfolio=portfolio)
 start = Start(ib, manager)

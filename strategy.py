@@ -8,6 +8,7 @@ from streamers import VolumeStreamer
 from candle import (BreakoutCandle, RsiCandle, CarverCandle, BreakoutRsiCandle,
                     BreakoutLockCandle)
 from portfolio import FixedPortfolio, AdjustedPortfolio, WeightedAdjustedPortfolio
+from exec_mode import EventDrivenExecModel
 
 
 log = Logger(__name__)
@@ -145,6 +146,7 @@ jpy = Params(
  'ES': 41337.0}
 """
 
+exec_model = EventDrivenExecModel()
 
 candles = [BreakoutCandle(VolumeStreamer(params.volume,
                                          params.avg_periods),
@@ -154,4 +156,5 @@ candles = [BreakoutCandle(VolumeStreamer(params.volume,
 portfolio = WeightedAdjustedPortfolio(target_vol=.55)
 
 strategy_kwargs = {'candles': candles,
-                   'portfolio': portfolio}
+                   'portfolio': portfolio,
+                   'exec_model': exec_model}

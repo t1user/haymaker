@@ -621,6 +621,8 @@ class _Market:
         log.info(f'Mark to market on open positions: '
                  f'{sum(self.account.mtm.values())}')
         log.info(f'Open positions: {self.account.positions}')
+        self.manager.trader.blotter.save()
+        self.manager.freeze()
 
     def reboot(self) -> None:
         """

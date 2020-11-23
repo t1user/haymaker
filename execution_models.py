@@ -102,14 +102,12 @@ class StopMultipleTakeProfit(BracketLeg):
 
 class BaseExecModel:
 
-    contracts = {}
-
-    def __init__(self, trader):
-        self.trade = trader.trade
-        self._trader = trader
-
     def __str__(self):
         return self.__class__.__name__
+
+    def connect_trader(self, trader):
+        self.trade = trader.trade
+        self._trader = trader
 
     @staticmethod
     def entry_order(signal: int, amount: int) -> Order:
@@ -130,12 +128,10 @@ class BaseExecModel:
 
 class EventDrivenExecModel(BaseExecModel):
 
-    def __init__(self, trader: Optional[Trader] = None,
-                 stop: BracketLeg = TrailingStop(),
+    contracts = {}
+
+    def __init__(self, stop: BracketLeg = TrailingStop(),
                  take_profit: Optional[BracketLeg] = None):
-        if trader is None:
-            trader = Trader()
-        super().__init__(trader)
         self.stop = stop
         self.take_profit = take_profit
         log.debug(f'execution model initialized {self}')

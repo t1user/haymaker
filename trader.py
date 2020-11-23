@@ -15,9 +15,8 @@ log = Logger(__name__)
 
 class Trader:
 
-    def __init__(self,
-                 ib: IB, blotter: AbstractBaseBlotter = CsvBlotter()
-                 ) -> None:
+    def __init__(self, ib: IB,
+                 blotter: AbstractBaseBlotter = CsvBlotter()) -> None:
         self.ib = ib
         self.blotter = blotter
         self.contracts = {}

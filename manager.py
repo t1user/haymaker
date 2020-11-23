@@ -5,7 +5,9 @@ from ib_insync import IB
 
 from candle import Candle
 from portfolio import Portfolio
+from trader import Trader
 from saver import AbstractBaseSaver, PickleSaver
+from blotter import AbstractBaseBlotter, CsvBlotter
 from execution_models import BaseExecModel, EventDrivenExecModel
 from logger import Logger
 
@@ -16,21 +18,29 @@ class Manager:
 
     def __init__(self, ib: IB, candles: List[Candle],
                  portfolio: Portfolio,
-                 exec_model: Optional[BaseExecModel] = None,
                  saver: AbstractBaseSaver = PickleSaver(),
+                 blotter: AbstractBaseBlotter = CsvBlotter(),
+                 exec_model: Optional[BaseExecModel] = None,
+                 trader: Optional[Trader] = None,
                  contract_fields: Union[List[str], str] = 'contract',
                  keep_ref: bool = True):
 
         self.ib = ib
         self.candles = candles
         self.saver = saver
+        self.blotter = blotter
+        self.trader = Trader(ib, blotter)
         self.exec_model = exec_model or EventDrivenExecModel()
+        self.connect_exec_model()
         self.keep_ref = keep_ref
         self.portfolio = portfolio
-        self.connect_portfolio(portfolio)
+        self.connect_portfolio()
         log.debug(f'manager object initiated: {self}')
 
-    def connect_portfolio(self, portfolio: Portfolio):
+    def connect_exec_model(self):
+        self.exec_model.connect_trader(self.trader)
+
+    def connect_portfolio(self):
         self.portfolio.register(self.ib, self.candles)
         self.portfolio.entrySignal += self.exec_model.onEntry
         self.portfolio.closeSignal += self.exec_model.onClose
