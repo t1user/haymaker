@@ -13,7 +13,7 @@ from trader import Manager, Trader
 from streamers import VolumeStreamer
 from candle import BreakoutCandle
 from portfolio import WeightedAdjustedPortfolio
-from exec_model import EventDrivenExecModel
+from execution_models import EventDrivenExecModel
 from logger import rotating_logger_with_shell
 
 

@@ -8,7 +8,7 @@ from streamers import VolumeStreamer
 from candle import (BreakoutCandle, RsiCandle, CarverCandle, BreakoutRsiCandle,
                     BreakoutLockCandle)
 from portfolio import FixedPortfolio, AdjustedPortfolio, WeightedAdjustedPortfolio
-from exec_mode import EventDrivenExecModel
+from execution_models import EventDrivenExecModel
 
 
 log = Logger(__name__)
