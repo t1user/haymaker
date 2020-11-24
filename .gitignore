@@ -1,6 +1,7 @@
 *~
 .env
 .ipynb_checkpoints
+.idea
 __pycache__
 logs/
 blotter/

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import defaultdict
 
 import numpy as np
 from typing import NamedTuple, Optional
@@ -105,9 +106,12 @@ class BaseExecModel:
     def __str__(self):
         return self.__class__.__name__
 
-    def connect_trader(self, trader):
+    def connect_trader(self, trader: Trader):
         self.trade = trader.trade
         self._trader = trader
+
+    def onStarted(self):
+        pass
 
     @staticmethod
     def entry_order(signal: int, amount: int) -> Order:
@@ -173,8 +177,9 @@ class EventDrivenExecModel(BaseExecModel):
                        amount: int) -> None:
         log.warning(f'Emergency close on restart: {contract.localSymbol} '
                     f'side: {signal} amount: {amount}')
-        self.trade(contract, self.close_order(
+        trade = self.trade(contract, self.close_order(
             signal, amount), 'EMERGENCY CLOSE')
+        trade.filledEvent += self.remove_bracket
 
     def attach_bracket(self, trade: Trade) -> None:
         sl_points, min_tick = self.contracts[trade.contract.symbol]
@@ -187,33 +192,27 @@ class EventDrivenExecModel(BaseExecModel):
                 bracket_trade.filledEvent += self.remove_bracket
 
     def remove_bracket(self, trade: Trade) -> None:
-        self._trader.remove_bracket(trade.contract)
+        self.cancel_all_orders_for_contract(trade.contract)
 
-    def reconcile_stops(self) -> None:
+    def cancel_all_orders_for_contract(self, contract: Contract) -> None:
+        open_trades = self._trader.trades()
+        orders = defaultdict(list)
+        for t in open_trades:
+            orders[t.contract.localSymbol].append(t.order)
+        for order in orders[contract.localSymbol]:
+            self._trader.cancel(order)
+
+    def onStarted(self) -> None:
         """
-        To be executed on restart. Make sure all positions have corresponding
-        stop-losses, if not send a closing order. For all existing
-        bracket orders attach reporting events for the blotter.
-
-        THIS LIKELY DOESN'T WORK. DISTINGUISH BETWEEN STP AND LIMIT FOR EMERGENCY
-        CLOSE?????
+        Make sure all positions have corresponding stop-losses or
+        emergency-close them.
         """
-
-        trades = self._trader.trades()
-        log.info(f'open trades on re-connect: {len(trades)} '
-                 f'{[t.contract.localSymbol for t in trades]}')
-        # attach reporting events
-        for trade in trades:
-            if trade.orderStatus.remaining != 0:
-                if trade.order.orderType in ('STP', 'TRAIL'):
-                    self.attach_events(trade, 'STOP-LOSS')
-                else:
-                    self.attach_events(trade, 'TAKE-PROFIT')
-
         # check for orphan positions
+        trades = self._trader.trades()
         positions = self._trader.positions()
         log.debug(f'positions on re-connect: {positions}')
-        trade_contracts = set([t.contract for t in trades])
+        trade_contracts = set([t.contract for t in trades
+                               if t.order.orderType in ('STP', 'TRAIL')])
         position_contracts = set([p.contract for p in positions])
         orphan_contracts = position_contracts - trade_contracts
         orphan_positions = [position for position in positions
@@ -223,7 +222,7 @@ class EventDrivenExecModel(BaseExecModel):
             log.debug(f'len(orphan_positions): {len(orphan_positions)}')
             log.debug(f'orphan contracts: {orphan_contracts}')
             for p in orphan_positions:
-                self._trader.contracts(p.contract)
+                self._trader.ib.qualifyContracts(p.contract)
                 self.emergencyClose(
                     p.contract, -np.sign(p.position), int(np.abs(p.position)))
                 log.error(f'emergencyClose position: {p.contract}, '

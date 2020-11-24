@@ -47,7 +47,8 @@ class Manager:
 
     def onStarted(self, *args, **kwargs):
         log.debug('manager onStarted')
-        self.exec_model.reconcile_stops()
+        self.trader.onStarted()
+        self.exec_model.onStarted()
         self.candles = get_contracts(self.candles, self.ib)
         # allow backtester to convey simulation time
         now = kwargs.get('now') or datetime.now()

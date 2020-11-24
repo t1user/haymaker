@@ -9,9 +9,9 @@ from trader import Trader
 from execution_models import EventDrivenExecModel
 from strategy import strategy_kwargs
 from logger import rotating_logger_with_shell
-from logbook import INFO
+from logbook import INFO, DEBUG
 
-log = rotating_logger_with_shell(__file__[:-3])
+log = rotating_logger_with_shell(__file__[:-3], DEBUG, DEBUG)
 
 
 class Start(Handlers):

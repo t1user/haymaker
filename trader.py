@@ -50,23 +50,16 @@ class Trader:
     def positions(self):
         return self.ib.positions()
 
-    def contracts(self, contracts):
-        return self.ib.qualifyContracts(contracts)
-
     def trade(self, contract: Contract, order: Order, reason: str) -> Trade:
         trade = self.ib.placeOrder(contract, order)
         self.attach_events(trade, reason)
         log.info(f'{contract.localSymbol} order placed: {order}')
         return trade
 
-    def remove_bracket(self, contract: Contract) -> None:
-        open_trades = self.ib.openTrades()
-        orders = defaultdict(list)
-        for t in open_trades:
-            orders[t.contract.localSymbol].append(t.order)
-        for order in orders[contract.localSymbol]:
-            self.ib.cancelOrder(order)
-            log.info(f'{order.orderType} removed for {contract.localSymbol}')
+    def cancel(self, order: Order):
+        self.ib.cancelOrder(order)
+        log.info(f'Cancelled {order.orderType} for '
+                 f'{order.contract.localSymbol}')
 
     def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
@@ -79,6 +72,21 @@ class Trader:
         log.debug(f'Reporting events attached for {trade.contract.localSymbol}'
                   f' {trade.order.action} {trade.order.totalQuantity}'
                   f' {trade.order.orderType}')
+
+    def onStarted(self):
+        """
+        Attach reporting events to all open trades.
+        """
+        trades = self.trades()
+        log.info(f'open trades on re-connect: {len(trades)} '
+                 f'{[t.contract.localSymbol for t in trades]}')
+        # attach reporting events
+        for trade in trades:
+            if trade.orderStatus.remaining != 0:
+                if trade.order.orderType in ('STP', 'TRAIL'):
+                    self.attach_events(trade, 'STOP-LOSS')
+                else:
+                    self.attach_events(trade, 'TAKE-PROFIT')
 
     def report_trade(self, reason: str, trade: Trade) -> None:
         message = (f'{reason} trade filled: {trade.contract.localSymbol} '
