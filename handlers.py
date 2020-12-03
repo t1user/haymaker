@@ -90,22 +90,22 @@ class IBHandlers:
         pass
 
     def onNewOrder(self, trade: Trade):
-        log.debug(f'New order: {trade.contract.localSymbol} {trade.order}')
+        log.info(f'New order: {trade.contract.localSymbol} {trade.order}')
 
     def onOrderModify(self, trade: Trade):
-        log.debug(
+        log.info(
             f'Order modified: {trade.contract.localSymbol} {trade.order}')
 
     def onCancelledOrder(self, trade: Trade):
-        log.debug(
+        log.info(
             f'Order cancelled: {trade.contract.localSymbol} {trade.order}')
 
     def onOpenOrder(self, trade: Trade):
         pass
 
     def onOrderStatus(self, trade: Trade):
-        log.debug(f'Order status {trade.contract.localSymbol} {trade.order} '
-                  f'{trade.orderStatus}')
+        log.info(f'Order status {trade.contract.localSymbol} {trade.order} '
+                 f'{trade.orderStatus}')
 
     def onExecDetails(self, trade: Trade, fill: Fill):
         pass
@@ -120,7 +120,7 @@ class IBHandlers:
         unrealized = round(item.unrealizedPNL, 2)
         total = round(realized + unrealized)
         report = (item.contract.localSymbol, realized, unrealized, total)
-        log.info(f'Portfolio item: {report}')
+        log.debug(f'Portfolio item: {report}')
         self.portfolio_items[item.contract.localSymbol] = (
             realized, unrealized, total)
 
