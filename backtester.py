@@ -671,8 +671,19 @@ class _Market:
                 # TODO fix
                 self.prices[f'M{contract}'] = bars.bar(self.date)
 
+    def parent_is_done(self, trade):
+        parentId = trade.order.parentId
+        if parentId:
+            for trade in self.trades:
+                if trade.order.orderId == parentId:
+                    parent = trade
+            return parent.isDone()
+        else:
+            return True
+
     def run_orders(self) -> None:
-        open_trades = [trade for trade in self.trades if not trade.isDone()]
+        open_trades = [trade for trade in self.trades if not trade.isDone()
+                       and self.parent_is_done(trade)]
         for trade in open_trades.copy():
             self.validate_order_trigger(
                 trade.order, self.prices[trade.contract.symbol])
@@ -680,7 +691,28 @@ class _Market:
                 trade.order,
                 self.prices[trade.contract.symbol])
             if price_or_bool:
-                self.execute_trade(trade, price_or_bool)
+                executed = self.execute_trade(trade, price_or_bool)
+                # cancel any linked orders
+                linked = []
+                if executed.order.ocaGroup:
+                    linked.append(self.verify_oca(executed, open_trades))
+                elif executed.order.parentId:
+                    linked.append(self.verify_bracket(executed, open_trades))
+                for t in linked:
+                    self.cancel_trade(t)
+
+    @staticmethod
+    def verify_oca(trade: Trade, open_trades: List[Trade]) -> List[Trade]:
+        oca = trade.order.ocaGroup
+        return [t for t in open_trades if t.order.ocaGroup == oca]
+
+    @staticmethod
+    def verify_bracket(trade: Trade, open_trades: List[Trade]) -> List[Trade]:
+        return []
+
+    @staticmethod
+    def cancel_trade(trade: Trade) -> None:
+        pass
 
     @staticmethod
     def validate_order_trigger(order: Order, price: BarData) -> None:
@@ -690,7 +722,7 @@ class _Market:
         """
         # order doesn't have a trigger price (default value)
         if order.triggerPrice == 1.7976931348623157e+308:
-            #log.debug('validate_order_trigger returned')
+            # log.debug('validate_order_trigger returned')
             return
 
         if (
@@ -759,6 +791,7 @@ class _Market:
         trade.fillEvent.emit(trade, trade.fills[-1])
         trade.filledEvent.emit(trade)
         self.update_commission(executed_trade, net_pnl, commission)
+        return trade
 
     @staticmethod
     def apply_slippage(price: float, tick: float, action: str) -> float:

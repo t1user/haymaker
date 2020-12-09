@@ -3,12 +3,12 @@ from collections import defaultdict
 from itertools import count
 
 import numpy as np
-from typing import NamedTuple, Optional, Dict, Any
+from typing import NamedTuple, Optional, Dict, Any, List
 
 from trader import Trader
 from candle import Candle
 from ib_insync import (Contract, Trade, Order, MarketOrder, LimitOrder,
-                       StopOrder, BracketOrder, TagValue)
+                       StopOrder, BracketOrder, TagValue, Position)
 from logger import Logger
 
 
@@ -103,7 +103,7 @@ class StopMultipleTakeProfit(BracketLeg):
                           outsideRth=True, tif='GTC')
 
 
-class StopFexiMultipleTakeProfit(BracketLeg):
+class StopFlexiMultipleTakeProfit(BracketLeg):
 
     def __call__(self, trade: Trade, sl_points: int, min_tick: float,
                  tp_multiple: float) -> Order:
@@ -160,7 +160,6 @@ class EventDrivenExecModel(BaseExecModel):
                  take_profit: Optional[BracketLeg] = None):
         self.stop = stop
         self.take_profit = take_profit
-        self.count = count(1, 1)
         log.debug(f'execution model initialized {self}')
 
     @staticmethod
@@ -192,13 +191,11 @@ class EventDrivenExecModel(BaseExecModel):
         trade.filledEvent += self.attach_bracket
 
     def onClose(self, contract: Contract, signal: int, amount: int) -> None:
-        # TODO can sl close position before being removed?
-        # make sure sl didn't close the position before being removed
         log.debug(f'{contract.localSymbol} close signal: {signal}')
         trade = self.trade(contract,
                            self.close_order(self.action(signal), amount),
                            'CLOSE')
-        trade.filledEvent += self.remove_bracket
+        trade.filledEvent += self.bracketing_action
 
     def emergencyClose(self, contract: Contract, signal: int,
                        amount: int) -> None:
@@ -207,31 +204,32 @@ class EventDrivenExecModel(BaseExecModel):
         trade = self.trade(contract,
                            self.close_order(self.action(signal), amount),
                            'EMERGENCY CLOSE')
-        trade.filledEvent += self.remove_bracket
+        trade.filledEvent += self.bracketing_action
 
-    @property
-    def label(self):
-        return f'oca_{next(self.count)}'
+    def order_kwargs(self):
+        return {}
 
     def attach_bracket(self, trade: Trade) -> None:
-        sl_points, min_tick = self.contracts[trade.contract.symbol]
-        label = self.label
+        params = self.contracts[trade.contract.symbol]
+        order_kwargs = self.grouping_params()
+        oca_group_name = f'oca_{next(self.count)}'
+        log.debug(f'attaching bracket with params: {params}, '
+                  f'label: {oca_group_name}')
         for bracket_order, label in zip(
                 (self.stop, self.take_profit), ('STOP-LOSS', 'TAKE-PROFIT')):
             # take profit may be None
             if bracket_order:
-                order = bracket_order(trade, sl_points, min_tick)
-                order.ocaGroup = label
-                order.ocaType = 1
+                log.debug(f'bracket: {bracket_order}')
+                order = bracket_order(trade, *params)
+                order.update(**order_kwargs)
+                log.debug(f'order: {order}')
                 bracket_trade = self.trade(trade.contract, order, label)
-                # bracket_trade.filledEvent += self.remove_bracket
-                bracket_trade.filledEvent += self.report_bracket
-
-    def report_bracket(self, trade: Trade) -> None:
-        log.info(f'bracket order: {trade.order}')
+                bracket_trade.filledEvent += self.bracketing_action
 
     def remove_bracket(self, trade: Trade) -> None:
         self.cancel_all_trades_for_contract(trade.contract)
+
+    bracketing_action = remove_bracket
 
     def cancel_all_trades_for_contract(self, contract: Contract) -> None:
         open_trades = self._trader.trades()
@@ -244,38 +242,86 @@ class EventDrivenExecModel(BaseExecModel):
     def onStarted(self) -> None:
         """
         Make sure all positions have corresponding stop-losses or
-        emergency-close them.
+        emergency-close them. Check for stray orders (take profit or stop loss
+        without associated position) and cancel them if any. Attach events
+        canceling take-profit/stop-loss after one of them is hit.
         """
         # check for orphan positions
         trades = self._trader.trades()
         positions = self._trader.positions()
         log.debug(f'positions on re-connect: {positions}')
+
+        orphan_positions = self.check_for_orphan_positions(trades, positions)
+        if orphan_positions:
+            log.warning(f'orphan positions: {orphan_positions}')
+            log.debug(f'len(orphan_positions): {len(orphan_positions)}')
+            self.handle_orphan_positions(orphan_positions)
+
+        orphan_trades = self.check_for_orphan_trades(trades, positions)
+        if orphan_trades:
+            log.warning(f'orphan trades: {orphan_trades}')
+            self.handle_orphan_trades(orphan_trades)
+
+        for trade in trades:
+            trade.filledEvent += self.bracketing_action
+
+    @staticmethod
+    def check_for_orphan_positions(trades: List[Trade],
+                                   positions: List[Position]) -> List[Trade]:
         trade_contracts = set([t.contract for t in trades
                                if t.order.orderType in ('STP', 'TRAIL')])
         position_contracts = set([p.contract for p in positions])
         orphan_contracts = position_contracts - trade_contracts
         orphan_positions = [position for position in positions
                             if position.contract in orphan_contracts]
-        if orphan_positions:
-            log.warning(f'orphan positions: {orphan_positions}')
-            log.debug(f'len(orphan_positions): {len(orphan_positions)}')
-            log.debug(f'orphan contracts: {orphan_contracts}')
-            for p in orphan_positions:
-                self._trader.ib.qualifyContracts(p.contract)
-                self.emergencyClose(
-                    p.contract, -np.sign(p.position), int(np.abs(p.position)))
-                log.error(f'emergencyClose position: {p.contract}, '
-                          f'{-np.sign(p.position)}, {int(np.abs(p.position))}')
-                t = self._trader.ib.reqAllOpenOrders()
-                log.debug(f'reqAllOpenOrders: {t}')
-                log.debug(f'openTrades: {self._trader.ib.openTrades()}')
+        return orphan_positions
+
+    @staticmethod
+    def check_for_orphan_trades(trades, positions) -> List[Trade]:
+        trade_contracts = set([t.contract for t in trades])
+        position_contracts = set([p.contract for p in positions])
+        orphan_contracts = trade_contracts - position_contracts
+        orphan_trades = [trade for trade in trades
+                         if trade.contract in orphan_contracts]
+        return orphan_trades
+
+    def handle_orphan_positions(self, orphan_positions: List[Position]
+                                ) -> None:
+        self._trader.ib.qualifyContracts(
+            *[p.contract for p in orphan_positions])
+        for p in orphan_positions:
+            self.emergencyClose(
+                p.contract, -np.sign(p.position), int(np.abs(p.position)))
+            log.error(f'emergencyClose position: {p.contract}, '
+                      f'{-np.sign(p.position)}, {int(np.abs(p.position))}')
+            t = self._trader.ib.reqAllOpenOrders()
+            log.debug(f'reqAllOpenOrders: {t}')
+            log.debug(f'openTrades: {self._trader.ib.openTrades()}')
+
+    def handle_orphan_trades(self, trades: List[Trade]) -> None:
+        for trade in trades:
+            self._trader.cancel(trade)
 
 
-class EventDrivenTakeProfitExecModel(EventDrivenExecModel):
+class OcaExecModel(EventDrivenExecModel):
+
+    count = count(1, 1)
+
+    def order_kwargs(self):
+        return {'ocaGroup': f'oca_{next(self.count)}',
+                'ocaType': 1}
+
+    def report_bracket(self, trade: Trade) -> None:
+        log.debug(f'Bracketing order filled: {trade.order}')
+
+    bracketing_action = report_bracket
+
+
+class EventDrivenTakeProfitExecModel(OcaExecModel):
 
     def __init__(self):
         self.stop = TrailingStop()
-        self.take_profit = StopFexiMultipleTakeProfit()
+        self.take_profit = StopFlexiMultipleTakeProfit()
         log.debug(f'Excution model initialized: {self}')
 
     def save_contract(self, contract, sl_points, obj):
@@ -283,16 +329,6 @@ class EventDrivenTakeProfitExecModel(EventDrivenExecModel):
             sl_points,
             obj.details.minTick,
             obj.tp_multiple)
-
-    def attach_bracket(self, trade: Trade) -> None:
-        sl_points, min_tick, tp_multiple = self.contracts[trade.contract.symbol]
-        for bracket_order, label in zip(
-                (self.stop, self.take_profit), ('STOP-LOSS', 'TAKE-PROFIT')):
-            # take profit may be None
-            if bracket_order:
-                order = bracket_order(trade, sl_points, min_tick, tp_multiple)
-                bracket_trade = self.trade(trade.contract, order, label)
-                bracket_trade.filledEvent += self.remove_bracket
 
 
 class BracketExecModel(BaseExecModel):

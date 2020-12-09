@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import NamedTuple, Dict
+from typing import NamedTuple, Dict, List
 
-from ib_insync import Order, IB, Fill, CommissionReport, Trade, Contract
+from ib_insync import (Order, IB, Fill, CommissionReport, Trade, Contract,
+                       Position)
 
 from candle import Candle
 from blotter import AbstractBaseBlotter, CsvBlotter
@@ -49,10 +50,10 @@ class Trader:
             trade.modifyEvent.clear()
             self.attach_events(trade, 'MANUAL TRADE')
 
-    def trades(self):
+    def trades(self) -> List[Trade]:
         return self.ib.openTrades()
 
-    def positions(self):
+    def positions(self) -> List[Position]:
         return self.ib.positions()
 
     def quote(self, contract: Contract) -> Quote:
