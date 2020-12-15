@@ -3,9 +3,9 @@ from collections import defaultdict
 from itertools import count
 
 import numpy as np
-from typing import NamedTuple, Optional, Dict, Any, List
+from typing import NamedTuple, Optional, Dict, Any, List, Literal
 
-from trader import Trader
+from trader import Trader, Quote
 from candle import Candle
 from ib_insync import (Contract, Trade, Order, MarketOrder, LimitOrder,
                        StopOrder, BracketOrder, TagValue, Position)
@@ -195,7 +195,7 @@ class EventDrivenExecModel(BaseExecModel):
         trade = self.trade(contract,
                            self.close_order(self.action(signal), amount),
                            'CLOSE')
-        trade.filledEvent += self.bracketing_action
+        trade.filledEvent += self.remove_bracket
 
     def emergencyClose(self, contract: Contract, signal: int,
                        amount: int) -> None:
@@ -211,10 +211,9 @@ class EventDrivenExecModel(BaseExecModel):
 
     def attach_bracket(self, trade: Trade) -> None:
         params = self.contracts[trade.contract.symbol]
-        order_kwargs = self.grouping_params()
-        oca_group_name = f'oca_{next(self.count)}'
+        order_kwargs = self.order_kwargs()
         log.debug(f'attaching bracket with params: {params}, '
-                  f'label: {oca_group_name}')
+                  f'order_kwargs: {order_kwargs}')
         for bracket_order, label in zip(
                 (self.stop, self.take_profit), ('STOP-LOSS', 'TAKE-PROFIT')):
             # take profit may be None
@@ -336,9 +335,6 @@ class BracketExecModel(BaseExecModel):
     def getId(self):
         return self._trader.ib.client.getReqId()
 
-    def onStarted(self) -> None:
-        EventDrivenExecModel.onStarted(self)
-
     @staticmethod
     def entry_order(action: str, quantity: int, price: float, **kwargs
                     ) -> Order:
@@ -350,14 +346,15 @@ class BracketExecModel(BaseExecModel):
     def stop_loss(action: str, quantity: int, distance: float, **kwargs
                   ) -> Order:
         return Order(action, quantity, orderType='TRAIL', auxPrice=distance,
-                     outsideRth=True, tif='GTC', **kwargs)
+                     outsideRth=True, tif='GTC')
 
     @staticmethod
     def close_order(action: str, quantity: int) -> Order:
         return MarketOrder(action, quantity, tif='GTC')
 
     @staticmethod
-    def algo_kwargs(priority: str = 'Normal') -> Dict[str, Any]:
+    def algo_kwargs(priority: Literal['Normal', 'Urgent', 'Patient'] = 'Normal'
+                    ) -> Dict[str, Any]:
         return {
             'algoStrategy': 'Adaptive',
             'algoParams': [TagValue('adaptivePriority', priority)]
@@ -388,26 +385,25 @@ class BracketExecModel(BaseExecModel):
 
         return BracketOrder(parent, takeProfit, stopLoss)
 
+    def price_limit(self, quote: Quote, min_tick: float) -> float:
+        spread = quote.ask - quote.bid
+
     def onEntry(self, contract: Contract, signal: int, amount: int,
                 sl_points: int, obj: Candle) -> None:
         assert signal in (-1, 1)
         quote = self._trader.quote(contract)
+        log.debug(f'quote: {quote}')
         action = 'BUY' if signal == 1 else 'SELL'
         price = quote.bid if action == 'SELL' else quote.ask
-        takeProfitPrice = price + sl_points * obj.tp_points * signal
+        takeProfitPrice = round_tick(
+            price - sl_points * obj.tp_multiple * signal,
+            obj.details.minTick)
         bracket = self.bracket(action, amount, price, takeProfitPrice,
-                               sl_points, **self.algo_kwargs)
+                               sl_points, **self.algo_kwargs())
         for order, label in zip(bracket, ('ENTRY', 'TAKE-PROFIT', 'STOP-LOSS')):
             self.trade(contract, order, label)
 
     def onClose(self, contract: Contract, signal: int, amount: int) -> None:
         log.debug(f'{contract.localSymbol} close signal: {signal}')
         action = 'BUY' if signal == 1 else 'SELL'
-        trade = self.trade(contract, self.close_order(action, amount), 'CLOSE')
-        trade.filledEvent += self.remove_bracket
-
-    def remove_bracket(self, trade: Trade) -> None:
-        EventDrivenExecModel.remove_bracket(self, trade)
-
-    def cancel_all_trades_for_contract(self, contract: Contract) -> None:
-        EventDrivenExecModel.cancel_all_trades_for_contract(self, contract)
+        self.trade(contract, self.close_order(action, amount), 'CLOSE')

@@ -8,7 +8,7 @@ from streamers import VolumeStreamer
 from candle import (BreakoutCandle, RsiCandle, CarverCandle, BreakoutRsiCandle,
                     BreakoutLockCandle)
 from portfolio import FixedPortfolio, AdjustedPortfolio, WeightedAdjustedPortfolio
-from execution_models import EventDrivenTakeProfitExecModel
+from execution_models import EventDrivenTakeProfitExecModel, BracketExecModel
 
 
 log = Logger(__name__)
@@ -99,7 +99,7 @@ ym = Params(
 contracts = [es, ym, gc]
 
 
-exec_model = EventDrivenTakeProfitExecModel()
+exec_model = BracketExecModel()
 
 candles = [BreakoutLockCandle(VolumeStreamer(params.volume,
                                              params.avg_periods),

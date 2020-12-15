@@ -51,6 +51,7 @@ class IBHandlers:
         ib.barUpdateEvent += self.onBarUpdate
         ib.newOrderEvent += self.onNewOrder
         ib.orderModifyEvent += self.onOrderModify
+        ib.cancelOrderEvent += self.onCancelOrder
         ib.openOrderEvent += self.onOpenOrder
         ib.orderStatusEvent += self.onOrderStatus
         ib.execDetailsEvent += self.onExecDetails
@@ -96,9 +97,9 @@ class IBHandlers:
         log.info(
             f'Order modified: {trade.contract.localSymbol} {trade.order}')
 
-    def onCancelledOrder(self, trade: Trade):
+    def onCancelOrder(self, trade: Trade):
         log.info(
-            f'Order cancelled: {trade.contract.localSymbol} {trade.order}')
+            f'Order canceled: {trade.contract.localSymbol} {trade.order}')
 
     def onOpenOrder(self, trade: Trade):
         pass
@@ -162,7 +163,7 @@ class IBHandlers:
             log.warning(f'ERROR: {errorCode} {errorString} {contract}')
 
     def onTimeout(self, idlePeriod: float):
-        pass
+        log.error(f'Timeout! Idle period: {idlePeriod}')
 
     def onScheduledUpdate(self, time):
         log.info(f'pnl: {self.ib.pnl()}')

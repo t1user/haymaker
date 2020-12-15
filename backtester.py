@@ -178,7 +178,7 @@ class IB:
         return [v for v in self.market.trades
                 if v.orderStatus.status not in OrderStatus.DoneStates]
 
-    def placeOrder(self, contract, order):
+    def placeOrder(self, contract: Contract, order: Order) -> Trade:
         orderId = order.orderId or next(self.id)
         now = self.market.date
         trade = self.market.get_trade(order)
@@ -194,40 +194,32 @@ class IB:
             assert order.totalQuantity != 0, 'Order quantity cannot be zero'
             order.orderId = orderId
             order.permId = orderId
-            orderStatus = OrderStatus(status=OrderStatus.PendingSubmit,
-                                      remaining=order.totalQuantity)
+            if order.parentId:
+                # this is for bracket order implementation TODO
+                orderStatus = OrderStatus(status=OrderStatus.PreSubmitted,
+                                          remaining=order.totalQuantity)
+                log.error('Why the fuck are we here?')
+            else:
+                orderStatus = OrderStatus(status=OrderStatus.Submitted,
+                                          remaining=order.totalQuantity)
             logEntry = TradeLogEntry(now, orderStatus, '')
             trade = Trade(contract, order, orderStatus, [], [logEntry])
             self.newOrderEvent.emit(trade)
             self.market.append_trade(trade)
         return trade
 
-    def cancelOrder(self, order):
-        now = self.market.date
+    def cancelOrder(self, order: Order) -> None:
         trade = self.market.get_trade(order)
         if trade:
-            if not trade.isDone():
-                # this is a placeholder for implementation of further methods
-                status = trade.orderStatus.status
-                if (status == OrderStatus.PendingSubmit and not order.transmit
-                        or status == OrderStatus.Inactive):
-                    newStatus = OrderStatus.Cancelled
-                else:
-                    newStatus = OrderStatus.Cancelled
-                logEntry = TradeLogEntry(now, newStatus, '')
-                trade.log.append(logEntry)
-                trade.orderStatus.status = newStatus
-                trade.cancelEvent.emit(trade)
-                trade.statusEvent.emit(trade)
-                self.cancelOrderEvent.emit(trade)
-                self.orderStatusEvent.emit(trade)
-                if newStatus == OrderStatus.Cancelled:
-                    trade.cancelledEvent.emit(trade)
+            self.market.cancel_trade(trade)
+            self.cancelOrderEvent.emit(trade)
+            self.orderStatusEvent.emit(trade)
         else:
             log.error(f'cancelOrder: Unknown orderId {order.orderId}')
 
     def run(self):
-        # This is a monkey fucking patch, needs to be redone TODO
+        # TODO
+        # This is a fucking monkey patch, needs to be redone
         if self.mode == 'use_ib':
             commissions = self.reqCommissionsFromIB(
                 self._contracts)
@@ -237,7 +229,7 @@ class IB:
             commissions = self.reqCommissionsFromDB(
                 self._contracts)
         else:
-            raise ValueError(f'Mode should be one of "use_ib" or "db_only"')
+            raise ValueError('Mode should be one of "use_ib" or "db_only"')
 
         self.market.commissions = commissions
 
@@ -671,7 +663,10 @@ class _Market:
                 # TODO fix
                 self.prices[f'M{contract}'] = bars.bar(self.date)
 
-    def parent_is_done(self, trade):
+    def parent_is_done(self, trade: Trade) -> bool:
+        """
+        Not in use. Bracketing implementation work in progress.
+        """
         parentId = trade.order.parentId
         if parentId:
             for trade in self.trades:
@@ -682,8 +677,7 @@ class _Market:
             return True
 
     def run_orders(self) -> None:
-        open_trades = [trade for trade in self.trades if not trade.isDone()
-                       and self.parent_is_done(trade)]
+        open_trades = [trade for trade in self.trades if not trade.isDone()]
         for trade in open_trades.copy():
             self.validate_order_trigger(
                 trade.order, self.prices[trade.contract.symbol])
@@ -692,29 +686,29 @@ class _Market:
                 self.prices[trade.contract.symbol])
             if price_or_bool:
                 executed = self.execute_trade(trade, price_or_bool)
+                open_trades.remove(executed)
                 # cancel any linked orders
                 linked = []
                 if executed.order.ocaGroup:
-                    linked.append(self.verify_oca(executed, open_trades))
+                    linked.extend(self.find_oca(executed, open_trades))
                 elif executed.order.parentId:
-                    linked.append(self.verify_bracket(executed, open_trades))
+                    linked.extend(self.find_bracket(
+                        executed, open_trades))
+                log.debug(f'linked orders to be cancelled: {linked}')
                 for t in linked:
                     self.cancel_trade(t)
 
     @staticmethod
-    def verify_oca(trade: Trade, open_trades: List[Trade]) -> List[Trade]:
+    def find_oca(trade: Trade, open_trades: List[Trade]) -> List[Trade]:
         oca = trade.order.ocaGroup
+        log.debug(f'veryfing open trades: {open_trades} for {oca}')
         return [t for t in open_trades if t.order.ocaGroup == oca]
 
-    @staticmethod
-    def verify_bracket(trade: Trade, open_trades: List[Trade]) -> List[Trade]:
-        return []
+    @ staticmethod
+    def find_bracket(trade: Trade, open_trades: List[Trade]) -> List[Trade]:
+        raise NotImplementedError
 
-    @staticmethod
-    def cancel_trade(trade: Trade) -> None:
-        pass
-
-    @staticmethod
+    @ staticmethod
     def validate_order_trigger(order: Order, price: BarData) -> None:
         """
         Verify if adjustable order triggered modification. If so
@@ -735,6 +729,20 @@ class _Market:
             # prevent future trigger verification
             order.triggerPrice = 1.7976931348623157e+308
             log.debug(f'Order adjusted: {order}')
+
+    def cancel_trade(self, trade: Trade) -> None:
+        log.debug(f'will cancel trade: {trade}')
+        now = self.date
+        if not trade.isDone():
+            newStatus = OrderStatus.Cancelled
+            logEntry = TradeLogEntry(now, newStatus, '')
+            trade.log.append(logEntry)
+            trade.orderStatus.status = newStatus
+            trade.cancelEvent.emit(trade)
+            trade.statusEvent.emit(trade)
+            trade.cancelledEvent.emit(trade)
+            log.debug(f'cancelled trade: {trade}')
+            log.debug(f'isDone: {trade.isDone()}')
 
     def validate_order(self, order: Order, price: BarData
                        ) -> Union[bool, float]:
@@ -758,7 +766,7 @@ class _Market:
                  'TRAIL': self.validate_trail}
         return funcs[order.orderType](order, price)
 
-    def execute_trade(self, trade: Trade, price: float) -> None:
+    def execute_trade(self, trade: Trade, price: float) -> Trade:
         """
         After order is validated (ie. it should be executed), do the actual
         execution. Execution price is passed as argument.
@@ -859,7 +867,7 @@ class _Market:
                     execution=execution,
                     commissionReport=commission)
         trade.fills.append(fill)
-        trade.orderStatus = OrderStatus(status='Filled',
+        trade.orderStatus = OrderStatus(status=OrderStatus.Filled,
                                         filled=quantity,
                                         remaining=0,
                                         avgFillPrice=price,
