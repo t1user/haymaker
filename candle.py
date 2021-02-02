@@ -46,12 +46,12 @@ class Candle(ABC):
             df = pd.DataFrame(self.candles)
             df.set_index('date', inplace=True)
             self.df = self.get_indicators(df)
-            log_assert(not self.df.iloc[-1].isna().any(), (
-                f'Not enough data for indicators for instrument'
-                f' {self.contract.localSymbol} '
-                f' index: {df.index[-1]}'
-                f' values: {self.df.iloc[-1].to_dict()}'
-                f'{self.df}'), __name__)
+            # log_assert(not self.df.iloc[-1].isna().any(), (
+            #    f'Not enough data for indicators for instrument'
+            #    f' {self.contract.localSymbol} '
+            #    f' index: {df.index[-1]}'
+            #    f' values: {self.df.iloc[-1].to_dict()}'
+            #    f'{self.df}'), __name__)
             self.process()
 
     def save(self, saver):
@@ -217,8 +217,50 @@ class BreakoutLockCandle(SingleSignalMixin, Candle):
         df['atr'] = indicators.atr(df, self.atr_periods)
         df['signal'] = indicators.min_max_signal(df.price, self.periods)
         df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
-        df['lock'] = -1 * (df.signal.shift().rolling(self.lock_periods).max()
-                           - df.signal.shift().rolling(self.lock_periods).min())
-        df['filtered_signal'] = ((df['signal'] - df['lock']) *
-                                 ((df['signal'] * df['filter']) == 1))
+        df['pre_lock'] = df['signal'] * ((df['signal'] * df['filter']) == 1)
+
+        df['lock'] = (((df.pre_lock.shift().rolling(self.lock_periods).min()
+                        + df.pre_lock.shift().rolling(self.lock_periods).max()))
+                      + df.pre_lock.shift()).clip(-1, 1)
+
+        df['filtered_signal'] = (
+            df['pre_lock'] * ~((df['pre_lock'] * df['lock']) == 1))
+        return df
+
+
+class BreakoutBufferCandle(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['signal'] = indicators.min_max_buffer_signal(
+            df.price, self.periods, df.atr * 2)
+        df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['filtered_signal'] = df['signal'] * \
+            ((df['signal'] * df['filter']) == 1)
+        return df
+
+
+class BreakoutLockBufferCandle(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['signal'] = indicators.min_max_buffer_signal(
+            df.price, self.periods, df.atr)
+        df['filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['pre_lock'] = df['signal'] * ((df['signal'] * df['filter']) == 1)
+
+        df['lock'] = (((df.pre_lock.shift().rolling(self.lock_periods).min()
+                        + df.pre_lock.shift().rolling(self.lock_periods).max()))
+                      + df.pre_lock.shift()).clip(-1, 1)
+
+        df['filtered_signal'] = (
+            df['pre_lock'] * ~((df['pre_lock'] * df['lock']) == 1))
         return df

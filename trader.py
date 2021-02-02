@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from functools import partial
-from typing import NamedTuple, Dict, List
+from typing import NamedTuple, Dict, List, Optional
 
 from ib_insync import (Order, IB, Fill, CommissionReport, Trade, Contract,
                        Position)
@@ -15,6 +16,7 @@ log = Logger(__name__)
 
 
 class Quote(NamedTuple):
+    time: datetime
     bid: float
     ask: float
 
@@ -58,16 +60,21 @@ class Trader:
 
     def quote(self, contract: Contract) -> Quote:
         q = self.ib.reqTickers(contract)[0]
-        return Quote(q.bid, q.ask)
+        log.debug(q)
+        return Quote(q.time, q.bid, q.ask)
 
     def multiple_quote(self, contracts: Contract) -> Dict[Contract, Quote]:
         return {i.contract.localSymbol: Quote(i.bid, i.ask)
                 for i in self.ib.reqTickers(*contracts)}
 
-    def trade(self, contract: Contract, order: Order, reason: str) -> Trade:
+    def trade(self, contract: Contract, order: Order,
+              reason: Optional[str] = None) -> Trade:
         trade = self.ib.placeOrder(contract, order)
-        self.attach_events(trade, reason)
-        log.debug(f'{contract.localSymbol} order placed: {order}')
+        if reason:
+            self.attach_events(trade, reason)
+            log.debug(f'{contract.localSymbol} order placed: {order}')
+        else:
+            log.debug(f'{contract.localSymbol} order updated: {order}')
         return trade
 
     def cancel(self, trade: Trade):

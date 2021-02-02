@@ -105,15 +105,20 @@ class IBHandlers:
         pass
 
     def onOrderStatus(self, trade: Trade):
-        log.info(f'Order status {trade.contract.localSymbol} {trade.order} '
-                 f'{trade.orderStatus}')
+        log.info(f'Order status {trade.contract.localSymbol} '
+                 f'{trade.order.action} {trade.order.totalQuantity} '
+                 f'{trade.order.orderType} - '
+                 f'{trade.orderStatus.status} - '
+                 f'(t: {trade.order.totalQuantity} '
+                 f'f: {trade.orderStatus.filled} '
+                 f'r: {trade.orderStatus.remaining})')
 
     def onExecDetails(self, trade: Trade, fill: Fill):
         pass
 
     def onCommissionReport(self, trade: Trade, fill: Fill,
                            report: CommissionReport):
-        #log.debug(f'Commission report: {report}')
+        # log.debug(f'Commission report: {report}')
         pass
 
     def onUpdatePortfolio(self, item: PortfolioItem):
@@ -126,7 +131,8 @@ class IBHandlers:
             realized, unrealized, total)
 
     def onPosition(self, position: Position):
-        log.debug(f'Position update: {position}')
+        log.debug(f'Position update: {position.contract.localSymbol}: '
+                  f'{position.position}, avg cost: {position.avgCost}')
 
     def onAccountValue(self, value: AccountValue):
         if value.tag == 'NetLiquidation':
@@ -137,9 +143,10 @@ class IBHandlers:
         tags = ['UnrealizedPnL', 'RealizedPnL', 'FuturesPNL',
                 'NetLiquidationByCurrency']
         """
-        tags = ['NetLiquidationByCurrency']
-        if value.tag in tags:
-            log.info(f'{value.tag}: {value.value}')
+        # tags = ['NetLiquidationByCurrency']
+        # if value.tag in tags:
+        #    log.info(f'{value.tag}: {value.value}')
+        pass
 
     def onPnl(self, entry: PnL):
         pass

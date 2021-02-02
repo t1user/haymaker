@@ -704,11 +704,11 @@ class _Market:
         log.debug(f'veryfing open trades: {open_trades} for {oca}')
         return [t for t in open_trades if t.order.ocaGroup == oca]
 
-    @ staticmethod
+    @staticmethod
     def find_bracket(trade: Trade, open_trades: List[Trade]) -> List[Trade]:
         raise NotImplementedError
 
-    @ staticmethod
+    @staticmethod
     def validate_order_trigger(order: Order, price: BarData) -> None:
         """
         Verify if adjustable order triggered modification. If so
@@ -725,7 +725,12 @@ class _Market:
             (order.action.upper() == 'SELL' and order.triggerPrice <= price.high)
         ):
             order.orderType = order.adjustedOrderType
-            order.auxPrice = order.adjustedStopPrice
+            if order.orderType == 'STP':
+                order.auxPrice = order.adjustedStopPrice
+            elif order.orderType == 'TRAIL':
+                order.trailStopPrice = order.adjustedStopPrice
+                # works only in absolute units (precent - TODO)
+                order.auxPrice = order.adjustedTrailingAmount
             # prevent future trigger verification
             order.triggerPrice = 1.7976931348623157e+308
             log.debug(f'Order adjusted: {order}')

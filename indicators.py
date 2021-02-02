@@ -35,7 +35,7 @@ get_ATR = atr
 def min_max_signal(data: pd.Series, period: int) -> pd.Series:
     """
     Return Series of signals (one of: -1, 0 or 1) dependig on whether
-    price broke out above max (1) or below min (-1) over last period
+    price broke out above max (1) or below min (-1) over last <period>
     observations.
 
     Args:
@@ -46,6 +46,31 @@ def min_max_signal(data: pd.Series, period: int) -> pd.Series:
     df = pd.DataFrame({
         'max': ((data - data.shift(1).rolling(period).max()) > 0) * 1,
         'min': ((data.shift(1).rolling(period).min() - data) > 0) * 1,
+    })
+    df['signal'] = df['max'] - df['min']
+    return df['signal']
+
+
+def min_max_buffer_signal(data: pd.Series, period: int,
+                          buff: float = 0) -> pd.Series:
+    """
+    Return Series of signals (one of: -1, 0 or 1) dependig on whether
+    price broke out above max + <buff> (1) or below min - <buff> (-1) over last
+    <period> observations.
+
+    This is a general case of min_max_signal, not combined because this one
+    will be removed if not found useful.
+
+    Args:
+    ---------
+    data: price Series
+    period: lookback period
+    buff: buffor expressing sensitivity filter for deciding whether min or max
+          has been breached, given in price units (default: 0)
+    """
+    df = pd.DataFrame({
+        'max': ((data - data.shift(1).rolling(period).max() + buff) > 0) * 1,
+        'min': ((data.shift(1).rolling(period).min() + buff - data) > 0) * 1,
     })
     df['signal'] = df['max'] - df['min']
     return df['signal']

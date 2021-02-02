@@ -65,6 +65,9 @@ class FixedPortfolio(Portfolio):
         return 1
 
     def onSignal(self, obj: Candle):
+        #error_message = f'Invalid signal: {obj.df.filtered_signal[-1]}'
+        #assert obj.df.filtered_signal[-1] in [-1, 1], error_message
+
         position = self.positions.get(obj.contract.symbol)
         if obj.df.filtered_signal[-1] and not position:
             message = (f'entry signal emitted for {obj.contract.localSymbol},'
@@ -113,6 +116,9 @@ class AdjustedPortfolio(Portfolio):
         return round(contracts * self.div_multiplier, 1)
 
     def onSignal(self, obj: Candle):
+        #error_message = f'Invalid signal: {obj.df.filtered_signal[-1]}'
+        #assert obj.df.filtered_signal[-1] in [-1, 1], error_message
+
         position = (self.positions.get(obj.contract.symbol)
                     or self.positions.get(obj.micro_contract.symbol))
         if obj.df.filtered_signal[-1] and not position:

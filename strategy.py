@@ -5,10 +5,9 @@ from ib_insync import ContFuture
 from logbook import Logger
 
 from streamers import VolumeStreamer
-from candle import (BreakoutCandle, RsiCandle, CarverCandle, BreakoutRsiCandle,
-                    BreakoutLockCandle)
-from portfolio import FixedPortfolio, AdjustedPortfolio, WeightedAdjustedPortfolio
-from execution_models import EventDrivenTakeProfitExecModel, BracketExecModel
+from candle import BreakoutCandle, BreakoutLockCandle
+from portfolio import AdjustedPortfolio
+from execution_models import EventDrivenTakeProfitExecModel
 
 
 log = Logger(__name__)
@@ -29,9 +28,6 @@ class Params:
     avg_periods: Optional[int] = None
     volume: Optional[int] = None  # candle volume given directly
     min_atr: float = 0
-    rsi_threshold: float = 70
-    rsi_periods: float = 24
-    rsi_smooth: float = 15
     lock_periods_multiple: float = 2
     tp_multiple: float = 2
 
@@ -42,75 +38,66 @@ class Params:
 nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
-    trades_per_day=5,
+    trades_per_day=5.2,
     atr_periods=50,
-    sl_atr=1,
-    # avg_periods=60,
     volume=12000,
     min_atr=14,
-    alloc=.4,
-    tp_multiple=6,
+    tp_multiple=8,
 )
 
 es = Params(
     contract=ContFuture('ES', 'GLOBEX'),
     micro_contract=ContFuture('MES', 'GLOBEX'),
-    trades_per_day=.8,
+    trades_per_day=.6,
     ema_fast=120,
     ema_slow=320,
     sl_atr=3,
-    # avg_periods=60,
     volume=43000,
     min_atr=5,
-    alloc=.125,
     lock_periods_multiple=1,
-    tp_multiple=3,
+    tp_multiple=2
 )
 
 gc = Params(
     contract=ContFuture('GC', 'NYMEX'),
     micro_contract=ContFuture('MGC', 'NYMEX'),
-    trades_per_day=1.7,
+    trades_per_day=1.0,
     ema_fast=60,
     periods=60,
     sl_atr=2,
     atr_periods=50,
-    # avg_periods=60,
     volume=5500,
     min_atr=1.9,
-    alloc=.225,
+    tp_multiple=6
 )
 
 ym = Params(
     contract=ContFuture('YM', 'ECBOT'),
     micro_contract=ContFuture('MYM', 'ECBOT'),
-    trades_per_day=.9,
+    trades_per_day=1.3,
     atr_periods=50,
     ema_fast=60,
     ema_slow=120,
     sl_atr=2,
-    # avg_periods=60,
     volume=8000,
-    alloc=.25,
     tp_multiple=6,
 )
 
 
-contracts = [es, ym, gc]
-
-
-exec_model = BracketExecModel()
+exec_model = EventDrivenTakeProfitExecModel()
 
 candles = [BreakoutLockCandle(VolumeStreamer(params.volume,
                                              params.avg_periods),
                               contract_fields=['contract', 'micro_contract'],
                               **params.__dict__)
-           for params in contracts]
+           for params in [es]]
 
-candles.append(BreakoutCandle(VolumeStreamer(nq.volume,
-                                             nq.avg_periods),
-                              contract_fields=['contract', 'micro_contract'],
-                              **nq.__dict__))
+candles.extend([BreakoutCandle(VolumeStreamer(params.volume,
+                                              params.avg_periods),
+                               contract_fields=['contract', 'micro_contract'],
+                               **params.__dict__)
+                for params in [nq, ym]])
+
 portfolio = AdjustedPortfolio(target_vol=.55)
 
 strategy_kwargs = {'candles': candles,
