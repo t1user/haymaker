@@ -24,7 +24,7 @@ util.logToConsole()
 asyncio.get_event_loop().set_debug(True)
 
 blotter = CsvBlotter(save_to_file=False, filename='backtest', path='backtests',
-                     note=f'_{start_date}_{end_date}')
+                     note=f'_{start_date}_{end_date}_bollinger_40_std_1')
 saver = PickleSaver('notebooks/freeze/backtest')
 manager = Manager(ib, saver=saver, blotter=blotter, **strategy_kwargs)
 market = Market(cash, manager, reboot=False)

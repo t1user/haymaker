@@ -85,6 +85,16 @@ class SingleSignalMixin:
             self.signal.emit(self)
 
 
+class DoubleSignalMixin:
+    def process(self) -> None:
+        log.debug(f'New candle for {self.contract.localSymbol} '
+                  f'{self.df.index[-1]}: {self.df.iloc[-1].to_dict()}')
+        if self.df.signal[-1]:
+            self.entrySignal.emit(self)
+        elif self.df.close_signal[-1]:
+            self.closeSignal.emit(self)
+
+
 class FilterMixin:
     def filter(self, df: pd.DataFrame) -> pd.DataFrame:
         df['ema_fast'] = df.price.ewm(
@@ -263,4 +273,42 @@ class BreakoutLockBufferCandle(SingleSignalMixin, Candle):
 
         df['filtered_signal'] = (
             df['pre_lock'] * ~((df['pre_lock'] * df['lock']) == 1))
+        return df
+
+
+class RocCandle(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['roc'] = df.price.pct_change(self.roc)
+        df['signal'] = np.sign(df['roc'])
+        df['filtered_signal'] = df['signal']
+        return df
+
+
+class RocCandleFiltered(FilterMixin, RocCandle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        return self.filter(RocCandle.get_indicators(self, df))
+
+
+class BollingerCandle(DoubleSignalMixin, Candle):
+    """
+    Entry signal when price brakes out of Bollinger band, close signal
+    when price crosses mean.
+    """
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['mid'] = df.price.ewm(span=self.bollinger_periods).mean()
+        df['std'] = df['price'].ewm(span=self.bollinger_periods).std()
+        df['upper'] = df['mid'] + 1 * df['std']
+        df['lower'] = df['mid'] - 1 * df['std']
+        df['up'] = (df['price'] > df['upper'].shift()) * 1
+        df['down'] = (df['price'] < df['lower'].shift()) * -1
+        df['signal'] = df['up'] + df['down']
+        df['filtered_signal'] = df['signal']
+        df['direction'] = np.sign(df['price'] - df['mid'])
+        df['close_signal'] = ((df['direction'] * df['direction'].shift()) < 0
+                              ) * df['direction']
         return df

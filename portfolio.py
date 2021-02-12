@@ -89,8 +89,19 @@ class FixedPortfolio(Portfolio):
                 log.debug(
                     f'close signal emitted for {obj.contract.localSymbol}')
                 self.closeSignal.emit(obj.contract, obj.df.signal[-1],
-                                      abs(self.positions[obj.contract.symbol]),
-                                      )
+                                      abs(self.positions[obj.contract.symbol]))
+
+
+class DoubleSignalFixedPortfolio(FixedPortfolio):
+
+    def onEntry(self, obj: Candle) -> None:
+        FixedPortfolio.onSignal(self, obj)
+
+    def onClose(self, obj: Candle) -> None:
+        if (position := self.positions.get(obj.contract.symbol)):
+            log.debug(f'close signal emitted for {obj.contract.localSymbol}')
+            self.closeSignal.emit(obj.contract, obj.df.close_signal[-1],
+                                  abs(position))
 
 
 class AdjustedPortfolio(Portfolio):
