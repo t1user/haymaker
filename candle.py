@@ -312,3 +312,29 @@ class BollingerCandle(DoubleSignalMixin, Candle):
         df['close_signal'] = ((df['direction'] * df['direction'].shift()) < 0
                               ) * df['direction']
         return df
+
+
+class BreakoutStrenthFilteredCandle(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['atr'] = indicators.atr(df, self.atr_periods)
+
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['ema_filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+
+        df['ema_slow_diff'] = df['ema_slow'].diff().abs()
+        df['vol_slow'] = df['price'].ewm(span=self.ema_slow).std()
+        df['strength_slow'] = (df['ema_slow_diff'] / df['vol_slow']) * 100
+        df['strength_slow_median'] = df['strength_slow'].expanding().median()
+        df['strength_filter'] = (df['strength_slow'] >=
+                                 df['strength_slow_median'])
+
+        df['signal'] = indicators.min_max_signal(df.price, self.periods)
+
+        df['pre_strength'] = df['signal'] * \
+            ((df['signal'] * df['ema_filter']) == 1)
+        df['filtered_signal'] = df['pre_strength'] * df['strength_filter']
+        return df

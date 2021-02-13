@@ -109,7 +109,7 @@ class Start(Handlers):
         # asyncio.get_event_loop().set_debug(True)
         # util.logToConsole()
         self.manager = manager
-        ibc = IBC(twsVersion=979,
+        ibc = IBC(twsVersion=981,
                   gateway=True,
                   ibcIni='/home/tomek/ibc/config_live.ini',
                   tradingMode='live',

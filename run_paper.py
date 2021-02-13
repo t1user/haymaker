@@ -19,7 +19,7 @@ class Start(Handlers):
     def __init__(self, ib, manager):
         util.patchAsyncio()
         self.manager = manager
-        ibc = IBC(twsVersion=979,
+        ibc = IBC(twsVersion=981,
                   gateway=False,
                   tradingMode='paper',
                   )

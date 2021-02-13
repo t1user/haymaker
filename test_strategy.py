@@ -8,7 +8,7 @@ from streamers import VolumeStreamer
 from candle import (MultipleBreakoutCandle, BreakoutLockCandle, BreakoutCandle,
                     CarverCandle, RsiCandle, BreakoutBufferCandle,
                     BreakoutLockBufferCandle, RocCandle, RocCandleFiltered,
-                    BollingerCandle)
+                    BollingerCandle, BreakoutStrenthFilteredCandle)
 from portfolio import (FixedPortfolio, AdjustedPortfolio,
                        WeightedAdjustedPortfolio,
                        DoubleSignalFixedPortfolio)
@@ -109,11 +109,11 @@ ym = Params(
 
 # contracts = [es, gc]
 
-exec_model = BaseExecModel()
+exec_model = EventDrivenExecModel()
 
-candles = [BollingerCandle(VolumeStreamer(params.volume,
-                                          params.avg_periods),
-                           contract_fields=[
+candles = [BreakoutStrenthFilteredCandle(VolumeStreamer(params.volume,
+                                                        params.avg_periods),
+                                         contract_fields=[
     'contract', 'micro_contract'],
     **params.__dict__)
     for params in [es, gc, ym, nq]]
@@ -126,7 +126,7 @@ candles.extend([BreakoutCandle(VolumeStreamer(params.volume,
                 for params in [nq, ym]])
 """
 
-portfolio = DoubleSignalFixedPortfolio(target_vol=.55)
+portfolio = FixedPortfolio(target_vol=.55)
 
 strategy_kwargs = {'candles': candles,
                    'portfolio': portfolio,
