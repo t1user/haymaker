@@ -168,9 +168,9 @@ class VolumeStreamer(StreamAggregator):
     @staticmethod
     def verify(bar: BarData) -> bool:
         """
-        Faulty bar often comes with volume = -1.
+        Faulty bar often comes with volume = -1 or barCount = -1.
         """
-        return (bar.volume >= 0)
+        return (bar.volume >= 0) and (bar.barCount > 0)
 
     def aggregate(self, bar: BarData) -> None:
         if not self.verify(bar):
