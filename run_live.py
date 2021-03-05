@@ -9,7 +9,8 @@ from logbook import DEBUG
 from handlers import Handlers
 from saver import ArcticSaver
 from blotter import MongoBlotter
-from trader import Manager, Trader
+from manager import Manager
+from trader import Trader
 from streamers import VolumeStreamer
 from candle import BreakoutCandle
 from portfolio import WeightedAdjustedPortfolio
@@ -109,7 +110,7 @@ class Start(Handlers):
         # asyncio.get_event_loop().set_debug(True)
         # util.logToConsole()
         self.manager = manager
-        ibc = IBC(twsVersion=981,
+        ibc = IBC(twsVersion=978,
                   gateway=True,
                   ibcIni='/home/tomek/ibc/config_live.ini',
                   tradingMode='live',

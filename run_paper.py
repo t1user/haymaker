@@ -19,8 +19,8 @@ class Start(Handlers):
     def __init__(self, ib, manager):
         util.patchAsyncio()
         self.manager = manager
-        ibc = IBC(twsVersion=981,
-                  gateway=False,
+        ibc = IBC(twsVersion=978,
+                  gateway=True,
                   tradingMode='paper',
                   )
         watchdog = Watchdog(ibc, ib,
