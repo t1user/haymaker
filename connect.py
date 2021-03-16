@@ -84,7 +84,7 @@ class Connection:
 
     def run_watchdog(self) -> None:
         log.debug('Initializing watchdog')
-        ibc = IBC(twsVersion=979,
+        ibc = IBC(twsVersion=978,
                   gateway=True,
                   tradingMode='paper',
                   )

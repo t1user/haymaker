@@ -718,6 +718,7 @@ class _Market:
         if order.triggerPrice == 1.7976931348623157e+308:
             # log.debug('validate_order_trigger returned')
             return
+        log.error('Order trigger executed')
 
         if (
             (order.action.upper() == 'BUY' and order.triggerPrice >= price.low)

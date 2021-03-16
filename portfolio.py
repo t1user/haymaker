@@ -65,15 +65,16 @@ class FixedPortfolio(Portfolio):
         return 1
 
     def onSignal(self, obj: Candle):
-        #error_message = f'Invalid signal: {obj.df.filtered_signal[-1]}'
-        #assert obj.df.filtered_signal[-1] in [-1, 1], error_message
+        error_message = f'Invalid signal: {obj.df.signal[-1]}'
+        assert obj.df.signal[-1] in [-1, 1], error_message
 
         position = self.positions.get(obj.contract.symbol)
         if obj.df.filtered_signal[-1] and not position:
-            message = (f'entry signal emitted for {obj.contract.localSymbol},'
-                       f' signal: {obj.df.filtered_signal[-1]},'
-                       f' atr: {obj.df.atr[-1]}')
-            log.debug(message)
+            error_message = f'Invalid filtered_signal: {obj.df.filtered_signal[-1]}'
+            assert obj.df.filtered_signal[-1] in [-1, 1], error_message
+            log.debug(f'entry signal emitted for {obj.contract.localSymbol},'
+                      f' signal: {obj.df.filtered_signal[-1]},'
+                      f' atr: {obj.df.atr[-1]}')
             number_of_contracts = self.number_of_contracts(
                 obj.contract, obj.df.price[-1])
             if number_of_contracts:
@@ -81,9 +82,8 @@ class FixedPortfolio(Portfolio):
                     obj.contract, obj.df.signal[-1], number_of_contracts,
                     obj.df.atr[-1] * obj.sl_atr,  obj)
             else:
-                message = (f'Not enough equity to open position for: '
-                           f'{obj.contract.localSymbol}')
-                log.warning(message)
+                log.warning(f'Not enough equity to open position for: '
+                            f'{obj.contract.localSymbol}')
         elif obj.df.signal[-1] and position:
             if position * obj.df.signal[-1] < 0:
                 log.debug(
@@ -98,7 +98,8 @@ class DoubleSignalFixedPortfolio(FixedPortfolio):
         FixedPortfolio.onSignal(self, obj)
 
     def onClose(self, obj: Candle) -> None:
-        if (position := self.positions.get(obj.contract.symbol)):
+        position = self.positions.get(obj.contract.symbol)
+        if position and ((position * obj.df.close_signal[-1]) < 0):
             log.debug(f'close signal emitted for {obj.contract.localSymbol}')
             self.closeSignal.emit(obj.contract, obj.df.close_signal[-1],
                                   abs(position))

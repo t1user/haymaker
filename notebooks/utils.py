@@ -33,7 +33,7 @@ def plot(*data):
         else:
             raise ValueError('Arguments must be Series or a Dataframe')
     # plot the charts
-    fig = plt.figure(figsize=(20, 16))
+    fig = plt.figure(figsize=(20, len(columns)*5))
     num_plots = len(columns)
     for n, p in enumerate(columns):
         if n == 0:
@@ -740,7 +740,7 @@ def summary(price: Union[pd.Series, pd.DataFrame],
         price = price.open
 
     if threshold is None:
-        threshold = [0, 3, 5, 6, 7, 10, 15, 17, 19, 20]
+        threshold = [0, 1, 3, 5, 6, 10, 15, 17, 19, 20]
     elif isinstance(threshold, (int, float)):
         threshold = [threshold]
 

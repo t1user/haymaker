@@ -338,3 +338,72 @@ class BreakoutStrenthFilteredCandle(SingleSignalMixin, Candle):
             ((df['signal'] * df['ema_filter']) == 1)
         df['filtered_signal'] = df['pre_strength'] * df['strength_filter']
         return df
+
+
+class DonchianCandle(DoubleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['atr'] = indicators.atr(df, self.atr_periods)
+
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['ema_filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+
+        df['signal'] = indicators.min_max_signal(
+            df.price, self.periods)
+        df['filtered_signal'] = df['signal'] * \
+            ((df['signal'] * df['ema_filter']) == 1)
+
+        df['close_signal'] = indicators.min_max_signal(
+            df.price, self.close_periods)
+
+        return df
+
+
+class BreakoutCandleVolFilter(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['signal'] = indicators.min_max_signal(df.price, self.periods)
+
+        df['ema_filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['ema_filtered_signal'] = df['signal'] * \
+            ((df['signal'] * df['ema_filter']) == 1)
+
+        df['vol_filter'] = df['atr'] < (df['close'] * self.lock_filter)
+
+        df['filtered_signal'] = df['vol_filter'] * df['ema_filtered_signal']
+
+        return df
+
+
+class BreakoutLockCandleVolFilter(SingleSignalMixin, Candle):
+
+    def get_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['ema_fast'] = df.price.ewm(
+            span=self.ema_fast, min_periods=int(self.ema_fast*.6)).mean()
+        df['ema_slow'] = df.price.ewm(
+            span=self.ema_slow, min_periods=int(self.ema_slow*.6)).mean()
+        df['atr'] = indicators.atr(df, self.atr_periods)
+        df['signal'] = indicators.min_max_signal(df.price, self.periods)
+        df['ema_filter'] = np.sign(df['ema_fast'] - df['ema_slow'])
+        df['ema_filtered_signal'] = df['signal'] * \
+            ((df['signal'] * df['ema_filter']) == 1)
+
+        df['vol_filter'] = df['atr'] < (df['close'] * self.lock_filter)
+
+        df['pre_lock'] = df['vol_filter'] * df['ema_filtered_signal']
+
+        df['lock'] = (((df.pre_lock.shift().rolling(self.lock_periods).min()
+                        + df.pre_lock.shift().rolling(self.lock_periods).max()))
+                      + df.pre_lock.shift()).clip(-1, 1)
+
+        df['filtered_signal'] = (
+            df['pre_lock'] * ~((df['pre_lock'] * df['lock']) == 1))
+        return df

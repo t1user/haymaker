@@ -507,6 +507,7 @@ if __name__ == '__main__':
     # object where data is stored
     store = ArcticStore(f'{wts}_{barSize}')
 
+    # the bool is for cont_only
     holder = ContractHolder(ib, 'contracts.csv',
                             store, wts, barSize, True, aggression=1)
 
