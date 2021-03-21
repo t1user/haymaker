@@ -11,26 +11,26 @@ from handlers import WatchdogHandlers
 log = Logger(__name__)
 
 
-class Connection:
-    def __init__(self, ib: IB, func: Callable, watchdog: bool = False) -> None:
-        self.watchdog = watchdog
-        self.func = func
-        self.host = '127.0.0.1'
-        self.port = 4002
-        self.id = 1
-        self.ib = ib
-        self.ib.connectedEvent += self.onConnectedEvent
-        self.ib.errorEvent += self.onErrorEvent
+class IBHandlers:
+    def __init__(self, ib: IB) -> None:
+        self.ib.connectedEvent += self.onConnected
+        self.ib.errorEvent += self.onError
         self.ib.client.apiError += self.onApiError
+        self.ib.disconnectedEvent += self.onDisconnected
 
-        # external watchdog is managing connection
-        if not self.watchdog:
-            self.ib.disconnectedEvent += self.onDisconnectedEvent
-        # watchdog here managing connection
-        else:
-            self.ib.disconnectedEvent += self.onDisconnectedEventWatchdog
+    def onError(self, reqId: int, errorCode: int, errorString: str,
+                contract: Contract) -> None:
+        log.error(f'IB error {errorCode}: {errorString}')
+        if errorCode == 1100:
+            log.warning(f'Event loop will be stopped!')
+            asyncio.get_event_loop().stop()
+            self.run()
 
-        self.establish_connection()
+    def onApiError(self, *args) -> None:
+        log.error(f'API error: {args}')
+
+    def onConnected(self, *args) -> None:
+        pass
 
     def run(self) -> None:
         """Fire-up dataloding function."""
@@ -40,18 +40,44 @@ class Connection:
         except Exception as e:
             log.error(f'ignoring schedule exception: {e}')
 
-    def establish_connection(self) -> None:
-        """
-        Choose appropriate connection path based on whether watchdog
-        is to be used.
-        """
-        log.debug('Establishing connection')
-        if self.watchdog:
-            log.debug('Watchdog to be run')
-            self.run_watchdog()
-        else:
-            log.debug('No watchdog')
-            self.get_clientId()
+
+class StartWatchdog(IBHandlers):
+    def __init__(self, ib: IB, func: Callable) -> None:
+        self.func = func
+        self.ib = ib
+        log.debug('Initializing watchdog')
+        ibc = IBC(twsVersion=978,
+                  gateway=True,
+                  tradingMode='paper',
+                  )
+        watchdog = Watchdog(ibc, ib,
+                            port='4002',
+                            clientId=10,
+                            )
+        log.debug('Attaching handlers...')
+        IBHandlers.__init__(self, ib)
+        watchdog.startedEvent += self.onStarted
+        log.debug('Initializing watchdog...')
+        watchdog.start()
+        log.debug('Watchdog started.')
+        ib.run()
+        log.debug('ib run.')
+
+    def onStarted(self, *args):
+        log.debug(f'Starting: {args}')
+        util.run(self.func())
+
+    def onDisconnected(self):
+        pass
+
+    def onError(self, *args):
+        log.debug(f'Error: {args}')
+
+
+class StartNoWatchdog(IBHandlers):
+    def __init__(self, ib: IB, func: Callable) -> None:
+        IBHandlers.__init__(self, ib)
+        pass
 
     def get_clientId(self) -> None:
         """Find an unoccupied clientId for connection."""
@@ -69,6 +95,16 @@ class Connection:
                            'moving up to the next one')
                 log.debug(message)
 
+    def onDisconnected(self) -> None:
+        """Initiate re-start when external watchdog manages api connection."""
+        log.debug('Disconnected!')
+        try:
+            util.sleep(60)
+        except Exception as e:
+            log.debug(f'exception caught: {e}')
+        log.debug('will attempt reconnection')
+        self.connect()
+
     def connect(self) -> None:
         """Establish conection while not using watchdog."""
         log.debug('Connecting....')
@@ -82,49 +118,16 @@ class Connection:
             except Exception as e:
                 log.debug(f'Connection error: {e}')
 
-    def run_watchdog(self) -> None:
-        log.debug('Initializing watchdog')
-        ibc = IBC(twsVersion=978,
-                  gateway=True,
-                  tradingMode='paper',
-                  )
-        watchdog = Watchdog(ibc, self.ib,
-                            port='4002',
-                            clientId=self.id,
-                            )
-        handlers = WatchdogHandlers(watchdog)
-        watchdog.start()
-        log.debug('Watchdog started.')
-        self.ib.run()
-        log.debug('ib run.')
 
-    def onEvent(self, *args):
-        log.debug(f'logging event: {args}')
+class Connection:
+    def __init__(self, ib: IB, func: Callable, watchdog: bool = False) -> None:
+        if watchdog:
+            self.watchdog(ib, func)
+        else:
+            self.no_watchdog(ib, func)
 
-    def onConnectedEvent(self) -> None:
-        log.debug('Connected!')
-        self.run()
+    def watchdog(self, ib, func):
+        return StartWatchdog(ib, func)
 
-    def onDisconnectedEvent(self) -> None:
-        """Initiate re-start when external watchdog manages api connection."""
-        log.debug('Disconnected!')
-        try:
-            util.sleep(60)
-        except Exception as e:
-            log.debug(f'exception caught: {e}')
-        log.debug('will attempt reconnection')
-        self.connect()
-
-    def onDisconnectedEventWatchdog(self, *args) -> None:
-        log.debug(f'Diconnected! Args: {args}')
-
-    def onErrorEvent(self, reqId: int, errorCode: int, errorString: str,
-                     contract: Contract) -> None:
-        log.error(f'IB error {errorCode}: {errorString}')
-        if errorCode == 1100:
-            log.warning(f'Event loop will be stopped!')
-            asyncio.get_event_loop().stop()
-            self.run()
-
-    def onApiError(self, *args) -> None:
-        log.error(f'API error: {args}')
+    def no_watchdog(self, ib, func):
+        return StartNoWatchdog(ib, func)
