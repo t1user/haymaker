@@ -294,8 +294,8 @@ class AbstractBaseStore(ABC):
         return self.read(self.latest_contfutures(index, field)[symbol],
                          start_date, end_date)
 
-    def contfuture_contract_object(self, symbol: str, index: int=-1,
-                                   field: str='tradingClass'
+    def contfuture_contract_object(self, symbol: str, index: int = -1,
+                                   field: str = 'tradingClass'
                                    ) -> Optional[Contract]:
         """
         Return ib_insync object for latest contfuture for given exchange symbol
@@ -309,7 +309,7 @@ class AbstractBaseStore(ABC):
         exchange='GLOBEX', currency='USD', localSymbol='NQU0',
         tradingClass='NQ')
         """
-        meta=self.read_metadata(
+        meta = self.read_metadata(
             self.latest_contfutures(index, field).get(symbol))
         if meta:
             try:
@@ -320,23 +320,23 @@ class AbstractBaseStore(ABC):
 
 class ArcticStore(AbstractBaseStore):
 
-    def __init__(self, lib: str, host: str='localhost') -> None:
+    def __init__(self, lib: str, host: str = 'localhost') -> None:
         """
         Library name is whatToShow + barSize, eg.
         TRADES_1_min
         BID_ASK_1_hour
         MIDPOINT_30_secs
         """
-        lib=lib.replace(' ', '_')
-        self.db=Arctic(host)
+        lib = lib.replace(' ', '_')
+        self.db = Arctic(host)
         self.db.initialize_library(lib)
-        self.store=self.db[lib]
+        self.store = self.db[lib]
 
     def write(self, symbol: Union[str, Contract],
-              data: pd.DataFrame, meta: dict={}) -> VersionedItem:
-        metadata=self._metadata(symbol)
+              data: pd.DataFrame, meta: dict = {}) -> VersionedItem:
+        metadata = self._metadata(symbol)
         metadata.update(meta)
-        version=self.store.write(
+        version = self.store.write(
             self._symbol(symbol),
             self._clean(data),
             metadata=self._update_metadata(symbol, metadata))
@@ -344,7 +344,8 @@ class ArcticStore(AbstractBaseStore):
             return f'symbol: {version.symbol} version: {version.version}'
 
     def read(self, symbol: Union[str, Contract],
-             start_date: Optional[str]=None, end_date: Optional[str]=None
+             start_date: Optional[str] = None,
+             end_date: Optional[str] = None
              ) -> Optional[pd.DataFrame]:
         try:
             return self.read_object(symbol, start_date, end_date).data
@@ -352,8 +353,8 @@ class ArcticStore(AbstractBaseStore):
             return None
 
     def read_object(self, symbol: Union[str, Contract],
-                    start_date: Optional[str]=None,
-                    end_date: Optional[str]=None
+                    start_date: Optional[str] = None,
+                    end_date: Optional[str] = None
                     ) -> Optional[VersionedItem]:
         """
         Return Arctic object, which contains data and full metadata.
@@ -371,7 +372,7 @@ class ArcticStore(AbstractBaseStore):
         Repr is __repr__() of ib contract object.
         Object is the actual ib contract object.
         """
-        date_range=DateRange(start_date, end_date)
+        date_range = DateRange(start_date, end_date)
         try:
             return self.store.read(self._symbol(symbol), date_range=date_range)
         except NoDataFoundException:
@@ -401,13 +402,13 @@ class ArcticStore(AbstractBaseStore):
 
     def _metadata(self, obj: Union[Contract, str]) -> Dict[str, Dict[str, str]]:
         if isinstance(obj, Contract):
-            meta=super()._metadata(obj)
+            meta = super()._metadata(obj)
             meta.update({'object': pickle.dumps(obj)})
             # Unconmment following line if pickled object is not to be saved
             # Will make data unusable for backtester
             # meta.update({'object': None})
         else:
-            meta={}
+            meta = {}
         return meta
 
 
@@ -417,15 +418,15 @@ class PyTablesStore(AbstractBaseStore):
     THIS HAS NOT BEEN TESTED AND LIKELY DOESN'T WORK PROPERLY. TODO.
     """
 
-    def __init__(self, lib: str, path: str=default_path) -> None:
-        lib=lib.replace(' ', '_')
-        path=f'{path}/{lib}.h5'
-        self.store=partial(pd.HDFStore, path)
-        self.metastore=f'{path}/meta.pickle'
+    def __init__(self, lib: str, path: str = default_path) -> None:
+        lib = lib.replace(' ', '_')
+        path = f'{path}/{lib}.h5'
+        self.store = partial(pd.HDFStore, path)
+        self.metastore = f'{path}/meta.pickle'
 
     def write(self, symbol: Union[str, Contract],
-              data: pd.DataFrame, meta: dict={}) -> str:
-        _symbol=self._symbol(symbol)
+              data: pd.DataFrame, meta: dict = {}) -> str:
+        _symbol = self._symbol(symbol)
         with self.store() as store:
             store.put(_symbol,
                       self._clean(data))
@@ -434,7 +435,7 @@ class PyTablesStore(AbstractBaseStore):
 
     def read(self, symbol: Union[str, Contract]) -> Optional[pd.DataFrame]:
         with self.store() as store:
-            data=store.get(self._symbol(symbol))
+            data = store.get(self._symbol(symbol))
         return data
 
     def delete(self, symbol: Union[str, Contract]) -> None:
@@ -452,20 +453,20 @@ class PyTablesStore(AbstractBaseStore):
     def _read_meta(self) -> dict:
         """Return full metadata dictionary (for all symbols)."""
         with open(self.metastore, 'rb') as metastore:
-            meta=pickle.load(metastore)
+            meta = pickle.load(metastore)
         return meta
 
     def _write_meta(self, symbol, data):
-        meta=self._read_meta()
-        meta[symbol]=data
+        meta = self._read_meta()
+        meta[symbol] = data
         with open(self.metastore, 'wb') as metastore:
             pickle.dump(meta, metastore)
 
 
 class PickleStore(AbstractBaseStore):
 
-    def __init__(self, lib: str, path: str=default_path) -> None:
-        lib=lib.replace(' ', '_')
+    def __init__(self, lib: str, path: str = default_path) -> None:
+        lib = lib.replace(' ', '_')
         pass
 
 
@@ -478,18 +479,18 @@ class Store:
     """Pandas HDFStore table format"""
 
     def __init__(self, path=default_path, what='cont_fut_only'):
-        path=f'{default_path}/{what}.h5'
-        self.store=partial(pd.HDFStore, path)
+        path = f'{default_path}/{what}.h5'
+        self.store = partial(pd.HDFStore, path)
 
     def write(self, symbol, data, freq='min'):
         with self.store() as store:
             store.append(self._symbol(symbol, freq), data)
 
     def date_string(self, start_date=None, end_date=None):
-        dates=[]
+        dates = []
         if start_date:
             if isinstance(start_date, pd.Timestamp):
-                start_date=start_date.strftime('%Y%m%d')
+                start_date = start_date.strftime('%Y%m%d')
             dates.append(f'index >= {start_date}')
         if end_date:
             if isinstance(end_date, pd.Timestamp):
