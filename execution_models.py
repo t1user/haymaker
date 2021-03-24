@@ -344,7 +344,9 @@ class EventDrivenExecModel(BaseExecModel):
         # check for orphan positions
         trades = self._trader.trades()
         positions = self._trader.positions()
-        log.debug(f'positions on re-connect: {positions}')
+        positions_for_log = [(position.contract.symbol, position.position)
+                             for position in positions]
+        log.debug(f'positions on re-connect: {positions_for_log}')
 
         orphan_positions = self.check_for_orphan_positions(trades, positions)
         if orphan_positions:
@@ -391,7 +393,12 @@ class EventDrivenExecModel(BaseExecModel):
                       f'{-np.sign(p.position)}, {int(np.abs(p.position))}')
             t = self._trader.ib.reqAllOpenOrders()
             log.debug(f'reqAllOpenOrders: {t}')
-            log.debug(f'openTrades: {self._trader.ib.openTrades()}')
+            trades_for_log = [(trade.contract.symbol, trade.order.action,
+                               trade.order.orderType, trade.order.totalQuantity,
+                               trade.order.lmtPrice, trade.order.auxPrice,
+                               trade.orderStatus.status, trade.order.orderId)
+                              for trade in self._trader.ib.openTrades()]
+            log.debug(f'openTrades: {trades_for_log}')
 
     def handle_orphan_trades(self, trades: List[Trade]) -> None:
         for trade in trades:
