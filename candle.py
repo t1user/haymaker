@@ -400,9 +400,9 @@ class BreakoutLockCandleVolFilter(SingleSignalMixin, Candle):
 
         df['pre_lock'] = df['vol_filter'] * df['ema_filtered_signal']
 
-        df['lock'] = (((df.pre_lock.shift().rolling(self.lock_periods).min()
-                        + df.pre_lock.shift().rolling(self.lock_periods).max()))
-                      + df.pre_lock.shift()).clip(-1, 1)
+        df['lock'] = (df.pre_lock.shift().rolling(self.lock_periods).min()
+                      + df.pre_lock.shift().rolling(self.lock_periods).max()
+                      ).clip(-1, 1)
 
         df['filtered_signal'] = (
             df['pre_lock'] * ~((df['pre_lock'] * df['lock']) == 1))
