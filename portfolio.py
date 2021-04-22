@@ -115,10 +115,12 @@ class AdjustedPortfolio(Portfolio):
         self.alloc = 1/len(self.candles)
 
     def number_of_contracts(self, contract: Candle):
+        account_value = self.account_value
+        log.debug(f'account value: {account value}')
         daily_vol = self.target_vol / 16
-        daily_cash_alloc = daily_vol * self.account_value * self.alloc
-        cash_alloc_per_trade = daily_cash_alloc / \
-            (contract.trades_per_day ** .5)
+        daily_cash_alloc = daily_vol * account_value * self.alloc
+        cash_alloc_per_trade = (daily_cash_alloc /
+                                (contract.trades_per_day ** .5))
         points_alloc_per_trade = (cash_alloc_per_trade /
                                   float(contract.contract.multiplier))
         # 1.4 is atr to vol 'translation'
