@@ -1,3 +1,4 @@
+
 from typing import List, Any
 from abc import ABC
 
@@ -116,7 +117,7 @@ class AdjustedPortfolio(Portfolio):
 
     def number_of_contracts(self, contract: Candle):
         account_value = self.account_value
-        log.debug(f'account value: {account value}')
+        log.debug(f'account value: {account_value}')
         daily_vol = self.target_vol / 16
         daily_cash_alloc = daily_vol * account_value * self.alloc
         cash_alloc_per_trade = (daily_cash_alloc /
