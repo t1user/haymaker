@@ -57,8 +57,7 @@ class Params:
 nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
-    trades_per_day=3.8,
-    atr_periods=50,
+    trades_per_day=4,
     # avg_periods=60,
     volume=12000,
     min_atr=14,
@@ -73,6 +72,7 @@ es = Params(
     trades_per_day=.5,
     ema_fast=120,
     ema_slow=320,
+    atr_periods=180,
     sl_atr=3,
     # avg_periods=60,
     volume=43000,
@@ -85,12 +85,10 @@ es = Params(
 gc = Params(
     contract=ContFuture('GC', 'NYMEX'),
     micro_contract=ContFuture('MGC', 'NYMEX'),
-    trades_per_day=1.0,
+    trades_per_day=.5,
     ema_fast=60,
     periods=60,
     sl_atr=2,
-    # atr_periods=90,
-    atr_periods=50,
     # avg_periods=60,
     volume=5500,
     min_atr=1.9,
@@ -102,14 +100,14 @@ ym = Params(
     contract=ContFuture('YM', 'ECBOT'),
     micro_contract=ContFuture('MYM', 'ECBOT'),
     trades_per_day=1,
-    atr_periods=50,
     ema_fast=60,
     ema_slow=120,
     sl_atr=2,
     # avg_periods=60,
     volume=8000,
     alloc=.3,
-    tp_multiple=6
+    tp_multiple=6,
+    min_atr=55,
 )
 
 
@@ -133,7 +131,7 @@ candles.extend([BreakoutCandleVolFilter(VolumeStreamer(params.volume,
     for params in [nq, ym]])
 
 
-portfolio = AdjustedPortfolio(target_vol=.55)
+portfolio = FixedPortfolio(target_vol=.55)
 
 strategy_kwargs = {'candles': candles,
                    'portfolio': portfolio,

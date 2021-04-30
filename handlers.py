@@ -167,10 +167,11 @@ class IBHandlers:
                 contract: Contract):
         if errorCode not in (2157, 2158, 2119, 2104, 2106, 165, 2108,
                              2103, 2105, 10182, 1100):
-            log.warning(f'ERROR: {errorCode} {errorString} {contract}')
+            log.error(f'ERROR: {errorCode} {errorString} {contract}')
 
     def onTimeout(self, idlePeriod: float):
-        log.error(f'Timeout! Idle period: {idlePeriod}')
+        pass
+        #log.error(f'Timeout! Idle period: {idlePeriod}')
 
     def onScheduledUpdate(self, time):
         log.info(f'pnl: {self.ib.pnl()}')

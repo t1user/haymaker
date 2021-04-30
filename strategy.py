@@ -21,7 +21,7 @@ class Params:
     ema_fast: int = 5  # number of periods for moving average filter
     ema_slow: int = 120  # number of periods for moving average filter
     sl_atr: int = 1  # stop loss in ATRs
-    atr_periods: int = 180  # number of periods to calculate ATR on
+    atr_periods: int = 50  # number of periods to calculate ATR on
     trades_per_day: int = 0
     alloc: float = 0  # fraction of capital to be allocated to instrument
     # candle volume to be calculated as average of x periods
@@ -40,7 +40,6 @@ nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
     trades_per_day=3.8,
-    atr_periods=50,
     volume=12000,
     min_atr=14,
     lock_filter=0.004,
@@ -51,6 +50,7 @@ es = Params(
     contract=ContFuture('ES', 'GLOBEX'),
     micro_contract=ContFuture('MES', 'GLOBEX'),
     trades_per_day=.5,
+    atr_periods=180,
     ema_fast=120,
     ema_slow=320,
     sl_atr=3,
@@ -67,7 +67,6 @@ gc = Params(
     ema_fast=60,
     periods=60,
     sl_atr=2,
-    atr_periods=50,
     volume=5500,
     min_atr=1.9,
     tp_multiple=6
@@ -77,12 +76,12 @@ ym = Params(
     contract=ContFuture('YM', 'ECBOT'),
     micro_contract=ContFuture('MYM', 'ECBOT'),
     trades_per_day=1,
-    atr_periods=50,
     ema_fast=60,
     ema_slow=120,
     sl_atr=2,
     volume=8000,
     tp_multiple=6,
+    min_atr=55
 )
 
 

@@ -5,8 +5,6 @@ from handlers import Handlers
 from saver import ArcticSaver
 from blotter import MongoBlotter
 from manager import Manager
-from trader import Trader
-from execution_models import EventDrivenExecModel
 from strategy import strategy_kwargs
 from logger import rotating_logger_with_shell
 from logbook import INFO, DEBUG

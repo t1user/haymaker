@@ -110,6 +110,8 @@ class AbstractBaseBlotter(ABC):
         """
         pass
 
+    # read and delete/clear should be abstractmethods - TODO
+
     def __repr__(self):
         return f'{self.__class__.__name__}: {self.__dict__}'
 

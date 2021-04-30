@@ -50,7 +50,7 @@ class Params:
 nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
-    trades_per_day=4.5,
+    trades_per_day=4,
     volume=12000,
     min_atr=14,
     lock_filter=0.004,
