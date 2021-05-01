@@ -279,8 +279,7 @@ class Adjust:
             adjusted = self.adjusted_stop(
                 self.adjusted_stop_distance, order.position,
                 entry=self.trigger)
-            # print(
-            #    f'Adjusted from: {order} to {adjusted} at h: {high}, l: {low}')
+            # print(f'Adjusted: {order} to {adjusted} at h: {high}, l: {low}')
             self.done = True
             return adjusted
         else:
@@ -300,14 +299,11 @@ class NoAdjust:
     def __init__(self, *args):
         pass
 
-    def evaluate(self, order: BaseBracket, *args):
+    def evaluate(self, order: BaseBracket, *args) -> BaseBracket:
         return order
 
 
 class Context:
-
-    brackets = []
-    position = 0
 
     def __init__(self, stop: BaseBracket, tp: Union[TakeProfit, NoTakeProfit],
                  adjust: Union[Adjust, NoAdjust], always_on: bool = True
@@ -316,6 +312,7 @@ class Context:
         self._tp = tp
         self._adjust = adjust
         self.always_on = always_on
+        self.position = 0
         # print(f'Context init: {self}')
 
     def __call__(self, row: np.array) -> int:
@@ -334,6 +331,7 @@ class Context:
 
     def eval_for_close(self) -> None:
         if self.signal == -self.position:
+            # print(f'Close signal: {self.signal}, h: {self.high} l: {self.low}')
             self.close_position()
             if self.always_on:
                 self.open_position()
@@ -345,35 +343,30 @@ class Context:
             self.open_position()
 
     def open_position(self) -> None:
-        # stop loss must be the last element of brackets list
-        # so that it can be pop()ed
-        self.brackets = [self._tp(self.distance, self.signal,
-                                  self.high, self.low),
-                         self._stop(self.distance, self.signal,
-                                    self.high, self.low)]
+        self.stop = self._stop(self.distance, self.signal,
+                               self.high, self.low)
+        self.tp = self._tp(self.distance, self.signal,
+                           self.high, self.low)
         self.adjust = self._adjust(self.distance, self.signal,
                                    self.high, self.low)
         self.position = self.signal
 
     def close_position(self) -> None:
-        self.brackets.clear()
         self.position = 0
         # print('---------------------')
 
     def eval_brackets(self) -> None:
-        if any([bracket.evaluate(self.high, self.low)
-                for bracket in self.brackets]):
-            # uncomment only for debuging
-            # bracket = [bracket for bracket in self.brackets
-            #           if bracket.evaluate(self.high, self.low)][0]
-            # print(f'bracket hit: {bracket}, h: {self.high}, l: {self.low}')
+        if self.stop.evaluate(self.high, self.low):
+            # print(f'stop hit: {self.stop}, h: {self.high}, l: {self.low}')
+            self.close_position()
+        elif self.tp.evaluate(self.high, self.low):
+            # print(f'tp hit: {self.tp}, h: {self.high}, l: {self.low}')
             self.close_position()
         else:
             self.eval_adjust()
 
     def eval_adjust(self) -> None:
-        self.brackets.append(
-            self.adjust.evaluate(self.brackets.pop(), self.high, self.low))
+        self.stop = self.adjust.evaluate(self.stop, self.high, self.low)
 
     def __repr__(self):
         return (f'{self.__class__.__name__}' + '(' + ', '.join(
