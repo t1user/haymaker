@@ -1,4 +1,5 @@
 import csv
+import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -110,10 +111,26 @@ class AbstractBaseBlotter(ABC):
         """
         pass
 
-    # read and delete/clear should be abstractmethods - TODO
+    @abstractmethod
+    def delete(self, query: Dict) -> str:
+        """
+        Delete items from blotter.
+        """
+        pass
+
+    @abstractmethod
+    def clear(self):
+        """
+        Clear all items in the blotter.
+        """
+        s = input('This will permanently delete all items in the blotter. '
+                  'Continue? ').lower()
+        if s != 'yes' and s != 'y':
+            sys.exit()
 
     def __repr__(self):
-        return f'{self.__class__.__name__}: {self.__dict__}'
+        return (f'{self.__class__.__name__}' + '(' + ', '.join(
+            [f'{k}={v}' for k, v in self.__dict__.items()]) + ')')
 
 
 class CsvBlotter(AbstractBaseBlotter):
@@ -151,6 +168,12 @@ class CsvBlotter(AbstractBaseBlotter):
             for item in self.blotter:
                 writer.writerow(item)
 
+    def delete(self, query: Dict) -> str:
+        raise NotImplementedError
+
+    def clear(self) -> str:
+        raise NotImplementedError
+
 
 class MongoBlotter(AbstractBaseBlotter):
 
@@ -171,10 +194,27 @@ class MongoBlotter(AbstractBaseBlotter):
     def read(self) -> pd.DataFrame:
         return util.df([i for i in self.collection.find()])
 
+    def delete(self, querry: Dict) -> str:
+        results = self.collection.find(querry)
+        for doc in results:
+            print(doc)
+        s = input('Above documents will be deleted.'
+                  'Continue? ').lower()
+        if s != 'yes' and s != 'y':
+            sys.exit()
+        x = self.collection.delete_many(querry)
+        return f'Documents deleted: {x.raw_result}'
+
+    def clear(self) -> str:
+        print(f'Deleting all items from {self.collection}')
+        super().clear()
+        x = self.collection.delete_many({})
+        return f'Deleted {x.deleted_count} documents.'
+
 
 class AsyncMongoBlottter(AbstractBaseBlotter):
     """
-    NOT TESTED
+    NOT TESTED. Clear and delete methods missing. TODO.
     """
 
     def __init__(self, save_to_file: bool = True, host: str = 'localhost',
@@ -217,3 +257,9 @@ class TickBlotter(AbstractBaseBlotter):
             d.update({'index': pd.to_datetime(d['time'], utc=True)})
             data.append(d)
         self.store.write(self.collection, data)
+
+    def delete(self, querry: Dict) -> str:
+        raise NotImplementedError
+
+    def clear(self) -> str:
+        raise NotImplementedError
