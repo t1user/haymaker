@@ -23,7 +23,7 @@ util.patchAsyncio()
 
 
 class IB:
-    path = 'b_temp'
+    path = '/home/tomek/ib_data/b_temp'
 
     events = ('barUpdateEvent', 'newOrderEvent', 'orderModifyEvent',
               'cancelOrderEvent', 'orderStatusEvent')

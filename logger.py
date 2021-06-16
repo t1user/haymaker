@@ -10,7 +10,7 @@ log = Logger(__name__)
 
 
 def logger(name: str, stream_level=DEBUG, file_level=DEBUG,
-           folder: str = 'logs') -> Logger:
+           folder: str = default_path('logs')) -> Logger:
     set_datetime_format('local')
     StreamHandler(sys.stdout, level=stream_level,
                   bubble=True).push_application()

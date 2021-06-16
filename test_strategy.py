@@ -30,7 +30,7 @@ class Params:
     ema_fast: int = 5  # number of periods for moving average filter
     ema_slow: int = 120  # number of periods for moving average filter
     sl_atr: int = 1  # stop loss in ATRs
-    atr_periods: int = 180  # number of periods to calculate ATR on
+    atr_periods: int = 50  # number of periods to calculate ATR on
     trades_per_day: int = 0
     alloc: float = 0  # fraction of capital to be allocated to instrument
     # candle volume to be calculated as average of x periods
@@ -57,7 +57,7 @@ class Params:
 nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
-    trades_per_day=4,
+    trades_per_day=3.8,
     # avg_periods=60,
     volume=13000,
     min_atr=14,
@@ -101,7 +101,6 @@ ym = Params(
     micro_contract=ContFuture('MYM', 'ECBOT'),
     trades_per_day=1,
     ema_fast=60,
-    ema_slow=120,
     sl_atr=2,
     # avg_periods=60,
     volume=8000,
@@ -131,7 +130,7 @@ candles.extend([BreakoutCandleVolFilter(VolumeStreamer(params.volume,
     for params in [nq, ym]])
 
 
-portfolio = FixedPortfolio(target_vol=.55)
+portfolio = AdjustedPortfolio(target_vol=.55)
 
 strategy_kwargs = {'candles': candles,
                    'portfolio': portfolio,
