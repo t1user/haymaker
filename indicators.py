@@ -6,7 +6,7 @@ import numpy as np
 import sys
 
 
-def atr(data: pd.DataFrame, periods: List[int], exp: bool = True) -> pd.Series:
+def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
     """
     Return Series with ATRs.
 
@@ -17,8 +17,8 @@ def atr(data: pd.DataFrame, periods: List[int], exp: bool = True) -> pd.Series:
     exp: True - expotential mean, False - simple rolling mean 
     """
     TR = pd.DataFrame({'A': (data['high'] - data['low']),
-                       'B': (data['high'] - data['close']).abs(),
-                       'C': (data['low'] - data['close']).abs()
+                       'B': (data['high'] - data['close'].shift()).abs(),
+                       'C': (data['low'] - data['close'].shift()).abs()
                        })
     TR['TR'] = TR.max(axis=1)
     if exp:
