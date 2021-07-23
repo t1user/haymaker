@@ -1,9 +1,8 @@
 from functools import partial
-from typing import List, Dict, Callable, Tuple
+from typing import Dict, Callable, Tuple
 
 import pandas as pd
 import numpy as np
-import sys
 
 
 def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
@@ -176,3 +175,29 @@ def range_crosser(ind: pd.Series, threshold: float) -> pd.Series:
     df['s'] = np.sign(df['ind'].diff())
     df['signal'] = df['ss'] * df['s']
     return df['signal']
+
+
+def adx(data: pd.DataFrame, lookback: int) -> pd.Series:
+    """
+    Average directional movement index (expotentially weighted).
+
+    data - must have columns: 'high' and 'low'
+
+    references:
+    https://en.wikipedia.org/wiki/Average_directional_movement_index
+    https://www.investopedia.com/terms/d/dmi.asp
+    https://www.fmlabs.com/reference/default.htm?url=ADX.htm
+    """
+    df = data.copy()
+    df['atr'] = atr(df, lookback)
+    df['deltaHigh'] = (df['high'] - df['high'].shift()).clip(lower=0)
+    df['deltaLow'] = (df['low'] - df['low'].shift()).clip(lower=0)
+    df['plusDM'] = (df['deltaHigh'] > df['deltaLow']) * df['deltaHigh']
+    df['minusDM'] = (df['deltaLow'] > df['deltaHigh']) * df['deltaLow']
+    df['pdm_s'] = df['plusDM'].ewm(span=lookback).mean()
+    df['mdm_s'] = df['minusDM'].ewm(span=lookback).mean()
+    df['pDI'] = (df['pdm_s'] / df['atr']) * 100
+    df['mDI'] = (df['mdm_s'] / df['atr']) * 100
+    df['dx'] = ((df['pDI'] - df['mDI']).abs() / (df['pDI'] + df['mDI'])) * 100
+    df['adx'] = df['dx'].ewm(span=lookback).mean()
+    return df['adx']
