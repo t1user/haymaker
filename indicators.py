@@ -1,8 +1,11 @@
 from functools import partial
-from typing import Dict, Callable, Tuple
+from typing import Dict, Callable, Tuple, Union
 
 import pandas as pd
 import numpy as np
+
+from research.numba_tools import (
+    _in_out_signal_to_position_converter, _signal_to_position_converter)
 
 
 def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
@@ -13,7 +16,7 @@ def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
     ---------
     data: must have columns: 'high', 'low', 'close'
     periods: lookback period
-    exp: True - expotential mean, False - simple rolling mean 
+    exp: True - expotential mean, False - simple rolling mean
     """
     TR = pd.DataFrame({'A': (data['high'] - data['low']),
                        'B': (data['high'] - data['close'].shift()).abs(),
@@ -201,3 +204,46 @@ def adx(data: pd.DataFrame, lookback: int) -> pd.Series:
     df['dx'] = ((df['pDI'] - df['mDI']).abs() / (df['pDI'] + df['mDI'])) * 100
     df['adx'] = df['dx'].ewm(span=lookback).mean()
     return df['adx']
+
+
+def breakout(price: pd.Series, lookback: int, stop_frac: float = .5
+             ) -> pd.Series:
+    """
+    Create a Series with position representing byuing upside breakout
+    beyond lookback periods maximum and selling breakout below
+    lookback periods minimum.
+
+    Args:
+    -----
+
+    data: price series on which the breakouts are to be determined,
+    typically close prices
+
+    lookback: number of periods for max/min calculation
+
+    stop_frac: number of periods expresed as fraction of lookback
+    periods; breakout above/blow max/min of this number of periods
+    will in the opposite direction to the existing position will close
+    out existing position must be between 0 and 1; if equal to 1,
+    strategy is always in the market (oposite signal reverses existing
+    position); default: .5
+
+    Returns:
+    --------
+
+    Series where 1 means long, -1 short position, 0 no position at a
+    given index point.
+    """
+
+    assert isinstance(price, pd.Series), 'data must be pandas series'
+    assert stop_frac > 0 and stop_frac <= 1, 'stop_frac must be from (0, 1>'
+
+    df = pd.DataFrame({'price': price})
+    df['in'] = min_max_signal(df['price'], lookback)
+    if stop_frac == 1:
+        df['break'] = _signal_to_position_converter(df['in'].to_numpy())
+    else:
+        df['out'] = min_max_signal(df['price'], int(lookback*stop_frac))
+        df['break'] = _in_out_signal_to_position_converter(
+            df[['in', 'out']].to_numpy())
+    return df['break']
