@@ -209,9 +209,10 @@ def adx(data: pd.DataFrame, lookback: int) -> pd.Series:
 def breakout(price: pd.Series, lookback: int, stop_frac: float = .5
              ) -> pd.Series:
     """
-    Create a Series with position representing byuing upside breakout
+    Create a Series with signal representing byuing upside breakout
     beyond lookback periods maximum and selling breakout below
-    lookback periods minimum.
+    lookback periods minimum.  One generated signal stays constant
+    until canceled or reversed.
 
     Args:
     -----
@@ -231,11 +232,11 @@ def breakout(price: pd.Series, lookback: int, stop_frac: float = .5
     Returns:
     --------
 
-    Series where 1 means long, -1 short position, 0 no position at a
-    given index point.
+    Series where 1 means long signal, -1 short position, 0 no position
+    at a given index point.
     """
 
-    assert isinstance(price, pd.Series), 'data must be pandas series'
+    assert isinstance(price, pd.Series), 'price must be a pandas series'
     assert stop_frac > 0 and stop_frac <= 1, 'stop_frac must be from (0, 1>'
 
     df = pd.DataFrame({'price': price})
