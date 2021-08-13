@@ -1,12 +1,13 @@
 import sys
-sys.path.append('/home/tomek/ib_tools')  # noqa
+
 from collections import namedtuple
 from typing import NamedTuple, List, Union, Optional, Dict, Literal
 
-import numpy as np
-import pandas as pd
+import numpy as np  # type: ignore
+import pandas as pd  # type: ignore
 
-from pyfolio.timeseries import perf_stats
+sys.path.append('/home/tomek/ib_tools')  # noqa
+from pyfolio.timeseries import perf_stats  # type: ignore # noqa
 
 
 def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
@@ -17,10 +18,17 @@ def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
     return daily
 
 
+class Positions(NamedTuple):
+    positions: pd.DataFrame
+    opens: pd.DataFrame
+    closes: pd.DataFrame
+    transactions: pd.DataFrame
+
+
 def pos(price: pd.Series,
         transaction: pd.Series,
         position: pd.Series,
-        cost: float = 0) -> NamedTuple:
+        cost: float = 0) -> Positions:
     """
     Match open and close transactions to create position list.
 
@@ -58,8 +66,7 @@ def pos(price: pd.Series,
     positions = opens.join(closes, how='outer', lsuffix='_o', rsuffix='_c')
     positions['pnl'] = -(positions['open'] + positions['close']) - cost*2
     positions['duration'] = positions['date_c'] - positions['date_o']
-    Results = namedtuple('Result', 'positions, opens, closes, transactions')
-    return Results(positions, opens, closes, transactions)
+    return Positions(positions, opens, closes, transactions)
 
 
 def get_min_tick(data: pd.Series) -> float:
@@ -125,12 +132,12 @@ def _perf(price: pd.Series,
 
 
 Results = namedtuple(
-    'Result', 'stats, daily, positions, df, opens, closes')
+    'Results', 'stats, daily, positions, df, opens, closes')
 
 
 def perf(price: pd.Series,
          position: pd.Series,
-         slippage: float = 0) -> Results:
+         slippage: float = 1.5) -> Results:
     """
     Return performance statistics and underlying data for debuging.
 
@@ -190,26 +197,30 @@ def perf(price: pd.Series,
 
     # container for all non-pyfolio stats
     stats = pd.Series()
-    stats['Win percent'] = len(win_pos) / len(positions)
-    stats['Average gain'] = win_pos.pnl.sum() / len(win_pos)
-    stats['Average loss'] = loss_pos.pnl.sum() / len(loss_pos)
-    stats['Avg gain/loss ratio'] = abs(stats['Average gain'] /
-                                       stats['Average loss'])
-    stats['Position EV'] = ((stats['Win percent'] * stats['Average gain'])
-                            + ((1 - stats['Win percent'])
-                               * stats['Average loss']))
-    days = daily.returns.count()
-    num_pos = len(win_pos) + len(loss_pos)
-    stats['Positions per day'] = num_pos/days
-    stats['Days per position'] = days/num_pos
-    stats['Actual avg. duration'] = duration.round('min')
+    try:
+        stats['Win percent'] = len(win_pos) / len(positions)
+        stats['Average gain'] = win_pos.pnl.sum() / len(win_pos)
+        stats['Average loss'] = loss_pos.pnl.sum() / len(loss_pos)
+        stats['Avg gain/loss ratio'] = abs(stats['Average gain'] /
+                                           stats['Average loss'])
+        stats['Position EV'] = ((stats['Win percent'] * stats['Average gain'])
+                                + ((1 - stats['Win percent'])
+                                   * stats['Average loss']))
 
-    stats['Days'] = days
-    stats['Positions'] = num_pos
-    stats['Trades'] = p.transactions
-    stats['Monthly EV'] = (stats['Positions per day'] *
-                           stats['Position EV'] * 21)
-    stats['Annual EV'] = 12 * stats['Monthly EV']
+        days = daily.returns.count()
+        num_pos = len(win_pos) + len(loss_pos)
+        stats['Positions per day'] = num_pos/days
+        stats['Days per position'] = days/num_pos
+        stats['Actual avg. duration'] = duration.round('min')
+
+        stats['Days'] = days
+        stats['Positions'] = num_pos
+        stats['Trades'] = p.transactions
+        stats['Monthly EV'] = (stats['Positions per day'] *
+                               stats['Position EV'] * 21)
+        stats['Annual EV'] = 12 * stats['Monthly EV']
+    except (ZeroDivisionError, KeyError):
+        pass
 
     # Generate output table
     pyfolio_stats = perf_stats(daily['returns'])
@@ -258,7 +269,7 @@ def v_backtester(indicator: pd.Series,
         return df
 
 
-out = NamedTuple('Out', [('stats', pd.DataFrame),
+Out = NamedTuple('Out', [('stats', pd.DataFrame),
                          ('dailys', pd.DataFrame),
                          ('returns', pd.DataFrame),
                          ('positions', Dict[float, pd.DataFrame]),
@@ -270,7 +281,7 @@ def summary(data: Union[pd.Series, pd.DataFrame],
             indicator: Optional[pd.Series] = None,
             slip: float = 0,
             threshold: Optional[Union[List, float]] = None,
-            price_field_name: str = 'open') -> out:
+            price_field_name: str = 'open') -> Out:
     """
     Return stats summary of strategy for various thresholds run on the
     indicator.  The strategy is long when indicator > threshold and
@@ -346,7 +357,7 @@ def summary(data: Union[pd.Series, pd.DataFrame],
         returns[i] = r.daily['returns']
         positions[i] = r.positions
         dfs[i] = r.df
-    return out(stats, dailys, returns, positions, dfs)
+    return Out(stats, dailys, returns, positions, dfs)
 
 
 def sig_pos(data: pd.Series) -> pd.Series:
@@ -355,3 +366,15 @@ def sig_pos(data: pd.Series) -> pd.Series:
     was generated).
     """
     return data.shift().fillna(0).astype(int)
+
+
+def optimize(df, func, start_param, scope=range(20)):
+    results = pd.DataFrame(index=scope, columns=['Sharpe', 'Return', 'Vol'])
+    for i in scope:
+        param = start_param * 2**i
+        data = sig_pos(func(df['close'], param))
+        out = perf(df['open'], data)
+        results.loc[i, 'Sharpe'] = out[0].loc['Sharpe ratio']
+        results.loc[i, 'Return'] = out[0].loc['Annual return']
+        results.loc[i, 'Vol'] = out[0].loc['Annual volatility']
+    return results
