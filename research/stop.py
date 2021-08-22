@@ -1,11 +1,11 @@
-import pandas as pd
-import numpy as np
-from typing import (Optional, Union, Literal, NewType, Tuple, Type, TypeVar)
+import pandas as pd  # type: ignore
+import numpy as np  # type: ignore
+from typing import (Optional, Union, Literal, Tuple, Type, TypeVar, Dict, Any)
 from abc import ABC, abstractmethod
 
-### Stop loss ###
+# ## Stop loss ###
 
-StopMode = NewType('StopMode', Literal['fixed', 'trail'])
+StopMode = Literal['fixed', 'trail']
 
 
 class BaseBracket(ABC):
@@ -29,7 +29,7 @@ class BaseBracket(ABC):
         return (high + low) / 2
 
     def set_trigger(self, distance: float, high: float, low: float,
-                    ) -> float:
+                    *args: Any) -> float:
         """
         This is for stop loss.  For take profit the method has to be
         overridden.
@@ -50,12 +50,14 @@ class TrailStop(BaseBracket):
             else:
                 self.trigger = min(self.trigger, low + self.distance)
                 return False
-        if self.position == 1:
+        elif self.position == 1:
             if self.trigger >= low:
                 return True
             else:
                 self.trigger = max(self.trigger, high - self.distance)
                 return False
+        else:
+            raise ValueError('Evaluating TrailStop for zero position')
 
 
 class FixedStop(BaseBracket):
@@ -71,6 +73,8 @@ class FixedStop(BaseBracket):
 
 class TakeProfit(BaseBracket):
 
+    multiple: float
+
     @classmethod
     def set_up(cls, multiple: float) -> Type[BaseBracket]:
         cls.multiple = multiple
@@ -85,11 +89,11 @@ class TakeProfit(BaseBracket):
             return False
 
     def set_trigger(self, distance: float, high: float, low: float,
-                    entry: float = 0) -> None:
+                    *args: Any) -> float:
         return self.entry + distance * self.position * self.multiple
 
 
-class NoTakeProfit:
+class NoTakeProfit(BaseBracket):
 
     def __init__(self, *args):
         pass
@@ -98,12 +102,17 @@ class NoTakeProfit:
         return False
 
 
-stop_dict = {'fixed': FixedStop, 'trail': TrailStop}
+stop_dict: Dict[StopMode, Type[BaseBracket]] = {
+    'fixed': FixedStop, 'trail': TrailStop}
 
 A = TypeVar('A', bound='Adjust')
 
 
 class Adjust:
+
+    adjusted_stop: Type[BaseBracket]
+    trigger_multiple: float
+    stop_multiple: float
 
     def __init__(self, stop_distance: float,  signal: int, high: float = 0,
                  low: float = 0, entry: float = 0) -> None:
@@ -115,8 +124,8 @@ class Adjust:
         # print(f'Adjust init: {self}')
 
     @classmethod
-    def set_up(cls, adjusted_stop: str, trigger_multiple: float,
-               stop_multiple: float) -> Type[A]:
+    def set_up(cls: Type[A], adjusted_stop: Type[BaseBracket],
+               trigger_multiple: float, stop_multiple: float) -> Type[A]:
         cls.adjusted_stop = adjusted_stop
         cls.trigger_multiple = trigger_multiple
         cls.stop_multiple = stop_multiple
@@ -153,7 +162,7 @@ class Adjust:
             [f'{k}={v}' for k, v in self.__dict__.items()]) + ')')
 
 
-class NoAdjust:
+class NoAdjust(Adjust):
     def __init__(self, *args):
         pass
 
@@ -163,8 +172,8 @@ class NoAdjust:
 
 class Context:
 
-    def __init__(self, stop: BaseBracket, tp: Union[TakeProfit, NoTakeProfit],
-                 adjust: Union[Adjust, NoAdjust], always_on: bool = True
+    def __init__(self, stop: Type[BaseBracket], tp: Type[BaseBracket],
+                 adjust: Type[Adjust], always_on: bool = True
                  ) -> None:
         self._stop = stop
         self._tp = tp
@@ -255,8 +264,8 @@ def _stop_loss(data: np.array, stop: Context) -> np.array:
 
 def param_factory(mode: StopMode, tp_multiple: Optional[float] = None,
                   adjust_tuple: Optional[Tuple[StopMode, float, float]] = None
-                  ) -> Tuple[BaseBracket, Union[TakeProfit, NoTakeProfit],
-                             Union[Adjust, NoAdjust]]:
+                  ) -> Tuple[Type[BaseBracket], Type[BaseBracket],
+                             Type[Adjust]]:
     """
     Verify validity of parameters and based on them return appropriate
     objects for Context.
@@ -264,6 +273,8 @@ def param_factory(mode: StopMode, tp_multiple: Optional[float] = None,
     Stop is required.  Take profit and adjust if not used set to
     objects that don't do anything.
     """
+    adjust: Type[Adjust]
+
     if tp_multiple and adjust_tuple:
         assert adjust_tuple[1] < tp_multiple, (
             'Take profit multiple must be > adjust trigger multiple. Otherwise'
@@ -281,7 +292,7 @@ def param_factory(mode: StopMode, tp_multiple: Optional[float] = None,
 
     if adjust_tuple:
         adjusted_stop = stop_dict.get(adjust_tuple[0])
-        if not stop:
+        if not adjusted_stop:
             raise ValueError(f"Invalid adjusted stop loss type: "
                              f"{adjust_tuple[0]}. "
                              f"Must be 'fixed' or 'trail'")
@@ -296,7 +307,7 @@ def stop_loss(df: pd.DataFrame,
               distance: Union[float, pd.Series],
               mode: StopMode = 'trail',
               tp_multiple: float = 0,
-              adjust: Optional[Tuple[str, float, float]] = None,
+              adjust: Optional[Tuple[StopMode, float, float]] = None,
               always_on: bool = True
               ) -> np.array:
     """
@@ -382,4 +393,4 @@ def stop_loss(df: pd.DataFrame,
     data = df[['signal', 'high', 'low', 'distance', ]].to_numpy()
     params = param_factory(mode, tp_multiple, adjust)
     context = Context(*params, always_on=always_on)
-    return _stop_loss(data, context)
+    return _stop_loss(data, context).astype('int')
