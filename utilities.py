@@ -38,23 +38,31 @@ def update_details(ib: IB, store: AbstractBaseStore,
         contract.update(includeExpired=True)
         contracts[key] = contract
     ib.qualifyContracts(*contracts.values())
+    print(f'contracts qualified: {contracts.values()}')
     details = {}
     for k, v in contracts.copy().items():
         try:
             details[k] = ib.reqContractDetails(v)[0]
         except IndexError:
-            log.error(f'Contract unavailable: {k}')
+            print(f'Contract unavailable: {k}')
             del contracts[k]
+        if details.get(k):
+            print(f'Details for {k} loaded.')
+        else:
+            print(f'Details for {k} unavailable')
+    print('All available details collected')
 
     # get commission levels
     order = MarketOrder('BUY', 1)
     commissions = {}
     for k, v in contracts.items():
+        print(f'Pulling commission for: {v}')
         try:
             commissions[k] = ib.whatIfOrder(v, order).commission
         except AttributeError:
             log.error(f'Commission unavailable for: {k}')
             commissions[k] = np.nan
+        print(f'Commission for {k} saved.')
 
     for c, d in details.items():
         _d = {'name': d.longName,
@@ -63,7 +71,7 @@ def update_details(ib: IB, store: AbstractBaseStore,
               }
         store.write_metadata(c, _d)
 
-    log.info('Data written to store.')
+    print('Data written to store.')
 
 
 def default_path(*dirnames: str) -> str:
