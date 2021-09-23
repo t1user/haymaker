@@ -237,20 +237,30 @@ def v_backtester(indicator: pd.Series,
     """
     Vector backtester.
 
-    Run a quick and dirty backtest for a system that goes long
-    when indicator is above threshold and short when indicator
-    is below minus threshold. Commissions and spreads are not accounted for.
-    Transactions are assumed to be executed on the next price point after
-    trade signal is generated. Positions are marked to market.
+    Run a quick and dirty backtest for a system that goes long when
+    indicator is above threshold and short when indicator is below
+    minus threshold.  Commissions and spreads are not accounted for.
+    Transactions are assumed to be executed on the next price point
+    after trade signal is generated.  Positions are marked to market.
 
     Args:
-        indicator:   Series with indicator values moving around zero,
-                     same index as price
-        threshold:   strategy goes long when indicator above threshold,
-                     short when price below minus threshold
+    -----
+
+    indicator: Series with indicator values moving around zero, same
+    index as price
+
+    threshold: strategy goes long when indicator above threshold,
+    short when price below minus threshold
+
+    signal_or_position: what columns are to be returned in the
+    resulting df
 
     Returns:
-       DataFame with columns: 'signal', 'position'
+    --------
+
+    Series with 'signal' or 'position' or DataFrame with 'indicator' ,
+    'signal', and 'position' depending on the value of argument
+    'signal_or_position'
     """
 
     assert signal_or_position in ('signal', 'position', 'both'), \
