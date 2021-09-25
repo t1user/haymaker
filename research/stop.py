@@ -3,6 +3,8 @@ import numpy as np  # type: ignore
 from typing import (Optional, Union, Literal, Tuple, Type, TypeVar, Dict, Any)
 from abc import ABC, abstractmethod
 
+from signal_converters import pos_trans
+
 # ## Stop loss ###
 
 StopMode = Literal['fixed', 'trail']
@@ -10,10 +12,10 @@ StopMode = Literal['fixed', 'trail']
 
 class BaseBracket(ABC):
 
-    def __init__(self, distance: float, signal: int, high: float = 0,
+    def __init__(self, distance: float, transaction: int, high: float = 0,
                  low: float = 0, entry: float = 0) -> None:
         self.distance = distance
-        self.position = signal
+        self.position = transaction
         self.entry = entry or self.set_entry(high, low)
         self.trigger = self.set_trigger(distance, high, low)
         # print(f'bracket init: {self}, h: {high}, l: {low}')
@@ -57,7 +59,9 @@ class TrailStop(BaseBracket):
                 self.trigger = max(self.trigger, high - self.distance)
                 return False
         else:
-            raise ValueError('Evaluating TrailStop for zero position')
+            raise ValueError(
+                f'Evaluating TrailStop for zero position. '
+                f'Position: {self.position}')
 
 
 class FixedStop(BaseBracket):
@@ -114,11 +118,11 @@ class Adjust:
     trigger_multiple: float
     stop_multiple: float
 
-    def __init__(self, stop_distance: float,  signal: int, high: float = 0,
+    def __init__(self, stop_distance: float,  transaction: int, high: float = 0,
                  low: float = 0, entry: float = 0) -> None:
         self.adjusted_stop_distance = stop_distance * self.stop_multiple
         adjusted_trigger_distance = stop_distance * self.trigger_multiple
-        self.position = signal
+        self.position = transaction
         self.set_trigger(adjusted_trigger_distance, high, low, entry)
         self.done = False
         # print(f'Adjust init: {self}')
@@ -175,6 +179,16 @@ class Context:
     def __init__(self, stop: Type[BaseBracket], tp: Type[BaseBracket],
                  adjust: Type[Adjust], always_on: bool = True
                  ) -> None:
+        """
+        always_on - whether the system attempts to always be in the
+        market, True means that closing transaction for a position is
+        simultaneusly a transaction to open opposite position, False
+        means that closing transaction for a position results in
+        system being out of the market.  Triggering brackets doesn't
+        mean openning opposite position (that requires a transaction
+        opposite to current position).
+        """
+
         self._stop = stop
         self._tp = tp
         self._adjust = adjust
@@ -183,7 +197,7 @@ class Context:
         # print(f'Context init: {self}')
 
     def __call__(self, row: np.array) -> int:
-        self.signal = row[0]
+        self.transaction = row[0]
         self.high = row[1]
         self.low = row[2]
         self.distance = row[3]
@@ -197,8 +211,9 @@ class Context:
         return self.position
 
     def eval_for_close(self) -> None:
-        if self.signal == -self.position:
-            # print(f'Close signal: {self.signal}, h: {self.high} l: {self.low}')
+        if self.transaction == -self.position:
+            # print(
+            #    f'Close transaction: {self.transaction}, h: {self.high} l: {self.low}')
             self.close_position()
             if self.always_on:
                 self.open_position()
@@ -206,17 +221,17 @@ class Context:
             self.eval_brackets()
 
     def eval_for_open(self) -> None:
-        if self.signal:
+        if self.transaction:
             self.open_position()
 
     def open_position(self) -> None:
-        self.stop = self._stop(self.distance, self.signal,
+        self.stop = self._stop(self.distance, self.transaction,
                                self.high, self.low)
-        self.tp = self._tp(self.distance, self.signal,
+        self.tp = self._tp(self.distance, self.transaction,
                            self.high, self.low)
-        self.adjust = self._adjust(self.distance, self.signal,
+        self.adjust = self._adjust(self.distance, self.transaction,
                                    self.high, self.low)
-        self.position = self.signal
+        self.position = self.transaction
 
     def close_position(self) -> None:
         self.position = 0
@@ -247,7 +262,7 @@ def _stop_loss(data: np.array, stop: Context) -> np.array:
 
     data: collumns have the folowing meaning:
 
-    0 - signal is -1, 1 or 0 for transaction signal
+    0 - transaction is -1, 1 or 0 for transaction signal
 
     1 - high price for the price bar
 
@@ -303,17 +318,27 @@ def param_factory(mode: StopMode, tp_multiple: Optional[float] = None,
     return (stop, tp, adjust)
 
 
+def always_on(series: pd.Series) -> bool:
+    """
+    Based on passed position series determine whether system is always
+    in the market (closing position always means opening opposite
+    position).
+    """
+    start = min(series.idxmax(), series.idxmin())
+    series = series.loc[start:]
+    return series[series == 0].count() == 0
+
+
 def stop_loss(df: pd.DataFrame,
               distance: Union[float, pd.Series],
               mode: StopMode = 'trail',
               tp_multiple: float = 0,
               adjust: Optional[Tuple[StopMode, float, float]] = None,
-              always_on: bool = True
               ) -> np.array:
     """
     Apply stop loss and optionally take profit to a strategy.
 
-    Convert a series with signals or positions into a series with
+    Convert a series with transactions or positions into a series with
     positions resulting from applying a specified type of stop loss.
 
     Stop loss can be trailing or fixed and it might be automatically
@@ -321,12 +346,12 @@ def stop_loss(df: pd.DataFrame,
     achieved.
 
     Results of pre-stop/pre-take-profit strategy can be given as
-    signals or positions.  Signals have values (-1 or 1) only when new
+    transactions or positions.  Transactions have values (-1 or 1) only when new
     trade to open or close position is required (otherwise zero).
     Values of positions indicate what position should be held at a
     given point in time.
 
-    Values in signal series have the following meaning: 1 - long
+    Values in transaction series have the following meaning: 1 - long
     transaction -1 - short transaction 0 - no transaction.  Each row
     indicates whether transaction signal has been generated.
 
@@ -343,7 +368,7 @@ def stop_loss(df: pd.DataFrame,
 
     df - input dataframe, must have following collumns: ['high',
     'low'] - high and low prices for the price bar, and either
-    ['signal'] or ['position'] - result of pre-stop/pre-take-profit
+    ['transaction'] or ['position'] - result of pre-stop/pre-take-profit
     strategy, if it has both ['position'] takes precedence
 
     distance - desired distance of stop loss, which may be given as a
@@ -367,13 +392,6 @@ def stop_loss(df: pd.DataFrame,
     [2] adjusted stop distance - distance value to be used by adjusted
     stop given in multiples of unadjusted stop distance.
 
-    always_on - whether the system attempts to always be in the
-    market, True means that closing signal for a position is
-    simultaneusly a signal to open opposite position, False means that
-    closing signal for a position results in system being out of the
-    market.  Triggering brackets doesn't mean openning opposite
-    position (that requires a signal opposite to current position).
-
     Returns:
     --------
 
@@ -382,15 +400,14 @@ def stop_loss(df: pd.DataFrame,
 
     assert set(df.columns).issuperset(set(['high', 'low'])
                                       ), "df must have columns: 'high', 'low'"
-    assert ('position' in df.columns or 'signal' in df.columns
-            ), "df must have either column 'signal' or 'position'"
+    assert ('position' in df.columns or 'transaction' in df.columns
+            ), "df must have either column 'transaction' or 'position'"
 
     df = df.copy()
     df['distance'] = distance
     if 'position' in df.columns:
-        df['signal'] = (df['position'].shift() !=
-                        df['position']) * df['position']
-    data = df[['signal', 'high', 'low', 'distance', ]].to_numpy()
+        df['transaction'] = pos_trans(df['position'])
+    data = df[['transaction', 'high', 'low', 'distance', ]].to_numpy()
     params = param_factory(mode, tp_multiple, adjust)
-    context = Context(*params, always_on=always_on)
+    context = Context(*params, always_on=always_on(df['position'])
     return _stop_loss(data, context).astype('int')
