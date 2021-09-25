@@ -1,6 +1,6 @@
-import pandas as pd
-import numpy as np
-from numba import jit
+import pandas as pd  # type: ignore
+import numpy as np  # type: ignore
+from numba import jit  # type: ignore
 from typing import Optional, Union, NamedTuple
 
 
@@ -8,8 +8,9 @@ from typing import Optional, Union, NamedTuple
 
 @jit(nopython=True)
 def _swing(data: np.array, f: np.array, margin: np.array) -> np.array:
-    """Numba optimized implementation for swing indicators.  Should
-    not be used directly, but via swing function which accepts pandas
+    """
+    Numba optimized implementation for swing indicators.  Should not
+    be used directly, but via swing function which accepts pandas
     objects.
 
     Args:
@@ -32,7 +33,6 @@ def _swing(data: np.array, f: np.array, margin: np.array) -> np.array:
     --------
 
     Numpy array as described in docstring to function swing.
-
     """
 
     state = np.ones((data.shape[0], 1), dtype=np.int8)
@@ -63,7 +63,8 @@ def _swing(data: np.array, f: np.array, margin: np.array) -> np.array:
                 extreme[i] = row[1]
                 pivot[i] = extreme[i-1]
                 max_pivot = pivot[i]
-                max_list[i] = max_pivot
+                # max_list[i] = max_pivot
+
             else:
                 state[i] = 1
                 extreme[i] = max(extreme[i-1, 0], row[0])
@@ -80,7 +81,8 @@ def _swing(data: np.array, f: np.array, margin: np.array) -> np.array:
                 extreme[i] = row[0]
                 pivot[i] = extreme[i-1]
                 min_pivot = pivot[i]
-                min_list[i] = min_pivot
+                # min_list[i] = min_pivot
+
             else:
                 state[i, 0] = -1
                 extreme[i] = min(extreme[i-1, 0], row[1])
@@ -88,6 +90,8 @@ def _swing(data: np.array, f: np.array, margin: np.array) -> np.array:
 
         else:
             raise ValueError('Wrong state value!')
+        min_list[i] = min_pivot
+        max_list[i] = max_pivot
     return np.concatenate((state, extreme, pivot, signal, max_list, min_list),
                           axis=1)
 
@@ -114,6 +118,10 @@ def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
     User interface allowing to use numba optimized _swing function
     passing pandas objects (See _swing docstring).  This should be
     used as entry point to _swing.
+
+    The function needs runway.  It starts at long swing state, which
+    maybe incorrect.  To be sure correct state is used, it's best to
+    disregard values until first swing change.
 
     Args:
     -----
@@ -145,16 +153,21 @@ def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
     downswing
 
     [1]/extreme - current extreme (since last pivot) against which
-    filter is applied to determine if swing changed direction
+    filter is applied to determine if swing changed direction; for
+    each new series starts at max of the first bar in series and only
+    adjusts to correct value after first state change
 
-    [2]/pivot - last swing pivot point
+    [2]/pivot - last swing pivot point, last price at which state
+    changed; for each new series starts at max of the first bar in
+    series and only adjusts to correct value after first state change
 
     [3]/signal - trade signal, generated when opposite swing pivot is
-    breached by margin
+    breached by margin; at every series swing starts at 1 at only
+    later adjusts to correct value
 
-    [4]/last_max - at pivot point latest upswing pivot, otherwise zero
+    [4]/last_max - latest upswing pivot
 
-    [5]/last_min - at pivot point latest downswing pivot, otherwize zero
+    [5]/last_min - latest downswing pivot
     """
     if isinstance(f, (float, int)):
         f = np.ones((data.shape[0], 1)) * f
@@ -176,10 +189,10 @@ def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
         return output
 
 
-### Signal to position converter ###
+### Blip to position converter ###
 
 @jit(nopython=True)
-def _signal_to_position_converter(data: np.array) -> np.array:
+def _blip_to_signal_converter(data: np.array) -> np.array:
     """
     Given a column with signals, return a column with positions
     resulting from those signals.
@@ -207,25 +220,25 @@ def _signal_to_position_converter(data: np.array) -> np.array:
     return state
 
 
-### In-Out signal to position converter ###
+### In-Out signal unifier ###
 
 @jit(nopython=True)
-def _in_out_signal_to_position_converter(data: np.array) -> np.array:
+def _in_out_signal_unifier(data: np.array) -> np.array:
     """
-    Given an array with two columns, one with position entry signals
-    and one with position close signals, return an array with
-    corresponding position after applying those two signals.
+    Given an array with two columns, one with entry and one with close
+    signal, return an array with signal resulting from combining those
+    two signals.
 
     Args:
     -----
 
-    data - must have two columns: [0] - position entry signals [1] -
-    position close signals
+    data: must have two columns: [0] - entry signal [1] -
+    position clos signal
 
     Returns:
     --------
 
-    Numpy array of shape [data.shape[0], 1] with position resulting
+    Numpy array of shape [data.shape[0], 1] with signal resulting
     from applying entry and close signals (1: long, 0: no position,
     -1: short).
     """
