@@ -409,5 +409,5 @@ def stop_loss(df: pd.DataFrame,
         df['transaction'] = pos_trans(df['position'])
     data = df[['transaction', 'high', 'low', 'distance', ]].to_numpy()
     params = param_factory(mode, tp_multiple, adjust)
-    context = Context(*params, always_on=always_on(df['position'])
+    context = Context(*params, always_on=always_on(df['position']))
     return _stop_loss(data, context).astype('int')
