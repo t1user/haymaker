@@ -96,22 +96,9 @@ def _swing(data: np.array, f: np.array, margin: np.array) -> np.array:
                           axis=1)
 
 
-class Output(NamedTuple):
-    state: np.array
-    extreme: np.array
-    pivot: np.array
-    signal: np.array
-    last_max: np.array
-    last_min: np.array
-
-
-def _output_converter(arr: np.array) -> Output:
-    return Output(*arr.T)
-
-
 def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
           margin: Optional[float] = None, output_as_tuple: bool = True
-          ) -> Union[np.array, Output]:
+          ) -> Union[np.array, pd.DataFrame]:
     """
     Simulate swing trading signals and return generated output series.
 
@@ -144,10 +131,12 @@ def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
     Returns:
     --------
 
-    Numpy array with shape [data.shape[0], 6] (if output_as_tuple is
-    False) or named tuple with pd.Series, where columns/properties
-    have the following meaning for every row corresponding to price
-    data ([np.array column index]/NamedTuple property name):
+    Numpy array with shape [data.shape[0], 6] (if output_as_df is
+    False) or original data DataFrame with additional columns.
+
+    Generated columns have following meaning for every row
+    corresponding to price data ([np.array column index]/DataFrame
+    column name):
 
     [0]/state - what swing are we in?  (1) for upswing (-1) for
     downswing
@@ -179,12 +168,16 @@ def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
         margin = margin * f
     else:
         margin = 0 * f
-    data = data[['high', 'low']].to_numpy()
+    _data = data[['high', 'low']].to_numpy()
 
-    output = _swing(data, f, margin)
+    output = _swing(_data, f, margin)
 
     if output_as_tuple:
-        return _output_converter(output)
+        return data.join(pd.DataFrame(
+            output,
+            columns=['state', 'extreme', 'pivot', 'signal', 'last_max',
+                     'last_min'],
+            index=data.index))
     else:
         return output
 
