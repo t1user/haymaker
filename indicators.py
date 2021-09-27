@@ -1,11 +1,11 @@
 from functools import partial
-from typing import Dict, Callable, Tuple, Union
+from typing import Dict, Callable, Tuple
 
-import pandas as pd
-import numpy as np
+import pandas as pd  # type: ignore
+import numpy as np  # type: ignore
 
 from research.numba_tools import (
-    _in_out_signal_to_position_converter, _signal_to_position_converter)
+    _in_out_signal_unifier, _blip_to_signal_converter, swing)
 
 
 def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
@@ -34,23 +34,66 @@ def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
 get_ATR = atr
 
 
-def min_max_signal(data: pd.Series, period: int) -> pd.Series:
+def resampled_atr(df: pd.DataFrame, periods: int, exp: bool = True,
+                  freq: str = 'B') -> pd.Series:
     """
-    Return Series of signals (one of: -1, 0 or 1) dependig on whether
+    Return atr over dataframe resampled to frequency defined by freq.
+
+    Usage:
+    ------
+
+    resampled_atr(data, 20, freq='B') - 20 day atr
+
+    resampled_atr(data, 46, req='H') - 46 hour atr
+
+    Args:
+    -----
+
+    df - must have columns 'open', 'high', 'low', 'close'
+
+    periods - timeframe over which atr will be smoothed
+
+    exp - whether to use regular (False) or expotential (True)
+    smoothing, default: True
+
+    freq - pandas offset string or object representing target
+    conversion
+    """
+
+    assert set(['open', 'high', 'low', 'close']).issubset(set(df.columns)), \
+        "df must have columns: 'open', 'high', 'low', 'close'"
+    daily = df.resample(freq).agg(
+        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'})
+    df['atr'] = atr(daily, periods).shift()
+    df['atr'] = df['atr'].fillna(method='ffill')
+    return df['atr']
+
+
+def min_max_blip(price: pd.Series, period: int) -> pd.Series:
+    """
+    Return Series of blips (one of: -1, 0 or 1) dependig on whether
     price broke out above max (1) or below min (-1) over last <period>
     observations.
 
     Args:
     ---------
-    data: price Series
+    price: price Series
     period: lookback period
     """
     df = pd.DataFrame({
-        'max': ((data - data.shift(1).rolling(period).max()) > 0) * 1,
-        'min': ((data.shift(1).rolling(period).min() - data) > 0) * 1,
+        'max': ((price - price.shift(1).rolling(period).max()) > 0) * 1,
+        'min': ((price.shift(1).rolling(period).min() - price) > 0) * 1,
     })
-    df['signal'] = df['max'] - df['min']
-    return df['signal']
+    df['blip'] = df['max'] - df['min']
+    return df['blip']
+
+
+def min_max_signal(data: pd.Series, period: int) -> pd.Series:
+    """
+    For backward compatibility only.  Correct nomenclature for the
+    returned type of series is 'blip'.
+    """
+    return min_max_blip(data, period)
 
 
 def min_max_buffer_signal(data: pd.Series, period: int,
@@ -206,12 +249,12 @@ def adx(data: pd.DataFrame, lookback: int) -> pd.Series:
     return df['adx']
 
 
-def breakout(price: pd.Series, lookback: int, stop_frac: float = .5
+def breakout(price: pd.Series, lookback: int, stop_frac: float = .5,
              ) -> pd.Series:
     """
     Create a Series with signal representing byuing upside breakout
     beyond lookback periods maximum and selling breakout below
-    lookback periods minimum.  One generated signal stays constant
+    lookback periods minimum.  Once generated signal stays constant
     until canceled or reversed.
 
     Args:
@@ -224,10 +267,10 @@ def breakout(price: pd.Series, lookback: int, stop_frac: float = .5
 
     stop_frac: number of periods expresed as fraction of lookback
     periods; breakout above/blow max/min of this number of periods
-    will in the opposite direction to the existing position will close
-    out existing position must be between 0 and 1; if equal to 1,
-    strategy is always in the market (oposite signal reverses existing
-    position); default: .5
+    (rounded to nearest int) in the opposite direction to the existing
+    position will close out existing position; must be between 0 and
+    1; if equal to 1, strategy is always in the market (oposite signal
+    reverses existing position); default: .5
 
     Returns:
     --------
@@ -240,11 +283,32 @@ def breakout(price: pd.Series, lookback: int, stop_frac: float = .5
     assert stop_frac > 0 and stop_frac <= 1, 'stop_frac must be from (0, 1>'
 
     df = pd.DataFrame({'price': price})
-    df['in'] = min_max_signal(df['price'], lookback)
+    df['in'] = min_max_blip(df['price'], lookback)
     if stop_frac == 1:
-        df['break'] = _signal_to_position_converter(df['in'].to_numpy())
+        df['break'] = _blip_to_signal_converter(df['in'].to_numpy())
     else:
-        df['out'] = min_max_signal(df['price'], int(lookback*stop_frac))
-        df['break'] = _in_out_signal_to_position_converter(
-            df[['in', 'out']].to_numpy())
+        df['out'] = min_max_blip(df['price'], int(lookback*stop_frac))
+        df['break'] = _in_out_signal_unifier(df[['in', 'out']].to_numpy())
     return df['break']
+
+
+def resample(df: pd.DataFrame, freq: str) -> pd.DataFrame:
+    return df.resample(freq).agg(
+        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'})
+
+
+def strength_oscillator(df: pd.DataFrame, periods) -> pd.Series:
+    d = df.copy()
+    d['momentum'] = d.close.diff()
+    d['high_low'] = d['high'] - d['low']
+    return (d['momentum'] / d['high_low']).rolling(periods).mean()
+
+
+def join_swing(df: pd.DataFrame, *args, **kwargs) -> pd.DataFrame:
+    """
+    Return original df with added columns that result from applying
+    swing.  All args and kwargs must be compatible with swing function
+    requirements.
+    """
+    return df.join(pd.DataFrame(swing(df, *args, **kwargs)._asdict(),
+                                index=df.index))

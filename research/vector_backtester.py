@@ -1,13 +1,16 @@
 import sys
 
-from collections import namedtuple
 from typing import NamedTuple, List, Union, Optional, Dict, Literal
 
 import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
 
-sys.path.append('/home/tomek/ib_tools')  # noqa
 from pyfolio.timeseries import perf_stats  # type: ignore # noqa
+
+from signal_converters import sig_pos
+
+
+sys.path.append('/home/tomek/ib_tools')
 
 
 def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
@@ -100,7 +103,7 @@ def _perf(price: pd.Series,
     changed one bar after signal is generated, but this is
     resposibility of function that generates position.
 
-    cost - 
+    cost - transaction cost expressed in price points
     """
     assert price.index.equals(position.index), \
         'Price and position must have the same index'
@@ -131,8 +134,13 @@ def _perf(price: pd.Series,
     return df
 
 
-Results = namedtuple(
-    'Results', 'stats, daily, positions, df, opens, closes')
+class Results(NamedTuple):
+    stats: pd.Series
+    daily: pd.DataFrame
+    positions: pd.DataFrame
+    df: pd.DataFrame
+    opens: pd.Series
+    closes: pd.Series
 
 
 def perf(price: pd.Series,
@@ -158,7 +166,7 @@ def perf(price: pd.Series,
 
     Named tuple with output DataFrames with the following properties:
 
-    stats -
+    stats - summary of stats for the backtest
 
     daily - daily returns (includes closed positions and
     mark-to-market for open positions)
@@ -368,14 +376,6 @@ def summary(data: Union[pd.Series, pd.DataFrame],
         positions[i] = r.positions
         dfs[i] = r.df
     return Out(stats, dailys, returns, positions, dfs)
-
-
-def sig_pos(data: pd.Series) -> pd.Series:
-    """
-    Convert signal to position (position is changed one bar after signal
-    was generated).
-    """
-    return data.shift().fillna(0).astype(int)
 
 
 def optimize(df, func, start_param, scope=range(20)):
