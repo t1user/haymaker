@@ -509,7 +509,7 @@ if __name__ == '__main__':
 
     # the bool is for cont_only
     holder = ContractHolder(ib, 'contracts.csv',
-                            store, wts, barSize, False, aggression=1)
+                            store, wts, barSize, True, aggression=1)
 
     asyncio.get_event_loop().set_debug(True)
     # util.logToConsole(DEBUG)

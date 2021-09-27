@@ -1,13 +1,13 @@
+# type: ignore
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Union, List
+from typing import Dict, Any, Union, List, Optional
 
 from ib_insync import Event, IB
-import pandas as pd
-import numpy as np
+import pandas as pd  # type: ignore
+import numpy as np  # type: ignore
 
-from logger import Logger, log_assert
+from logger import Logger
 import indicators
-
 
 log = Logger(__name__)
 
@@ -24,9 +24,9 @@ class Candle(ABC):
         self.__dict__.update(kwargs)
         self.streamer = streamer
         self.streamer.newCandle.connect(self.append, keep_ref=True)
-        self.df = None
+        self.df: Optional[pd.DataFrame] = None
         log.debug(f'candle init for contract: {kwargs}')
-        self.candles = []
+        self.candles: List = []
         self._createEvents()
 
     def _createEvents(self):

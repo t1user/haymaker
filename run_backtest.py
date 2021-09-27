@@ -13,8 +13,8 @@ from test_strategy import strategy_kwargs
 
 log = logger(__file__[:-3], WARNING, WARNING)
 
-start_date = '20210501'
-end_date = '20210531'
+start_date = '20210101'
+end_date = '20210921'
 cash = 80000
 store = ArcticStore('TRADES_30_secs')
 source = DataSourceManager(store, start_date, end_date)
@@ -25,7 +25,7 @@ asyncio.get_event_loop().set_debug(True)
 
 blotter = CsvBlotter(save_to_file=False, filename='backtest',
                      path='/home/tomek/ib_data/backtests',
-                     note=f'_{start_date}_{end_date}_adjusted_base')
+                     note=f'_{start_date}_{end_date}_fixed')
 saver = PickleSaver('/home/tomek/ib_data/freeze/backtest')
 manager = Manager(ib, saver=saver, blotter=blotter, **strategy_kwargs)
 market = Market(cash, manager, reboot=False)
