@@ -215,6 +215,12 @@ def perf(price: pd.Series,
                                 + ((1 - stats['Win percent'])
                                    * stats['Average loss']))
 
+        # this is sanity check for Positions EV (should be the same)
+        # stats['Average pnl'] = positions.pnl.mean()
+
+        stats['Long EV'] = positions[positions['open'] > 0].pnl.mean()
+        stats['Short EV'] = positions[positions['open'] < 0].pnl.mean()
+
         days = daily.returns.count()
         num_pos = len(win_pos) + len(loss_pos)
         stats['Positions per day'] = num_pos/days
