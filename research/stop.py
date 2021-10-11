@@ -12,31 +12,29 @@ StopMode = Literal['fixed', 'trail']
 
 class BaseBracket(ABC):
 
-    def __init__(self, distance: float, transaction: int, high: float = 0,
-                 low: float = 0, entry: float = 0) -> None:
+    def __init__(self, distance: float, transaction: int,
+                 entry: float = 0) -> None:
         self.distance = distance
         self.position = transaction
-        self.entry = entry or self.set_entry(high, low)
-        self.trigger = self.set_trigger(distance, high, low)
-        # print(f'bracket init: {self}, h: {high}, l: {low}')
+        self.entry = entry
+        self.trigger = self.set_trigger()
+        # print(f'bracket init: {self}, e: {entry}')
 
     @abstractmethod
-    def evaluate(self, high: float, low: float) -> bool:
+    def evaluate(self, high: float, low: float) -> float:
         """
-        Bracket has been triggered - True or False?
+        Bracket has been triggered?
+        True: return price to execute transaction
+        False: return 0
         """
         pass
 
-    def set_entry(self, high: float, low: float) -> float:
-        return (high + low) / 2
-
-    def set_trigger(self, distance: float, high: float, low: float,
-                    *args: Any) -> float:
+    def set_trigger(self, *args: Any) -> float:
         """
         This is for stop loss.  For take profit the method has to be
         overridden.
         """
-        return self.entry - distance * self.position
+        return self.entry - self.distance * self.position
 
     def __repr__(self):
         return (f'{self.__class__.__name__}' + '(' + ', '.join(
@@ -45,19 +43,19 @@ class BaseBracket(ABC):
 
 class TrailStop(BaseBracket):
 
-    def evaluate(self, high: float, low: float) -> bool:
+    def evaluate(self, high: float, low: float) -> float:
         if self.position == -1:
             if self.trigger <= high:
-                return True
+                return self.trigger
             else:
                 self.trigger = min(self.trigger, low + self.distance)
-                return False
+                return 0
         elif self.position == 1:
             if self.trigger >= low:
-                return True
+                return self.trigger
             else:
                 self.trigger = max(self.trigger, high - self.distance)
-                return False
+                return 0
         else:
             raise ValueError(
                 f'Evaluating TrailStop for zero position. '
@@ -66,13 +64,13 @@ class TrailStop(BaseBracket):
 
 class FixedStop(BaseBracket):
 
-    def evaluate(self, high: float, low: float) -> bool:
+    def evaluate(self, high: float, low: float) -> float:
         if self.position == 1 and self.trigger >= low:
-            return True
+            return self.trigger
         elif self.position == -1 and self.trigger <= high:
-            return True
+            return self.trigger
         else:
-            return False
+            return 0
 
 
 class TakeProfit(BaseBracket):
@@ -92,9 +90,8 @@ class TakeProfit(BaseBracket):
         else:
             return False
 
-    def set_trigger(self, distance: float, high: float, low: float,
-                    *args: Any) -> float:
-        return self.entry + distance * self.position * self.multiple
+    def set_trigger(self, *args: Any) -> float:
+        return self.entry + self.distance * self.position * self.multiple
 
 
 class NoTakeProfit(BaseBracket):
@@ -118,12 +115,13 @@ class Adjust:
     trigger_multiple: float
     stop_multiple: float
 
-    def __init__(self, stop_distance: float,  transaction: int, high: float = 0,
-                 low: float = 0, entry: float = 0) -> None:
+    def __init__(self, stop_distance: float,  transaction: int,
+                 entry: float = 0) -> None:
+        self.entry = entry
         self.adjusted_stop_distance = stop_distance * self.stop_multiple
-        adjusted_trigger_distance = stop_distance * self.trigger_multiple
+        self.adjusted_trigger_distance = stop_distance * self.trigger_multiple
         self.position = transaction
-        self.set_trigger(adjusted_trigger_distance, high, low, entry)
+        self.set_trigger()
         self.done = False
         # print(f'Adjust init: {self}')
 
@@ -156,10 +154,9 @@ class Adjust:
         else:
             return order
 
-    def set_trigger(self, distance: float, high: float, low: float,
-                    entry: float) -> None:
-        reference = entry or ((high + low) / 2)
-        self.trigger = reference + distance * self.position
+    def set_trigger(self) -> None:
+        self.trigger = (self.entry + self.adjusted_trigger_distance
+                        * self.position)
 
     def __repr__(self):
         return (f'{self.__class__.__name__}' + '(' + ', '.join(
@@ -196,19 +193,20 @@ class Context:
         self.position = 0
         # print(f'Context init: {self}')
 
-    def __call__(self, row: np.array) -> int:
+    def __call__(self, row: np.array) -> Tuple[int, float]:
         self.transaction = row[0]
         self.high = row[1]
         self.low = row[2]
         self.distance = row[3]
+        self.price = row[4]
         return self.dispatch()
 
-    def dispatch(self) -> int:
+    def dispatch(self) -> Tuple[int, float]:
         if self.position:
             self.eval_for_close()
         else:
             self.eval_for_open()
-        return self.position
+        return (self.position, self.price)
 
     def eval_for_close(self) -> None:
         if self.transaction == -self.position:
@@ -226,24 +224,30 @@ class Context:
 
     def open_position(self) -> None:
         self.stop = self._stop(self.distance, self.transaction,
-                               self.high, self.low)
+                               self.price)
         self.tp = self._tp(self.distance, self.transaction,
-                           self.high, self.low)
+                           self.price)
         self.adjust = self._adjust(self.distance, self.transaction,
-                                   self.high, self.low)
+                                   self.price)
         self.position = self.transaction
+        # position may be closed on the same bar, where it's open
+        self.eval_brackets()
 
     def close_position(self) -> None:
         self.position = 0
         # print('---------------------')
 
     def eval_brackets(self) -> None:
-        if self.stop.evaluate(self.high, self.low):
+        if (p := self.stop.evaluate(self.high, self.low)):
             # print(f'stop hit: {self.stop}, h: {self.high}, l: {self.low}')
+            self.price = p
             self.close_position()
-        elif self.tp.evaluate(self.high, self.low):
+            return
+        elif (p := self.tp.evaluate(self.high, self.low)):
             # print(f'tp hit: {self.tp}, h: {self.high}, l: {self.low}')
+            self.price = p
             self.close_position()
+            return
         else:
             self.eval_adjust()
 
@@ -271,10 +275,11 @@ def _stop_loss(data: np.array, stop: Context) -> np.array:
     3 - stop distance (if stop were to be applied at this point)
     """
 
-    out = np.zeros((data.shape[0], 1), dtype=np.float32)
+    position = np.zeros((data.shape[0], 1), dtype=np.int8)
+    price = np.zeros((data.shape[0], 1), dtype=np.float32)
     for i, row in enumerate(data):
-        out[i] = stop(row)
-    return out
+        position[i], price[i] = stop(row)
+    return np.concatenate((position, price), axis=1)
 
 
 def param_factory(mode: StopMode, tp_multiple: Optional[float] = None,
@@ -334,7 +339,9 @@ def stop_loss(df: pd.DataFrame,
               mode: StopMode = 'trail',
               tp_multiple: float = 0,
               adjust: Optional[Tuple[StopMode, float, float]] = None,
-              ) -> np.array:
+              price_column: str = 'open',
+              return_type: int = 1
+              ) -> Union[pd.Series, pd.DataFrame]:
     """
     Apply stop loss and optionally take profit to a strategy.
 
@@ -346,10 +353,10 @@ def stop_loss(df: pd.DataFrame,
     achieved.
 
     Results of pre-stop/pre-take-profit strategy can be given as
-    transactions or positions.  Transactions have values (-1 or 1) only when new
-    trade to open or close position is required (otherwise zero).
-    Values of positions indicate what position should be held at a
-    given point in time.
+    transactions or positions.  Transactions have values (-1 or 1)
+    only when new trade to open or close position is required
+    (otherwise zero).  Values of positions indicate what position
+    should be held at a given point in time.
 
     Values in transaction series have the following meaning: 1 - long
     transaction -1 - short transaction 0 - no transaction.  Each row
@@ -361,15 +368,17 @@ def stop_loss(df: pd.DataFrame,
     Change in position indicates transaction signal.
 
     This function is a user interface for stop-loss applying
-    functions, which ultimately will be numba optimized.
+    functions, which ultimately will be numba optimized (when numba
+    people get their shit together).
 
     Args:
     -----
 
     df - input dataframe, must have following collumns: ['high',
     'low'] - high and low prices for the price bar, and either
-    ['transaction'] or ['position'] - result of pre-stop/pre-take-profit
-    strategy, if it has both ['position'] takes precedence
+    ['transaction'] or ['position'] - result of
+    pre-stop/pre-take-profit strategy, if it has both ['position']
+    takes precedence
 
     distance - desired distance of stop loss, which may be given as a
     float if distance value is the same at all time points or a
@@ -396,18 +405,40 @@ def stop_loss(df: pd.DataFrame,
     --------
 
     Position series resulting from applying the stop-loss/take-profit.
+
+    Format depends on the setting of 'return_type' parameter:
+
+    [0] - position only (pd.Series)
+
+    [1] - position and price (pd.DataFrame)
+
+    [else] - original DataFrame with additional columns: 'position'
+    (or 'position_sl' when 'position' was in the origianal df) and
+    price (pd.DataFrame)
     """
 
     assert set(df.columns).issuperset(set(['high', 'low'])
                                       ), "df must have columns: 'high', 'low'"
     assert ('position' in df.columns or 'transaction' in df.columns
             ), "df must have either column 'transaction' or 'position'"
+    assert price_column in df.columns, \
+        f"'{price_column}' indicated as price column, but not in df"
 
-    df = df.copy()
-    df['distance'] = distance
-    if 'position' in df.columns:
-        df['transaction'] = pos_trans(df['position'])
-    data = df[['transaction', 'high', 'low', 'distance', ]].to_numpy()
+    _df = df.copy()
+    _df['distance'] = distance
+    if 'position' in _df.columns:
+        _df['transaction'] = pos_trans(df['position'])
+    data = _df[['transaction', 'high', 'low',
+                'distance', price_column]].to_numpy()
     params = param_factory(mode, tp_multiple, adjust)
-    context = Context(*params, always_on=always_on(df['position']))
-    return _stop_loss(data, context).astype('int')
+    context = Context(*params, always_on=always_on(_df['position']))
+    if return_type == 1:
+        return pd.Series(_stop_loss(data, context).T[0].astype('int'),
+                         index=df.index)
+    elif return_type == 2:
+        return pd.DataFrame(_stop_loss(data, context),
+                            columns=['position', 'price'], index=df.index)
+    else:
+        return df.join(pd.DataFrame(_stop_loss(data, context),
+                                    columns=['position', 'price'],
+                                    index=df.index), rsuffix='_sl')

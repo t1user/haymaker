@@ -1,13 +1,15 @@
 from typing import (Callable, Iterable, Dict, Tuple, List, Optional, Any,
-                    Sequence, Literal, Union)
+                    Sequence, DefaultDict)
 
 import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import seaborn as sns  # type: ignore
+from collections import defaultdict
 
 from pyfolio.timeseries import perf_stats  # type: ignore
 
 from vector_backtester import perf, sig_pos
+from stop import stop_loss
 
 
 class Optimizer:
@@ -33,6 +35,12 @@ class Optimizer:
     progression, by default: 'geo'.  For 'geo' mode, if start is an
     int, progression elements will also be cast into int.
 
+    opti_params - explicitly specify which paramaters are to be
+    optimized, if not given, two optimization paramaters will be pass
+    to func as positional arguments, order in which opti_params are
+    given is meaningful; if func is an OptiWrapper, opti_params are
+    ignored
+
     slip - transaction cost expressed as percentage of ticksize
 
     pairs - pairs of parameters to run the backtest on, if given, sp_1
@@ -56,10 +64,11 @@ class Optimizer:
     """
 
     def __init__(self, df: pd.DataFrame, func: Callable,
-                 sp_1: Tuple[Any, ...] = (100, 1.25, 'geo'),
-                 sp_2: Tuple[Any, ...] = (.1, .1, 'lin'),
+                 sp_1: Tuple[float, float, str] = (100, 1.25, 'geo'),
+                 sp_2: Tuple[float, float, str] = (.1, .1, 'lin'),
+                 opti_params: Optional[Sequence[str]] = None,
                  slip=1.5,
-                 pairs: Optional[Sequence[Tuple[float, float]]] = None
+                 pairs: Optional[Sequence[Tuple[float, float]]] = None,
                  ) -> None:
 
         assert pairs or (sp_1 and sp_2), 'Either pairs or parameters required'
@@ -67,6 +76,13 @@ class Optimizer:
         self.func = func
         self.df = df
         self.slip = slip
+
+        if opti_params and not isinstance(self.func, OptiWrapper):
+            assert len(opti_params) == 2, ('Need exactly two optimization'
+                                           'parameters')
+            self.opti_params = opti_params
+        else:
+            self.opti_params = []
 
         self.raw_stats: Dict[Tuple[float, float], pd.Series] = {}
         self.raw_dailys: Dict[Tuple[float, float], pd.DataFrame] = {}
@@ -115,13 +131,31 @@ class Optimizer:
 
     @staticmethod
     def get_pairs(sp_1: Iterable[float], sp_2: Iterable[float],
-                  ) -> Sequence[Tuple[float, float]]:
+                  ) -> List[Tuple[float, float]]:
 
         return [(p_1, p_2) for p_1 in sp_1 for p_2 in sp_2]
 
+    def args_kwargs(self, p_1: float, p_2: float) -> Tuple[
+            List[float], Dict[str, float]]:
+        if self.opti_params:
+            kwargs = {key: value for key, value in zip(
+                self.opti_params, (p_1, p_2))}
+            args = []
+        else:
+            kwargs = {}
+            args = [p_1, p_2]
+        return args, kwargs
+
     def calc(self, p_1: float, p_2: float) -> None:
-        data = sig_pos(self.func(self.df['close'], p_1, p_2))
-        out = perf(self.df['open'], data, slippage=self.slip)
+        args, kwargs = self.args_kwargs(p_1, p_2)
+        if isinstance(self.func, OptiWrapper):
+            # stop requires position and df, also returns df
+            data = self.func(self.df, *args, **kwargs)
+            out = perf(data['price'], data['position'], slippage=self.slip)
+        else:
+            # indicator requires signal and series
+            data = sig_pos(self.func(self.df['close'], *args, **kwargs))
+            out = perf(self.df['open'], data, slippage=self.slip)
         self.raw_stats[p_1, p_2] = out.stats
         self.raw_dailys[p_1, p_2] = out.daily
         self.raw_positions[p_1, p_2] = out.positions
@@ -183,6 +217,106 @@ class Optimizer:
 
     def __str__(self):
         return f"TWo param simulation for {self.func.__name__}"
+
+
+class OptiWrapper:
+
+    """
+    Wrap signal function and stop loss to deliever a callable object
+    that can be fed into Optimizer.
+
+    Args:
+    -----
+
+    func - signal function, on which stop is to be applied, this
+    function must return signal
+
+    X, Y - two optimization (must be exactly two) parameters expressed
+    as: 'signal__<param>' or 'stop__<param>'
+
+    Additionally, if optimization is to be run with non-default kwargs
+    (for signal function or stop function), those non-default values
+    must be given by setting following properties on the object:
+    signal_kwargs, stop_kwargs.
+
+    After initialization object can be passed as Optimizer (as func)
+    or alternatively, running object's 'optimize' method will return
+    Optimizer object.
+    """
+
+    signal_kwargs: Dict[Any, Any] = {}
+    stop_kwargs: Dict[Any, Any] = {}
+
+    def __init__(self, func: Callable, X: str, Y: str):
+        self.X = X
+        self.Y = Y
+        self.func = func
+        self.opti_params_dict = self.extractor((X, Y))
+        for i in (X, Y):
+            assert '__' in i, ("optimization parameters must be given "
+                               "as 'signal__<param>' or 'stop__<param>'")
+        self.key_param: List[Tuple[str, str]] = []
+        self.params_formater()
+
+    @staticmethod
+    def extractor(i: Tuple[str, str]) -> DefaultDict[str, List[str]]:
+        """
+        Convert user defined optimization parameters in the format
+        'signal__<param>' or 'stop__<param>' into a dict that can to
+        used to insert the params into appropriate function during
+        simulation.
+        """
+        d: DefaultDict[str, List[str]] = defaultdict(list)
+        for x in i:
+            items = x.split('__')
+            d[items[0]].append(items[1])
+        assert set(d.keys()).issubset(set(('signal', 'stop'))), (
+            "prefixes must be either 'signal' or 'stop'")
+        # create empty lists for missing keys
+        d['signal']
+        d['stop']
+        return d
+
+    def params_formater(self):
+        """
+        Create a dictionary that will be feed as **params to signal
+        and stop functions with placeholders for variable params in
+        appropriate places.
+        """
+        self.params_values_dict: Dict[str, Dict[str, float]] = {
+            k: {} for k in self.opti_params_dict.keys()}
+        for key, param_list in self.opti_params_dict.items():
+            for param in param_list:
+                self.params_values_dict[key][param] = 0
+                self.key_param.append((key, param))
+
+    def assign(self, X, Y):
+        """
+        During every param iteration put the current value of params
+        into the dict that will feed them into appropriate function.
+        """
+        for i, j in zip(self.key_param, (X, Y)):
+            self.params_values_dict[i[0]][i[1]] = j
+        return self.params_values_dict
+
+    def __call__(self, df, X, Y):
+        params_values = self.assign(X, Y)
+        df['position'] = sig_pos(self.func(df['close'], **self.signal_kwargs,
+                                           **params_values['signal']))
+        return stop_loss(df, return_type=2, **self.stop_kwargs,
+                         **params_values['stop'])
+
+    def optimize(self, df: pd.DataFrame, sp_1, sp_2) -> Optimizer:
+        return Optimizer(df, self,
+                         sp_1, sp_2,
+                         slip=1.5)
+
+    @property
+    def __name__(self):
+        return self.__repr__()
+
+    def __repr__(self):
+        return f'{self.__class__.__name__} with params: {self.__dict__}'
 
 
 def plot_grid(data: Optimizer, fields: List[str] = [
