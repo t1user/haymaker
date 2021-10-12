@@ -5,10 +5,12 @@ import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import seaborn as sns  # type: ignore
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 
 from pyfolio.timeseries import perf_stats  # type: ignore
 
-from vector_backtester import perf, sig_pos
+from vector_backtester import perf, Results
+from signal_converters import sig_pos
 from stop import stop_loss
 
 
@@ -46,6 +48,9 @@ class Optimizer:
     pairs - pairs of parameters to run the backtest on, if given, sp_1
     and sp_2 will be ignored
 
+    multiprocess - whether simulation is to be run in single or multi
+    processes
+
     Properties:
     -----------
 
@@ -69,6 +74,7 @@ class Optimizer:
                  opti_params: Optional[Sequence[str]] = None,
                  slip=1.5,
                  pairs: Optional[Sequence[Tuple[float, float]]] = None,
+                 multiprocess: bool = True
                  ) -> None:
 
         assert pairs or (sp_1 and sp_2), 'Either pairs or parameters required'
@@ -94,8 +100,21 @@ class Optimizer:
 
         self._table: Dict[str, pd.DataFrame] = {}
 
-        for p in self.pairs:
-            self.calc(p[0], p[1])
+        """
+        with multiprocessing.Pool() as pool:
+            pool.starmap_async(self.calc, self.pairs, callback=self.save,
+                         error_callback=self.save_error)
+        """
+
+        if multiprocess:
+            with ProcessPoolExecutor() as executor:
+                results = {pair: data for pair, data in
+                           zip(self.pairs, executor.map(self.calc, self.pairs))
+                           }
+            self.bulk_save(results)
+        else:
+            for p in self.pairs:
+                self.save(p, self.calc(p))
 
         self.extract_stats()
         self.__dict__.update(self._table)
@@ -146,7 +165,8 @@ class Optimizer:
             args = [p_1, p_2]
         return args, kwargs
 
-    def calc(self, p_1: float, p_2: float) -> None:
+    def calc(self, pair: Tuple[float, float]) -> Results:
+        p_1, p_2 = pair
         args, kwargs = self.args_kwargs(p_1, p_2)
         if isinstance(self.func, OptiWrapper):
             # stop requires position and df, also returns df
@@ -156,10 +176,17 @@ class Optimizer:
             # indicator requires signal and series
             data = sig_pos(self.func(self.df['close'], *args, **kwargs))
             out = perf(self.df['open'], data, slippage=self.slip)
-        self.raw_stats[p_1, p_2] = out.stats
-        self.raw_dailys[p_1, p_2] = out.daily
-        self.raw_positions[p_1, p_2] = out.positions
-        self.raw_dfs[p_1, p_2] = out.df
+        return out
+
+    def bulk_save(self, data: Dict[Tuple[float, float], Results]) -> None:
+        for k, v in data.items():
+            self.save(k, v)
+
+    def save(self, pair: Tuple[float, float], out: Results) -> None:
+        self.raw_stats[pair] = out.stats
+        self.raw_dailys[pair] = out.daily
+        self.raw_positions[pair] = out.positions
+        self.raw_dfs[pair] = out.df
 
     def extract_stats(self) -> None:
         self._fields = [i for i in self.raw_stats[self.pairs[-1]].index]
