@@ -82,13 +82,13 @@ class TakeProfit(BaseBracket):
         cls.multiple = multiple
         return cls
 
-    def evaluate(self, high: float, low: float) -> bool:
+    def evaluate(self, high: float, low: float) -> float:
         if self.position == -1 and self.trigger >= low:
-            return True
+            return self.trigger
         elif self.position == 1 and self.trigger <= high:
-            return True
+            return self.trigger
         else:
-            return False
+            return 0
 
     def set_trigger(self, *args: Any) -> float:
         return self.entry + self.distance * self.position * self.multiple
@@ -386,7 +386,7 @@ def stop_loss(df: pd.DataFrame,
 
     mode - stop loss type to apply, possible values: 'fixed', 'trail'
 
-    tp_distance - take profit distance in price points or omitted if
+    tp_multiple - take profit distance in price points or omitted if
     none
 
     adjust - whether stop loss should be adjusted based on distance
