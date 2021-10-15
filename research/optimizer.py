@@ -190,14 +190,21 @@ class Optimizer:
 
     def extract_stats(self) -> None:
         self._fields = [i for i in self.raw_stats[self.pairs[-1]].index]
+
         self.field_trans = {i: i.lower().replace(
             ' ', '_').replace('/', '_').replace('.', '') for i in self._fields}
         self.fields = list(self.field_trans.values())
+        dtypes = {self.field_trans[i]: type(
+            self.raw_stats[self.pairs[-1]].loc[i]) for i in self._fields}
         self._table = {f: pd.DataFrame() for f in self.fields}
         for index, stats_table in self.raw_stats.items():
             for field in self._fields:
                 self._table[self.field_trans[field]
                             ].loc[index] = stats_table[field]
+
+        # cast dfs back to original type (otherwise they're all floats)
+        for key, table in self._table.copy().items():
+            self._table[key] = table.fillna(0).astype(dtypes[key])
 
     def extract_dailys(self) -> None:
         log_returns = {}
@@ -221,11 +228,13 @@ class Optimizer:
 
     @property
     def return_mean(self) -> float:
-        return self._table['annual_return'].mean().mean()
+        return self._table['annual_return'][self._table[
+            'annual_return'] != 0].mean().mean()
 
     @property
     def return_median(self) -> float:
-        return self._table['annual_return'].stack().median()
+        return self._table['annual_return'][self._table[
+            'annual_return'] != 0].stack().median()
 
     @property
     def combine(self):
@@ -361,9 +370,12 @@ def plot_grid(data: Optimizer, fields: List[str] = [
 
     table_one = getattr(data, fields[0])
     table_two = getattr(data, fields[1])
-    pos_rows = table_one[table_one > 0].count()/table_one.count()
-    pos_columns = table_one[table_one > 0].count(
-        axis=1)/table_one.count(axis=1)
+    pos_rows = (
+        (table_one[table_one > 0].count() / table_one.count()) * 100
+    ).astype(int)
+    pos_columns = (
+        (table_one[table_one > 0].count(axis=1)/table_one.count(axis=1)) * 100
+    ).astype(int)
 
     sns.set_style('whitegrid')
     colormap = sns.diverging_palette(10, 133, n=5, as_cmap=True)
@@ -374,73 +386,93 @@ def plot_grid(data: Optimizer, fields: List[str] = [
 
     heatmap_kwargs = {'square': True, 'cmap': colormap, 'annot': True,
                       'annot_kws': {'fontsize': 'large'},
-                      'fmt': ".2f", 'cbar': False, 'linewidth': .3, }
+                      # 'fmt': ".2f",
+                      'cbar': False, 'linewidth': .3, }
     no_labels = {'xticklabels': False, 'yticklabels': False}
 
-    if fields[0] == 'annual_return':
-        table_1_scaling_kwargs = {'vmin': -.3, 'vmax': .3}
-    else:
-        table_1_scaling_kwargs = {'robust': True}
+    def kwargs_updater(field: str, table: pd.DataFrame) -> Dict[str, Any]:
+        kwargs_dict: Dict[str, Any] = {}
+        if field in ['annual_return', 'sharpe_ratio', 'cumulative_returns',
+                     'calmar_ratio', 'sortino_ratio', 'skew',  'position_ev',
+                     'monthly_ev', 'annual_ev', 'long_ev', 'short_ev',
+                     ]:
+            kwargs_dict['center'] = 0
 
-    if fields[1] == 'sharpe_ratio':
-        table_2_scaling_kwargs = {'vmin': -1, 'vmax': 1}
-    else:
-        table_2_scaling_kwargs = {'robust': True}
+        if table.dtypes.iloc[0] == int:
+            kwargs_dict['fmt'] = '.0f'
+        else:
+            kwargs_dict['fmt'] = '.2f'
+
+        if field in ['annual_return', 'cummulative_return', 'max_drawdown',
+                     'daily_value_at_risk', 'win_percent', ]:
+            kwargs_dict['fmt'] = '.0%'
+
+        if field == 'annual_return':
+            kwargs_dict.update({'vmin': -.3, 'vmax': .3})
+        elif field in ['sharpe_ratio', 'sortino_ratio']:
+            kwargs_dict.update({'vmin': -1, 'vmax': 1})
+        else:
+            kwargs_dict['robust'] = True
+
+        return kwargs_dict
+
+    table_1_kwargs = kwargs_updater(fields[0], table_one)
+    table_2_kwargs = kwargs_updater(fields[1], table_two)
 
     ax0 = fig.add_subplot(gs[0, 0])
     ax0.set_title('%>0')
     sns.heatmap(pd.DataFrame(pos_columns), **heatmap_kwargs,
-                **no_labels, vmin=0, vmax=1, center=.5)
+                **no_labels, fmt=".0f", vmin=0, vmax=100, center=50)
 
     ax1 = fig.add_subplot(gs[0, 1])
     ax1.set_title('mean')
     sns.heatmap(pd.DataFrame(table_one.mean(axis=1)), **
-                heatmap_kwargs, **no_labels, **table_1_scaling_kwargs)
+                heatmap_kwargs, **no_labels, **table_1_kwargs)
 
     ax15 = fig.add_subplot(gs[0, 2])
     ax15.set_title('median')
-    sns.heatmap(pd.DataFrame(table_one.median(axis=1)), **
-                heatmap_kwargs, **no_labels, **table_1_scaling_kwargs)
+    sns.heatmap(pd.DataFrame(table_one.median(axis=1)),
+                **heatmap_kwargs, **no_labels, **table_1_kwargs)
 
     ax2 = fig.add_subplot(gs[0, 3])
     ax2.set_title(fields[0])
-    sns.heatmap(table_one, **heatmap_kwargs, **table_1_scaling_kwargs)
+    sns.heatmap(table_one, **heatmap_kwargs, **table_1_kwargs)
 
     ax3 = fig.add_subplot(gs[0, 4])
     ax3.set_title(fields[1])
-    sns.heatmap(table_two, **heatmap_kwargs, **table_2_scaling_kwargs)
+    sns.heatmap(table_two, **heatmap_kwargs, **table_2_kwargs)
 
     ax35 = fig.add_subplot(gs[0, 5])
     ax35.set_title('median')
     sns.heatmap(pd.DataFrame(table_two.median(axis=1)), **
-                heatmap_kwargs, **no_labels, **table_2_scaling_kwargs)
+                heatmap_kwargs, **no_labels, **table_2_kwargs)
 
     ax4 = fig.add_subplot(gs[0, 6])
     ax4.set_title('mean')
     sns.heatmap(pd.DataFrame(table_two.mean(axis=1)), **
-                heatmap_kwargs, **no_labels, **table_2_scaling_kwargs)
+                heatmap_kwargs, **no_labels, **table_2_kwargs)
 
     ax45 = fig.add_subplot(gs[1, 3])
     ax45.set_title('median')
     sns.heatmap(pd.DataFrame(table_one.median()).T, **
-                heatmap_kwargs, **no_labels, **table_1_scaling_kwargs)
+                heatmap_kwargs, **no_labels, **table_1_kwargs)
 
     ax455 = fig.add_subplot(gs[1, 4])
     sns.heatmap(pd.DataFrame(table_two.median()).T, **
-                heatmap_kwargs, **no_labels, **table_2_scaling_kwargs)
+                heatmap_kwargs, **no_labels, **table_2_kwargs)
     ax455.set_title('median')
 
     ax5 = fig.add_subplot(gs[2, 3])
     ax5.set_title('mean')
     sns.heatmap(pd.DataFrame(table_one.mean()).T, **heatmap_kwargs,
-                **no_labels, **table_1_scaling_kwargs)
+                **no_labels, **table_1_kwargs)
 
     ax6 = fig.add_subplot(gs[2, 4])
     sns.heatmap(pd.DataFrame(table_two.mean()).T, **heatmap_kwargs,
-                **no_labels, **table_2_scaling_kwargs)
+                **no_labels, **table_2_kwargs)
     ax6.set_title('mean')
 
     ax7 = fig.add_subplot(gs[3, 3])
     ax7.set_title('%>0')
     sns.heatmap(pd.DataFrame(pos_rows).T, **heatmap_kwargs,
-                **no_labels, vmin=0, vmax=1, center=.5)
+                **no_labels, fmt=".0f", vmin=0, vmax=100, center=50)

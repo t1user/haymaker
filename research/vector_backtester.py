@@ -225,13 +225,13 @@ def perf(price: pd.Series,
         num_pos = len(win_pos) + len(loss_pos)
         stats['Positions per day'] = num_pos/days
         stats['Days per position'] = days/num_pos
-        stats['Actual avg. duration'] = duration.round('min')
+        stats['Actual avg. duration'] = str(duration.round('min'))
 
         stats['Days'] = days
         stats['Positions'] = num_pos
         stats['Trades'] = p.transactions
-        stats['Monthly EV'] = (stats['Positions per day'] *
-                               stats['Position EV'] * 21)
+        stats['Monthly EV'] = int(stats['Positions per day'] *
+                                  stats['Position EV'] * 21)
         stats['Annual EV'] = 12 * stats['Monthly EV']
     except (ZeroDivisionError, KeyError):
         pass
