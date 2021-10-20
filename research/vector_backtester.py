@@ -225,7 +225,7 @@ def perf(price: pd.Series,
         num_pos = len(win_pos) + len(loss_pos)
         stats['Positions per day'] = num_pos/days
         stats['Days per position'] = days/num_pos
-        stats['Actual avg. duration'] = str(duration.round('min'))
+        stats['Actual avg. duration'] = duration.round('min')
 
         stats['Days'] = days
         stats['Positions'] = num_pos

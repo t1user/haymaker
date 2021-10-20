@@ -69,7 +69,7 @@ def calibrate(inds: pd.DataFrame, adjustment: Optional[float] = None,
     else:
         adjustments = 10/inds.abs().mean()
     scaled_inds = (inds * adjustments).clip(lower=-20, upper=20)
-    target_vol = scaled_inds.abs().std().mean()
+    target_vol = scaled_inds.abs().std().mean()  # this is dumm, FIX, TODO
     corr = scaled_inds.corr()
 
     # negative correlations capped at zero

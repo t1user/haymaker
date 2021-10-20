@@ -100,12 +100,6 @@ class Optimizer:
 
         self._table: Dict[str, pd.DataFrame] = {}
 
-        """
-        with multiprocessing.Pool() as pool:
-            pool.starmap_async(self.calc, self.pairs, callback=self.save,
-                         error_callback=self.save_error)
-        """
-
         if multiprocess:
             with ProcessPoolExecutor() as executor:
                 results = {pair: data for pair, data in
@@ -204,7 +198,11 @@ class Optimizer:
 
         # cast dfs back to original type (otherwise they're all floats)
         for key, table in self._table.copy().items():
-            self._table[key] = table.fillna(0).astype(dtypes[key])
+            try:
+                self._table[key] = table.fillna(0).astype(dtypes[key])
+            except TypeError:
+                if dtypes[key] == pd.Timedelta:
+                    self._table[key] = table / pd.Timedelta('1day')
 
     def extract_dailys(self) -> None:
         log_returns = {}
@@ -224,17 +222,19 @@ class Optimizer:
 
     @property
     def rank(self) -> pd.Series:
-        return self.paths.iloc[-1].sort_values().tail(20)
+        return (self.paths.iloc[-1] - 1).sort_values().tail(20)
 
     @property
-    def return_mean(self) -> float:
-        return self._table['annual_return'][self._table[
+    def return_mean(self) -> str:
+        m = self._table['annual_return'][self._table[
             'annual_return'] != 0].mean().mean()
+        return f'{m:.2%}'
 
     @property
-    def return_median(self) -> float:
-        return self._table['annual_return'][self._table[
+    def return_median(self) -> str:
+        m = self._table['annual_return'][self._table[
             'annual_return'] != 0].stack().median()
+        return f'{m:.2%}'
 
     @property
     def combine(self):
@@ -370,6 +370,8 @@ def plot_grid(data: Optimizer, fields: List[str] = [
 
     table_one = getattr(data, fields[0])
     table_two = getattr(data, fields[1])
+
+    # percentage of positive rows and columns
     pos_rows = (
         (table_one[table_one > 0].count() / table_one.count()) * 100
     ).astype(int)
@@ -386,11 +388,10 @@ def plot_grid(data: Optimizer, fields: List[str] = [
 
     heatmap_kwargs = {'square': True, 'cmap': colormap, 'annot': True,
                       'annot_kws': {'fontsize': 'large'},
-                      # 'fmt': ".2f",
                       'cbar': False, 'linewidth': .3, }
     no_labels = {'xticklabels': False, 'yticklabels': False}
 
-    def kwargs_updater(field: str, table: pd.DataFrame) -> Dict[str, Any]:
+    def formater(field: str, table: pd.DataFrame) -> Dict[str, Any]:
         kwargs_dict: Dict[str, Any] = {}
         if field in ['annual_return', 'sharpe_ratio', 'cumulative_returns',
                      'calmar_ratio', 'sortino_ratio', 'skew',  'position_ev',
@@ -409,15 +410,21 @@ def plot_grid(data: Optimizer, fields: List[str] = [
 
         if field == 'annual_return':
             kwargs_dict.update({'vmin': -.3, 'vmax': .3})
-        elif field in ['sharpe_ratio', 'sortino_ratio']:
+        elif field == 'sharpe_ratio':
             kwargs_dict.update({'vmin': -1, 'vmax': 1})
+        elif field == 'sortino_ratio':
+            kwargs_dict.update({'vmin': -2, 'vmax': 2})
+        elif field == 'positions':
+            kwargs_dict.update({'center': 250, 'vmin': 0, 'vmax': 750})
+        elif field == 'trades':
+            kwargs_dict.update({'center': 500, 'vmin': 0, 'vmax': 1500})
         else:
             kwargs_dict['robust'] = True
 
         return kwargs_dict
 
-    table_1_kwargs = kwargs_updater(fields[0], table_one)
-    table_2_kwargs = kwargs_updater(fields[1], table_two)
+    table_1_kwargs = formater(fields[0], table_one)
+    table_2_kwargs = formater(fields[1], table_two)
 
     ax0 = fig.add_subplot(gs[0, 0])
     ax0.set_title('%>0')
