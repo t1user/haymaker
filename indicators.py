@@ -5,7 +5,7 @@ import pandas as pd  # type: ignore
 import numpy as np  # type: ignore
 
 from research.numba_tools import (
-    _in_out_signal_unifier, _blip_to_signal_converter, swing)
+    _in_out_signal_unifier, _blip_to_signal_converter, swing)  # noqa
 
 
 def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
@@ -18,6 +18,10 @@ def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
     periods: lookback period
     exp: True - expotential mean, False - simple rolling mean
     """
+
+    assert set(['open', 'high', 'low', 'close']).issubset(set(data.columns)), \
+        "<data> must be a dataframe with columns: 'open', 'high', 'low', 'close'"
+
     TR = pd.DataFrame({'A': (data['high'] - data['low']),
                        'B': (data['high'] - data['close'].shift()).abs(),
                        'C': (data['low'] - data['close'].shift()).abs()
@@ -34,8 +38,8 @@ def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
 get_ATR = atr
 
 
-def resampled_atr(df: pd.DataFrame, periods: int, exp: bool = True,
-                  freq: str = 'B') -> pd.Series:
+def resampled_atr(df: pd.DataFrame, periods: int,
+                  freq: str = 'B',  exp: bool = True) -> pd.Series:
     """
     Return atr over dataframe resampled to frequency defined by freq.
 
@@ -44,7 +48,7 @@ def resampled_atr(df: pd.DataFrame, periods: int, exp: bool = True,
 
     resampled_atr(data, 20, freq='B') - 20 day atr
 
-    resampled_atr(data, 46, req='H') - 46 hour atr
+    resampled_atr(data, 46, freq='H') - 46 hour atr
 
     Args:
     -----
@@ -62,11 +66,67 @@ def resampled_atr(df: pd.DataFrame, periods: int, exp: bool = True,
 
     assert set(['open', 'high', 'low', 'close']).issubset(set(df.columns)), \
         "df must have columns: 'open', 'high', 'low', 'close'"
-    daily = df.resample(freq).agg(
-        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'})
-    df['atr'] = atr(daily, periods).shift()
+
+    df = df.copy()
+    resampled = df.resample(freq, label='right', closed='right').agg(
+        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}
+    ).dropna()
+    # whithout .shift() there is forward data snooping
+    df['atr'] = atr(resampled, periods, exp)
     df['atr'] = df['atr'].fillna(method='ffill')
     return df['atr']
+
+
+def cont_resampled_atr(df, bar: int, periods: int, exp: bool = True
+                       ) -> pd.Series:
+    """
+    Create continuous resampled atr series.  At every df row, last
+    <bar> rows will be treated as one bar for atr calculation.  It's
+    different from atr, where every row is treated as one bar and
+    different from resampled_atr, where price series is first
+    resampled to a new frequency and then any missing values are
+    forward filled from last available point.
+
+    So for hourly calculation at half hour point, resampled_atr will
+    give the last value from the hour top, wherus cont_resampled_atr
+    will calculate value based on last sixty minutes.
+
+    Args:
+    -----
+
+    df - must have columns 'open', 'high', 'low', 'close'
+
+    bar - number of df rows to treat as one (e.g. if df has 30s data
+    and hourly atr is required, bar value should be 120)
+
+    periods - how many bars to lookback for smoothing
+
+    exp - whether to use regular rolling mean (False) or expotential
+    (True) moving average
+    """
+
+    assert set(['open', 'high', 'low', 'close']).issubset(set(df.columns)), \
+        "df must have columns: 'open', 'high', 'low', 'close'"
+
+    d = pd.DataFrame()
+    d['A'] = df['high'].rolling(bar).max() - df['low'].rolling(bar).min()
+    d['B'] = (df['high'].rolling(bar).max() - df['close'].shift(bar)).abs()
+    d['C'] = (df['low'].rolling(bar).min() - df['close'].shift(bar)).abs()
+    d['TR'] = d.max(axis=1)
+    # easier to reshape in numpy
+    TR_values = d.TR.values
+    start_index = TR_values.shape[0] % bar
+    step1 = pd.DataFrame(TR_values[start_index:].reshape((-1, bar)))
+    if exp:
+        step2 = step1.ewm(span=periods).mean()
+    else:
+        step2 = step1.rolling(periods).mean()
+    TR = step2.values.reshape((1, -1)).T
+    # TR is still ndarray, has no index and needs to be put back into
+    # correct place in d
+    d = d.iloc[start_index:]
+    d['atr'] = TR
+    return d['atr']
 
 
 def min_max_blip(price: pd.Series, period: int) -> pd.Series:
