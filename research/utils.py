@@ -1,11 +1,12 @@
 from multiprocessing import Pool, cpu_count
-import sys
+#import sys
 
 import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 
-sys.path.append('/home/tomek/ib_tools')  # noqa
+
+# sys.path.append('/home/tomek/ib_tools')  # noqa
 
 
 def plot(*data):

@@ -4,6 +4,7 @@ from typing import (Optional, Union, Literal, Tuple, Type, TypeVar, Dict, Any)
 from abc import ABC, abstractmethod
 
 from signal_converters import pos_trans
+from vector_backtester import get_min_tick
 
 # ## Stop loss ###
 
@@ -334,11 +335,25 @@ def always_on(series: pd.Series) -> bool:
     return series[series == 0].count() == 0
 
 
+def multiply(series: pd.Series, multiplier):
+    """
+    Floor multiplied price series to the nearest tick.
+    """
+    if multiplier != 1:
+        tick = get_min_tick(series)
+        data = series * multiplier
+        floor = data // tick
+        return floor * tick
+    else:
+        return series
+
+
 def stop_loss(df: pd.DataFrame,
               distance: Union[float, pd.Series],
               mode: StopMode = 'trail',
               tp_multiple: float = 0,
               adjust: Optional[Tuple[StopMode, float, float]] = None,
+              multiplier: float = 1,
               price_column: str = 'open',
               return_type: int = 1
               ) -> Union[pd.Series, pd.DataFrame]:
@@ -401,6 +416,8 @@ def stop_loss(df: pd.DataFrame,
     [2] adjusted stop distance - distance value to be used by adjusted
     stop given in multiples of unadjusted stop distance.
 
+    return_type - specify what data is returned, see below
+
     Returns:
     --------
 
@@ -408,9 +425,9 @@ def stop_loss(df: pd.DataFrame,
 
     Format depends on the setting of 'return_type' parameter:
 
-    [0] - position only (pd.Series)
+    [1] - position only (pd.Series)
 
-    [1] - position and price (pd.DataFrame)
+    [2] - position and price (pd.DataFrame)
 
     [else] - original DataFrame with additional columns: 'position'
     (or 'position_sl' when 'position' was in the origianal df) and
@@ -423,9 +440,12 @@ def stop_loss(df: pd.DataFrame,
             ), "df must have either column 'transaction' or 'position'"
     assert price_column in df.columns, \
         f"'{price_column}' indicated as price column, but not in df"
+    assert multiplier > 0, 'Multiplier must be greater than zero.'
+    assert isinstance(distance, (pd.Series, float, int)), \
+        f'distance must be series or number, not {type(distance)}'
 
     _df = df.copy()
-    _df['distance'] = distance
+    _df['distance'] = distance * multiplier
     if 'position' in _df.columns:
         _df['transaction'] = pos_trans(df['position'])
     data = _df[['transaction', 'high', 'low',

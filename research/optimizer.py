@@ -74,7 +74,7 @@ class Optimizer:
                  opti_params: Optional[Sequence[str]] = None,
                  slip=1.5,
                  pairs: Optional[Sequence[Tuple[float, float]]] = None,
-                 multiprocess: bool = True
+                 multiprocess: bool = True,
                  ) -> None:
 
         assert pairs or (sp_1 and sp_2), 'Either pairs or parameters required'
@@ -193,8 +193,12 @@ class Optimizer:
         self._table = {f: pd.DataFrame() for f in self.fields}
         for index, stats_table in self.raw_stats.items():
             for field in self._fields:
-                self._table[self.field_trans[field]
-                            ].loc[index] = stats_table[field]
+                try:
+                    self._table[self.field_trans[field]
+                                ].loc[index] = stats_table[field]
+                except KeyError:
+                    print(f'Warning: No values for {index} '
+                          f'{self.field_trans[field]}')
 
         # cast dfs back to original type (otherwise they're all floats)
         for key, table in self._table.copy().items():

@@ -233,7 +233,7 @@ def perf(price: pd.Series,
         stats['Monthly EV'] = int(stats['Positions per day'] *
                                   stats['Position EV'] * 21)
         stats['Annual EV'] = 12 * stats['Monthly EV']
-    except (ZeroDivisionError, KeyError):
+    except (ZeroDivisionError, KeyError, ValueError):
         pass
 
     # Generate output table
