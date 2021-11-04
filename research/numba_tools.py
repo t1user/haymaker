@@ -1,13 +1,13 @@
-import pandas as pd  # type: ignore
-import numpy as np  # type: ignore
+import pandas as pd
+import numpy as np
 from numba import jit  # type: ignore
-from typing import Optional, Union, NamedTuple
+from typing import Optional, Union
 
 
 ### Swing trading signals ###
 
 @jit(nopython=True)
-def _swing(data: np.array, f: np.array, margin: np.array) -> np.array:
+def _swing(data: np.ndarray, f: np.ndarray, margin: np.ndarray) -> np.ndarray:
     """
     Numba optimized implementation for swing indicators.  Should not
     be used directly, but via swing function which accepts pandas
@@ -96,9 +96,9 @@ def _swing(data: np.array, f: np.array, margin: np.array) -> np.array:
                           axis=1)
 
 
-def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
+def swing(data: pd.DataFrame, f: Union[float, np.ndarray, pd.Series],
           margin: Optional[float] = None, output_as_tuple: bool = True
-          ) -> Union[np.array, pd.DataFrame]:
+          ) -> Union[np.ndarray, pd.DataFrame]:
     """
     Simulate swing trading signals and return generated output series.
 
@@ -161,7 +161,7 @@ def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
     if isinstance(f, (float, int)):
         f = np.ones((data.shape[0], 1)) * f
     elif isinstance(f, (pd.DataFrame, pd.Series)):
-        f = f.to_numpy()
+        f = f.to_numpy().reshape((len(f), 1))
     if margin:
         if isinstance(margin, (pd.DataFrame, pd.Series)):
             margin = margin.to_numpy()
@@ -185,7 +185,7 @@ def swing(data: pd.DataFrame, f: Union[float, np.array, pd.Series],
 ### Blip to position converter ###
 
 @jit(nopython=True)
-def _blip_to_signal_converter(data: np.array) -> np.array:
+def _blip_to_signal_converter(data: np.ndarray) -> np.ndarray:
     """
     Given a column with signals, return a column with positions
     resulting from those signals.
@@ -216,7 +216,7 @@ def _blip_to_signal_converter(data: np.array) -> np.array:
 ### In-Out signal unifier ###
 
 @jit(nopython=True)
-def _in_out_signal_unifier(data: np.array) -> np.array:
+def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
     """
     Given an array with two columns, one with entry and one with close
     signal, return an array with signal resulting from combining those

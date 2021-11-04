@@ -233,8 +233,8 @@ def perf(price: pd.Series,
         stats['Monthly EV'] = int(stats['Positions per day'] *
                                   stats['Position EV'] * 21)
         stats['Annual EV'] = 12 * stats['Monthly EV']
-    except (ZeroDivisionError, KeyError, ValueError):
-        pass
+    except (ZeroDivisionError, KeyError, ValueError) as error:
+        print(error)
 
     # Generate output table
     pyfolio_stats = perf_stats(daily['returns'])

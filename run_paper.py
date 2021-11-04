@@ -7,7 +7,7 @@ from blotter import MongoBlotter
 from manager import Manager
 from strategy import strategy_kwargs
 from logger import rotating_logger_with_shell
-from logbook import INFO, DEBUG
+from logbook import INFO, DEBUG  # type: ignore
 
 log = rotating_logger_with_shell(__file__[:-3], DEBUG, DEBUG)
 

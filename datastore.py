@@ -5,13 +5,13 @@ from datetime import datetime
 from collections import defaultdict
 import pickle
 
-import pandas as pd
-import numpy as np
-from logbook import Logger
-from arctic.date import DateRange
-from arctic.store.versioned_item import VersionedItem
-from arctic.exceptions import NoDataFoundException
-from arctic import Arctic
+import pandas as pd  # type: ignore
+import numpy as np  # type: ignore
+from logbook import Logger  # type: ignore
+from arctic.date import DateRange  # type: ignore
+from arctic.store.versioned_item import VersionedItem  # type: ignore
+from arctic.exceptions import NoDataFoundException  # type: ignore
+from arctic import Arctic  # type: ignore
 from ib_insync.contract import Future, ContFuture, Contract
 
 from config import default_path
@@ -158,14 +158,14 @@ class AbstractBaseStore(ABC):
         df.drop(index=df[df.index.duplicated()].index, inplace=True)
         return df
 
-    def check_earliest(self, symbol: str) -> datetime:
+    def check_earliest(self, symbol: str) -> Optional[datetime]:
         """Return earliest date of available data for a given symbol."""
         try:
             return self.read(symbol).index.min()
         except (KeyError, AttributeError):
             return None
 
-    def check_latest(self, symbol: str) -> datetime:
+    def check_latest(self, symbol: str) -> Optional[datetime]:
         """Return earliest date of available data for a given symbol."""
         try:
             return self.read(symbol).index.max()
@@ -443,7 +443,7 @@ class PyTablesStore(AbstractBaseStore):
 
     def keys(self) -> List[str]:
         with self.store() as store:
-            keys=store.keys()
+            keys = store.keys()
         return keys
 
     def read_metadata(self, symbol: Union[str, Contract]) -> dict:

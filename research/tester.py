@@ -1,10 +1,10 @@
 from datetime import timedelta
 from functools import partial
 from typing import Callable, List, Optional, Tuple, Union
-import pandas as pd
+import pandas as pd  # type: ignore
 
 from grouper import group_by_volume, VolumeGrouper
-from datastore import Store
+from datastore import Store  # type: ignore
 
 
 TIME_INT = 30

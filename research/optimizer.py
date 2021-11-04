@@ -1,5 +1,5 @@
 from typing import (Callable, Iterable, Dict, Tuple, List, Optional, Any,
-                    Sequence, DefaultDict)
+                    Sequence, DefaultDict, Union)
 
 import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -51,6 +51,10 @@ class Optimizer:
     multiprocess - whether simulation is to be run in single or multi
     processes
 
+    pass_full_df - if False (default), <func> will get a price series
+    (typical for an indicator), otherwise full df will be passed (for
+    functions that require more than closing price to produce result)
+
     Properties:
     -----------
 
@@ -75,6 +79,7 @@ class Optimizer:
                  slip=1.5,
                  pairs: Optional[Sequence[Tuple[float, float]]] = None,
                  multiprocess: bool = True,
+                 pass_full_df: bool = False,
                  ) -> None:
 
         assert pairs or (sp_1 and sp_2), 'Either pairs or parameters required'
@@ -82,6 +87,11 @@ class Optimizer:
         self.func = func
         self.df = df
         self.slip = slip
+
+        if pass_full_df:
+            self.in_data = df
+        else:
+            self.in_data = df['close']
 
         if opti_params and not isinstance(self.func, OptiWrapper):
             assert len(opti_params) == 2, ('Need exactly two optimization'
@@ -164,11 +174,11 @@ class Optimizer:
         args, kwargs = self.args_kwargs(p_1, p_2)
         if isinstance(self.func, OptiWrapper):
             # stop requires position and df, also returns df
-            data = self.func(self.df, *args, **kwargs)
+            data = self.func(self.df, self.in_data, *args, **kwargs)
             out = perf(data['price'], data['position'], slippage=self.slip)
         else:
             # indicator requires signal and series
-            data = sig_pos(self.func(self.df['close'], *args, **kwargs))
+            data = sig_pos(self.func(self.in_data, *args, **kwargs))
             out = perf(self.df['open'], data, slippage=self.slip)
         return out
 
@@ -330,7 +340,7 @@ class OptiWrapper:
                 self.params_values_dict[key][param] = 0
                 self.key_param.append((key, param))
 
-    def assign(self, X, Y):
+    def assign(self, X: float, Y: float):
         """
         During every param iteration put the current value of params
         into the dict that will feed them into appropriate function.
@@ -339,9 +349,10 @@ class OptiWrapper:
             self.params_values_dict[i[0]][i[1]] = j
         return self.params_values_dict
 
-    def __call__(self, df, X, Y):
+    def __call__(self, df: pd.DataFrame, in_data: Union[pd.Series, pd.DataFrame],
+                 X: float, Y: float) -> pd.DataFrame:
         params_values = self.assign(X, Y)
-        df['position'] = sig_pos(self.func(df['close'], **self.signal_kwargs,
+        df['position'] = sig_pos(self.func(in_data, **self.signal_kwargs,
                                            **params_values['signal']))
         return stop_loss(df, return_type=2, **self.stop_kwargs,
                          **params_values['stop'])
