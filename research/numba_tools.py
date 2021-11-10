@@ -1,4 +1,4 @@
-import pandas as pd
+import pandas as pd  # type: ignore
 import numpy as np
 from numba import jit  # type: ignore
 from typing import Optional, Union
@@ -97,7 +97,8 @@ def _swing(data: np.ndarray, f: np.ndarray, margin: np.ndarray) -> np.ndarray:
 
 
 def swing(data: pd.DataFrame, f: Union[float, np.ndarray, pd.Series],
-          margin: Optional[float] = None, output_as_tuple: bool = True
+          margin: Optional[Union[float, pd.Series]] = None,
+          output_as_tuple: bool = True
           ) -> Union[np.ndarray, pd.DataFrame]:
     """
     Simulate swing trading signals and return generated output series.
@@ -161,7 +162,7 @@ def swing(data: pd.DataFrame, f: Union[float, np.ndarray, pd.Series],
     if isinstance(f, (float, int)):
         f = np.ones((data.shape[0], 1)) * f
     elif isinstance(f, (pd.DataFrame, pd.Series)):
-        f = f.to_numpy().reshape((len(f), 1))
+        f = f.to_numpy()
     if margin:
         if isinstance(margin, (pd.DataFrame, pd.Series)):
             margin = margin.to_numpy()
@@ -250,3 +251,37 @@ def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
                     (state[i-1] + row[0]), 1), -1)).astype(np.int8)
 
     return state
+
+
+## volume grouper ##
+
+@jit(nopython=True)
+def _volume_grouper(volume: np.ndarray, target: int) -> np.ndarray:
+    aggregator = 0
+    label = 0
+    labels = np.zeros(volume.shape)
+    for i, row in enumerate(volume):
+        aggregator += row
+        if aggregator >= target:
+            aggregator = 0
+            label += 1
+        labels[i] = label
+    return labels
+
+
+def volume_grouper(df: pd.DataFrame, target) -> pd.DataFrame:
+    assert set(['open', 'high', 'low', 'close', 'volume', 'barCount']
+               ).issubset(set(df.columns)), (
+                   "df must have all of the columns: 'open', 'high', 'low',"
+                   " 'close', 'volume', 'barCount'")
+    df = df.copy().reset_index()
+    df['labels'] = _volume_grouper(df.volume.to_numpy(), target)
+    return df.groupby('labels').agg({
+        'date': 'first',
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'volume': 'sum',
+        'barCount': 'sum'
+    }).set_index('date')
