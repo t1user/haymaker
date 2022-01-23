@@ -489,8 +489,9 @@ class Market:
     def __getattr__(self, name):
         return getattr(self.instance, name)
 
-    def __setattr__(self, name):
-        return setattr(self.instance, name)
+    # This was fucked (no value param), possibly incorrect
+    def __setattr__(self, name, value):
+        return setattr(self.instance, name, value)
 
 
 class _Market:
