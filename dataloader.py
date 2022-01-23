@@ -3,20 +3,23 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+from collections import deque
 import itertools
 import asyncio
-from typing import List, Union, Type, Optional
+from typing import List, Union, Optional, Any, Dict, NamedTuple
 from functools import partial
+
 
 import pandas as pd
 from ib_insync import (IB, Contract, Future, ContFuture, BarDataList, util,
                        Event)
-from logbook import DEBUG
+# from logbook import DEBUG, INFO
 
 from logger import logger
 from connect import Connection
 from config import max_number_of_workers
 from datastore import ArcticStore, AbstractBaseStore
+from task_logger import create_task
 
 
 """
@@ -45,7 +48,7 @@ class ContractObjectSelector:
             keep_default_na=False
         ).to_dict('records')
         self.ib = ib
-        self.contracts = []
+        self.contracts: List[Contract] = []
         log.debug('ContractObjectSelector about to create objects')
         self.create_objects()
         log.debug('Objects created')
@@ -115,10 +118,11 @@ class DataWriter:
         pulse += self.onPulse
 
         self.next_date = ''
-        self._objects = []
-        self._queue = []
-        self._current_object = None
+        self._objects: List[DownloadContainer] = []
+        self._queue: List[DownloadContainer] = []
+        self._current_object: Optional[DownloadContainer] = None
         self.schedule_tasks()
+        log.info(f'Object initialized: {self}')
 
     def onPulse(self, time: datetime):
         self.write_to_store()
@@ -126,6 +130,11 @@ class DataWriter:
     def schedule_tasks(self):
         update = self.update()
         backfill = self.backfill()
+        fill_gaps = self.fill_gaps()
+
+        log.debug(f'update for {self.c}: {update}')
+        log.debug(f'backfill for {self.c}: {backfill}')
+        log.debug(f'fill_gaps for {self.c}: {fill_gaps}')
 
         if backfill:
             log.debug(f'{self.c} queued for backfill')
@@ -137,6 +146,13 @@ class DataWriter:
             self._objects.append(
                 DownloadContainer(from_date=self.to_date, to_date=update,
                                   update=True))
+
+        if fill_gaps is not None:
+            for gap in fill_gaps:
+                log.debug(
+                    f'{self.c} queued gap from {gap.start} to {gap.stop}')
+                self._objects.append(DownloadContainer(from_date=gap.start,
+                                                       to_date=gap.stop))
 
         self._queue = self._objects.copy()
         self.schedule_next()
@@ -200,8 +216,29 @@ class DataWriter:
             if dt > to_date:
                 return dt
 
+    def fill_gaps(self) -> List[NamedTuple]:
+        data = self.data.copy()
+        data['timestamp'] = data.index
+        data['gap'] = data['timestamp'].diff()
+        inferred_frequency = data['gap'].mode()[0]
+        log.debug(f'inferred frequency: {inferred_frequency}')
+        data['gap_bool'] = data['gap'] > inferred_frequency
+        data['start'] = data.timestamp.shift()
+        data['stop'] = data.timestamp.shift(-1)
+        gaps = data[data['gap_bool']]
+        out = pd.DataFrame({'start': gaps['start'], 'stop': gaps['stop']}
+                           ).reset_index(drop=True)
+        out = out[1:]
+        out['start_time'] = out['start'].apply(lambda x: x.time())
+        cutoff_time = out['start_time'].mode()[0]
+        log.debug(f'inferred cutoff time: {cutoff_time}')
+        non_standard_gaps = out[out['start_time'] != cutoff_time].reset_index(
+            drop=True)
+        return list(non_standard_gaps[['start', 'stop']].itertuples(
+            index=False))
+
     @property
-    def params(self):
+    def params(self) -> Dict[str: Union[Contract, str, bool]]:
         return {
             'contract': self.contract,
             'endDateTime': self.next_date,
@@ -216,8 +253,9 @@ class DataWriter:
         duration = barSize_to_duration(self.barSize, self.aggression)
         delta = self.next_date - self._current_object.from_date
         if delta < duration_to_timedelta(duration):
+            # requests for periods shorter than 30s don't work
             duration = duration_str(
-                delta.total_seconds(), self.aggression, False)
+                max(delta.total_seconds(), 30), self.aggression, False)
         return duration
 
     @property
@@ -234,15 +272,17 @@ class DataWriter:
     @property
     def from_date(self) -> Optional[pd.datetime]:
         """Earliest point in datastore"""
-        return self.data.index.min() if self.data is not None else None
+        # second point in the df to avoid 1 point gap
+        return None or self.data.index[1]
 
     @property
     def to_date(self) -> Optional[pd.datetime]:
         """Latest point in datastore"""
-        return self.data.index.max() if self.data is not None else None
+        return None or self.data.index.max()
 
     def __repr__(self):
-        return (f'DataWriter for {self.contract.localSymbol} ')
+        return (f'{self.__class__.__name__}' + '(' + ', '.join(
+            [f'{k}={v}' for k, v in self.__dict__.items()]) + ')')
 
 
 @dataclass
@@ -254,19 +294,33 @@ class DownloadContainer:
     update: bool = False
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
     bars: List[BarDataList] = field(default_factory=list)
+    retries: int = 0
+    nodata_retries: int = 0
 
     def save(self, bars: BarDataList) -> Optional[datetime]:
         """Store downloaded data and if more data needed return
         endpoint for next download"""
 
         if bars:
+            log.debug(f'Received bars from: {bars[0].date} to {bars[-1].date}')
             self.bars.append(bars)
             self.current_date = bars[0].date
         elif self.current_date:
-            # might be a bank holiday
-            self.current_date -= timedelta(days=1)
-        else:
+            log.error(f'Cannot download data past {self.current_date}')
+            # might be a bank holiday (TODO: this needs to be tested)
+            # self.current_date -= timedelta(days=1)
             return
+        else:
+            if self.ok_to_write:
+                return
+            else:
+                log.debug(f'Attempt {self.retires + 1} to fill in update gap')
+                self.current_date = (
+                    self.df.index.min() - timedelta(days=1) * self.retries)
+                self.retries += 1
+                if self.retries > 5:
+                    self.retries = 0
+                    return
         if self.from_date < self.current_date < self.to_date:
             return self.current_date
 
@@ -288,11 +342,14 @@ class DownloadContainer:
             self.df = util.df([b for bars in reversed(self.bars)
                                for b in bars])
             self.df.set_index('date', inplace=True)
-            if self.ok_to_write:
-                df = self.df
-                self.df = pd.DataFrame()
-                return df
-            log.debug(f'cannot write data')
+
+            if not self.ok_to_write:
+                log.warning(f'Writing update with gap between: '
+                            f' {self.from_date} and {self.df.index.min()}')
+
+            df = self.df
+            self.df = pd.DataFrame()
+            return df
 
     def clear(self):
         self.bars = []
@@ -359,11 +416,14 @@ class ContractHolder:
                 *args, **kwargs)
         return ContractHolder.__instance
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self.instance, name)
 
-    def __setattr__(self, name):
-        return setattr(self.instance, name)
+    def __setattr__(self, name: str, value: Any) -> None:
+        return setattr(self.instance, name, value)
+
+    def __call__(self):
+        return self.instance()
 
 
 def bar_size_validator(s):
@@ -459,19 +519,92 @@ def duration_to_timedelta(duration):
     raise ValueError(f'Unknown duration string: {duration}')
 
 
-async def worker(name: str, queue: asyncio.Queue):
+class SecondPacer:
+    """    NOT IN USE   """
+
+    def __init__(self, seconds: int = 2, request_limit: int = 6):
+        self.seconds = seconds
+        self.store = deque(maxlen=request_limit)
+
+    def check(self):
+        self.store.append(datetime.now())
+
+
+class Pacer:
+    """
+    Keep track of requests made and check against IB restricions.
+
+    check - returns True if requests have to stop to avoid data
+    request pacing violation.
+    """
+
+    def __init__(self, barSize: str, wts: str, minutes=10) -> None:
+        self.max_request_number = 60 if wts != 'BID_ASK' else 30
+        self.time_limit = minutes * 60
+        self.restriction = self.check_restriction(barSize)
+        self.restriction_until = datetime.now()
+        self.reset()
+
+    def check_restriction(self, barSize: 'str') -> bool:
+        return True if duration_in_secs(barSize) <= 60 else False
+
+    def check(self) -> bool:
+        self.request_number = next(self.counter)
+
+        if not self.restriction:
+            return False
+
+        if datetime.now() < self.restriction_until:
+            log.debug(
+                f'Enforcing restriction in place until {self.restriction_until}')
+            return True
+
+        if self.timer == 0:
+            self.start_timer()
+
+        if (self.request_number >= self.max_request_number) and (
+                (datetime.now() - self.timer).seconds <= self.time_limit):
+            self.restrict()
+            log.debug('Establishing restriction')
+            return True
+        else:
+            return False
+
+    def restrict(self):
+        self.restriction_until = datetime.now() + timedelta(
+            seconds=self.time_limit)
+
+    def start_timer(self):
+        self.timer = datetime.now()
+
+    def reset(self) -> None:
+        self.request_number = 0
+        self.counter = itertools.count(1, 1)
+        self.timer = 0
+
+
+async def worker(name: str, queue: asyncio.Queue, pacer):
     while True:
         contract = await queue.get()
         log.debug(
             f'{name} loading {contract.contract.localSymbol} '
             f'ending {contract.next_date} '
-            # f'with params: {contract.params})'
+            f'Duration: {contract.params["durationStr"]}, '
+            f'Bar size: {contract.params["barSizeSetting"]} '
         )
-        chunk = await ib.reqHistoricalDataAsync(**contract.params, timeout=0)
-        contract.save_chunk(chunk)
-        if contract.next_date:
-            await queue.put(contract)
-        queue.task_done()
+        if pacer.check():
+            log.debug(f'SLEEPING for {pacer.time_limit} seconds '
+                      f'to avoid pacing violation.')
+            util.sleep(pacer.time_limit)
+            pacer.reset()
+        else:
+            log.debug(
+                f'{datetime.now()} request number {pacer.request_number}')
+            chunk = await ib.reqHistoricalDataAsync(**contract.params, timeout=0)
+            contract.save_chunk(chunk)
+            if contract.next_date:
+                await queue.put(contract)
+            queue.task_done()
 
 
 async def main(holder: ContractHolder):
@@ -482,12 +615,20 @@ async def main(holder: ContractHolder):
     log.debug(f'main function started, '
               f'retrieving data for {len(contracts)} instruments')
 
-    queue = asyncio.LifoQueue()
+    queue: asyncio.Queue[DataWriter] = asyncio.LifoQueue()
     for contract in contracts:
         await queue.put(contract)
-    workers = [asyncio.create_task(worker(f'worker {i}', queue))
+    pacer = Pacer(holder.barSize, holder.wts)
+    workers = [create_task(worker(f'worker {i}', queue, pacer),
+                           logger=log, message='asyncio error',
+                           message_args=f'worker {i}')
                for i in range(number_of_workers)]
 
+    """
+    workers = [asyncio.create_task(worker(f'worker {i}', queue, pacer))
+               for i in range(number_of_workers)]
+
+    """
     await queue.join()
 
     # cancel all workers
@@ -499,20 +640,38 @@ async def main(holder: ContractHolder):
     await asyncio.gather(*workers)
 
 
+class ErrorState:
+    """Not in use"""
+    _state: bool = False
+
+    def set(self, *args) -> None:
+        self._state = True
+
+    def clear(self) -> None:
+        self._state = False
+
+    def __call__(self) -> bool:
+        state = self._state
+        self.clear
+        return state
+
+    state = __call__
+
+
 if __name__ == '__main__':
     util.patchAsyncio()
     ib = IB()
-    barSize = '30 secs'
-    wts = 'TRADES'
+    barSize = '1 secs'
+    wts = 'MIDPOINT'
     # object where data is stored
     store = ArcticStore(f'{wts}_{barSize}')
 
     # the bool is for cont_only
-    holder = ContractHolder(ib, 'contracts.csv',
+    holder = ContractHolder(ib, '_contracts.csv',
                             store, wts, barSize, True, aggression=1)
 
     asyncio.get_event_loop().set_debug(True)
-    # util.logToConsole(DEBUG)
+    # util.logToConsole(INFO)
     Connection(ib, partial(main, holder), watchdog=True)
 
     log.debug('script finished, about to disconnect')

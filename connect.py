@@ -1,4 +1,6 @@
 import asyncio
+import time
+
 from typing import Callable
 
 from ib_insync import IB, util, Contract
@@ -46,7 +48,7 @@ class StartWatchdog(IBHandlers):
         self.func = func
         self.ib = ib
         log.debug('Initializing watchdog')
-        ibc = IBC(twsVersion=978,
+        ibc = IBC(twsVersion=981,
                   gateway=True,
                   tradingMode='paper',
                   )
@@ -70,14 +72,23 @@ class StartWatchdog(IBHandlers):
     def onDisconnected(self):
         pass
 
-    def onError(self, *args):
-        log.debug(f'Error: {args}')
+    def onError(self, reqId: int, errorCode: int, errorString: str,
+                contract: Contract) -> None:
+        try:
+            what = contract.localSymbol
+        except AttributeError:
+            what = str(contract)
+        log.debug(f'Error {errorCode} {errorString} for: {what}')
+        if errorCode == 162:
+            # handle pacing violation (badly :)
+            log.warning('PACING????')
+            # time.sleep(600)
 
 
 class StartNoWatchdog(IBHandlers):
     def __init__(self, ib: IB, func: Callable) -> None:
+        self.ib = ib
         IBHandlers.__init__(self, ib)
-        pass
 
     def get_clientId(self) -> None:
         """Find an unoccupied clientId for connection."""
@@ -88,7 +99,7 @@ class StartNoWatchdog(IBHandlers):
                 log.info(f'connected with clientId: {i}')
                 break
             except ConnectionRefusedError:
-                log.error(f'TWS or IB Gateway is not running.')
+                log.error('TWS or IB Gateway is not running.')
                 break
             except Exception as exc:
                 message = (f'exception {exc} for connection {i}... '
