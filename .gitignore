@@ -13,3 +13,4 @@ notebooks/freeze/
 b_temp/
 #*
 *#
+.mypy_cache
