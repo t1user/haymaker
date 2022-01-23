@@ -131,7 +131,7 @@ class AbstractBaseStore(ABC):
         Otherwise return empty dict.
         """
         if isinstance(obj, Contract):
-            return {**obj.nonDefaults(),
+            return {**obj.nonDefaults(),  # noqa
                     **{'repr': repr(obj),
                        'secType': obj.secType,
                        'object': obj}}
@@ -155,7 +155,8 @@ class AbstractBaseStore(ABC):
     def _clean(df: pd.DataFrame) -> pd.DataFrame:
         """Ensure no duplicates and ascending sorting of diven df."""
         df = df.sort_index(ascending=True)
-        df.drop(index=df[df.index.duplicated()].index, inplace=True)
+        df = df[~df.index.duplicated()]
+        #df.drop(index=df[df.index.duplicated()].index, inplace=True)
         return df
 
     def check_earliest(self, symbol: str) -> Optional[datetime]:
