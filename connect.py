@@ -1,5 +1,5 @@
 import asyncio
-import time
+import sys
 
 from typing import Callable
 
@@ -79,9 +79,12 @@ class StartWatchdog(IBHandlers):
         except AttributeError:
             what = str(contract)
         log.debug(f'Error {errorCode} {errorString} for: {what}')
+        if 'pacing violation' in errorString:
+            log.error('PACING VIOLATION. Adjust Pacer Parameters.')
+            # sys.exit()
         if errorCode == 162:
             # handle pacing violation (badly :)
-            log.warning('PACING????')
+            log.warning('CHECK REASON????')
             # time.sleep(600)
 
 

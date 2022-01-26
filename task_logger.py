@@ -49,7 +49,7 @@ def _handle_task_result(
 ) -> None:
     try:
         task.result()
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, ConnectionError):
         pass  # Task cancellation should not be logged as an error.
     # Ad the pylint ignore: we want to handle all exceptions here so that the result of the task
     # is properly logged. There is no point re-raising the exception in this callback.
