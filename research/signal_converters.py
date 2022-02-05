@@ -87,4 +87,5 @@ def sig_pos(signal: pd.Series) -> pd.Series:
 
 def blip_sig(blip: pd.Series) -> pd.Series:
     """Blip to signal converter. Numba optimized."""
-    return pd.Series(_blip_to_signal_converter(blip.to_numpy()))
+    return pd.Series(_blip_to_signal_converter(blip.to_numpy()),
+                     index=blip.index)

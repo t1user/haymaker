@@ -188,8 +188,8 @@ def swing(data: pd.DataFrame, f: Union[float, np.ndarray, pd.Series],
 @jit(nopython=True)
 def _blip_to_signal_converter(data: np.ndarray) -> np.ndarray:
     """
-    Given a column with signals, return a column with positions
-    resulting from those signals.
+    Given a column with blips, return a column with signals
+    resulting from those blips.
 
     Args:
     -----
@@ -222,6 +222,8 @@ def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
     Given an array with two columns, one with entry and one with close
     signal, return an array with signal resulting from combining those
     two signals.
+
+    THIS IS FOR BLIPS????
 
     Args:
     -----

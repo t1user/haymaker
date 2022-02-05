@@ -1,5 +1,5 @@
 import pandas as pd  # type: ignore
-import numpy as np  # type: ignore
+import numpy as np
 from typing import (Optional, Union, Literal, Tuple, Type, TypeVar, Dict, Any)
 from abc import ABC, abstractmethod
 
@@ -194,7 +194,7 @@ class Context:
         self.position = 0
         # print(f'Context init: {self}')
 
-    def __call__(self, row: np.array) -> Tuple[int, float]:
+    def __call__(self, row: np.ndarray) -> Tuple[int, float]:
         self.transaction = row[0]
         self.high = row[1]
         self.low = row[2]
@@ -260,7 +260,7 @@ class Context:
             [f'{k}={v}' for k, v in self.__dict__.items()]) + ')')
 
 
-def _stop_loss(data: np.array, stop: Context) -> np.array:
+def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
     """
     Args:
     -----
@@ -429,6 +429,8 @@ def stop_loss(df: pd.DataFrame,
 
     [2] - position and price (pd.DataFrame)
 
+    [3] - two tuple of pd.Series position and price
+
     [else] - original DataFrame with additional columns: 'position'
     (or 'position_sl' when 'position' was in the origianal df) and
     price (pd.DataFrame)
@@ -452,13 +454,18 @@ def stop_loss(df: pd.DataFrame,
                 'distance', price_column]].to_numpy()
     params = param_factory(mode, tp_multiple, adjust)
     context = Context(*params, always_on=always_on(_df['position']))
+    result = _stop_loss(data, context)
     if return_type == 1:
-        return pd.Series(_stop_loss(data, context).T[0].astype('int'),
+        return pd.Series(result.T[0].astype('int'),
                          index=df.index)
     elif return_type == 2:
-        return pd.DataFrame(_stop_loss(data, context),
+        return pd.DataFrame(result,
                             columns=['position', 'price'], index=df.index)
+    elif return_type == 3:
+        out_df = pd.DataFrame(result, columns=['position', 'price'],
+                              index=df.index)
+        return out_df['position'], out_df['price']
     else:
-        return df.join(pd.DataFrame(_stop_loss(data, context),
+        return df.join(pd.DataFrame(result,
                                     columns=['position', 'price'],
                                     index=df.index), rsuffix='_sl')
