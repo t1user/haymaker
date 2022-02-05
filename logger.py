@@ -1,7 +1,8 @@
 import sys
 from datetime import datetime
-from logbook import (Logger, StreamHandler, FileHandler, DEBUG, INFO,
-                     TimedRotatingFileHandler, set_datetime_format)
+from logbook import (Logger, StreamHandler,  # type: ignore
+                     TimedRotatingFileHandler, FileHandler, DEBUG, INFO,
+                     set_datetime_format)
 
 from utilities import default_path
 
@@ -14,7 +15,7 @@ def logger(name: str, stream_level=DEBUG, file_level=DEBUG,
     set_datetime_format('local')
     StreamHandler(sys.stdout, level=stream_level,
                   bubble=True).push_application()
-    filename = __file__.split('/')[-1][:-3]
+    # filename = __file__.split('/')[-1][:-3]
     FileHandler(
         f'{folder}/{name}_{datetime.today().strftime("%Y-%m-%d_%H-%M")}.log',
         bubble=True, level=file_level, delay=True).push_application()

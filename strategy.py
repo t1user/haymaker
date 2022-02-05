@@ -2,11 +2,11 @@ from typing import Tuple, Optional
 from dataclasses import dataclass
 
 from ib_insync import ContFuture
-from logbook import Logger
+from logbook import Logger  # type: ignore
 
 from streamers import VolumeStreamer
 from candle import BreakoutCandleVolFilter, BreakoutLockCandleVolFilter
-from portfolio import AdjustedPortfolio
+from portfolio import FixedPortfolio
 from execution_models import EventDrivenTakeProfitExecModel
 
 
@@ -39,7 +39,7 @@ class Params:
 nq = Params(
     contract=ContFuture('NQ', 'GLOBEX'),
     micro_contract=ContFuture('MNQ', 'GLOBEX'),
-    trades_per_day=3.8,
+    trades_per_day=4,
     volume=12000,
     min_atr=14,
     lock_filter=0.004,
@@ -100,7 +100,7 @@ candles.extend([BreakoutCandleVolFilter(VolumeStreamer(params.volume,
     **params.__dict__)
     for params in [nq, ym]])
 
-portfolio = AdjustedPortfolio(target_vol=.55)
+portfolio = FixedPortfolio()
 
 strategy_kwargs = {'candles': candles,
                    'portfolio': portfolio,

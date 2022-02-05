@@ -3,8 +3,8 @@ from pathlib import Path
 from os import makedirs, path
 
 import numpy as np
-from ib_insync import IB, ContFuture, MarketOrder, Future
-from logbook import Logger
+from ib_insync import IB, MarketOrder
+from logbook import Logger  # type: ignore
 
 from datastore import AbstractBaseStore
 

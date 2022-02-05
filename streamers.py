@@ -3,8 +3,8 @@ from typing import Optional
 from collections import deque
 from datetime import datetime
 
-import pandas as pd
-from logbook import Logger
+import pandas as pd  # type: ignore
+from logbook import Logger  # type: ignore
 from ib_insync import IB, util, Event, Contract, BarData, BarDataList
 
 log = Logger(__name__)

@@ -1,20 +1,22 @@
 import asyncio
-import sys
+# import sys
 
 from typing import Callable
 
 from ib_insync import IB, util, Contract
 from ib_insync.ibcontroller import IBC, Watchdog
 
-from logbook import Logger
-from handlers import WatchdogHandlers
+from logbook import Logger  # type: ignore
+# from handlers import WatchdogHandlers
 
 
 log = Logger(__name__)
 
 
 class IBHandlers:
-    def __init__(self, ib: IB) -> None:
+    def __init__(self, ib: IB, func: Callable) -> None:
+        self.ib = ib
+        self.func = func
         self.ib.connectedEvent += self.onConnected
         self.ib.errorEvent += self.onError
         self.ib.client.apiError += self.onApiError
@@ -24,7 +26,7 @@ class IBHandlers:
                 contract: Contract) -> None:
         log.error(f'IB error {errorCode}: {errorString}')
         if errorCode == 1100:
-            log.warning(f'Event loop will be stopped!')
+            log.warning('Event loop will be stopped!')
             asyncio.get_event_loop().stop()
             self.run()
 
@@ -32,6 +34,9 @@ class IBHandlers:
         log.error(f'API error: {args}')
 
     def onConnected(self, *args) -> None:
+        pass
+
+    def onDisconnected(self, *args) -> None:
         pass
 
     def run(self) -> None:
@@ -45,19 +50,17 @@ class IBHandlers:
 
 class StartWatchdog(IBHandlers):
     def __init__(self, ib: IB, func: Callable) -> None:
-        self.func = func
-        self.ib = ib
         log.debug('Initializing watchdog')
         ibc = IBC(twsVersion=981,
                   gateway=True,
                   tradingMode='paper',
                   )
         watchdog = Watchdog(ibc, ib,
-                            port='4002',
+                            port=4002,
                             clientId=10,
                             )
         log.debug('Attaching handlers...')
-        IBHandlers.__init__(self, ib)
+        IBHandlers.__init__(self, ib, func)
         watchdog.startedEvent += self.onStarted
         log.debug('Initializing watchdog...')
         watchdog.start()
@@ -90,8 +93,10 @@ class StartWatchdog(IBHandlers):
 
 class StartNoWatchdog(IBHandlers):
     def __init__(self, ib: IB, func: Callable) -> None:
-        self.ib = ib
-        IBHandlers.__init__(self, ib)
+        IBHandlers.__init__(self, ib, func)
+        self.host = 'localhost'
+        self.port = 4002  # this is for paper account
+        self.id = 12
 
     def get_clientId(self) -> None:
         """Find an unoccupied clientId for connection."""
@@ -109,7 +114,7 @@ class StartNoWatchdog(IBHandlers):
                            'moving up to the next one')
                 log.debug(message)
 
-    def onDisconnected(self) -> None:
+    def onDisconnected(self, *args) -> None:
         """Initiate re-start when external watchdog manages api connection."""
         log.debug('Disconnected!')
         try:
@@ -128,7 +133,7 @@ class StartNoWatchdog(IBHandlers):
             except ConnectionRefusedError as e:
                 log.debug(f'While attepting reconnection: {e}')
                 util.sleep(30)
-                log.debug(f'post sleep...')
+                log.debug('post sleep...')
             except Exception as e:
                 log.debug(f'Connection error: {e}')
 

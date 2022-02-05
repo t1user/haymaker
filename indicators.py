@@ -4,8 +4,8 @@ from typing import Dict, Callable, Tuple
 import pandas as pd  # type: ignore
 import numpy as np  # type: ignore
 
-from research.numba_tools import (
-    _in_out_signal_unifier, _blip_to_signal_converter, swing)  # noqa
+from research.numba_tools import (  # type: ignore
+    _in_out_signal_unifier, _blip_to_signal_converter, swing)
 
 
 def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
@@ -274,6 +274,7 @@ def range_crosser(ind: pd.Series, threshold: float) -> pd.Series:
     """
     For an ind like rsi, returns signal (-1, 0, 1) when ind crosses
     threshold from above or -threshold from below.
+    THIS IS LIKELY CRAP. CHECK BEFORE USE!!!
     """
     df = pd.DataFrame({'ind': ind})
     df['inside'] = (df['ind'].abs() < threshold)

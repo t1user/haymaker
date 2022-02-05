@@ -1,5 +1,6 @@
 # from __future__ import annotations
 
+
 import os
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
@@ -7,7 +8,7 @@ from collections import deque
 import itertools
 import asyncio
 import random
-from typing import List, Union, Optional, Any, Dict, NamedTuple, Tuple
+from typing import List, Union, Optional, Any, Dict, NamedTuple, Tuple, Deque
 from typing_extensions import Protocol
 from functools import partial
 
@@ -17,7 +18,7 @@ from ib_insync import (IB, Contract, Future, ContFuture, BarDataList, util,
                        Event)
 # from logbook import DEBUG, INFO
 
-from logger import logger
+from logger import logger  # type: ignore
 from connect import Connection
 from config import max_number_of_workers
 from datastore import ArcticStore, AbstractBaseStore
@@ -66,7 +67,7 @@ class ContractObjectSelector:
         # converting Futures to ContFutures
         self.contFutures = []
         for obj in self.futures:
-            params = obj.nonDefaults()
+            params = obj.nonDefaults()  # type: ignore
             del params['secType']
             self.contFutures.append(ContFuture(**params))
         log.debug(f'contfutures: {self.contFutures}')
@@ -74,12 +75,12 @@ class ContractObjectSelector:
     def lookup_futures(self, obj: List[Future]) -> List[Future]:
         futures = []
         for o in obj:
-            o.update(includeExpired=True)
+            o.update(includeExpired=True)  # type: ignore
             futures.append(
-                [Contract.create(**c.contract.dict())
+                [Contract.create(**c.contract.dict())  # type: ignore
                  for c in self.ib.reqContractDetails(o)]
             )
-        return list(itertools.chain(*futures))
+        return list(itertools.chain(*futures))  # type: ignore
 
     @property
     def list(self) -> List[Contract]:
@@ -88,9 +89,10 @@ class ContractObjectSelector:
         return self.contracts
 
     def update(self) -> List[Contract]:
-        qualified = self.contFutures + self.non_futures
+        qualified = self.contFutures + self.non_futures  # type: ignore
         self.ib.qualifyContracts(*qualified)
-        self.contracts = self.lookup_futures(self.futures) + qualified
+        self.contracts = self.lookup_futures(
+            self.futures) + qualified  # type: ignore
         return self.contracts
 
     @property
@@ -323,7 +325,7 @@ class DownloadContainer:
             if self.ok_to_write:
                 return
             else:
-                log.debug(f'Attempt {self.retires + 1} to fill in update gap')
+                log.debug(f'Attempt {self.retries + 1} to fill in update gap')
                 self.current_date = (
                     self.df.index.min() - timedelta(days=1) * self.retries)
                 self.retries += 1
@@ -549,7 +551,7 @@ class NoTimer:
 
 class Timer:
     def __init__(self, seconds: int, requests: int) -> None:
-        self.holder = deque(maxlen=requests)
+        self.holder: Deque[datetime] = deque(maxlen=requests)
         self.seconds = seconds
         self._seconds = timedelta(seconds=seconds)
         self.requests = requests
@@ -605,11 +607,11 @@ class Timer:
 
 class Pacer:
     def __init__(self, timers: List[TimerProtocol]) -> None:
-        self.timers: TimerProtocol = timers
+        self.timers = timers
 
     async def __aenter__(self):
         for timer in self.timers:
-            while (t := timer.check()):
+            while (_ := timer.check()):
                 log.debug(f'restriction by timer: {timer} '
                           f'for {timer.sleep_time()}sec '
                           f'until {datetime.now() + timer._sleep_time()}'
@@ -631,17 +633,24 @@ class Pacer:
 
 def pacer(barSize, wts,
           *,
-          restrictions: Tuple[Tuple[int, int], ...] = ((2, 6), (600, 60)),
+          restrictions: List[Tuple[int, int]] = [(2, 6), (600, 60)],
           restriction_threshold: int = 30,
           norestriction: bool = False,
           timers: Optional[Union[List[TimerProtocol], TimerProtocol]] = None
           ) -> Pacer:
-    """Factory function returning correct pacer to avoid pacing restrictions"""
+    """
+    Factory function returning correct pacer preventing (or rather
+    limiting -:)) data pacing restrictions by Interactive Brokers.
+    """
+
+    log.debug(f'INSIDE PACER'
+              f'duration in secs: {duration_in_secs(barSize)}'
+              f'restriction threshold: {restriction_threshold}')
 
     # 'BID_ASK' requests counted as double by ib
     if wts == 'BID_ASK':
-        restrictions = Tuple(int(restrictions[1]/2)
-                             for restriction in restrictions)
+        restrictions = [(restriction[0], int(restriction[1] / 2))
+                        for restriction in restrictions]
 
     if timers:
         if not isinstance(timers, list):
@@ -650,7 +659,7 @@ def pacer(barSize, wts,
             assert isinstance(
                 timer, Timer), 'timers must be a Timer or list of Timer'
 
-    elif norestriction or duration_in_secs(barSize) > restriction_threshold:
+    elif norestriction or (duration_in_secs(barSize) > restriction_threshold):
         timers = [NoTimer()]
     else:
         timers = [Timer(*res) for res in restrictions]
@@ -709,12 +718,12 @@ async def main(holder: ContractHolder):
     queue: asyncio.Queue[DataWriter] = asyncio.LifoQueue()
     for contract in contracts:
         await queue.put(contract)
-    p = pacer(holder.barSize, holder.wts, restrictions=(
-        (2, 6), (600, 60-number_of_workers)))
+    p = pacer(holder.barSize, holder.wts, restrictions=[
+        (2, 6), (600, 60-number_of_workers)])
     log.debug(f'Pacer initialized: {p}')
     workers = [create_task(worker(f'worker {i}', queue, p),
                            logger=log, message='asyncio error',
-                           message_args=f'worker {i}')
+                           message_args=(f'worker {i}', ))
                for i in range(number_of_workers)]
 
     """
@@ -736,14 +745,14 @@ async def main(holder: ContractHolder):
 if __name__ == '__main__':
     util.patchAsyncio()
     ib = IB()
-    barSize = '1 secs'
-    wts = 'MIDPOINT'
+    barSize = '30 secs'
+    wts = 'TRADES'
     # object where data is stored
     store = ArcticStore(f'{wts}_{barSize}')
 
     # the bool is for cont_only
     holder = ContractHolder(ib, '__contracts.csv',
-                            store, wts, barSize, False, aggression=1)
+                            store, wts, barSize, False, aggression=2)
 
     asyncio.get_event_loop().set_debug(True)
     # util.logToConsole(INFO)

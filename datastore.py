@@ -41,7 +41,8 @@ class AbstractBaseStore(ABC):
     """
 
     @abstractmethod
-    def write(self, symbol: Union[str, Contract]):
+    def write(self, symbol: Union[str, Contract], data: pd.DataFrame,
+              meta: dict = {}):
         """
         Write data to datastore. Implementation has to recognize whether
         string or Contract was passed, extract metadata and save it in
@@ -131,7 +132,7 @@ class AbstractBaseStore(ABC):
         Otherwise return empty dict.
         """
         if isinstance(obj, Contract):
-            return {**obj.nonDefaults(),  # noqa
+            return {**obj.nonDefaults(),  # type: ignore
                     **{'repr': repr(obj),
                        'secType': obj.secType,
                        'object': obj}}

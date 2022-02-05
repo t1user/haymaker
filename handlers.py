@@ -1,11 +1,11 @@
-from typing import Set
+from typing import Set, Dict, Tuple
 
 from ib_insync import (IB, Trade, Fill, Contract, CommissionReport,
                        BarDataList, PortfolioItem, AccountValue, PnL,
                        PnLSingle, Ticker, NewsTick, NewsBulletin,
                        ScanData, Position, Event)
 from ib_insync.ibcontroller import Watchdog
-from logbook import Logger
+from logbook import Logger  # type: ignore
 
 
 log = Logger(__name__)
@@ -70,7 +70,7 @@ class IBHandlers:
         scheduledUpdate = Event().timerange(300, None, 600)
         scheduledUpdate += self.onScheduledUpdate
         self.ib = ib
-        self.portfolio_items = {}
+        self.portfolio_items: Dict[str, Tuple[float, float, float]] = {}
 
     def onConnected(self):
         log.debug('Connection established')
@@ -171,7 +171,7 @@ class IBHandlers:
 
     def onTimeout(self, idlePeriod: float):
         pass
-        #log.error(f'Timeout! Idle period: {idlePeriod}')
+        # log.error(f'Timeout! Idle period: {idlePeriod}')
 
     def onScheduledUpdate(self, time):
         log.info(f'pnl: {self.ib.pnl()}')
