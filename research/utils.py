@@ -1,9 +1,8 @@
-from multiprocessing import Pool, cpu_count
-#import sys
-
-import numpy as np  # type: ignore
-import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
+import pandas as pd  # type: ignore
+import numpy as np  # type: ignore
+from multiprocessing import Pool, cpu_count  # type: ignore
+#import sys
 
 
 # sys.path.append('/home/tomek/ib_tools')  # noqa
@@ -175,3 +174,63 @@ def m_proc(dfs, func):
     results = [pool.apply_async(func, args=(df,)) for df in dfs]
     output = [p.get() for p in results]
     return output
+
+
+def signal_generator(series: pd.Series, threshold: float = 0
+                     ) -> pd.Series:
+    return ((series > threshold) * 1 - (series < threshold) * 1
+            + (series == threshold) * 0)
+
+
+def combine_signals(series1: pd.Series, series2: pd.Series
+                    ) -> pd.Series:
+    return (np.sign(series1) == np.sign(series2)) * series1
+
+
+def crosser(ind: pd.Series, threshold: float) -> pd.Series:
+    df = pd.DataFrame({'ind': ind})
+    df['above_below'] = (df['ind'] >= threshold) * 1 - \
+        (df['ind'] < threshold) * 1
+    df['blip'] = ((df['above_below'].shift() + df['above_below'])
+                  == 0) * df['above_below']
+    df = df.dropna()
+    return df['blip']
+
+
+def gap_tracer(df: pd.DataFrame, runs: int = 6) -> pd.DataFrame:
+    """
+    Verify consistency of price data df.  Return all points where
+    series ends at a non-standard time point.
+    """
+    df = df.copy()
+    df['timestamp'] = df.index
+    df['gap'] = df.timestamp.diff()
+    df['gap_bool'] = df['gap'] > df['gap'].mode()[0]
+    df['from'] = df['timestamp'].shift()
+    # all gaps in timeseries
+    gaps = df[df['gap_bool']]
+
+    # non standard gaps
+    out = pd.DataFrame(
+        {'from': gaps['from'], 'to': gaps['timestamp']}).reset_index(drop=True)
+    out['duration'] = out['to'] - out['from']
+    out = out[1:]
+
+    out['from_time'] = out['from'].apply(lambda x: x.time())
+
+    # most frequent time cutoff (end of day)
+    def cut(df):
+        df = df.copy()
+        cutoff_time = df['from_time'].mode()[0]
+        print(cutoff_time)
+        gapless = df[df['from_time']
+                     != cutoff_time].reset_index(drop=True)
+        return gapless
+
+    non_standard_gaps = out
+    for _ in range(runs):
+        non_standard_gaps = cut(non_standard_gaps)
+
+    del non_standard_gaps['from_time']
+
+    return non_standard_gaps
