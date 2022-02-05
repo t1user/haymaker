@@ -178,8 +178,13 @@ class Optimizer:
             out = perf(data['price'], data['position'], slippage=self.slip)
         else:
             # indicator requires signal and series
-            data = sig_pos(self.func(self.in_data, *args, **kwargs))
-            out = perf(self.df['open'], data, slippage=self.slip)
+            data = self.func(self.in_data, *args, **kwargs)
+            if isinstance(data, tuple):
+                # position and price returend
+                out = perf(data[1], data[0], slippage=self.slip)
+            else:
+                # returned signal has to be converted to position
+                out = perf(self.df['open'], sig_pos(data), slippage=self.slip)
         return out
 
     def bulk_save(self, data: Dict[Tuple[float, float], Results]) -> None:
@@ -357,10 +362,11 @@ class OptiWrapper:
         return stop_loss(df, return_type=2, **self.stop_kwargs,
                          **params_values['stop'])
 
-    def optimize(self, df: pd.DataFrame, sp_1, sp_2) -> Optimizer:
+    def optimize(self, df: pd.DataFrame, sp_1, sp_2, slip: float = 1.5
+                 ) -> Optimizer:
         return Optimizer(df, self,
                          sp_1, sp_2,
-                         slip=1.5)
+                         slip=slip)
 
     @property
     def __name__(self):
