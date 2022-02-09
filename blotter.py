@@ -7,11 +7,11 @@ from typing import List, Dict, Any, Optional
 from ib_insync.order import Trade
 from ib_insync.objects import Fill, CommissionReport
 from ib_insync import util
-from logbook import Logger
-from pymongo import MongoClient
-import motor.motor_asyncio
-from arctic import TICK_STORE, Arctic
-import pandas as pd
+from logbook import Logger  # type: ignore
+from pymongo import MongoClient  # type: ignore
+import motor.motor_asyncio  # type: ignore
+from arctic import TICK_STORE, Arctic  # type: ignore
+import pandas as pd  # type: ignore
 
 from utilities import default_path
 
@@ -36,12 +36,13 @@ class AbstractBaseBlotter(ABC):
 
     def __init__(self, save_to_file: bool = True) -> None:
         self.save_to_file = save_to_file
-        self.blotter = []
-        self.unsaved_trades = {}
-        self.com_reports = {}
+        self.blotter: List[Dict] = []
+        self.unsaved_trades: Dict = {}
+        self.com_reports: Dict = {}
 
-    def log_trade(self, trade: Trade, comms: List[CommissionReport],
-                  reason: str = '') -> None:
+    def log_trade(
+        self, trade: Trade, comms: List[CommissionReport], reason: str = ""
+    ) -> None:
         sys_time = datetime.now()
         time = trade.log[-1].time
         contract = trade.contract.localSymbol
@@ -50,40 +51,48 @@ class AbstractBaseBlotter(ABC):
         price = trade.orderStatus.avgFillPrice
         # ib_insync issue: sometimes fills relate to wrong transaction
         # fill.contract == trade.contract to prevent that
-        exec_ids = [fill.execution.execId for fill in trade.fills
-                    if fill.contract == trade.contract]
+        exec_ids = [
+            fill.execution.execId
+            for fill in trade.fills
+            if fill.contract == trade.contract
+        ]
         order_id = trade.order.orderId
         perm_id = trade.order.permId
         reason = reason
         row = {
-            'sys_time': sys_time,  # actual system time
-            'time': time,  # what ib considers to be current time
-            'contract': contract,  # 4 letter symbol string
-            'action': action,  # buy or sell
-            'amount': amount,  # unsigned amount
-            'price': price,
-            'exec_ids': exec_ids,  # list of execution ids
-            'order_id': order_id,  # non unique
-            'perm_id': perm_id,  # unique trade id
-            'reason': reason,  # note passed by the trading system
-            'commission': sum([comm.commission for comm in comms]),
-            'realizedPNL': sum([comm.realizedPNL for comm in comms]),
+            "sys_time": sys_time,  # actual system time
+            "time": time,  # what ib considers to be current time
+            "contract": contract,  # 4 letter symbol string
+            "action": action,  # buy or sell
+            "amount": amount,  # unsigned amount
+            "price": price,
+            "exec_ids": exec_ids,  # list of execution ids
+            "order_id": order_id,  # non unique
+            "perm_id": perm_id,  # unique trade id
+            "reason": reason,  # note passed by the trading system
+            "commission": sum([comm.commission for comm in comms]),
+            "realizedPNL": sum([comm.realizedPNL for comm in comms]),
         }
         self.save_report(row)
-        log.debug(f'trade report saved: {row}')
+        log.debug(f"trade report saved: {row}")
 
-    def log_commission(self, trade: Trade, fill: Fill,
-                       comm_report: CommissionReport, reason: str):
+    def log_commission(
+        self, trade: Trade, fill: Fill, comm_report: CommissionReport, reason: str
+    ):
         """
         Get trades that have all CommissionReport filled and log them.
         """
         # bug in ib_insync sometimes causes trade to have fills for
         # unrelated transactions, permId uniquely identifies order
-        comms = [fill.commissionReport for fill in trade.fills
-                 if fill.commissionReport.execId != ''
-                 and fill.execution.permId == trade.order.permId]
-        fills = [fill for fill in trade.fills
-                 if fill.execution.permId == trade.order.permId]
+        comms = [
+            fill.commissionReport
+            for fill in trade.fills
+            if fill.commissionReport.execId != ""
+            and fill.execution.permId == trade.order.permId
+        ]
+        fills = [
+            fill for fill in trade.fills if fill.execution.permId == trade.order.permId
+        ]
         if trade.isDone() and (len(comms) == len(fills)):
             self.log_trade(trade, comms, reason)
 
@@ -123,47 +132,59 @@ class AbstractBaseBlotter(ABC):
         """
         Clear all items in the blotter.
         """
-        s = input('This will permanently delete all items in the blotter. '
-                  'Continue? ').lower()
-        if s != 'yes' and s != 'y':
+        s = input(
+            "This will permanently delete all items in the blotter. " "Continue? "
+        ).lower()
+        if s != "yes" and s != "y":
             sys.exit()
 
     def __repr__(self):
-        return (f'{self.__class__.__name__}' + '(' + ', '.join(
-            [f'{k}={v}' for k, v in self.__dict__.items()]) + ')')
+        return (
+            f"{self.__class__.__name__}"
+            + "("
+            + ", ".join([f"{k}={v}" for k, v in self.__dict__.items()])
+            + ")"
+        )
 
 
 class CsvBlotter(AbstractBaseBlotter):
 
-    fieldnames = None
+    fieldnames: List[str] = []
 
-    def __init__(self, save_to_file: bool = True, filename: str = None,
-                 path: Optional[str] = None, note: str = ''):
+    def __init__(
+        self,
+        save_to_file: bool = True,
+        filename: str = None,
+        path: Optional[str] = None,
+        note: str = "",
+    ):
         if path is None:
-            path = default_path('blotter')
+            path = default_path("blotter")
         if filename is None:
-            filename = __file__.split('/')[-1][:-3]
-        self.file = (f'{path}/{filename}_'
-                     f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}{note}.csv')
+            filename = __file__.split("/")[-1][:-3]
+        self.file = (
+            f"{path}/{filename}_"
+            f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}{note}.csv'
+        )
         super().__init__(save_to_file)
 
     def create_header(self) -> None:
-        with open(self.file, 'w') as f:
+        with open(self.file, "w") as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writeheader()
 
     def write_to_file(self, data: Dict[str, Any]) -> None:
         if not self.fieldnames:
-            self.fieldnames = data.keys()
+            self.fieldnames = list(data.keys())
             self.create_header()
-        with open(self.file, 'a') as f:
+        with open(self.file, "a") as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writerow(data)
 
     def save(self) -> None:
-        self.fieldnames = self.blotter[0].keys()
+        self.fieldnames = list(self.blotter[0].keys())
         self.create_header()
-        with open(self.file, 'a') as f:
+        with open(self.file, "a") as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             for item in self.blotter:
                 writer.writerow(item)
@@ -176,10 +197,14 @@ class CsvBlotter(AbstractBaseBlotter):
 
 
 class MongoBlotter(AbstractBaseBlotter):
-
-    def __init__(self, save_to_file: bool = True, host: str = 'localhost',
-                 port: int = 27017, db: str = 'blotter',
-                 collection: 'str' = 'test_blotter') -> None:
+    def __init__(
+        self,
+        save_to_file: bool = True,
+        host: str = "localhost",
+        port: int = 27017,
+        db: str = "blotter",
+        collection: "str" = "test_blotter",
+    ) -> None:
         self.client = MongoClient(host, port)
         self.db = self.client[db]
         self.collection = self.db[collection]
@@ -198,18 +223,17 @@ class MongoBlotter(AbstractBaseBlotter):
         results = self.collection.find(querry)
         for doc in results:
             print(doc)
-        s = input('Above documents will be deleted.'
-                  'Continue? ').lower()
-        if s != 'yes' and s != 'y':
+        s = input("Above documents will be deleted." "Continue? ").lower()
+        if s != "yes" and s != "y":
             sys.exit()
         x = self.collection.delete_many(querry)
-        return f'Documents deleted: {x.raw_result}'
+        return f"Documents deleted: {x.raw_result}"
 
     def clear(self) -> str:
-        print(f'Deleting all items from {self.collection}')
+        print(f"Deleting all items from {self.collection}")
         super().clear()
         x = self.collection.delete_many({})
-        return f'Deleted {x.deleted_count} documents.'
+        return f"Deleted {x.deleted_count} documents."
 
 
 class AsyncMongoBlottter(AbstractBaseBlotter):
@@ -217,9 +241,14 @@ class AsyncMongoBlottter(AbstractBaseBlotter):
     NOT TESTED. Clear and delete methods missing. TODO.
     """
 
-    def __init__(self, save_to_file: bool = True, host: str = 'localhost',
-                 port: int = 27017, db: str = 'blotter',
-                 collection: 'str' = 'test_blotter') -> None:
+    def __init__(
+        self,
+        save_to_file: bool = True,
+        host: str = "localhost",
+        port: int = 27017,
+        db: str = "blotter",
+        collection: "str" = "test_blotter",
+    ) -> None:
         self.client = motor.motor_asyncio.AsyncIOMotorClient(host, port)
         self.db = self.client[db]
         self.collection = self.db[collection]
@@ -239,22 +268,26 @@ class AsyncMongoBlottter(AbstractBaseBlotter):
 
 
 class TickBlotter(AbstractBaseBlotter):
-    def __init__(self, save_to_file: bool = True, host: str = 'localhost',
-                 library: str = 'tick_blotter',
-                 collection: str = 'test_blotter') -> None:
+    def __init__(
+        self,
+        save_to_file: bool = True,
+        host: str = "localhost",
+        library: str = "tick_blotter",
+        collection: str = "test_blotter",
+    ) -> None:
         self.db = Arctic(host)
         self.db.initialize_library(library, lib_type=TICK_STORE)
         self.store = self.db[library]
         self.collection = collection
 
     def write_to_file(self, data: Dict[str, Any]) -> None:
-        data['index'] = pd.to_datetime(data['time'], utc=True)
+        data["index"] = pd.to_datetime(data["time"], utc=True)
         self.store.write(self.collection, [data])
 
     def save(self) -> None:
         data = []
         for d in self.blotter:
-            d.update({'index': pd.to_datetime(d['time'], utc=True)})
+            d.update({"index": pd.to_datetime(d["time"], utc=True)})
             data.append(d)
         self.store.write(self.collection, data)
 
