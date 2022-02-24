@@ -269,6 +269,7 @@ class DataWriter:
     @property
     def duration(self):
         duration = barSize_to_duration(self.barSize, self.aggression)
+        # this gets string and datetime error TODO
         delta = self.next_date - self._current_object.from_date
         if delta < duration_to_timedelta(duration):
             # requests for periods shorter than 30s don't work
@@ -815,14 +816,14 @@ async def main(holder: ContractHolder) -> None:
 if __name__ == "__main__":
     util.patchAsyncio()
     ib = IB()
-    barSize = "30 secs"
-    wts = "TRADES"
+    barSize = "1 secs"
+    wts = "BID_ASK"
     # object where data is stored
     store = ArcticStore(f"{wts}_{barSize}")
 
     # the bool is for cont_only
     holder = ContractHolder(
-        ib, "__contracts.csv", store, wts, barSize, False, aggression=2
+        ib, "_contracts.csv", store, wts, barSize, True, aggression=2
     )
 
     asyncio.get_event_loop().set_debug(True)
