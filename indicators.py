@@ -5,7 +5,10 @@ import pandas as pd  # type: ignore
 import numpy as np  # type: ignore
 
 from research.numba_tools import (  # type: ignore
-    _in_out_signal_unifier, _blip_to_signal_converter, swing)
+    _in_out_signal_unifier,
+    _blip_to_signal_converter,
+    swing,
+)
 
 
 def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
@@ -19,18 +22,22 @@ def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
     exp: True - expotential mean, False - simple rolling mean
     """
 
-    assert set(['open', 'high', 'low', 'close']).issubset(set(data.columns)), \
-        "<data> must be a dataframe with columns: 'open', 'high', 'low', 'close'"
+    assert set(["open", "high", "low", "close"]).issubset(
+        set(data.columns)
+    ), "<data> must be a dataframe with columns: 'open', 'high', 'low', 'close'"
 
-    TR = pd.DataFrame({'A': (data['high'] - data['low']),
-                       'B': (data['high'] - data['close'].shift()).abs(),
-                       'C': (data['low'] - data['close'].shift()).abs()
-                       })
-    TR['TR'] = TR.max(axis=1)
+    TR = pd.DataFrame(
+        {
+            "A": (data["high"] - data["low"]),
+            "B": (data["high"] - data["close"].shift()).abs(),
+            "C": (data["low"] - data["close"].shift()).abs(),
+        }
+    )
+    TR["TR"] = TR.max(axis=1)
     if exp:
-        TR['ATR'] = TR['TR'].ewm(span=periods).mean()
+        TR["ATR"] = TR["TR"].ewm(span=periods).mean()
     else:
-        TR['ATR'] = TR['TR'].rolling(periods).mean()
+        TR["ATR"] = TR["TR"].rolling(periods).mean()
     return TR.ATR
 
 
@@ -38,8 +45,9 @@ def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
 get_ATR = atr
 
 
-def resampled_atr(df: pd.DataFrame, periods: int,
-                  freq: str = 'B',  exp: bool = True) -> pd.Series:
+def resampled_atr(
+    df: pd.DataFrame, periods: int, freq: str = "B", exp: bool = True
+) -> pd.Series:
     """
     Return atr over dataframe resampled to frequency defined by freq.
 
@@ -64,21 +72,23 @@ def resampled_atr(df: pd.DataFrame, periods: int,
     conversion
     """
 
-    assert set(['open', 'high', 'low', 'close']).issubset(set(df.columns)), \
-        "df must have columns: 'open', 'high', 'low', 'close'"
+    assert set(["open", "high", "low", "close"]).issubset(
+        set(df.columns)
+    ), "df must have columns: 'open', 'high', 'low', 'close'"
 
     df = df.copy()
-    resampled = df.resample(freq, label='right', closed='right').agg(
-        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}
-    ).dropna()
+    resampled = (
+        df.resample(freq, label="right", closed="right")
+        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+        .dropna()
+    )
     # whithout .shift() there is forward data snooping
-    df['atr'] = atr(resampled, periods, exp)
-    df['atr'] = df['atr'].fillna(method='ffill')
-    return df['atr']
+    df["atr"] = atr(resampled, periods, exp)
+    df["atr"] = df["atr"].fillna(method="ffill")
+    return df["atr"]
 
 
-def cont_resampled_atr(df, bar: int, periods: int, exp: bool = True
-                       ) -> pd.Series:
+def cont_resampled_atr(df, bar: int, periods: int, exp: bool = True) -> pd.Series:
     """
     Create continuous resampled atr series.  At every df row, last
     <bar> rows will be treated as one bar for atr calculation.  It's
@@ -105,14 +115,15 @@ def cont_resampled_atr(df, bar: int, periods: int, exp: bool = True
     (True) moving average
     """
 
-    assert set(['open', 'high', 'low', 'close']).issubset(set(df.columns)), \
-        "df must have columns: 'open', 'high', 'low', 'close'"
+    assert set(["open", "high", "low", "close"]).issubset(
+        set(df.columns)
+    ), "df must have columns: 'open', 'high', 'low', 'close'"
 
     d = pd.DataFrame()
-    d['A'] = df['high'].rolling(bar).max() - df['low'].rolling(bar).min()
-    d['B'] = (df['high'].rolling(bar).max() - df['close'].shift(bar)).abs()
-    d['C'] = (df['low'].rolling(bar).min() - df['close'].shift(bar)).abs()
-    d['TR'] = d.max(axis=1)
+    d["A"] = df["high"].rolling(bar).max() - df["low"].rolling(bar).min()
+    d["B"] = (df["high"].rolling(bar).max() - df["close"].shift(bar)).abs()
+    d["C"] = (df["low"].rolling(bar).min() - df["close"].shift(bar)).abs()
+    d["TR"] = d.max(axis=1)
     # easier to reshape in numpy
     TR_values = d.TR.values
     start_index = TR_values.shape[0] % bar
@@ -125,8 +136,8 @@ def cont_resampled_atr(df, bar: int, periods: int, exp: bool = True
     # TR is still ndarray, has no index and needs to be put back into
     # correct place in d
     d = d.iloc[start_index:]
-    d['atr'] = TR
-    return d['atr']
+    d["atr"] = TR
+    return d["atr"]
 
 
 def min_max_blip(price: pd.Series, period: int) -> pd.Series:
@@ -140,12 +151,14 @@ def min_max_blip(price: pd.Series, period: int) -> pd.Series:
     price: price Series
     period: lookback period
     """
-    df = pd.DataFrame({
-        'max': ((price - price.shift(1).rolling(period).max()) > 0) * 1,
-        'min': ((price.shift(1).rolling(period).min() - price) > 0) * 1,
-    })
-    df['blip'] = df['max'] - df['min']
-    return df['blip']
+    df = pd.DataFrame(
+        {
+            "max": ((price - price.shift(1).rolling(period).max()) > 0) * 1,
+            "min": ((price.shift(1).rolling(period).min() - price) > 0) * 1,
+        }
+    )
+    df["blip"] = df["max"] - df["min"]
+    return df["blip"]
 
 
 def min_max_signal(data: pd.Series, period: int) -> pd.Series:
@@ -156,8 +169,7 @@ def min_max_signal(data: pd.Series, period: int) -> pd.Series:
     return min_max_blip(data, period)
 
 
-def min_max_buffer_signal(data: pd.Series, period: int,
-                          buff: float = 0) -> pd.Series:
+def min_max_buffer_signal(data: pd.Series, period: int, buff: float = 0) -> pd.Series:
     """
     Return Series of signals (one of: -1, 0 or 1) dependig on whether
     price broke out above max + <buff> (1) or below min - <buff> (-1) over last
@@ -173,24 +185,28 @@ def min_max_buffer_signal(data: pd.Series, period: int,
     buff: buffor expressing sensitivity filter for deciding whether min or max
           has been breached, given in price units (default: 0)
     """
-    df = pd.DataFrame({
-        'max': ((data - data.shift(1).rolling(period).max() + buff) > 0) * 1,
-        'min': ((data.shift(1).rolling(period).min() + buff - data) > 0) * 1,
-    })
-    df['signal'] = df['max'] - df['min']
-    return df['signal']
+    df = pd.DataFrame(
+        {
+            "max": ((data - data.shift(1).rolling(period).max() + buff) > 0) * 1,
+            "min": ((data.shift(1).rolling(period).min() + buff - data) > 0) * 1,
+        }
+    )
+    df["signal"] = df["max"] - df["min"]
+    return df["signal"]
 
 
 def get_std(data, periods):
-    returns = np.log(data.avg_price.pct_change()+1)
+    returns = np.log(data.avg_price.pct_change() + 1)
     return returns.rolling(periods).std() * data.avg_price
 
 
 def get_min_max(data, period):
-    return pd.DataFrame({
-        'max': (data - data.shift(1).rolling(period).max()) > 0,
-        'min': (data.shift(1).rolling(period).min() - data) > 0
-    })
+    return pd.DataFrame(
+        {
+            "max": (data - data.shift(1).rolling(period).max()) > 0,
+            "min": (data.shift(1).rolling(period).min() - data) > 0,
+        }
+    )
 
 
 def majority_function(data: pd.DataFrame) -> pd.Series:
@@ -202,14 +218,14 @@ def majority_function(data: pd.DataFrame) -> pd.Series:
     ---------
     data: every row contains bool values, on which majority function is applied
     """
-    return (
-        0.5 + ((data.sum(axis=1) - 0.5) / data.count(axis=1))).apply(np.floor)
+    return (0.5 + ((data.sum(axis=1) - 0.5) / data.count(axis=1))).apply(np.floor)
 
 
-def get_min_max_df(data: pd.DataFrame, periods: Tuple[int],
-                   func: Callable[[pd.DataFrame, int],
-                                  pd.DataFrame] = get_min_max
-                   ) -> Dict[str, pd.DataFrame]:
+def get_min_max_df(
+    data: pd.DataFrame,
+    periods: Tuple[int],
+    func: Callable[[pd.DataFrame, int], pd.DataFrame] = get_min_max,
+) -> Dict[str, pd.DataFrame]:
     """
     Given a list of periods, return func on each of those periods.
     """
@@ -218,41 +234,41 @@ def get_min_max_df(data: pd.DataFrame, periods: Tuple[int],
     maxs = pd.DataFrame()
     for period in periods:
         df = min_max_func(period)
-        mins[period] = df['min']
-        maxs[period] = df['max']
-    return {'min': mins,
-            'max': maxs}
+        mins[period] = df["min"]
+        maxs[period] = df["max"]
+    return {"min": mins, "max": maxs}
 
 
 def get_signals(data: pd.Series, periods: Tuple[int]) -> pd.Series:
     min_max = get_min_max_df(data, periods)
-    return pd.DataFrame({
-        'signal': majority_function(
-            min_max['max']) - majority_function(min_max['min'])
-    })
+    return pd.DataFrame(
+        {
+            "signal": majority_function(min_max["max"])
+            - majority_function(min_max["min"])
+        }
+    )
 
 
 def any_signal(data: pd.Series, periods: Tuple[int]) -> pd.Series:
     min_max = get_min_max_df(data, periods)
-    return min_max['max'].any(axis=1) * 1 - min_max['min'].any(axis=1) * 1
+    return min_max["max"].any(axis=1) * 1 - min_max["min"].any(axis=1) * 1
 
 
 def rsi(price: pd.Series, lookback: int) -> pd.Series:
-    df = pd.DataFrame({'price': price})
-    df['change'] = df['price'].diff().fillna(0)
-    df['up'] = ((df['change'] > 0) * df['change']).rolling(lookback).sum()
-    df['down'] = ((df['change'] < 0) * df['change'].abs()
-                  ).rolling(lookback).sum()
-    df['rs'] = df['up'] / df['down']
-    df['rsi'] = (100 - (100/(1+df['rs'])))
-    return df['rsi']
+    df = pd.DataFrame({"price": price})
+    df["change"] = df["price"].diff().fillna(0)
+    df["up"] = ((df["change"] > 0) * df["change"]).rolling(lookback).sum()
+    df["down"] = ((df["change"] < 0) * df["change"].abs()).rolling(lookback).sum()
+    df["rs"] = df["up"] / df["down"]
+    df["rsi"] = 100 - (100 / (1 + df["rs"]))
+    return df["rsi"]
 
 
 def modified_rsi(rsi: pd.Series) -> pd.Series:
     """
     Rescale passed rsi to -100 to 100.
     """
-    return 2*(rsi - 50)
+    return 2 * (rsi - 50)
 
 
 def carver(price: pd.Series, lookback: int) -> pd.Series:
@@ -262,12 +278,12 @@ def carver(price: pd.Series, lookback: int) -> pd.Series:
     (modified stochastic oscilator, after Rob Carver:
     https://qoppac.blogspot.com/2016/05/a-simple-breakout-trading-rule.html).
     """
-    df = pd.DataFrame({'price': price})
-    df['max'] = df['price'].rolling(lookback).max()
-    df['min'] = df['price'].rolling(lookback).min()
-    df['mid'] = df[['min', 'max']].mean(axis=1)
-    df['carver'] = 200*((df['price'] - df['mid']) / (df['max'] - df['min']))
-    return df['carver']
+    df = pd.DataFrame({"price": price})
+    df["max"] = df["price"].rolling(lookback).max()
+    df["min"] = df["price"].rolling(lookback).min()
+    df["mid"] = df[["min", "max"]].mean(axis=1)
+    df["carver"] = 200 * ((df["price"] - df["mid"]) / (df["max"] - df["min"]))
+    return df["carver"]
 
 
 def range_crosser(ind: pd.Series, threshold: float) -> pd.Series:
@@ -276,12 +292,12 @@ def range_crosser(ind: pd.Series, threshold: float) -> pd.Series:
     threshold from above or -threshold from below.
     THIS IS LIKELY CRAP. CHECK BEFORE USE!!!
     """
-    df = pd.DataFrame({'ind': ind})
-    df['inside'] = (df['ind'].abs() < threshold)
-    df['ss'] = ~(df['inside'].shift().fillna(False)) & df['inside']
-    df['s'] = np.sign(df['ind'].diff())
-    df['signal'] = df['ss'] * df['s']
-    return df['signal']
+    df = pd.DataFrame({"ind": ind})
+    df["inside"] = df["ind"].abs() < threshold
+    df["ss"] = ~(df["inside"].shift().fillna(False)) & df["inside"]
+    df["s"] = np.sign(df["ind"].diff())
+    df["signal"] = df["ss"] * df["s"]
+    return df["signal"]
 
 
 def adx(data: pd.DataFrame, lookback: int) -> pd.Series:
@@ -296,22 +312,25 @@ def adx(data: pd.DataFrame, lookback: int) -> pd.Series:
     https://www.fmlabs.com/reference/default.htm?url=ADX.htm
     """
     df = data.copy()
-    df['atr'] = atr(df, lookback)
-    df['deltaHigh'] = (df['high'] - df['high'].shift()).clip(lower=0)
-    df['deltaLow'] = (df['low'] - df['low'].shift()).clip(lower=0)
-    df['plusDM'] = (df['deltaHigh'] > df['deltaLow']) * df['deltaHigh']
-    df['minusDM'] = (df['deltaLow'] > df['deltaHigh']) * df['deltaLow']
-    df['pdm_s'] = df['plusDM'].ewm(span=lookback).mean()
-    df['mdm_s'] = df['minusDM'].ewm(span=lookback).mean()
-    df['pDI'] = (df['pdm_s'] / df['atr']) * 100
-    df['mDI'] = (df['mdm_s'] / df['atr']) * 100
-    df['dx'] = ((df['pDI'] - df['mDI']).abs() / (df['pDI'] + df['mDI'])) * 100
-    df['adx'] = df['dx'].ewm(span=lookback).mean()
-    return df['adx']
+    df["atr"] = atr(df, lookback)
+    df["deltaHigh"] = (df["high"] - df["high"].shift()).clip(lower=0)
+    df["deltaLow"] = (df["low"] - df["low"].shift()).clip(lower=0)
+    df["plusDM"] = (df["deltaHigh"] > df["deltaLow"]) * df["deltaHigh"]
+    df["minusDM"] = (df["deltaLow"] > df["deltaHigh"]) * df["deltaLow"]
+    df["pdm_s"] = df["plusDM"].ewm(span=lookback).mean()
+    df["mdm_s"] = df["minusDM"].ewm(span=lookback).mean()
+    df["pDI"] = (df["pdm_s"] / df["atr"]) * 100
+    df["mDI"] = (df["mdm_s"] / df["atr"]) * 100
+    df["dx"] = ((df["pDI"] - df["mDI"]).abs() / (df["pDI"] + df["mDI"])) * 100
+    df["adx"] = df["dx"].ewm(span=lookback).mean()
+    return df["adx"]
 
 
-def breakout(price: pd.Series, lookback: int, stop_frac: float = .5,
-             ) -> pd.Series:
+def breakout(
+    price: pd.Series,
+    lookback: int,
+    stop_frac: float = 0.5,
+) -> pd.Series:
     """
     Create a Series with signal representing byuing upside breakout
     beyond lookback periods maximum and selling breakout below
@@ -340,29 +359,30 @@ def breakout(price: pd.Series, lookback: int, stop_frac: float = .5,
     at a given index point.
     """
 
-    assert isinstance(price, pd.Series), 'price must be a pandas series'
-    assert stop_frac > 0 and stop_frac <= 1, 'stop_frac must be from (0, 1>'
+    assert isinstance(price, pd.Series), "price must be a pandas series"
+    assert stop_frac > 0 and stop_frac <= 1, "stop_frac must be from (0, 1>"
 
-    df = pd.DataFrame({'price': price})
-    df['in'] = min_max_blip(df['price'], lookback)
+    df = pd.DataFrame({"price": price})
+    df["in"] = min_max_blip(df["price"], lookback)
     if stop_frac == 1:
-        df['break'] = _blip_to_signal_converter(df['in'].to_numpy())
+        df["break"] = _blip_to_signal_converter(df["in"].to_numpy())
     else:
-        df['out'] = min_max_blip(df['price'], int(lookback*stop_frac))
-        df['break'] = _in_out_signal_unifier(df[['in', 'out']].to_numpy())
-    return df['break']
+        df["out"] = min_max_blip(df["price"], int(lookback * stop_frac))
+        df["break"] = _in_out_signal_unifier(df[["in", "out"]].to_numpy())
+    return df["break"]
 
 
 def resample(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     return df.resample(freq).agg(
-        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'})
+        {"open": "first", "high": "max", "low": "min", "close": "last"}
+    )
 
 
 def strength_oscillator(df: pd.DataFrame, periods) -> pd.Series:
     d = df.copy()
-    d['momentum'] = d.close.diff()
-    d['high_low'] = d['high'] - d['low']
-    return (d['momentum'] / d['high_low']).rolling(periods).mean()
+    d["momentum"] = d.close.diff()
+    d["high_low"] = d["high"] - d["low"]
+    return (d["momentum"] / d["high_low"]).rolling(periods).mean()
 
 
 def join_swing(df: pd.DataFrame, *args, **kwargs) -> pd.DataFrame:
@@ -371,5 +391,4 @@ def join_swing(df: pd.DataFrame, *args, **kwargs) -> pd.DataFrame:
     swing.  All args and kwargs must be compatible with swing function
     requirements.
     """
-    return df.join(pd.DataFrame(swing(df, *args, **kwargs)._asdict(),
-                                index=df.index))
+    return df.join(pd.DataFrame(swing(df, *args, **kwargs)._asdict(), index=df.index))
