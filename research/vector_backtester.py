@@ -10,14 +10,14 @@ from pyfolio.timeseries import perf_stats  # type: ignore # noqa
 from signal_converters import sig_pos
 
 
-sys.path.append('/home/tomek/ib_tools')
+sys.path.append("/home/tomek/ib_tools")
 
 
 def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
     daily = pd.DataFrame()
-    daily['lreturn'] = lreturn.resample('B').sum().dropna()
-    daily['returns'] = np.exp(daily['lreturn']) - 1
-    daily['balance'] = (daily['returns'] + 1).cumprod()
+    daily["lreturn"] = lreturn.resample("B").sum().dropna()
+    daily["returns"] = np.exp(daily["lreturn"]) - 1
+    daily["balance"] = (daily["returns"] + 1).cumprod()
     return daily
 
 
@@ -28,10 +28,9 @@ class Positions(NamedTuple):
     transactions: int
 
 
-def pos(price: pd.Series,
-        transaction: pd.Series,
-        position: pd.Series,
-        cost: float = 0) -> Positions:
+def pos(
+    price: pd.Series, transaction: pd.Series, position: pd.Series, cost: float = 0
+) -> Positions:
     """
     Match open and close transactions to create position list.
 
@@ -42,13 +41,14 @@ def pos(price: pd.Series,
             closes: pd.DataFrame all close transactions
             transactions: int number of all transactions
     """
-    df = pd.DataFrame({'price': price,
-                       'transaction': transaction,
-                       'position': position})
+    df = pd.DataFrame(
+        {"price": price, "transaction": transaction, "position": position}
+    )
 
-    df['c_transaction'] = ((df['transaction'] != 0) *
-                           (-df['position'].shift(1))).fillna(0)
-    df['o_transaction'] = df['transaction'] - df['c_transaction']
+    df["c_transaction"] = (
+        (df["transaction"] != 0) * (-df["position"].shift(1))
+    ).fillna(0)
+    df["o_transaction"] = df["transaction"] - df["c_transaction"]
 
     # DataFrame calculating per transaction stats
     _opens = df[df.o_transaction != 0]
@@ -61,14 +61,14 @@ def pos(price: pd.Series,
         _closes.c_transaction[-1] = _opens.o_transaction[-1] * -1
 
     # create positions df
-    opens = (_opens['price'] * _opens['o_transaction']).reset_index()
-    closes = (_closes['price'] * _closes['c_transaction']).reset_index()
-    opens.columns = ['date', 'open']
-    closes.columns = ['date', 'close']
+    opens = (_opens["price"] * _opens["o_transaction"]).reset_index()
+    closes = (_closes["price"] * _closes["c_transaction"]).reset_index()
+    opens.columns = ["date", "open"]
+    closes.columns = ["date", "close"]
 
-    positions = opens.join(closes, how='outer', lsuffix='_o', rsuffix='_c')
-    positions['pnl'] = -(positions['open'] + positions['close']) - cost*2
-    positions['duration'] = positions['date_c'] - positions['date_o']
+    positions = opens.join(closes, how="outer", lsuffix="_o", rsuffix="_c")
+    positions["pnl"] = -(positions["open"] + positions["close"]) - cost * 2
+    positions["duration"] = positions["date_c"] - positions["date_o"]
     return Positions(positions, opens, closes, transactions)
 
 
@@ -86,9 +86,7 @@ def get_min_tick(data: pd.Series) -> float:
     return min_tick
 
 
-def _perf(price: pd.Series,
-          position: pd.Series,
-          cost: float) -> pd.DataFrame:
+def _perf(price: pd.Series, position: pd.Series, cost: float) -> pd.DataFrame:
     """
     Convert price, position and transaction cost information into
     logarithmic returns.
@@ -106,31 +104,35 @@ def _perf(price: pd.Series,
     cost - transaction cost expressed in price points
     """
 
-    assert price.index.equals(position.index), \
-        'Price and position must have the same index'
+    assert price.index.equals(
+        position.index
+    ), "Price and position must have the same index"
 
-    df = pd.DataFrame({
-        'price': price,
-        'position': position,
-    })
+    df = pd.DataFrame(
+        {
+            "price": price,
+            "position": position,
+        }
+    )
 
-    df['transaction'] = (df['position'] - df['position'].shift(1)
-                         .fillna(0)).astype('int')
+    df["transaction"] = (df["position"] - df["position"].shift(1).fillna(0)).astype(
+        "int"
+    )
 
-    df['slippage'] = df['transaction'].abs() * cost
-    if (df.position[-1] != 0):  # & (df.transaction[-1] == 0):
+    df["slippage"] = df["transaction"].abs() * cost
+    if df.position[-1] != 0:  # & (df.transaction[-1] == 0):
         df.slippage[-1] += np.abs(df.position[-1]) * cost
 
-    df['curr_price'] = (df['position'] - df['transaction']) * df['price']
+    df["curr_price"] = (df["position"] - df["transaction"]) * df["price"]
 
-    df['base_price'] = (df['price'].shift(
-        1) * df['position'].shift(1)).fillna(0)
-    df['pnl'] = df['curr_price'] - df['base_price'] - df['slippage']
+    df["base_price"] = (df["price"].shift(1) * df["position"].shift(1)).fillna(0)
+    df["pnl"] = df["curr_price"] - df["base_price"] - df["slippage"]
     # however convoluted, probably is correct
-    slip_return = np.log((-df['slippage'] / df['price']) + 1).fillna(0)
-    price_return = np.log(((df['curr_price'] - df['base_price'])
-                           / abs(df['base_price'])) + 1).fillna(0)
-    df['lreturn'] = slip_return + price_return
+    slip_return = np.log((-df["slippage"] / df["price"]) + 1).fillna(0)
+    price_return = np.log(
+        ((df["curr_price"] - df["base_price"]) / abs(df["base_price"])) + 1
+    ).fillna(0)
+    df["lreturn"] = slip_return + price_return
 
     return df
 
@@ -144,9 +146,7 @@ class Results(NamedTuple):
     closes: pd.DataFrame
 
 
-def perf(price: pd.Series,
-         position: pd.Series,
-         slippage: float = 1.5) -> Results:
+def perf(price: pd.Series, position: pd.Series, slippage: float = 1.5) -> Results:
     """
     Return performance statistics and underlying data for debuging.
 
@@ -155,7 +155,7 @@ def perf(price: pd.Series,
 
     price - in priciple 'open' price should be used as position is
     assumed to be entered and closed on the next bar after signal was
-    generate
+    generated
 
     position - what position is held at each bar, possible values (-1,
     0, 1)
@@ -190,66 +190,68 @@ def perf(price: pd.Series,
     df = _perf(price, position, cost)
 
     # bar by bar to daily returns
-    daily = daily_returns_log_based(df['lreturn'])
+    daily = daily_returns_log_based(df["lreturn"])
 
     # position stats
-    p = pos(df['price'], df['transaction'], df['position'], cost=cost)
+    p = pos(df["price"], df["transaction"], df["position"], cost=cost)
     positions = p.positions
     # assert round(positions.pnl.sum(), 4) == round(df.pnl.sum(), 4), \
     #    f'Dubious pnl calcs... {positions.pnl.sum()} vs. {df.pnl.sum()}'
 
-    duration = positions['duration'].mean()
-    win_pos = positions[positions['pnl'] > 0]
+    duration = positions["duration"].mean()
+    win_pos = positions[positions["pnl"] > 0]
     # positions with zero gain are loss making
-    loss_pos = positions[positions['pnl'] <= 0]
+    loss_pos = positions[positions["pnl"] <= 0]
     # =========================================
 
     # container for all non-pyfolio stats
     stats = pd.Series()
     try:
-        stats['Win percent'] = len(win_pos) / len(positions)
-        stats['Average gain'] = win_pos.pnl.sum() / len(win_pos)
-        stats['Average loss'] = loss_pos.pnl.sum() / len(loss_pos)
-        stats['Avg gain/loss ratio'] = abs(stats['Average gain'] /
-                                           stats['Average loss'])
-        stats['Position EV'] = ((stats['Win percent'] * stats['Average gain'])
-                                + ((1 - stats['Win percent'])
-                                   * stats['Average loss']))
+        stats["Win percent"] = len(win_pos) / len(positions)
+        stats["Average gain"] = win_pos.pnl.sum() / len(win_pos)
+        stats["Average loss"] = loss_pos.pnl.sum() / len(loss_pos)
+        stats["Avg gain/loss ratio"] = abs(
+            stats["Average gain"] / stats["Average loss"]
+        )
+        stats["Position EV"] = (stats["Win percent"] * stats["Average gain"]) + (
+            (1 - stats["Win percent"]) * stats["Average loss"]
+        )
 
         # this is sanity check for Positions EV (should be the same)
         # stats['Average pnl'] = positions.pnl.mean()
 
-        stats['Long EV'] = positions[positions['open'] > 0].pnl.mean()
-        stats['Short EV'] = positions[positions['open'] < 0].pnl.mean()
+        stats["Long EV"] = positions[positions["open"] > 0].pnl.mean()
+        stats["Short EV"] = positions[positions["open"] < 0].pnl.mean()
 
         days = daily.returns.count()
         num_pos = len(win_pos) + len(loss_pos)
-        stats['Positions per day'] = num_pos/days
-        stats['Days per position'] = days/num_pos
+        stats["Positions per day"] = num_pos / days
+        stats["Days per position"] = days / num_pos
         # duration is a pd.Timedelta rounded to the closes minute
-        stats['Actual avg. duration'] = duration.round('min')
+        stats["Actual avg. duration"] = duration.round("min")
 
-        stats['Days'] = days
-        stats['Positions'] = num_pos
-        stats['Trades'] = p.transactions
-        stats['Monthly EV'] = int(stats['Positions per day'] *
-                                  stats['Position EV'] * 21)
-        stats['Annual EV'] = 12 * stats['Monthly EV']
+        stats["Days"] = days
+        stats["Positions"] = num_pos
+        stats["Trades"] = p.transactions
+        stats["Monthly EV"] = int(
+            stats["Positions per day"] * stats["Position EV"] * 21
+        )
+        stats["Annual EV"] = 12 * stats["Monthly EV"]
     except (ZeroDivisionError, KeyError, ValueError) as error:
         print(error)
 
     # Generate output table
-    pyfolio_stats = perf_stats(daily['returns'])
+    pyfolio_stats = perf_stats(daily["returns"])
     stats = pyfolio_stats.append(stats)
 
     return Results(stats, daily, positions, df, p[1], p[2])
 
 
-def v_backtester(indicator: pd.Series,
-                 threshold: float = 0,
-                 signal_or_position: Literal['signal', 'position',
-                                             'both'] = 'position'
-                 ) -> Union[pd.Series, pd.DataFrame]:
+def v_backtester(
+    indicator: pd.Series,
+    threshold: float = 0,
+    signal_or_position: Literal["signal", "position", "both"] = "position",
+) -> Union[pd.Series, pd.DataFrame]:
     """
     Vector backtester.
 
@@ -279,35 +281,45 @@ def v_backtester(indicator: pd.Series,
     'signal_or_position'
     """
 
-    assert signal_or_position in ('signal', 'position', 'both'), \
-        "Acceptable values for 'signal_or_position' are 'signal', 'position',"
+    assert signal_or_position in (
+        "signal",
+        "position",
+        "both",
+    ), "Acceptable values for 'signal_or_position' are 'signal', 'position',"
     " 'both'"
 
-    df = pd.DataFrame({'indicator': indicator})
-    df['signal'] = ((df['indicator'] > threshold) * 1) \
-        + ((df['indicator'] < -threshold) * -1)
-    df['position'] = (df['signal'].shift(1).fillna(0)).astype('int')
-    if signal_or_position == 'position':
-        return df['position']
-    elif signal_or_position == 'signal':
-        return df['signal']
+    df = pd.DataFrame({"indicator": indicator})
+    df["signal"] = ((df["indicator"] > threshold) * 1) + (
+        (df["indicator"] < -threshold) * -1
+    )
+    df["position"] = (df["signal"].shift(1).fillna(0)).astype("int")
+    if signal_or_position == "position":
+        return df["position"]
+    elif signal_or_position == "signal":
+        return df["signal"]
     else:
         return df
 
 
-Out = NamedTuple('Out', [('stats', pd.DataFrame),
-                         ('dailys', pd.DataFrame),
-                         ('returns', pd.DataFrame),
-                         ('positions', Dict[float, pd.DataFrame]),
-                         ('dfs', Dict[float, pd.DataFrame]),
-                         ])
+Out = NamedTuple(
+    "Out",
+    [
+        ("stats", pd.DataFrame),
+        ("dailys", pd.DataFrame),
+        ("returns", pd.DataFrame),
+        ("positions", Dict[float, pd.DataFrame]),
+        ("dfs", Dict[float, pd.DataFrame]),
+    ],
+)
 
 
-def summary(data: Union[pd.Series, pd.DataFrame],
-            indicator: Optional[pd.Series] = None,
-            slip: float = 0,
-            threshold: Optional[Union[List, float]] = None,
-            price_field_name: str = 'open') -> Out:
+def summary(
+    data: Union[pd.Series, pd.DataFrame],
+    indicator: Optional[pd.Series] = None,
+    slip: float = 0,
+    threshold: Optional[Union[List, float]] = None,
+    price_field_name: str = "open",
+) -> Out:
     """
     Return stats summary of strategy for various thresholds run on the
     indicator.  The strategy is long when indicator > threshold and
@@ -345,12 +357,14 @@ def summary(data: Union[pd.Series, pd.DataFrame],
 
     Named tuple with stats and underlying simulation results.
     """
-    assert isinstance(data, (pd.DataFrame, pd.Series)), \
-        'Data must be either Series or DataFrame'
+    assert isinstance(
+        data, (pd.DataFrame, pd.Series)
+    ), "Data must be either Series or DataFrame"
 
     if isinstance(data, pd.DataFrame):
-        assert price_field_name in data.columns, \
-            "Use 'price_field_name' argument to indicate which column in "
+        assert (
+            price_field_name in data.columns
+        ), "Use 'price_field_name' argument to indicate which column in "
         "'data' contains price"
 
         price = data[price_field_name]
@@ -359,8 +373,10 @@ def summary(data: Union[pd.Series, pd.DataFrame],
             try:
                 indicator = data.forecast
             except KeyError:
-                raise KeyError("Indicator has to be passed directly "
-                               "or passed df must have column 'forecast'")
+                raise KeyError(
+                    "Indicator has to be passed directly "
+                    "or passed df must have column 'forecast'"
+                )
 
     if threshold is None:
         threshold = [0, 1, 3, 5, 6, 10, 15, 17, 19, 20]
@@ -380,19 +396,19 @@ def summary(data: Union[pd.Series, pd.DataFrame],
             continue
         stats[i] = r.stats
         dailys[i] = r.daily.balance
-        returns[i] = r.daily['returns']
+        returns[i] = r.daily["returns"]
         positions[i] = r.positions
         dfs[i] = r.df
     return Out(stats, dailys, returns, positions, dfs)
 
 
 def optimize(df, func, start_param, scope=range(20)):
-    results = pd.DataFrame(index=scope, columns=['Sharpe', 'Return', 'Vol'])
+    results = pd.DataFrame(index=scope, columns=["Sharpe", "Return", "Vol"])
     for i in scope:
         param = start_param * 2**i
-        data = sig_pos(func(df['close'], param))
-        out = perf(df['open'], data)
-        results.loc[i, 'Sharpe'] = out[0].loc['Sharpe ratio']
-        results.loc[i, 'Return'] = out[0].loc['Annual return']
-        results.loc[i, 'Vol'] = out[0].loc['Annual volatility']
+        data = sig_pos(func(df["close"], param))
+        out = perf(df["open"], data)
+        results.loc[i, "Sharpe"] = out[0].loc["Sharpe ratio"]
+        results.loc[i, "Return"] = out[0].loc["Annual return"]
+        results.loc[i, "Vol"] = out[0].loc["Annual volatility"]
     return results
