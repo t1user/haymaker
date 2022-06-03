@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Optional, List
 from dataclasses import dataclass
 
 from ib_insync import ContFuture
@@ -8,21 +8,21 @@ from streamers import VolumeStreamer
 from candle import BreakoutCandleVolFilter, BreakoutLockCandleVolFilter
 from portfolio import FixedPortfolio
 from execution_models import EventDrivenTakeProfitExecModel
-
+from candle import Candle
 
 log = Logger(__name__)
 
 
 @dataclass
 class Params:
-    contract: Tuple[str]  # contract given as tuple of params given to Future()
-    micro_contract: Tuple[str]  # (1/10) contract corresponding to contract
+    contract: ContFuture  # NOTTRUE contract given as tuple of params given to Future()
+    micro_contract: ContFuture  # (1/10) contract corresponding to contract
     periods: int = 40  # periods for breakout calculation
     ema_fast: int = 5  # number of periods for moving average filter
     ema_slow: int = 120  # number of periods for moving average filter
     sl_atr: int = 1  # stop loss in ATRs
     atr_periods: int = 50  # number of periods to calculate ATR on
-    trades_per_day: int = 0
+    trades_per_day: float = 0
     alloc: float = 0  # fraction of capital to be allocated to instrument
     # candle volume to be calculated as average of x periods
     avg_periods: Optional[int] = None
@@ -86,7 +86,7 @@ ym = Params(
 
 exec_model = EventDrivenTakeProfitExecModel()
 
-candles = [
+candles: List[Candle] = [
     BreakoutLockCandleVolFilter(
         VolumeStreamer(params.volume, params.avg_periods),
         contract_fields=["contract", "micro_contract"],
@@ -106,7 +106,7 @@ candles.extend(
     ]
 )
 
-portfolio = FixedPortfolio()
+portfolio = FixedPortfolio(2)
 
 strategy_kwargs = {"candles": candles, "portfolio": portfolio, "exec_model": exec_model}
 
