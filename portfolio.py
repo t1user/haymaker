@@ -63,7 +63,7 @@ class FixedPortfolio(Portfolio):
         Portfolio.__init__(self, **kwargs)
 
     def number_of_contracts(self, contract: Contract, price: float):
-        return 1
+        return self.number
 
     def onSignal(self, obj: Candle):
         error_message = f"Invalid signal: {obj.df.signal[-1]}"
