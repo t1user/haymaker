@@ -5,6 +5,7 @@ from os import makedirs, path
 import numpy as np
 from ib_insync import IB, MarketOrder
 from logbook import Logger  # type: ignore
+from arctic import Arctic
 
 from datastore import AbstractBaseStore
 
@@ -12,8 +13,9 @@ from datastore import AbstractBaseStore
 log = Logger(__name__)
 
 
-def update_details(ib: IB, store: AbstractBaseStore,
-                   keys: Optional[Union[str, List[str]]] = None) -> None:
+def update_details(
+    ib: IB, store: AbstractBaseStore, keys: Optional[Union[str, List[str]]] = None
+) -> None:
     """
     Pull contract details from ib and update metadata in store.
 
@@ -31,47 +33,44 @@ def update_details(ib: IB, store: AbstractBaseStore,
     contracts = {}
     for key in keys:
         try:
-            contract = eval(store.read_metadata(key)['repr'])
+            contract = eval(store.read_metadata(key)["repr"])
         except TypeError:
-            log.error(f'Metadata missing for {key}')
+            log.error(f"Metadata missing for {key}")
             continue
         contract.update(includeExpired=True)
         contracts[key] = contract
     ib.qualifyContracts(*contracts.values())
-    print(f'contracts qualified: {contracts.values()}')
+    print(f"contracts qualified: {contracts.values()}")
     details = {}
     for k, v in contracts.copy().items():
         try:
             details[k] = ib.reqContractDetails(v)[0]
         except IndexError:
-            print(f'Contract unavailable: {k}')
+            print(f"Contract unavailable: {k}")
             del contracts[k]
         if details.get(k):
-            print(f'Details for {k} loaded.')
+            print(f"Details for {k} loaded.")
         else:
-            print(f'Details for {k} unavailable')
-    print('All available details collected')
+            print(f"Details for {k} unavailable")
+    print("All available details collected")
 
     # get commission levels
-    order = MarketOrder('BUY', 1)
+    order = MarketOrder("BUY", 1)
     commissions = {}
     for k, v in contracts.items():
-        print(f'Pulling commission for: {v}')
+        print(f"Pulling commission for: {v}")
         try:
             commissions[k] = ib.whatIfOrder(v, order).commission
         except AttributeError:
-            log.error(f'Commission unavailable for: {k}')
+            log.error(f"Commission unavailable for: {k}")
             commissions[k] = np.nan
-        print(f'Commission for {k} saved.')
+        print(f"Commission for {k} saved.")
 
     for c, d in details.items():
-        _d = {'name': d.longName,
-              'min_tick': d.minTick,
-              'commission': commissions[c]
-              }
+        _d = {"name": d.longName, "min_tick": d.minTick, "commission": commissions[c]}
         store.write_metadata(c, _d)
 
-    print('Data written to store.')
+    print("Data written to store.")
 
 
 def default_path(*dirnames: str) -> str:
@@ -81,7 +80,18 @@ def default_path(*dirnames: str) -> str:
     Should also work in Windows but not tested.
     """
     home = Path.home()
-    dirnames_str = ' / '.join(dirnames)
-    if not Path.exists(home / 'ib_data' / dirnames_str):
-        makedirs(home.joinpath('ib_data', *dirnames))
-    return path.join(str(home), 'ib_data', *dirnames)
+    dirnames_str = " / ".join(dirnames)
+    if not Path.exists(home / "ib_data" / dirnames_str):
+        makedirs(home.joinpath("ib_data", *dirnames))
+    return path.join(str(home), "ib_data", *dirnames)
+
+
+def quota_checker(store: Arctic) -> None:
+    """
+    Given arctic datastore print quotas for all libraries.
+    """
+    for lib in store.list_libraries():
+        quota = store.get_quota(lib) / 1024**3
+        size = store.get_library(lib).stats()["totals"]["size"] / 1024**3
+        usage = size / quota
+        print(f"{lib} - quota: {quota:.2f}GB, size: {size:.2f}GB, usage: {usage:.1%}")
