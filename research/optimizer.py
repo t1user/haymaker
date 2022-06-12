@@ -118,7 +118,7 @@ class Optimizer:
             self.in_data = df["close"]
 
         if opti_params and not isinstance(self.func, OptiWrapper):
-            assert len(opti_params) == 2, "Need exactly two optimization" "parameters"
+            assert len(opti_params) == 2, "Need exactly two optimization parameters"
             self.opti_params = opti_params
         else:
             self.opti_params = []
@@ -160,7 +160,7 @@ class Optimizer:
             mode = "geo"
         else:
             raise ValueError(
-                f"Wrong parameter: {sp}. " f"Must be a tuple of: (start, stop, [mode])"
+                f"Wrong parameter: {sp}. Must be a tuple of: (start, stop, [mode])"
             )
 
         if isinstance(start, Sequence):
@@ -212,6 +212,7 @@ class Optimizer:
             data = self.func(self.in_data, *args, **kwargs)
             if isinstance(data, tuple):
                 # position and price returend
+                # WHY THE FUCK IS ORDER SWAPPED????????? TODO
                 out = perf(data[1], data[0], slippage=self.slip)
             else:
                 # returned signal has to be converted to position

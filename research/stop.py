@@ -17,7 +17,7 @@ class BaseBracket(ABC):
         self.position = transaction
         self.entry = entry
         self.trigger = self.set_trigger()
-        # print(f'bracket init: {self}, e: {entry}')
+        # print(f"bracket init: {self}, e: {entry}")
 
     @abstractmethod
     def evaluate(self, high: float, low: float) -> float:
@@ -187,6 +187,7 @@ class Context:
         always_on: bool = True,
     ) -> None:
         """
+        NO LONGER RELEVANT - TODO
         always_on - whether the system attempts to always be in the
         market, True means that closing transaction for a position is
         simultaneusly a transaction to open opposite position, False
@@ -199,17 +200,19 @@ class Context:
         self._stop = stop
         self._tp = tp
         self._adjust = adjust
-        self.always_on = always_on
+        # self.always_on = always_on
         self.position = 0
         # print(f'Context init: {self}')
 
     def __call__(self, row: np.ndarray) -> Tuple[int, float]:
-        self.ante_position = row[0]  # position before applying stop loss
-        self.transaction = row[1]
-        self.high = row[2]
-        self.low = row[3]
-        self.distance = row[4]
-        self.price = row[5]
+        (
+            self.ante_position,  # position before applying stop loss
+            self.transaction,
+            self.high,
+            self.low,
+            self.distance,
+            self.price,
+        ) = row
         return self.dispatch()
 
     def dispatch(self) -> Tuple[int, float]:
@@ -224,6 +227,7 @@ class Context:
             # print(
             #    f'Close transaction: {self.transaction}, h: {self.high} l: {self.low}')
             self.close_position()
+            # this opens oposite position for 'always-on' systems
             self.eval_for_open()
             # if self.always_on:
             #    self.open_position()
@@ -232,28 +236,29 @@ class Context:
 
     def eval_for_open(self) -> None:
         if self.transaction and (self.transaction == self.ante_position):
-            self.open_position()
+            self.open_position(self.transaction)
 
-    def open_position(self) -> None:
-        self.stop = self._stop(self.distance, self.transaction, self.price)
-        self.tp = self._tp(self.distance, self.transaction, self.price)
-        self.adjust = self._adjust(self.distance, self.transaction, self.price)
-        self.position = self.ante_position
-        # position may be closed on the same bar, where it's open
+    def open_position(self, transaction: int) -> None:
+        self.stop = self._stop(self.distance, transaction, self.price)
+        self.tp = self._tp(self.distance, transaction, self.price)
+        self.adjust = self._adjust(self.distance, transaction, self.price)
+        # self.position = self.ante_position
+        self.position = transaction
+        # position may be closed on the same bar, where it's opened
         self.eval_brackets()
 
     def close_position(self) -> None:
         self.position = 0
-        # print('---------------------')
+        # print("---------------------")
 
     def eval_brackets(self) -> None:
         if p := self.stop.evaluate(self.high, self.low):
-            # print(f'stop hit: {self.stop}, h: {self.high}, l: {self.low}')
+            # print(f"stop hit: {self.stop}, h: {self.high}, l: {self.low}")
             self.price = p
             self.close_position()
             return
         elif p := self.tp.evaluate(self.high, self.low):
-            # print(f'tp hit: {self.tp}, h: {self.high}, l: {self.low}')
+            # print(f"tp hit: {self.tp}, h: {self.high}, l: {self.low}")
             self.price = p
             self.close_position()
             return
@@ -272,13 +277,36 @@ class Context:
         )
 
 
+class BlipContext(Context):
+    def __call__(self, row: np.ndarray) -> Tuple[int, float]:
+        (
+            self.blip,
+            self.high,
+            self.low,
+            self.distance,
+            self.price,
+        ) = row
+        return self.dispatch()
+
+    def eval_for_close(self) -> None:
+        if self.blip == -self.position:
+            self.close_position()
+        else:
+            self.eval_brackets()
+
+    def eval_for_open(self) -> None:
+        if self.blip:
+            self.open_position(self.blip)
+
+
 def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
     """
     Args:
     -----
 
     data: collumns have the folowing meaning:
-
+    edit: now 0 - position 1 - transaction
+    TO BE FIXED
     0 - transaction is -1, 1 or 0 for transaction signal
 
     1 - high price for the price bar
@@ -317,9 +345,7 @@ def param_factory(
 
     stop = stop_dict.get(mode)
     if not stop:
-        raise ValueError(
-            f"Invalid stop loss type: {mode}. " f"Must be 'fixed' or 'trail'"
-        )
+        raise ValueError(f"Invalid stop loss type: {mode}. Must be 'fixed' or 'trail'")
 
     if tp_multiple:
         tp = TakeProfit.set_up(tp_multiple)
@@ -330,8 +356,7 @@ def param_factory(
         adjusted_stop = stop_dict.get(adjust_tuple[0])
         if not adjusted_stop:
             raise ValueError(
-                f"Invalid adjusted stop loss type: "
-                f"{adjust_tuple[0]}. "
+                f"Invalid adjusted stop loss type: {adjust_tuple[0]}. "
                 f"Must be 'fixed' or 'trail'"
             )
         adjust = Adjust.set_up(adjusted_stop, adjust_tuple[1], adjust_tuple[2])
@@ -343,6 +368,7 @@ def param_factory(
 
 def always_on(series: pd.Series) -> bool:
     """
+    NOT IN USE
     Based on passed position series determine whether system is always
     in the market (closing position always means opening opposite
     position).
@@ -352,17 +378,20 @@ def always_on(series: pd.Series) -> bool:
     return series[series == 0].count() == 0
 
 
-def multiply(series: pd.Series, multiplier):
+def round_tick(series: pd.Series) -> pd.Series:
+    tick = get_min_tick(series)
+    floor = series // tick
+    remainder = series % tick
+    return floor * tick + 1 * (remainder > tick / 2)
+
+
+def multiply(series: pd.Series, multiplier: float) -> pd.Series:
     """
     Floor multiplied price series to the nearest tick.
     """
     if multiplier != 1:
-        tick = get_min_tick(series)
-        data = series * multiplier
-        floor = data // tick
-        return floor * tick
-    else:
-        return series
+        series = series * multiplier
+    return round_tick(series)
 
 
 def stop_loss(
@@ -454,31 +483,53 @@ def stop_loss(
     price (pd.DataFrame)
     """
 
-    assert set(df.columns).issuperset(
-        set(["high", "low"])
-    ), "df must have columns: 'high', 'low'"
-    assert (
-        "position" in df.columns or "transaction" in df.columns
-    ), "df must have either column 'transaction' or 'position'"
-    assert (
-        price_column in df.columns
-    ), f"'{price_column}' indicated as price column, but not in df"
-    assert multiplier > 0, "Multiplier must be greater than zero."
-    assert isinstance(
-        distance, (pd.Series, float, int)
-    ), f"distance must be series or number, not {type(distance)}"
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError("df must be a pandas DataFrame")
+    if not set(df.columns).issuperset(set(["high", "low"])):
+        raise ValueError("df must have columns: 'high', 'low'")
+    if not ("position" in df.columns or "blip" in df.columns):
+        raise ValueError("df must have either column 'transaction' or 'position'")
+    if not (price_column in df.columns):
+        raise ValueError(f"'{price_column}' indicated as price column, but not in df")
+    if multiplier <= 0:
+        raise ValueError("Multiplier must be greater than zero.")
+    if not isinstance(distance, (pd.Series, float, int)):
+        raise ValueError(f"distance must be series or number, not {type(distance)}")
 
     _df = df.copy()
     _df["distance"] = distance * multiplier
+
+    params = param_factory(mode, tp_multiple, adjust)
+
     if "position" in _df.columns:
         _df["transaction"] = pos_trans(df["position"])
-    _df["position"] = _df["position"].astype(int, copy=False)
-    data = _df[
-        ["position", "transaction", "high", "low", "distance", price_column]
-    ].to_numpy()
-    params = param_factory(mode, tp_multiple, adjust)
-    context = Context(*params, always_on=always_on(_df["position"]))
+        _df["position"] = _df["position"].astype(int, copy=False)
+        data_fields = [
+            "position",
+            "transaction",
+            "high",
+            "low",
+            "distance",
+            price_column,
+        ]
+        context = Context(*params)
+    else:
+        _df["blip"] = _df["blip"].shift().fillna(0)
+        data_fields = [
+            "blip",
+            "high",
+            "low",
+            "distance",
+            price_column,
+        ]
+        context = BlipContext(*params)
+
+    data = _df[[*data_fields]].to_numpy()
     result = _stop_loss(data, context)
+
+    # I fucking hate that: TODO
+    # result[:1] = round_tick(pd.Series(result[:1].T)).values.T
+
     if return_type == 1:
         return pd.Series(result.T[0].astype("int"), index=df.index)
     elif return_type == 2:

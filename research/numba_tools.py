@@ -6,6 +6,7 @@ from typing import Optional, Union
 
 ### Swing trading signals ###
 
+
 @jit(nopython=True)
 def _swing(data: np.ndarray, f: np.ndarray, margin: np.ndarray) -> np.ndarray:
     """
@@ -52,54 +53,55 @@ def _swing(data: np.ndarray, f: np.ndarray, margin: np.ndarray) -> np.ndarray:
         if i == 0:
             continue
 
-        if state[i-1, 0] == 1:
-            if (row[0] > (max_pivot[0] + margin[i])):
+        if state[i - 1, 0] == 1:
+            if row[0] > (max_pivot[0] + margin[i]):
                 signal[i] = 1
             else:
-                signal[i] = signal[i-1]
+                signal[i] = signal[i - 1]
 
-            if (extreme[i-1, 0] - row[1]) > f[i]:
+            if (extreme[i - 1, 0] - row[1]) > f[i]:
                 state[i] = -1
                 extreme[i] = row[1]
-                pivot[i] = extreme[i-1]
+                pivot[i] = extreme[i - 1]
                 max_pivot = pivot[i]
                 # max_list[i] = max_pivot
 
             else:
                 state[i] = 1
-                extreme[i] = max(extreme[i-1, 0], row[0])
-                pivot[i] = pivot[i-1]
+                extreme[i] = max(extreme[i - 1, 0], row[0])
+                pivot[i] = pivot[i - 1]
 
-        elif state[i-1, 0] == -1:
-            if (row[1] < (min_pivot[0] - margin[i])):
+        elif state[i - 1, 0] == -1:
+            if row[1] < (min_pivot[0] - margin[i]):
                 signal[i] = -1
             else:
-                signal[i] = signal[i-1]
+                signal[i] = signal[i - 1]
 
-            if np.abs(extreme[i-1, 0] - row[0]) > f[i]:
+            if np.abs(extreme[i - 1, 0] - row[0]) > f[i]:
                 state[i] = 1
                 extreme[i] = row[0]
-                pivot[i] = extreme[i-1]
+                pivot[i] = extreme[i - 1]
                 min_pivot = pivot[i]
                 # min_list[i] = min_pivot
 
             else:
                 state[i, 0] = -1
-                extreme[i] = min(extreme[i-1, 0], row[1])
-                pivot[i] = pivot[i-1]
+                extreme[i] = min(extreme[i - 1, 0], row[1])
+                pivot[i] = pivot[i - 1]
 
         else:
-            raise ValueError('Wrong state value!')
+            raise ValueError("Wrong state value!")
         min_list[i] = min_pivot
         max_list[i] = max_pivot
-    return np.concatenate((state, extreme, pivot, signal, max_list, min_list),
-                          axis=1)
+    return np.concatenate((state, extreme, pivot, signal, max_list, min_list), axis=1)
 
 
-def swing(data: pd.DataFrame, f: Union[float, np.ndarray, pd.Series],
-          margin: Optional[Union[float, pd.Series]] = None,
-          output_as_tuple: bool = True
-          ) -> Union[np.ndarray, pd.DataFrame]:
+def swing(
+    data: pd.DataFrame,
+    f: Union[float, np.ndarray, pd.Series],
+    margin: Optional[Union[float, pd.Series]] = None,
+    output_as_tuple: bool = True,
+) -> Union[np.ndarray, pd.DataFrame]:
     """
     Simulate swing trading signals and return generated output series.
 
@@ -169,21 +171,24 @@ def swing(data: pd.DataFrame, f: Union[float, np.ndarray, pd.Series],
         margin = margin * f
     else:
         margin = 0 * f
-    _data = data[['high', 'low']].to_numpy()
+    _data = data[["high", "low"]].to_numpy()
 
     output = _swing(_data, f, margin)
 
     if output_as_tuple:
-        return data.join(pd.DataFrame(
-            output,
-            columns=['state', 'extreme', 'pivot', 'signal', 'last_max',
-                     'last_min'],
-            index=data.index))
+        return data.join(
+            pd.DataFrame(
+                output,
+                columns=["state", "extreme", "pivot", "signal", "last_max", "last_min"],
+                index=data.index,
+            )
+        )
     else:
         return output
 
 
 ### Blip to position converter ###
+
 
 @jit(nopython=True)
 def _blip_to_signal_converter(data: np.ndarray) -> np.ndarray:
@@ -209,12 +214,13 @@ def _blip_to_signal_converter(data: np.ndarray) -> np.ndarray:
             state[i] = row
         else:
             # state[i] = np.maximum(np.minimum((state[i-1] + row), 1), -1)
-            state[i] = row or state[i-1]
+            state[i] = row or state[i - 1]
 
     return state
 
 
 ### In-Out signal unifier ###
+
 
 @jit(nopython=True)
 def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
@@ -245,17 +251,20 @@ def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
         if i == 0:
             state[i] = row[0]
         else:
-            if state[i-1] != 0:
-                state[i] = (np.maximum(np.minimum(
-                    (state[i-1] + row[0] + row[1]), 1), -1)).astype(np.int8)
+            if state[i - 1] != 0:
+                state[i] = (
+                    np.maximum(np.minimum((state[i - 1] + row[0] + row[1]), 1), -1)
+                ).astype(np.int8)
             else:
-                state[i] = (np.maximum(np.minimum(
-                    (state[i-1] + row[0]), 1), -1)).astype(np.int8)
+                state[i] = (
+                    np.maximum(np.minimum((state[i - 1] + row[0]), 1), -1)
+                ).astype(np.int8)
 
     return state
 
 
 ## volume grouper ##
+
 
 @jit(nopython=True)
 def _volume_grouper(volume: np.ndarray, target: int) -> np.ndarray:
@@ -272,18 +281,26 @@ def _volume_grouper(volume: np.ndarray, target: int) -> np.ndarray:
 
 
 def volume_grouper(df: pd.DataFrame, target) -> pd.DataFrame:
-    assert set(['open', 'high', 'low', 'close', 'volume', 'barCount']
-               ).issubset(set(df.columns)), (
-                   "df must have all of the columns: 'open', 'high', 'low',"
-                   " 'close', 'volume', 'barCount'")
+    assert set(["open", "high", "low", "close", "volume", "barCount"]).issubset(
+        set(df.columns)
+    ), (
+        "df must have all of the columns: 'open', 'high', 'low',"
+        " 'close', 'volume', 'barCount'"
+    )
     df = df.copy().reset_index()
-    df['labels'] = _volume_grouper(df.volume.to_numpy(), target)
-    return df.groupby('labels').agg({
-        'date': 'first',
-        'open': 'first',
-        'high': 'max',
-        'low': 'min',
-        'close': 'last',
-        'volume': 'sum',
-        'barCount': 'sum'
-    }).set_index('date')
+    df["labels"] = _volume_grouper(df.volume.to_numpy(), target)
+    return (
+        df.groupby("labels")
+        .agg(
+            {
+                "date": "first",
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+                "barCount": "sum",
+            }
+        )
+        .set_index("date")
+    )

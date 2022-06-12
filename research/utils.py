@@ -188,7 +188,7 @@ def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
     """
     series2 is filter
     """
-    return (np.sign(series1) == np.sign(series2)) * series1
+    return ((np.sign(series1) == np.sign(series2)) * series1).astype(int, copy=False)
 
 
 def crosser(ind: pd.Series, threshold: float) -> pd.Series:
@@ -238,3 +238,14 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6) -> pd.DataFrame:
     del non_standard_gaps["from_time"]
 
     return non_standard_gaps
+
+
+def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
+    """
+    Trend strength ranking indicator. Kaufman book 2013 edition, p. 1069.
+    """
+    df = pd.DataFrame(index=price.index)
+    df["log_return"] = np.log(price.pct_change(lookback) + 1)
+    df["one_period_returns"] = np.log(price.pct_change() + 1)
+    df["std"] = df["one_period_returns"].rolling(lookback).std()
+    return df["log_return"] / (df["std"] * np.sqrt(lookback))

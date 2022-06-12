@@ -146,6 +146,26 @@ class Results(NamedTuple):
     closes: pd.DataFrame
 
 
+def efficiency(price: pd.Series, strategy_return: float) -> float:
+    market_return = abs(price[-1] / price[0] - 1)
+    return strategy_return / market_return
+
+
+def efficiency_1(price: pd.Series, strategy_return: float) -> float:
+    open = price[0]
+    close = price[-1]
+    high = price.max()
+    low = price.min()
+    distance = (
+        max(abs((open - high)), abs((open - low)))
+        + min(abs((close - high)), abs((close - low)))
+        + (high - low)
+        - abs(close - open)
+    )
+    market_return = distance / open
+    return strategy_return / market_return
+
+
 def perf(price: pd.Series, position: pd.Series, slippage: float = 1.5) -> Results:
     """
     Return performance statistics and underlying data for debuging.
@@ -237,11 +257,14 @@ def perf(price: pd.Series, position: pd.Series, slippage: float = 1.5) -> Result
             stats["Positions per day"] * stats["Position EV"] * 21
         )
         stats["Annual EV"] = 12 * stats["Monthly EV"]
+
     except (ZeroDivisionError, KeyError, ValueError) as error:
         print(error)
 
     # Generate output table
     pyfolio_stats = perf_stats(daily["returns"])
+    stats["Efficiency"] = efficiency(price, pyfolio_stats["Cumulative returns"])
+    stats["Efficiency_1"] = efficiency_1(price, pyfolio_stats["Cumulative returns"])
     stats = pyfolio_stats.append(stats)
 
     return Results(stats, daily, positions, df, p[1], p[2])
