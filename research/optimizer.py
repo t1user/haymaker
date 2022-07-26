@@ -104,6 +104,7 @@ class Optimizer:
         pairs: Optional[Sequence[Tuple[float, float]]] = None,
         multiprocess: bool = True,
         pass_full_df: bool = False,
+        **kwargs,
     ) -> None:
 
         assert pairs or (sp_1 and sp_2), "Either pairs or parameters required"
@@ -111,6 +112,7 @@ class Optimizer:
         self.func = func
         self.df = df
         self.slip = slip
+        self.kwargs = kwargs
 
         if pass_full_df:
             self.in_data = df
@@ -206,17 +208,21 @@ class Optimizer:
         if isinstance(self.func, OptiWrapper):
             # stop requires position and df, also returns df
             data = self.func(self.df, self.in_data, *args, **kwargs)
-            out = perf(data["price"], data["position"], slippage=self.slip)
+            out = perf(
+                data["price"], data["position"], slippage=self.slip, **self.kwargs
+            )
         else:
             # indicator requires signal and series
             data = self.func(self.in_data, *args, **kwargs)
             if isinstance(data, tuple):
                 # position and price returend
                 # WHY THE FUCK IS ORDER SWAPPED????????? TODO
-                out = perf(data[1], data[0], slippage=self.slip)
+                out = perf(data[1], data[0], slippage=self.slip, **self.kwargs)
             else:
                 # returned signal has to be converted to position
-                out = perf(self.df["open"], sig_pos(data), slippage=self.slip)
+                out = perf(
+                    self.df["open"], sig_pos(data), slippage=self.slip, **self.kwargs
+                )
         return out
 
     def bulk_save(self, data: Dict[Tuple[float, float], Results]) -> None:

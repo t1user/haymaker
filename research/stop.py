@@ -281,6 +281,7 @@ class BlipContext(Context):
     def __call__(self, row: np.ndarray) -> Tuple[int, float]:
         (
             self.blip,
+            self.close_blip,
             self.high,
             self.low,
             self.distance,
@@ -289,7 +290,7 @@ class BlipContext(Context):
         return self.dispatch()
 
     def eval_for_close(self) -> None:
-        if self.blip == -self.position:
+        if self.close_blip == -self.position:
             self.close_position()
         else:
             self.eval_brackets()
@@ -436,7 +437,8 @@ def stop_loss(
     Args:
     -----
 
-    df - input dataframe, must have following collumns: ['high',
+    df - THIS IS OUTDATED. NOW DF CAN HAVE POSITION OR BLIP.
+    input dataframe, must have following collumns: ['high',
     'low'] - high and low prices for the price bar, and either
     ['transaction'] or ['position'] - result of
     pre-stop/pre-take-profit strategy, if it has both ['position']
@@ -515,8 +517,11 @@ def stop_loss(
         context = Context(*params)
     else:
         _df["blip"] = _df["blip"].shift().fillna(0)
+        if "close_blip" not in _df.columns:
+            _df["close_blip"] = _df["blip"]
         data_fields = [
             "blip",
+            "close_blip",
             "high",
             "low",
             "distance",

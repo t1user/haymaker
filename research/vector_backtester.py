@@ -29,7 +29,10 @@ class Positions(NamedTuple):
 
 
 def pos(
-    price: pd.Series, transaction: pd.Series, position: pd.Series, cost: float = 0
+    price: pd.Series,
+    transaction: pd.Series,
+    position: pd.Series,
+    cost: float = 0,
 ) -> Positions:
     """
     Match open and close transactions to create position list.
@@ -55,7 +58,7 @@ def pos(
     _closes = df[df.c_transaction != 0]
     transactions = len(_opens) + len(_closes)
 
-    # close out open trade (if any)
+    # close out final open position (if any)
     if not len(_opens) == len(_closes):
         _closes = _closes.append(df.iloc[-1])
         _closes.c_transaction[-1] = _opens.o_transaction[-1] * -1
@@ -86,7 +89,24 @@ def get_min_tick(data: pd.Series) -> float:
     return min_tick
 
 
-def _perf(price: pd.Series, position: pd.Series, cost: float) -> pd.DataFrame:
+def _skip_last_open(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    If df ends in an open position, get rid of the last open position.
+    """
+    if df["position"].iloc[-1] == 0:
+        return df
+    position = df["position"]
+    # index of last transaction
+    i = position[position.shift() != position].index[-1]
+
+    df = df[:i]
+    df["position"].iloc[-1] = 0
+    return df
+
+
+def _perf(
+    price: pd.Series, position: pd.Series, cost: float, skip_last_open: bool
+) -> pd.DataFrame:
     """
     Convert price, position and transaction cost information into
     logarithmic returns.
@@ -114,6 +134,9 @@ def _perf(price: pd.Series, position: pd.Series, cost: float) -> pd.DataFrame:
             "position": position,
         }
     )
+
+    if skip_last_open:
+        df = _skip_last_open(df)
 
     df["transaction"] = (df["position"] - df["position"].shift(1).fillna(0)).astype(
         "int"
@@ -166,9 +189,49 @@ def efficiency_1(price: pd.Series, strategy_return: float) -> float:
     return strategy_return / market_return
 
 
-def perf(price: pd.Series, position: pd.Series, slippage: float = 1.5) -> Results:
+def duration_warning(positions: pd.DataFrame, full_df: pd.DataFrame) -> float:
     """
-    Return performance statistics and underlying data for debuging.
+    Calculate the percentage of positions with duration of 1 candle.
+    """
+    indices = pd.DataFrame(
+        {"n": np.arange(1, len(full_df.index) + 1, 1)}, index=full_df.index
+    )
+
+    locations = positions[["date_o", "date_c"]]
+    locations["i_o"] = indices.loc[locations["date_o"], "n"].reset_index(drop=True)
+    locations["i_c"] = indices.loc[locations["date_c"], "n"].reset_index(drop=True)
+    locations["duration"] = locations["i_c"] - locations["i_o"]
+    return (
+        locations[locations["duration"] == 1].duration.count()
+        / locations["duration"].count()
+    )
+
+
+def last_open_position_warning(
+    positions: pd.DataFrame, threshold: float
+) -> Optional[str]:
+    pnl_frac = np.abs(positions.iloc[-1].pnl / positions.pnl.sum())
+    durations = positions["date_c"] - positions["date_o"]
+    average = durations.iloc[:-1].mean()
+    last = durations.iloc[-1]
+    mean_time_frac = last / average
+    if pnl_frac > threshold:
+        message = (
+            f"Warning: last open position represents {pnl_frac:.1%} of total pnl "
+            f"and is {mean_time_frac:.1f}x average duration ({last} vs {average})"
+        )
+        return message
+    return None
+
+
+def perf(
+    price: pd.Series,
+    position: pd.Series,
+    slippage: float = 1.5,
+    skip_last_open: bool = False,
+    **kwargs,
+) -> Results:
+    """Return performance statistics and underlying data for debuging.
 
     Args:
     -----
@@ -181,6 +244,12 @@ def perf(price: pd.Series, position: pd.Series, slippage: float = 1.5) -> Result
     0, 1)
 
     slippage - transaction cost expressed as multiple of min tick
+
+    skip_last_open - final unclosed position might represent a large
+    fraction of returns while not really being the result of the
+    strategy - when finally closed according to strategy rules, most
+    of the pnl can be gone; if False, last open transaction will be
+    assumed to be closed at the last available price point
 
     Returns:
     --------
@@ -201,22 +270,40 @@ def perf(price: pd.Series, position: pd.Series, slippage: float = 1.5) -> Result
     opens - open transactions (pd.Series)
 
     closes - close transactions (pd.Series)
+
     """
 
     # transaction cost
     cost = get_min_tick(price) * slippage
 
     # generate returns
-    df = _perf(price, position, cost)
+    df = _perf(price, position, cost, skip_last_open)
+
+    # position stats
+    p = pos(
+        df["price"],
+        df["transaction"],
+        df["position"],
+        cost=cost,
+    )
+    positions = p.positions
+
+    # Warn if final unclosed position doesn't seem to make sense
+    if not skip_last_open:
+        warnings = last_open_position_warning(positions, 0.3)
+        if warnings is not None:
+            print(warnings)
+
+    try:
+        assert round(positions.pnl.sum(), 4) == round(
+            df.pnl.sum(), 4
+        ), f"Dubious pnl calcs... from positions: {positions.pnl.sum()} "
+        f"vs. from df: {df.pnl.sum()}"
+    except AssertionError as e:
+        print(f"Warning: {e}")
 
     # bar by bar to daily returns
     daily = daily_returns_log_based(df["lreturn"])
-
-    # position stats
-    p = pos(df["price"], df["transaction"], df["position"], cost=cost)
-    positions = p.positions
-    # assert round(positions.pnl.sum(), 4) == round(df.pnl.sum(), 4), \
-    #    f'Dubious pnl calcs... {positions.pnl.sum()} vs. {df.pnl.sum()}'
 
     duration = positions["duration"].mean()
     win_pos = positions[positions["pnl"] > 0]
@@ -266,6 +353,10 @@ def perf(price: pd.Series, position: pd.Series, slippage: float = 1.5) -> Result
     stats["Efficiency"] = efficiency(price, pyfolio_stats["Cumulative returns"])
     stats["Efficiency_1"] = efficiency_1(price, pyfolio_stats["Cumulative returns"])
     stats = pyfolio_stats.append(stats)
+
+    warning = duration_warning(positions, df)
+    if warning > 0.05:
+        print(f"Warning: {warning:.1%} positions closed on the next candle after open.")
 
     return Results(stats, daily, positions, df, p[1], p[2])
 
