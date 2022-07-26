@@ -1,7 +1,7 @@
 import pandas as pd  # type: ignore
 import numpy as np
 from numba import jit  # type: ignore
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 
 
 ### Swing trading signals ###
@@ -191,7 +191,7 @@ def swing(
 
 
 @jit(nopython=True)
-def _blip_to_signal_converter(data: np.ndarray) -> np.ndarray:
+def _blip_to_signal_converter(data: np.ndarray, always_on=True) -> np.ndarray:
     """
     Given a column with blips, return a column with signals
     resulting from those blips.
@@ -200,12 +200,16 @@ def _blip_to_signal_converter(data: np.ndarray) -> np.ndarray:
     -----
 
     data: one column with values (-1, 0, 1)
+    always_on: if True, blip oposite to current signal, generates oposite signal;
+               if False, blip oposite to current signal, cancels existing signal
+               (returns 0)
 
     Returns:
     --------
 
-    Single column array representing positions from input signals.
+    Single column array representing signal from blips.
     """
+    # Don't replace min and max with clip - doesn't work with numba!!!
 
     state = np.ones(data.shape, dtype=np.int8)
 
@@ -213,8 +217,10 @@ def _blip_to_signal_converter(data: np.ndarray) -> np.ndarray:
         if i == 0:
             state[i] = row
         else:
-            # state[i] = np.maximum(np.minimum((state[i-1] + row), 1), -1)
-            state[i] = row or state[i - 1]
+            if always_on:
+                state[i] = row or state[i - 1]
+            else:
+                state[i] = np.maximum(np.minimum((state[i - 1] + row), 1), -1)
 
     return state
 
@@ -229,21 +235,22 @@ def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
     signal, return an array with signal resulting from combining those
     two signals.
 
-    THIS IS FOR BLIPS????
+    THIS IS FOR BLIPS???? WORKS FOR BOTH: SIGNALS AND BLIPS? - !!!!!TEST!!!!!!
 
     Args:
     -----
 
-    data: must have two columns: [0] - entry signal [1] -
-    position clos signal
+    data: must have two columns: [0] - entry signal/blip [1] - close signal/blip
 
     Returns:
     --------
 
     Numpy array of shape [data.shape[0], 1] with signal resulting
-    from applying entry and close signals (1: long, 0: no position,
+    from applying entry and close signals/blips (1: long, 0: not on the market,
     -1: short).
     """
+
+    # Don't replace min and max with clip - doesn't work with numba!!!
 
     state = np.zeros((data.shape[0], 1), dtype=np.int8)
 
@@ -253,12 +260,11 @@ def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
         else:
             if state[i - 1] != 0:
                 state[i] = (
-                    np.maximum(np.minimum((state[i - 1] + row[0] + row[1]), 1), -1)
+                    np.maximum(np.minimum((state[i - 1] + row[1]), 1), -1)
                 ).astype(np.int8)
+                # previous version added also row[0] here
             else:
-                state[i] = (
-                    np.maximum(np.minimum((state[i - 1] + row[0]), 1), -1)
-                ).astype(np.int8)
+                state[i] = row[0]
 
     return state
 
@@ -280,20 +286,31 @@ def _volume_grouper(volume: np.ndarray, target: int) -> np.ndarray:
     return labels
 
 
-def volume_grouper(df: pd.DataFrame, target) -> pd.DataFrame:
-    assert set(["open", "high", "low", "close", "volume", "barCount"]).issubset(
+def volume_grouper(
+    df: pd.DataFrame, target, label: Literal["left", "right"] = "right"
+) -> pd.DataFrame:
+
+    if not set(["open", "high", "low", "close", "volume", "barCount"]).issubset(
         set(df.columns)
-    ), (
-        "df must have all of the columns: 'open', 'high', 'low',"
-        " 'close', 'volume', 'barCount'"
-    )
+    ):
+        raise ValueError(
+            "df must have all of the columns: 'open', 'high', 'low',"
+            " 'close', 'volume', 'barCount'"
+        )
+    if label == "left":
+        _label = "first"
+    elif label == "right":
+        _label = "last"
+    else:
+        raise ValueError("label must be either 'left' or 'right'")
+
     df = df.copy().reset_index()
     df["labels"] = _volume_grouper(df.volume.to_numpy(), target)
     return (
         df.groupby("labels")
         .agg(
             {
-                "date": "first",
+                "date": _label,
                 "open": "first",
                 "high": "max",
                 "low": "min",
