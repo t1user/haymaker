@@ -1,8 +1,8 @@
 import matplotlib.pyplot as plt  # type: ignore
 import pandas as pd  # type: ignore
-import numpy as np  # type: ignore
+import numpy as np
 from multiprocessing import Pool, cpu_count  # type: ignore
-
+from typing import Union, Optional, List, Tuple, Set, Sequence
 
 # sys.path.append('/home/tomek/ib_tools')  # noqa
 
@@ -186,7 +186,8 @@ def signal_generator(series: pd.Series, threshold: float = 0) -> pd.Series:
 
 def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
     """
-    series2 is filter
+    Series2 is filter. If input signals disagree, no signal is
+    output. If they agree, series1 signal is the output.
     """
     return ((np.sign(series1) == np.sign(series2)) * series1).astype(int, copy=False)
 
@@ -249,3 +250,77 @@ def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
     df["one_period_returns"] = np.log(price.pct_change() + 1)
     df["std"] = df["one_period_returns"].rolling(lookback).std()
     return df["log_return"] / (df["std"] * np.sqrt(lookback))
+
+
+def upsample(
+    df: pd.DataFrame,
+    dfg: pd.DataFrame,
+    keep: Optional[Union[str, Sequence[str]]] = None,
+    propagate: Optional[Union[str, Sequence[str]]] = None,
+) -> pd.DataFrame:
+    """Upsample time series by combining higher frequency and lower frequency dataframes.
+
+    df: higher frequency data, all columns will be kept
+
+    dfg: lower frequency data, only non-overlapping columns will be kept, unless
+    columns to keep are given explicitly
+
+    propagate: columns, that will be propagated
+
+    keep: don't propagate these columns; forward-fill NA with with zeros.
+
+    If none of propagate or keep given, all columns will be propagated.
+
+    If only one given, non specified columns will be included in the other group.
+
+    If both propagate and keep specified, but they don't include all upsampled columns,
+    non specified columns will be propagated.
+
+    Columns specified in keep and propagate must not overlap.
+
+    """
+
+    def warn_blip(columns: Union[Set[str], List[str]]) -> None:
+        """Blips should not be propagated. If any column name contains word 'blip' warn user
+        that they may be making a mistake."""
+        blip_columns = [b for b in columns if "blip" in b]
+        if blip_columns:
+            print(f"Warning: blip is being propagated: {blip_columns}")
+
+    def verify(data: Union[Sequence[str], str, Set]) -> List[str]:
+        if isinstance(data, (str, int, float)):
+            data = [
+                data,
+            ]
+        data = set(data)  # ensure no double entries inserted by user
+        if not data.issubset(upsampled_columns):
+            raise ValueError(
+                f"Cannot upsample: {list(data.difference(upsampled_columns))} "
+                f"- not in columns."
+            )
+        return list(data)
+
+    upsampled_columns = set(dfg.columns) - set(df.columns)
+    joined_df = df.join(dfg[upsampled_columns])
+    if not (keep or propagate):
+        warn_blip(upsampled_columns)
+        return joined_df.ffill().dropna()
+    elif keep and propagate:
+        keep = verify(keep)
+        propagate = verify(propagate)
+        assert not set(keep).intersection(
+            propagate
+        ), "Columns in keep and propagate must not overlap."
+        propagate.extend(list(set(upsampled_columns) - set(keep) - set(propagate)))
+    else:
+        if keep:
+            keep = verify(keep)
+            propagate = list(set(upsampled_columns) - set(keep))
+        else:
+            assert propagate is not None
+            propagate = verify(propagate)
+            keep = list(set(upsampled_columns) - set(propagate))
+    joined_df[keep] = joined_df[keep].fillna(0)
+    joined_df[propagate] = joined_df[propagate].ffill()
+    warn_blip(propagate)
+    return joined_df.dropna()
