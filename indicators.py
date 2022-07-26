@@ -2,7 +2,7 @@ from functools import partial
 from typing import Dict, Callable, Tuple
 
 import pandas as pd  # type: ignore
-import numpy as np  # type: ignore
+import numpy as np
 
 from research.numba_tools import (  # type: ignore
     _in_out_signal_unifier,
@@ -11,7 +11,32 @@ from research.numba_tools import (  # type: ignore
 )
 
 
-def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
+def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
+
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df must be a pd.DataFrame")
+
+    if not set(["open", "high", "low", "close"]).issubset(set(df.columns)):
+        raise ValueError("df must have columns: 'open', 'high', 'low', 'close'")
+
+    d = pd.DataFrame()
+    d["A"] = df["high"].rolling(bar).max() - df["low"].rolling(bar).min()
+    d["B"] = (df["high"].rolling(bar).max() - df["close"].shift(bar)).abs()
+    d["C"] = (df["low"].rolling(bar).min() - df["close"].shift(bar)).abs()
+    d["TR"] = d.max(axis=1)
+    return d["TR"]
+
+
+def mmean(d: pd.Series, periods: int, exp: bool = True) -> pd.Series:
+    """Shotcut to select type of mean over a series (modified mean)."""
+    if exp:
+        out = d.ewm(span=periods).mean()
+    else:
+        out = d.rolling(periods).mean()
+    return out
+
+
+def atr(df: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
     """
     Return Series with ATRs.
 
@@ -22,122 +47,164 @@ def atr(data: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
     exp: True - expotential mean, False - simple rolling mean
     """
 
-    assert set(["open", "high", "low", "close"]).issubset(
-        set(data.columns)
-    ), "<data> must be a dataframe with columns: 'open', 'high', 'low', 'close'"
-
-    TR = pd.DataFrame(
-        {
-            "A": (data["high"] - data["low"]),
-            "B": (data["high"] - data["close"].shift()).abs(),
-            "C": (data["low"] - data["close"].shift()).abs(),
-        }
-    )
-    TR["TR"] = TR.max(axis=1)
-    if exp:
-        TR["ATR"] = TR["TR"].ewm(span=periods).mean()
-    else:
-        TR["ATR"] = TR["TR"].rolling(periods).mean()
-    return TR.ATR
+    return mmean(true_range(df, 1), periods, exp)
 
 
 # depricated function name
 get_ATR = atr
 
 
-def resampled_atr(
-    df: pd.DataFrame, periods: int, freq: str = "B", exp: bool = True
+def resample(
+    df: pd.DataFrame, freq: str, how: Dict[str, str] = {}, **kwargs
+) -> pd.DataFrame:
+    """Shortcut function to resample ohlc dataframe or close price series.
+    Args:
+
+    df - DataFrame to be resampled
+
+    freq - pandas offset key
+
+    how - dict of functions for aggregation of non-standard fields
+
+    **kwargs - will be passed directly to pd.DataFrame.resample
+      function
+
+    """
+
+    if isinstance(df, pd.Series):
+        return df.resample(freq, **kwargs).last().dropna()
+
+    elif isinstance(df, pd.DataFrame):
+        field_dict = {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+            "barCount": "sum",
+        }
+        field_dict.update(how)
+
+        return (
+            df.resample(freq, **kwargs)
+            .agg(
+                {key: field_dict[key] for key in df.columns if key in field_dict.keys()}
+            )
+            .dropna()
+        )
+    else:
+        raise TypeError("df must be either series or dataframe")
+
+
+def downsampled_func(
+    df: pd.DataFrame, func: Callable, freq: str = "B", *args, **kwargs
 ) -> pd.Series:
     """
-    Return atr over dataframe resampled to frequency defined by freq.
+    Calculate <func> over lower frequency than df and fill forward values.
+
+
+    Exapmple use: signals could be based on 1-minute df, but they would be filtered
+    by trends based on 1-hour data.
+
 
     Usage:
-    ------
+    -----
+    downsampled_func(df, lambda x: x.close.rolling(10).mean(), 'B')
 
-    resampled_atr(data, 20, freq='B') - 20 day atr
-
-    resampled_atr(data, 46, freq='H') - 46 hour atr
+    this will return daily rolling mean over 10 days, which will be filled forward to
+    every point in time next day.
 
     Args:
     -----
 
     df - must have columns 'open', 'high', 'low', 'close'
 
-    periods - timeframe over which atr will be smoothed
+    func - callable to be applied to lower frequency data (must take
+    df and return series)
 
-    exp - whether to use regular (False) or expotential (True)
-    smoothing, default: True
+    freq -  pandas offset string representing frequency of data to which df
+    will be resampled before being passed to <func>
 
-    freq - pandas offset string or object representing target
-    conversion
+    func_kwargs - will be passed to <func>
+
+    Returns:
+    -------
+    pd.Series that can be inserted as column to the original df ensuring
+    no forward data snooping
+
     """
-
-    assert set(["open", "high", "low", "close"]).issubset(
-        set(df.columns)
-    ), "df must have columns: 'open', 'high', 'low', 'close'"
 
     df = df.copy()
-    resampled = (
-        df.resample(freq, label="right", closed="right")
-        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
-        .dropna()
-    )
-    # whithout .shift() there is forward data snooping
-    df["atr"] = atr(resampled, periods, exp)
-    df["atr"] = df["atr"].fillna(method="ffill")
-    return df["atr"]
+
+    # label="right" ensures no forward data snooping
+    resampled = resample(df, freq, label="right")
+    df["f"] = func(resampled, *args, **kwargs)
+    df["f"] = df["f"].shift(-1)
+    df["f"] = df["f"].ffill()
+    return df["f"]
 
 
-def cont_resampled_atr(df, bar: int, periods: int, exp: bool = True) -> pd.Series:
+def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.Series:
+
     """
-    Create continuous resampled atr series.  At every df row, last
-    <bar> rows will be treated as one bar for atr calculation.  It's
-    different from atr, where every row is treated as one bar and
-    different from resampled_atr, where price series is first
-    resampled to a new frequency and then any missing values are
-    forward filled from last available point.
+    Shortcut function to simplify generating downsampled atr.
 
-    So for hourly calculation at half hour point, resampled_atr will
-    give the last value from the hour top, wherus cont_resampled_atr
+    **kwargs will be passed directly to atr function.
+
+    Usage:
+    ------
+
+    downsampled_atr(df, 20, freq='B') - 20 day atr
+
+    downsampled_atr(df, 46, freq='H', exp=False) - 46 hour atr, simple moving average
+    """
+
+    return downsampled_func(df, partial(atr, periods=periods), freq, **kwargs)
+
+
+def cont_downsampled_func(d: pd.Series, bar: int, func, *args, **kwargs) -> pd.Series:
+    """
+    Apply <func> to continuous resampled series.  At every df row, last
+    <bar> rows will be treated as one bar.  It's different from downsampled_func,
+    where price series is first resampled to a new frequency and then any missing
+    values are forward filled from last available point.
+
+    So for hourly calculation at half hour point, downsampled_func will
+    give the last value from the hour top, wherus cont_downsampled_func
     will calculate value based on last sixty minutes.
 
     Args:
     -----
 
-    df - must have columns 'open', 'high', 'low', 'close'
+    d - input data, must be a pd.Series
 
-    bar - number of df rows to treat as one (e.g. if df has 30s data
-    and hourly atr is required, bar value should be 120)
-
-    periods - how many bars to lookback for smoothing
-
-    exp - whether to use regular rolling mean (False) or expotential
-    (True) moving average
+    bar - number of df rows to treat as one (e.g. if d has 30s data
+    and hourly <func> is required, <bar> value should be 120)
     """
 
-    assert set(["open", "high", "low", "close"]).issubset(
-        set(df.columns)
-    ), "df must have columns: 'open', 'high', 'low', 'close'"
-
-    d = pd.DataFrame()
-    d["A"] = df["high"].rolling(bar).max() - df["low"].rolling(bar).min()
-    d["B"] = (df["high"].rolling(bar).max() - df["close"].shift(bar)).abs()
-    d["C"] = (df["low"].rolling(bar).min() - df["close"].shift(bar)).abs()
-    d["TR"] = d.max(axis=1)
     # easier to reshape in numpy
-    TR_values = d.TR.values
-    start_index = TR_values.shape[0] % bar
-    step1 = pd.DataFrame(TR_values[start_index:].reshape((-1, bar)))
-    if exp:
-        step2 = step1.ewm(span=periods).mean()
-    else:
-        step2 = step1.rolling(periods).mean()
-    TR = step2.values.reshape((1, -1)).T
-    # TR is still ndarray, has no index and needs to be put back into
-    # correct place in d
+    values = d.values
+    start_index = values.shape[0] % bar
+    step1 = pd.DataFrame(values[start_index:].reshape((-1, bar)))
+    step2 = func(step1, *args, **kwargs)
+    out = step2.values.reshape((1, -1)).T
+    # out is an ndarray, has no index and needs to be put back into correct place in d
     d = d.iloc[start_index:]
-    d["atr"] = TR
-    return d["atr"]
+    return pd.Series(out.flatten(), index=d.index)
+
+
+def cont_downsampled_atr(
+    df: pd.DataFrame, bar: int, periods: int, exp: bool = True
+) -> pd.Series:
+    """Shortcut function to get continues downsampled atr
+    (cont_downsampled_func where func is atr).
+
+    exp - True = expotential moving average, False = simple moving average
+    """
+
+    return cont_downsampled_func(
+        true_range(df, bar), bar, partial(mmean), periods=periods, exp=exp
+    )
 
 
 def min_max_blip(price: pd.Series, period: int) -> pd.Series:
@@ -151,18 +218,14 @@ def min_max_blip(price: pd.Series, period: int) -> pd.Series:
     price: price Series
     period: lookback period
     """
-    df = pd.DataFrame(
-        {
-            "max": ((price - price.shift(1).rolling(period).max()) > 0) * 1,
-            "min": ((price.shift(1).rolling(period).min() - price) > 0) * 1,
-        }
+    return ((price > price.rolling(period, closed="left").max()) * 1) - (
+        (price < price.rolling(period, closed="left").min()) * 1
     )
-    df["blip"] = df["max"] - df["min"]
-    return df["blip"]
 
 
 def min_max_signal(data: pd.Series, period: int) -> pd.Series:
     """
+    DEPRECATED
     For backward compatibility only.  Correct nomenclature for the
     returned type of series is 'blip'.
     """
@@ -200,7 +263,7 @@ def get_std(data, periods):
     return returns.rolling(periods).std() * data.avg_price
 
 
-def get_min_max(data, period):
+def get_min_max(data: pd.Series, period: int) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "max": (data - data.shift(1).rolling(period).max()) > 0,
@@ -222,12 +285,13 @@ def majority_function(data: pd.DataFrame) -> pd.Series:
 
 
 def get_min_max_df(
-    data: pd.DataFrame,
+    data: pd.Series,
     periods: Tuple[int],
-    func: Callable[[pd.DataFrame, int], pd.DataFrame] = get_min_max,
+    func: Callable[[pd.Series, int], pd.DataFrame] = get_min_max,
 ) -> Dict[str, pd.DataFrame]:
     """
     Given a list of periods, return func on each of those periods.
+    This is bullshit.
     """
     min_max_func = partial(func, data)
     mins = pd.DataFrame()
@@ -254,9 +318,11 @@ def any_signal(data: pd.Series, periods: Tuple[int]) -> pd.Series:
     return min_max["max"].any(axis=1) * 1 - min_max["min"].any(axis=1) * 1
 
 
-def rsi(price: pd.Series, lookback: int) -> pd.Series:
+def rsi(
+    price: pd.Series, lookback: int, periods: int = 1, *args, **kwargs
+) -> pd.Series:
     df = pd.DataFrame({"price": price})
-    df["change"] = df["price"].diff().fillna(0)
+    df["change"] = df["price"].diff(periods).fillna(0)
     df["up"] = ((df["change"] > 0) * df["change"]).rolling(lookback).sum()
     df["down"] = ((df["change"] < 0) * df["change"].abs()).rolling(lookback).sum()
     df["rs"] = df["up"] / df["down"]
@@ -332,9 +398,9 @@ def breakout(
     stop_frac: float = 0.5,
 ) -> pd.Series:
     """
-    Create a Series with signal representing byuing upside breakout
+    Create a Series with signal representing buying upside breakout
     beyond lookback periods maximum and selling breakout below
-    lookback periods minimum.  Once generated signal stays constant
+    lookback periods minimum.  Once generated, signal stays constant
     until canceled or reversed.
 
     Args:
@@ -359,8 +425,10 @@ def breakout(
     at a given index point.
     """
 
-    assert isinstance(price, pd.Series), "price must be a pandas series"
-    assert stop_frac > 0 and stop_frac <= 1, "stop_frac must be from (0, 1>"
+    if not isinstance(price, pd.Series):
+        raise TypeError("price must be a pandas series")
+    if not (stop_frac > 0 and stop_frac <= 1):
+        raise ValueError("stop_frac must be from (0, 1>")
 
     df = pd.DataFrame({"price": price})
     df["in"] = min_max_blip(df["price"], lookback)
@@ -370,12 +438,6 @@ def breakout(
         df["out"] = min_max_blip(df["price"], int(lookback * stop_frac))
         df["break"] = _in_out_signal_unifier(df[["in", "out"]].to_numpy())
     return df["break"]
-
-
-def resample(df: pd.DataFrame, freq: str) -> pd.DataFrame:
-    return df.resample(freq).agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last"}
-    )
 
 
 def strength_oscillator(df: pd.DataFrame, periods) -> pd.Series:
