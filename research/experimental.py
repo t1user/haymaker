@@ -37,10 +37,10 @@ def resampled_series(row: pd.Series, *, series: pd.Series, field: str, f: Callab
     )
 
 
-def last_downsampled_func_p(df: pd.DataFrame, freq: str, func, *args) -> pd.Series:
-    """
-    func - accepts series returns series
-    """
+def last_downsampled_func_p(
+    df: pd.DataFrame, freq: str, func: Callable[[pd.Series], pd.Series], *args
+) -> pd.Series:
+    """This doesn't work."""
 
     series = resample(df, freq).close
     o = partial(resampled_series, series=series, field="close", f=func)

@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Dict, Callable, Tuple
+from typing import Dict, Callable, Tuple, Union
 
 import pandas as pd  # type: ignore
 import numpy as np
@@ -55,7 +55,7 @@ get_ATR = atr
 
 
 def resample(
-    df: pd.DataFrame, freq: str, how: Dict[str, str] = {}, **kwargs
+    df: Union[pd.DataFrame, pd.Series], freq: str, how: Dict[str, str] = {}, **kwargs
 ) -> pd.DataFrame:
     """Shortcut function to resample ohlc dataframe or close price series.
     Args:
@@ -97,7 +97,7 @@ def resample(
 
 
 def downsampled_func(
-    df: pd.DataFrame, func: Callable, freq: str = "B", *args, **kwargs
+    df: Union[pd.DataFrame, pd.Series], freq: str, func: Callable, *args, **kwargs
 ) -> pd.Series:
     """
     Calculate <func> over lower frequency than df and fill forward values.
@@ -109,7 +109,7 @@ def downsampled_func(
 
     Usage:
     -----
-    downsampled_func(df, lambda x: x.close.rolling(10).mean(), 'B')
+    downsampled_func(df, 'B', lambda x: x.close.rolling(10).mean())
 
     this will return daily rolling mean over 10 days, which will be filled forward to
     every point in time next day.
@@ -119,11 +119,11 @@ def downsampled_func(
 
     df - must have columns 'open', 'high', 'low', 'close'
 
-    func - callable to be applied to lower frequency data (must take
-    df and return series)
-
     freq -  pandas offset string representing frequency of data to which df
     will be resampled before being passed to <func>
+
+    func - callable to be applied to lower frequency data (must take
+    the same type as df and return series)
 
     func_kwargs - will be passed to <func>
 
@@ -134,10 +134,16 @@ def downsampled_func(
 
     """
 
-    df = df.copy()
-
     # label="right" ensures no forward data snooping
     resampled = resample(df, freq, label="right")
+
+    if isinstance(df, pd.DataFrame):
+        df = df.copy()
+    elif isinstance(df, pd.Series):
+        df = pd.DataFrame({"data": df})
+    else:
+        raise TypeError("df must be pd.DataFrame or pd.Series")
+
     df["f"] = func(resampled, *args, **kwargs)
     df["f"] = df["f"].shift(-1)
     df["f"] = df["f"].ffill()
@@ -159,7 +165,7 @@ def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.
     downsampled_atr(df, 46, freq='H', exp=False) - 46 hour atr, simple moving average
     """
 
-    return downsampled_func(df, partial(atr, periods=periods), freq, **kwargs)
+    return downsampled_func(df, freq, partial(atr, periods=periods), **kwargs)
 
 
 def cont_downsampled_func(d: pd.Series, bar: int, func, *args, **kwargs) -> pd.Series:
