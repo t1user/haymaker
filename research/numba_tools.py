@@ -1,10 +1,10 @@
 import pandas as pd  # type: ignore
 import numpy as np
 from numba import jit  # type: ignore
-from typing import Optional, Union, Literal
+from typing import Optional, Union, Literal, Tuple
 
 
-### Swing trading signals ###
+# Swing trading signals ###
 
 
 @jit(nopython=True)
@@ -113,6 +113,9 @@ def swing(
     maybe incorrect.  To be sure correct state is used, it's best to
     disregard values until first swing change.
 
+    For each new series starts at max of the first bar in series and only
+    adjusts to correct value after first state change
+
     Args:
     -----
 
@@ -145,17 +148,13 @@ def swing(
     downswing
 
     [1]/extreme - current extreme (since last pivot) against which
-    filter is applied to determine if swing changed direction; for
-    each new series starts at max of the first bar in series and only
-    adjusts to correct value after first state change
+    filter is applied to determine if swing changed direction;
 
     [2]/pivot - last swing pivot point, last price at which state
-    changed; for each new series starts at max of the first bar in
-    series and only adjusts to correct value after first state change
+    changed;
 
     [3]/signal - trade signal, generated when opposite swing pivot is
-    breached by margin; at every series swing starts at 1 at only
-    later adjusts to correct value
+    breached by margin;
 
     [4]/last_max - latest upswing pivot
 
@@ -187,7 +186,7 @@ def swing(
         return output
 
 
-### Blip to position converter ###
+# Blip to position converter ###
 
 
 @jit(nopython=True)
@@ -225,17 +224,20 @@ def _blip_to_signal_converter(data: np.ndarray, always_on=True) -> np.ndarray:
     return state
 
 
-### In-Out signal unifier ###
+# In-Out signal unifier ###
 
 
 @jit(nopython=True)
 def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
-    """
-    Given an array with two columns, one with entry and one with close
+    """Given an array with two columns, one with entry and one with close
     signal, return an array with signal resulting from combining those
     two signals.
 
-    THIS IS FOR BLIPS???? WORKS FOR BOTH: SIGNALS AND BLIPS? - !!!!!TEST!!!!!!
+    THIS IS FOR BLIPS???? WORKS FOR BOTH: SIGNALS AND BLIPS? -
+    !!!!!TEST!!!!!!  if entry is a signal, it will immediately reenter
+    position after close-out, right?
+
+    !!!!!!!WORKS ONLY FOR BLIPS!!!!!
 
     Args:
     -----
@@ -248,6 +250,7 @@ def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
     Numpy array of shape [data.shape[0], 1] with signal resulting
     from applying entry and close signals/blips (1: long, 0: not on the market,
     -1: short).
+
     """
 
     # Don't replace min and max with clip - doesn't work with numba!!!
@@ -269,7 +272,7 @@ def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
     return state
 
 
-## volume grouper ##
+# volume grouper ###
 
 
 @jit(nopython=True)
@@ -321,3 +324,158 @@ def volume_grouper(
         )
         .set_index("date")
     )
+
+
+# pivot ###
+
+
+@jit(nopython=True)
+def _pivot(
+    price: np.ndarray, f: np.ndarray, initial_state: Literal[-1, 1] = 1
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    state = np.ones((price.shape[0]), dtype=np.int8)
+    state[0] = initial_state
+    extreme_list = []
+    extreme = price[0]
+    extreme_index = 0
+
+    for i, p in enumerate(price):
+
+        # check for change of state
+        if (state[i - 1] * p) < (state[i - 1] * (extreme - (state[i - 1] * f[i - 1]))):
+            state[i] = -state[i - 1]
+            extreme_list.append(state[i - 1] * extreme_index)
+            extreme_index = i
+            extreme = p
+        else:
+            state[i] = state[i - 1]
+
+            # check for new extreme
+            extreme_diff = state[i - 1] * np.maximum(-state[i - 1] * (extreme - p), 0)
+            if extreme_diff != 0:
+                extreme_index = i
+                extreme = extreme + extreme_diff
+
+    extremes = np.array(extreme_list)
+    mins = -extremes[extremes < 0]
+    maxes = extremes[extremes > 0]
+    return state, mins, maxes
+
+
+def pivot(
+    data: Union[pd.DataFrame, pd.Series],
+    f: Union[pd.Series, float, int],
+    initial_state: Literal[-1, 1] = 1,
+    return_type: int = 3,
+) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray], pd.DataFrame]:
+    """Calculate local peaks and troughs in a time series.
+
+    Given a filter f and a price series, assume that a price move away
+    from local extreme by at least f points constitues a change in
+    trend and record this local extreme.
+
+    Even if df given, only close price will be taken into account
+    (highs and lows ignored).
+
+    WARNING: inappropriate use will lead to forward data snooping,
+    eg. in 'down' state, the exact minimum poin will be unknown until
+    state changes. So in 'down' state only last max value/index should
+    be used and in 'up' state only last min. Both could be use for
+    graphical representations but not for making trading decisions!
+    For both forward-safe extremes use <swing>.
+
+    Args:
+    ---------
+
+    data: price series; must be a Series or DataFrame with column 'close'
+
+    f: trend filter; number of points that the price has to move away from last
+    extreme for the trend to be considered changed
+
+    initial_state: at the beginning of price series direction of trend
+    is unknown so a side has to be picked arbitrarily; it doesn't
+    matter much because trend will be corrected into actual state
+    after runway period
+
+    return_type: how data is to be returned, values:
+
+    1 - tuple of 3 ndarrays with mins, maxes, state; mins, maxes
+    contain indexes of respective extremes; state is a series that
+    matches original data index, 1 means uptrand, -1 downtrend
+
+    2 - DataFrame with 5 columns: mins, maxes, state, mins_, maxes_;
+
+    mins, maxes: contain True at the index point of respective
+    extreme, False otherwise;
+
+    state: contains -1 or 1 depending on the trend at given point;
+
+    3 - original DataFrame (or DataFrame with original price series)
+    with additial 3 columns with names and meanings same as in option
+    2 and additionally 4 columns with meaning:
+
+    min_val, maxe_val: for every point the value of last min or max
+
+    min_index, max_index: indexes of last min or max
+
+
+    Returns:
+    ---------
+
+    Return format determined by return_type argument.
+
+    """
+
+    if isinstance(data, pd.Series):
+        data = pd.DataFrame({"close": data})
+    elif isinstance(data, pd.DataFrame):
+        if "close" not in data.columns:
+            raise ValueError("DataFrame must have column 'close'")
+    else:
+        raise TypeError("data must be a Series or DataFrame")
+
+    price = data["close"].to_numpy()
+
+    if isinstance(f, pd.Series):
+        f = f.to_numpy()
+    elif isinstance(f, (float, int)):
+        f = np.ones((data.shape[0])) * f
+    else:
+        raise TypeError(f"Wrong type: {f}")
+
+    state, mins, maxes = _pivot(price, f, initial_state)
+
+    if return_type == 1:
+        return state, mins, maxes
+
+    df = data.copy()
+
+    df[["mins", "maxes"]] = False
+    df.iloc[maxes, df.columns.get_loc("maxes")] = True
+    df.iloc[mins, df.columns.get_loc("mins")] = True
+
+    df["date"] = df.index
+    df[["min_index", "max_index"]] = np.nan
+    df["min_index"] = df["date"].mask(~df["mins"]).ffill()
+    df["max_index"] = df["date"].mask(~df["maxes"]).ffill()
+    del df["date"]
+
+    df[["mins", "maxes"]] = df[["mins", "maxes"]].replace(False, np.nan)
+    df["min_val"] = (df["mins"] * df["close"]).ffill()
+    df["max_val"] = (df["maxes"] * df["close"]).ffill()
+
+    df["state"] = state
+
+    if return_type == 2:
+        return df[["mins", "maxes", "state"]]
+    else:
+        return df
+
+
+def clear_runway(df: pd.DataFrame, initial_state: Literal[-1, 1] = 1) -> pd.DataFrame:
+    """For swing and pivot function - clear initial initialization period data."""
+    data = df[df["state"] == -initial_state]
+    if len(data) > 0:
+        start = data.index[0]
+        data = df[start:][1:]
+    return data
