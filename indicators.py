@@ -27,16 +27,16 @@ def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
     return d["TR"]
 
 
-def mmean(d: pd.Series, periods: int, exp: bool = True) -> pd.Series:
+def mmean(d: pd.Series, periods: int, exp: bool = True, **kwargs) -> pd.Series:
     """Shotcut to select type of mean over a series (modified mean)."""
     if exp:
-        out = d.ewm(span=periods).mean()
+        out = d.ewm(span=periods, **kwargs).mean()
     else:
-        out = d.rolling(periods).mean()
+        out = d.rolling(periods, **kwargs).mean()
     return out
 
 
-def atr(df: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
+def atr(df: pd.DataFrame, periods: int, exp: bool = True, **kwargs) -> pd.Series:
     """
     Return Series with ATRs.
 
@@ -45,9 +45,10 @@ def atr(df: pd.DataFrame, periods: int, exp: bool = True) -> pd.Series:
     data: must have columns: 'high', 'low', 'close'
     periods: lookback period
     exp: True - expotential mean, False - simple rolling mean
+    **kwargs will be passed to averaging function
     """
 
-    return mmean(true_range(df, 1), periods, exp)
+    return mmean(true_range(df, 1), periods, exp, **kwargs)
 
 
 # depricated function name

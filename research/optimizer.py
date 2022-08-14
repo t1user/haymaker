@@ -25,8 +25,7 @@ from stop import stop_loss
 
 
 class Optimizer:
-    """
-    Backtest performance of func with parameters sp_1 and sp_2 over
+    """Backtest performance of func with parameters sp_1 and sp_2 over
     prices in df.
 
     Optimizer object will run the backtests on instantiation and make
@@ -40,7 +39,8 @@ class Optimizer:
 
     func - must take exactly two parameters and return a continuous
     signal (transaction will be executed when signal changes, on index
-    point subsequent to the change)
+    point subsequent to the change) WHAT FUCKING PARAMETERS YOU PIECE
+    OF SHIT????
 
     sp_1 and sp_2 - given as tuples (start, step, mode), where mode is
     either 'geo' for geometric progression or 'lin' for linear
@@ -91,6 +91,7 @@ class Optimizer:
 
     Review actual results of a given simulation.  They are all dicts
     with keys being tuples with parameters.
+
     """
 
     def __init__(
@@ -129,6 +130,7 @@ class Optimizer:
         self.raw_dailys: Dict[Tuple[float, float], pd.DataFrame] = {}
         self.raw_positions: Dict[Tuple[float, float], pd.DataFrame] = {}
         self.raw_dfs: Dict[Tuple[float, float], pd.DataFrame] = {}
+        self.raw_warnings: Dict[Tuple[float, float], List[str]] = {}
 
         self.pairs = pairs or self.get_pairs(
             self.progression(sp_1), self.progression(sp_2)
@@ -234,6 +236,7 @@ class Optimizer:
         self.raw_dailys[pair] = out.daily
         self.raw_positions[pair] = out.positions
         self.raw_dfs[pair] = out.df
+        self.raw_warnings[pair] = out.warnings
 
     def extract_stats(self) -> None:
         self._fields = [i for i in self.raw_stats[self.pairs[-1]].index]
@@ -243,10 +246,13 @@ class Optimizer:
             for i in self._fields
         }
         self.fields = list(self.field_trans.values())
+        # index -50 because in the middle of the table it's least likely to hit nan
         dtypes = {
-            self.field_trans[i]: type(self.raw_stats[self.pairs[-1]].loc[i])
+            self.field_trans[i]: type(self.raw_stats[self.pairs[-50]].loc[i])
             for i in self._fields
         }
+        # external access for debuging
+        self.dtypes = dtypes
         self._table = {f: pd.DataFrame() for f in self.fields}
         for index, stats_table in self.raw_stats.items():
             for field in self._fields:
@@ -256,6 +262,9 @@ class Optimizer:
                     print(
                         f"Warning: No values for {index} " f"{self.field_trans[field]}"
                     )
+                except ValueError:
+                    print(f"Some stats are fucked, check: index={index}, field={field}")
+                    raise
 
         # cast dfs back to original type (otherwise they're all floats)
         for key, table in self._table.copy().items():
@@ -315,8 +324,12 @@ class Optimizer:
     def combine_paths(self):
         return (self.combine + 1).cumprod()
 
+    @property
+    def warnings(self):
+        return {k: v for k, v in self.raw_warnings.items() if len(v) != 0}
+
     def __repr__(self):
-        return f"{self.__class__.__name__} for {self.func.__name__}"
+        return f"{self.__class__.__name__}(func={self.func.__name__})"
 
     def __str__(self):
         return f"TWo param simulation for {self.func.__name__}"
@@ -401,6 +414,7 @@ class OptiWrapper:
         """
         During every param iteration put the current value of params
         into the dict that will feed them into appropriate function.
+        WTF is that supposed to mean????
         """
         for i, j in zip(self.key_param, (X, Y)):
             self.params_values_dict[i[0]][i[1]] = j
@@ -427,7 +441,9 @@ class OptiWrapper:
         return self.__repr__()
 
     def __repr__(self):
-        return f"{self.__class__.__name__} with params: {self.__dict__}"
+        return (
+            f"{self.__class__.__name__}(X={self.X}, Y={self.Y}, self.func={self.func})"
+        )
 
 
 def plot_grid(

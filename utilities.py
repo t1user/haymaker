@@ -3,9 +3,9 @@ from pathlib import Path
 from os import makedirs, path
 
 import numpy as np
-from ib_insync import IB, MarketOrder
+from ib_insync import IB, MarketOrder, ContFuture, Future  # noqa
 from logbook import Logger  # type: ignore
-from arctic import Arctic
+from arctic import Arctic  # type: ignore
 
 from datastore import AbstractBaseStore
 

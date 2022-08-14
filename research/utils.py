@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt  # type: ignore
 import pandas as pd  # type: ignore
 import numpy as np
 from multiprocessing import Pool, cpu_count  # type: ignore
-from typing import Union, Optional, List, Tuple, Set, Sequence
+from typing import Union, Optional, List, Set, Sequence, Literal
 
 # sys.path.append('/home/tomek/ib_tools')  # noqa
 
@@ -324,3 +324,91 @@ def upsample(
     joined_df[propagate] = joined_df[propagate].ffill()
     warn_blip(propagate)
     return joined_df.dropna()
+
+
+def inout_range(
+    s: pd.Series, threshold: float = 0, inout: Literal["inside", "outside"] = "inside"
+) -> pd.Series:
+    """Given a threshold, return True/False series indicating whether s prices
+    are inside/outside (-threshold, threshold) range.
+    """
+
+    if threshold == 0:
+        raise ValueError("theshold cannot be zero")
+    threshold = abs(threshold)
+    excess = s.abs() - threshold
+    if inout == "outside":
+        result = excess > 0
+    elif inout == "inside":
+        result = excess < 0
+    else:
+        raise ValueError("'inout' parameter must be either 'inside' or 'outside'")
+    result.name = inout
+    return result
+
+
+def _range_entry(s: pd.Series) -> pd.Series:
+    """
+    s is the output of inout_range
+    """
+
+    return -((s.shift() - s) * s).fillna(0)
+
+
+def _signed_range_entry(entry: pd.Series, sign: pd.Series) -> pd.Series:
+    """
+    entry is the output of _range_entry
+
+    entry will be signed same as price when entering range.
+    """
+
+    return (_range_entry(entry) * np.sign(sign)).astype(int)
+
+
+def range_blip(
+    indicator: pd.Series,
+    threshold: float = 0,
+    inout: Literal["inside", "outside"] = "inside",
+) -> pd.Series:
+    """
+    Blip when indicator enters range. Blip is signed the same as sign of
+    the indicator.
+    """
+
+    indicator = indicator.dropna()
+
+    r = inout_range(indicator, threshold, inout)
+    return _signed_range_entry(_range_entry(r), indicator)
+
+
+def zero_crosser(indicator: pd.Series) -> pd.Series:
+    """
+    Blip when indicator crosses zero. Blip is signed the same as sign of the indicator.
+    When indicator value is exactly zero at some point, next value will be treated as
+    having crossed zero.
+    """
+
+    return ((indicator.shift() * indicator) <= 0) * np.sign(indicator)
+
+
+def rolling_weighted_mean(
+    price: pd.Series, weights: pd.Series, periods: int
+) -> pd.Series:
+    price_vol = price * weights
+    return price_vol.rolling(periods).sum() / weights.rolling(periods).sum()
+
+
+def rolling_weighted_std(
+    price: pd.Series,
+    weights: pd.Series,
+    periods: int,
+    weighted_mean: Optional[pd.Series] = None,
+):
+    """weighted_mean can be given to save one caluclation"""
+
+    if weighted_mean is None:
+        weighted_mean = rolling_weighted_mean(price, weights, periods)
+
+    diff_vol = ((price - weighted_mean) ** 2) * weights
+    weighted_var = diff_vol.rolling(periods).sum() / weights.rolling(periods).sum()
+    return np.sqrt(weighted_var)

@@ -1,7 +1,8 @@
 import pandas as pd  # type: ignore
 import numpy as np
-from numba import jit  # type: ignore
-from typing import Optional, Union, Literal, Tuple
+from numpy.linalg import lstsq as lst
+from numba import jit, prange  # type: ignore
+from typing import Optional, Union, Literal, Tuple, Callable
 
 
 # Swing trading signals ###
@@ -479,3 +480,155 @@ def clear_runway(df: pd.DataFrame, initial_state: Literal[-1, 1] = 1) -> pd.Data
         start = data.index[0]
         data = df[start:][1:]
     return data
+
+
+# pivot indicator ###
+
+
+# --------------
+# These indicator functions can be passed as <func> parameter to <pivot_indicator>
+# --------------
+#
+# signature of indicator function:
+#
+# @jit(nopython=True)
+# def func(x: np.ndarray, y: np.adarray) -> Tuple[float, float, float]:
+#     return a, b, c
+
+# where x is an index vector, y i vector wtih prices
+# and a, b, c are floats
+# if less than 3 values are to be returned, 'empty' values should
+# be set to 0.0
+#
+# Functions must be numba decorated.
+
+
+@jit(nopython=True)
+def regression(
+    x: np.ndarray, y: np.ndarray, fit_intercept=False
+) -> Tuple[float, float, float]:
+    """Return regression slope, intercept and value, where value is prediction by
+    regression fitted function.
+
+    if fit_intercept is False, intercept will be a zero vector.
+    """
+
+    x_ = x - x[0]
+    y_ = np.log(y / y[0])
+
+    if fit_intercept:
+        x_ = np.vstack((x_, np.ones(x_.shape[0]))).T
+    else:
+        x_ = np.vstack((x_, np.zeros(x_.shape[0]))).T
+
+    slope, intercept = lst(x_, y_)[0]
+
+    value = np.exp((slope * x_[-1, 0]) + intercept) * y[0]
+
+    return slope, intercept, value
+
+
+@jit(nopython=True)
+def regression_with_intercept(x: np.ndarray, y: np.ndarray):
+    """By default regression will fit function without intercept. This is
+    a shortcut that allows to fit a function with intercept (numba doesn't
+    accept partial objects).
+    """
+    return regression(x, y, True)
+
+
+regression_no_intercept = regression
+
+
+@jit(nopython=True)
+def mean_sd_z(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float]:
+    mean = np.mean(y)
+    std = np.std(y)
+    return mean, std, (y[-1] - mean) / std
+
+
+# --------------
+# End of indicator functions
+# --------------
+
+
+@jit(nopython=True, parallel=True)
+def _process_chunk(arr, offset, func):
+
+    out = np.zeros(
+        (arr[offset:].shape[0], 3),
+    )
+
+    for i in prange(offset, arr.shape[0]):
+        x, y = arr[: i + 1].T
+        out[i - offset] = func(x, y)
+    return out
+
+
+@jit(nopython=True)
+def _pivot_indicator(indexes, arr, func):
+    out = []
+    for pivot, start, stop in indexes:
+        offset = start - pivot
+        out.append(_process_chunk(arr[pivot:stop], offset, func))
+    return out
+
+
+def pivot_indicator(df: pd.DataFrame, func: Callable) -> pd.DataFrame:
+    """
+    Calculates expanding <func> since the last pivot.
+
+    This is an interface function for farious numba enhanced no-python functions.
+
+    df is the result of pivot function with desired parameters. It must have columns:
+    state, maxes, mins.
+
+    Usage example:
+
+    d = df.copy()
+    d['atr'] = downsampled_atr(d, 60*23)
+    # always pass the result of pivot function with desired parameters
+    d = pivot(d, d['atr'])
+
+    dd = pivot_indicator(d, regression)
+    dd.columns = ['slope', 'intercept', 'value']
+
+    or:
+
+    dd = pivot_indicator(d, mean_sd_z)
+    dd.columns = ['mean', 'std', 'z']
+
+    """
+    d = df.copy()
+    # ind is row index
+    d["ind"] = np.arange(d.shape[0])
+    # index of last max
+    d["max_ind"] = (d["ind"] * d["maxes"]).ffill()
+    # index of last min
+    d["min_ind"] = (d["ind"] * d["mins"]).ffill()
+    # index of last pivot
+    d["pivot_ind"] = ((d["state"] == 1) * d["min_ind"]) + (
+        (d["state"] == -1) * d["max_ind"]
+    )
+    # did the state change True or False
+    d["state_change"] = d["state"] != d["state"].shift()
+
+    state_and_pivot = d[d["state_change"] == True].loc[:, ["ind", "pivot_ind"]]  # noqa
+    state_and_pivot["start"] = state_and_pivot["ind"]
+    state_and_pivot["stop"] = state_and_pivot["start"].shift(-1).fillna(len(d))
+
+    # indexes of pivot, state start index and state stop index
+    state_and_pivot = state_and_pivot.iloc[:, 1:].dropna().astype(int)
+
+    df_start = state_and_pivot["start"].iloc[0]
+
+    state_and_pivot = state_and_pivot.to_numpy()
+
+    # index and close prices
+    arr = d[["ind", "close"]].values
+    out = _pivot_indicator(state_and_pivot, arr, func)
+    indicator = np.concatenate(out)
+
+    index = d.iloc[df_start:].index
+    indicator = pd.DataFrame(indicator, index=index)
+    return indicator

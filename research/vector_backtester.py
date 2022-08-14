@@ -167,6 +167,7 @@ class Results(NamedTuple):
     df: pd.DataFrame
     opens: pd.DataFrame
     closes: pd.DataFrame
+    warnings: List[str]
 
 
 def efficiency(price: pd.Series, strategy_return: float) -> float:
@@ -210,6 +211,8 @@ def duration_warning(positions: pd.DataFrame, full_df: pd.DataFrame) -> float:
 def last_open_position_warning(
     positions: pd.DataFrame, threshold: float
 ) -> Optional[str]:
+    if len(positions) == 0:
+        return "No positions"
     pnl_frac = np.abs(positions.iloc[-1].pnl / positions.pnl.sum())
     durations = positions["date_c"] - positions["date_o"]
     average = durations.iloc[:-1].mean()
@@ -271,7 +274,10 @@ def perf(
 
     closes - close transactions (pd.Series)
 
+    warnings -
+
     """
+    warnings = []
 
     # transaction cost
     cost = get_min_tick(price) * slippage
@@ -290,9 +296,9 @@ def perf(
 
     # Warn if final unclosed position doesn't seem to make sense
     if not skip_last_open:
-        warnings = last_open_position_warning(positions, 0.3)
-        if warnings is not None:
-            print(warnings)
+        warn = last_open_position_warning(positions, 0.3)
+        if warn is not None:
+            warnings.append(warn)
 
     try:
         assert round(positions.pnl.sum(), 4) == round(
@@ -300,12 +306,13 @@ def perf(
         ), f"Dubious pnl calcs... from positions: {positions.pnl.sum()} "
         f"vs. from df: {df.pnl.sum()}"
     except AssertionError as e:
-        print(f"Warning: {e}")
+        warnings.append(str(e))
 
     # bar by bar to daily returns
     daily = daily_returns_log_based(df["lreturn"])
 
     duration = positions["duration"].mean()
+
     win_pos = positions[positions["pnl"] > 0]
     # positions with zero gain are loss making
     loss_pos = positions[positions["pnl"] <= 0]
@@ -314,24 +321,25 @@ def perf(
     # container for all non-pyfolio stats
     stats = pd.Series()
     try:
-        stats["Win percent"] = len(win_pos) / len(positions)
-        stats["Average gain"] = win_pos.pnl.sum() / len(win_pos)
-        stats["Average loss"] = loss_pos.pnl.sum() / len(loss_pos)
+        # np.float64 and np.int64 can be divided by zero
+        stats["Win percent"] = win_pos.pnl.count() / len(positions)
+        stats["Average gain"] = win_pos.pnl.sum() / win_pos.pnl.count()
+        stats["Average loss"] = loss_pos.pnl.sum() / loss_pos.pnl.count()
         stats["Avg gain/loss ratio"] = abs(
             stats["Average gain"] / stats["Average loss"]
         )
-        stats["Position EV"] = (stats["Win percent"] * stats["Average gain"]) + (
-            (1 - stats["Win percent"]) * stats["Average loss"]
-        )
 
-        # this is sanity check for Positions EV (should be the same)
-        # stats['Average pnl'] = positions.pnl.mean()
+        # stats["Position EV"] = (stats["Win percent"] * stats["Average gain"]) + (
+        #    (1 - stats["Win percent"]) * stats["Average loss"]
+        # )
+
+        stats["Position EV"] = positions.pnl.mean()
 
         stats["Long EV"] = positions[positions["open"] > 0].pnl.mean()
         stats["Short EV"] = positions[positions["open"] < 0].pnl.mean()
 
         days = daily.returns.count()
-        num_pos = len(win_pos) + len(loss_pos)
+        num_pos = win_pos.pnl.count() + loss_pos.pnl.count()
         stats["Positions per day"] = num_pos / days
         stats["Days per position"] = days / num_pos
         # duration is a pd.Timedelta rounded to the closes minute
@@ -340,13 +348,13 @@ def perf(
         stats["Days"] = days
         stats["Positions"] = num_pos
         stats["Trades"] = p.transactions
-        stats["Monthly EV"] = int(
-            stats["Positions per day"] * stats["Position EV"] * 21
-        )
+        stats["Monthly EV"] = stats["Positions per day"] * stats["Position EV"] * 21
         stats["Annual EV"] = 12 * stats["Monthly EV"]
 
-    except (ZeroDivisionError, KeyError, ValueError) as error:
+    except (KeyError, ValueError) as error:
         print(error)
+        warnings.append(str(error))
+        raise
 
     # Generate output table
     pyfolio_stats = perf_stats(daily["returns"])
@@ -356,9 +364,11 @@ def perf(
 
     warning = duration_warning(positions, df)
     if warning > 0.05:
-        print(f"Warning: {warning:.1%} positions closed on the next candle after open.")
+        warnings.append(
+            f"Warning: {warning:.1%} positions closed on the next candle after open."
+        )
 
-    return Results(stats, daily, positions, df, p[1], p[2])
+    return Results(stats, daily, positions, df, p[1], p[2], warnings)
 
 
 def v_backtester(
