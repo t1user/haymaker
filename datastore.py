@@ -5,14 +5,14 @@ from datetime import datetime
 from collections import defaultdict
 import pickle
 
-import pandas as pd  # type: ignore
+import pandas as pd
 import numpy as np
 from logbook import Logger  # type: ignore
-from arctic.date import DateRange  # type: ignore
-from arctic.store.versioned_item import VersionedItem  # type: ignore
-from arctic.exceptions import NoDataFoundException  # type: ignore
-from arctic import Arctic  # type: ignore
-from ib_insync.contract import Future, ContFuture, Contract
+from arctic.date import DateRange
+from arctic.store.versioned_item import VersionedItem
+from arctic.exceptions import NoDataFoundException
+from arctic import Arctic
+from ib_insync import Future, ContFuture, Contract, util
 
 from config import default_path
 
@@ -139,7 +139,7 @@ class AbstractBaseStore(ABC):
         """
         if isinstance(obj, Contract):
             return {
-                **obj.nonDefaults(),  # type: ignore
+                **util.dataclassNonDefaults(obj),
                 **{"repr": repr(obj), "secType": obj.secType, "object": obj},
             }
         else:
@@ -160,7 +160,7 @@ class AbstractBaseStore(ABC):
 
     @staticmethod
     def _clean(df: pd.DataFrame) -> pd.DataFrame:
-        """Ensure no duplicates and ascending sorting of diven df."""
+        """Ensure no duplicates and ascending sorting of given df."""
         df = df.sort_index(ascending=True)
         df = df[~df.index.duplicated()]
         # df.drop(index=df[df.index.duplicated()].index, inplace=True)
@@ -168,35 +168,65 @@ class AbstractBaseStore(ABC):
 
     def check_earliest(self, symbol: str) -> Optional[datetime]:
         """Return earliest date of available data for a given symbol."""
+
         try:
-            return self.read(symbol).index.min()  # type: ignore
-        except (KeyError, AttributeError):
+            data = self.read(symbol)
+        except KeyError:
             return None
+
+        if data is None:
+            return None
+
+        return data.index.min()
 
     def check_latest(self, symbol: str) -> Optional[datetime]:
         """Return earliest date of available data for a given symbol."""
+
         try:
-            return self.read(symbol).index.max()  # type: ignore
-        except (KeyError, AttributeError):
+            data = self.read(symbol)
+        except KeyError:
             return None
 
-    def date_range(self) -> pd.DataFrame:
+        if data is None:
+            return None
+
+        return data.index.max()
+
+    def date_range(self, symbol: Optional[str] = None) -> pd.DataFrame:
         """
-        For every key in datastore return start date and end date of
-        available data.
+        For every key in datastore return start date and end date
+        of available data. If symbol is given, only keys related to
+        the symbol will be included.
         """
-        range = {}
-        for key in self.keys():
+
+        range: Dict[Any, Any] = {}
+        keys = self.keys()
+        if symbol:
+            keys = [k for k in keys if k.startswith(symbol)]
+
+        for key in keys:
             df = self.read(key)
-            try:
-                range[key] = (df.index[0], df.index[-1])  # type: ignore
-            except IndexError:
+            if df is None:
                 range[key] = (None, None)
+            else:
+                try:
+                    range[key] = (df.index[0], df.index[-1])
+                except IndexError:
+                    range[key] = (None, None)
         return pd.DataFrame(range).T.rename(columns={0: "from", 1: "to"})
 
-    def review(self, *field: str) -> pd.DataFrame:
+    def review(self, *field: str, symbol: Optional[str] = None) -> pd.DataFrame:
         """
-        Return df with date_range together with some contract details.
+        Return df with date_range together with some contract
+        details. If symbol given, include only contracts related to
+        the symbol.
+
+        Parameters:
+        ----------
+        *field - positional arguments will be treated as required additional columns
+
+        symbol - must be given as keyword only argument
+
         """
         fields = [
             "symbol",
@@ -208,14 +238,17 @@ class AbstractBaseStore(ABC):
         ]
         if field:
             fields.extend(field)
-        df = self.date_range()
+        df = self.date_range(symbol=symbol)
         details = defaultdict(list)
-        for key in df.to_dict("index").keys():
-            meta = self.read_metadata(key)
+        for row in df.itertuples():
+            meta = self.read_metadata(row.Index)
             for f in fields:
                 details[f].append("" if meta is None else meta.get(f))
         for k, v in details.items():
             df[k] = v
+        df["lastTradeDateOrContractMonth"] = pd.to_datetime(
+            df["lastTradeDateOrContractMonth"]
+        )
         return df
 
     def _contfutures(self) -> List[str]:
@@ -310,9 +343,11 @@ class AbstractBaseStore(ABC):
         ----------
         DataFrame with price/volume data for given contract.
         """
-        return self.read(
+        data = self.read(
             self.latest_contfutures(index, field)[symbol], start_date, end_date
         )
+        assert data is not None, "contfuture data cannot be None"
+        return data
 
     def contfuture_contract_object(
         self, symbol: str, index: int = -1, field: str = "tradingClass"
@@ -354,7 +389,7 @@ class ArcticStore(AbstractBaseStore):
 
     def write(
         self, symbol: Union[str, Contract], data: pd.DataFrame, meta: dict = {}
-    ) -> VersionedItem:
+    ) -> str:
         metadata = self._metadata(symbol)
         metadata.update(meta)
         version = self.store.write(
@@ -362,8 +397,7 @@ class ArcticStore(AbstractBaseStore):
             self._clean(data),
             metadata=self._update_metadata(symbol, metadata),
         )
-        if version:
-            return f"symbol: {version.symbol} version: {version.version}"
+        return f"symbol: {version.symbol} version: {version.version}"
 
     def read(
         self,
@@ -371,9 +405,10 @@ class ArcticStore(AbstractBaseStore):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
-        try:
-            return self.read_object(symbol, start_date, end_date).data  # type: ignore
-        except (AttributeError, NoDataFoundException):
+        data = self.read_object(symbol, start_date, end_date)
+        if data:
+            return data.data
+        else:
             return None
 
     def read_object(
@@ -466,6 +501,7 @@ class PyTablesStore(AbstractBaseStore):
     ) -> Optional[pd.DataFrame]:
         with self.store() as store:
             data = store.get(self._symbol(symbol))
+        assert isinstance(data, pd.DataFrame)
         return data
 
     def delete(self, symbol: Union[str, Contract]) -> None:
