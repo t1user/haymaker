@@ -209,7 +209,7 @@ def _blip_to_signal_converter(data: np.ndarray, always_on=True) -> np.ndarray:
 
     Single column array representing signal from blips.
     """
-    # Don't replace min and max with clip - doesn't work with numba!!!
+    # Don't replace minimum and maximum with clip - doesn't work with numba!!!
 
     state = np.ones(data.shape, dtype=np.int8)
 
@@ -283,10 +283,10 @@ def _volume_grouper(volume: np.ndarray, target: int) -> np.ndarray:
     labels = np.zeros(volume.shape)
     for i, row in enumerate(volume):
         aggregator += row
+        labels[i] = label
         if aggregator >= target:
             aggregator = 0
             label += 1
-        labels[i] = label
     return labels
 
 
@@ -632,3 +632,6 @@ def pivot_indicator(df: pd.DataFrame, func: Callable) -> pd.DataFrame:
     index = d.iloc[df_start:].index
     indicator = pd.DataFrame(indicator, index=index)
     return indicator
+
+
+# box chart ###

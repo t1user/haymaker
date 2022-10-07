@@ -4,6 +4,10 @@ import numpy as np
 from multiprocessing import Pool, cpu_count  # type: ignore
 from typing import Union, Optional, List, Set, Sequence, Literal
 
+from signal_converters import sig_pos
+from stop import stop_loss
+from vector_backtester import Results
+
 # sys.path.append('/home/tomek/ib_tools')  # noqa
 
 
@@ -334,7 +338,7 @@ def inout_range(
     """
 
     if threshold == 0:
-        raise ValueError("theshold cannot be zero")
+        raise ValueError("theshold cannot be zero, use: <zero_crosser>")
     threshold = abs(threshold)
     excess = s.abs() - threshold
     if inout == "outside":
@@ -371,7 +375,7 @@ def range_blip(
     inout: Literal["inside", "outside"] = "inside",
 ) -> pd.Series:
     """
-    Blip when indicator enters range. Blip is signed the same as sign of
+    Blip when indicator enters or leaves range. Blip is signed the same as sign of
     the indicator.
     """
 
@@ -403,8 +407,8 @@ def rolling_weighted_std(
     weights: pd.Series,
     periods: int,
     weighted_mean: Optional[pd.Series] = None,
-):
-    """weighted_mean can be given to save one caluclation"""
+) -> pd.Series:
+    """weighted_mean can be passed to save one caluclation"""
 
     if weighted_mean is None:
         weighted_mean = rolling_weighted_mean(price, weights, periods)
@@ -412,3 +416,72 @@ def rolling_weighted_std(
     diff_vol = ((price - weighted_mean) ** 2) * weights
     weighted_var = diff_vol.rolling(periods).sum() / weights.rolling(periods).sum()
     return np.sqrt(weighted_var)
+
+
+def stop_signal(df, signal_func, /, *func_args, **stop_kwargs) -> pd.DataFrame:
+    """Wrapper to allow applying stop loss to any signal function.
+
+    Args are passed to function, kwargs to stop loss.
+    """
+    _df = df.copy()
+    _df["position"] = sig_pos(signal_func(_df["close"], *func_args))
+    return stop_loss(_df, **stop_kwargs, return_type=2)
+
+
+def long_short_returns(r: Results) -> pd.Series:
+    """Return df with log returns of long and short positions in r"""
+    pos = r.positions
+    pos["return"] = np.log(pos["pnl"] / pos["open"].abs())
+    pos = pos.set_index("date_c")
+    long = pos[pos["open"] > 0]
+    short = pos[pos["open"] < 0]
+    combined = pd.DataFrame({"long": long["return"], "short": short["return"]})
+    combined = (combined + 1).fillna(1).cumprod()
+    return combined
+
+
+def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFrame:
+    """Split simulation results into long, short positions, total
+    strategy return and underlying instrument return
+
+    Args:
+    --------
+    cumsum - running sum of all values accross columns, useful for path chart
+
+    log_return - if True logarithmic returns, else absolute values in
+    price points
+
+    """
+
+    rdf = r.df.copy()
+    if log_return:
+        field = "lreturn"
+        price = np.log(rdf["price"].pct_change() + 1)
+    else:
+        field = "pnl"
+        price = rdf["price"].diff()
+
+    # this is to deal with always-on strategies where transaction is -2 or 2
+    # this line will result with np.inf when transaction is zero
+    # it's fixed subsequently
+    half_return = rdf[field] / rdf["transaction"].abs()
+    rdf["_return"] = half_return.mask(
+        half_return.replace([-np.inf, np.inf], np.nan).isna(), rdf[field]
+    )
+    # for 'double' transactions: they are included both in longs and shorts
+    # (the size has been halved previously)
+    longs = rdf[(rdf["curr_price"] > 0) | (rdf["position"] == 1)]
+    shorts = rdf[(rdf["curr_price"] < 0) | (rdf["position"] == -1)]
+    df = pd.DataFrame(
+        {
+            "price": price,
+            "longs": longs["_return"],
+            "shorts": shorts["_return"],
+            "strategy": rdf[field],
+        }
+    ).fillna(0)
+
+    if cumsum:
+        return df.cumsum()
+    else:
+        return df

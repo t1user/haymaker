@@ -65,6 +65,9 @@ class Optimizer:
     (typical for an indicator), otherwise full df will be passed (for
     functions that require more than closing price to produce result)
 
+    save_mem - if True, raw_dfs and raw_dailys will not be saved to
+    conserve memory
+
     Properties:
     -----------
 
@@ -98,6 +101,7 @@ class Optimizer:
         self,
         df: pd.DataFrame,
         func: Callable,
+        /,
         sp_1: Tuple[float, float, str] = (100, 1.25, "geo"),
         sp_2: Tuple[float, float, str] = (0.1, 0.1, "lin"),
         opti_params: Optional[Sequence[str]] = None,
@@ -105,15 +109,18 @@ class Optimizer:
         pairs: Optional[Sequence[Tuple[float, float]]] = None,
         multiprocess: bool = True,
         pass_full_df: bool = False,
+        save_mem: bool = False,
         **kwargs,
     ) -> None:
 
-        assert pairs or (sp_1 and sp_2), "Either pairs or parameters required"
+        if not (pairs or (sp_1 and sp_2)):
+            raise ValueError("Either pairs or parameters required")
 
         self.func = func
         self.df = df
         self.slip = slip
         self.kwargs = kwargs
+        self.save_mem = save_mem
 
         if pass_full_df:
             self.in_data = df
@@ -131,13 +138,11 @@ class Optimizer:
         self.raw_positions: Dict[Tuple[float, float], pd.DataFrame] = {}
         self.raw_dfs: Dict[Tuple[float, float], pd.DataFrame] = {}
         self.raw_warnings: Dict[Tuple[float, float], List[str]] = {}
+        self._table: Dict[str, pd.DataFrame] = {}
 
         self.pairs = pairs or self.get_pairs(
             self.progression(sp_1), self.progression(sp_2)
         )
-
-        self._table: Dict[str, pd.DataFrame] = {}
-
         if multiprocess:
             with ProcessPoolExecutor() as executor:
                 results = {
@@ -153,7 +158,8 @@ class Optimizer:
 
         self.extract_stats()
         self.__dict__.update(self._table)
-        self.extract_dailys()
+        if not self.save_mem:
+            self.extract_dailys()
 
     @staticmethod
     def progression(sp: Tuple[Any, ...]) -> Sequence:
@@ -220,6 +226,15 @@ class Optimizer:
                 # position and price returend
                 # WHY THE FUCK IS ORDER SWAPPED????????? TODO
                 out = perf(data[1], data[0], slippage=self.slip, **self.kwargs)
+            elif isinstance(data, pd.DataFrame):
+                if not set(["position", "price"]).issubset(set(data.columns)):
+                    raise ValueError(
+                        f"optimizer received df with columns: {data.columns}, "
+                        f"looking for columns: 'price', 'position'"
+                    )
+                out = perf(
+                    data["price"], data["position"], slippage=self.slip, **self.kwargs
+                )
             else:
                 # returned signal has to be converted to position
                 out = perf(
@@ -233,10 +248,11 @@ class Optimizer:
 
     def save(self, pair: Tuple[float, float], out: Results) -> None:
         self.raw_stats[pair] = out.stats
-        self.raw_dailys[pair] = out.daily
         self.raw_positions[pair] = out.positions
-        self.raw_dfs[pair] = out.df
         self.raw_warnings[pair] = out.warnings
+        if not self.save_mem:
+            self.raw_dailys[pair] = out.daily
+            self.raw_dfs[pair] = out.df
 
     def extract_stats(self) -> None:
         self._fields = [i for i in self.raw_stats[self.pairs[-1]].index]
@@ -247,10 +263,17 @@ class Optimizer:
         }
         self.fields = list(self.field_trans.values())
         # index -50 because in the middle of the table it's least likely to hit nan
-        dtypes = {
-            self.field_trans[i]: type(self.raw_stats[self.pairs[-50]].loc[i])
-            for i in self._fields
-        }
+        try:
+            dtypes = {
+                self.field_trans[i]: type(self.raw_stats[self.pairs[-50]].loc[i])
+                for i in self._fields
+            }
+        except IndexError:
+            # if it's not a full table, just try the last item
+            dtypes = {
+                self.field_trans[i]: type(self.raw_stats[self.pairs[-1]].loc[i])
+                for i in self._fields
+            }
         # external access for debuging
         self.dtypes = dtypes
         self._table = {f: pd.DataFrame() for f in self.fields}
@@ -292,7 +315,7 @@ class Optimizer:
 
     @property
     def rank(self) -> pd.Series:
-        return (self.paths.iloc[-1] - 1).sort_values().tail(20)
+        return (self.paths.iloc[-1] - 1).dropna().sort_values().tail(20)
 
     @property
     def return_mean(self) -> str:
@@ -442,7 +465,8 @@ class OptiWrapper:
 
     def __repr__(self):
         return (
-            f"{self.__class__.__name__}(X={self.X}, Y={self.Y}, self.func={self.func})"
+            f"{self.__class__.__name__}(X={self.X}, Y={self.Y},"
+            f" self.func={self.func.__name__})"
         )
 
 
@@ -461,6 +485,9 @@ def plot_grid(
 
     table_one = getattr(data, fields[0])
     table_two = getattr(data, fields[1])
+
+    for t in [table_one, table_two]:
+        assert t.shape == (10, 10), f"Wrong data shape {t.shape}, must be (10, 10)"
 
     # percentage of positive rows and columns
     pos_rows = ((table_one[table_one > 0].count() / table_one.count()) * 100).astype(

@@ -1,4 +1,4 @@
-import pandas as pd
+import pandas as pd  # type: ignore
 import numpy as np
 
 
@@ -12,9 +12,14 @@ class VolumeGrouper:
     volume = 0
     label = 0
 
-    def __init__(self, in_df: pd.DataFrame, avg_vol: int = 1000,
-                 dynamic: bool = False, multiple: int = 30,
-                 days: int = 10) -> None:
+    def __init__(
+        self,
+        in_df: pd.DataFrame,
+        avg_vol: int = 1000,
+        dynamic: bool = False,
+        multiple: int = 30,
+        days: int = 10,
+    ) -> None:
         """
         Args:
         in_df: DataFrame to be resampled, must be indexed by date and have
@@ -53,10 +58,10 @@ class VolumeGrouper:
 
         data has fields: date, volume.
         """
-        self.avg_vol = self.bar_volume.get(data['date'].floor('d'))
+        self.avg_vol = self.bar_volume.get(data["date"].floor("d"))
         if self.avg_vol is None:
             return np.nan
-        return self.group(data['volume'])
+        return self.group(data["volume"])
 
     def group(self, vol: int) -> int:
         """
@@ -78,14 +83,17 @@ class VolumeGrouper:
         Used only if dynamic=True.
         Return rolling mean volume over given days per bar on the input df.
         """
-        daily_volume = self.in_df.resample('B').agg(
-            {'close': 'count', 'volume': 'mean'})
+        daily_volume = self.in_df.resample("B").agg(
+            {"close": "count", "volume": "mean"}
+        )
         daily_volume.rename(
-            columns={'close': 'count', 'volume': 'mean_volume'}, inplace=True)
-        daily_volume['rolling_volume'] = daily_volume['mean_volume'].rolling(
-            days).mean().round()
+            columns={"close": "count", "volume": "mean_volume"}, inplace=True
+        )
+        daily_volume["rolling_volume"] = (
+            daily_volume["mean_volume"].rolling(days).mean().round()
+        )
         daily_volume = daily_volume.dropna()
-        return daily_volume['rolling_volume']
+        return daily_volume["rolling_volume"]
 
     @property
     def df(self) -> pd.DataFrame:
@@ -93,24 +101,31 @@ class VolumeGrouper:
         vol_candles = self.in_df.copy().reset_index()
 
         if self.dynamic:
-            vol_candles['label'] = vol_candles[[
-                'date', 'volume']].apply(self.group_dynamic, axis=1)
+            vol_candles["label"] = vol_candles[["date", "volume"]].apply(
+                self.group_dynamic, axis=1
+            )
             vol_candles = vol_candles.dropna()
         else:
-            vol_candles['label'] = vol_candles.volume.apply(self.group)
+            vol_candles["label"] = vol_candles.volume.apply(self.group)
 
         # for debuging and inspection
-        self.labeled = vol_candles.set_index('date')
+        self.labeled = vol_candles.set_index("date")
 
-        vol_candles = vol_candles.groupby('label').agg(
-            {'date': 'last',
-             'open': 'first',
-             'high': 'max',
-             'low': 'min',
-             'close': 'last',
-             'barCount': 'sum',
-             'volume': 'sum', }
-        ).set_index('date')
+        vol_candles = (
+            vol_candles.groupby("label")
+            .agg(
+                {
+                    "date": "last",
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "barCount": "sum",
+                    "volume": "sum",
+                }
+            )
+            .set_index("date")
+        )
         return vol_candles
 
 
@@ -124,9 +139,9 @@ def group_by_volume(df, volume=1000, dynamic=False, multiple=30, days=10):
 
 def group_by_time(df, time_int):
     vol_candles = pd.DataFrame()
-    vol_candles['open'] = df.open.resample(time_int).first()
-    vol_candles['high'] = df.high.resample(time_int).max()
-    vol_candles['low'] = df.low.resample(time_int).min()
-    vol_candles['close'] = df.close.resample(time_int).last()
+    vol_candles["open"] = df.open.resample(time_int).first()
+    vol_candles["high"] = df.high.resample(time_int).max()
+    vol_candles["low"] = df.low.resample(time_int).min()
+    vol_candles["close"] = df.close.resample(time_int).last()
     vol_candles = vol_candles.reset_index()
     return vol_candles

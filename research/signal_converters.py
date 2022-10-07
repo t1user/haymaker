@@ -1,5 +1,7 @@
 import pandas as pd  # type: ignore
+from typing import Optional, Literal
 from numba_tools import _blip_to_signal_converter
+
 
 """
 This module allows for most frequent conversions between various types
@@ -41,21 +43,33 @@ only, neither of those series are concerned with sizing)
 three values [-1, 0, 1] where -1 is short, 1 long and 0 flat.
 
 Neither of those series are required in all dfs.  They are used on as
-needed basis.  However, this terminology is being used consistently
-throughout the package to ensure consistent meaning in all files.
+needed basis.  This terminology should be used consistently
+throughout the package.
 
 """
 
 
-def sig_blip(signal: pd.Series, clip=True) -> pd.Series:
+def sig_blip(
+    signal: pd.Series, clip=True, side: Optional[Literal["open", "close"]] = None
+) -> pd.Series:
     """
     Signal to blip converter.
 
     if clip == False in case of 'always-in-the-market' systems, ie.
-    signal is never zero will return -2 or 2.
+    signal never is zero will return -2 or 2.
+
+    NOT TESTED
     """
+    if signal.isna().any():
+        raise ValueError("n/a values in signal")
 
     o = (signal - signal.shift()).fillna(0)
+
+    if side == "open":
+        o = o * (signal.shift() == 0)
+    elif side == "close":
+        o = o * (signal.shift() != 0)
+
     if clip:
         return o.clip(-1, 1)
     else:
@@ -69,8 +83,10 @@ def pos_trans(position: pd.Series, clip=True) -> pd.Series:
     if clip == False in case of 'always-in-the-market' systems, ie.
     position is never zero, will return -2 or 2.
     """
-    o = (position.shift() != position) * \
-        (position - position.shift()).fillna(0)
+    # is it the same as sig_blip with side=None???
+    # (position.shift() != position) is redundant?
+    # return sig_blip(position, clip, None)
+    o = (position.shift() != position) * (position - position.shift()).fillna(0)
     if clip:
         return o.clip(-1, 1)
     else:
@@ -85,7 +101,8 @@ def sig_pos(signal: pd.Series) -> pd.Series:
     return signal.shift().fillna(0).astype(int)
 
 
-def blip_sig(blip: pd.Series) -> pd.Series:
+def blip_sig(blip: pd.Series, always_on=True) -> pd.Series:
     """Blip to signal converter. Numba optimized."""
-    return pd.Series(_blip_to_signal_converter(blip.to_numpy()),
-                     index=blip.index)
+    return pd.Series(
+        _blip_to_signal_converter(blip.to_numpy(), always_on), index=blip.index
+    )

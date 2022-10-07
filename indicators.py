@@ -97,6 +97,35 @@ def resample(
         raise TypeError("df must be either series or dataframe")
 
 
+def weighted_resample(
+    df: pd.DataFrame, freq: str, price_column: str = "average", **kwargs
+) -> pd.DataFrame:
+    """
+    While performing resample calculate also volume weighted price.
+
+    Args:
+    ----------
+
+    df, freq - same as in resample
+
+    price_column - price column to be used for caluclation, typically
+    should be volume weighted average price for the bar.
+
+    **kwargs - will be passed to resample function
+
+    """
+
+    if "volume" not in df.columns:
+        raise KeyError("df must have column: volume")
+
+    df = df.copy()
+    df["weights"] = df.volume.resample(freq).transform(lambda x: x / x.sum())
+    df["weight_price"] = df["weights"] * df[price_column]
+    return resample(df, freq, how={"weight_price": "sum"}, **kwargs).rename(
+        columns={"weight_price": "average"}
+    )
+
+
 def downsampled_func(
     df: Union[pd.DataFrame, pd.Series], freq: str, func: Callable, *args, **kwargs
 ) -> pd.Series:
@@ -170,8 +199,7 @@ def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.
 
 
 def cont_downsampled_func(d: pd.Series, bar: int, func, *args, **kwargs) -> pd.Series:
-    """
-    Apply <func> to continuous resampled series.  At every df row, last
+    """Apply <func> to continuous resampled series.  At every df row, last
     <bar> rows will be treated as one bar.  It's different from downsampled_func,
     where price series is first resampled to a new frequency and then any missing
     values are forward filled from last available point.
@@ -180,6 +208,18 @@ def cont_downsampled_func(d: pd.Series, bar: int, func, *args, **kwargs) -> pd.S
     give the last value from the hour top, wherus cont_downsampled_func
     will calculate value based on last sixty minutes.
 
+    If result compared to resample, resample will need closed='right',
+    label='right'.
+
+    Usage:
+    -----
+
+    For d being an OHLC one minute price dataframe, this is hourly
+    standard deviation over rolling 23 hours (i.e. 1 day):
+
+    cont_downsampled_func(d.close, 60, lambda x: x.rolling(23).std())
+
+
     Args:
     -----
 
@@ -187,6 +227,7 @@ def cont_downsampled_func(d: pd.Series, bar: int, func, *args, **kwargs) -> pd.S
 
     bar - number of df rows to treat as one (e.g. if d has 30s data
     and hourly <func> is required, <bar> value should be 120)
+
     """
 
     # easier to reshape in numpy
@@ -210,7 +251,7 @@ def cont_downsampled_atr(
     """
 
     return cont_downsampled_func(
-        true_range(df, bar), bar, partial(mmean), periods=periods, exp=exp
+        true_range(df, bar), bar, mmean, periods=periods, exp=exp
     )
 
 
@@ -448,10 +489,11 @@ def breakout(
 
 
 def strength_oscillator(df: pd.DataFrame, periods) -> pd.Series:
+    """Kaufman 2013, p. 408"""
     d = df.copy()
-    d["momentum"] = d.close.diff()
-    d["high_low"] = d["high"] - d["low"]
-    return (d["momentum"] / d["high_low"]).rolling(periods).mean()
+    d["momentum"] = d.close.diff().fillna(0).rolling(periods).mean()
+    d["high_low"] = (d["high"] - d["low"]).rolling(periods).mean()
+    return (d["momentum"] / d["high_low"]).dropna()
 
 
 def join_swing(df: pd.DataFrame, *args, **kwargs) -> pd.DataFrame:
@@ -461,3 +503,22 @@ def join_swing(df: pd.DataFrame, *args, **kwargs) -> pd.DataFrame:
     requirements.
     """
     return df.join(pd.DataFrame(swing(df, *args, **kwargs)._asdict(), index=df.index))
+
+
+def spread(df: pd.DataFrame, lookback: int) -> pd.Series:
+    df = df.copy()
+    if not set(["high", "low"]).issubset(set(df.columns)):
+        if "close" in df.columns:
+            df["high"] = df["low"] = df["close"]
+        else:
+            raise ValueError(
+                "Required columns for spread are: 'high' and 'low' or 'close'"
+            )
+    df["max"] = df["high"].rolling(lookback).max()
+    df["min"] = df["low"].rolling(lookback).min()
+    return df["max"] - df["min"]
+
+
+def momentum(price, periods):
+    """Double smoothed momentum"""
+    return price.diff(periods).ewm(span=periods).mean().ewm(span=periods).mean()

@@ -5,6 +5,8 @@ from typing import NamedTuple, List, Union, Optional, Dict, Literal
 import numpy as np
 import pandas as pd  # type: ignore
 
+# from scipy import stats as scipy_stats  # type: ignore
+
 from pyfolio.timeseries import perf_stats  # type: ignore # noqa
 
 from signal_converters import sig_pos
@@ -227,6 +229,23 @@ def last_open_position_warning(
     return None
 
 
+# def probabilistic_sharpe(
+#     sharpe: float, skew: float, kurtosis: float, sr_benchmark: float = 0.0
+# ) -> float:
+#     """Not in use. Formula needs verification as results are rubish."""
+#     # std of the sharpe ratio estimation
+#     sr_std = np.sqrt(
+#         (
+#             1
+#             + (0.5 * sharpe**2)
+#             - (skew * sharpe)
+#             + ((kurtosis / 4) * sharpe**2)  # removed -3 as this is Fischer's already
+#         )
+#         / 251  # 252 annual observations minus one (degrees of freedom)
+#     )
+#     return scipy_stats.norm.cdf((sharpe - sr_benchmark) / sr_std)
+
+
 def perf(
     price: pd.Series,
     position: pd.Series,
@@ -274,10 +293,21 @@ def perf(
 
     closes - close transactions (pd.Series)
 
-    warnings -
+    warnings - list of generated warnings
 
     """
     warnings = []
+
+    if not (isinstance(price, pd.Series) and isinstance(position, pd.Series)):
+        raise TypeError(
+            f"price and position must be pd.Series, not {type(price)}, {type(position)}"
+        )
+
+    if len(price) == 0:
+        raise ValueError("Price series is empty.")
+
+    if len(position[position != 0]) == 0:
+        warnings.append("No positions")
 
     # transaction cost
     cost = get_min_tick(price) * slippage
@@ -358,9 +388,13 @@ def perf(
 
     # Generate output table
     pyfolio_stats = perf_stats(daily["returns"])
+
     stats["Efficiency"] = efficiency(price, pyfolio_stats["Cumulative returns"])
     stats["Efficiency_1"] = efficiency_1(price, pyfolio_stats["Cumulative returns"])
     stats = pyfolio_stats.append(stats)
+    # stats["Probabilistic Sharpe"] = probabilistic_sharpe(
+    #    stats["Sharpe ratio"], stats["Skew"], stats["Kurtosis"]
+    # )
 
     warning = duration_warning(positions, df)
     if warning > 0.05:
@@ -481,15 +515,15 @@ def summary(
 
     Named tuple with stats and underlying simulation results.
     """
-    assert isinstance(
-        data, (pd.DataFrame, pd.Series)
-    ), "Data must be either Series or DataFrame"
+    if not isinstance(data, (pd.DataFrame, pd.Series)):
+        raise ValueError("Data must be either Series or DataFrame")
 
     if isinstance(data, pd.DataFrame):
-        assert (
-            price_field_name in data.columns
-        ), "Use 'price_field_name' argument to indicate which column in "
-        "'data' contains price"
+        if not (price_field_name in data.columns):
+            raise ValueError(
+                "Use 'price_field_name' argument to indicate which column in "
+                "'data' contains price"
+            )
 
         price = data[price_field_name]
 
@@ -501,6 +535,8 @@ def summary(
                     "Indicator has to be passed directly "
                     "or passed df must have column 'forecast'"
                 )
+    elif isinstance(data, pd.Series):
+        price = data
 
     if threshold is None:
         threshold = [0, 1, 3, 5, 6, 10, 15, 17, 19, 20]
