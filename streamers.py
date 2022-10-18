@@ -18,6 +18,8 @@ class BarStreamer(ABC):
     useRTH = False
     contract = None
 
+    """ TODO: backfilling leaves one duplicated data point on joining time series"""
+
     def __call__(
         self, ib, contract: Contract, start_date: Optional[datetime] = None
     ) -> None:
