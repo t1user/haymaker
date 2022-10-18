@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt  # type: ignore
 import pandas as pd  # type: ignore
 import numpy as np
 from multiprocessing import Pool, cpu_count  # type: ignore
-from typing import Union, Optional, List, Set, Sequence, Literal
+from typing import Union, Optional, List, Set, Sequence, Literal, Callable
 
 from signal_converters import sig_pos
 from stop import stop_loss
@@ -83,8 +83,8 @@ def true_sharpe(ret):
 
 def rolling_sharpe(returns: pd.Series, months: float) -> pd.DataFrame:
     ret = pd.DataFrame({"returns": returns})
-    ret["mean"] = ret["returns"].rolling(22 * months).mean() * 252
-    ret["vol"] = ret["returns"].rolling(22 * months).std() * np.sqrt(252)
+    ret["mean"] = ret["returns"].rolling(int(12 * months)).mean() * 252
+    ret["vol"] = ret["returns"].rolling(int(12 * months)).std() * np.sqrt(252)
     ret["sharpe"] = ret["mean"] / ret["vol"]
     ret = ret.dropna()
     return ret
@@ -262,7 +262,8 @@ def upsample(
     keep: Optional[Union[str, Sequence[str]]] = None,
     propagate: Optional[Union[str, Sequence[str]]] = None,
 ) -> pd.DataFrame:
-    """Upsample time series by combining higher frequency and lower frequency dataframes.
+    """Upsample time series by combining higher frequency and lower
+    frequency dataframes.
 
     df: higher frequency data, all columns will be kept
 
@@ -285,8 +286,8 @@ def upsample(
     """
 
     def warn_blip(columns: Union[Set[str], List[str]]) -> None:
-        """Blips should not be propagated. If any column name contains word 'blip' warn user
-        that they may be making a mistake."""
+        """Blips should not be propagated. If any column name contains
+        word 'blip' warn user that they may be making a mistake."""
         blip_columns = [b for b in columns if "blip" in b]
         if blip_columns:
             print(f"Warning: blip is being propagated: {blip_columns}")
@@ -305,7 +306,7 @@ def upsample(
         return list(data)
 
     upsampled_columns = set(dfg.columns) - set(df.columns)
-    joined_df = df.join(dfg[upsampled_columns])
+    joined_df = df.join(dfg[upsampled_columns])  # type: ignore
     if not (keep or propagate):
         warn_blip(upsampled_columns)
         return joined_df.ffill().dropna()
@@ -415,20 +416,24 @@ def rolling_weighted_std(
 
     diff_vol = ((price - weighted_mean) ** 2) * weights
     weighted_var = diff_vol.rolling(periods).sum() / weights.rolling(periods).sum()
-    return np.sqrt(weighted_var)
+    return np.sqrt(weighted_var)  # type: ignore
 
 
-def stop_signal(df, signal_func, /, *func_args, **stop_kwargs) -> pd.DataFrame:
+def stop_signal(
+    df, signal_func: Callable, /, *func_args, **stop_kwargs
+) -> pd.DataFrame:
     """Wrapper to allow applying stop loss to any signal function.
 
     Args are passed to function, kwargs to stop loss.
     """
     _df = df.copy()
     _df["position"] = sig_pos(signal_func(_df["close"], *func_args))
-    return stop_loss(_df, **stop_kwargs, return_type=2)
+    stopped = stop_loss(_df, **stop_kwargs, return_type=2)
+    assert isinstance(stopped, pd.DataFrame)
+    return stopped
 
 
-def long_short_returns(r: Results) -> pd.Series:
+def long_short_returns(r: Results) -> pd.DataFrame:
     """Return df with log returns of long and short positions in r"""
     pos = r.positions
     pos["return"] = np.log(pos["pnl"] / pos["open"].abs())
@@ -456,10 +461,10 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFr
     rdf = r.df.copy()
     if log_return:
         field = "lreturn"
-        price = np.log(rdf["price"].pct_change() + 1)
+        price = np.log(rdf["price"].pct_change() + 1)  # type: ignore
     else:
         field = "pnl"
-        price = rdf["price"].diff()
+        price = rdf["price"].diff()  # type: ignore
 
     # this is to deal with always-on strategies where transaction is -2 or 2
     # this line will result with np.inf when transaction is zero

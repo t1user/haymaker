@@ -375,7 +375,7 @@ def always_on(series: pd.Series) -> bool:
     position).
     """
     start = min(series.idxmax(), series.idxmin())
-    series = series.loc[start:]
+    series = series.loc[start:]  # type: ignore
     return series[series == 0].count() == 0
 
 
@@ -404,7 +404,7 @@ def stop_loss(
     multiplier: float = 1,
     price_column: str = "open",
     return_type: int = 1,
-) -> Union[pd.Series, pd.DataFrame]:
+) -> Union[pd.Series, pd.DataFrame, Tuple[pd.Series, pd.Series]]:
     """
     Apply stop loss and optionally take profit to a strategy.
 

@@ -62,14 +62,14 @@ def pos(
 
     # close out final open position (if any)
     if not len(_opens) == len(_closes):
-        _closes = _closes.append(df.iloc[-1])
+        _closes = _closes.append(df.iloc[-1])  # type: ignore
         _closes.c_transaction[-1] = _opens.o_transaction[-1] * -1
 
     # create positions df
     opens = (_opens["price"] * _opens["o_transaction"]).reset_index()
     closes = (_closes["price"] * _closes["c_transaction"]).reset_index()
-    opens.columns = ["date", "open"]
-    closes.columns = ["date", "close"]
+    opens.columns = pd.Index(["date", "open"])
+    closes.columns = pd.Index(["date", "close"])
 
     positions = opens.join(closes, how="outer", lsuffix="_o", rsuffix="_c")
     positions["pnl"] = -(positions["open"] + positions["close"]) - cost * 2
@@ -101,7 +101,7 @@ def _skip_last_open(df: pd.DataFrame) -> pd.DataFrame:
     # index of last transaction
     i = position[position.shift() != position].index[-1]
 
-    df = df[:i]
+    df = df[:i]  # type: ignore
     df["position"].iloc[-1] = 0
     return df
 
@@ -153,8 +153,8 @@ def _perf(
     df["base_price"] = (df["price"].shift(1) * df["position"].shift(1)).fillna(0)
     df["pnl"] = df["curr_price"] - df["base_price"] - df["slippage"]
     # however convoluted, probably is correct
-    slip_return = np.log((-df["slippage"] / df["price"]) + 1).fillna(0)
-    price_return = np.log(
+    slip_return = np.log((-df["slippage"] / df["price"]) + 1).fillna(0)  # type: ignore
+    price_return = np.log(  # type: ignore
         ((df["curr_price"] - df["base_price"]) / abs(df["base_price"])) + 1
     ).fillna(0)
     df["lreturn"] = slip_return + price_return
@@ -373,7 +373,7 @@ def perf(
         stats["Positions per day"] = num_pos / days
         stats["Days per position"] = days / num_pos
         # duration is a pd.Timedelta rounded to the closes minute
-        stats["Actual avg. duration"] = duration.round("min")
+        stats["Actual avg. duration"] = duration.round("min")  # type: ignore
 
         stats["Days"] = days
         stats["Positions"] = num_pos
@@ -550,7 +550,9 @@ def summary(
     dfs = {}
     for i in threshold:
         try:
+            assert indicator is not None
             b = v_backtester(indicator, i)
+            assert isinstance(b, pd.Series)
             r = perf(price, b, slippage=slip)
         except ZeroDivisionError:
             continue

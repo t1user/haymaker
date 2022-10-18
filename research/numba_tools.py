@@ -165,15 +165,18 @@ def swing(
         f = np.ones((data.shape[0], 1)) * f
     elif isinstance(f, (pd.DataFrame, pd.Series)):
         f = f.to_numpy()
-    if margin:
-        if isinstance(margin, (pd.DataFrame, pd.Series)):
-            margin = margin.to_numpy()
-        margin = margin * f
+    if margin is None:
+        _margin = 0 * f
+    elif isinstance(margin, (pd.DataFrame, pd.Series)):
+        _margin = margin.to_numpy() * f
+    elif isinstance(margin, float):
+        _margin = margin * f
     else:
-        margin = 0 * f
+        raise TypeError("Margin must be pd.Series, pd.DataFrame or float")
+
     _data = data[["high", "low"]].to_numpy()
 
-    output = _swing(_data, f, margin)
+    output = _swing(_data, f, _margin)
 
     if output_as_tuple:
         return data.join(
@@ -438,13 +441,13 @@ def pivot(
     price = data["close"].to_numpy()
 
     if isinstance(f, pd.Series):
-        f = f.to_numpy()
+        _f = f.to_numpy()
     elif isinstance(f, (float, int)):
-        f = np.ones((data.shape[0])) * f
+        _f = np.ones((data.shape[0])) * f
     else:
         raise TypeError(f"Wrong type: {f}")
 
-    state, mins, maxes = _pivot(price, f, initial_state)
+    state, mins, maxes = _pivot(price, _f, initial_state)
 
     if return_type == 1:
         return state, mins, maxes
@@ -478,6 +481,7 @@ def clear_runway(df: pd.DataFrame, initial_state: Literal[-1, 1] = 1) -> pd.Data
     data = df[df["state"] == -initial_state]
     if len(data) > 0:
         start = data.index[0]
+        assert isinstance(start, int)
         data = df[start:][1:]
     return data
 
@@ -622,11 +626,11 @@ def pivot_indicator(df: pd.DataFrame, func: Callable) -> pd.DataFrame:
 
     df_start = state_and_pivot["start"].iloc[0]
 
-    state_and_pivot = state_and_pivot.to_numpy()
+    _state_and_pivot = state_and_pivot.to_numpy()
 
     # index and close prices
     arr = d[["ind", "close"]].values
-    out = _pivot_indicator(state_and_pivot, arr, func)
+    out = _pivot_indicator(_state_and_pivot, arr, func)
     indicator = np.concatenate(out)
 
     index = d.iloc[df_start:].index
