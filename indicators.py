@@ -73,7 +73,7 @@ def resample(
     """
 
     if isinstance(df, pd.Series):
-        return df.resample(freq, **kwargs).last().dropna()
+        return df.resample(freq, **kwargs).last().dropna()  # type: ignore
 
     elif isinstance(df, pd.DataFrame):
         field_dict = {
@@ -87,7 +87,7 @@ def resample(
         field_dict.update(how)
 
         return (
-            df.resample(freq, **kwargs)
+            df.resample(freq, **kwargs)  # type: ignore
             .agg(
                 {key: field_dict[key] for key in df.columns if key in field_dict.keys()}
             )

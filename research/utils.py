@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt  # type: ignore
 import pandas as pd  # type: ignore
 import numpy as np
 from multiprocessing import Pool, cpu_count  # type: ignore
-from typing import Union, Optional, List, Set, Sequence, Literal, Callable
+from typing import Union, Optional, List, Set, Sequence, Literal, Callable, Tuple
 
 from signal_converters import sig_pos
 from stop import stop_loss
@@ -206,10 +206,21 @@ def crosser(ind: pd.Series, threshold: float) -> pd.Series:
     return df["blip"]
 
 
-def gap_tracer(df: pd.DataFrame, runs: int = 6) -> pd.DataFrame:
+def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFrame:
     """
     Verify consistency of price data df.  Return all points where
-    series ends at a non-standard time point.
+    series ends at a non-standard time point or otherwise is suspected
+    of missing data.
+
+    Parameters:
+    -----------
+    runs - number of iterations, each run
+    determines the most frequent closing time and treatss all gaps
+    starting at those regular times as normal
+
+    gap_freq - for each run, frequency at which gap duration must
+    occur to be treated as normal
+
     """
     df = df.copy()
     df["timestamp"] = df.index
@@ -229,20 +240,41 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6) -> pd.DataFrame:
     out["from_time"] = out["from"].apply(lambda x: x.time())
 
     # most frequent time cutoff (end of day)
-    def cut(df):
+    def time_cut(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Timestamp]:
         df = df.copy()
         cutoff_time = df["from_time"].mode()[0]
-        print(cutoff_time)
-        gapless = df[df["from_time"] != cutoff_time].reset_index(drop=True)
-        return gapless
+        gapless = df[(df["from_time"] != cutoff_time)].reset_index(drop=True)
+        return gapless, cutoff_time
+
+    # non standard gap duration based on frequency for every time cutoff
+    def duration_cut(cf: pd.Timestamp) -> pd.DataFrame:
+        duration_counts = out[out["from_time"] == cf].duration.value_counts()
+        duration_count_thresholds = set(
+            duration_counts[duration_counts > gap_freq].index
+        )
+        suspicious = out[
+            (out["from_time"] == cf)
+            & out["duration"].apply(lambda x: x not in duration_count_thresholds)
+        ].reset_index(drop=True)
+        return suspicious
+
+    cutoffs = []
 
     non_standard_gaps = out
+
     for _ in range(runs):
-        non_standard_gaps = cut(non_standard_gaps)
+        try:
+            non_standard_gaps, cutoff = time_cut(non_standard_gaps)
+            cutoffs.append(cutoff)
+        except KeyError:
+            break
 
-    del non_standard_gaps["from_time"]
+    suspicious = [duration_cut(cf) for cf in cutoffs]
+    suspicious.append(non_standard_gaps)
+    out_df = pd.concat(suspicious).sort_values("from").reset_index(drop=True)
+    del out_df["from_time"]
 
-    return non_standard_gaps
+    return out_df
 
 
 def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
@@ -256,19 +288,35 @@ def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
     return df["log_return"] / (df["std"] * np.sqrt(lookback))
 
 
+def chande_momentum_indicator(price: pd.Series, lookback: int) -> pd.Series:
+    df = pd.DataFrame({"price": price})
+    df["diff"] = df["price"].diff()
+    df["ups"] = df["diff"] * (df["diff"] > 0)
+    df["downs"] = df["diff"] * (df["diff"] < 0)
+    df["numerator"] = df["ups"] - df["downs"]
+    df["denominator"] = df["ups"] + df["downs"]
+    return df["numerator"] / df["denominator"]
+
+
 def upsample(
     df: pd.DataFrame,
     dfg: pd.DataFrame,
+    *,
+    labels: Literal["left", "right"] = "right",
     keep: Optional[Union[str, Sequence[str]]] = None,
     propagate: Optional[Union[str, Sequence[str]]] = None,
 ) -> pd.DataFrame:
-    """Upsample time series by combining higher frequency and lower
+    """
+    Upsample time series by combining higher frequency and lower
     frequency dataframes.
 
     df: higher frequency data, all columns will be kept
 
     dfg: lower frequency data, only non-overlapping columns will be kept, unless
     columns to keep are given explicitly
+
+    labels: how the dfg is labeled; must be specified correctly or there
+    is strong future snooping
 
     propagate: columns, that will be propagated
 
@@ -305,8 +353,32 @@ def upsample(
             )
         return list(data)
 
-    upsampled_columns = set(dfg.columns) - set(df.columns)
-    joined_df = df.join(dfg[upsampled_columns])  # type: ignore
+    def join(
+        df: pd.DataFrame,
+        dfg: pd.DataFrame,
+        upsampled_columns: List[str],
+        labels: Literal["left", "right"],
+    ) -> pd.DataFrame:
+        """Before joining the two dataframes, ensure that they are
+        correctly aligned. If the dfg is left label (which is
+        typical), its values need to be shifted"""
+        if labels == "right":
+            joined_df = df.join(dfg[upsampled_columns])
+        elif labels == "left":
+            dfg = dfg.shift()
+            joined_df = df.join(dfg[upsampled_columns])
+            joined_df[upsampled_columns] = joined_df[upsampled_columns].shift(-1)
+        else:
+            raise ValueError(f"labels must be 'left' or 'right', '{labels}' given")
+
+        return joined_df
+
+    upsampled_columns = list(set(dfg.columns) - set(df.columns))
+    # preserve types to be able to cast back into them
+    types = dfg[upsampled_columns].dtypes.to_dict()
+
+    joined_df = join(df, dfg, upsampled_columns, labels)
+
     if not (keep or propagate):
         warn_blip(upsampled_columns)
         return joined_df.ffill().dropna()
@@ -325,10 +397,10 @@ def upsample(
             assert propagate is not None
             propagate = verify(propagate)
             keep = list(set(upsampled_columns) - set(propagate))
-    joined_df[keep] = joined_df[keep].fillna(0)
-    joined_df[propagate] = joined_df[propagate].ffill()
-    warn_blip(propagate)
-    return joined_df.dropna()
+            joined_df[keep] = joined_df[keep].fillna(0)
+            joined_df[propagate] = joined_df[propagate].ffill()
+            warn_blip(propagate)
+    return joined_df.dropna().astype(types)  # type: ignore
 
 
 def inout_range(
