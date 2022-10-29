@@ -1,6 +1,6 @@
 import sys
 
-from typing import NamedTuple, List, Union, Optional, Dict, Literal
+from typing import NamedTuple, Tuple, List, Union, Optional, Dict, Literal
 
 import numpy as np
 import pandas as pd  # type: ignore
@@ -47,7 +47,11 @@ def pos(
             transactions: int number of all transactions
     """
     df = pd.DataFrame(
-        {"price": price, "transaction": transaction, "position": position}
+        {
+            "price": price,
+            "transaction": transaction,
+            "position": position,
+        }
     )
 
     df["c_transaction"] = (
@@ -72,9 +76,94 @@ def pos(
     closes.columns = pd.Index(["date", "close"])
 
     positions = opens.join(closes, how="outer", lsuffix="_o", rsuffix="_c")
-    positions["pnl"] = -(positions["open"] + positions["close"]) - cost * 2
+    positions["g_pnl"] = -(positions["open"] + positions["close"])
+    positions["pnl"] = positions["g_pnl"] - cost * 2
     positions["duration"] = positions["date_c"] - positions["date_o"]
     return Positions(positions, opens, closes, transactions)
+
+
+def excursions(
+    high_low: pd.DataFrame, positions: pd.DataFrame, divisor: Optional[pd.Series] = None
+) -> pd.DataFrame:
+    """
+    Calculate maximum adverse and favourable excursions.
+
+    Arguments:
+    ---------
+
+    high_low: dataframe with high and low prices
+
+    positions: series with positions -1, 0, 1
+
+    divisor: number that favourable and adverse excursions will be
+    divided by; typically atr or other volatility indicator, allows to
+    express results in terms of vol multiples; it's callers
+    resposibility to ensure that open price is alligned with indicator
+    that would be available at that point in time
+
+
+    Returns:
+    -------
+
+    Dataframe with columns:
+
+    fav: maximum favourable excursion
+
+    adv: maximum adverse excurion
+
+    eff: efficiency, relation of position pnl to difference between
+    highest high and lowest low during position's time in the market
+
+    """
+
+    if not isinstance(high_low, pd.DataFrame):
+        raise ValueError(f"high_low must be a pandas series not {type(high_low)}")
+    if not set(["high", "low"]).issubset(set(high_low.columns)):
+        raise ValueError("high_low must have columns named 'high' and 'low'")
+
+    high_low = high_low.copy()
+
+    if divisor is None:
+        high_low["divisor"] = 1
+    elif isinstance(divisor, pd.Series) and (divisor.index == high_low.index).all():
+        high_low["divisor"] = divisor
+    else:
+        raise ValueError(
+            "divisor, if given must be a pd.Series with the same index as high_low"
+        )
+
+    def extremes(
+        high_low: pd.DataFrame, positions: pd.DataFrame
+    ) -> List[Tuple[float, float, float]]:
+        data = []
+        for p in positions[["date_o", "date_c"]].itertuples():
+            h_l = high_low.loc[p.date_o : p.date_c]
+            # last candle shouldn't be covered fully, because might have exited
+            # before the extreme value was reached
+            h_l = h_l.iloc[:-1]
+            data.append((h_l["high"].max(), h_l["low"].min(), h_l["divisor"].iloc[0]))
+        return data
+
+    out = positions.join(
+        pd.DataFrame(extremes(high_low, positions), columns=["high", "low", "divisor"])
+    )
+    # here we have to establish wheather closing price was an extreme
+    out["close_"] = out["close"].abs()
+    out["high"] = (out[["close_", "high"]]).max(axis=1)
+    out["low"] = (out[["close_", "low"]]).min(axis=1)
+
+    out["_fav"] = ((out["open"] > 0) * out["high"]) + ((out["open"] < 0) * out["low"])
+    out["_adv"] = ((out["open"] > 0) * out["low"]) + ((out["open"] < 0) * out["high"])
+
+    out["fav"] = ((out["open"].abs() - out["_fav"]).abs() / out["divisor"]).round(2)
+    out["adv"] = ((out["open"].abs() - out["_adv"]).abs() / out["divisor"]).round(2)
+    out["eff"] = (out["g_pnl"] / (out["high"] - out["low"])).round(2)
+
+    if divisor is None:
+        return out[["fav", "adv", "eff"]]
+    else:
+        out["pnl_mul"] = (out["g_pnl"] / out["divisor"]).round(2)
+        return out[["pnl_mul", "fav", "adv", "eff"]]
 
 
 def get_min_tick(data: pd.Series) -> float:
@@ -151,6 +240,7 @@ def _perf(
     df["curr_price"] = (df["position"] - df["transaction"]) * df["price"]
 
     df["base_price"] = (df["price"].shift(1) * df["position"].shift(1)).fillna(0)
+    # this line doesn't go to further caluclations
     df["pnl"] = df["curr_price"] - df["base_price"] - df["slippage"]
     # however convoluted, probably is correct
     slip_return = np.log((-df["slippage"] / df["price"]) + 1).fillna(0)  # type: ignore
