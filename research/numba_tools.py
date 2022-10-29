@@ -294,15 +294,16 @@ def _volume_grouper(volume: np.ndarray, target: int) -> np.ndarray:
 
 
 def volume_grouper(
-    df: pd.DataFrame, target, label: Literal["left", "right"] = "right"
+    df: pd.DataFrame,
+    target: int,
+    field: str = "volume",
+    label: Literal["left", "right"] = "right",
 ) -> pd.DataFrame:
 
-    if not set(["open", "high", "low", "close", "volume", "barCount"]).issubset(
-        set(df.columns)
-    ):
+    if not set(["open", "high", "low", "close", field]).issubset(set(df.columns)):
         raise ValueError(
-            "df must have all of the columns: 'open', 'high', 'low',"
-            " 'close', 'volume', 'barCount'"
+            f"df must have all of the columns: 'open', 'high', 'low',"
+            f" 'close', '{field}'"
         )
     if label == "left":
         _label = "first"
@@ -312,20 +313,22 @@ def volume_grouper(
         raise ValueError("label must be either 'left' or 'right'")
 
     df = df.copy().reset_index()
-    df["labels"] = _volume_grouper(df.volume.to_numpy(), target)
+    df["labels"] = _volume_grouper(df[field].to_numpy(), target)
+    field_dict = {
+        "date": _label,
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+        "barCount": "sum",
+    }
+    if field not in field_dict:
+        field_dict.update({field: "sum"})
+
     return (
         df.groupby("labels")
-        .agg(
-            {
-                "date": _label,
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum",
-                "barCount": "sum",
-            }
-        )
+        .agg({key: field_dict[key] for key in df.columns if key in field_dict})
         .set_index("date")
     )
 
