@@ -37,6 +37,10 @@ def update_details(
         except TypeError:
             log.error(f"Metadata missing for {key}")
             continue
+        except NameError as e:
+            log.error(f"Wrong name: {e}")
+            print(e)
+            continue
         contract.update(includeExpired=True)
         contracts[key] = contract
     ib.qualifyContracts(*contracts.values())
@@ -71,6 +75,26 @@ def update_details(
         store.write_metadata(c, _d)
 
     print("Data written to store.")
+
+
+def copy_meta(store):
+    """For contracts where meta is no longer available from IB, copy
+    meta from existing contracts of the same class"""
+    rev = store.review("commission")
+    data_df = rev[["name", "tradingClass", "commission", "min_tick"]].dropna()
+    data_df = data_df.groupby("tradingClass").last()
+
+    data = data_df.to_dict("index")
+
+    for k in store.keys():
+        meta = store.read_metadata(k)
+
+        try:
+            store.write_metadata(k, data[meta["tradingClass"]])
+        except KeyError:
+            continue
+
+    print("Data writtten to store")
 
 
 def default_path(*dirnames: str) -> str:
