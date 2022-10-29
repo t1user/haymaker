@@ -516,9 +516,11 @@ def stop_loss(
         ]
         context = Context(*params)
     else:
-        _df["blip"] = _df["blip"].shift().fillna(0)
         if "close_blip" not in _df.columns:
             _df["close_blip"] = _df["blip"]
+        # we want to be returning positions rather than signals
+        _df["blip"] = _df["blip"].shift().fillna(0)
+        _df["close_blip"] = _df["close_blip"].shift().fillna(0)
         data_fields = [
             "blip",
             "close_blip",
@@ -538,9 +540,12 @@ def stop_loss(
     if return_type == 1:
         return pd.Series(result.T[0].astype("int"), index=df.index)
     elif return_type == 2:
-        return pd.DataFrame(result, columns=["position", "price"], index=df.index)
+        out_df = pd.DataFrame(result, columns=["position", "price"], index=df.index)
+        out_df["position"] = out_df["position"].astype(int, copy=False)
+        return out_df
     elif return_type == 3:
         out_df = pd.DataFrame(result, columns=["position", "price"], index=df.index)
+        out_df["position"] = out_df["position"].astype(int, copy=False)
         return out_df["position"], out_df["price"]
     else:
         return df.join(
