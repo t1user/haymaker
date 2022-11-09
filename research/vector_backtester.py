@@ -16,6 +16,11 @@ sys.path.append("/home/tomek/ib_tools")
 
 
 def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
+    """
+    Create daily simple (non-log) returns from log returns at every bar.
+    Columns other than 'returns' is just fucking around. Simple daily
+    returns are needed for pyfolio stats.
+    """
     daily = pd.DataFrame()
     daily["lreturn"] = lreturn.resample("B").sum().dropna()
     daily["returns"] = np.exp(daily["lreturn"]) - 1
@@ -23,11 +28,39 @@ def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
     return daily
 
 
+def daily_returns_pnl_based(price_pnl: pd.DataFrame) -> pd.DataFrame:
+    """
+    Daily returns from absolute pnl and price values.
+    There is no mark-to-market for open positions: i.e. full pnl recognized
+    at the moment position is closed.
+    """
+    daily = price_pnl.resample("B").agg({"price": "first", "pnl": "sum"}).dropna()
+    assert isinstance(daily, pd.DataFrame)
+    daily["returns"] = daily["pnl"] / daily["price"]
+    daily["balance"] = (daily["returns"] + 1).cumprod()
+    return daily
+
+
+def extract_open_stop_positions(df: pd.DataFrame) -> pd.DataFrame:
+    op_s = df[df["open_stop"] != 0]
+    op_s = op_s[["open_price", "stop_price"]]
+    op_s = op_s.reset_index()
+    op_s["date_o"] = op_s["date"]
+    op_s["date_c"] = op_s["date"]
+    del op_s["date"]
+    op_s = op_s.rename(columns={"open_price": "open", "stop_price": "close"})
+    order = ["date_o", "open", "date_c", "close"]
+    op_s = op_s.reindex(columns=order)
+    return op_s
+
+
 class Positions(NamedTuple):
     positions: pd.DataFrame
     opens: pd.DataFrame
     closes: pd.DataFrame
     transactions: int
+    open_stop_positions: Optional[pd.DataFrame] = None
+    df: Optional[pd.DataFrame] = None
 
 
 def pos(
@@ -35,6 +68,7 @@ def pos(
     transaction: pd.Series,
     position: pd.Series,
     cost: float = 0,
+    open_stop_positions: Optional[pd.DataFrame] = None,
 ) -> Positions:
     """
     Match open and close transactions to create position list.
@@ -54,9 +88,9 @@ def pos(
         }
     )
 
-    df["c_transaction"] = (
-        (df["transaction"] != 0) * (-df["position"].shift(1))
-    ).fillna(0)
+    df["c_transaction"] = ((df["transaction"] != 0) * (-df["position"].shift())).fillna(
+        0
+    )
     df["o_transaction"] = df["transaction"] - df["c_transaction"]
 
     # DataFrame calculating per transaction stats
@@ -76,10 +110,15 @@ def pos(
     closes.columns = pd.Index(["date", "close"])
 
     positions = opens.join(closes, how="outer", lsuffix="_o", rsuffix="_c")
+
+    if open_stop_positions is not None:
+        positions = pd.concat([positions, open_stop_positions]).sort_values("date_o")
+
     positions["g_pnl"] = -(positions["open"] + positions["close"])
     positions["pnl"] = positions["g_pnl"] - cost * 2
     positions["duration"] = positions["date_c"] - positions["date_o"]
-    return Positions(positions, opens, closes, transactions)
+
+    return Positions(positions, opens, closes, transactions, open_stop_positions, df)
 
 
 def excursions(
@@ -98,7 +137,7 @@ def excursions(
     divisor: number that favourable and adverse excursions will be
     divided by; typically atr or other volatility indicator, allows to
     express results in terms of vol multiples; it's callers
-    resposibility to ensure that open price is alligned with indicator
+    resposibility to ensure that open price is alligned with divisor
     that would be available at that point in time
 
 
@@ -140,7 +179,10 @@ def excursions(
             h_l = high_low.loc[p.date_o : p.date_c]
             # last candle shouldn't be covered fully, because might have exited
             # before the extreme value was reached
-            h_l = h_l.iloc[:-1]
+            # for single bar positions, we assume bar's extremes were
+            # maximum excursions
+            if len(h_l) > 1:
+                h_l = h_l.iloc[:-1]
             data.append((h_l["high"].max(), h_l["low"].min(), h_l["divisor"].iloc[0]))
         return data
 
@@ -196,7 +238,11 @@ def _skip_last_open(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _perf(
-    price: pd.Series, position: pd.Series, cost: float, skip_last_open: bool
+    price: pd.Series,
+    position: pd.Series,
+    cost: float,
+    skip_last_open: bool = False,
+    ocs: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Convert price, position and transaction cost information into
@@ -226,40 +272,73 @@ def _perf(
         }
     )
 
+    df["position"] = df["position"].astype(int)
+
     if skip_last_open:
         df = _skip_last_open(df)
 
-    df["transaction"] = (df["position"] - df["position"].shift(1).fillna(0)).astype(
-        "int"
-    )
+    df["transaction"] = (df["position"] - df["position"].shift().fillna(0)).astype(int)
 
     df["slippage"] = df["transaction"].abs() * cost
-    if df.position[-1] != 0:  # & (df.transaction[-1] == 0):
-        df.slippage[-1] += np.abs(df.position[-1]) * cost
 
     df["curr_price"] = (df["position"] - df["transaction"]) * df["price"]
+    df["base_price"] = (df["price"].shift(1) * df["position"].shift()).fillna(0)
+    df["g_pnl"] = df["curr_price"] - df["base_price"]
 
-    df["base_price"] = (df["price"].shift(1) * df["position"].shift(1)).fillna(0)
-    # this line doesn't go to further caluclations
-    df["pnl"] = df["curr_price"] - df["base_price"] - df["slippage"]
-    # however convoluted, probably is correct
-    slip_return = np.log((-df["slippage"] / df["price"]) + 1).fillna(0)  # type: ignore
-    price_return = np.log(  # type: ignore
-        ((df["curr_price"] - df["base_price"]) / abs(df["base_price"])) + 1
+    if ocs is not None:
+        df = df.join(ocs)
+        df["open_stop"] = -(
+            (ocs[["open_price", "stop_price"]].sum(axis=1))
+            * (ocs[["open_price", "stop_price"]].astype(bool).all(axis=1))
+        ).fillna(0)
+        df["stop_adj"] = (
+            (df["price"] - df["stop_price"].abs())
+            * np.sign(df["stop_price"])
+            * (df["stop_price"] != 0)
+            * (df["open_stop"] == 0)
+        )
+        df["t_count"] = ocs.astype(bool).sum(axis=1)
+        # overriding slippage on purpose
+        df["slippage"] = df["t_count"] * cost
+        df["g_pnl"] += df["stop_adj"] + df["open_stop"]
+
+    # final open positions must account for closing cost
+    if df.position[-1] != 0:
+        df.slippage[-1] += np.abs(df.position[-1]) * cost
+
+    df["pnl"] = df["g_pnl"] - df["slippage"]
+
+    df["lreturn"] = np.log(
+        (df["pnl"] / df["price"].shift()) + 1  # type: ignore
     ).fillna(0)
-    df["lreturn"] = slip_return + price_return
 
     return df
+
+
+# def separate_open_stops(df: pd.DataFrame) -> pd.DataFrame:
+#         df["open_stop"] = -(
+#         (ocs[["open_price", "stop_price"]].sum(axis=1))
+#         * (ocs[["open_price", "stop_price"]].astype(bool).all(axis=1))
+#     ).fillna(0)
+#     df["stop_adj"] = (
+#         (df["price"] - df["stop_price"].abs())
+#         * np.sign(df["stop_price"])
+#         * (df["stop_price"] != 0)
+#         * (df["open_stop"] == 0)
+#         # * -df["position"].shift()
+#     )
 
 
 class Results(NamedTuple):
     stats: pd.Series
     daily: pd.DataFrame
     positions: pd.DataFrame
-    df: pd.DataFrame
     opens: pd.DataFrame
     closes: pd.DataFrame
+    df: pd.DataFrame
     warnings: List[str]
+    open_stop_positions: Optional[pd.DataFrame] = None
+    pdf: Optional[pd.DataFrame] = None
 
 
 def efficiency(price: pd.Series, strategy_return: float) -> float:
@@ -336,11 +415,45 @@ def last_open_position_warning(
 #     return scipy_stats.norm.cdf((sharpe - sr_benchmark) / sr_std)
 
 
+def generate_positions(open_close: pd.DataFrame) -> pd.Series:
+    """
+    Use df with open, close, stop prices that came from stop-loss
+    to generate resulting positions as of end of every bar.
+    """
+    df = open_close[["open_price", "close_price", "stop_price"]]
+    posi = np.sign(df).astype(int)
+    posi_change = posi.sum(axis=1)
+    posi_end = posi_change.cumsum()
+    return posi_end
+
+
+def pnl_from_stops(df: pd.DataFrame, price: pd.Series) -> float:
+    """Given object generated by stop-loss function, calculate total
+    gross (before fees and slippage) pnl."""
+    from_stop = df[["open_price", "close_price", "stop_price"]]
+    counts = from_stop.astype(bool).sum()
+    total = from_stop.sum(axis=1).sum()
+
+    if counts["open_price"] != (counts["close_price"] + counts["stop_price"]):
+        total += price.iloc[-1] * -np.sign(
+            df[df["open_price"] != 0].open_price.iloc[-1]
+        )
+        counts["close_price"] += 1
+
+    assert counts["open_price"] == (counts["close_price"] + counts["stop_price"]), (
+        "Stop function generated a dataframe, where number of open transactions "
+        "is not equal to number of closing transactions."
+    )
+    return -total
+
+
 def perf(
     price: pd.Series,
-    position: pd.Series,
+    position: Optional[pd.Series] = None,
+    open_close: Optional[pd.DataFrame] = None,
     slippage: float = 1.5,
     skip_last_open: bool = False,
+    raise_exceptions: bool = True,
     **kwargs,
 ) -> Results:
     """Return performance statistics and underlying data for debuging.
@@ -352,8 +465,7 @@ def perf(
     assumed to be entered and closed on the next bar after signal was
     generated
 
-    position - what position is held at each bar, possible values (-1,
-    0, 1)
+    position - position held at each bar (after), possible values (-1, 0, 1)
 
     slippage - transaction cost expressed as multiple of min tick
 
@@ -388,30 +500,77 @@ def perf(
     """
     warnings = []
 
-    if not (isinstance(price, pd.Series) and isinstance(position, pd.Series)):
-        raise TypeError(
-            f"price and position must be pd.Series, not {type(price)}, {type(position)}"
-        )
-
-    if len(price) == 0:
+    if not isinstance(price, pd.Series):
+        raise TypeError(f"price must be a pd.Series, not {type(price)}")
+    elif len(price) == 0:
         raise ValueError("Price series is empty.")
 
-    if len(position[position != 0]) == 0:
-        warnings.append("No positions")
+    if open_close is None:
+        if position is None:
+            raise ValueError("Single price series given without position series.")
+        elif not isinstance(position, pd.Series):
+            raise TypeError(
+                f"Position, if given, must be a pd.Series, not {type(position)}"
+            )
+        elif len(position[position != 0]) == 0:
+            warnings.append("No positions")
+
+    else:
+        if not isinstance(open_close, pd.DataFrame):
+            raise TypeError(
+                f"open_close, if given, must be a pd.DataFrame, not {type(open_close)}"
+            )
+        elif not set(["open_price", "close_price", "stop_price"]).issubset(
+            set(open_close.columns)
+        ):
+            raise ValueError(
+                "open_close should be a DataFrame coming from stop_loss function, "
+                "it  must have columns: 'open_price', 'close_price', 'stop_price"
+            )
+        elif len(open_close[open_close["open_price"] != 0]) == 0:
+            warnings.append("No positions.")
 
     # transaction cost
     cost = get_min_tick(price) * slippage
 
     # generate returns
-    df = _perf(price, position, cost, skip_last_open)
+    if open_close is None:
+        assert position is not None
+    else:
+        position = generate_positions(open_close)
+        if "position" in open_close.columns:
+            assert (open_close["position"] == position).all(), (
+                "Stop loss generated wrong data; open, close, stop prices "
+                "imply different positions than positions returned by stop-loss "
+                "function."
+            )
+        open_close = open_close[["open_price", "close_price", "stop_price"]]
+
+    df = _perf(price, position, cost, skip_last_open, open_close)
+
+    if open_close is None:
+        open_stop_positions = None
+        # price = df["price"]
+    else:
+        try:
+            assert (m := round(pnl_from_stops(open_close, price), 0)) == (
+                m1 := df["g_pnl"].sum().round(0)
+            ), f"pnl from stops: {m}, pnl: {m1}"
+        except AssertionError as e:
+            if raise_exceptions:
+                raise
+            else:
+                warnings.append(str(e))
+
+        open_stop_positions = extract_open_stop_positions(df)
+        price = (
+            ((df["stop_price"] != 0) * (df["open_stop"] == 0) * df["stop_price"])
+            + ((df["stop_price"] != 0) * (df["open_stop"] != 0) * df["price"])
+            + ((df["stop_price"] == 0) * df["price"])
+        ).abs()
 
     # position stats
-    p = pos(
-        df["price"],
-        df["transaction"],
-        df["position"],
-        cost=cost,
-    )
+    p = pos(price, df["transaction"], df["position"], cost, open_stop_positions)
     positions = p.positions
 
     # Warn if final unclosed position doesn't seem to make sense
@@ -421,15 +580,21 @@ def perf(
             warnings.append(warn)
 
     try:
-        assert round(positions.pnl.sum(), 4) == round(
-            df.pnl.sum(), 4
-        ), f"Dubious pnl calcs... from positions: {positions.pnl.sum()} "
-        f"vs. from df: {df.pnl.sum()}"
+        assert positions.pnl.sum() == df.pnl.sum(), (
+            f"Dubious pnl calcs... from positions: {positions.pnl.sum()} "
+            f"vs. from df: {df.pnl.sum()}"
+        )
     except AssertionError as e:
-        warnings.append(str(e))
+        if raise_exceptions:
+            raise
+        else:
+            warnings.append(str(e))
 
     # bar by bar to daily returns
     daily = daily_returns_log_based(df["lreturn"])
+    # this is left in for potential debugging
+    # differences between the two methods are minuscule
+    # daily = daily_returns_pnl_based(df[["pnl", "price"]])
 
     duration = positions["duration"].mean()
 
@@ -467,7 +632,7 @@ def perf(
 
         stats["Days"] = days
         stats["Positions"] = num_pos
-        stats["Trades"] = p.transactions
+        # stats["Trades"] = len(positions)*2
         stats["Monthly EV"] = stats["Positions per day"] * stats["Position EV"] * 21
         stats["Annual EV"] = 12 * stats["Monthly EV"]
 
@@ -481,7 +646,12 @@ def perf(
 
     stats["Efficiency"] = efficiency(price, pyfolio_stats["Cumulative returns"])
     stats["Efficiency_1"] = efficiency_1(price, pyfolio_stats["Cumulative returns"])
+
+    year_frac = (df.index[-1] - df.index[0]) / pd.Timedelta(days=365)  # type: ignore
+    stats["Simple annual return"] = (df["pnl"].sum() / df["price"].iloc[0]) / year_frac
+
     stats = pyfolio_stats.append(stats)
+
     # stats["Probabilistic Sharpe"] = probabilistic_sharpe(
     #    stats["Sharpe ratio"], stats["Skew"], stats["Kurtosis"]
     # )
@@ -492,7 +662,17 @@ def perf(
             f"Warning: {warning:.1%} positions closed on the next candle after open."
         )
 
-    return Results(stats, daily, positions, df, p[1], p[2], warnings)
+    return Results(
+        stats,
+        daily,
+        positions,
+        p.opens,
+        p.closes,
+        df,
+        warnings,
+        p.open_stop_positions,
+        p.df,
+    )
 
 
 def v_backtester(

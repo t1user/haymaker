@@ -186,25 +186,14 @@ class Context:
         adjust: Type[Adjust],
         always_on: bool = True,
     ) -> None:
-        """
-        NO LONGER RELEVANT - TODO
-        always_on - whether the system attempts to always be in the
-        market, True means that closing transaction for a position is
-        simultaneusly a transaction to open opposite position, False
-        means that closing transaction for a position results in
-        system being out of the market.  Triggering brackets doesn't
-        mean openning opposite position (that requires a transaction
-        opposite to current position).
-        """
 
         self._stop = stop
         self._tp = tp
         self._adjust = adjust
-        # self.always_on = always_on
         self.position = 0
         # print(f'Context init: {self}')
 
-    def __call__(self, row: np.ndarray) -> Tuple[int, float]:
+    def __call__(self, row: np.ndarray) -> Tuple[int, float, float, float]:
         (
             self.ante_position,  # position before applying stop loss
             self.transaction,
@@ -215,27 +204,36 @@ class Context:
         ) = row
         return self.dispatch()
 
-    def dispatch(self) -> Tuple[int, float]:
+    def dispatch(self) -> Tuple[int, float, float, float]:
+        self.open_price: float = 0
+        self.close_price: float = 0
+        self.stop_price: float = 0
         if self.position:
             self.eval_for_close()
         else:
             self.eval_for_open()
-        return (self.position, self.price)
+        # keeping price to prevent breaking interface for some older research functions
+        return (
+            self.position,
+            self.open_price,
+            self.close_price,
+            self.stop_price,
+        )
 
     def eval_for_close(self) -> None:
         if self.transaction == -self.position:
             # print(
             #    f'Close transaction: {self.transaction}, h: {self.high} l: {self.low}')
+            # self.close_price = 1  # self.price * -self.position
             self.close_position()
             # this opens oposite position for 'always-on' systems
             self.eval_for_open()
-            # if self.always_on:
-            #    self.open_position()
         else:
             self.eval_brackets()
 
     def eval_for_open(self) -> None:
         if self.transaction and (self.transaction == self.ante_position):
+            # self.open_price = 1  # self.price * self.transaction
             self.open_position(self.transaction)
 
     def open_position(self, transaction: int) -> None:
@@ -243,25 +241,25 @@ class Context:
         self.tp = self._tp(self.distance, transaction, self.price)
         self.adjust = self._adjust(self.distance, transaction, self.price)
         # self.position = self.ante_position
+        self.open_price = self.price * transaction
         self.position = transaction
         # position may be closed on the same bar, where it's opened
         self.eval_brackets()
 
     def close_position(self) -> None:
+        self.close_price = self.price * -self.position
         self.position = 0
         # print("---------------------")
 
     def eval_brackets(self) -> None:
         if p := self.stop.evaluate(self.high, self.low):
             # print(f"stop hit: {self.stop}, h: {self.high}, l: {self.low}")
-            self.price = p
-            self.close_position()
-            return
+            self.stop_price = p * -self.position
+            self.position = 0
         elif p := self.tp.evaluate(self.high, self.low):
             # print(f"tp hit: {self.tp}, h: {self.high}, l: {self.low}")
-            self.price = p
-            self.close_position()
-            return
+            self.stop_price = p * -self.position
+            self.position = 0
         else:
             self.eval_adjust()
 
@@ -278,7 +276,7 @@ class Context:
 
 
 class BlipContext(Context):
-    def __call__(self, row: np.ndarray) -> Tuple[int, float]:
+    def __call__(self, row: np.ndarray) -> Tuple[int, float, float, float]:
         (
             self.blip,
             self.close_blip,
@@ -305,23 +303,34 @@ def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
     Args:
     -----
 
-    data: collumns have the folowing meaning:
-    edit: now 0 - position 1 - transaction
-    TO BE FIXED
-    0 - transaction is -1, 1 or 0 for transaction signal
+    data: collumns have the meaning required by the context is being passed.
 
-    1 - high price for the price bar
+    Currently
+    Context requires:
+    [0] position (before the bar is processed, ie. ante_position)
+    [1] transaction
+    [2] high
+    [3] low
+    [4] distance (required stop distance at given bar)
+    [5] price (at which non-stopped transaction will be executed on this bar)
 
-    2 - low price for the price bar
+    BlipContext requires:
+    [0] blip
+    [1] close_blip
+    [2] high
+    [3] low
+    [4] distance (required stop distance at given bar)
+    [5] price (at which non-stopped transaction will be executed on this bar)
 
-    3 - stop distance (if stop were to be applied at this point)
     """
 
     position = np.zeros((data.shape[0], 1), dtype=np.int8)
-    price = np.zeros((data.shape[0], 1), dtype=np.float32)
+    open_price = np.zeros((data.shape[0], 1), dtype=np.float32)
+    close_price = np.zeros((data.shape[0], 1), dtype=np.float32)
+    stop_price = np.zeros((data.shape[0], 1), dtype=np.float32)
     for i, row in enumerate(data):
-        position[i], price[i] = stop(row)
-    return np.concatenate((position, price), axis=1)
+        position[i], open_price[i], close_price[i], stop_price[i] = stop(row)
+    return np.concatenate((position, open_price, close_price, stop_price), axis=1)
 
 
 def param_factory(
@@ -416,19 +425,7 @@ def stop_loss(
     achieved.
 
     Results of pre-stop/pre-take-profit strategy can be given as
-    transactions or positions.  Transactions have values (-1 or 1)
-    only when new trade to open or close position is required
-    (otherwise zero).  Values of positions indicate what position
-    should be held at a given point in time.
-
-    Values in transaction series have the following meaning: 1 - long
-    transaction -1 - short transaction 0 - no transaction.  Each row
-    indicates whether transaction signal has been generated.
-
-    Values in position series have the following meaning: 1 - long
-    position, -1 - short position, 0 - no position.  Each row
-    indicates whether position should be kept at this time point.
-    Change in position indicates transaction signal.
+    positions or blips.
 
     This function is a user interface for stop-loss applying
     functions, which ultimately will be numba optimized (when numba
@@ -437,12 +434,13 @@ def stop_loss(
     Args:
     -----
 
-    df - THIS IS OUTDATED. NOW DF CAN HAVE POSITION OR BLIP.
-    input dataframe, must have following collumns: ['high',
+    df - input dataframe, must have following collumns: ['high',
     'low'] - high and low prices for the price bar, and either
-    ['transaction'] or ['position'] - result of
-    pre-stop/pre-take-profit strategy, if it has both ['position']
-    takes precedence
+    ['position'] or ['blip']- result of pre-stop/pre-take-profit
+    strategy, if it has both ['position'] takes precedence. If blip is
+    given, additionally, close blip can also be provided, then blip is
+    to open positions close_blip to close. If only blip given, it will
+    be used to both open and close positions.
 
     distance - desired distance of stop loss, which may be given as a
     float if distance value is the same at all time points or a
@@ -476,13 +474,10 @@ def stop_loss(
 
     [1] - position only (pd.Series)
 
-    [2] - position and price (pd.DataFrame)
+    [2] - open, close, stop price and position (pd.DataFrame)
 
-    [3] - two tuple of pd.Series position and price
+    [else] - original DataFrame merged with results of the stop loss
 
-    [else] - original DataFrame with additional columns: 'position'
-    (or 'position_sl' when 'position' was in the origianal df) and
-    price (pd.DataFrame)
     """
 
     if not isinstance(df, pd.DataFrame):
@@ -490,7 +485,7 @@ def stop_loss(
     if not set(df.columns).issuperset(set(["high", "low"])):
         raise ValueError("df must have columns: 'high', 'low'")
     if not ("position" in df.columns or "blip" in df.columns):
-        raise ValueError("df must have either column 'transaction' or 'position'")
+        raise ValueError("df must have either column 'position'or 'blip'")
     if not (price_column in df.columns):
         raise ValueError(f"'{price_column}' indicated as price column, but not in df")
     if multiplier <= 0:
@@ -540,15 +535,24 @@ def stop_loss(
     if return_type == 1:
         return pd.Series(result.T[0].astype("int"), index=df.index)
     elif return_type == 2:
-        out_df = pd.DataFrame(result, columns=["position", "price"], index=df.index)
+        out_df = pd.DataFrame(
+            result,
+            columns=["position", "open_price", "close_price", "stop_price"],
+            index=df.index,
+        )
         out_df["position"] = out_df["position"].astype(int, copy=False)
         return out_df
-    elif return_type == 3:
-        out_df = pd.DataFrame(result, columns=["position", "price"], index=df.index)
-        out_df["position"] = out_df["position"].astype(int, copy=False)
-        return out_df["position"], out_df["price"]
     else:
         return df.join(
-            pd.DataFrame(result, columns=["position", "price"], index=df.index),
+            pd.DataFrame(
+                result,
+                columns=[
+                    "position",
+                    "open_price",
+                    "close_price",
+                    "stop_price",
+                ],
+                index=df.index,
+            ),
             rsuffix="_sl",
         )
