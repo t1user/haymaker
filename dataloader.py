@@ -51,7 +51,7 @@ class ContractObjectSelector:
         log.debug("Objects created")
 
     def create_objects(self) -> None:
-        self.objects = [Contract.create(**s) for s in self.symbols]
+        self.objects = [Contract.create(**s) for s in self.symbols]  # type: ignore
         self.non_futures = [obj for obj in self.objects if not isinstance(obj, Future)]
         log.debug(f"non-futures: {self.non_futures}")
         self.futures = [obj for obj in self.objects if isinstance(obj, Future)]
@@ -183,6 +183,8 @@ class DataWriter:
 
     def save_chunk(self, data: BarDataList):
         assert self._current_object is not None
+        # TODO
+        # next data sometimes becomes None and subsequenty throws error in line 362
         next_date = self._current_object.save(data)
         log.debug(f"{self.c}: chunk saved, next_date: {next_date}")
         if next_date:
@@ -196,7 +198,9 @@ class DataWriter:
             data = self.data
             if data is None:
                 data = pd.DataFrame()
-            data = data.append(_data)
+            # TODO: replace append with concat
+            data = pd.concat([data, _data])
+            # data = data.append(_data)
             version = self.store.write(self.contract, data)
             log.debug(f"data written to datastore as {version}")
             if version:
@@ -293,7 +297,7 @@ class DataWriter:
     def from_date(self) -> Optional[datetime]:
         """Earliest point in datastore"""
         # second point in the df to avoid 1 point gap
-        return self.data.index[1] if self.data is not None else None
+        return self.data.index[1] if self.data is not None else None  # type: ignore
 
     @property
     def to_date(self) -> Optional[datetime]:
@@ -359,6 +363,7 @@ class DownloadContainer:
         difficult to find gaps would possibly occur in datastore."""
 
         if self.update:
+            # TODO: this throws errors occationally
             return self.df.index.min() <= self.from_date
         else:
             return True
@@ -788,7 +793,7 @@ async def main(holder: ContractHolder) -> None:
         holder.barSize, holder.wts, restrictions=[(2, 6), (600, 60 - number_of_workers)]
     )
     log.debug(f"Pacer initialized: {p}")
-    workers = [
+    workers: List[asyncio.Task] = [
         create_task(
             worker(f"worker {i}", queue, p),
             logger=log,
@@ -817,7 +822,7 @@ if __name__ == "__main__":
     util.patchAsyncio()
     ib = IB()
     barSize = "1 secs"
-    wts = "BID_ASK"
+    wts = "MIDPOINT"
     # object where data is stored
     store = ArcticStore(f"{wts}_{barSize}")
 

@@ -3,24 +3,24 @@ Source: https://quantlane.com/blog/ensure-asyncio-task-exceptions-get-logged/
 """
 
 
-from typing import Any, Awaitable, Optional, TypeVar, Tuple
+from typing import Any, Optional, TypeVar, Tuple, Coroutine
 
 import asyncio
 import functools
 import logging
 
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def create_task(
-        coroutine: Awaitable[T],
-        *,
-        logger: logging.Logger,
-        message: str,
-        message_args: Tuple[Any, ...] = (),
-        loop: Optional[asyncio.AbstractEventLoop] = None,
-) -> 'asyncio.Task[T]':
+    coroutine: Coroutine,
+    *,
+    logger: logging.Logger,
+    message: str,
+    message_args: Tuple[Any, ...] = (),
+    loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> "asyncio.Task[T]":
     # This type annotation has to be quoted for Python < 3.9,
     # see https://www.python.org/dev/peps/pep-0585/
     """
@@ -32,10 +32,14 @@ def create_task(
     """
     if loop is None:
         loop = asyncio.get_running_loop()
-    task = loop.create_task(coroutine)
+    task: asyncio.Task = loop.create_task(coroutine)
     task.add_done_callback(
-        functools.partial(_handle_task_result, logger=logger,
-                          message=message, message_args=message_args)
+        functools.partial(
+            _handle_task_result,
+            logger=logger,
+            message=message,
+            message_args=message_args,
+        )
     )
     return task
 
