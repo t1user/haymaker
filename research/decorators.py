@@ -3,7 +3,7 @@ from functools import wraps
 import pandas as pd
 
 
-def verify_input(func):
+def ensure_df(func):
     """Allow signal producting functions to work with either dataframe or series."""
 
     @wraps(func)

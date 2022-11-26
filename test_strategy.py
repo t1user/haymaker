@@ -5,18 +5,36 @@ from ib_insync import ContFuture
 from logbook import Logger
 
 from streamers import VolumeStreamer
-from candle import (MultipleBreakoutCandle, BreakoutLockCandle, BreakoutCandle,
-                    CarverCandle, RsiCandle, BreakoutBufferCandle,
-                    BreakoutLockBufferCandle, RocCandle, RocCandleFiltered,
-                    BollingerCandle, BreakoutStrenthFilteredCandle,
-                    DonchianCandle, BreakoutCandleVolFilter,
-                    BreakoutLockCandleVolFilter)
-from portfolio import (FixedPortfolio, AdjustedPortfolio,
-                       WeightedAdjustedPortfolio,
-                       DoubleSignalFixedPortfolio)
-from execution_models import (EventDrivenExecModel, StopMultipleTakeProfit,
-                              EventDrivenTakeProfitExecModel, OcaExecModel,
-                              AdjustableTrailingStopExecModel, BaseExecModel)
+from candle import (
+    MultipleBreakoutCandle,
+    BreakoutLockCandle,
+    BreakoutCandle,
+    CarverCandle,
+    RsiCandle,
+    BreakoutBufferCandle,
+    BreakoutLockBufferCandle,
+    RocCandle,
+    RocCandleFiltered,
+    BollingerCandle,
+    BreakoutStrenthFilteredCandle,
+    DonchianCandle,
+    BreakoutCandleVolFilter,
+    BreakoutLockCandleVolFilter,
+)
+from portfolio import (
+    FixedPortfolio,
+    AdjustedPortfolio,
+    WeightedAdjustedPortfolio,
+    DoubleSignalFixedPortfolio,
+)
+from execution_models import (
+    EventDrivenExecModel,
+    StopMultipleTakeProfit,
+    EventDrivenTakeProfitExecModel,
+    OcaExecModel,
+    AdjustableTrailingStopExecModel,
+    BaseExecModel,
+)
 
 
 log = Logger(__name__)
@@ -55,21 +73,21 @@ class Params:
 
 
 nq = Params(
-    contract=ContFuture('NQ', 'GLOBEX'),
-    micro_contract=ContFuture('MNQ', 'GLOBEX'),
+    contract=ContFuture("NQ", "GLOBEX"),
+    micro_contract=ContFuture("MNQ", "GLOBEX"),
     trades_per_day=3.8,
     # avg_periods=60,
     volume=12000,
     min_atr=14,
-    alloc=.3,
+    alloc=0.3,
     lock_filter=0.004,
     tp_multiple=8,
 )
 
 es = Params(
-    contract=ContFuture('ES', 'GLOBEX'),
-    micro_contract=ContFuture('MES', 'GLOBEX'),
-    trades_per_day=.5,
+    contract=ContFuture("ES", "GLOBEX"),
+    micro_contract=ContFuture("MES", "GLOBEX"),
+    trades_per_day=0.5,
     ema_fast=120,
     ema_slow=320,
     atr_periods=180,
@@ -77,34 +95,34 @@ es = Params(
     # avg_periods=60,
     volume=43000,
     min_atr=5,
-    alloc=.2,
+    alloc=0.2,
     lock_periods_multiple=1,
-    tp_multiple=2
+    tp_multiple=2,
 )
 
 gc = Params(
-    contract=ContFuture('GC', 'NYMEX'),
-    micro_contract=ContFuture('MGC', 'NYMEX'),
-    trades_per_day=.5,
+    contract=ContFuture("GC", "NYMEX"),
+    micro_contract=ContFuture("MGC", "NYMEX"),
+    trades_per_day=0.5,
     ema_fast=60,
     periods=60,
     sl_atr=2,
     # avg_periods=60,
     volume=5500,
     min_atr=1.9,
-    alloc=.2,
-    tp_multiple=6
+    alloc=0.2,
+    tp_multiple=6,
 )
 
 ym = Params(
-    contract=ContFuture('YM', 'ECBOT'),
-    micro_contract=ContFuture('MYM', 'ECBOT'),
+    contract=ContFuture("YM", "ECBOT"),
+    micro_contract=ContFuture("MYM", "ECBOT"),
     trades_per_day=1,
     ema_fast=60,
     sl_atr=2,
     # avg_periods=60,
     volume=8000,
-    alloc=.3,
+    alloc=0.3,
     tp_multiple=6,
     min_atr=55,
 )
@@ -114,24 +132,29 @@ ym = Params(
 
 exec_model = EventDrivenTakeProfitExecModel()
 
-candles = [BreakoutLockCandleVolFilter(VolumeStreamer(params.volume,
-                                                      params.avg_periods),
-                                       contract_fields=[
-    'contract', 'micro_contract'],
-    **params.__dict__)
-    for params in [es]]
+candles = [
+    BreakoutLockCandleVolFilter(
+        VolumeStreamer(params.volume, params.avg_periods),
+        contract_fields=["contract", "micro_contract"],
+        **params.__dict__
+    )
+    for params in [es]
+]
 
 
-candles.extend([BreakoutCandleVolFilter(VolumeStreamer(params.volume,
-                                                       params.avg_periods),
-                                        contract_fields=[
-    'contract', 'micro_contract'],
-    **params.__dict__)
-    for params in [nq, ym]])
+candles.extend(
+    [
+        BreakoutCandleVolFilter(
+            VolumeStreamer(params.volume, params.avg_periods),
+            contract_fields=["contract", "micro_contract"],
+            **params.__dict__
+        )
+        for params in [nq, ym]
+    ]
+)
 
 
-portfolio = AdjustedPortfolio(target_vol=.55)
+# portfolio = AdjustedPortfolio(target_vol=.55)
+portfolio = FixedPortfolio()
 
-strategy_kwargs = {'candles': candles,
-                   'portfolio': portfolio,
-                   'exec_model': exec_model}
+strategy_kwargs = {"candles": candles, "portfolio": portfolio, "exec_model": exec_model}

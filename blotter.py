@@ -9,7 +9,8 @@ from ib_insync.objects import Fill, CommissionReport
 from ib_insync import util
 from logbook import Logger  # type: ignore
 from pymongo import MongoClient  # type: ignore
-import motor.motor_asyncio  # type: ignore
+
+# import motor.motor_asyncio  # type: ignore
 from arctic import TICK_STORE, Arctic  # type: ignore
 import pandas as pd  # type: ignore
 

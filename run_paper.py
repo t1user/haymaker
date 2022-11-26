@@ -13,25 +13,27 @@ log = rotating_logger_with_shell(__file__[:-3], DEBUG, DEBUG)
 
 
 class Start(Handlers):
-
     def __init__(self, ib, manager):
         util.patchAsyncio()
         self.manager = manager
-        ibc = IBC(twsVersion=981,
-                  gateway=True,
-                  tradingMode='paper',
-                  )
-        watchdog = Watchdog(ibc, ib,
-                            port='4002',
-                            clientId=0,
-                            )
-        log.debug('attaching handlers...')
+        ibc = IBC(
+            twsVersion=1020,
+            gateway=True,
+            tradingMode="paper",
+        )
+        watchdog = Watchdog(
+            ibc,
+            ib,
+            port="4002",
+            clientId=0,
+        )
+        log.debug("attaching handlers...")
         super().__init__(ib, watchdog)
         # this is the main entry point into strategy
         watchdog.startedEvent += manager.onStarted
-        log.debug('initializing watchdog...')
+        log.debug("initializing watchdog...")
         watchdog.start()
-        log.debug('watchdog initialized')
+        log.debug("watchdog initialized")
         ib.run()
 
 

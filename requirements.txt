@@ -1,7 +1,5 @@
-pandas
-numpy
 ib_insync
 git+https://github.com/manahl/arctic.git
 logbook
-pymongo
 pyfolio
+motor

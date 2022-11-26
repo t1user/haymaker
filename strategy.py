@@ -37,8 +37,8 @@ class Params:
 
 
 nq = Params(
-    contract=ContFuture("NQ", "GLOBEX"),
-    micro_contract=ContFuture("MNQ", "GLOBEX"),
+    contract=ContFuture("NQ", "CME"),
+    micro_contract=ContFuture("MNQ", "CME"),
     trades_per_day=4,
     volume=12000,
     min_atr=14,
@@ -47,8 +47,8 @@ nq = Params(
 )
 
 es = Params(
-    contract=ContFuture("ES", "GLOBEX"),
-    micro_contract=ContFuture("MES", "GLOBEX"),
+    contract=ContFuture("ES", "CME"),
+    micro_contract=ContFuture("MES", "CME"),
     trades_per_day=0.5,
     atr_periods=180,
     ema_fast=120,

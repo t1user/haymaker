@@ -64,6 +64,8 @@ class BarStreamer(ABC):
 
     def onNewBar(self, bars: BarDataList, hasNewBar: bool) -> None:
         if hasNewBar:
+            # latest bar is "under construction", [-2] is the latest
+            # ready for consumption
             self.aggregate(bars[-2])
 
     @abstractmethod
@@ -104,7 +106,7 @@ class StreamAggregator(BarStreamer):
 
     def create_candle(self) -> None:
         df = util.df(self.new_bars)
-        df.date = df.date.astype("datetime64")
+        df.date = df.date.astype("datetime64[ns]")
         df.set_index("date", inplace=True)
         df["volume_weighted"] = df.average * df.volume
         weighted_price = df.volume_weighted.sum() / df.volume.sum()
@@ -202,7 +204,7 @@ class VolumeStreamer(StreamAggregator):
     def all_bars_df(self):
         if self.all_bars:
             df = util.df(self.all_bars)
-            df.date = df.date.astype("datetime64")
+            df.date = df.date.astype("datetime64[ns]")
             df.set_index("date", inplace=True)
         else:
             df = pd.DataFrame()

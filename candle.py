@@ -60,7 +60,12 @@ class Candle(ABC):
 
     def __call__(self, ib: IB):
         log.debug(f"Candle {self.contract.localSymbol} initializing data stream...")
-        self.details = ib.reqContractDetails(self.contract)[0]
+        try:
+            self.details = ib.reqContractDetails(self.contract)[0]
+        except IndexError:
+            # catch error when contract is unrecognised
+            # TODO
+            raise
         self.streamer(ib, self.contract)
 
     def append(self, candle: Dict[str, Any]):
