@@ -184,7 +184,6 @@ class Context:
         stop: Type[BaseBracket],
         tp: Type[BaseBracket],
         adjust: Type[Adjust],
-        always_on: bool = True,
     ) -> None:
 
         self._stop = stop
@@ -195,7 +194,7 @@ class Context:
 
     def __call__(self, row: np.ndarray) -> Tuple[int, float, float, float]:
         (
-            self.ante_position,  # position before applying stop loss
+            self.target_position,  # required position before sl applied
             self.transaction,
             self.high,
             self.low,
@@ -212,7 +211,6 @@ class Context:
             self.eval_for_close()
         else:
             self.eval_for_open()
-        # keeping price to prevent breaking interface for some older research functions
         return (
             self.position,
             self.open_price,
@@ -232,7 +230,7 @@ class Context:
             self.eval_brackets()
 
     def eval_for_open(self) -> None:
-        if self.transaction and (self.transaction == self.ante_position):
+        if self.transaction and (self.transaction == self.target_position):
             # self.open_price = 1  # self.price * self.transaction
             self.open_position(self.transaction)
 
@@ -240,7 +238,7 @@ class Context:
         self.stop = self._stop(self.distance, transaction, self.price)
         self.tp = self._tp(self.distance, transaction, self.price)
         self.adjust = self._adjust(self.distance, transaction, self.price)
-        # self.position = self.ante_position
+        # self.position = self.target_position
         self.open_price = self.price * transaction
         self.position = transaction
         # position may be closed on the same bar, where it's opened
@@ -307,7 +305,7 @@ def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
 
     Currently
     Context requires:
-    [0] position (before the bar is processed, ie. ante_position)
+    [0] position (before the bar is processed, ie. target_position)
     [1] transaction
     [2] high
     [3] low
@@ -412,10 +410,9 @@ def stop_loss(
     adjust: Optional[Tuple[StopMode, float, float]] = None,
     multiplier: float = 1,
     price_column: str = "open",
-    return_type: int = 1,
-) -> Union[pd.Series, pd.DataFrame, Tuple[pd.Series, pd.Series]]:
-    """
-    Apply stop loss and optionally take profit to a strategy.
+    **kwargs,
+) -> pd.DataFrame:
+    """Apply stop loss and optionally take profit to a strategy.
 
     Convert a series with transactions or positions into a series with
     positions resulting from applying a specified type of stop loss.
@@ -440,7 +437,11 @@ def stop_loss(
     strategy, if it has both ['position'] takes precedence. If blip is
     given, additionally, close blip can also be provided, then blip is
     to open positions close_blip to close. If only blip given, it will
-    be used to both open and close positions.
+    be used to both open and close positions.  Blips must be shifted
+    to appear at the appropriate point in time, i.e. they must appear
+    at the time points where transaction should be executed (similarly
+    position changes at the points in time where transaction should be
+    executed). Stop will not shift blilps (or any other indicators).
 
     distance - desired distance of stop loss, which may be given as a
     float if distance value is the same at all time points or a
@@ -477,7 +478,6 @@ def stop_loss(
     [2] - open, close, stop price and position (pd.DataFrame)
 
     [else] - original DataFrame merged with results of the stop loss
-
     """
 
     if not isinstance(df, pd.DataFrame):
@@ -514,8 +514,9 @@ def stop_loss(
         if "close_blip" not in _df.columns:
             _df["close_blip"] = _df["blip"]
         # we want to be returning positions rather than signals
-        _df["blip"] = _df["blip"].shift().fillna(0)
-        _df["close_blip"] = _df["close_blip"].shift().fillna(0)
+        # blips have to be shifted (before upsampling)
+        _df["blip"] = _df["blip"]
+        _df["close_blip"] = _df["close_blip"]
         data_fields = [
             "blip",
             "close_blip",
@@ -529,30 +530,10 @@ def stop_loss(
     data = _df[[*data_fields]].to_numpy()
     result = _stop_loss(data, context)
 
-    # I fucking hate that: TODO
-    # result[:1] = round_tick(pd.Series(result[:1].T)).values.T
-
-    if return_type == 1:
-        return pd.Series(result.T[0].astype("int"), index=df.index)
-    elif return_type == 2:
-        out_df = pd.DataFrame(
-            result,
-            columns=["position", "open_price", "close_price", "stop_price"],
-            index=df.index,
-        )
-        out_df["position"] = out_df["position"].astype(int, copy=False)
-        return out_df
-    else:
-        return df.join(
-            pd.DataFrame(
-                result,
-                columns=[
-                    "position",
-                    "open_price",
-                    "close_price",
-                    "stop_price",
-                ],
-                index=df.index,
-            ),
-            rsuffix="_sl",
-        )
+    out_df = pd.DataFrame(
+        result,
+        columns=["position", "open_price", "close_price", "stop_price"],
+        index=df.index,
+    )
+    out_df["position"] = out_df["position"].astype(int, copy=False)
+    return out_df

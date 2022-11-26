@@ -297,7 +297,7 @@ def volume_grouper(
     df: pd.DataFrame,
     target: int,
     field: str = "volume",
-    label: Literal["left", "right"] = "right",
+    label: Literal["left", "right"] = "left",
 ) -> pd.DataFrame:
 
     if not set(["open", "high", "low", "close", field]).issubset(set(df.columns)):

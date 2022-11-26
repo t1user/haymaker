@@ -232,6 +232,7 @@ def cont_downsampled_func(d: pd.Series, bar: int, func, *args, **kwargs) -> pd.S
 
     # easier to reshape in numpy
     values = d.values
+    assert isinstance(values, np.ndarray)
     start_index = values.shape[0] % bar
     step1 = pd.DataFrame(values[start_index:].reshape((-1, bar)))
     step2 = func(step1, *args, **kwargs)
@@ -351,7 +352,7 @@ def get_min_max_df(
     return {"min": mins, "max": maxs}
 
 
-def get_signals(data: pd.Series, periods: Tuple[int]) -> pd.Series:
+def get_signals(data: pd.Series, periods: Tuple[int]) -> pd.DataFrame:
     min_max = get_min_max_df(data, periods)
     return pd.DataFrame(
         {

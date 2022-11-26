@@ -302,7 +302,7 @@ def upsample(
     df: pd.DataFrame,
     dfg: pd.DataFrame,
     *,
-    labels: Literal["left", "right"] = "right",
+    label: Literal["left", "right"] = "left",
     keep: Optional[Union[str, Sequence[str]]] = None,
     propagate: Optional[Union[str, Sequence[str]]] = None,
 ) -> pd.DataFrame:
@@ -310,12 +310,12 @@ def upsample(
     Upsample time series by combining higher frequency and lower
     frequency dataframes.
 
-    df: higher frequency data, all columns will be kept
+    df: higher frequency data, all columns will be kept; data is left labeled
 
     dfg: lower frequency data, only non-overlapping columns will be kept, unless
     columns to keep are given explicitly
 
-    labels: how the dfg is labeled; must be specified correctly or there
+    label: how the dfg is labeled; must be specified correctly or there
     is strong future snooping
 
     propagate: columns, that will be propagated
@@ -357,19 +357,22 @@ def upsample(
         df: pd.DataFrame,
         dfg: pd.DataFrame,
         upsampled_columns: List[str],
-        labels: Literal["left", "right"],
+        label: Literal["left", "right"],
     ) -> pd.DataFrame:
-        """Before joining the two dataframes, ensure that they are
-        correctly aligned. If the dfg is left label (which is
-        typical), its values need to be shifted"""
-        if labels == "right":
+        """
+        Before joining the two dataframes, ensure that they are
+        correctly aligned. Signal and blip should be shifted on dfg
+        BEFORE upsampling.
+
+        """
+        if label == "left":
             joined_df = df.join(dfg[upsampled_columns])
-        elif labels == "left":
-            dfg = dfg.shift()
+        elif label == "right":
+            dfg = dfg.shift(-1)
             joined_df = df.join(dfg[upsampled_columns])
-            joined_df[upsampled_columns] = joined_df[upsampled_columns].shift(-1)
+            joined_df[upsampled_columns] = joined_df[upsampled_columns].shift(1)
         else:
-            raise ValueError(f"labels must be 'left' or 'right', '{labels}' given")
+            raise ValueError(f"label must be 'left' or 'right', '{label}' given")
 
         return joined_df
 
@@ -377,7 +380,11 @@ def upsample(
     # preserve types to be able to cast back into them
     types = dfg[upsampled_columns].dtypes.to_dict()
 
-    joined_df = join(df, dfg, upsampled_columns, labels)
+    # ffill and subsequent dropnas depend on dfg not having n/a's
+    if len(dfg[dfg.isna().any(axis=1)]) != 0:
+        raise ValueError("Lower frequency dataframe (dfg) must not have n/a values.")
+
+    joined_df = join(df, dfg, upsampled_columns, label)
 
     if not (keep or propagate):
         warn_blip(upsampled_columns)
@@ -397,9 +404,9 @@ def upsample(
             assert propagate is not None
             propagate = verify(propagate)
             keep = list(set(upsampled_columns) - set(propagate))
-            joined_df[keep] = joined_df[keep].fillna(0)
-            joined_df[propagate] = joined_df[propagate].ffill()
-            warn_blip(propagate)
+    joined_df[keep] = joined_df[keep].fillna(0)
+    joined_df[propagate] = joined_df[propagate].ffill()
+    warn_blip(propagate)
     return joined_df.dropna().astype(types)  # type: ignore
 
 
@@ -562,3 +569,36 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFr
         return df.cumsum()
     else:
         return df
+
+
+def vector_grouper(
+    df: pd.DataFrame,
+    number: int,
+    field: str = "volume",
+    label: Literal["left", "right"] = "left",
+) -> pd.DataFrame:
+    """
+    Alternative (volume) grouper. Vector based. Difference with
+    numba_tools grouper is about the treatment of the first/last bar
+    in a grouped candle. No look-forward bias in either, slightly
+    different approach, both doable in event driven live system.
+
+    """
+    df = df.copy()
+    df = df.reset_index(drop=False)
+    df["index_"] = (df[field].cumsum() // number).shift().fillna(0)
+    return (
+        df.groupby("index_")
+        .agg(
+            {
+                "date": "first",
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+                "barCount": "sum",
+            }
+        )
+        .set_index("date")
+    )

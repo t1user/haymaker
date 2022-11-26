@@ -58,7 +58,7 @@ class VolumeGrouper:
 
         data has fields: date, volume.
         """
-        self.avg_vol = self.bar_volume.get(data["date"].floor("d"))
+        self.avg_vol = self.bar_volume.get(data["date"].floor("d"))  # type: ignore
         if self.avg_vol is None:
             return np.nan
         return self.group(data["volume"])
@@ -86,7 +86,7 @@ class VolumeGrouper:
         daily_volume = self.in_df.resample("B").agg(
             {"close": "count", "volume": "mean"}
         )
-        daily_volume.rename(
+        daily_volume.rename(  # type: ignore
             columns={"close": "count", "volume": "mean_volume"}, inplace=True
         )
         daily_volume["rolling_volume"] = (

@@ -11,6 +11,7 @@ from typing import (
     Union,
 )
 
+from datetime import datetime as time
 import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import seaborn as sns  # type: ignore
@@ -39,8 +40,7 @@ class Optimizer:
 
     func - must take exactly two parameters and return a continuous
     signal (transaction will be executed when signal changes, on index
-    point subsequent to the change) WHAT FUCKING PARAMETERS YOU PIECE
-    OF SHIT????
+    point subsequent to the change)
 
     sp_1 and sp_2 - given as tuples (start, step, mode), where mode is
     either 'geo' for geometric progression or 'lin' for linear
@@ -97,6 +97,8 @@ class Optimizer:
 
     """
 
+    in_data: Union[pd.Series, pd.DataFrame]
+
     def __init__(
         self,
         df: pd.DataFrame,
@@ -112,6 +114,7 @@ class Optimizer:
         save_mem: bool = False,
         **kwargs,
     ) -> None:
+        self.time = time.now()
 
         if not (pairs or (sp_1 and sp_2)):
             raise ValueError("Either pairs or parameters required")
@@ -220,13 +223,20 @@ class Optimizer:
                 data["price"], data["position"], slippage=self.slip, **self.kwargs
             )
         else:
-            # indicator requires signal and series
             data = self.func(self.in_data, *args, **kwargs)
             if isinstance(data, tuple):
-                # position and price returend
-                # WHY THE FUCK IS ORDER SWAPPED????????? TODO
-                out = perf(data[1], data[0], slippage=self.slip, **self.kwargs)
+                # if tuple returned it must be directly passable to perf
+                assert (
+                    len(data) == 2
+                ), f"Function returned tuple of shape {len(data)} instead of 2."
+                try:
+                    out = perf(*data, slippage=self.slip, **self.kwargs)
+                except:  # noqa
+                    print(f"Error for pair: {pair}")
+                    raise
             elif isinstance(data, pd.DataFrame):
+                # likely doesn't work now
+                # NOT IN USE
                 if not set(["position", "price"]).issubset(set(data.columns)):
                     raise ValueError(
                         f"optimizer received df with columns: {data.columns}, "
@@ -352,7 +362,12 @@ class Optimizer:
         return {k: v for k, v in self.raw_warnings.items() if len(v) != 0}
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(func={self.func.__name__})"
+        try:
+            func = self.func.__name__
+        except AttributeError:
+            # this is for partial objects
+            func = self.func.func.__name__
+        return f"{self.__class__.__name__}(func={func})"
 
     def __str__(self):
         return f"TWo param simulation for {self.func.__name__}"
@@ -454,7 +469,7 @@ class OptiWrapper:
         df["position"] = sig_pos(
             self.func(in_data, **self.signal_kwargs, **params_values["signal"])
         )
-        return stop_loss(df, return_type=2, **self.stop_kwargs, **params_values["stop"])
+        return stop_loss(df, **self.stop_kwargs, **params_values["stop"])
 
     def optimize(self, df: pd.DataFrame, sp_1, sp_2, slip: float = 1.5) -> Optimizer:
         return Optimizer(df, self, sp_1, sp_2, slip=slip)
