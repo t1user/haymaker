@@ -101,10 +101,9 @@ def swing(
     data: pd.DataFrame,
     f: Union[float, np.ndarray, pd.Series],
     margin: Optional[Union[float, pd.Series]] = None,
-    output_as_tuple: bool = True,
+    output_as_df: bool = True,
 ) -> Union[np.ndarray, pd.DataFrame]:
-    """
-    Simulate swing trading signals and return generated output series.
+    """Simulate swing trading signals and return generated output series.
 
     User interface allowing to use numba optimized _swing function
     passing pandas objects (See _swing docstring).  This should be
@@ -132,8 +131,8 @@ def swing(
     margin: how much previous swing pivot has to be breached to
     establish swing reversal, expressed in multiples of f
 
-    output_as_tuple: whether data should be returned as a named tuple
-    with each property as a pd.Series or raw numpy array
+    output_as_df: whether data should be returned as a dataframe or
+    raw numpy array
 
     Returns:
     --------
@@ -178,14 +177,17 @@ def swing(
 
     output = _swing(_data, f, _margin)
 
-    if output_as_tuple:
-        return data.join(
+    if output_as_df:
+        out = data.join(
             pd.DataFrame(
                 output,
                 columns=["state", "extreme", "pivot", "signal", "last_max", "last_min"],
                 index=data.index,
             )
         )
+        out["state"] = out["state"].astype(int)
+        out["signal"] = out["signal"].astype(int)
+        return out
     else:
         return output
 
@@ -479,12 +481,12 @@ def pivot(
         return df
 
 
-def clear_runway(df: pd.DataFrame, initial_state: Literal[-1, 1] = 1) -> pd.DataFrame:
+def clear_runway(df: pd.DataFrame) -> pd.DataFrame:
     """For swing and pivot function - clear initial initialization period data."""
+    initial_state = df["state"].iloc[0]
     data = df[df["state"] == -initial_state]
     if len(data) > 0:
         start = data.index[0]
-        assert isinstance(start, int)
         data = df[start:][1:]
     return data
 

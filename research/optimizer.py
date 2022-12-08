@@ -250,6 +250,11 @@ class Optimizer:
                 out = perf(
                     self.df["open"], sig_pos(data), slippage=self.slip, **self.kwargs
                 )
+        if self.save_mem:
+            # daily and df attributes dropped to limit memory usage
+            return Results(
+                out.stats, pd.DataFrame(), out.positions, pd.DataFrame(), out.warnings
+            )
         return out
 
     def bulk_save(self, data: Dict[Tuple[float, float], Results]) -> None:
@@ -263,6 +268,7 @@ class Optimizer:
         if not self.save_mem:
             self.raw_dailys[pair] = out.daily
             self.raw_dfs[pair] = out.df
+        del out
 
     def extract_stats(self) -> None:
         self._fields = [i for i in self.raw_stats[self.pairs[-1]].index]
@@ -305,7 +311,10 @@ class Optimizer:
                 self._table[key] = table.fillna(0).astype(dtypes[key])
             except TypeError:
                 if dtypes[key] == pd.Timedelta:
-                    self._table[key] = table / pd.Timedelta("1day")
+                    try:
+                        self._table[key] = table / pd.Timedelta("1day")
+                    except:  # noqa
+                        self._table[key] = table
 
     def extract_dailys(self) -> None:
         log_returns = {}

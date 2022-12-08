@@ -316,7 +316,7 @@ def upsample(
     columns to keep are given explicitly
 
     label: how the dfg is labeled; must be specified correctly or there
-    is strong future snooping
+    is strong future snooping; for positions and blips, series should be labeled: right;
 
     propagate: columns, that will be propagated
 
@@ -472,7 +472,7 @@ def zero_crosser(indicator: pd.Series) -> pd.Series:
     having crossed zero.
     """
 
-    return ((indicator.shift() * indicator) <= 0) * np.sign(indicator)
+    return (((indicator.shift() * indicator) <= 0) * np.sign(indicator)).astype(int)
 
 
 def rolling_weighted_mean(
@@ -507,9 +507,9 @@ def stop_signal(
     """
     _df = df.copy()
     _df["position"] = sig_pos(signal_func(_df["close"], *func_args))
-    stopped = stop_loss(_df, **stop_kwargs, return_type=2)
+    stopped = stop_loss(_df, **stop_kwargs)
     assert isinstance(stopped, pd.DataFrame)
-    return stopped
+    return stopped["position"]
 
 
 def long_short_returns(r: Results) -> pd.DataFrame:
@@ -580,8 +580,8 @@ def vector_grouper(
     """
     Alternative (volume) grouper. Vector based. Difference with
     numba_tools grouper is about the treatment of the first/last bar
-    in a grouped candle. No look-forward bias in either, slightly
-    different approach, both doable in event driven live system.
+    in a grouped candle.  This method has a small look-ahead bias,
+    i.e. is not usable for anything serious.
 
     """
     df = df.copy()

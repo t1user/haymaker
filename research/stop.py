@@ -495,6 +495,7 @@ def stop_loss(
 
     _df = df.copy()
     _df["distance"] = distance * multiplier
+    assert _df["distance"].min() > 0, "Wrong values for stop loss distance"
 
     params = param_factory(mode, tp_multiple, adjust)
 

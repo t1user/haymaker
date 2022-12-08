@@ -563,7 +563,8 @@ def perf(
         warnings.append("No positions")
 
     # transaction cost
-    cost = get_min_tick(price) * slippage
+    min_tick = get_min_tick(price)
+    cost = min_tick * slippage
 
     df = _perf(price, position, cost, open_close)
 
@@ -609,7 +610,8 @@ def perf(
     positions = p
 
     try:
-        assert positions.pnl.sum() == df.pnl.sum(), (
+        # exact comparision (==) causes floating arithmetics issues
+        assert abs(positions.pnl.sum() - df.pnl.sum()) < 0.01, (
             f"Dubious pnl calcs... from positions: {positions.pnl.sum()} "
             f"vs. from df: {df.pnl.sum()}"
         )
@@ -630,10 +632,16 @@ def perf(
         if warn is not None:
             warnings.append(warn)
 
-    assert df.g_pnl.sum() == positions.g_pnl.sum(), (
-        f"gross pnl from positions: {positions.g_pnl.sum()}, "
-        f"gross pnl from df: {df.g_pnl.sum()}"
-    )
+    try:
+        assert abs(df.g_pnl.sum() - positions.g_pnl.sum()) < 0.01, (
+            f"gross pnl from positions: {positions.g_pnl.sum()}, "
+            f"gross pnl from df: {df.g_pnl.sum()}"
+        )
+    except AssertionError as e:
+        if raise_exceptions:
+            raise
+        else:
+            warnings.append(str(e))
 
     # bar by bar to daily returns
     daily = daily_returns_log_based(df["lreturn"])
@@ -665,10 +673,16 @@ def perf(
         # )
 
         stats["Position EV"] = positions.pnl.mean()
+        stats["Position EV in ticks"] = stats["Position EV"] / min_tick
 
         stats["Long EV"] = positions[positions["open"] > 0].pnl.mean()
         stats["Short EV"] = positions[positions["open"] < 0].pnl.mean()
-
+        sorted_gains = positions["pnl"].sort_values().values
+        if len(sorted_gains) > 0:
+            stats["Best trade"] = sorted_gains[-1]
+            stats["Worst trade"] = sorted_gains[0]
+            stats["Best trade as % of pnl"] = sorted_gains[-1] / positions["pnl"].sum()
+            stats["Worst trade as % of pnl"] = sorted_gains[0] / positions["pnl"].sum()
         days = daily.returns.count()
         num_pos = win_pos.pnl.count() + loss_pos.pnl.count()
         stats["Positions per day"] = num_pos / days
@@ -693,8 +707,15 @@ def perf(
     stats["Efficiency_1"] = efficiency(price, df["pnl"].sum() / df["price"].iloc[0])
     stats["Efficiency_2"] = efficiency_2(price, pyfolio_stats["Cumulative returns"])
 
+    # Annual return from pyfolio is with annual capitalization
+    # Here return is without capitalization
     year_frac = (df.index[-1] - df.index[0]) / pd.Timedelta(days=365)  # type: ignore
     stats["Simple annual return"] = (df["pnl"].sum() / df["price"].iloc[0]) / year_frac
+
+    stats["Position Sharpe"] = stats["Position EV"] / positions.pnl.std()
+    stats["Annualized position Sharpe"] = stats["Position Sharpe"] * np.sqrt(
+        stats["Positions per day"] * 252
+    )
 
     stats = pyfolio_stats.append(stats)
 

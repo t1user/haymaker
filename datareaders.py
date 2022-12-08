@@ -223,8 +223,8 @@ class ContData(ArcticStore):
         super().__init__("Synthetic_TRADES_30_secs")
 
     def review(self):
-        return super().review("commission")[
-            ["name", "from", "to", "min_tick", "commission"]
+        return super().review("commission", "multiplier")[
+            ["name", "from", "to", "min_tick", "commission", "multiplier"]
         ]
 
 
