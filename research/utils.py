@@ -488,7 +488,7 @@ def rolling_weighted_std(
     periods: int,
     weighted_mean: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """weighted_mean can be passed to save one caluclation"""
+    """weighted_mean can be passed to save one computation"""
 
     if weighted_mean is None:
         weighted_mean = rolling_weighted_mean(price, weights, periods)
@@ -498,12 +498,26 @@ def rolling_weighted_std(
     return np.sqrt(weighted_var)  # type: ignore
 
 
+def weighted_zscore(df: pd.DataFrame, lookback: int) -> pd.Series:
+    """
+    Weighted z-score. Can be used to test whether price is within/outside
+    Bollinger Bands.
+
+    """
+    wmean = rolling_weighted_mean(df["close"], df["volume"], lookback)
+    wstd = rolling_weighted_std(df["close"], df["volume"], lookback, wmean)
+    return ((df["close"] - wmean) / wstd).dropna()
+
+
 def stop_signal(
     df, signal_func: Callable, /, *func_args, **stop_kwargs
 ) -> pd.DataFrame:
     """Wrapper to allow applying stop loss to any signal function.
 
+
     Args are passed to function, kwargs to stop loss.
+
+    THIS SHOULDN'T BE USED WITHOUT FURTHER REVIEW. IT'S PROBABLY WRONG.
     """
     _df = df.copy()
     _df["position"] = sig_pos(signal_func(_df["close"], *func_args))

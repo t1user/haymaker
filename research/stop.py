@@ -1,4 +1,4 @@
-import pandas as pd  # type: ignore
+import pandas as pd
 import numpy as np
 from typing import Optional, Union, Literal, Tuple, Type, TypeVar, Dict, Any
 from abc import ABC, abstractmethod
@@ -328,7 +328,9 @@ def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
     stop_price = np.zeros((data.shape[0], 1), dtype=np.float32)
     for i, row in enumerate(data):
         position[i], open_price[i], close_price[i], stop_price[i] = stop(row)
-    return np.concatenate((position, open_price, close_price, stop_price), axis=1)
+    return np.concatenate(
+        (position, open_price, close_price, stop_price), axis=1  # type:ignore
+    )
 
 
 def param_factory(
@@ -431,16 +433,17 @@ def stop_loss(
     Args:
     -----
 
-    df - input dataframe, must have following collumns: ['high',
-    'low'] - high and low prices for the price bar, and either
-    ['position'] or ['blip']- result of pre-stop/pre-take-profit
-    strategy, if it has both ['position'] takes precedence. If blip is
-    given, additionally, close blip can also be provided, then blip is
-    to open positions close_blip to close. If only blip given, it will
-    be used to both open and close positions.  Blips must be shifted
-    to appear at the appropriate point in time, i.e. they must appear
-    at the time points where transaction should be executed (similarly
-    position changes at the points in time where transaction should be
+    df - input dataframe, must have following collumns:
+    - ['high', 'low'] - high and low prices for the price bar,
+    - ['position'] or ['blip']- result of pre-stop/pre-take-profit
+    strategy,
+    if it has both ['position'] takes precedence.
+    If blip is given, additionally, close blip can also be provided,
+    then blip is to open positions close_blip to close. If only blip given,
+    it will be used to both open and close positions.
+    BLIPS MUST BE SHIFTED to appear at the appropriate point in time,
+    i.e. they must appear at the time points where transaction should be executed
+    (similarly position changes at the points in time where transaction should be
     executed). Stop will not shift blilps (or any other indicators).
 
     distance - desired distance of stop loss, which may be given as a
@@ -469,15 +472,10 @@ def stop_loss(
     Returns:
     --------
 
-    Position series resulting from applying the stop-loss/take-profit.
+    Dataframe with columns: ['position', 'open', 'stop', 'close']
+    listing prices at which transactions would be made and the resulting
+    position AFTER transactions are executed.
 
-    Format depends on the setting of 'return_type' parameter:
-
-    [1] - position only (pd.Series)
-
-    [2] - open, close, stop price and position (pd.DataFrame)
-
-    [else] - original DataFrame merged with results of the stop loss
     """
 
     if not isinstance(df, pd.DataFrame):
@@ -494,8 +492,12 @@ def stop_loss(
         raise ValueError(f"distance must be series or number, not {type(distance)}")
 
     _df = df.copy()
-    _df["distance"] = distance * multiplier
-    assert _df["distance"].min() > 0, "Wrong values for stop loss distance"
+    _df["distance"] = distance * multiplier  # type: ignore
+    assert _df["distance"].min() > 0, (
+        f"Wrong values for stop loss distance: "
+        f"{_df['distance']}"
+        f"min value: {_df['distance'].min()}"
+    )
 
     params = param_factory(mode, tp_multiple, adjust)
 

@@ -1,6 +1,6 @@
 import pandas as pd  # type: ignore
-from typing import Optional, Literal
-from numba_tools import _blip_to_signal_converter
+from typing import Optional, Literal, Union
+from numba_tools import _blip_to_signal_converter, _in_out_signal_unifier
 
 
 """
@@ -101,8 +101,38 @@ def sig_pos(signal: pd.Series) -> pd.Series:
     return signal.shift().fillna(0).astype(int)
 
 
-def blip_sig(blip: pd.Series, always_on=True) -> pd.Series:
-    """Blip to signal converter. Numba optimized."""
-    return pd.Series(
-        _blip_to_signal_converter(blip.to_numpy(), always_on), index=blip.index
-    )
+def blip_sig(blip: Union[pd.Series, pd.DataFrame], always_on=True) -> pd.Series:
+    """
+    Blip to signal converter. Numba optimized.
+
+    Parameters:
+    ----------
+    blip:
+        if pd.Series - the series represents both open and close signals
+
+        if pd.DataFrame - first column is open signals, second column is close signals
+
+    always_on:
+        relevant only if blis is a Series;
+        if True - close blip is simultanously an open blip for a reverse position.
+    """
+
+    def verify(series: pd.Series) -> None:
+        if not set(series.fillna(0)).issubset(set({-1, 0, 1})):
+            raise ValueError(
+                "Data passed to blip_sig contain values other than -1, 0, 1"
+            )
+
+    if isinstance(blip, pd.Series):
+        verify(blip)
+        return pd.Series(
+            _blip_to_signal_converter(blip.to_numpy(), always_on), index=blip.index
+        )
+    elif isinstance(blip, pd.DataFrame):
+        verify(blip.iloc[:, 0])
+        verify(blip.iloc[:, 1])
+        return pd.Series(
+            _in_out_signal_unifier(blip.to_numpy()).flatten(), index=blip.index
+        )
+    else:
+        raise TypeError(f"Passed data must be a Series or DataFrame, not {type(blip)}")

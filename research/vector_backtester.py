@@ -128,93 +128,6 @@ def pos(
     return positions
 
 
-def excursions(
-    high_low: pd.DataFrame, positions: pd.DataFrame, divisor: Optional[pd.Series] = None
-) -> pd.DataFrame:
-    """
-    Calculate maximum adverse and favourable excursions.
-
-    Arguments:
-    ---------
-
-    high_low: dataframe with high and low prices
-
-    positions: series with positions -1, 0, 1
-
-    divisor: number that favourable and adverse excursions will be
-    divided by; typically atr or other volatility indicator, allows to
-    express results in terms of vol multiples; it's callers
-    resposibility to ensure that open price is alligned with divisor
-    that would be available at that point in time
-
-
-    Returns:
-    -------
-
-    Dataframe with columns:
-
-    fav: maximum favourable excursion
-
-    adv: maximum adverse excurion
-
-    eff: efficiency, relation of position pnl to difference between
-    highest high and lowest low during position's time in the market
-
-    """
-
-    if not isinstance(high_low, pd.DataFrame):
-        raise ValueError(f"high_low must be a pandas series not {type(high_low)}")
-    if not set(["high", "low"]).issubset(set(high_low.columns)):
-        raise ValueError("high_low must have columns named 'high' and 'low'")
-
-    high_low = high_low.copy()
-
-    if divisor is None:
-        high_low["divisor"] = 1
-    elif isinstance(divisor, pd.Series) and (divisor.index == high_low.index).all():
-        high_low["divisor"] = divisor
-    else:
-        raise ValueError(
-            "divisor, if given must be a pd.Series with the same index as high_low"
-        )
-
-    def extremes(
-        high_low: pd.DataFrame, positions: pd.DataFrame
-    ) -> List[Tuple[float, float, float]]:
-        data = []
-        for p in positions[["date_o", "date_c"]].itertuples():
-            h_l = high_low.loc[p.date_o : p.date_c]
-            # last candle shouldn't be covered fully, because might have exited
-            # before the extreme value was reached
-            # for single bar positions, we assume bar's extremes were
-            # maximum excursions
-            if len(h_l) > 1:
-                h_l = h_l.iloc[:-1]
-            data.append((h_l["high"].max(), h_l["low"].min(), h_l["divisor"].iloc[0]))
-        return data
-
-    out = positions.join(
-        pd.DataFrame(extremes(high_low, positions), columns=["high", "low", "divisor"])
-    )
-    # here we have to establish wheather closing price was an extreme
-    out["close_"] = out["close"].abs()
-    out["high"] = (out[["close_", "high"]]).max(axis=1)
-    out["low"] = (out[["close_", "low"]]).min(axis=1)
-
-    out["_fav"] = ((out["open"] > 0) * out["high"]) + ((out["open"] < 0) * out["low"])
-    out["_adv"] = ((out["open"] > 0) * out["low"]) + ((out["open"] < 0) * out["high"])
-
-    out["fav"] = ((out["open"].abs() - out["_fav"]).abs() / out["divisor"]).round(2)
-    out["adv"] = ((out["open"].abs() - out["_adv"]).abs() / out["divisor"]).round(2)
-    out["eff"] = (out["g_pnl"] / (out["high"] - out["low"])).round(2)
-
-    if divisor is None:
-        return out[["fav", "adv", "eff"]]
-    else:
-        out["pnl_mul"] = (out["g_pnl"] / out["divisor"]).round(2)
-        return out[["pnl_mul", "fav", "adv", "eff"]]
-
-
 def get_min_tick(data: pd.Series) -> float:
     """
     Estimate min_tick value from price data.
@@ -238,6 +151,7 @@ def _skip_last_open(df: pd.DataFrame) -> pd.DataFrame:
     position = df["position"]
     # index of last transaction
     i = position[position.shift() != position].index[-1]
+    assert isinstance(i, int)
     df = df[:i]  # .iloc[:-1]
     df["position"].iloc[-1] = 0
     return df
@@ -451,7 +365,7 @@ class _Data:
     position: pd.DataFrame
     open_close: Optional[pd.DataFrame] = None
 
-    @singledispatchmethod
+    @singledispatchmethod  # type: ignore
     def __init__(self, position_or_stop_price) -> None:
         raise TypeError(
             "Parameter `position_or_stop_price` must be a Series with position or "
@@ -482,7 +396,7 @@ class _Data:
 
     @__init__.register
     def __series(self, position_or_stop_price: pd.Series) -> None:
-        self.position = position_or_stop_price
+        self.position = position_or_stop_price  # type: ignore
 
     @property
     def data(self):
@@ -556,7 +470,8 @@ def perf(
     elif len(price) == 0:
         raise ValueError("Price series is empty.")
 
-    # open_close is price data returned from stop-loss and None if stop loss was not used
+    # open_close is price data returned from stop-loss and None if stop loss
+    # was not used
     position, open_close = _Data(position_or_stop_price).data
 
     if len(position[position != 0]) == 0:
@@ -910,3 +825,112 @@ def optimize(df, func, start_param, scope=range(20)):
         results.loc[i, "Return"] = out[0].loc["Annual return"]
         results.loc[i, "Vol"] = out[0].loc["Annual volatility"]
     return results
+
+
+def excursions(
+    high_low: pd.DataFrame, positions: pd.DataFrame, divisor: Optional[pd.Series] = None
+) -> pd.DataFrame:
+    """
+    Calculate maximum adverse and favourable excursions.
+
+    Arguments:
+    ---------
+
+    high_low: dataframe with high and low prices
+
+    positions: dataframe with positions returned from perf function
+
+    divisor: number that favourable and adverse excursions will be
+    divided by; typically atr or other volatility indicator, allows to
+    express results in terms of vol multiples; it's callers
+    resposibility to ensure that open price is alligned with divisor
+    that would be available at that point in time
+
+
+    Returns:
+    -------
+
+    Dataframe with columns:
+
+    pnl_mul: [available only if divisor is not None], pnl exressed as
+    multiple of divisor
+
+    fav: maximum favourable excursion
+
+    adv: maximum adverse excursion
+
+    eff: efficiency; ratio of position pnl to difference between
+    highest high and lowest low during position's time in the market
+    """
+
+    if not isinstance(high_low, pd.DataFrame):
+        raise ValueError(f"high_low must be a pandas series not {type(high_low)}")
+    if not set(["high", "low"]).issubset(set(high_low.columns)):
+        raise ValueError("high_low must have columns named 'high' and 'low'")
+
+    high_low = high_low.copy()
+
+    if divisor is None:
+        high_low["divisor"] = 1
+    elif isinstance(divisor, pd.Series) and (divisor.index == high_low.index).all():
+        high_low["divisor"] = divisor
+    else:
+        raise ValueError(
+            "divisor, if given must be a pd.Series with the same index as high_low"
+        )
+
+    def extremes(
+        high_low: pd.DataFrame, positions: pd.DataFrame
+    ) -> List[Tuple[float, float, float]]:
+        data = []
+        for p in positions[["date_o", "date_c"]].itertuples():
+            h_l = high_low.loc[p.date_o : p.date_c]
+            # last candle shouldn't be covered fully, because might have exited
+            # before the extreme value was reached
+            # for single bar positions, we assume bar's extremes were
+            # maximum excursions
+            if len(h_l) > 1:
+                h_l = h_l.iloc[:-1]
+            data.append((h_l["high"].max(), h_l["low"].min(), h_l["divisor"].iloc[0]))
+        return data
+
+    out = positions.join(
+        pd.DataFrame(extremes(high_low, positions), columns=["high", "low", "divisor"])
+    )
+    # here we have to establish wheather closing price was an extreme
+    out["close_"] = out["close"].abs()
+    out["high"] = (out[["close_", "high"]]).max(axis=1)
+    out["low"] = (out[["close_", "low"]]).min(axis=1)
+
+    out["_fav"] = ((out["open"] > 0) * out["high"]) + ((out["open"] < 0) * out["low"])
+    out["_adv"] = ((out["open"] > 0) * out["low"]) + ((out["open"] < 0) * out["high"])
+
+    out["fav"] = ((out["open"].abs() - out["_fav"]).abs() / out["divisor"]).round(2)
+    out["adv"] = ((out["open"].abs() - out["_adv"]).abs() / out["divisor"]).round(2)
+    out["eff"] = (out["g_pnl"] / (out["high"] - out["low"])).round(2)
+
+    if divisor is None:
+        return out[["fav", "adv", "eff"]]
+    else:
+        out["pnl_mul"] = (out["g_pnl"] / out["divisor"]).round(2)
+        return out[["pnl_mul", "fav", "adv", "eff"]]
+
+
+def profitable_excursions(
+    df: pd.DataFrame, results: Results, divisor: Optional[pd.Series] = None
+) -> pd.DataFrame:
+    """
+    A shortcut accepting raw dataframe with ohlc prices, result of perf simulation
+    and returning data allowing for calculation of adverse excursions.
+    """
+    positions = results.positions
+    exc = excursions(df[["high", "low"]], positions, divisor).join(positions)
+    return exc[exc["pnl"] > 0]
+
+
+# I know I'm going to call it this even if its not correct
+adverse_excursions = profitable_excursions
+
+
+def blip_extractor(signal: pd.Series) -> pd.Series:
+    return (signal.shift() != signal) * signal

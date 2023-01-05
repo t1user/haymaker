@@ -89,7 +89,11 @@ def resample(
         return (
             df.resample(freq, **kwargs)  # type: ignore
             .agg(
-                {key: field_dict[key] for key in df.columns if key in field_dict.keys()}
+                {
+                    key: field_dict[key]  # type: ignore
+                    for key in df.columns
+                    if key in field_dict.keys()
+                }
             )
             .dropna()
         )
@@ -235,7 +239,12 @@ def cont_downsampled_func(d: pd.Series, bar: int, func, *args, **kwargs) -> pd.S
     assert isinstance(values, np.ndarray)
     start_index = values.shape[0] % bar
     step1 = pd.DataFrame(values[start_index:].reshape((-1, bar)))
-    step2 = func(step1, *args, **kwargs)
+    try:
+        # for functions that calculate dataframe columnwise
+        step2 = func(step1, *args, **kwargs)
+    except ValueError:
+        # for functions that require a series
+        step2 = step1.apply(lambda x: func(x, *args, **kwargs), axis=0)
     out = step2.values.reshape((1, -1)).T
     # out is an ndarray, has no index and needs to be put back into correct place in d
     d = d.iloc[start_index:]
@@ -368,13 +377,32 @@ def any_signal(data: pd.Series, periods: Tuple[int]) -> pd.Series:
 
 
 def rsi(
-    price: pd.Series, lookback: int, periods: int = 1, *args, **kwargs
+    price: pd.Series, lookback: int, periods: int = 1, exp: bool = True, *args, **kwargs
 ) -> pd.Series:
+    """
+    Rsi indicator on a scale of 0 - 100.
+
+    Parameteres:
+    -----------
+
+    periods:
+        number of periods over which ups and downs are to be caluclated
+
+    exp:
+        wheather expotential or simple moving average should be used
+
+    """
     df = pd.DataFrame({"price": price})
     df["change"] = df["price"].diff(periods).fillna(0)
-    df["up"] = ((df["change"] > 0) * df["change"]).rolling(lookback).sum()
-    df["down"] = ((df["change"] < 0) * df["change"].abs()).rolling(lookback).sum()
-    df["rs"] = df["up"] / df["down"]
+    df["up"] = (df["change"] > 0) * df["change"]
+    df["down"] = (df["change"] < 0) * df["change"].abs()
+    if exp:
+        df["up_roll"] = df["up"].ewm(span=lookback).mean()
+        df["down_roll"] = df["down"].ewm(span=lookback).mean()
+    else:
+        df["up_roll"] = df["up"].rolling(lookback).mean()
+        df["down_roll"] = df["down"].rolling(lookback).mean()
+    df["rs"] = df["up_roll"] / df["down_roll"]
     df["rsi"] = 100 - (100 / (1 + df["rs"]))
     return df["rsi"]
 

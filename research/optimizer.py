@@ -230,7 +230,7 @@ class Optimizer:
                     len(data) == 2
                 ), f"Function returned tuple of shape {len(data)} instead of 2."
                 try:
-                    out = perf(*data, slippage=self.slip, **self.kwargs)
+                    out = perf(*data, slippage=self.slip, **self.kwargs)  # type: ignore
                 except:  # noqa
                     print(f"Error for pair: {pair}")
                     raise
@@ -271,7 +271,9 @@ class Optimizer:
         del out
 
     def extract_stats(self) -> None:
-        self._fields = [i for i in self.raw_stats[self.pairs[-1]].index]
+        self._fields: List[str] = [
+            i for i in self.raw_stats[self.pairs[-1]].index  # type: ignore
+        ]
 
         self.field_trans = {
             i: i.lower().replace(" ", "_").replace("/", "_").replace(".", "")
@@ -330,7 +332,11 @@ class Optimizer:
 
     @property
     def corr(self) -> pd.DataFrame:
-        return self.log_returns.corr()
+        try:
+            return self.log_returns.corr()
+        except AttributeError:
+            print("Not available with save_mem=True")
+            raise
 
     @property
     def rank(self) -> pd.Series:

@@ -94,7 +94,9 @@ def _swing(data: np.ndarray, f: np.ndarray, margin: np.ndarray) -> np.ndarray:
             raise ValueError("Wrong state value!")
         min_list[i] = min_pivot
         max_list[i] = max_pivot
-    return np.concatenate((state, extreme, pivot, signal, max_list, min_list), axis=1)
+    return np.concatenate(
+        (state, extreme, pivot, signal, max_list, min_list), axis=1  # type: ignore
+    )
 
 
 def swing(
@@ -330,7 +332,13 @@ def volume_grouper(
 
     return (
         df.groupby("labels")
-        .agg({key: field_dict[key] for key in df.columns if key in field_dict})
+        .agg(
+            {
+                key: field_dict[key]  # type: ignore
+                for key in df.columns
+                if key in field_dict
+            }
+        )
         .set_index("date")
     )
 
@@ -641,6 +649,3 @@ def pivot_indicator(df: pd.DataFrame, func: Callable) -> pd.DataFrame:
     index = d.iloc[df_start:].index
     indicator = pd.DataFrame(indicator, index=index)
     return indicator
-
-
-# box chart ###
