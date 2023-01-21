@@ -107,7 +107,7 @@ class Optimizer:
         sp_1: Tuple[float, float, str] = (100, 1.25, "geo"),
         sp_2: Tuple[float, float, str] = (0.1, 0.1, "lin"),
         opti_params: Optional[Sequence[str]] = None,
-        slip=1.5,
+        # slip=1.5,
         pairs: Optional[Sequence[Tuple[float, float]]] = None,
         multiprocess: bool = True,
         pass_full_df: bool = False,
@@ -121,7 +121,7 @@ class Optimizer:
 
         self.func = func
         self.df = df
-        self.slip = slip
+        # self.slip = slip
         self.kwargs = kwargs
         self.save_mem = save_mem
 
@@ -161,8 +161,8 @@ class Optimizer:
 
         self.extract_stats()
         self.__dict__.update(self._table)
-        if not self.save_mem:
-            self.extract_dailys()
+        # if not self.save_mem:
+        self.extract_dailys()
 
     @staticmethod
     def progression(sp: Tuple[Any, ...]) -> Sequence:
@@ -219,20 +219,22 @@ class Optimizer:
         if isinstance(self.func, OptiWrapper):
             # stop requires position and df, also returns df
             data = self.func(self.df, self.in_data, *args, **kwargs)
-            out = perf(
-                data["price"], data["position"], slippage=self.slip, **self.kwargs
-            )
+            out = perf(data["price"], data["position"], **self.kwargs)
         else:
-            data = self.func(self.in_data, *args, **kwargs)
+            try:
+                data = self.func(self.in_data, *args, **kwargs)
+            except:  # noqa
+                print(f"Error running function for pair: {pair}")
+                raise
             if isinstance(data, tuple):
                 # if tuple returned it must be directly passable to perf
                 assert (
                     len(data) == 2
                 ), f"Function returned tuple of shape {len(data)} instead of 2."
                 try:
-                    out = perf(*data, slippage=self.slip, **self.kwargs)  # type: ignore
+                    out = perf(*data, **self.kwargs)  # type: ignore
                 except:  # noqa
-                    print(f"Error for pair: {pair}")
+                    print(f"Error running perf for pair: {pair}")
                     raise
             elif isinstance(data, pd.DataFrame):
                 # likely doesn't work now
@@ -242,14 +244,10 @@ class Optimizer:
                         f"optimizer received df with columns: {data.columns}, "
                         f"looking for columns: 'price', 'position'"
                     )
-                out = perf(
-                    data["price"], data["position"], slippage=self.slip, **self.kwargs
-                )
+                out = perf(data["price"], data["position"], **self.kwargs)
             else:
                 # returned signal has to be converted to position
-                out = perf(
-                    self.df["open"], sig_pos(data), slippage=self.slip, **self.kwargs
-                )
+                out = perf(self.df["open"], sig_pos(data), **self.kwargs)
         if self.save_mem:
             # daily and df attributes dropped to limit memory usage
             return Results(
@@ -332,11 +330,7 @@ class Optimizer:
 
     @property
     def corr(self) -> pd.DataFrame:
-        try:
-            return self.log_returns.corr()
-        except AttributeError:
-            print("Not available with save_mem=True")
-            raise
+        return self.log_returns.corr()
 
     @property
     def rank(self) -> pd.Series:
@@ -486,8 +480,8 @@ class OptiWrapper:
         )
         return stop_loss(df, **self.stop_kwargs, **params_values["stop"])
 
-    def optimize(self, df: pd.DataFrame, sp_1, sp_2, slip: float = 1.5) -> Optimizer:
-        return Optimizer(df, self, sp_1, sp_2, slip=slip)
+    def optimize(self, df: pd.DataFrame, sp_1, sp_2, **kwargs) -> Optimizer:
+        return Optimizer(df, self, sp_1, sp_2, **kwargs)
 
     @property
     def __name__(self):

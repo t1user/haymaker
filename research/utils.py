@@ -197,6 +197,9 @@ def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
 
 
 def crosser(ind: pd.Series, threshold: float) -> pd.Series:
+    """
+    Generate blips only at points where indicator goes above/below threshold.
+    """
     df = pd.DataFrame({"ind": ind})
     df["above_below"] = (df["ind"] >= threshold) * 1 - (df["ind"] < threshold) * 1
     df["blip"] = ((df["above_below"].shift() + df["above_below"]) == 0) * df[
@@ -471,7 +474,7 @@ def zero_crosser(indicator: pd.Series) -> pd.Series:
     When indicator value is exactly zero at some point, next value will be treated as
     having crossed zero.
     """
-
+    indicator = indicator.fillna(0)
     return (((indicator.shift() * indicator) <= 0) * np.sign(indicator)).astype(int)
 
 

@@ -917,15 +917,22 @@ def excursions(
 
 
 def profitable_excursions(
-    df: pd.DataFrame, results: Results, divisor: Optional[pd.Series] = None
-) -> pd.DataFrame:
+    df: pd.DataFrame,
+    results: Results,
+    divisor: Optional[pd.Series] = None,
+    full: bool = False,
+) -> Union[pd.Series, pd.DataFrame]:
     """
     A shortcut accepting raw dataframe with ohlc prices, result of perf simulation
     and returning data allowing for calculation of adverse excursions.
     """
     positions = results.positions
-    exc = excursions(df[["high", "low"]], positions, divisor).join(positions)
-    return exc[exc["pnl"] > 0]
+    exc = positions.join(excursions(df[["high", "low"]], positions, divisor))
+    out = exc[exc["pnl"] > 0]
+    if full:
+        return out
+    else:
+        return out.adv.describe()
 
 
 # I know I'm going to call it this even if its not correct
@@ -934,3 +941,41 @@ adverse_excursions = profitable_excursions
 
 def blip_extractor(signal: pd.Series) -> pd.Series:
     return (signal.shift() != signal) * signal
+
+
+def factor_extractor(
+    pos: pd.DataFrame,
+    df: pd.DataFrame,
+    field: Union[str, List[str]],
+    shift: bool = True,
+) -> pd.DataFrame:
+    """Join positions with a column from the original dataframe that produced
+    those positions. Helps determine factors that impact the pnl.
+
+    Parameters:
+    ----------
+
+    pos:
+        dataframe with position list produced by perf function
+
+    df: dataframe with a column with factor data, must have the same
+        index as df used to produce the positions
+
+    field:
+        name of the column in df, which contains factor data
+
+    shift: whether df should be shifted prior to calculations -
+        important to use point in time at which signal was generated
+    """
+    pos = pos.set_index("date_o")
+    if shift:
+        df = df.shift()
+
+    if isinstance(field, str):
+        field = [field]
+
+    overlap = list(set(pos.columns).intersection(set(field)))
+    cols = [c for c in pos.columns if c not in overlap]
+    pos = pos[cols]
+
+    return pos.join(df.loc[pos.index, field]).reset_index()

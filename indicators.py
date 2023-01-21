@@ -9,6 +9,7 @@ from research.numba_tools import (  # type: ignore
     _blip_to_signal_converter,
     swing,
 )
+from decorators import ensure_df
 
 
 def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
@@ -376,8 +377,21 @@ def any_signal(data: pd.Series, periods: Tuple[int]) -> pd.Series:
     return min_max["max"].any(axis=1) * 1 - min_max["min"].any(axis=1) * 1
 
 
+def modified_rsi(rsi: pd.Series) -> pd.Series:
+    """
+    Rescale passed rsi to -100 to 100.
+    """
+    return 2 * (rsi - 50)
+
+
 def rsi(
-    price: pd.Series, lookback: int, periods: int = 1, exp: bool = True, *args, **kwargs
+    price: pd.Series,
+    lookback: int,
+    periods: int = 1,
+    exp: bool = True,
+    rescale=False,
+    *args,
+    **kwargs
 ) -> pd.Series:
     """
     Rsi indicator on a scale of 0 - 100.
@@ -391,6 +405,14 @@ def rsi(
     exp:
         wheather expotential or simple moving average should be used
 
+    rescale:
+        False - return classic RSI
+        True - rescale classic RSI to (-100, 100)
+
+    note:
+    ----
+    Resluts not matching talib.RSI -> for that averaging function must be:
+    .ewm(span=1/lookback).mean()
     """
     df = pd.DataFrame({"price": price})
     df["change"] = df["price"].diff(periods).fillna(0)
@@ -404,14 +426,35 @@ def rsi(
         df["down_roll"] = df["down"].rolling(lookback).mean()
     df["rs"] = df["up_roll"] / df["down_roll"]
     df["rsi"] = 100 - (100 / (1 + df["rs"]))
-    return df["rsi"]
+    if rescale:
+        return modified_rsi(df["rsi"])
+    else:
+        return df["rsi"]
 
 
-def modified_rsi(rsi: pd.Series) -> pd.Series:
+def macd(
+    price: pd.Series, fastperiod: int, slowperiod: int, signalperiod: int
+) -> pd.DataFrame:
     """
-    Rescale passed rsi to -100 to 100.
+    Results checked against talib.MACD, maching exactly.
     """
-    return 2 * (rsi - 50)
+    df = pd.DataFrame({"close": price})
+    df["fast_trendline"] = df["close"].ewm(span=fastperiod).mean()
+    df["slow_trendline"] = df["close"].ewm(span=slowperiod).mean()
+    df["macd"] = df["fast_trendline"] - df["slow_trendline"]
+    df["macdsignal"] = df["macd"].ewm(span=signalperiod).mean()
+    df["macdhist"] = df["macd"] - df["macdsignal"]
+    return df[["macd", "macdsignal", "macdhist"]]
+
+
+def tsi(price: pd.Series, lookback1, lookback2):
+    """
+    True Strenght Index. Kaufman 2013, p. 404.
+    """
+    return (
+        price.diff().ewm(span=lookback1).mean().ewm(span=lookback2).mean()
+        / price.diff().abs().ewm(span=lookback1).mean().ewm(span=lookback2).mean()
+    )
 
 
 def carver(price: pd.Series, lookback: int) -> pd.Series:
@@ -551,3 +594,22 @@ def spread(df: pd.DataFrame, lookback: int) -> pd.Series:
 def momentum(price, periods):
     """Double smoothed momentum"""
     return price.diff(periods).ewm(span=periods).mean().ewm(span=periods).mean()
+
+
+@ensure_df
+def divergence_index(df, fast, factor=1):
+    """
+    Kaufman 2013 p. 384
+    """
+    df = df.copy()
+    slow = 10 * fast
+    df["fast_ema"] = df["close"].ewm(span=fast).mean()
+    df["slow_ema"] = df["close"].ewm(span=slow).mean()
+    df["diff"] = df["close"].diff(slow)
+    numerator = df["fast_ema"] - df["slow_ema"]
+    denominator = (df["diff"].rolling(slow).std()) ** 2
+    df["di"] = numerator / denominator
+    band = df["di"].rolling(slow).std()
+    df["upper"] = factor * band
+    df["lower"] = -factor * band
+    return df[["di", "upper", "lower"]]
