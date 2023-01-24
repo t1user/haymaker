@@ -249,6 +249,10 @@ class AbstractBaseStore(ABC):
         df["lastTradeDateOrContractMonth"] = pd.to_datetime(
             df["lastTradeDateOrContractMonth"]
         )
+        try:
+            df["multiplier"] = df["multiplier"].astype(float)
+        except KeyError:
+            pass
         return df
 
     def _contfutures(self) -> List[str]:

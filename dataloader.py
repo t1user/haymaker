@@ -274,7 +274,15 @@ class DataWriter:
     def duration(self):
         duration = barSize_to_duration(self.barSize, self.aggression)
         # this gets string and datetime error TODO
-        delta = self.next_date - self._current_object.from_date
+        try:
+            delta = self.next_date - self._current_object.from_date
+        except:
+            log.error(
+                f"next date: {self.next_date}, "
+                f"from_date: {self._current_object.from_date}"
+            )
+            raise
+
         if delta < duration_to_timedelta(duration):
             # requests for periods shorter than 30s don't work
             duration = duration_str(
@@ -364,7 +372,13 @@ class DownloadContainer:
 
         if self.update:
             # TODO: this throws errors occationally
-            return self.df.index.min() <= self.from_date
+            try:
+                return self.df.index.min() <= self.from_date
+            except:
+                log.error(
+                    "index.min: {self.df.index.min()}, from_date: {self.from_date}"
+                )
+                raise
         else:
             return True
 
@@ -821,8 +835,8 @@ async def main(holder: ContractHolder) -> None:
 if __name__ == "__main__":
     util.patchAsyncio()
     ib = IB()
-    barSize = "1 secs"
-    wts = "MIDPOINT"
+    barSize = "30 secs"
+    wts = "TRADES"
     # object where data is stored
     store = ArcticStore(f"{wts}_{barSize}")
 

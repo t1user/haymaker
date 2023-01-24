@@ -1,4 +1,5 @@
 import asyncio
+
 # import sys
 
 from typing import Callable
@@ -7,6 +8,7 @@ from ib_insync import IB, util, Contract
 from ib_insync.ibcontroller import IBC, Watchdog
 
 from logbook import Logger  # type: ignore
+
 # from handlers import WatchdogHandlers
 
 
@@ -22,16 +24,17 @@ class IBHandlers:
         self.ib.client.apiError += self.onApiError
         self.ib.disconnectedEvent += self.onDisconnected
 
-    def onError(self, reqId: int, errorCode: int, errorString: str,
-                contract: Contract) -> None:
-        log.error(f'IB error {errorCode}: {errorString}')
+    def onError(
+        self, reqId: int, errorCode: int, errorString: str, contract: Contract
+    ) -> None:
+        log.error(f"IB error {errorCode}: {errorString}")
         if errorCode == 1100:
-            log.warning('Event loop will be stopped!')
+            log.warning("Event loop will be stopped!")
             asyncio.get_event_loop().stop()
             self.run()
 
     def onApiError(self, *args) -> None:
-        log.error(f'API error: {args}')
+        log.error(f"API error: {args}")
 
     def onConnected(self, *args) -> None:
         pass
@@ -41,60 +44,64 @@ class IBHandlers:
 
     def run(self) -> None:
         """Fire-up dataloding function."""
-        log.debug(f'running {self.func}')
+        log.debug(f"running {self.func}")
         try:
             util.run(self.func())
         except Exception as e:
-            log.error(f'ignoring schedule exception: {e}')
+            log.error(f"ignoring schedule exception: {e}")
 
 
 class StartWatchdog(IBHandlers):
     def __init__(self, ib: IB, func: Callable) -> None:
-        log.debug('Initializing watchdog')
-        ibc = IBC(twsVersion=981,
-                  gateway=True,
-                  tradingMode='paper',
-                  )
-        watchdog = Watchdog(ibc, ib,
-                            port=4002,
-                            clientId=10,
-                            )
-        log.debug('Attaching handlers...')
+        log.debug("Initializing watchdog")
+        ibc = IBC(
+            twsVersion=1020,
+            gateway=True,
+            tradingMode="paper",
+        )
+        watchdog = Watchdog(
+            ibc,
+            ib,
+            port=4002,
+            clientId=10,
+        )
+        log.debug("Attaching handlers...")
         IBHandlers.__init__(self, ib, func)
         watchdog.startedEvent += self.onStarted
-        log.debug('Initializing watchdog...')
+        log.debug("Initializing watchdog...")
         watchdog.start()
-        log.debug('Watchdog started.')
+        log.debug("Watchdog started.")
         ib.run()
-        log.debug('ib run.')
+        log.debug("ib run.")
 
     def onStarted(self, *args):
-        log.debug(f'Starting: {args}')
+        log.debug(f"Starting: {args}")
         util.run(self.func())
 
     def onDisconnected(self):
         pass
 
-    def onError(self, reqId: int, errorCode: int, errorString: str,
-                contract: Contract) -> None:
+    def onError(
+        self, reqId: int, errorCode: int, errorString: str, contract: Contract
+    ) -> None:
         try:
             what = contract.localSymbol
         except AttributeError:
             what = str(contract)
-        log.debug(f'Error {errorCode} {errorString} for: {what}')
-        if 'pacing violation' in errorString:
-            log.error('PACING VIOLATION. Adjust Pacer Parameters.')
+        log.debug(f"Error {errorCode} {errorString} for: {what}")
+        if "pacing violation" in errorString:
+            log.error("PACING VIOLATION. Adjust Pacer Parameters.")
             # sys.exit()
         if errorCode == 162:
             # handle pacing violation (badly :)
-            log.warning('CHECK REASON????')
+            log.warning("CHECK REASON????")
             # time.sleep(600)
 
 
 class StartNoWatchdog(IBHandlers):
     def __init__(self, ib: IB, func: Callable) -> None:
         IBHandlers.__init__(self, ib, func)
-        self.host = 'localhost'
+        self.host = "localhost"
         self.port = 4002  # this is for paper account
         self.id = 12
 
@@ -104,38 +111,40 @@ class StartNoWatchdog(IBHandlers):
             self.id = i
             try:
                 self.connect()
-                log.info(f'connected with clientId: {i}')
+                log.info(f"connected with clientId: {i}")
                 break
             except ConnectionRefusedError:
-                log.error('TWS or IB Gateway is not running.')
+                log.error("TWS or IB Gateway is not running.")
                 break
             except Exception as exc:
-                message = (f'exception {exc} for connection {i}... '
-                           'moving up to the next one')
+                message = (
+                    f"exception {exc} for connection {i}... "
+                    "moving up to the next one"
+                )
                 log.debug(message)
 
     def onDisconnected(self, *args) -> None:
         """Initiate re-start when external watchdog manages api connection."""
-        log.debug('Disconnected!')
+        log.debug("Disconnected!")
         try:
             util.sleep(60)
         except Exception as e:
-            log.debug(f'exception caught: {e}')
-        log.debug('will attempt reconnection')
+            log.debug(f"exception caught: {e}")
+        log.debug("will attempt reconnection")
         self.connect()
 
     def connect(self) -> None:
         """Establish conection while not using watchdog."""
-        log.debug('Connecting....')
+        log.debug("Connecting....")
         while not self.ib.isConnected():
             try:
                 self.ib.connect(self.host, self.port, self.id)
             except ConnectionRefusedError as e:
-                log.debug(f'While attepting reconnection: {e}')
+                log.debug(f"While attepting reconnection: {e}")
                 util.sleep(30)
-                log.debug('post sleep...')
+                log.debug("post sleep...")
             except Exception as e:
-                log.debug(f'Connection error: {e}')
+                log.debug(f"Connection error: {e}")
 
 
 class Connection:

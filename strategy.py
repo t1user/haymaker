@@ -73,8 +73,8 @@ gc = Params(
 )
 
 ym = Params(
-    contract=ContFuture("YM", "ECBOT"),
-    micro_contract=ContFuture("MYM", "ECBOT"),
+    contract=ContFuture("YM", "CBOT"),
+    micro_contract=ContFuture("MYM", "CBOT"),
     trades_per_day=1,
     ema_fast=60,
     sl_atr=2,
