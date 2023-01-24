@@ -49,7 +49,7 @@ def atr(df: pd.DataFrame, periods: int, exp: bool = True, **kwargs) -> pd.Series
     **kwargs will be passed to averaging function
     """
 
-    return mmean(true_range(df, 1), periods, exp, **kwargs)
+    return mmean(true_range(df, 1), periods, exp, **kwargs).rename("ATR")
 
 
 # depricated function name
@@ -566,6 +566,29 @@ def strength_oscillator(df: pd.DataFrame, periods) -> pd.Series:
     d["momentum"] = d.close.diff().fillna(0).rolling(periods).mean()
     d["high_low"] = (d["high"] - d["low"]).rolling(periods).mean()
     return (d["momentum"] / d["high_low"]).dropna()
+
+
+def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
+    """
+    Trend strength ranking indicator. Kaufman book 2013 edition, p. 1069.
+    """
+    df = pd.DataFrame(index=price.index)
+    df["log_return"] = np.log(price.pct_change(lookback) + 1)
+    df["one_period_returns"] = np.log(price.pct_change() + 1)
+    df["std"] = df["one_period_returns"].rolling(lookback).std()
+    return df["log_return"] / (df["std"] * np.sqrt(lookback))
+
+
+def chande_momentum_indicator(
+    price: pd.Series, lookback: int, diff_period: int = 1
+) -> pd.Series:
+    df = pd.DataFrame({"price": price})
+    df["diff"] = df["price"].diff(diff_period)
+    df["ups"] = (df["diff"] * (df["diff"] > 0)).rolling(lookback).sum()
+    df["downs"] = (df["diff"] * (df["diff"] < 0)).rolling(lookback).sum()
+    df["numerator"] = df["ups"] - df["downs"]
+    df["denominator"] = df["ups"] + df["downs"]
+    return (df["numerator"] / df["denominator"]).ffill()
 
 
 def join_swing(df: pd.DataFrame, *args, **kwargs) -> pd.DataFrame:

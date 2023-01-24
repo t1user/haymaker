@@ -280,27 +280,6 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFra
     return out_df
 
 
-def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
-    """
-    Trend strength ranking indicator. Kaufman book 2013 edition, p. 1069.
-    """
-    df = pd.DataFrame(index=price.index)
-    df["log_return"] = np.log(price.pct_change(lookback) + 1)
-    df["one_period_returns"] = np.log(price.pct_change() + 1)
-    df["std"] = df["one_period_returns"].rolling(lookback).std()
-    return df["log_return"] / (df["std"] * np.sqrt(lookback))
-
-
-def chande_momentum_indicator(price: pd.Series, lookback: int) -> pd.Series:
-    df = pd.DataFrame({"price": price})
-    df["diff"] = df["price"].diff()
-    df["ups"] = df["diff"] * (df["diff"] > 0)
-    df["downs"] = df["diff"] * (df["diff"] < 0)
-    df["numerator"] = df["ups"] - df["downs"]
-    df["denominator"] = df["ups"] + df["downs"]
-    return df["numerator"] / df["denominator"]
-
-
 def upsample(
     df: pd.DataFrame,
     dfg: pd.DataFrame,
