@@ -14,11 +14,11 @@ from ib_insync import IB, Contract, Future, ContFuture, BarDataList, util, Event
 
 # from logbook import DEBUG, INFO
 
-from logger import logger  # type: ignore
-from connect import Connection
-from config import max_number_of_workers
-from datastore import ArcticStore, AbstractBaseStore
-from task_logger import create_task
+from ib_tools.logger import logger  # type: ignore
+from ib_tools.connect import Connection
+from ib_tools.config import max_number_of_workers
+from ib_tools.datastore import ArcticStore, AbstractBaseStore
+from ib_tools.task_logger import create_task
 
 """
 Async queue implementation modelled (loosely) on example here:
@@ -27,7 +27,7 @@ and here:
 https://realpython.com/async-io-python/#using-a-queue
 """
 
-log = logger(__file__[:-3])
+log = logger(__name__)  # (__file__[:-3])
 
 
 class ContractObjectSelector:

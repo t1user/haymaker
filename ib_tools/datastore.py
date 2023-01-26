@@ -14,7 +14,7 @@ from arctic.exceptions import NoDataFoundException
 from arctic import Arctic
 from ib_insync import Future, ContFuture, Contract, util
 
-from config import default_path
+from ib_tools.config import default_path
 
 log = Logger(__name__)
 

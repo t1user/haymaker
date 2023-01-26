@@ -201,12 +201,19 @@ class Context:
             self.distance,
             self.price,
         ) = row
+
+        if self.transaction:
+            assert (
+                self.distance > 0
+            ), f"Wrong value for stop loss distance: {self.distance}"
+
         return self.dispatch()
 
     def dispatch(self) -> Tuple[int, float, float, float]:
         self.open_price: float = 0
         self.close_price: float = 0
         self.stop_price: float = 0
+
         if self.position:
             self.eval_for_close()
         else:
@@ -283,6 +290,12 @@ class BlipContext(Context):
             self.distance,
             self.price,
         ) = row
+
+        if self.blip:
+            assert (
+                self.distance > 0
+            ), f"Wrong value for stop loss distance: {self.distance}"
+
         return self.dispatch()
 
     def eval_for_close(self) -> None:
@@ -493,11 +506,6 @@ def stop_loss(
 
     _df = df.copy()
     _df["distance"] = distance * multiplier  # type: ignore
-    assert _df["distance"].min() > 0, (
-        f"Wrong values for stop loss distance: "
-        f"{_df['distance']}"
-        f"min value: {_df['distance'].min()}"
-    )
 
     params = param_factory(mode, tp_multiple, adjust)
 

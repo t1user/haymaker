@@ -7,7 +7,7 @@ from ib_insync import IB, MarketOrder, ContFuture, Future  # noqa
 from logbook import Logger  # type: ignore
 from arctic import Arctic  # type: ignore
 
-from datastore import AbstractBaseStore
+from ib_tools.datastore import AbstractBaseStore
 
 
 log = Logger(__name__)
@@ -101,7 +101,6 @@ def default_path(*dirnames: str) -> str:
     """
     Return path created by joining  ~/ib_data/ and recursively all dirnames
     If the path doesn't exist create it.
-    Should also work in Windows but not tested.
     """
     home = Path.home()
     dirnames_str = " / ".join(dirnames)

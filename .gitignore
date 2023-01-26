@@ -10,8 +10,8 @@ b_temp/
 #*
 *#
 .mypy_cache
-mypy.ini
 .vscode
 build/
 dist/
-contracts.csv
+ib_tools.egg-info
+stubs/
