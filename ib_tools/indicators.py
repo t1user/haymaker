@@ -1,15 +1,15 @@
 from functools import partial
-from typing import Dict, Callable, Tuple, Union
+from typing import Dict, Callable, Tuple, Union, Optional
 
 import pandas as pd  # type: ignore
 import numpy as np
 
-from research.numba_tools import (  # type: ignore
+from research.numba_tools import (
     _in_out_signal_unifier,
     _blip_to_signal_converter,
     swing,
 )
-from decorators import ensure_df
+from research.decorators import ensure_df
 
 
 def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
@@ -591,13 +591,19 @@ def chande_momentum_indicator(
     return (df["numerator"] / df["denominator"]).ffill()
 
 
-def join_swing(df: pd.DataFrame, *args, **kwargs) -> pd.DataFrame:
+def join_swing(
+    df: pd.DataFrame,
+    f: Union[float, np.ndarray, pd.Series],
+    margin: Optional[Union[float, pd.Series]] = None,
+) -> pd.DataFrame:
     """
     Return original df with added columns that result from applying
     swing.  All args and kwargs must be compatible with swing function
     requirements.
     """
-    return df.join(pd.DataFrame(swing(df, *args, **kwargs)._asdict(), index=df.index))
+    s = swing(df, f, margin, output_as_df=True)
+    assert isinstance(s, pd.DataFrame)
+    return df.join(s)
 
 
 def spread(df: pd.DataFrame, lookback: int) -> pd.Series:

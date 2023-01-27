@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Deque, List
 from collections import deque
 from datetime import datetime
+from typing import Optional, Deque, List
 
-import pandas as pd
-from logbook import Logger  # type: ignore
 from ib_insync import IB, util, Event, Contract, BarData, BarDataList
+from logbook import Logger  # type: ignore
+import pandas as pd
+
 
 log = Logger(__name__)
 
