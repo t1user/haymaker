@@ -1,28 +1,27 @@
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime as time
 from typing import (
+    Any,
     Callable,
-    Iterable,
+    DefaultDict,
     Dict,
-    Tuple,
+    Iterable,
     List,
     Optional,
-    Any,
     Sequence,
-    DefaultDict,
+    Tuple,
     Union,
 )
 
-from datetime import datetime as time
-import pandas as pd  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
+import pandas as pd  # type: ignore
 import seaborn as sns  # type: ignore
-from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
-
 from pyfolio.timeseries import perf_stats  # type: ignore
 
-from vector_backtester import perf, Results
-from signal_converters import sig_pos
-from stop import stop_loss
+from ib_tools.research.signal_converters import sig_pos
+from ib_tools.research.stop import stop_loss
+from ib_tools.research.vector_backtester import Results, perf
 
 
 class Optimizer:

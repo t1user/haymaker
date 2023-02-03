@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
-from arctic import Arctic  # type: ignore
-import pandas as pd  # type: ignore
+import pandas as pd
+from arctic import Arctic
 
-from logger import Logger
-from utilities import default_path
+from ib_tools.logger import Logger
+from ib_tools.utilities import default_path
 
 log = Logger(__name__)
 

@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Union, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Union
 
-from ib_insync import Event, IB, Contract
-import pandas as pd  # type: ignore
+import ib_insync as ibi
 import numpy as np
+import pandas as pd  # type: ignore
 
-from logger import Logger
-import indicators
+from ib_tools import indicators
+from ib_tools.logger import Logger  # type: ignore
 
 log = Logger(__name__)
 
@@ -17,7 +17,7 @@ class CandleMixin(Protocol):
         ...
 
     @property
-    def contract(self) -> Contract:
+    def contract(self) -> ibi.Contract:
         ...
 
     @property
@@ -25,15 +25,15 @@ class CandleMixin(Protocol):
         ...
 
     @property
-    def signal(self) -> Event:
+    def signal(self) -> ibi.Event:
         ...
 
     @property
-    def entrySignal(self) -> Event:
+    def entrySignal(self) -> ibi.Event:
         ...
 
     @property
-    def closeSignal(self) -> Event:
+    def closeSignal(self) -> ibi.Event:
         ...
 
 
@@ -54,11 +54,11 @@ class Candle(ABC):
         self._createEvents()
 
     def _createEvents(self):
-        self.signal = Event("signal")
-        self.entrySignal = Event("entrySignal")
-        self.closeSignal = Event("closeSignal")
+        self.signal = ibi.Event("signal")
+        self.entrySignal = ibi.Event("entrySignal")
+        self.closeSignal = ibi.Event("closeSignal")
 
-    def __call__(self, ib: IB):
+    def __call__(self, ib: ibi.IB):
         log.debug(f"Candle {self.contract.localSymbol} initializing data stream...")
         try:
             self.details = ib.reqContractDetails(self.contract)[0]

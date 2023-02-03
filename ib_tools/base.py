@@ -1,24 +1,46 @@
+import dataclasses
 from abc import ABC, abstractmethod
+from typing import ClassVar, Dict, List, Protocol, Type
 
-from ib_insync import Event
+import ib_insync as ibi
 from logbook import Logger  # type: ignore
 
 log = Logger(__name__)
 
 
-class Atom(ABC):
+class NewEvent(ibi.Event):
+    """
+    Save the object originating the Event and attach it to every emission.
+    """
 
+    def __init__(
+        self, name: str = "", _with_error_done_events: bool = True, *, source_object
+    ):
+        self.source_object = source_object
+        super().__init__(name="", _with_error_done_events=True)
+
+    def emit(self, *args):
+        super().emit(*args, source=self.source_object)
+
+
+class Atom(ABC):
     """
     Abstract base object from which all other objects inherit.
 
     """
 
-    def __init__(self):
+    ib: ClassVar[ibi.IB]
+
+    @classmethod
+    def attach_ib(cls, ib: ibi.IB) -> None:
+        cls.ib = ib
+
+    def __init__(self) -> None:
         self._createEvents()
 
     def _createEvents(self):
-        self.startEvent = Event("startEvent")
-        self.dataEvent = Event("dataEvent")
+        self.startEvent = NewEvent("startEvent", source_object=self)
+        self.dataEvent = NewEvent("dataEvent", source_object=self)
 
     @abstractmethod
     def onStart(self, data, source: "Atom") -> None:
@@ -30,7 +52,10 @@ class Atom(ABC):
 
     def connect(self, *targets) -> "Atom":
         for t in targets:
+            self.startEvent.disconnect(t.onStart)
             self.startEvent.connect(t.onStart, keep_ref=True)
+
+            self.dataEvent.disconnect(t.onData)
             self.dataEvent.connect(t.onData, keep_ref=True)
         return self
 
@@ -104,3 +129,38 @@ class Pipe(Atom):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}{tuple(i for i in self._members)}"
+
+
+class IsDataclass(Protocol):
+    __dataclass_fields__: Dict[str, dataclasses.Field]
+
+
+class AtomDataclass(Atom, IsDataclass):
+    pass
+
+
+class Strategy:
+
+    # It's not finished
+    # Should kwargs be given as a tree?
+    # if not what if kwargs are the same for multiple classes
+
+    _strings: Dict[str, List[str]] = {}
+    _objects: Dict[str, Type[AtomDataclass]]
+    _pipe: Pipe
+
+    @classmethod
+    def fromAtoms(cls, *targets: Type[AtomDataclass]):
+        for obj in targets:
+            cls._strings[obj.__name__] = list(obj.__dataclass_fields__.keys())
+            cls._objects[obj.__name__] = obj
+
+    def __init__(self, **kwargs):
+        self._pipe = self.pipe(self.instantiate(**kwargs))
+
+    def instantiate(self, **kwargs):
+        for name, obj in self.objects.items():
+            return obj(**self.strings.get[name])
+
+    def to_yaml(self):
+        pass

@@ -1,11 +1,10 @@
-from typing import List, Any
 from abc import ABC
+from typing import Any, List
 
-from ib_insync import IB, Contract, Event
+import ib_insync as ibi
 
-from candle import Candle
-from logger import Logger
-
+from ib_tools.candle import Candle
+from ib_tools.logger import Logger  # type: ignore
 
 log = Logger(__name__)
 
@@ -18,10 +17,10 @@ class Portfolio(ABC):
         self._createEvents()
 
     def _createEvents(self):
-        self.entrySignal = Event("entrySignal")
-        self.closeSignal = Event("closeSignal")
+        self.entrySignal = ibi.Event("entrySignal")
+        self.closeSignal = ibi.Event("closeSignal")
 
-    def register(self, ib: IB, candles: List[Candle]):
+    def register(self, ib: ibi.IB, candles: List[Candle]):
         self.ib = ib
         self.candles = candles
 
@@ -62,7 +61,7 @@ class FixedPortfolio(Portfolio):
         self.number = number
         Portfolio.__init__(self, **kwargs)
 
-    def number_of_contracts(self, contract: Contract, price: float):
+    def number_of_contracts(self, contract: ibi.Contract, price: float):
         return self.number
 
     def onSignal(self, obj: Candle):
@@ -119,7 +118,7 @@ class AdjustedPortfolio(Portfolio):
 
     multiplier_dict = {2: 1.35, 3: 1.5, 4: 1.65}
 
-    def register(self, ib: IB, candles: List[Candle]):
+    def register(self, ib: ibi.IB, candles: List[Candle]):
         super().register(ib, candles)
         self.div_multiplier = self.multiplier_dict[len(candles)]
         self.alloc = 1 / len(self.candles)
@@ -215,7 +214,7 @@ class AdjustedPortfolio(Portfolio):
 
 
 class WeightedAdjustedPortfolio(AdjustedPortfolio):
-    def register(self, ib: IB, candles: List[Candle]):
+    def register(self, ib: ibi.IB, candles: List[Candle]):
         Portfolio.register(self, ib, candles)
         self.div_multiplier = self.multiplier_dict[len(candles)]
         allocs = [candle.alloc for candle in candles]

@@ -1,26 +1,25 @@
-from collections import defaultdict
-from abc import ABC, abstractmethod
-import string
 import random
+import string
+from abc import ABC, abstractmethod
+from collections import defaultdict
+from typing import Any, Dict, List, Literal, NamedTuple, Optional
 
 import numpy as np
-from typing import NamedTuple, Optional, Dict, Any, List, Literal
-
-from trader import Trader
-from candle import Candle
 from ib_insync import (
-    Contract,
-    Trade,
-    Order,
-    MarketOrder,
-    LimitOrder,
-    StopOrder,
     BracketOrder,
-    TagValue,
+    Contract,
+    LimitOrder,
+    MarketOrder,
+    Order,
     Position,
+    StopOrder,
+    TagValue,
+    Trade,
 )
-from logger import Logger
 
+from ib_tools.candle import Candle
+from ib_tools.logger import Logger
+from ib_tools.trader import Trader
 
 log = Logger(__name__)
 
@@ -470,7 +469,7 @@ class OcaExecModel(EventDrivenExecModel):
     and take-profit.
     """
 
-    oca_ids = []
+    oca_ids: List[str] = []
 
     def oca_group(self):
         while (

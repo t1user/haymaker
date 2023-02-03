@@ -1,7 +1,11 @@
-import pandas as pd  # type: ignore
-from typing import Optional, Literal, Union
-from numba_tools import _blip_to_signal_converter, _in_out_signal_unifier
+from typing import Literal, Optional, Union
 
+import pandas as pd  # type: ignore
+
+from ib_tools.research.numba_tools import (
+    _blip_to_signal_converter,
+    _in_out_signal_unifier,
+)
 
 """
 This module allows for most frequent conversions between various types

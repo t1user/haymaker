@@ -1,10 +1,11 @@
-import pandas as pd
-import numpy as np
-from typing import Optional, Union, Literal, Tuple, Type, TypeVar, Dict, Any
 from abc import ABC, abstractmethod
+from typing import Any, Dict, Literal, Optional, Tuple, Type, TypeVar, Union
 
-from signal_converters import pos_trans
-from vector_backtester import get_min_tick
+import numpy as np
+import pandas as pd
+
+from ib_tools.research.signal_converters import pos_trans
+from ib_tools.research.vector_backtester import get_min_tick
 
 # ## Stop loss ###
 

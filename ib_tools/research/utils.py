@@ -1,12 +1,13 @@
-import matplotlib.pyplot as plt  # type: ignore
-import pandas as pd  # type: ignore
-import numpy as np
 from multiprocessing import Pool, cpu_count  # type: ignore
-from typing import Union, Optional, List, Set, Sequence, Literal, Callable, Tuple
+from typing import Callable, List, Literal, Optional, Sequence, Set, Tuple, Union
 
-from signal_converters import sig_pos
-from stop import stop_loss
-from vector_backtester import Results
+import matplotlib.pyplot as plt  # type: ignore
+import numpy as np
+import pandas as pd  # type: ignore
+
+from ib_tools.research.signal_converters import sig_pos
+from ib_tools.research.stop import stop_loss
+from ib_tools.research.vector_backtester import Results
 
 # sys.path.append('/home/tomek/ib_tools')  # noqa
 
@@ -366,10 +367,10 @@ def upsample(
     if len(dfg[dfg.isna().any(axis=1)]) != 0:
         raise ValueError("Lower frequency dataframe (dfg) must not have n/a values.")
 
-    joined_df = join(df, dfg, upsampled_columns, label)
+    joined_df = join(df, dfg, upsampled_columns, label)  # type: ignore
 
     if not (keep or propagate):
-        warn_blip(upsampled_columns)
+        warn_blip(upsampled_columns)  # type: ignore
         return joined_df.ffill().dropna()
     elif keep and propagate:
         keep = verify(keep)
@@ -377,15 +378,17 @@ def upsample(
         assert not set(keep).intersection(
             propagate
         ), "Columns in keep and propagate must not overlap."
-        propagate.extend(list(set(upsampled_columns) - set(keep) - set(propagate)))
+        propagate.extend(
+            list(set(upsampled_columns) - set(keep) - set(propagate))  # type: ignore
+        )
     else:
         if keep:
             keep = verify(keep)
-            propagate = list(set(upsampled_columns) - set(keep))
+            propagate = list(set(upsampled_columns) - set(keep))  # type: ignore
         else:
             assert propagate is not None
             propagate = verify(propagate)
-            keep = list(set(upsampled_columns) - set(propagate))
+            keep = list(set(upsampled_columns) - set(propagate))  # type: ignore
     joined_df[keep] = joined_df[keep].fillna(0)
     joined_df[propagate] = joined_df[propagate].ffill()
     warn_blip(propagate)
@@ -491,9 +494,7 @@ def weighted_zscore(df: pd.DataFrame, lookback: int) -> pd.Series:
     return ((df["close"] - wmean) / wstd).dropna()
 
 
-def stop_signal(
-    df, signal_func: Callable, /, *func_args, **stop_kwargs
-) -> pd.DataFrame:
+def stop_signal(df, signal_func: Callable, /, *func_args, **stop_kwargs) -> pd.Series:
     """Wrapper to allow applying stop loss to any signal function.
 
 

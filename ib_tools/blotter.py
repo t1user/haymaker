@@ -2,19 +2,19 @@ import csv
 import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from ib_insync.order import Trade
-from ib_insync.objects import Fill, CommissionReport
-from ib_insync import util
-from logbook import Logger  # type: ignore
-from pymongo import MongoClient  # type: ignore
+import pandas as pd
 
 # import motor.motor_asyncio  # type: ignore
 from arctic import TICK_STORE, Arctic  # type: ignore
-import pandas as pd  # type: ignore
+from ib_insync import util
+from ib_insync.objects import CommissionReport, Fill
+from ib_insync.order import Trade
+from logbook import Logger  # type: ignore
+from pymongo import MongoClient  # type: ignore
 
-from utilities import default_path
+from ib_tools.utilities import default_path
 
 log = Logger(__name__)
 

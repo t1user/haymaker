@@ -1,15 +1,15 @@
 from functools import partial
-from typing import Dict, Callable, Tuple, Union, Optional
+from typing import Callable, Dict, Optional, Tuple, Union
 
-import pandas as pd  # type: ignore
 import numpy as np
+import pandas as pd
 
-from research.numba_tools import (
-    _in_out_signal_unifier,
+from ib_tools.research.decorators import ensure_df
+from ib_tools.research.numba_tools import (
     _blip_to_signal_converter,
+    _in_out_signal_unifier,
     swing,
 )
-from research.decorators import ensure_df
 
 
 def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:

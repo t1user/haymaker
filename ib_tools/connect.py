@@ -1,13 +1,13 @@
-import asyncio
+# import asyncio
+import sys
+from typing import Callable
+
+from ib_insync import IB, Contract, util
+from ib_insync.ibcontroller import IBC, Watchdog
+from logbook import Logger  # type: ignore
 
 # import sys
 
-from typing import Callable
-
-from ib_insync import IB, util, Contract
-from ib_insync.ibcontroller import IBC, Watchdog
-
-from logbook import Logger  # type: ignore
 
 # from handlers import WatchdogHandlers
 
@@ -29,15 +29,16 @@ class IBHandlers:
     ) -> None:
         log.error(f"IB error {errorCode}: {errorString}")
         if errorCode == 1100:
-            log.warning("Event loop will be stopped!")
-            asyncio.get_event_loop().stop()
-            self.run()
+            # log.warning("Event loop will be stopped!")
+            # asyncio.get_event_loop().stop()
+            # self.run()
+            log.critical("Connection error: figure out how to handle it!")
 
     def onApiError(self, *args) -> None:
         log.error(f"API error: {args}")
 
     def onConnected(self, *args) -> None:
-        pass
+        log.info("Connected!")
 
     def onDisconnected(self, *args) -> None:
         pass
@@ -47,6 +48,9 @@ class IBHandlers:
         log.debug(f"running {self.func}")
         try:
             util.run(self.func())
+        except (KeyboardInterrupt, SystemExit):
+            self.ib.disconnect()
+            sys.exit()
         except Exception as e:
             log.error(f"ignoring schedule exception: {e}")
 
@@ -103,7 +107,8 @@ class StartNoWatchdog(IBHandlers):
         IBHandlers.__init__(self, ib, func)
         self.host = "localhost"
         self.port = 4002  # this is for paper account
-        self.id = 12
+        # self.id = 12
+        self.get_clientId()
 
     def get_clientId(self) -> None:
         """Find an unoccupied clientId for connection."""
@@ -112,7 +117,7 @@ class StartNoWatchdog(IBHandlers):
             try:
                 self.connect()
                 log.info(f"connected with clientId: {i}")
-                break
+                return
             except ConnectionRefusedError:
                 log.error("TWS or IB Gateway is not running.")
                 break
@@ -122,6 +127,10 @@ class StartNoWatchdog(IBHandlers):
                     "moving up to the next one"
                 )
                 log.debug(message)
+
+    def onConnected(self):
+        log.info("Connected!")
+        self.run()
 
     def onDisconnected(self, *args) -> None:
         """Initiate re-start when external watchdog manages api connection."""
@@ -136,6 +145,7 @@ class StartNoWatchdog(IBHandlers):
     def connect(self) -> None:
         """Establish conection while not using watchdog."""
         log.debug("Connecting....")
+        counter = 0
         while not self.ib.isConnected():
             try:
                 self.ib.connect(self.host, self.port, self.id)
@@ -145,6 +155,8 @@ class StartNoWatchdog(IBHandlers):
                 log.debug("post sleep...")
             except Exception as e:
                 log.debug(f"Connection error: {e}")
+                if counter > 10:
+                    log.error("Reconnection attempt failed afer 10 retries.")
 
 
 class Connection:

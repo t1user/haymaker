@@ -1,20 +1,18 @@
-from abc import ABC, abstractmethod
-from typing import List, Dict, Union, Optional, Any, DefaultDict
-from functools import partial
-from datetime import datetime
-from collections import defaultdict
 import pickle
+from abc import ABC, abstractmethod
+from collections import defaultdict
+from datetime import datetime
+from functools import partial
+from typing import Any, DefaultDict, Dict, List, Optional, Union
 
-import pandas as pd
 import numpy as np
-from logbook import Logger  # type: ignore
-from arctic.date import DateRange
-from arctic.store.versioned_item import VersionedItem
-from arctic.exceptions import NoDataFoundException
+import pandas as pd
 from arctic import Arctic
-from ib_insync import Future, ContFuture, Contract, util
-
-from ib_tools.config import default_path
+from arctic.date import DateRange
+from arctic.exceptions import NoDataFoundException
+from arctic.store.versioned_item import VersionedItem
+from ib_insync import ContFuture, Contract, Future, util
+from logbook import Logger  # type: ignore
 
 log = Logger(__name__)
 
@@ -479,13 +477,17 @@ class ArcticStore(AbstractBaseStore):
         return meta
 
 
+# TODO: change this to factory
+DEFAULT_PATH = "~/datastore"
+
+
 class PyTablesStore(AbstractBaseStore):
     """
     Pandas HDFStore fixed format.
     THIS HAS NOT BEEN TESTED AND LIKELY DOESN'T WORK PROPERLY. TODO.
     """
 
-    def __init__(self, lib: str, path: str = default_path) -> None:
+    def __init__(self, lib: str, path: str = DEFAULT_PATH) -> None:
         lib = lib.replace(" ", "_")
         path = f"{path}/{lib}.h5"
         self.store = partial(pd.HDFStore, path)
@@ -534,7 +536,7 @@ class PyTablesStore(AbstractBaseStore):
 
 
 class PickleStore(AbstractBaseStore):
-    def __init__(self, lib: str, path: str = default_path) -> None:
+    def __init__(self, lib: str, path: str = DEFAULT_PATH) -> None:
         lib = lib.replace(" ", "_")
         pass
 
@@ -547,8 +549,8 @@ class PickleStore(AbstractBaseStore):
 class Store:
     """Pandas HDFStore table format"""
 
-    def __init__(self, path=default_path, what="cont_fut_only"):
-        path = f"{default_path}/{what}.h5"
+    def __init__(self, path=DEFAULT_PATH, what="cont_fut_only"):
+        path = f"{DEFAULT_PATH}/{what}.h5"
         self.store = partial(pd.HDFStore, path)
 
     def write(self, symbol, data, freq="min"):

@@ -1,19 +1,15 @@
-import sys
-
-from typing import NamedTuple, Tuple, List, Union, Optional, Dict, Literal
 from functools import singledispatchmethod
+from typing import Dict, List, Literal, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd  # type: ignore
+from pyfolio.timeseries import perf_stats  # type: ignore
+
+from ib_tools.research.signal_converters import sig_pos
 
 # from scipy import stats as scipy_stats  # type: ignore
 
-from pyfolio.timeseries import perf_stats  # type: ignore
-
-from signal_converters import sig_pos
-
-
-sys.path.append("/home/tomek/ib_tools")
+# sys.path.append("/home/tomek/ib_tools")
 
 
 def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
@@ -573,7 +569,7 @@ def perf(
     # =========================================
 
     # container for all non-pyfolio stats
-    stats = pd.Series()
+    stats = pd.Series(dtype="O")
     try:
         # np.float64 and np.int64 can be divided by zero
         stats["Win percent"] = win_pos.pnl.count() / len(positions)
@@ -632,7 +628,7 @@ def perf(
         stats["Positions per day"] * 252
     )
 
-    stats = pyfolio_stats.append(stats)
+    stats = pd.concat([pyfolio_stats, stats])
 
     # stats["Probabilistic Sharpe"] = probabilistic_sharpe(
     #    stats["Sharpe ratio"], stats["Skew"], stats["Kurtosis"]

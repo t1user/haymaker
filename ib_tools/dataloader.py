@@ -1,24 +1,22 @@
-import os
-from datetime import datetime, timedelta, date
-from dataclasses import dataclass, field
-from collections import deque
-import itertools
 import asyncio
+import itertools
+import os
 import random
-from typing import List, Union, Optional, Any, Dict, NamedTuple, Tuple, Deque
-from typing_extensions import Protocol
-from functools import partial
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Any, Deque, Dict, List, NamedTuple, Optional, Tuple, Union
 
-import pandas as pd  # type: ignore
-from ib_insync import IB, Contract, Future, ContFuture, BarDataList, util, Event
+import pandas as pd
+from ib_insync import IB, BarDataList, ContFuture, Contract, Event, Future, util
+from logbook import Logger  # type: ignore
+from typing_extensions import Protocol
+
+from ib_tools.datastore import AbstractBaseStore
+from ib_tools.task_logger import create_task
 
 # from logbook import DEBUG, INFO
 
-from ib_tools.logger import logger  # type: ignore
-from ib_tools.connect import Connection
-from ib_tools.config import max_number_of_workers
-from ib_tools.datastore import ArcticStore, AbstractBaseStore
-from ib_tools.task_logger import create_task
 
 """
 Async queue implementation modelled (loosely) on example here:
@@ -27,7 +25,10 @@ and here:
 https://realpython.com/async-io-python/#using-a-queue
 """
 
-log = logger(__name__)  # (__file__[:-3])
+log = Logger(__name__)  # (__file__[:-3])
+
+# TODO: change this to factory
+MAX_NUMBER_OF_WORKERS = 40
 
 
 class ContractObjectSelector:
@@ -39,11 +40,8 @@ class ContractObjectSelector:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     def __init__(self, ib: IB, file: str, directory: Union[str, None] = None) -> None:
-        if directory:
-            self.BASE_DIR = directory
-        self.symbols = pd.read_csv(
-            os.path.join(self.BASE_DIR, file), keep_default_na=False
-        ).to_dict("records")
+
+        self.symbols = pd.read_csv(file, keep_default_na=False).to_dict("records")
         self.ib = ib
         self.contracts: List[Contract] = []
         log.debug("ContractObjectSelector about to create objects")
@@ -448,7 +446,7 @@ class ContractHolder:
                     continue
                 self.items.append(
                     DataWriter(
-                        store,
+                        self.store,
                         o,
                         headTimeStamp,
                         barSize=self.barSize,
@@ -768,7 +766,7 @@ def validate_age(contract: DataWriter) -> bool:
     return True
 
 
-async def worker(name: str, queue: asyncio.Queue, pacer: Pacer) -> None:
+async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
     while True:
         contract = await queue.get()
         log.debug(
@@ -791,10 +789,10 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer) -> None:
         queue.task_done()
 
 
-async def main(holder: ContractHolder) -> None:
+async def main(holder: ContractHolder, ib: IB) -> None:
 
     contracts = holder()
-    number_of_workers = min(len(contracts), max_number_of_workers)
+    number_of_workers = min(len(contracts), MAX_NUMBER_OF_WORKERS)
 
     log.debug(
         f"main function started, " f"retrieving data for {len(contracts)} instruments"
@@ -809,7 +807,7 @@ async def main(holder: ContractHolder) -> None:
     log.debug(f"Pacer initialized: {p}")
     workers: List[asyncio.Task] = [
         create_task(
-            worker(f"worker {i}", queue, p),
+            worker(f"worker {i}", queue, p, ib),
             logger=log,
             message="asyncio error",
             message_args=(f"worker {i}",),
@@ -830,25 +828,3 @@ async def main(holder: ContractHolder) -> None:
 
     # wait until all worker tasks are cancelled
     await asyncio.gather(*workers)
-
-
-if __name__ == "__main__":
-    util.patchAsyncio()
-    ib = IB()
-    barSize = "30 secs"
-    wts = "TRADES"
-    # object where data is stored
-    store = ArcticStore(f"{wts}_{barSize}")
-
-    # the bool is for cont_only
-    holder = ContractHolder(
-        ib, "_contracts.csv", store, wts, barSize, True, aggression=2
-    )
-
-    asyncio.get_event_loop().set_debug(True)
-    # util.logToConsole(INFO)
-    Connection(ib, partial(main, holder), watchdog=True)
-
-    log.debug("script finished, about to disconnect")
-    ib.disconnect()
-    log.debug("disconnected")

@@ -19,14 +19,14 @@ class NewAtom(Atom):
         self.onStart_string = data
         self.onStart_caller = source
         self.onStart_checksum += 1
-        self.startEvent.emit(f"{data}_{self.name}", self)
+        self.startEvent.emit(f"{data}_{self.name}")
         return data, source
 
     def onData(self, data, source):
         self.onData_string = data
         self.onData_caller = source
         self.onData_checksum += 1
-        self.dataEvent.emit(f"{data}_{self.name}", self)
+        self.dataEvent.emit(f"{data}_{self.name}")
         return data, source
 
 
@@ -51,12 +51,12 @@ class TestAtom:
 
     def test_connect_startEvent(self, atom1, atom2):
         atom1.connect(atom2)
-        atom1.startEvent.emit("start_test_string", self)
+        atom1.startEvent.emit("start_test_string")
         assert atom2.onStart_string == "start_test_string"
 
     def test_connect_dataEvent(self, atom1, atom2):
         atom1.connect(atom2)
-        atom1.dataEvent.emit("data_test_string", self)
+        atom1.dataEvent.emit("data_test_string")
         assert atom2.onData_string == "data_test_string"
 
     def test_disconnect(self, atom1, atom2):
@@ -74,8 +74,8 @@ class TestAtom:
 
     def test_iadd(self, atom1, atom2):
         atom1 += atom2
-        atom1.startEvent.emit("test_string", atom1)
-        atom1.dataEvent.emit("test_string", atom1)
+        atom1.startEvent.emit("test_string")
+        atom1.dataEvent.emit("test_string")
         assert atom2.onStart_string == "test_string"
         assert atom2.onData_string == "test_string"
 
@@ -88,7 +88,7 @@ class TestAtom:
     def test_union(self, atom1, atom2):
         atom3 = NewAtom("atom3")
         atom3.union(atom1, atom2)
-        atom3.startEvent.emit("test_string", atom3)
+        atom3.startEvent.emit("test_string")
         assert atom1.onStart_string == "test_string"
         assert atom2.onStart_string == "test_string"
         assert id(atom1.onStart_caller) == id(atom3)
@@ -99,11 +99,27 @@ class TestAtom:
 
     def test_equality(self, atom1, atom2):
         atom1.connect(atom2)
-        atom1.startEvent.emit("test", atom1)
+        atom1.startEvent.emit("test")
         assert atom2.onStart_caller == atom1
 
     def test_repr(self, atom1):
         assert repr(atom1) == "NewAtom(name=atom1)"
+
+    def test_no_duplicate_connections(self, atom1, atom2):
+        atom1.connect(atom2)
+        atom1.connect(atom2)
+        atom1.startEvent.emit("test_string")
+        atom1.dataEvent.emit("test_string")
+        assert len(atom1.startEvent) == 1
+        assert len(atom1.dataEvent) == 1
+
+    def test_no_duplicate_connections_1(self, atom1, atom2):
+        atom1.connect(atom2)
+        atom1.connect(atom2)
+        atom1.startEvent.emit("test_string")
+        atom1.dataEvent.emit("test_string")
+        assert atom2.onStart_checksum == 1
+        assert atom2.onData_checksum == 1
 
 
 class TestPipe:
@@ -125,8 +141,8 @@ class TestPipe:
         end = NewAtom("end")
         start.connect(pipe)
         pipe.connect(end)
-        start.startEvent.emit("StartEvent", start)
-        start.dataEvent.emit("DataEvent", start)
+        start.startEvent.emit("StartEvent")
+        start.dataEvent.emit("DataEvent")
         return start, end, pipe
 
     def test_pipe_type(self, pipe_):
@@ -183,10 +199,47 @@ class TestPipe:
 
     def test_pass_through_startEvent_checksum(self, pass_through_pipe):
         """
-        Each object in the chain should have been acted upon.
+        Each object in the chain should have been acted upon, except for the first.
         """
         start, end, pipe = pass_through_pipe
+        assert start.onStart_checksum == 0
         assert end.onStart_checksum == 1
         assert pipe[0].onStart_checksum == 1
         assert pipe[1].onStart_checksum == 1
         assert pipe[2].onStart_checksum == 1
+
+
+class TestUnionPipe:
+    @pytest.fixture
+    def atoms(self):
+        return NewAtom("start"), NewAtom("end")
+
+    @pytest.fixture
+    def pipe1(self):
+        x, y, z = NewAtom("x"), NewAtom("y"), NewAtom("z")
+        pipe = Pipe(x, y, z)
+        return pipe
+
+    @pytest.fixture
+    def pipe2(self):
+        a, b, c = NewAtom("a"), NewAtom("b"), NewAtom("c")
+        pipe = Pipe(a, b, c)
+        return pipe
+
+    def test_union_pipe(self, pipe1, pipe2, atoms):
+        start, end = atoms
+        p1 = pipe1
+        p2 = pipe2
+        start.union(p1, p2)
+        start.startEvent.emit("test_string")
+        assert p1[-1].onStart_string == "test_string_x_y"
+        assert p2[-1].onStart_string == "test_string_a_b"
+
+    def test_union_pipe_output(self, pipe1, pipe2, atoms):
+        start, end = atoms
+        p1 = pipe1
+        p2 = pipe2
+        start.union(p1, p2)
+        p1.connect(end)
+        start.startEvent.emit("test_string")
+        assert end.onStart_string == "test_string_x_y_z"
