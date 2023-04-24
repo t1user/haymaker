@@ -63,7 +63,7 @@ class TestAtom:
         atom1.connect(atom2)
         atom1.disconnect(atom2)
         assert len(atom1.startEvent) == 0
-        assert len(atom2.dataEvent) == 0
+        assert len(atom1.dataEvent) == 0
 
     def test_clear(self, atom1, atom2):
         atom3 = NewAtom("atom3")
@@ -83,7 +83,7 @@ class TestAtom:
         atom1.connect(atom2)
         atom1 -= atom2
         assert len(atom1.startEvent) == 0
-        assert len(atom2.dataEvent) == 0
+        assert len(atom1.dataEvent) == 0
 
     def test_union(self, atom1, atom2):
         atom3 = NewAtom("atom3")
@@ -243,3 +243,49 @@ class TestUnionPipe:
         p1.connect(end)
         start.startEvent.emit("test_string")
         assert end.onStart_string == "test_string_x_y_z"
+
+
+# class WaitingAtom(Atom):
+#     def onStart(self, data, source):
+#         self.onStart_entry_time = datetime.now()
+#         print(f"onStartentry: {self.onStart_entry_time}")
+#         ibi.util.run(self.non_blocking_func())
+#         self.onStart_exit_time = datetime.now()
+#         print(f"onStartexit: {self.onStart_exit_time}")
+
+#     async def non_blocking_func(self):
+#         ibi.util.sleep()
+#         print("released control")
+#         await asyncio.sleep(2)
+#         self.onTask_finished_time = datetime.now()
+#         print(f"onTaskfinished: {self.onTask_finished_time}")
+
+#     def onData(self, data, source):
+#         self.onData_entry_time = datetime.now()
+#         print(f"onDataentry: {self.onData_entry_time}")
+
+
+# def test_onData_waiting_on_onStat_to_finish():
+#     atom1 = NewAtom("atom1")
+#     atom2 = WaitingAtom("atom2")
+#     atom1 += atom2
+#     atom1.startEvent.emit("test1")
+#     print(f"time dataEvent sent: {datetime.now()}")
+#     atom1.dataEvent.emit("test2")
+#     assert atom2.onData_entry_time == atom2.onTask_finished_time
+
+
+# class TestWaitingOnStart:
+#     @pytest.fixture
+#     def atom1(self):
+#         return NewAtom("atom1", True)
+
+#     @pytest.fixture
+#     def atom2(self):
+#         return NewAtom("atom2", True)
+
+#     def test_onData_can_wait(self):
+#         atom1 = NewAtom("atom1")
+#         atom2 = NewAtom("atom2")
+#         atom1 += atom2
+#         atom1.onData.emit()

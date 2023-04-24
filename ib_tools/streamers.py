@@ -1,6 +1,9 @@
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Awaitable, List, Optional
 
+import eventkit as ev  # type: ignore
 import ib_insync as ibi
 from logbook import Logger  # type: ignore
 
@@ -9,20 +12,48 @@ from ib_tools.base import Atom
 log = Logger(__name__)
 
 
+class Streamer(Atom):
+    instances: List["Streamer"] = []
+
+    def __new__(cls, *args, **kwargs):
+        obj = super().__new__(cls)
+        cls.instances.append(obj)
+        return obj
+
+    @classmethod
+    def awaitables(cls) -> List[Awaitable]:
+        """All instantiated streamers. Used to put in asyncio.gather"""
+        return [s.run() for s in cls.instances]
+
+    def __post_init__(self):
+        """Relevant only if inherited by a dataclass."""
+        Atom.__init__(self)
+
+    def streaming_func(self):
+        pass
+
+    async def run(self):
+        self.onStart(None, None)
+        while True:
+            await asyncio.sleep(0)
+
+    def onStart(self, data=None, source: Optional[Atom] = None) -> None:
+        ticker = self.streaming_func()
+        ticker.updateEvent += self.dataEvent
+
+
 @dataclass
-class HistoricalDataStreamer(Atom):
+class HistoricalDataStreamer(Streamer):
     contract: ibi.Contract
     durationStr: str
     barSizeSetting: str
     whatToShow: str
-    useRTH: bool
-    formatDate: int
+    useRTH: bool = False
+    formatDate: int = 2
     incremental_only: bool = True
+    last_bar_date: Optional[datetime] = None
 
-    def __post_init__(self):
-        Atom.__init__(self)
-
-    def streaming_func(self):
+    def streaming_func(self) -> Awaitable:
         return self.ib.reqHistoricalDataAsync(
             self.contract,
             endDateTime="",
@@ -30,74 +61,75 @@ class HistoricalDataStreamer(Atom):
             barSizeSetting=self.barSizeSetting,
             whatToShow=self.whatToShow,
             useRTH=self.useRTH,
-            formatDate=1,
+            formatDate=self.formatDate,
             keepUpToDate=True,
             timeout=0,
         )
 
-    def onStart(self, start_date, source) -> None:
-        log.debug(f"start_date: {start_date}")
-        if start_date is not None:
-            # 30s time-window to retrieve data
-            # LOOK AT THIS
-            # IT MAY CAUSE DOUBLING ON ONE DATA POINT
-            self.durationStr = f"{self.date_to_delta(start_date) + 30} S"
-        self.ib.run(self.run())
-        self.ib.reqMktData(self.contract, "221")
+    def date_to_delta(self, date: datetime) -> int:
+        secs = (datetime.now(date.tzinfo) - date).seconds
+        bar_size = int(self.barSizeSetting.split(" ")[0])
+        bars = secs // bar_size
+        duration = max((bars + 1) * bar_size, 30)
+        return duration
 
-    def onData(self, data, source: Atom) -> None:
-        pass
+    def onStart(
+        self, data: Optional[Any] = None, source: Optional[Atom] = None
+    ) -> None:
+        # THIS IS NOT TESTED
+        # THE VARIANT WITH ibi.run WORKS (but sucks)
+        # ibi.util.run(self.run())
+        loop = asyncio.get_event_loop()
+        loop.call_soon(self.run)
+        print(f"{self} started.")
+        # this starts subscription so that current price is readily available from ib
+        # TODO: consider if it's needed
+        self.ib.reqMktData(self.contract, "221")
 
     async def run(self):
         log.debug(f"Requesting bars for {self.contract.localSymbol}")
+        if self.last_bar_date:
+            self.durationStr = f"{self.date_to_delta(self.last_bar_date)} S"
+            print(f"duration string: {self.durationStr}")
         bars = await self.streaming_func()
         log.debug(f"Historical bars received for {self.contract.localSymbol}")
-        self.startEvent.emit(bars)
+        if self.last_bar_date:
+            stream = (
+                ev.Sequence(bars[:-1])
+                .pipe(ev.Filter(lambda x: x.date > self.last_bar_date))
+                .connect(self.dataEvent)
+            )
+        else:
+            stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
+        await stream
+
         async for bars, hasNewBar in bars.updateEvent:
-            self.on_bars(bars, hasNewBar)
+            if hasNewBar:
+                self.last_bar_date = bars[-2].date
+                self.on_new_bar(bars[:-1])
 
-    def on_bars(self, bars, hasNewBar):
-        if hasNewBar:
-            self.on_new_bar(bars[:-1])
-
-    def on_new_bar(self, bars: ibi.BarDataList, hasNewBar: bool) -> None:
+    def on_new_bar(self, bars: ibi.BarDataList) -> None:
         if self.incremental_only:
             self.dataEvent.emit(bars[-1])
         else:
             self.dataEvent.emit(bars)
 
-    def date_to_delta(self, date: datetime) -> int:
-        return (datetime.now() - date).seconds
-
 
 @dataclass
-class MktDataStreamer(Atom):
+class MktDataStreamer(Streamer):
     contract: ibi.Contract
     tickList: str
-
-    def __post_init__(self):
-        Atom.__init__(self)
 
     def streaming_func(self) -> ibi.Ticker:
         return self.ib.reqMktData(self.contract, self.tickList)
 
-    def onStart(self, data, source: Atom) -> None:
-        ticker = self.streaming_func()
-        ticker.updateEvent += self.dataEvent
-
-    def onData(self, data, source: Atom) -> None:
-        pass
-
 
 @dataclass
-class RealTimeBarsStreamer(Atom):
+class RealTimeBarsStreamer(Streamer):
     contract: ibi.Contract
     whatToShow: str
     useRTH: bool
     incremental_only: bool = True
-
-    def __post_init__(self):
-        Atom.__init__(self)
 
     def streaming_func(self):
         return self.ib.reqRealTimeBars(
@@ -107,14 +139,11 @@ class RealTimeBarsStreamer(Atom):
             self.useRTH,
         )
 
-    def onStart(self, data, source: Atom) -> None:
+    def onStart(self, data=None, source: Optional[Atom] = None) -> None:
         # this is a sync function
-        self.run()
+        self._run()
 
-    def onData(self, data, source: Atom) -> None:
-        pass
-
-    def run(self):
+    def _run(self):
         bars = self.streaming_func()
         bars.updateEvent += self.onUpdate
 
@@ -124,3 +153,19 @@ class RealTimeBarsStreamer(Atom):
                 self.dataEvent.emit(bars[-1])
             else:
                 self.dataEvent.emit(bars)
+
+
+@dataclass
+class TickByTickStreamer(Streamer):
+    contract: ibi.Contract
+    tickType: str
+    numberOfTicks: int = 0
+    ignoreSize: bool = False
+
+    def streaming_func(self) -> ibi.Ticker:
+        return self.ib.reqTickByTickData(
+            contract=self.contract,
+            tickType=self.tickType,
+            numberOfTicks=self.numberOfTicks,
+            ignoreSize=self.ignoreSize,
+        )

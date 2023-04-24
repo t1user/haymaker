@@ -1,6 +1,6 @@
 import dataclasses
 from abc import ABC, abstractmethod
-from typing import ClassVar, Dict, List, Protocol, Type
+from typing import ClassVar, Dict, List, Optional, Protocol, Type
 
 import ib_insync as ibi
 from logbook import Logger  # type: ignore
@@ -10,7 +10,8 @@ log = Logger(__name__)
 
 class NewEvent(ibi.Event):
     """
-    Save the object originating the Event and attach it to every emission.
+    Modified eventkit Event, that saves the object originating the Event and attaches it
+    to every emission.
     """
 
     def __init__(
@@ -20,10 +21,10 @@ class NewEvent(ibi.Event):
         super().__init__(name="", _with_error_done_events=True)
 
     def emit(self, *args):
-        super().emit(*args, source=self.source_object)
+        super().emit(*args, self.source_object)
 
 
-class Atom(ABC):
+class Atom:
     """
     Abstract base object from which all other objects inherit.
 
@@ -32,37 +33,34 @@ class Atom(ABC):
     ib: ClassVar[ibi.IB]
 
     @classmethod
-    def attach_ib(cls, ib: ibi.IB) -> None:
+    def set_ib(cls, ib: ibi.IB) -> None:
         cls.ib = ib
 
-    def __init__(self) -> None:
+    def __init__(self, wait_for_onStart: bool = False) -> None:
         self._createEvents()
 
     def _createEvents(self):
         self.startEvent = NewEvent("startEvent", source_object=self)
         self.dataEvent = NewEvent("dataEvent", source_object=self)
 
-    @abstractmethod
-    def onStart(self, data, source: "Atom") -> None:
+    def onStart(self, data, source: Optional["Atom"] = None) -> None:
         pass
 
-    @abstractmethod
-    def onData(self, data, source: "Atom") -> None:
+    def onData(self, data, source: Optional["Atom"]) -> None:
         pass
 
     def connect(self, *targets) -> "Atom":
         for t in targets:
-            self.startEvent.disconnect(t.onStart)
+            self.startEvent.disconnect_obj(t)
             self.startEvent.connect(t.onStart, keep_ref=True)
-
-            self.dataEvent.disconnect(t.onData)
+            self.dataEvent.disconnect_obj(t)
             self.dataEvent.connect(t.onData, keep_ref=True)
         return self
 
     def disconnect(self, *targets) -> "Atom":
         for t in targets:
-            self.startEvent.disconnect(t.onStart)
-            self.dataEvent.connect(t.onData)
+            self.startEvent.disconnect_obj(t)
+            self.dataEvent.disconnect_obj(t)
         return self
 
     def clear(self):
@@ -82,7 +80,13 @@ class Atom(ABC):
 
     def __repr__(self) -> str:
         attrs = ", ".join(
-            (f"{i}={j}" for i, j in self.__dict__.items() if "Event" not in str(i))
+            (
+                f"{i}={j}"
+                for i, j in self.__dict__.items()
+                if "Event" not in str(i)
+                if str(i) != "_wait_for_onStart"
+                if str(i) != "buffer"
+            )
         )
         return f"{self.__class__.__name__}({attrs})"
 
@@ -105,14 +109,14 @@ class Pipe(Atom):
         return self
 
     def disconnect(self, other) -> "Pipe":  # type: ignore
-        self.last.startEvent.disconnect(other.onStart)
-        self.last.dataEvent.disconnect(other.onData)
+        self.last.startEvent.disconnect_obj(other)
+        self.last.dataEvent.disconnect_obj(other)
         return self
 
-    def onStart(self, data, source: Atom) -> None:
+    def onStart(self, data, source: Optional[Atom] = None) -> None:
         self.first.onStart(data, source)
 
-    def onData(self, data, source: Atom) -> None:
+    def onData(self, data, source: Optional[Atom] = None) -> None:
         self.first.onData(data, source)
 
     def pipe(self):
@@ -140,7 +144,6 @@ class AtomDataclass(Atom, IsDataclass):
 
 
 class Strategy:
-
     # It's not finished
     # Should kwargs be given as a tree?
     # if not what if kwargs are the same for multiple classes
