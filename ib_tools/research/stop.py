@@ -76,7 +76,6 @@ class FixedStop(BaseBracket):
 
 
 class TakeProfit(BaseBracket):
-
     multiple: float
 
     @classmethod
@@ -110,7 +109,6 @@ A = TypeVar("A", bound="Adjust")
 
 
 class Adjust:
-
     adjusted_stop: Type[BaseBracket]
     trigger_multiple: float
     stop_multiple: float
@@ -149,7 +147,6 @@ class Adjust:
         elif (self.position == -1 and self.trigger >= low) or (
             self.position == 1 and self.trigger <= high
         ):
-
             adjusted = self.adjusted_stop(
                 self.adjusted_stop_distance, order.position, entry=self.trigger
             )
@@ -186,7 +183,6 @@ class Context:
         tp: Type[BaseBracket],
         adjust: Type[Adjust],
     ) -> None:
-
         self._stop = stop
         self._tp = tp
         self._adjust = adjust
@@ -317,7 +313,6 @@ def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
 
     data: collumns have the meaning required by the context is being passed.
 
-    Currently
     Context requires:
     [0] position (before the bar is processed, ie. target_position)
     [1] transaction

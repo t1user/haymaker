@@ -246,6 +246,11 @@ def efficiency(price: pd.Series, strategy_return: float) -> float:
     return strategy_return / market_return
 
 
+def efficiency_1(price: pd.Series, strategy_return: float) -> float:
+    market_return = abs(price.max() / price.min())
+    return strategy_return / market_return
+
+
 def efficiency_2(price: pd.Series, strategy_return: float) -> float:
     open = price[0]
     close = price[-1]
@@ -572,13 +577,10 @@ def perf(
     stats = pd.Series(dtype="O")
     try:
         # np.float64 and np.int64 can be divided by zero
-        stats["Win percent"] = win_pos.pnl.count() / len(positions)
+        stats["Win ratio"] = win_pos.pnl.count() / len(positions)
         stats["Average gain"] = win_pos.pnl.sum() / win_pos.pnl.count()
         stats["Average loss"] = loss_pos.pnl.sum() / loss_pos.pnl.count()
-        stats["Avg gain/loss ratio"] = abs(
-            stats["Average gain"] / stats["Average loss"]
-        )
-
+        stats["Profit factor"] = abs(stats["Average gain"] / stats["Average loss"])
         # stats["Position EV"] = (stats["Win percent"] * stats["Average gain"]) + (
         #    (1 - stats["Win percent"]) * stats["Average loss"]
         # )
@@ -616,7 +618,8 @@ def perf(
 
     stats["Efficiency"] = efficiency(price, pyfolio_stats["Cumulative returns"])
     stats["Efficiency_1"] = efficiency(price, df["pnl"].sum() / df["price"].iloc[0])
-    stats["Efficiency_2"] = efficiency_2(price, pyfolio_stats["Cumulative returns"])
+    stats["Efficiency_2"] = efficiency_1(price, pyfolio_stats["Cumulative returns"])
+    stats["Efficiency_3"] = efficiency_2(price, pyfolio_stats["Cumulative returns"])
 
     # Annual return from pyfolio is with annual capitalization
     # Here return is without capitalization
