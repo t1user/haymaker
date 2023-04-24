@@ -40,7 +40,6 @@ class ContractObjectSelector:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     def __init__(self, ib: IB, file: str, directory: Union[str, None] = None) -> None:
-
         self.symbols = pd.read_csv(file, keep_default_na=False).to_dict("records")
         self.ib = ib
         self.contracts: List[Contract] = []
@@ -106,7 +105,6 @@ class DataWriter:
         aggression: float = 2,
         now: datetime = datetime.now(),
     ) -> None:
-
         self.store = store
         self.contract = contract
         self.head = head
@@ -358,9 +356,9 @@ class DownloadContainer:
                     self.retries = 0
                     return None
         # this is likely irrelevant. Check. TODO.
-        if self.current_date:
-            if self.from_date < self.current_date < self.to_date:
-                return self.current_date
+        # if self.current_date:
+        #     if self.from_date < self.current_date < self.to_date:
+        #         return self.current_date
         return None
 
     @property
@@ -374,7 +372,7 @@ class DownloadContainer:
                 return self.df.index.min() <= self.from_date
             except:
                 log.error(
-                    "index.min: {self.df.index.min()}, from_date: {self.from_date}"
+                    f"ERROR index.min: {self.df.index.min()}, from_date: {self.from_date}"
                 )
                 raise
         else:
@@ -387,7 +385,6 @@ class DownloadContainer:
         if self.bars:
             self.df = util.df([b for bars in reversed(self.bars) for b in bars])
             self.df.set_index("date", inplace=True)
-
             if not self.ok_to_write:
                 log.warning(
                     f"Writing update with gap between: "
@@ -776,7 +773,9 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
             f'Bar size: {contract.params["barSizeSetting"]} '
         )
         async with pacer:
-            chunk = await ib.reqHistoricalDataAsync(**contract.params, timeout=0)
+            chunk = await ib.reqHistoricalDataAsync(
+                **contract.params, timeout=0, formatDate=2
+            )
         contract.save_chunk(chunk)
         if contract.next_date:
             if validate_age(contract):
@@ -790,7 +789,6 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
 
 
 async def main(holder: ContractHolder, ib: IB) -> None:
-
     contracts = holder()
     number_of_workers = min(len(contracts), MAX_NUMBER_OF_WORKERS)
 
