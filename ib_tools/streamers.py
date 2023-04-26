@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Awaitable, List, Optional
+from typing import Awaitable, List, Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -30,14 +30,14 @@ class Streamer(Atom):
         Atom.__init__(self)
 
     def streaming_func(self):
-        pass
+        raise NotImplementedError
 
     async def run(self):
         self.onStart(None, None)
         while True:
             await asyncio.sleep(0)
 
-    def onStart(self, data=None, source: Optional[Atom] = None) -> None:
+    def onStart(self, data, *args) -> None:
         ticker = self.streaming_func()
         ticker.updateEvent += self.dataEvent
 
@@ -73,24 +73,16 @@ class HistoricalDataStreamer(Streamer):
         duration = max((bars + 1) * bar_size, 30)
         return duration
 
-    def onStart(
-        self, data: Optional[Any] = None, source: Optional[Atom] = None
-    ) -> None:
-        # THIS IS NOT TESTED
-        # THE VARIANT WITH ibi.run WORKS (but sucks)
-        # ibi.util.run(self.run())
-        loop = asyncio.get_event_loop()
-        loop.call_soon(self.run)
-        print(f"{self} started.")
+    def onStart(self, data, *args) -> None:
         # this starts subscription so that current price is readily available from ib
         # TODO: consider if it's needed
         self.ib.reqMktData(self.contract, "221")
 
     async def run(self):
+        self.onStart(None, None)
         log.debug(f"Requesting bars for {self.contract.localSymbol}")
         if self.last_bar_date:
             self.durationStr = f"{self.date_to_delta(self.last_bar_date)} S"
-            print(f"duration string: {self.durationStr}")
         bars = await self.streaming_func()
         log.debug(f"Historical bars received for {self.contract.localSymbol}")
         if self.last_bar_date:
@@ -139,12 +131,13 @@ class RealTimeBarsStreamer(Streamer):
             self.useRTH,
         )
 
-    def onStart(self, data=None, source: Optional[Atom] = None) -> None:
+    def onStart(self, data, *args) -> None:
         # this is a sync function
         self._run()
 
     def _run(self):
         bars = self.streaming_func()
+        bars.updateEvent.clear()
         bars.updateEvent += self.onUpdate
 
     def onUpdate(self, bars, hasNewBar):

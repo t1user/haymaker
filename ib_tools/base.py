@@ -1,27 +1,10 @@
 import dataclasses
-from abc import ABC, abstractmethod
-from typing import ClassVar, Dict, List, Optional, Protocol, Type
+from typing import ClassVar, Dict, List, Protocol, Type
 
 import ib_insync as ibi
 from logbook import Logger  # type: ignore
 
 log = Logger(__name__)
-
-
-class NewEvent(ibi.Event):
-    """
-    Modified eventkit Event, that saves the object originating the Event and attaches it
-    to every emission.
-    """
-
-    def __init__(
-        self, name: str = "", _with_error_done_events: bool = True, *, source_object
-    ):
-        self.source_object = source_object
-        super().__init__(name="", _with_error_done_events=True)
-
-    def emit(self, *args):
-        super().emit(*args, self.source_object)
 
 
 class Atom:
@@ -40,13 +23,13 @@ class Atom:
         self._createEvents()
 
     def _createEvents(self):
-        self.startEvent = NewEvent("startEvent", source_object=self)
-        self.dataEvent = NewEvent("dataEvent", source_object=self)
+        self.startEvent = ibi.Event("startEven")
+        self.dataEvent = ibi.Event("dataEvent")
 
-    def onStart(self, data, source: Optional["Atom"] = None) -> None:
+    def onStart(self, data, *args) -> None:
         pass
 
-    def onData(self, data, source: Optional["Atom"]) -> None:
+    def onData(self, data, *args) -> None:
         pass
 
     def connect(self, *targets) -> "Atom":
@@ -113,11 +96,11 @@ class Pipe(Atom):
         self.last.dataEvent.disconnect_obj(other)
         return self
 
-    def onStart(self, data, source: Optional[Atom] = None) -> None:
-        self.first.onStart(data, source)
+    def onStart(self, data, *args) -> None:
+        self.first.onStart(data, *args)
 
-    def onData(self, data, source: Optional[Atom] = None) -> None:
-        self.first.onData(data, source)
+    def onData(self, data, *args) -> None:
+        self.first.onData(data, *args)
 
     def pipe(self):
         for i, member in enumerate(self._members):

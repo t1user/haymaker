@@ -75,7 +75,9 @@ class VolumeBars(ev.Op):
         self.bars = BarList()
 
     def on_source(self, new_bar: ibi.BarData, *args):
-        if not self.bars or self.bars[-1].volume >= self._volume:
+        if not self.bars or abs(self.bars[-1].volume) >= abs(
+            self._volume
+        ):  # remove abs!!!
             bar = new_bar
             bar.average = bar.average * bar.volume
             self.bars.append(bar)
