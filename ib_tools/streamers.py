@@ -25,10 +25,6 @@ class Streamer(Atom):
         """All instantiated streamers. Used to put in asyncio.gather"""
         return [s.run() for s in cls.instances]
 
-    def __post_init__(self):
-        """Relevant only if inherited by a dataclass."""
-        Atom.__init__(self)
-
     def streaming_func(self):
         raise NotImplementedError
 
@@ -52,6 +48,9 @@ class HistoricalDataStreamer(Streamer):
     formatDate: int = 2
     incremental_only: bool = True
     last_bar_date: Optional[datetime] = None
+
+    def __post_init__(self):
+        Atom.__init__(self)
 
     def streaming_func(self) -> Awaitable:
         return self.ib.reqHistoricalDataAsync(
@@ -112,6 +111,10 @@ class MktDataStreamer(Streamer):
     contract: ibi.Contract
     tickList: str
 
+    def __post_init__(self):
+        """Relevant only if inherited by a dataclass."""
+        Atom.__init__(self)
+
     def streaming_func(self) -> ibi.Ticker:
         return self.ib.reqMktData(self.contract, self.tickList)
 
@@ -122,6 +125,9 @@ class RealTimeBarsStreamer(Streamer):
     whatToShow: str
     useRTH: bool
     incremental_only: bool = True
+
+    def __post_init__(self):
+        Atom.__init__(self)
 
     def streaming_func(self):
         return self.ib.reqRealTimeBars(
@@ -154,6 +160,9 @@ class TickByTickStreamer(Streamer):
     tickType: str
     numberOfTicks: int = 0
     ignoreSize: bool = False
+
+    def __post_init__(self):
+        Atom.__init__(self)
 
     def streaming_func(self) -> ibi.Ticker:
         return self.ib.reqTickByTickData(

@@ -19,7 +19,7 @@ class Atom:
     def set_ib(cls, ib: ibi.IB) -> None:
         cls.ib = ib
 
-    def __init__(self, wait_for_onStart: bool = False) -> None:
+    def __init__(self) -> None:
         self._createEvents()
 
     def _createEvents(self):
@@ -63,13 +63,7 @@ class Atom:
 
     def __repr__(self) -> str:
         attrs = ", ".join(
-            (
-                f"{i}={j}"
-                for i, j in self.__dict__.items()
-                if "Event" not in str(i)
-                if str(i) != "_wait_for_onStart"
-                if str(i) != "buffer"
-            )
+            (f"{i}={j}" for i, j in self.__dict__.items() if "Event" not in str(i))
         )
         return f"{self.__class__.__name__}({attrs})"
 

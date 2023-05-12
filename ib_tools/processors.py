@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import List, Union
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -18,7 +18,7 @@ class BarAggregator(Atom):
     def onDataBar(self, bars, *args):
         self.dataEvent.emit(bars[-1])
 
-    def onData(self, data, source: Optional[Atom] = None) -> None:
+    def onData(self, data, *args) -> None:
         self._filter.on_source(data)
 
 

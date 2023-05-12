@@ -6,8 +6,6 @@ from ib_tools.base import Atom, Pipe
 class NewAtom(Atom):
     onStart_string = None
     onData_string = None
-    onStart_caller = None
-    onData_caller = None
     onData_checksum = 0
     onStart_checksum = 0
 
@@ -15,19 +13,17 @@ class NewAtom(Atom):
         self.name = name
         super().__init__()
 
-    def onStart(self, data, source):
+    def onStart(self, data, *args):
         self.onStart_string = data
-        self.onStart_caller = source
         self.onStart_checksum += 1
         self.startEvent.emit(f"{data}_{self.name}")
-        return data, source
+        return data
 
-    def onData(self, data, source):
+    def onData(self, data, *args):
         self.onData_string = data
-        self.onData_caller = source
         self.onData_checksum += 1
         self.dataEvent.emit(f"{data}_{self.name}")
-        return data, source
+        return data
 
 
 class TestAtom:
@@ -91,16 +87,10 @@ class TestAtom:
         atom3.startEvent.emit("test_string")
         assert atom1.onStart_string == "test_string"
         assert atom2.onStart_string == "test_string"
-        assert id(atom1.onStart_caller) == id(atom3)
 
     def test_unequality(self, atom1):
         ato = NewAtom("atom1")
         assert ato != atom1
-
-    def test_equality(self, atom1, atom2):
-        atom1.connect(atom2)
-        atom1.startEvent.emit("test")
-        assert atom2.onStart_caller == atom1
 
     def test_repr(self, atom1):
         assert repr(atom1) == "NewAtom(name=atom1)"
@@ -176,19 +166,6 @@ class TestPipe:
         assert pipe[1].onStart_string == "StartEvent_x"
         assert pipe[2].onStart_string == "StartEvent_x_y"
 
-    def test_source_object_pass_through(self, pass_through_pipe):
-        _, _, pipe = pass_through_pipe
-        assert pipe[1].onStart_caller == pipe[0]
-        assert pipe[2].onStart_caller == pipe[1]
-
-    def test_source_object_pass_through_to_outside_of_pipe(self, pass_through_pipe):
-        start, end, pipe = pass_through_pipe
-        assert end.onStart_caller == pipe[-1]
-
-    def test_object_pass_through_from_outside_of_pipe(self, pass_through_pipe):
-        start, end, pipe = pass_through_pipe
-        assert pipe[0].onStart_caller == start
-
     def test_pass_through_startEvent(self, pass_through_pipe):
         start, end, pipe = pass_through_pipe
         assert end.onStart_string == "StartEvent_x_y_z"
@@ -243,49 +220,3 @@ class TestUnionPipe:
         p1.connect(end)
         start.startEvent.emit("test_string")
         assert end.onStart_string == "test_string_x_y_z"
-
-
-# class WaitingAtom(Atom):
-#     def onStart(self, data, source):
-#         self.onStart_entry_time = datetime.now()
-#         print(f"onStartentry: {self.onStart_entry_time}")
-#         ibi.util.run(self.non_blocking_func())
-#         self.onStart_exit_time = datetime.now()
-#         print(f"onStartexit: {self.onStart_exit_time}")
-
-#     async def non_blocking_func(self):
-#         ibi.util.sleep()
-#         print("released control")
-#         await asyncio.sleep(2)
-#         self.onTask_finished_time = datetime.now()
-#         print(f"onTaskfinished: {self.onTask_finished_time}")
-
-#     def onData(self, data, source):
-#         self.onData_entry_time = datetime.now()
-#         print(f"onDataentry: {self.onData_entry_time}")
-
-
-# def test_onData_waiting_on_onStat_to_finish():
-#     atom1 = NewAtom("atom1")
-#     atom2 = WaitingAtom("atom2")
-#     atom1 += atom2
-#     atom1.startEvent.emit("test1")
-#     print(f"time dataEvent sent: {datetime.now()}")
-#     atom1.dataEvent.emit("test2")
-#     assert atom2.onData_entry_time == atom2.onTask_finished_time
-
-
-# class TestWaitingOnStart:
-#     @pytest.fixture
-#     def atom1(self):
-#         return NewAtom("atom1", True)
-
-#     @pytest.fixture
-#     def atom2(self):
-#         return NewAtom("atom2", True)
-
-#     def test_onData_can_wait(self):
-#         atom1 = NewAtom("atom1")
-#         atom2 = NewAtom("atom2")
-#         atom1 += atom2
-#         atom1.onData.emit()
