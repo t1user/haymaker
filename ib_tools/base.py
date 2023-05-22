@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import dataclasses
-from typing import ClassVar, Dict, List, Protocol, Type
+from typing import ClassVar, Protocol, Type
 
 import ib_insync as ibi
 from logbook import Logger  # type: ignore
@@ -14,6 +16,7 @@ class Atom:
     """
 
     ib: ClassVar[ibi.IB]
+    events: ClassVar = ("startEvent", "dataEvent")
 
     @classmethod
     def set_ib(cls, ib: ibi.IB) -> None:
@@ -50,7 +53,7 @@ class Atom:
         self.startEvent.clear()
         self.dataEvent.clear()
 
-    def pipe(self, *targets: "Atom") -> "Pipe":
+    def pipe(self, *targets: "Atom") -> Pipe:
         return Pipe(self, *targets)
 
     def union(self, *targets: "Atom") -> "Atom":
@@ -80,14 +83,18 @@ class Pipe(Atom):
         self.startEvent = self.first.startEvent
         self.dataEvent = self.first.dataEvent
 
-    def connect(self, other) -> "Pipe":  # type: ignore
-        self.last.startEvent.connect(other.onStart, keep_ref=True)
-        self.last.dataEvent.connect(other.onData, keep_ref=True)
+    def connect(self, *targets) -> "Pipe":
+        for target in targets:
+            self.last.startEvent.disconnect_obj(target)
+            self.last.startEvent.connect(target.onStart, keep_ref=True)
+            self.last.dataEvent.disconnect_obj(target)
+            self.last.dataEvent.connect(target.onData, keep_ref=True)
         return self
 
-    def disconnect(self, other) -> "Pipe":  # type: ignore
-        self.last.startEvent.disconnect_obj(other)
-        self.last.dataEvent.disconnect_obj(other)
+    def disconnect(self, *targets) -> "Pipe":
+        for target in targets:
+            self.last.startEvent.disconnect_obj(target)
+            self.last.dataEvent.disconnect_obj(target)
         return self
 
     def onStart(self, data, *args) -> None:
@@ -113,7 +120,7 @@ class Pipe(Atom):
 
 
 class IsDataclass(Protocol):
-    __dataclass_fields__: Dict[str, dataclasses.Field]
+    __dataclass_fields__: dict[str, dataclasses.Field]
 
 
 class AtomDataclass(Atom, IsDataclass):
@@ -125,8 +132,8 @@ class Strategy:
     # Should kwargs be given as a tree?
     # if not what if kwargs are the same for multiple classes
 
-    _strings: Dict[str, List[str]] = {}
-    _objects: Dict[str, Type[AtomDataclass]]
+    _strings: dict[str, list[str]] = {}
+    _objects: dict[str, Type[AtomDataclass]]
     _pipe: Pipe
 
     @classmethod

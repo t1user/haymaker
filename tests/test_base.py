@@ -174,6 +174,31 @@ class TestPipe:
         start, end, pipe = pass_through_pipe
         assert end.onData_string == "DataEvent_x_y_z"
 
+    def test_connect_multiple_objects(self, atoms, pipe_):
+        start = NewAtom("start")
+        end1 = NewAtom("end1")
+        end2 = NewAtom("end2")
+        start.connect(pipe_)
+        pipe_.connect(end1, end2)
+        start.dataEvent.emit("test_string")
+        assert end1.onData_string == "test_string_x_y_z"
+        assert end1.onData_string == "test_string_x_y_z"
+
+    def test_disconnect(self, atoms, pipe_):
+        start = NewAtom("start")
+        end1 = NewAtom("end1")
+        end2 = NewAtom("end2")
+        end3 = NewAtom("end3")
+        start.connect(pipe_)
+        pipe_.connect(end1, end2, end3)
+        pipe_.disconnect(end1, end2)
+        start.dataEvent.emit("test_string")
+        # this one is still connected
+        assert end3.onData_string == "test_string_x_y_z"
+        # those ones should be disconnected
+        assert end1.onData_string is None
+        assert end2.onData_string is None
+
     def test_pass_through_startEvent_checksum(self, pass_through_pipe):
         """
         Each object in the chain should have been acted upon, except for the first.
