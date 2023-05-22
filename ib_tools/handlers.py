@@ -1,18 +1,13 @@
-from typing import Set, Dict, Tuple
+from typing import Dict, Set, Tuple
 
-from ib_insync import (IB, Trade, Fill, Contract, CommissionReport,
-                       BarDataList, PortfolioItem, AccountValue, PnL,
-                       PnLSingle, Ticker, NewsTick, NewsBulletin,
-                       ScanData, Position, Event)
+import ib_insync as ibi
 from ib_insync.ibcontroller import Watchdog
 from logbook import Logger  # type: ignore
-
 
 log = Logger(__name__)
 
 
 class WatchdogHandlers:
-
     def __init__(self, dog: Watchdog):
         dog.startingEvent += self.onStarting
         dog.startedEvent += self.onStarted
@@ -23,34 +18,33 @@ class WatchdogHandlers:
         self.dog = dog
 
     def onStarting(self, *args):
-        log.debug(f'StartingEvent {args}')
+        log.debug(f"StartingEvent {args}")
 
     def onStarted(self, *args):
-        log.debug(f'StartedEvent {args}')
+        log.debug(f"StartedEvent {args}")
 
     def onStopping(self, *args):
-        log.debug(f'StoppingEvent {args}')
+        log.debug(f"StoppingEvent {args}")
 
     def onStopped(self, *args):
-        log.debug(f'StoppedEvent {args}')
+        log.debug(f"StoppedEvent {args}")
 
     def onSoftTimeout(self, *args):
-        log.debug(f'SoftTimeoutEvent {args}')
+        log.debug(f"SoftTimeoutEvent {args}")
 
     def onHardTimeout(self, *args):
-        log.debug(f'HardTimeoutEvent {args}')
+        log.debug(f"HardTimeoutEvent {args}")
 
 
 class IBHandlers:
-
-    def __init__(self, ib: IB):
+    def __init__(self, ib: ibi.IB):
         ib.connectedEvent += self.onConnected
         ib.disconnectedEvent += self.onDisconnected
         ib.updateEvent += self.onUpdate
         ib.pendingTickersEvent += self.onPendingTickers
         ib.barUpdateEvent += self.onBarUpdate
         ib.newOrderEvent += self.onNewOrder
-        ib.orderModifyEvent += self.onOrderModify
+        ib.orderModifyEvent += self.onModifyOrder
         ib.cancelOrderEvent += self.onCancelOrder
         ib.openOrderEvent += self.onOpenOrder
         ib.orderStatusEvent += self.onOrderStatus
@@ -67,78 +61,80 @@ class IBHandlers:
         ib.scannerDataEvent += self.onScannerData
         ib.errorEvent += self.onError
         ib.timeoutEvent += self.onTimeout
-        scheduledUpdate = Event().timerange(300, None, 600)
+        scheduledUpdate = ibi.Event().timerange(300, None, 600)
         scheduledUpdate += self.onScheduledUpdate
         self.ib = ib
         self.portfolio_items: Dict[str, Tuple[float, float, float]] = {}
 
     def onConnected(self):
-        log.debug('Connection established')
+        log.debug("Connection established")
         self.account = self.ib.client.getAccounts()[0]
         self.ib.accountSummary()
         self.ib.reqPnL(self.account)
 
     def onDisconnected(self):
-        log.debug('Connection lost')
+        log.warning("Connection lost")
 
     def onUpdate(self):
         pass
 
-    def onPendingTickers(self, tickers: Set[Ticker]):
+    def onPendingTickers(self, tickers: Set[ibi.Ticker]):
         pass
 
-    def onBarUpdate(self, bars: BarDataList, hasNewBar: bool):
+    def onBarUpdate(self, bars: ibi.BarDataList, hasNewBar: bool):
         pass
 
-    def onNewOrder(self, trade: Trade):
-        log.info(f'New order: {trade.contract.localSymbol} {trade.order}')
+    def onNewOrder(self, trade: ibi.Trade):
+        log.info(f"New order: {trade.contract.localSymbol} {trade.order}")
 
-    def onOrderModify(self, trade: Trade):
+    def onModifyOrder(self, trade: ibi.Trade):
+        log.info(f"Order modified: {trade.contract.localSymbol} {trade.order}")
+
+    def onCancelOrder(self, trade: ibi.Trade):
+        log.info(f"Order canceled: {trade.contract.localSymbol} {trade.order}")
+
+    def onOpenOrder(self, trade: ibi.Trade):
+        pass
+
+    def onOrderStatus(self, trade: ibi.Trade):
         log.info(
-            f'Order modified: {trade.contract.localSymbol} {trade.order}')
+            f"Order status {trade.contract.localSymbol} "
+            f"{trade.order.action} {trade.order.totalQuantity} "
+            f"{trade.order.orderType} - "
+            f"{trade.orderStatus.status} - "
+            f"(t: {trade.order.totalQuantity} "
+            f"f: {trade.orderStatus.filled} "
+            f"r: {trade.orderStatus.remaining})"
+        )
 
-    def onCancelOrder(self, trade: Trade):
-        log.info(
-            f'Order canceled: {trade.contract.localSymbol} {trade.order}')
-
-    def onOpenOrder(self, trade: Trade):
+    def onExecDetails(self, trade: ibi.Trade, fill: ibi.Fill):
         pass
 
-    def onOrderStatus(self, trade: Trade):
-        log.info(f'Order status {trade.contract.localSymbol} '
-                 f'{trade.order.action} {trade.order.totalQuantity} '
-                 f'{trade.order.orderType} - '
-                 f'{trade.orderStatus.status} - '
-                 f'(t: {trade.order.totalQuantity} '
-                 f'f: {trade.orderStatus.filled} '
-                 f'r: {trade.orderStatus.remaining})')
-
-    def onExecDetails(self, trade: Trade, fill: Fill):
-        pass
-
-    def onCommissionReport(self, trade: Trade, fill: Fill,
-                           report: CommissionReport):
+    def onCommissionReport(
+        self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
+    ):
         # log.debug(f'Commission report: {report}')
         pass
 
-    def onUpdatePortfolio(self, item: PortfolioItem):
+    def onUpdatePortfolio(self, item: ibi.PortfolioItem):
         realized = round(item.realizedPNL, 2)
         unrealized = round(item.unrealizedPNL, 2)
         total = round(realized + unrealized)
         report = (item.contract.localSymbol, realized, unrealized, total)
-        log.debug(f'Portfolio item: {report}')
-        self.portfolio_items[item.contract.localSymbol] = (
-            realized, unrealized, total)
+        log.debug(f"Portfolio item: {report}")
+        self.portfolio_items[item.contract.localSymbol] = (realized, unrealized, total)
 
-    def onPosition(self, position: Position):
-        log.debug(f'Position update: {position.contract.localSymbol}: '
-                  f'{position.position}, avg cost: {position.avgCost}')
+    def onPosition(self, position: ibi.Position):
+        log.debug(
+            f"Position update: {position.contract.localSymbol}: "
+            f"{position.position}, avg cost: {position.avgCost}"
+        )
 
-    def onAccountValue(self, value: AccountValue):
-        if value.tag == 'NetLiquidation':
+    def onAccountValue(self, value: ibi.AccountValue):
+        if value.tag == "NetLiquidation":
             log.debug(value)
 
-    def onAccountSummary(self, value: AccountValue):
+    def onAccountSummary(self, value: ibi.AccountValue):
         """
         tags = ['UnrealizedPnL', 'RealizedPnL', 'FuturesPNL',
                 'NetLiquidationByCurrency']
@@ -148,44 +144,56 @@ class IBHandlers:
         #    log.info(f'{value.tag}: {value.value}')
         pass
 
-    def onPnl(self, entry: PnL):
+    def onPnl(self, entry: ibi.PnL):
         pass
 
-    def onPnlSingle(self, entry: PnLSingle):
+    def onPnlSingle(self, entry: ibi.PnLSingle):
         pass
 
-    def onTickNews(self, news: NewsTick):
+    def onTickNews(self, news: ibi.NewsTick):
         pass
 
-    def onNewsBulletin(self, bulletin: NewsBulletin):
+    def onNewsBulletin(self, bulletin: ibi.NewsBulletin):
         pass
 
-    def onScannerData(self, data: ScanData):
+    def onScannerData(self, data: ibi.ScanData):
         pass
 
-    def onError(self, reqId: int, errorCode: int, errorString: str,
-                contract: Contract):
-        if errorCode not in (2157, 2158, 2119, 2104, 2106, 165, 2108,
-                             2103, 2105, 10182, 1100):
-            log.error(f'ERROR: {errorCode} {errorString} {contract}')
+    def onError(
+        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+    ):
+        if errorCode not in (
+            2157,
+            2158,
+            2119,
+            2104,
+            2106,
+            165,
+            2108,
+            2103,
+            2105,
+            10182,
+            1100,
+        ):
+            log.error(f"ERROR: {errorCode} {errorString} {contract}")
 
     def onTimeout(self, idlePeriod: float):
         pass
         # log.error(f'Timeout! Idle period: {idlePeriod}')
 
     def onScheduledUpdate(self, time):
-        log.info(f'pnl: {self.ib.pnl()}')
+        log.info(f"pnl: {self.ib.pnl()}")
         summary = [0, 0, 0]
         for contract, value in self.portfolio_items.items():
             summary[0] += value[0]
             summary[1] += value[1]
             summary[2] += value[2]
-        message = (f'realized: {summary[0]}, '
-                   f'unrealized: {summary[1]}, total: {summary[2]}')
+        message = (
+            f"realized: {summary[0]}, " f"unrealized: {summary[1]}, total: {summary[2]}"
+        )
         log.info(message)
-        positions = [(p.contract.localSymbol, p.position)
-                     for p in self.ib.positions()]
-        log.info(f'POSITIONS: {positions}')
+        positions = [(p.contract.localSymbol, p.position) for p in self.ib.positions()]
+        log.info(f"POSITIONS: {positions}")
         self.manager.onScheduledUpdate()
 
 

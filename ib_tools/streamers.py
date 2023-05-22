@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Awaitable, List, Optional
+from typing import Awaitable, Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -13,7 +15,7 @@ log = Logger(__name__)
 
 
 class Streamer(Atom):
-    instances: List["Streamer"] = []
+    instances: list["Streamer"] = []
 
     def __new__(cls, *args, **kwargs):
         obj = super().__new__(cls)
@@ -21,7 +23,7 @@ class Streamer(Atom):
         return obj
 
     @classmethod
-    def awaitables(cls) -> List[Awaitable]:
+    def awaitables(cls) -> list[Awaitable]:
         """All instantiated streamers. Used to put in asyncio.gather"""
         return [s.run() for s in cls.instances]
 

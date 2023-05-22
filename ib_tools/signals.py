@@ -1,17 +1,24 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Dict, Literal
+from typing import Any, Literal
+
+from typing_extensions import Protocol
 
 P = Literal[-1, 0, 1]
+
+
+class SignalProtocol(Protocol):
+    key: Any
+    signal: Literal[-1, 1]
+    lockable: bool
+    always_on: bool
 
 
 @dataclass
 class Signal:
     key: str
     signal: Literal[-1, 1]
-    stop_kwargs: Dict[str, bool]
-    excution_model: Any
     lockable: bool = True
     always_on: bool = False
 
@@ -38,7 +45,7 @@ class SignalProcessor(ABC):
         return wrapper
 
     @abstractmethod
-    def process_signal(self, signal: Signal) -> P:
+    def process_signal(self, signal: SignalProtocol) -> P:
         """
         Given signal, should return desired position.
         """
@@ -52,29 +59,29 @@ class BinarySignalProcessor(SignalProcessor):
     def __init__(self, state_machine):
         self.sm = state_machine
 
-    def process_signal(self, signal: Signal) -> P:
+    def process_signal(self, signal: SignalProtocol) -> P:
         if self.position(signal):
             return self.process_position(signal)
         else:
             return self.proces_no_position(signal)
 
-    def position(self, signal: Signal) -> P:
+    def position(self, signal: SignalProtocol) -> P:
         position = self.sm.position(signal.key)
         return position
 
-    def locked(self, signal: Signal) -> bool:
+    def locked(self, signal: SignalProtocol) -> bool:
         return self.sm.locked(signal.key)
 
-    def direction(self, signal: Signal) -> bool:
+    def direction(self, signal: SignalProtocol) -> bool:
         return signal.signal == self.position
 
-    def lockable(self, signal: Signal) -> bool:
+    def lockable(self, signal: SignalProtocol) -> bool:
         return signal.lockable
 
-    def same_direction(self, signal: Signal) -> bool:
+    def same_direction(self, signal: SignalProtocol) -> bool:
         return self.sm.position(signal.key) == signal.signal
 
-    def process_position(self, signal: Signal) -> P:
+    def process_position(self, signal: SignalProtocol) -> P:
         if self.same_direction(signal):
             return signal.signal
         elif signal.always_on:
@@ -82,7 +89,7 @@ class BinarySignalProcessor(SignalProcessor):
         else:
             return 0
 
-    def proces_no_position(self, signal: Signal) -> P:
+    def proces_no_position(self, signal: SignalProtocol) -> P:
         if self.lockable(signal) & (self.locked(signal) == signal.signal):
             return 0
         else:
