@@ -1,26 +1,12 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Literal
+from typing import Optional, Protocol, Tuple
 
-from typing_extensions import Protocol
+from ib_tools.misc import P, S
 
-P = Literal[-1, 0, 1]
-
-
-class SignalProtocol(Protocol):
-    key: Any
-    signal: Literal[-1, 1]
-    lockable: bool
-    always_on: bool
-
-
-@dataclass
-class Signal:
-    key: str
-    signal: Literal[-1, 1]
-    lockable: bool = True
-    always_on: bool = False
+PS = Tuple[P, S, Optional[str]]
 
 
 class SignalProcessor(ABC):
@@ -39,13 +25,13 @@ class SignalProcessor(ABC):
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            signal = func(*args, **kwargs)
-            return self.process_signal(signal)
+            signal, context = func(*args, **kwargs)
+            return self.process_signal(signal, context)
 
         return wrapper
 
     @abstractmethod
-    def process_signal(self, signal: SignalProtocol) -> P:
+    def process_signal(self, signal: P, context) -> PS:
         """
         Given signal, should return desired position.
         """
@@ -55,42 +41,54 @@ class SignalProcessor(ABC):
         return self.__class__.__name__
 
 
+class BinarySignalContext(Protocol):
+    key: tuple[str, str]
+    lockable: bool
+    always_on: bool
+
+
+class StateCheckerProtocol(Protocol):
+    def position(self, key: tuple[str, str]) -> P:
+        ...
+
+    def locked(self, key: tuple[str, str]) -> bool:
+        ...
+
+
 class BinarySignalProcessor(SignalProcessor):
-    def __init__(self, state_machine):
-        self.sm = state_machine
+    def __init__(self, state_checker: StateCheckerProtocol):
+        self.sm = state_checker
 
-    def process_signal(self, signal: SignalProtocol) -> P:
-        if self.position(signal):
-            return self.process_position(signal)
+    def process_signal(self, signal: P, context: BinarySignalContext) -> PS:
+        print(signal, context)
+        if self.position(signal, context):
+            return self.process_position(signal, context)
         else:
-            return self.proces_no_position(signal)
+            return self.proces_no_position(signal, context)
 
-    def position(self, signal: SignalProtocol) -> P:
-        position = self.sm.position(signal.key)
+    def position(self, signal: P, context: BinarySignalContext) -> P:
+        position = self.sm.position(context.key)
         return position
 
-    def locked(self, signal: SignalProtocol) -> bool:
-        return self.sm.locked(signal.key)
+    def locked(self, signal: P, context: BinarySignalContext) -> bool:
+        return self.sm.locked(context.key)
 
-    def direction(self, signal: SignalProtocol) -> bool:
-        return signal.signal == self.position
+    def direction(self, signal: P, context: BinarySignalContext) -> bool:
+        return signal == self.position
 
-    def lockable(self, signal: SignalProtocol) -> bool:
-        return signal.lockable
+    def same_direction(self, signal: P, context: BinarySignalContext) -> bool:
+        return self.sm.position(context.key) == signal
 
-    def same_direction(self, signal: SignalProtocol) -> bool:
-        return self.sm.position(signal.key) == signal.signal
-
-    def process_position(self, signal: SignalProtocol) -> P:
-        if self.same_direction(signal):
-            return signal.signal
-        elif signal.always_on:
-            return signal.signal
+    def process_position(self, signal: P, context: BinarySignalContext) -> PS:
+        if self.same_direction(signal, context):
+            return signal, 0, None
+        elif context.always_on:
+            return signal, 2 * signal, "reverse"  # type: ignore
         else:
-            return 0
+            return 0, signal, "close"
 
-    def proces_no_position(self, signal: SignalProtocol) -> P:
-        if self.lockable(signal) & (self.locked(signal) == signal.signal):
-            return 0
+    def proces_no_position(self, signal: P, context: BinarySignalContext) -> PS:
+        if context.lockable & (self.locked(signal, context) == signal):
+            return 0, 0, None
         else:
-            return signal.signal
+            return signal, signal, "entry"

@@ -68,6 +68,10 @@ class HistoricalDataStreamer(Streamer):
         )
 
     def date_to_delta(self, date: datetime) -> int:
+        """
+        Return number of bars (as per barSizeSetting) since date. Used to determine
+        number of bars required to backfill since last reset.
+        """
         secs = (datetime.now(date.tzinfo) - date).seconds
         bar_size = int(self.barSizeSetting.split(" ")[0])
         bars = secs // bar_size
