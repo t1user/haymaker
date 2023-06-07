@@ -184,7 +184,7 @@ class IBHandlers:
     def onScheduledUpdate(self, time):
         log.info(f"pnl: {self.ib.pnl()}")
         summary = [0, 0, 0]
-        for contract, value in self.portfolio_items.items():
+        for _contract, value in self.portfolio_items.items():
             summary[0] += value[0]
             summary[1] += value[1]
             summary[2] += value[2]

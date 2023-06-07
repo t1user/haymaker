@@ -13,7 +13,6 @@ from ib_tools.research.numba_tools import (
 
 
 def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
-
     if not isinstance(df, pd.DataFrame):
         raise TypeError("df must be a pd.DataFrame")
 
@@ -57,7 +56,10 @@ get_ATR = atr
 
 
 def resample(
-    df: Union[pd.DataFrame, pd.Series], freq: str, how: Dict[str, str] = {}, **kwargs
+    df: Union[pd.DataFrame, pd.Series],
+    freq: str,
+    how: Optional[Dict[str, str]] = None,
+    **kwargs
 ) -> pd.DataFrame:
     """Shortcut function to resample ohlc dataframe or close price series.
     Args:
@@ -72,6 +74,8 @@ def resample(
       function
 
     """
+    if how is None:
+        how = {}
 
     if isinstance(df, pd.Series):
         return df.resample(freq, **kwargs).last().dropna()  # type: ignore
@@ -186,7 +190,6 @@ def downsampled_func(
 
 
 def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.Series:
-
     """
     Shortcut function to simplify generating downsampled atr.
 
