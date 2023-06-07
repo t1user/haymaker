@@ -149,13 +149,12 @@ class AbstractBaseBlotter(ABC):
 
 
 class CsvBlotter(AbstractBaseBlotter):
-
     fieldnames: List[str] = []
 
     def __init__(
         self,
         save_to_file: bool = True,
-        filename: str = None,
+        filename: Optional[str] = None,
         path: Optional[str] = None,
         note: str = "",
     ):
@@ -236,36 +235,35 @@ class MongoBlotter(AbstractBaseBlotter):
         x = self.collection.delete_many({})
         return f"Deleted {x.deleted_count} documents."
 
+    # class AsyncMongoBlottter(AbstractBaseBlotter):
+    #     """
+    #     NOT TESTED. Clear and delete methods missing. TODO.
+    #     """
 
-class AsyncMongoBlottter(AbstractBaseBlotter):
-    """
-    NOT TESTED. Clear and delete methods missing. TODO.
-    """
+    #     def __init__(
+    #         self,
+    #         save_to_file: bool = True,
+    #         host: str = "localhost",
+    #         port: int = 27017,
+    #         db: str = "blotter",
+    #         collection: "str" = "test_blotter",
+    #     ) -> None:
+    #         self.client = motor.motor_asyncio.AsyncIOMotorClient(host, port)
+    #         self.db = self.client[db]
+    #         self.collection = self.db[collection]
+    #         super().__init__(save_to_file)
+    #
+    # async def _write_to_file(self, data: Dict[str, Any]) -> None:
+    #     await self.collection.insert_one(data)
 
-    def __init__(
-        self,
-        save_to_file: bool = True,
-        host: str = "localhost",
-        port: int = 27017,
-        db: str = "blotter",
-        collection: "str" = "test_blotter",
-    ) -> None:
-        self.client = motor.motor_asyncio.AsyncIOMotorClient(host, port)
-        self.db = self.client[db]
-        self.collection = self.db[collection]
-        super().__init__(save_to_file)
+    # def write_to_file(self, data: Dict[str, Any]) -> None:
+    #     util.run(self._write_to_file(data))
 
-    async def _write_to_file(self, data: Dict[str, Any]) -> None:
-        await self.collection.insert_one(data)
+    # async def _save(self) -> None:
+    #     await self.collection.insert_many(self.blotter)
 
-    def write_to_file(self, data: Dict[str, Any]) -> None:
-        util.run(self._write_to_file(data))
-
-    async def _save(self) -> None:
-        await self.collection.insert_many(self.blotter)
-
-    def save(self) -> None:
-        util.run(self._save())
+    # def save(self) -> None:
+    #     util.run(self._save())
 
 
 class TickBlotter(AbstractBaseBlotter):

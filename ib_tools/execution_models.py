@@ -1,27 +1,42 @@
+from __future__ import annotations
+
 import random
 import string
 from abc import ABC, abstractmethod
-from collections import defaultdict
-from typing import Any, Dict, List, Literal, NamedTuple, Optional
+from typing import NamedTuple, Optional, Protocol
 
-import numpy as np
-from ib_insync import (
-    BracketOrder,
-    Contract,
-    LimitOrder,
-    MarketOrder,
-    Order,
-    Position,
-    StopOrder,
-    TagValue,
-    Trade,
-)
+import ib_insync as ibi
 
-from ib_tools.candle import Candle
 from ib_tools.logger import Logger
 from ib_tools.trader import Trader
 
+from . import misc
+
 log = Logger(__name__)
+
+
+# This is not true for every type of execution model, TODO
+class ParamProtocol(Protocol):
+    details: ibi.ContractDetails
+    sl_triger_multiple: float
+    sl_adjusted_multiple: float
+    tp_multiple: float
+
+
+class TraderProtocol(Protocol):
+    def trade(self, conntract: ibi.Contract, order: ibi.Order, note: str) -> ibi.Trade:
+        ...
+
+    def cancel(self, trade: ibi.Trade) -> ibi.Trade:
+        ...
+
+    def trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
+        ...
+
+
+# =====================================================================
+# Helpers
+# =====================================================================
 
 
 def round_tick(price: float, tick_size: float) -> float:
@@ -37,6 +52,11 @@ class ContractMemo(NamedTuple):
     min_tick: float
 
 
+# =====================================================================
+# Various  types of orders packaged in objects required by exec models
+# =====================================================================
+
+
 class AbstractBracketLeg(ABC):
     """
     For use by EventDrivenExecModel to create stop-loss and take-profit
@@ -47,14 +67,14 @@ class AbstractBracketLeg(ABC):
     """
 
     def __call__(
-        self, trade: Trade, sl_points: int, min_tick: float, *args, **kwargs
-    ) -> Order:
+        self, trade: ibi.Trade, sl_points: int, min_tick: float, *args, **kwargs
+    ) -> ibi.Order:
         self._extract_trade(trade)
         self.sl_points = sl_points
         self.min_tick = min_tick
         return self.order()
 
-    def _extract_trade(self, trade: Trade) -> None:
+    def _extract_trade(self, trade: ibi.Trade) -> None:
         self.contract = trade.contract
         self.action = trade.order.action
         assert self.action in ("BUY", "SELL")
@@ -64,7 +84,7 @@ class AbstractBracketLeg(ABC):
         self.price = trade.orderStatus.avgFillPrice
 
     @abstractmethod
-    def order(self) -> Order:
+    def order(self) -> ibi.Order:
         raise NotImplementedError
 
 
@@ -73,12 +93,12 @@ class FixedStop(AbstractBracketLeg):
     Stop-loss with fixed distance from the execution price of entry order.
     """
 
-    def order(self) -> Order:
+    def order(self) -> ibi.Order:
         sl_price = round_tick(
             self.price + self.sl_points * self.direction, self.min_tick
         )
         log.info(f"STOP LOSS PRICE: {sl_price}")
-        return StopOrder(
+        return ibi.StopOrder(
             self.reverseAction, self.amount, sl_price, outsideRth=True, tif="GTC"
         )
 
@@ -88,10 +108,10 @@ class TrailingStop(AbstractBracketLeg):
     Stop loss trailing price by given distance.
     """
 
-    def order(self) -> Order:
+    def order(self) -> ibi.Order:
         distance = round_tick(self.sl_points, self.min_tick)
         log.info(f"TRAILING STOP LOSS DISTANCE: {distance}")
-        return Order(
+        return ibi.Order(
             orderType="TRAIL",
             action=self.reverseAction,
             totalQuantity=self.amount,
@@ -110,7 +130,7 @@ class TrailingFixedStop(TrailingStop):
     def __init__(self, multiple: float = 2) -> None:
         self.multiple = multiple
 
-    def order(self) -> Order:
+    def order(self) -> ibi.Order:
         sl = super().order()
         sl.adjustedOrderType = "STP"
         sl.adjustedStopPrice = self.price - self.direction * self.multiple * sl.auxPrice
@@ -130,17 +150,17 @@ class TrailingAdjustableStop(TrailingStop):
 
     def __call__(  # type: ignore
         self,
-        trade: Trade,
+        trade: ibi.Trade,
         sl_points: int,
         min_tick: float,
         sl_trigger_multiple: float,
         sl_adjusted_multiple: float,
-    ) -> Order:
+    ) -> ibi.Order:
         self.sl_trigger_multiple = sl_trigger_multiple
         self.sl_adjusted_multiple = sl_adjusted_multiple
         return super().__call__(trade, sl_points, min_tick)
 
-    def order(self) -> Order:
+    def order(self) -> ibi.Order:
         sl = super().order()
         # when trigger is penetrated
         sl.triggerPrice = (
@@ -169,12 +189,12 @@ class StopMultipleTakeProfit(AbstractBracketLeg):
     def __init__(self, multiple: float = 2) -> None:
         self.multiple = multiple
 
-    def order(self) -> Order:
+    def order(self) -> ibi.Order:
         tp_price = round_tick(
             self.price - self.sl_points * self.direction * self.multiple, self.min_tick
         )
         log.info(f"TAKE PROFIT PRICE: {tp_price}")
-        return LimitOrder(
+        return ibi.LimitOrder(
             self.reverseAction, self.amount, tp_price, outsideRth=True, tif="GTC"
         )
 
@@ -187,8 +207,8 @@ class StopFlexiMultipleTakeProfit(AbstractBracketLeg):
     """
 
     def __call__(  # type: ignore
-        self, trade: Trade, sl_points: int, min_tick: float, tp_multiple: float
-    ) -> Order:
+        self, trade: ibi.Trade, sl_points: int, min_tick: float, tp_multiple: float
+    ) -> ibi.Order:
         self.tp_multiple = tp_multiple
         return super().__call__(trade, sl_points, min_tick)
 
@@ -198,7 +218,12 @@ class StopFlexiMultipleTakeProfit(AbstractBracketLeg):
             self.min_tick,
         )
         log.info(f"TAKE PROFIT PRICE: {tp_price}")
-        return LimitOrder(self.reverseAction, self.amount, tp_price, tif="GTC")
+        return ibi.LimitOrder(self.reverseAction, self.amount, tp_price, tif="GTC")
+
+
+# =====================================================================
+# Actual execution models
+# =====================================================================
 
 
 class BaseExecModel:
@@ -210,66 +235,59 @@ class BaseExecModel:
     onStarted executed on (re)start.
     """
 
-    def __str__(self):
-        return self.__class__.__name__
-
-    def connect_trader(self, trader: Trader) -> None:
+    def __init__(self, trader: TraderProtocol) -> None:
         """
         Used by Manager on initialization.
         """
         self.trade = trader.trade
         self._trader = trader
 
-    def onStarted(self) -> None:
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self._trader!r})"
+
+    def execute(self, trade_params) -> None:
+        """Figure out whether this is open or close order and call
+        appropriate method."""
         pass
 
     @staticmethod
-    def entry_order(action: str, quantity: int) -> Order:
+    def entry_order(action: str, quantity: int) -> ibi.Order:
         """
         Return order to be used for entry transactions.
         """
-        return MarketOrder(
+        return ibi.MarketOrder(
             action,
             quantity,
             algoStrategy="Adaptive",
-            algoParams=[TagValue("adaptivePriority", "Normal")],
+            algoParams=[ibi.TagValue("adaptivePriority", "Normal")],
             tif="Day",
         )
 
     @staticmethod
-    def close_order(action: str, quantity: int) -> Order:
+    def close_order(action: str, quantity: int) -> ibi.Order:
         """
         Return order to be used for close transactions.
         """
-        return MarketOrder(action, quantity, tif="GTC")
-
-    @staticmethod
-    def action(signal: int) -> str:
-        """
-        Convert numerical trade direction signal (-1, or 1) to string
-        ('BUY' or 'SELL').
-        """
-        assert signal in (-1, 1), "Invalid trade signal"
-        return "BUY" if signal == 1 else "SELL"
+        return ibi.MarketOrder(action, quantity, tif="GTC")
 
     def onEntry(
-        self, contract: Contract, signal: int, amount: int, *args, **kwargs
-    ) -> Trade:
+        self, contract: ibi.Contract, signal: int, amount: int, *args, **kwargs
+    ) -> ibi.Trade:
         """
         Accept Portfolio event to execute position entry transaction.
         """
         return self.trade(
-            contract, self.entry_order(self.action(signal), amount), "ENTRY"
+            contract, self.entry_order(misc.action(signal), amount), "ENTRY"
         )
 
     def onClose(
-        self, contract: Contract, signal: int, amount: int, *args, **kwargs
-    ) -> Trade:
+        self, contract: ibi.Contract, signal: int, amount: int, *args, **kwargs
+    ) -> ibi.Trade:
         """
         Accept Portfolio event to execute position close transaction.
         """
         return self.trade(
-            contract, self.close_order(self.action(signal), amount), "CLOSE"
+            contract, self.close_order(misc.action(signal), amount), "CLOSE"
         )
 
 
@@ -277,19 +295,27 @@ class EventDrivenExecModel(BaseExecModel):
     """
     Use events to attach stop-loss and optional take-profit orders after
     execution of entry order. After close transaction remove existing
-    bracketing orders. On re(start) make sure that all positions have
+    bracketing orders.
+
+    this has been moved out of this class:
+    On re(start) make sure that all positions have
     stop-losses and that there are no open orders not attached to any
     existing position.
     """
 
-    contracts: Dict[str, ContractMemo] = {}
+    contracts: dict[str, ContractMemo] = {}
 
     def __init__(
         self,
-        stop: AbstractBracketLeg = TrailingStop(),
+        trader: TraderProtocol,
+        stop: Optional[AbstractBracketLeg] = None,
         take_profit: Optional[AbstractBracketLeg] = None,
     ):
-        self.stop = stop
+        super().__init__(trader)
+        if stop:
+            self.stop = stop
+        else:
+            self.stop = TrailingStop()
         self.take_profit = take_profit
         log.debug(f"execution model initialized {self}")
 
@@ -300,12 +326,12 @@ class EventDrivenExecModel(BaseExecModel):
 
     def onEntry(  # type: ignore
         self,
-        contract: Contract,
+        contract: ibi.Contract,
         signal: int,
         amount: int,
         sl_points: float,
-        obj: Candle,
-    ) -> Trade:
+        obj: ParamProtocol,
+    ) -> ibi.Trade:
         """
         Save information required for bracket orders and attach events
         that will attach brackets after order completion.
@@ -320,8 +346,8 @@ class EventDrivenExecModel(BaseExecModel):
         return trade
 
     def onClose(
-        self, contract: Contract, signal: int, amount: int, *args, **kwargs
-    ) -> Trade:
+        self, contract: ibi.Contract, signal: int, amount: int, *args, **kwargs
+    ) -> ibi.Trade:
         """
         Attach events that will cancel any brackets on order completion.
         """
@@ -330,24 +356,10 @@ class EventDrivenExecModel(BaseExecModel):
         trade.filledEvent += self.remove_bracket
         return trade
 
-    def emergencyClose(self, contract: Contract, signal: int, amount: int) -> None:
-        """
-        Used if on (re)start positions without associated stop-loss orders
-        detected.
-        """
-        log.warning(
-            f"Emergency close on restart: {contract.localSymbol} "
-            f"side: {signal} amount: {amount}"
-        )
-        trade = self.trade(
-            contract, self.close_order(self.action(signal), amount), "EMERGENCY CLOSE"
-        )
-        trade.filledEvent += self.bracketing_action
-
     def order_kwargs(self):
         return {}
 
-    def attach_bracket(self, trade: Trade) -> None:
+    def attach_bracket(self, trade: ibi.Trade) -> None:
         params = self.contracts[trade.contract.symbol]
         order_kwargs = self.order_kwargs()
         log.debug(
@@ -359,107 +371,19 @@ class EventDrivenExecModel(BaseExecModel):
             # take profit may be None
             if bracket_order:
                 log.debug(f"bracket: {bracket_order}")
-                order = bracket_order(trade, *params)
-                order.update(**order_kwargs)
+                order = bracket_order(trade, *params)  # type: ignore
+                ibi.util.dataclassUpdate(order, **order_kwargs)
                 log.debug(f"order: {order}")
                 bracket_trade = self.trade(trade.contract, order, label)
                 bracket_trade.filledEvent += self.bracketing_action
 
-    def remove_bracket(self, trade: Trade) -> None:
+    def remove_bracket(self, trade: ibi.Trade) -> None:
         self.cancel_all_trades_for_contract(trade.contract)
 
     bracketing_action = remove_bracket
 
-    def cancel_all_trades_for_contract(self, contract: Contract) -> None:
-        open_trades = self._trader.trades()
-        trades = defaultdict(list)
-        for t in open_trades:
-            trades[t.contract.localSymbol].append(t)
-        for trade in trades[contract.localSymbol]:
-            self._trader.cancel(trade)
-
-    def onStarted(self) -> None:
-        """
-        Make sure all positions have corresponding stop-losses or
-        emergency-close them. Check for stray orders (take profit or stop loss
-        without associated position) and cancel them if any. Attach events
-        canceling take-profit/stop-loss after one of them is hit.
-        """
-        # check for orphan positions
-        trades = self._trader.trades()
-        positions = self._trader.positions()
-        positions_for_log = [
-            (position.contract.symbol, position.position) for position in positions
-        ]
-        log.debug(f"positions on re-connect: {positions_for_log}")
-
-        orphan_positions = self.check_for_orphan_positions(trades, positions)
-        if orphan_positions:
-            log.warning(f"orphan positions: {orphan_positions}")
-            log.debug(f"len(orphan_positions): {len(orphan_positions)}")
-            self.handle_orphan_positions(orphan_positions)
-
-        orphan_trades = self.check_for_orphan_trades(trades, positions)
-        if orphan_trades:
-            log.warning(f"orphan trades: {orphan_trades}")
-            self.handle_orphan_trades(orphan_trades)
-
-        for trade in trades:
-            trade.filledEvent += self.bracketing_action
-
-    @staticmethod
-    def check_for_orphan_positions(
-        trades: List[Trade], positions: List[Position]
-    ) -> List[Trade]:
-        trade_contracts = set(
-            [t.contract for t in trades if t.order.orderType in ("STP", "TRAIL", "MKT")]
-        )
-        position_contracts = set([p.contract for p in positions])
-        orphan_contracts = position_contracts - trade_contracts
-        orphan_positions = [
-            position for position in positions if position.contract in orphan_contracts
-        ]
-        return orphan_positions
-
-    @staticmethod
-    def check_for_orphan_trades(trades, positions) -> List[Trade]:
-        trade_contracts = set([t.contract for t in trades])
-        position_contracts = set([p.contract for p in positions])
-        orphan_contracts = trade_contracts - position_contracts
-        orphan_trades = [
-            trade for trade in trades if trade.contract in orphan_contracts
-        ]
-        return orphan_trades
-
-    def handle_orphan_positions(self, orphan_positions: List[Position]) -> None:
-        self._trader.ib.qualifyContracts(*[p.contract for p in orphan_positions])
-        for p in orphan_positions:
-            self.emergencyClose(
-                p.contract, -np.sign(p.position), int(np.abs(p.position))
-            )
-            log.error(
-                f"emergencyClose position: {p.contract}, "
-                f"{-np.sign(p.position)}, {int(np.abs(p.position))}"
-            )
-            t = self._trader.ib.reqAllOpenOrders()
-            log.debug(f"reqAllOpenOrders: {t}")
-            trades_for_log = [
-                (
-                    trade.contract.symbol,
-                    trade.order.action,
-                    trade.order.orderType,
-                    trade.order.totalQuantity,
-                    trade.order.lmtPrice,
-                    trade.order.auxPrice,
-                    trade.orderStatus.status,
-                    trade.order.orderId,
-                )
-                for trade in self._trader.ib.openTrades()
-            ]
-            log.debug(f"openTrades: {trades_for_log}")
-
-    def handle_orphan_trades(self, trades: List[Trade]) -> None:
-        for trade in trades:
+    def cancel_all_trades_for_contract(self, contract: ibi.Contract) -> None:
+        for trade in self._trader.trades_for_contract(contract):
             self._trader.cancel(trade)
 
 
@@ -469,7 +393,7 @@ class OcaExecModel(EventDrivenExecModel):
     and take-profit.
     """
 
-    oca_ids: List[str] = []
+    oca_ids: list[str] = []
 
     def oca_group(self):
         while (
@@ -482,14 +406,15 @@ class OcaExecModel(EventDrivenExecModel):
     def order_kwargs(self):
         return {"ocaGroup": self.oca_group(), "ocaType": 1}
 
-    def report_bracket(self, trade: Trade) -> None:
+    def report_bracket(self, trade: ibi.Trade) -> None:
         log.debug(f"Bracketing order filled: {trade.order}")
 
     bracketing_action = report_bracket
 
 
 class AdjustableTrailingStopExecModel(EventDrivenExecModel):
-    def __init__(self):
+    def __init__(self, trader: Trader):
+        self.trader = trader
         self.stop = TrailingAdjustableStop()
         self.take_profit = None
         log.debug(f"Execution model initialized: {self}")
@@ -509,12 +434,13 @@ class EventDrivenTakeProfitExecModel(OcaExecModel):
     orders. Use oca order mechanism.
     """
 
-    def __init__(self):
+    def __init__(self, trader: Trader):
         """
         Trailing stop-loss with trailing amount given in points.
         Take profit distance from entry price given as multiple of trailing
         distance.
         """
+        self.trader = trader
         self.stop = TrailingStop()
         self.take_profit = StopFlexiMultipleTakeProfit()
         log.debug(f"Excution model initialized: {self}")
@@ -525,132 +451,3 @@ class EventDrivenTakeProfitExecModel(OcaExecModel):
             obj.details.minTick,
             obj.tp_multiple,
         )
-
-
-class BracketExecModel(BaseExecModel):
-    """
-    Use Interactive Brokers bracket orders to implement stop-loss and
-    take-profit.
-    Work in progress - TODO
-    """
-
-    def getId(self):
-        return self._trader.ib.client.getReqId()
-
-    @staticmethod
-    def entry_order(action: str, quantity: int, price: float, **kwargs) -> Order:
-        return LimitOrder(action, quantity, price, **kwargs)
-
-    @staticmethod
-    def take_profit(action: str, quantity: int, price: float, **kwargs) -> Order:
-        return LimitOrder(action, quantity, price, tif="GTC")
-
-    @staticmethod
-    def stop_loss(action: str, quantity: int, distance: float, **kwargs) -> Order:
-        log.debug(
-            f"stop_loss params: {action}, {quantity}, {distance}, " f"kwargs: {kwargs}"
-        )
-        return Order(
-            action=action,
-            totalQuantity=quantity,
-            orderType="TRAIL",
-            auxPrice=distance,
-            outsideRth=True,
-            tif="GTC",
-        )
-
-    @staticmethod
-    def close_order(action: str, quantity: int) -> Order:
-        return MarketOrder(action, quantity, tif="GTC")
-
-    @staticmethod
-    def algo_kwargs(
-        priority: Literal["Normal", "Urgent", "Patient"] = "Normal"
-    ) -> Dict[str, Any]:
-        return {
-            "algoStrategy": "Adaptive",
-            "algoParams": [TagValue("adaptivePriority", priority)],
-        }
-
-    def bracket(
-        self,
-        action: str,
-        quantity: float,
-        limitPrice: float,
-        takeProfitPrice: float,
-        stopLossDistance: float,
-        **kwargs,
-    ) -> BracketOrder:
-        assert action in ("BUY", "SELL")
-        reverseAction = "BUY" if action == "SELL" else "SELL"
-        k = self.algo_kwargs()
-
-        parent = self.entry_order(action, quantity, limitPrice, **k)
-        parent.orderId = self.getId()
-        parent.transmit = False
-
-        takeProfit = self.take_profit(reverseAction, quantity, takeProfitPrice, **k)
-        takeProfit.orderId = self.getId()
-        takeProfit.transmit = False
-        takeProfit.parentId = parent.orderId
-
-        stopLoss = self.stop_loss(reverseAction, quantity, stopLossDistance, **k)
-        stopLoss.orderId = self.getId()
-        stopLoss.transmit = True
-        stopLoss.parentId = parent.orderId
-
-        return BracketOrder(parent, takeProfit, stopLoss)
-
-    def price(self, action: str, contract: Contract) -> float:
-        quote = self._trader.quote(contract)
-        log.debug(f"quote for {contract.localSymbol}: {quote}")
-        return quote.bid if action == "SELL" else quote.ask
-
-    def onEntry(  # type: ignore
-        self, contract: Contract, signal: int, amount: int, sl_points: int, obj: Candle
-    ) -> None:
-        assert signal in (-1, 1)
-        action = "BUY" if signal == 1 else "SELL"
-        price = self.price(action, contract)
-        takeProfitPrice = round_tick(
-            price + sl_points * obj.tp_multiple * signal, obj.details.minTick
-        )
-        log.debug(f"sl_points: {sl_points}")
-        bracket = self.bracket(
-            action,
-            amount,
-            price,
-            takeProfitPrice,
-            round_tick(sl_points, obj.details.minTick),
-            **self.algo_kwargs(),
-        )
-        _t = {}
-        for order, label in zip(bracket, ("ENTRY", "TAKE-PROFIT", "STOP-LOSS")):
-            _t[label] = self.trade(contract, order, label)
-        if not self.monitor(_t["ENTRY"]):
-            log.info("Cannot fill entry order. Cancelling...")
-            self._trader.cancel(_t["ENTRY"])
-
-    def monitor(self, trade: Trade) -> bool:
-        c = 0
-        while c < 5:
-            c += 1
-            self._trader.ib.sleep(15)
-            if trade.isDone():
-                return True
-            else:
-                log.debug(
-                    f"{trade.contract.localSymbol} attempt {c} to amend "
-                    f"{trade.order.orderType}"
-                )
-                trade.order.limitPrice = self.price(trade.order.action, trade.contract)
-                self.trade(trade.contract, trade.order)
-        return False
-
-    def onClose(
-        self, contract: Contract, signal: int, amount: int, *args, **kwargs
-    ) -> None:
-        log.debug(f"{contract.localSymbol} close signal: {signal}")
-        action = "BUY" if signal == 1 else "SELL"
-        self.trade(contract, self.close_order(action, amount), "CLOSE")
-        # this has to return Trade????

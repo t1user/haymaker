@@ -1,11 +1,10 @@
 from datetime import datetime
 from functools import partial
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, Final, List, NamedTuple, Optional
 
 from ib_insync import IB, CommissionReport, Contract, Fill, Order, Position, Trade
 
 from ib_tools.blotter import AbstractBaseBlotter, CsvBlotter
-from ib_tools.candle import Candle
 from ib_tools.logger import Logger  # type: ignore
 
 log = Logger(__name__)
@@ -17,17 +16,15 @@ class Quote(NamedTuple):
     ask: float
 
 
+csv_blotter: Final = CsvBlotter()
+
+
 class Trader:
-    def __init__(self, ib: IB, blotter: AbstractBaseBlotter = CsvBlotter()) -> None:
+    def __init__(self, ib: IB, blotter: AbstractBaseBlotter = csv_blotter) -> None:
         self.ib = ib
         self.blotter = blotter
-        self.contracts: Dict[str, Candle] = {}
         self.ib.orderStatusEvent += self.verify_orders
         log.debug("Trader initialized")
-
-    def register(self, contract: Contract, obj: Candle) -> None:
-        log.debug(f"Registering: {contract.symbol}: {obj}")
-        self.contracts[contract.symbol] = obj
 
     def verify_orders(self, trade: Trade) -> None:
         """
@@ -86,6 +83,7 @@ class Trader:
         order = trade.order
         self.ib.cancelOrder(order)
         log.info(f"Cancelled {order.orderType} for " f"{trade.contract.localSymbol}")
+        return trade
 
     def attach_events(self, trade: Trade, reason: str) -> None:
         report_trade = partial(self.report_trade, reason)
