@@ -1,234 +1,75 @@
-from abc import ABC
-from typing import Any, List
+from __future__ import annotations
 
-import ib_insync as ibi
+from collections import defaultdict
+from typing import Literal
 
-from ib_tools.candle import Candle
-from ib_tools.logger import Logger  # type: ignore
+from ib_tools.base import Atom
+from ib_tools.logger import Logger
+from ib_tools.state_machine import StateMachine
 
 log = Logger(__name__)
 
-
-class Portfolio(ABC):
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-        self.kwargs = kwargs
-        self.values = {}
-        self._createEvents()
-
-    def _createEvents(self):
-        self.entrySignal = ibi.Event("entrySignal")
-        self.closeSignal = ibi.Event("closeSignal")
-
-    def register(self, ib: ibi.IB, candles: List[Candle]):
-        self.ib = ib
-        self.candles = candles
-
-    @property
-    def account_value(self):
-        self.update_value()
-        return self.values["TotalCashBalance"] + min(self.values["UnrealizedPnL"], 0)
-
-    @property
-    def positions(self):
-        positions = self.ib.positions()
-        return {p.contract.symbol: p.position for p in positions}
-
-    def update_value(self):
-        tags = self.ib.accountValues()
-        for item in tags:
-            if item.currency == "USD":
-                try:
-                    self.values[item.tag] = float(item.value)
-                except ValueError:
-                    pass
-
-    def onEntry(self, signal: Any):
-        raise NotImplementedError
-
-    def onClose(self, signal: Any):
-        raise NotImplementedError
-
-    def onSignal(self, signal: Any):
-        raise NotImplementedError
-
-    def __str__(self):
-        return f"{self.__class__.__name__} with args: {self.kwargs}"
+note = Literal[-1, 0, 1]
 
 
-class FixedPortfolio(Portfolio):
-    def __init__(self, number: int = 1, **kwargs):
-        self.number = number
-        Portfolio.__init__(self, **kwargs)
+class Holder(defaultdict):
+    __slots__ = ()
 
-    def number_of_contracts(self, contract: ibi.Contract, price: float):
-        return self.number
+    _allowed_values = [-1, 1]
 
-    def onSignal(self, obj: Candle):
-        error_message = f"Invalid signal: {obj.df.signal[-1]}"
-        assert obj.df.signal[-1] in [-1, 1], error_message
+    def __init__(self):
+        super().__init__(int)
 
-        position = self.positions.get(obj.contract.symbol)
-        if obj.df.filtered_signal[-1] and not position:
-            error_message = f"Invalid filtered_signal: {obj.df.filtered_signal[-1]}"
-            assert obj.df.filtered_signal[-1] in [-1, 1], error_message
-            log.debug(
-                f"entry signal emitted for {obj.contract.localSymbol},"
-                f" signal: {obj.df.filtered_signal[-1]},"
-                f" atr: {obj.df.atr[-1]}"
-            )
-            number_of_contracts = self.number_of_contracts(
-                obj.contract, obj.df.price[-1]
-            )
-            if number_of_contracts:
-                self.entrySignal.emit(
-                    obj.contract,
-                    obj.df.signal[-1],
-                    number_of_contracts,
-                    obj.df.atr[-1] * obj.sl_atr,
-                    obj,
-                )
-            else:
-                log.warning(
-                    f"Not enough equity to open position for: "
-                    f"{obj.contract.localSymbol}"
-                )
-        elif obj.df.signal[-1] and position:
-            if position * obj.df.signal[-1] < 0:
-                log.debug(f"close signal emitted for {obj.contract.localSymbol}")
-                self.closeSignal.emit(
-                    obj.contract,
-                    obj.df.signal[-1],
-                    abs(self.positions[obj.contract.symbol]),
-                )
+    def __call__(self, k, v):
+        if v not in self._allowed_values:
+            raise ValueError
+        else:
+            self[k] += v
 
 
-class DoubleSignalFixedPortfolio(FixedPortfolio):
-    def onEntry(self, obj: Candle) -> None:
-        FixedPortfolio.onSignal(self, obj)
+class SignalHolder(Holder):
+    def contracts(self, key: str):
+        """Sum up holdings by contract."""
 
-    def onClose(self, obj: Candle) -> None:
-        position = self.positions.get(obj.contract.symbol)
-        if position and ((position * obj.df.close_signal[-1]) < 0):
-            log.debug(f"close signal emitted for {obj.contract.localSymbol}")
-            self.closeSignal.emit(obj.contract, obj.df.close_signal[-1], abs(position))
+        out: defaultdict[str, int] = defaultdict(int)
 
+        for (contract, _strategy), amount in self.items():
+            out[contract] += amount
+        return out
 
-class AdjustedPortfolio(Portfolio):
+    def strategies(self, key: str):
+        """Sum up holdings by strategy."""
 
-    multiplier_dict = {2: 1.35, 3: 1.5, 4: 1.65}
+        out: defaultdict[str, int] = defaultdict(int)
 
-    def register(self, ib: ibi.IB, candles: List[Candle]):
-        super().register(ib, candles)
-        self.div_multiplier = self.multiplier_dict[len(candles)]
-        self.alloc = 1 / len(self.candles)
-
-    def number_of_contracts(self, contract: Candle):
-        account_value = self.account_value
-        log.debug(f"account value: {account_value}")
-        daily_vol = self.target_vol / 16
-        daily_cash_alloc = daily_vol * account_value * self.alloc
-        cash_alloc_per_trade = daily_cash_alloc / (contract.trades_per_day**0.5)
-        points_alloc_per_trade = cash_alloc_per_trade / float(
-            contract.contract.multiplier
-        )
-        # 1.4 is atr to vol 'translation'
-        contracts = points_alloc_per_trade / (
-            (max(contract.df.atr[-1], contract.min_atr) / 1.4) * contract.sl_atr
-        )
-        return round(contracts * self.div_multiplier, 1)
-
-    def onSignal(self, obj: Candle):
-        # error_message = f'Invalid signal: {obj.df.filtered_signal[-1]}'
-        # assert obj.df.filtered_signal[-1] in [-1, 1], error_message
-
-        position = self.positions.get(obj.contract.symbol) or self.positions.get(
-            obj.micro_contract.symbol
-        )
-        if obj.df.filtered_signal[-1] and not position:
-            message = (
-                f"entry signal emitted for {obj.contract.localSymbol},"
-                f" signal: {obj.df.filtered_signal[-1]},"
-                f" atr: {obj.df.atr[-1]}"
-            )
-            log.debug(message)
-            number_of_contracts = self.number_of_contracts(obj)
-            major_contracts = int(number_of_contracts)
-            minor_contracts = int((number_of_contracts - major_contracts) * 10)
-            log.debug(
-                f"contracts will be traded: "
-                f"{obj.contract.symbol}: {major_contracts}, "
-                f"{obj.micro_contract.symbol}: {minor_contracts}"
-            )
-            if major_contracts:
-                log.debug(
-                    f"emitting signal for major contract: "
-                    f"{obj.contract.symbol}: {major_contracts}"
-                )
-                self.entrySignal.emit(
-                    obj.contract,
-                    obj.df.signal[-1],
-                    major_contracts,
-                    obj.df.atr[-1] * obj.sl_atr,
-                    obj,
-                )
-            # 'and not' part because minor contract might have not been
-            # stopped out on previous position, even though major contract was
-            if minor_contracts and not self.positions.get(obj.micro_contract.symbol):
-                log.debug(
-                    f"emitting signal for minor contract: "
-                    f"{obj.micro_contract.symbol}: {minor_contracts}"
-                )
-                self.entrySignal.emit(
-                    obj.micro_contract,
-                    obj.df.signal[-1],
-                    minor_contracts,
-                    obj.df.atr[-1] * obj.sl_atr,
-                    obj,
-                )
-            if not (major_contracts or minor_contracts):
-                message = (
-                    f"Not enough equity to open position for: "
-                    f"{obj.contract.localSymbol}"
-                )
-                log.warning(message)
-        elif obj.df.signal[-1] and position:
-            if position * obj.df.signal[-1] < 0:
-                log.debug(f"close signal emitted for {obj.contract.localSymbol}")
-                # try except to cover case when position is only in
-                # micro_contract
-                try:
-                    self.closeSignal.emit(
-                        obj.contract,
-                        obj.df.signal[-1],
-                        abs(self.positions[obj.contract.symbol]),
-                    )
-                except KeyError:
-                    pass
-                if self.positions.get(obj.micro_contract.symbol):
-                    self.closeSignal.emit(
-                        obj.micro_contract,
-                        obj.df.signal[-1],
-                        abs(self.positions[obj.micro_contract.symbol]),
-                    )
+        for (_contract, strategy), amount in self.items():
+            out[strategy] += amount
+        return out
 
 
-class WeightedAdjustedPortfolio(AdjustedPortfolio):
-    def register(self, ib: ibi.IB, candles: List[Candle]):
-        Portfolio.register(self, ib, candles)
-        self.div_multiplier = self.multiplier_dict[len(candles)]
-        allocs = [candle.alloc for candle in candles]
-        assert round(sum(allocs), 4) == 1, "Allocations don't add-up to 1"
+class Portfolio(Atom):
+    """
+    Decides what to trade and how much based on received signals and queries to [SM?].
+    """
 
-    def number_of_contracts(self, contract: Candle):
-        daily_vol = self.target_vol / 16
-        daily_cash_alloc = daily_vol * self.account_value * contract.alloc
-        cash_alloc_per_trade = daily_cash_alloc / (contract.trades_per_day**0.5)
-        points_alloc_per_trade = cash_alloc_per_trade / float(
-            contract.contract.multiplier
-        )
-        # 1.4 is atr to vol 'translation'
-        contracts = points_alloc_per_trade / (
-            (max(contract.df.atr[-1], contract.min_atr) / 1.4) * contract.sl_atr
-        )
-        return round(contracts * self.div_multiplier, 1)
+    _signals = SignalHolder()
+    _positions = Holder()
+    _alocations: dict[
+        str, int
+    ]  # this should contain number of contracts for every strategy
+
+    def __init__(self, state_machine: StateMachine):
+        super().__init__()
+        self.sm = state_machine
+
+    def __onData__(self, data, *args) -> None:
+        self.dataEvent.emit(self.allocate(data))
+
+    def process_signal(self, data):
+        self._signals(data)
+
+    def allocate(self, data):
+        pass
+
+    def preallocate(self):
+        self._alcocations = {}
