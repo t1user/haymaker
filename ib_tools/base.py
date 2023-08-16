@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import ClassVar, Protocol, Type
+from typing import ClassVar, Protocol, Sequence, Type, Union
 
 import ib_insync as ibi
 from logbook import Logger  # type: ignore
 
 log = Logger(__name__)
+
+
+ContractOrSequence = Union[Sequence[ibi.Contract], ibi.Contract]
+
+CONTRACT_LIST: list[ibi.Contract] = list()
 
 
 class Atom:
@@ -16,7 +21,10 @@ class Atom:
     """
 
     ib: ClassVar[ibi.IB]
-    events: ClassVar = ("startEvent", "dataEvent")
+    _contract: ContractOrSequence
+    events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
+
+    contracts = CONTRACT_LIST
 
     @classmethod
     def set_ib(cls, ib: ibi.IB) -> None:
@@ -24,6 +32,18 @@ class Atom:
 
     def __init__(self) -> None:
         self._createEvents()
+
+    def __setattr__(self, prop, val):
+        if prop == "contract":
+            self.register_contract(val)
+        super().__setattr__(prop, val)
+
+    def register_contract(self, value) -> None:
+        if getattr(value, "__iter__", None):
+            for v in value:
+                self.contracts.append(v)
+        else:
+            self.contracts.append(value)
 
     def _createEvents(self):
         self.startEvent = ibi.Event("startEven")

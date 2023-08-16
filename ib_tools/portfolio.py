@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Literal
 
@@ -47,29 +48,32 @@ class SignalHolder(Holder):
         return out
 
 
-class Portfolio(Atom):
+class AbstractBasePortfolio(Atom, ABC):
     """
     Decides what to trade and how much based on received signals and queries to [SM?].
     """
-
-    _signals = SignalHolder()
-    _positions = Holder()
-    _alocations: dict[
-        str, int
-    ]  # this should contain number of contracts for every strategy
 
     def __init__(self, state_machine: StateMachine):
         super().__init__()
         self.sm = state_machine
 
-    def __onData__(self, data, *args) -> None:
-        self.dataEvent.emit(self.allocate(data))
+    def onData(self, data: dict, *args) -> None:
+        amount = self.allocate(data)
+        data.update({"amount": amount})
+        self.dataEvent.emit(data)
 
-    def process_signal(self, data):
-        self._signals(data)
+    @abstractmethod
+    def allocate(self, data: dict) -> float:
+        """
+        Return desired position size in contracts.  Interpretation of
+        this number is up to execution model.
+        """
+        ...
 
-    def allocate(self, data):
-        pass
 
-    def preallocate(self):
-        self._alcocations = {}
+class FixedPortfolio(AbstractBasePortfolio):
+    def allocate(self, data) -> float:
+        if data["signal"][2] == "close":
+            return 0
+        else:
+            return 1

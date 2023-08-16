@@ -70,6 +70,13 @@ def test_repr():
     "test_input,expected",
     [
         # pos, lock, signal, lockable, always_on
+        ((0, 0, 0, False, False), 0),  # No signal must generate no signal
+        ((0, 1, 0, True, False), 0),  # No signal must generate no signal
+        ((1, 0, 0, False, False), 1),  # No signal no change (blip based)
+        ((-1, 0, 0, False, False), -1),  # No signal no change (blip based)
+        ((1, 0, 0, True, False), 0),  # Zero signal, zero position (lockable)
+        ((-1, 0, 0, True, False), 0),  # Zero signal, zero position (lockable)
+        # ---
         ((1, 0, 1, False, False), 1),  # Same signal with existing position
         ((-1, 0, -1, False, False), -1),  # Same, opposite direction
         ((1, 0, -1, False, True), -1),  # Reverse signal, existing position, always-on
@@ -86,6 +93,10 @@ def test_repr():
         ((1, 0, -1, True, True), -1),  # Same, opposite direction
         ((1, 0, -1, False, False), 0),  # Position, opposite, closing signal
         ((-1, 0, 1, False, False), 0),  # Same, reverse direction
+        # same but with non-zero positions
+        ((2, 0, -1, True, True), -1),  # Same, opposite direction
+        ((2, 0, -1, False, False), 0),  # Position, opposite, closing signal
+        ((-2, 0, 1, False, False), 0),  # Same, reverse direction
     ],
 )
 def test_signal_paths(test_input, expected):
@@ -122,6 +133,13 @@ def test_signal_paths(test_input, expected):
     "test_input,expected",
     [
         # pos, lock, signal, lockable, always_on
+        ((0, 0, 0, False, False), 0),  # No signal must generate no signal
+        ((0, 1, 0, True, False), 0),  # No signal must generate no signal
+        ((1, 0, 0, False, False), 0),  # No signal no change (blip based)
+        ((-1, 0, 0, False, False), 0),  # No signal no change (blip based)
+        ((1, 0, 0, True, False), -1),  # Zero signal, zero position (lockable)
+        ((-1, 0, 0, True, False), 1),  # Zero signal, zero position (lockable)
+        # -----
         ((1, 0, 1, False, False), 0),  # Same signal with existing position
         ((-1, 0, -1, False, False), 0),  # Same, opposite direction
         ((1, 0, -1, False, True), -2),  # Reverse signal, existing position, always-on
@@ -139,6 +157,17 @@ def test_signal_paths(test_input, expected):
         ((1, 0, -1, False, False), -1),  # Position, opposite, closing signal
         ((-1, 0, 1, False, False), 1),  # Same, reverse direction
         ((1, 0, 1, False, True), 0),  # Irrelevant signal, always-on
+        # same but with non-zero position
+        ((2, 0, 1, False, False), 0),  # Same signal with existing position
+        ((-2, 0, -1, False, False), 0),  # Same, opposite direction
+        ((3, 0, -1, False, True), -2),  # Reverse signal, existing position, always-on
+        ((-3, 0, 1, False, True), 2),  # Same, opposite direction
+        ((-2, 0, 1, True, True), 2),  # Always_on position with opposite signal
+        ((3, 0, -1, True, True), -2),  # Same, opposite direction
+        ((3, 0, -1, False, False), -1),  # Position, opposite, closing signal
+        ((-2, 0, 1, False, False), 1),  # Same, reverse direction
+        ((4, 0, 1, False, True), 0),  # Irrelevant signal, always-on
+        ((-4, 0, -1, False, True), 0),  # Irrelevant signal, always-on
     ],
 )
 def test_signal_paths_transactions(test_input, expected):
@@ -175,6 +204,13 @@ def test_signal_paths_transactions(test_input, expected):
     "test_input,expected",
     [
         # pos, lock, signal, lockable, always_on
+        ((0, 0, 0, False, False), None),  # No signal must generate no signal
+        ((0, 1, 0, True, False), None),  # No signal must generate no signal
+        ((1, 0, 0, False, False), None),  # No signal no change (blip based)
+        ((-1, 0, 0, False, False), None),  # No signal no change (blip based)
+        ((1, 0, 0, True, False), "close"),  # Zero signal, zero position (lockable)
+        ((-1, 0, 0, True, False), "close"),  # Zero signal, zero position (lockable)
+        # ---
         ((1, 0, 1, False, False), None),  # Same signal with existing position
         ((-1, 0, -1, False, False), None),  # Same, opposite direction
         (
@@ -201,6 +237,11 @@ def test_signal_paths_transactions(test_input, expected):
         ((1, 0, -1, True, True), "reverse"),  # Same, opposite direction
         ((1, 0, -1, False, False), "close"),  # Position, opposite, closing signal
         ((-1, 0, 1, False, False), "close"),  # Same, reverse direction
+        # same but with non-zero position
+        ((-2, 0, 1, True, True), "reverse"),  # Always_on position with opposite signal
+        ((3, 0, -1, True, True), "reverse"),  # Same, opposite direction
+        ((2, 0, -1, False, False), "close"),  # Position, opposite, closing signal
+        ((-4, 0, 1, False, False), "close"),  # Same, reverse direction
     ],
 )
 def test_signal_paths_actions(test_input, expected):

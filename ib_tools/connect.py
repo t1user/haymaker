@@ -59,7 +59,7 @@ class StartWatchdog(IBHandlers):
     def __init__(self, ib: IB, func: Callable) -> None:
         log.debug("Initializing watchdog")
         ibc = IBC(
-            twsVersion=1020,
+            twsVersion=1023,
             gateway=True,
             tradingMode="paper",
         )

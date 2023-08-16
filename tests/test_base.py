@@ -1,6 +1,9 @@
+from typing import Sequence, Union
+
+import ib_insync as ibi
 import pytest
 
-from ib_tools.base import Atom, Pipe
+from ib_tools.base import CONTRACT_LIST, Atom, Pipe
 
 
 class NewAtom(Atom):
@@ -245,3 +248,126 @@ class TestUnionPipe:
         p1.connect(end)
         start.startEvent.emit("test_string")
         assert end.onStart_string == "test_string_x_y_z"
+
+
+class AtomWithContract(Atom):
+    def __init__(self, contract: Union[ibi.Contract, Sequence[ibi.Contract]]):
+        self.contract = contract
+
+
+class TestContract:
+    @pytest.fixture
+    def contract(self):
+        return ibi.Contract("ES", "CME")
+
+    @pytest.fixture
+    def atom(self):
+        return AtomWithContract(ibi.ContFuture("NQ", "CME"))
+
+    def test_can_assign_and_get_contract(self, atom):
+        assert isinstance(atom.contract, ibi.ContFuture)
+
+    def test_same_contract_returned_as_assigned(self, contract):
+        c = contract
+        a = AtomWithContract(c)
+        assert a.contract is c
+
+    def test_can_assign_and_retrieve_list_of_contracts(self):
+        c1 = ibi.Contract("ES", "CME")
+        c2 = ibi.Contract("MES", "CME")
+        atom = AtomWithContract([c1, c2])
+        assert isinstance(atom.contract, list)
+        assert atom.contract == [c1, c2]
+
+    def test_can_assign_and_retrieve_same_list_of_contracts(self):
+        c1 = ibi.Contract("ES", "CME")
+        c2 = ibi.Contract("MES", "CME")
+        list_of_contracts = [c1, c2]
+        atom = AtomWithContract(list_of_contracts)
+        assert atom.contract is list_of_contracts
+
+
+class TestContractList:
+    @pytest.fixture
+    def contract(self):
+        return ibi.Contract("YM")
+
+    @pytest.fixture
+    def list_of_contracts(self, contract):
+        return [contract, ibi.Contract("NQ")]
+
+    @pytest.fixture
+    def atom_with_contract(self, contract):
+        class NewAtomWithContract(Atom):
+            def __init__(self, contract):
+                self.contract = contract
+
+        a = NewAtomWithContract(contract)
+        yield a
+        a.contracts.clear()
+
+    @pytest.fixture
+    def atom_with_list_of_contracts(self, list_of_contracts):
+        class AtomWithListOfContracts(Atom):
+            def __init__(self, contract):
+                self.contract = contract
+
+        a = AtomWithListOfContracts(list_of_contracts)
+        yield a
+        a.contracts.clear()
+
+    def test_newly_added_contract_in_the_list(self):
+        class NewNewAtom(Atom):
+            def __init__(self, x):
+                self.contract = x
+
+        NewNewAtom("a")
+        assert "a" in CONTRACT_LIST
+
+    def test_newly_added_contract_in_Atom_list(self, atom_with_contract):
+        atom_with_contract.contract = "b"
+        assert "b" in atom_with_contract.contracts
+
+    def test_contract_list_on_instance_contains_contracts(
+        self, atom_with_contract, contract
+    ):
+        a = atom_with_contract
+        assert a.contracts == [contract]
+
+    def test_contract_list_on_class_contains_contracts(
+        self, atom_with_contract, contract
+    ):
+        assert Atom.contracts == [contract]
+
+    def test_ContractList_new_instance_contains_contracts(
+        self, atom_with_contract, contract
+    ):
+        atom_with_contract
+        alt_list = CONTRACT_LIST
+        assert alt_list == [contract]
+
+    def test_contract_list_works_with_lists(
+        self, atom_with_list_of_contracts, list_of_contracts
+    ):
+        a = atom_with_list_of_contracts
+        assert a.contracts == list_of_contracts
+
+
+class Test_keep_adding_contracts:
+    def atom(self, contract):
+        class A(Atom):
+            def __init__(self, contract):
+                self.contract = contract
+
+        return A(contract)
+
+    def test_single(self):
+        self.atom("a")
+        assert "a" in CONTRACT_LIST
+
+    def test_list(self):
+        self.atom(["x", "y", "z"])
+        assert "x" in CONTRACT_LIST
+        assert "y" in CONTRACT_LIST
+        assert "z" in CONTRACT_LIST
+        assert "z" in Atom.contracts

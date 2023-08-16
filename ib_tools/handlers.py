@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import suppress
 from typing import Dict, Set, Tuple
 
 import ib_insync as ibi
@@ -65,6 +67,7 @@ class IBHandlers:
         scheduledUpdate += self.onScheduledUpdate
         self.ib = ib
         self.portfolio_items: Dict[str, Tuple[float, float, float]] = {}
+        self.ib.setTimeout()
 
     def onConnected(self):
         log.debug("Connection established")
@@ -177,9 +180,19 @@ class IBHandlers:
         ):
             log.error(f"ERROR: {errorCode} {errorString} {contract}")
 
-    def onTimeout(self, idlePeriod: float):
-        pass
-        # log.error(f'Timeout! Idle period: {idlePeriod}')
+    async def onTimeout(self, idlePeriod: float):
+        # Possibly better to just use modified Watchdog instead of that
+        log.warning(f"Timeout! Idle period: {idlePeriod}")
+
+        probe = self.ib.reqHistoricalDataAsync(
+            ibi.ContFuture("ES", "CME"), "", "30 S", "5 secs", "MIDPOINT", False
+        )
+        bars = None
+        with suppress(asyncio.TimeoutError):
+            bars = await asyncio.wait_for(probe, 60)
+        if not bars:
+            log.error("No connection!")
+        self.ib.setTimeout()
 
     def onScheduledUpdate(self, time):
         log.info(f"pnl: {self.ib.pnl()}")

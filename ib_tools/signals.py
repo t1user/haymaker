@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from functools import wraps
-from typing import Optional, Protocol, Tuple
+from typing import Protocol
 
-from ib_tools.misc import P, S
+import numpy as np
 
-PS = Tuple[P, S, Optional[str]]
+from ib_tools.misc import PS, P
 
 
 class SignalProcessor(ABC):
@@ -55,20 +55,26 @@ class StateCheckerProtocol(Protocol):
         ...
 
 
+class LockableMixin:
+    pass
+
+
+class AlwaysOnMixin:
+    pass
+
+
 class BinarySignalProcessor(SignalProcessor):
-    def __init__(self, state_checker: StateCheckerProtocol):
+    def __init__(self, state_checker: StateCheckerProtocol) -> None:
         self.sm = state_checker
 
     def process_signal(self, signal: P, context: BinarySignalContext) -> PS:
-        print(signal, context)
         if self.position(signal, context):
             return self.process_position(signal, context)
         else:
             return self.proces_no_position(signal, context)
 
     def position(self, signal: P, context: BinarySignalContext) -> P:
-        position = self.sm.position(context.key)
-        return position
+        return np.sign(self.sm.position(context.key))
 
     def locked(self, signal: P, context: BinarySignalContext) -> bool:
         return self.sm.locked(context.key)
@@ -77,10 +83,15 @@ class BinarySignalProcessor(SignalProcessor):
         return signal == self.position
 
     def same_direction(self, signal: P, context: BinarySignalContext) -> bool:
-        return self.sm.position(context.key) == signal
+        return self.position(signal, context) == signal
 
     def process_position(self, signal: P, context: BinarySignalContext) -> PS:
-        if self.same_direction(signal, context):
+        if signal == 0:
+            if context.lockable:
+                return 0, -self.position(signal, context), "close"
+            else:
+                return self.position(signal, context), 0, None
+        elif self.same_direction(signal, context):
             return signal, 0, None
         elif context.always_on:
             return signal, 2 * signal, "reverse"  # type: ignore
@@ -91,4 +102,7 @@ class BinarySignalProcessor(SignalProcessor):
         if context.lockable & (self.locked(signal, context) == signal):
             return 0, 0, None
         else:
-            return signal, signal, "entry"
+            if signal != 0:
+                return signal, signal, "entry"
+            else:
+                return signal, signal, None
