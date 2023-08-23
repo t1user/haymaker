@@ -1,23 +1,26 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from functools import partial
-from typing import Final, Optional
+from typing import Final
 
 import ib_insync as ibi
 
 from ib_tools.blotter import AbstractBaseBlotter, CsvBlotter
-from ib_tools.logger import Logger  # type: ignore
+from ib_tools.state_machine import StateMachine
 
-log = Logger(__name__)
-
+log = logging.getLogger(__name__)
 
 csv_blotter: Final = CsvBlotter()
 
 
 class Trader:
-    def __init__(self, ib: ibi.IB, trade_handler: "BaseTradeHandler") -> None:
+    def __init__(
+        self, ib: ibi.IB, state_machine: StateMachine, trade_handler: "BaseTradeHandler"
+    ) -> None:
         self.ib = ib
+        self.state_machine = state_machine
         self.trade_handler = trade_handler
         self.ib.newOrderEvent += self.trace_manual_orders
         log.debug("Trader initialized")
@@ -29,9 +32,15 @@ class Trader:
         return self.ib.positions()
 
     def trade(
-        self, contract: ibi.Contract, order: ibi.Order, reason: Optional[str] = None
+        self,
+        contract: ibi.Contract,
+        order: ibi.Order,
+        reason: str = "",
+        strategy_key: str = "unknown",
     ) -> ibi.Trade:
         trade = self.ib.placeOrder(contract, order)
+        self.state_machine.register_order(strategy_key, reason, trade)
+
         if reason:
             self.trade_handler.attach_events(trade, reason)
             log.debug(f"{contract.localSymbol} order placed: {order}")

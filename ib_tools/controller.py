@@ -32,14 +32,15 @@ class Controller(Atom):
         Args:
         -----
 
-        data: tuple of:
+        data (dict) : must have keys:
+            * exec_model
+            * contract
+            * signal
+            * amount
 
-            - brick, which must have an exec model with `execute`
-              ready to be callled
+            otherwise an error will be logged and transaction will not be processed.
 
-            - amount - number interpretable by given `exec_model`,
-              which directly or directly can be translated into number
-              of contracts to be traded
+            * and any params required by the execution model
         """
         try:
             exec_model = data["exec_model"]
@@ -51,9 +52,10 @@ class Controller(Atom):
             return
         trade_object, blotter_note = exec_model.execute(contract, signal, amount)
         # what about info for trade blotter?
-        self.sm.book_trade(
-            trade_object, exec_model, blotter_note
-        )  # figure out how you wanna do it
+        # self.sm.book_trade(
+        #     trade_object, exec_model, blotter_note
+        # )  # figure out how you wanna do it
+        self.dataEvent.emit(data)
 
     def contract(self, key: tuple[str, str]) -> ibi.Contract:
         """

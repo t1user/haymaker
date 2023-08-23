@@ -1,53 +1,28 @@
 from __future__ import annotations
 
+import itertools
+import logging
 import random
 import string
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Any, Literal, NamedTuple, Optional, Protocol
+from typing import Any, ClassVar, Literal, Optional, TypedDict
 
 import ib_insync as ibi
 
 from ib_tools.bracket_legs import AbstractBracketLeg
-from ib_tools.logger import Logger
+from ib_tools.trader import Trader
 
 from . import misc
 
-# from ib_tools.trader import Trader
+log = logging.getLogger(__name__)
+
+OrderKey = Literal["open_order", "close_order", "stop_order", "tp_order"]
 
 
-log = Logger(__name__)
-
-OrderKey = Literal["entry_order", "close_order", "stop_order", "tp_order"]
-
-
-class TraderProtocol(Protocol):
-    def trade(self, conntract: ibi.Contract, order: ibi.Order, note: str) -> ibi.Trade:
-        ...
-
-    def cancel(self, trade: ibi.Trade) -> ibi.Trade:
-        ...
-
-    def modify(self, contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:
-        ...
-
-    def trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
-        ...
-
-
-# =====================================================================
-# Helpers
-# =====================================================================
-
-
-class ContractMemo(NamedTuple):
-    sl_points: float
-    min_tick: float
-
-
-# =====================================================================
-# Actual execution models
-# =====================================================================
+class Params(TypedDict):
+    open: dict[str, Any]
+    close: dict[str, Any]
 
 
 class AbstractExecModel(ABC):
@@ -55,37 +30,58 @@ class AbstractExecModel(ABC):
     Intermediary between Portfolio and Trader.  Allows for fine tuning
     of order types used, order monitoring, post-order events, etc.
 
-    Object initialized by a ``Brick``, ``Controller`` will call
-    execute method.
+    Object initialized by a :class:``Brick``, :class:``Controller``
+    will call execute method.
 
     All execution models must inherit from this class.
     """
 
-    trader: TraderProtocol
+    trader: ClassVar[Trader]
 
-    entry_order: dict[str, Any]
+    open_order: dict[str, Any]
     close_order: dict[str, Any]
 
     @classmethod
-    def inject_trader(cls, trader: TraderProtocol) -> None:
+    def inject_trader(cls, trader: Trader) -> None:
         cls.trader = trader
 
     def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
+        self.contract: Optional[ibi.Contract] = None
+        self.position: float = 0.0
+        self.params: Params = {"open": {}, "close": {}}
+
         if orders:
             for key, order_kwargs in orders.items():
                 setattr(self, key, order_kwargs)
 
     def _order(self, key: OrderKey, params: dict) -> ibi.Order:
-        """Builds order object from passed params.
+        """
+        Build order object from passed params and defaults stored as
+        object attributes.
+
+        `params` will override any order defaults stored as object
+        attributes.
 
         Args:
         =====
 
-        key: what kind of transaction it is.  Must be one of:
-        `entry_order`, `close_order`, `stop_order`, `tp_order`
+        key: what kind of transaction it is.  Must be:
+
+        * either one of pre-defined names: `open_order`,
+        `close_order`
+
+        * or one of keys in ``orders`` dict passed to
+        :meth:``self.__init__``, examples of good orders potentially
+        defined this way: `stop_order`, `tp_order`
 
         params: must be a dict of keywords and values accepted by
         ibi.Order
+
+        Returns:
+        ========
+
+        :class:``ibi.Order`` object, which can be directly passed to
+        the broker via :meth:``ibi.IB.send_order``.
         """
         order_kwargs = getattr(self, key)
         params.update(order_kwargs)
@@ -94,8 +90,16 @@ class AbstractExecModel(ABC):
     @abstractmethod
     def execute(self, data: dict) -> tuple[ibi.Trade, str]:
         """
-        Must use ``self.trade`` to send orders for execution, link any
-        ``ibi.Trade`` events to required callbacks.
+        Must use :meth:``self.trade``(:class:``ibi.Contract``,
+        :class:``ibi.Order``, strategy_key, reason) to send orders for
+        execution, and subsequently link any :class:``ibi.Trade``
+        events returned by :meth:``self.trade`` to required callbacks.
+
+        While openning position must set :attr:``self.contract`` to
+        :class:``ibi.Contract`` that has been used.
+
+        Must keep track of current position in the market by updating
+        :attr:``self.position``.
 
         Args:
         =====
@@ -110,11 +114,9 @@ class AbstractExecModel(ABC):
 
         (trade, note), where:
 
-        * trade: :class:``ibi.Trade`` object for the issued order
-        * note: info string for loggers and blotters about the
-        character of the transaction (open, close, stop, etc.)
-
-
+        * trade: :class:``ibi.Trade`` object for the issued order *
+        note: info string for loggers and blotters about the character
+        of the transaction (open, close, stop, etc.)
         """
         # TODO: what if more than one order issued????
         ...
@@ -123,16 +125,15 @@ class AbstractExecModel(ABC):
 class BaseExecModel(AbstractExecModel):
     """
     Enters and closes positions based on params sent to
-    :meth:``execute``.  Orders composed by :meth:`entry` and
+    :meth:``execute``.  Orders composed by :meth:`open` and
     :meth:`close`, which can be overridden or extended in subclasses
     to get more complex behaviour.
     """
 
-    params: dict
-    contract: ibi.Contract
-    position: float
+    def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
+        super().__init__(orders)
 
-    entry_order = {
+    open_order = {
         "orderType": "MKT",
         "algoStrategy": "Adaptive",
         "algoParams": [ibi.TagValue("adaptivePriority", "Normal")],
@@ -141,15 +142,15 @@ class BaseExecModel(AbstractExecModel):
     close_order = {"oderType": "MKT", "tif": "GTC"}
 
     def execute(self, data: dict) -> tuple[ibi.Trade, str]:
-        if data["signal"][2] == "entry":
-            self.params = data
-            note = "ENTRY"
-            trade = self.entry(data)
+        if data["signal"][2] == "open":
+            self.params["open"].update(data)
+            note = "OPEN"
+            trade = self.open(data)
             trade.filledEvent += self.register_contract
         elif data["signal"][2] == "close":
             # double check if position exists / or is it checked by signal already?
             # make sure correct contract used (from params dict?)
-            self.params.update({"close_params": data})
+            self.params["close"].update(data)
             note = "CLOSE"
             trade = self.close(data)
         trade.fillEvent += self.register_position
@@ -164,26 +165,23 @@ class BaseExecModel(AbstractExecModel):
         # TODO: handle situation if contract is a list of ibi.Contract ???
         self.contract = trade.contract
 
-    def entry(self, data: dict) -> ibi.Trade:
-        try:
-            contract = data["contract"]
-            signal = data["signal"][0]  # TODO: this is a dummy
-            amount = int(data["amount"])
-        except KeyError as e:
-            log.error("Missing params. Cannot execute trade", e)
-            # TODO: it's broken here, what do to?
+    def open(self, data: dict) -> ibi.Trade:
+        contract = data["contract"]
+        signal = data["signal"][0]  # TODO: this is a dummy
+        amount = int(data["amount"])
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
-        order = self._order("entry_order", order_kwargs)
-        return self.trader.trade(contract, order, "ENTRY")
+        order = self._order("open_order", order_kwargs)
+        key = data.get("key") or ""
+        return self.trader.trade(contract, order, "OPEN", key)
 
     def close(self, data: dict) -> ibi.Trade:
         # TODO: this is a dummy, make it work
-        contract = self.contract
         signal = data["signal"]  # wtf???
-        amount = self.position
-        order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
+        order_kwargs = {"action": misc.action(signal), "totalQuantity": self.position}
         order = self._order("close_order", order_kwargs)
-        return self.trader.trade(contract, order, "CLOSE")
+        assert self.contract is not None
+        key = data.get("key") or ""
+        return self.trader.trade(self.contract, order, "CLOSE", key)
 
     def __repr__(self):
         items = (f"{k}={v}" for k, v in self.__dict__.items())
@@ -193,7 +191,7 @@ class BaseExecModel(AbstractExecModel):
 class EventDrivenExecModel(BaseExecModel):
     """
     Use events to attach stop-loss and optional take-profit orders after
-    execution of entry order. After close transaction remove existing
+    execution of open order. After close transaction remove existing
     bracketing orders.
 
     this has been moved out of this class:
@@ -220,13 +218,13 @@ class EventDrivenExecModel(BaseExecModel):
         self.brackets = []
         log.debug(f"execution model initialized {self}")
 
-    def entry(self, data: dict) -> ibi.Trade:
+    def open(self, data: dict) -> ibi.Trade:
         """
         Save information required for bracket orders and attach events
         that will attach brackets after order completion.
         """
-        log.debug(f"{data['contract'].localSymbol} entry signal: {data['signal']} ")
-        trade = super().entry(data)
+        log.debug(f"{data['contract'].localSymbol} open signal: {data['signal']} ")
+        trade = super().open(data)
         attach_bracket = partial(self._attach_bracket, params=data)
         trade.filledEvent += attach_bracket
         return trade
@@ -258,7 +256,9 @@ class EventDrivenExecModel(BaseExecModel):
                 bracket_kwargs.update(self._dynamic_bracket_kwargs)  # type: ignore
                 order = self._order(order_key, bracket_kwargs)  # type: ignore
                 log.debug(f"bracket order: {order}")
-                bracket_trade = self.trader.trade(trade.contract, order, label)
+                bracket_trade = self.trader.trade(
+                    trade.contract, order, label, params["key"]
+                )
                 self.brackets.append(bracket_trade)
                 bracket_trade.filledEvent += self.bracket_filled_callback
 
@@ -279,15 +279,21 @@ class OcaExecModel(EventDrivenExecModel):
     stop-loss and take-profit.
     """
 
-    oca_ids: list[str] = []
+    counter_seed = itertools.count(1, 1).__next__
+
+    def __init__(
+        self,
+        stop: Optional[AbstractBracketLeg] = None,
+        take_profit: Optional[AbstractBracketLeg] = None,
+    ):
+        super().__init__(stop, take_profit)
+        self.counter = itertools.count(
+            100000 * self.counter_seed(), 1  # type: ignore
+        ).__next__
+        self.character_string = "".join(random.choices(string.ascii_letters, k=5))
 
     def oca_group(self):
-        while (
-            o := "".join(random.choices(string.ascii_letters + string.digits, k=10))
-        ) in self.oca_ids:
-            pass
-        self.oca_ids.append(o)
-        return o
+        return f"{self.character_string}{self.counter()}"
 
     def _dynamic_bracket_kwargs(self):
         return {"ocaGroup": self.oca_group(), "ocaType": 1}

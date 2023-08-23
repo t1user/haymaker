@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+import asyncio
+import logging
+from typing import NamedTuple, Optional
 
 import ib_insync as ibi
 
 from .base import Atom
 from .execution_models import AbstractExecModel
-from .logger import Logger  # type: ignore
 
-log = Logger(__name__)
+log = logging.getLogger("__name__")
 
 
-@dataclass
-class StrategyData:
-    pass
+class OrderInfo(NamedTuple):
+    key: str
+    reason: str
+    trade: ibi.Trade
 
 
 class StateMachine(Atom):
@@ -26,7 +27,10 @@ class StateMachine(Atom):
 
         1. Is a strategy in the market?
 
-        2. Is strategy locked?
+            - Which portion of the position in a contract is allocated
+              to this strategy
+
+        2. Is strategy locked? # NOT SURE ABOUT THIS ONE. MAYBE SIGNAL SHOULD DO IT.
 
         3. After (re)start:
 
@@ -60,21 +64,64 @@ class StateMachine(Atom):
         7. Make sure order events connected to call-backs
     """
 
-    _positions: dict[tuple[str, str], StrategyData] = {}
+    _instance: Optional["StateMachine"] = None
 
-    def position(self, key: str) -> int:
-        return 1
+    _data: dict[str, AbstractExecModel] = {}
+    orders: dict[int, OrderInfo] = {}
 
-    def locked(self, key: str) -> bool:
-        return True
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            return cls._instance
+        else:
+            raise TypeError("Attampt to instantiate StateMachine more than once.")
+
+    def __init__(self):
+        self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
+        self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
+
+    def position(self, key: str) -> float:
+        """
+        Return information about position held by strategy identified
+        by `key`.
+
+        If this `key` hasn't been created, than there is no position
+        for it.  Otherwise :class:``AbstractExecModel`` contains info
+        about `key`'s position.
+        """
+        exec_model_or_none = self._data.get(key)
+        if exec_model_or_none:
+            return exec_model_or_none.position
+        else:
+            return 0.0
+
+    def register_order(self, strategy_key: str, reason: str, trade: ibi.Trade) -> None:
+        """
+        Register `order` that has just been posted to the broker.
+        Verify that position has been registered.
+
+        This method is called by :class:``Trader``.
+        """
+        self.orders[trade.order.orderId] = OrderInfo(strategy_key, reason, trade)
+        ibi.util.sleep(0.5)
+        if not self._data.get(strategy_key):
+            log.error(f"Unknown trade: {trade}")
 
     def onData(self, data, *args) -> None:
-        pass
+        """
+        Save data sent by :class:``Controller`` about recently sent
+        open/close order.
+        """
+        self._data[data["key"]] = data["exec_model"]
 
-    def book_trade(
-        self, trade: ibi.Trade, exec_model: AbstractExecModel, note: str
-    ) -> None:
-        pass
+    async def handleNewOrderEvent(self, trade: ibi.Trade) -> None:
+        """
+        This is an event handler (callback).  Connected (subscribed)
+        to :meth:``ibi.IB.newOrderEvent`` in :meth:``__init__``
+        """
+        await asyncio.sleep(0.1)
+        if not self.orders.get(trade.order.orderId):
+            log.critical(f"Unknown trade in the system {trade}")
 
-    def book_cancel(self, trade):
+    def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
         pass
