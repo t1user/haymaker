@@ -8,7 +8,8 @@ from typing import Final, Optional
 import ib_insync as ibi
 
 from ib_tools.blotter import AbstractBaseBlotter, CsvBlotter
-from ib_tools.state_machine import StateMachine
+from ib_tools.manager import IB
+from ib_tools.state_machine import STATE_MACHINE
 
 log = logging.getLogger(__name__)
 
@@ -19,11 +20,10 @@ class Trader:
     def __init__(
         self,
         ib: ibi.IB,
-        state_machine: StateMachine,
         trade_handler: Optional["BaseTradeHandler"] = None,
     ) -> None:
         self.ib = ib
-        self.state_machine = state_machine
+        self.state_machine = STATE_MACHINE
         self.trade_handler = trade_handler or ReportTradeHandler()
         self.ib.newOrderEvent += self.trace_manual_orders
         log.debug("Trader initialized")
@@ -167,3 +167,6 @@ class ReportTradeHandler(BaseTradeHandler):
         report: ibi.CommissionReport,
     ) -> None:
         self.blotter.log_commission(trade, fill, report, reason)
+
+
+TRADER: Final[Trader] = Trader(IB)
