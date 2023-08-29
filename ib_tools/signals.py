@@ -6,15 +6,26 @@ from typing import Protocol
 
 import numpy as np
 
+from ib_tools.manager import STATE_MACHINE
 from ib_tools.misc import PS, P
 
 
 class SignalProcessor(ABC):
     """
-    Any processing that needs to happen between Brick and Portfolio
-    objects. It's the user's responsibility to make sure that signal
-    sent by Brick and processed by SignalProcessor can be correctly
-    interpreted by Portfolio.
+    Any processing that needs to happen between `Brick` and
+    `Portfolio` objects.  It's the user's responsibility to make sure
+    that signal sent by Brick and processed by SignalProcessor can be
+    correctly interpreted by Portfolio.
+
+    If either `Brick` or `Portfolio` needs to check current state or
+    market situation, it should be done here.
+
+    It's not obligatory for `Brick` to use :class:`.SignalProcessor`
+
+    Returns:
+    ========
+
+    (dict) Dict with keys interpretable by `Portfolio` and `ExecModel`.
     """
 
     def __call__(self, func):
@@ -38,20 +49,20 @@ class SignalProcessor(ABC):
         ...
 
     def __repr__(self):
-        return self.__class__.__name__
+        return self.__class__.__name__ + "()"
 
 
 class BinarySignalContext(Protocol):
-    key: tuple[str, str]
+    key: str
     lockable: bool
     always_on: bool
 
 
 class StateCheckerProtocol(Protocol):
-    def position(self, key: tuple[str, str]) -> P:
+    def position(self, key: str) -> P:
         ...
 
-    def locked(self, key: tuple[str, str]) -> bool:
+    def locked(self, key: str) -> bool:
         ...
 
 
@@ -64,8 +75,8 @@ class AlwaysOnMixin:
 
 
 class BinarySignalProcessor(SignalProcessor):
-    def __init__(self, state_checker: StateCheckerProtocol) -> None:
-        self.sm = state_checker
+    def __init__(self) -> None:
+        self.sm = STATE_MACHINE
 
     def process_signal(self, signal: P, context: BinarySignalContext) -> PS:
         if self.position(signal, context):

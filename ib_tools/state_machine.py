@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import NamedTuple, Optional
+from functools import partial
+from typing import Final, NamedTuple, Optional
 
 import ib_insync as ibi
+import numpy as np
 
 from .base import Atom
 from .execution_models import AbstractExecModel
+from .misc import Lock
 
 log = logging.getLogger("__name__")
 
@@ -30,7 +33,8 @@ class StateMachine(Atom):
             - Which portion of the position in a contract is allocated
               to this strategy
 
-        2. Is strategy locked? # NOT SURE ABOUT THIS ONE. MAYBE SIGNAL SHOULD DO IT.
+        2. Is strategy locked?  # NOT SURE ABOUT THIS ONE.  MAYBE
+           SIGNAL SHOULD DO IT.
 
         3. After (re)start:
 
@@ -62,11 +66,16 @@ class StateMachine(Atom):
         6. Are orders linked to strategies?
 
         7. Make sure order events connected to call-backs
+
+    Collect all information needed to restore state.  This info will
+    be stored to database.  If the app crashes, after restart, all
+    info about state required by any object must be found here.
     """
 
     _instance: Optional["StateMachine"] = None
 
     _data: dict[str, AbstractExecModel] = {}
+    _locks: dict[str, Lock] = {}
     orders: dict[int, OrderInfo] = {}
 
     def __new__(cls, *args, **kwargs):
@@ -77,6 +86,7 @@ class StateMachine(Atom):
             raise TypeError("Attampt to instantiate StateMachine more than once.")
 
     def __init__(self):
+        super().__init__()
         self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
 
@@ -86,7 +96,7 @@ class StateMachine(Atom):
         by `key`.
 
         If this `key` hasn't been created, than there is no position
-        for it.  Otherwise :class:``AbstractExecModel`` contains info
+        for it.  Otherwise :class:`AbstractExecModel` contains info
         about `key`'s position.
         """
         exec_model_or_none = self._data.get(key)
@@ -95,29 +105,58 @@ class StateMachine(Atom):
         else:
             return 0.0
 
+    def locked(self, key: str) -> Lock:
+        lock_or_none = self._locks.get(key)
+        if lock_or_none:
+            return lock_or_none
+        else:
+            return 0
+
+    def register_lock(self, strategy_key: str, trade: ibi.Trade) -> None:
+        self._locks[strategy_key] = np.sign(trade.filled())
+
+    def new_position_callbacks(self, strategy_key: str, trade: ibi.Trade) -> None:
+        """Additional methods may be added in sub-class"""
+
+        self.register_lock(strategy_key, trade)
+
     def register_order(self, strategy_key: str, reason: str, trade: ibi.Trade) -> None:
         """
-        Register `order` that has just been posted to the broker.
-        Verify that position has been registered.
+        Register order, register lock, verify that position has been registered.
 
-        This method is called by :class:``Trader``.
+        Register order that has just been posted to the broker.  If
+        it's an order openning a new position register a lock on this
+        strategy (the lock may or may not be used by strategy itself,
+        it doesn't matter here, locks are registered for all
+        positions).  Verify that position has been registered.
+
+        This method is called by :class:`Trader`.
         """
         self.orders[trade.order.orderId] = OrderInfo(strategy_key, reason, trade)
+
+        if reason.upper() in ("OPEN", "REVERSE"):
+            trade.filledEvent += partial(self.new_position_callbacks, strategy_key)
+
+        # What exactly is the purpose of this? Check if python dictionaries work???
         ibi.util.sleep(0.5)
         if not self._data.get(strategy_key):
             log.error(f"Unknown trade: {trade}")
 
     def onData(self, data, *args) -> None:
         """
-        Save data sent by :class:``Controller`` about recently sent
+        Save data sent by :class:`Controller` about recently sent
         open/close order.
         """
         self._data[data["key"]] = data["exec_model"]
 
     async def handleNewOrderEvent(self, trade: ibi.Trade) -> None:
         """
+        Check if the system knows about the order that was just posted
+        to the broker.
+
         This is an event handler (callback).  Connected (subscribed)
-        to :meth:``ibi.IB.newOrderEvent`` in :meth:``__init__``
+        to :meth:`ibi.IB.newOrderEvent` in
+        :meth:`State_Machine.__init__`
         """
         await asyncio.sleep(0.1)
         if not self.orders.get(trade.order.orderId):
@@ -125,3 +164,6 @@ class StateMachine(Atom):
 
     def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
         pass
+
+
+STATE_MACHINE: Final[StateMachine] = StateMachine()

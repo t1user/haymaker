@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from functools import partial
-from typing import Final
+from typing import Final, Optional
 
 import ib_insync as ibi
 
@@ -12,16 +12,19 @@ from ib_tools.state_machine import StateMachine
 
 log = logging.getLogger(__name__)
 
-csv_blotter: Final = CsvBlotter()
+CSV_BLOTTER: Final = CsvBlotter()
 
 
 class Trader:
     def __init__(
-        self, ib: ibi.IB, state_machine: StateMachine, trade_handler: "BaseTradeHandler"
+        self,
+        ib: ibi.IB,
+        state_machine: StateMachine,
+        trade_handler: Optional["BaseTradeHandler"] = None,
     ) -> None:
         self.ib = ib
         self.state_machine = state_machine
-        self.trade_handler = trade_handler
+        self.trade_handler = trade_handler or ReportTradeHandler()
         self.ib.newOrderEvent += self.trace_manual_orders
         log.debug("Trader initialized")
 
@@ -133,7 +136,7 @@ class BaseTradeHandler:
 
 
 class ReportTradeHandler(BaseTradeHandler):
-    def __init__(self, blotter: AbstractBaseBlotter = csv_blotter) -> None:
+    def __init__(self, blotter: AbstractBaseBlotter = CSV_BLOTTER) -> None:
         self.blotter = blotter
 
     def report_trade(self, reason: str, trade: ibi.Trade) -> None:

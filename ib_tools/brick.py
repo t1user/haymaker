@@ -14,7 +14,7 @@ from ib_tools.signals import SignalProcessor
 
 @dataclass
 class AbstractBaseBrick(Atom, ABC):
-    key: tuple[str, str]
+    key: str
     contract: ibi.Contract
     exec_model: BaseExecModel
 
@@ -32,7 +32,7 @@ class AbstractBaseBrick(Atom, ABC):
 
     def _params(self, signal, **kwargs) -> dict:
         """
-        Must return a dict with all params required by `Portfolio` and
+        Return a dict with all params required by `Portfolio` and
         `Execution Model`.  The dict may also be used to pass logging
         information.
         """

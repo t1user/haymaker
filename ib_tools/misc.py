@@ -21,6 +21,11 @@ Operation = Literal["entry", "close", "reverse", None]
 PS = Tuple[P, S, Operation]
 
 
+Lock = Literal[-1, 0, 1]
+Signal = Literal[-1, 0, 1]
+Action = Literal["OPEN", "CLOSE", "REVERSE"]
+
+
 def round_tick(price: float, tick_size: float) -> float:
     floor = price // tick_size
     remainder = price % tick_size

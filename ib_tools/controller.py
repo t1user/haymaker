@@ -15,7 +15,7 @@ class Controller(Atom):
     Code here should work for every kind of `brick`, `portfolio` and
     `execution model`.  Those elements can be specific to each other
     (i.e. require that they're complementary), it's user's
-    responsibility to use matching elements.  However, ``Controller``
+    responsibility to use matching elements.  However, :class:`.Controller`
     should be agnostic to type of other modules.  It shouldn't be
     neccessary for user to modify or subclass it.
     """
