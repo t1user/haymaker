@@ -9,7 +9,6 @@ import pandas as pd
 from ib_tools import misc
 from ib_tools.base import Atom
 from ib_tools.execution_models import BaseExecModel
-from ib_tools.signals import SignalProcessor
 
 
 @dataclass
@@ -49,15 +48,11 @@ class AbstractBaseBrick(Atom, ABC):
 
 @dataclass
 class AbstractDfBrick(AbstractBaseBrick):
-    lockable: bool  # TODO: get rid of this
-    always_on: bool  # TODO: get rid of this
-    signal_processor: SignalProcessor
     signal_column: str = "signal"
 
     def _signal(self, data) -> tuple[misc.PS, dict]:
         df_row = self.df_row(data).to_dict()
-        signal = df_row[self.signal_column]
-        return self.signal_processor.process_signal(signal, self), df_row
+        return df_row[self.signal_column]
 
     def df_row(self, data) -> pd.Series:
         return self.df(data).iloc[-1]
