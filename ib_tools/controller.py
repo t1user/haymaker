@@ -6,6 +6,7 @@ from .base import Atom
 from .handlers import IBHandlers
 from .logger import Logger
 from .state_machine import StateMachine
+from .trader import Trader
 
 log = Logger(__name__)
 
@@ -21,13 +22,15 @@ class Controller(Atom):
     """
 
     def __init__(self, state_machine: StateMachine):
+        # It's Atom so it already inherits access to IB
         super().__init__()
         self.sm = state_machine
+        self.trader = Trader(self.ib, self.sm)
 
     def onData(self, data: dict, *args) -> None:
         """
-        Pass control to exec_model, get ``ibi.Trade`` object and pass
-        it to ``state_machine``.
+        Pass control to exec_model, get `ibi.Trade` object and pass
+        it to `state_machine`.
 
         Args:
         -----
@@ -57,12 +60,11 @@ class Controller(Atom):
         # )  # figure out how you wanna do it
         self.dataEvent.emit(data)
 
-    def contract(self, key: tuple[str, str]) -> ibi.Contract:
-        """
-        Get correct ``Contract`` object for given strategy.  Not clear
-        HOW?  yet.
-        """
-        return ibi.Contract()
+    def trade(self, *args, **kwargs) -> ibi.Trade:
+        return self.trader.trade(*args, **kwargs)
+
+    def cancel(self, *args, **kwargs) -> ibi.Trade:
+        return self.trader.cancel(*args, **kwargs)
 
 
 class Handlers(IBHandlers):

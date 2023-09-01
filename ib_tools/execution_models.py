@@ -11,8 +11,9 @@ from typing import Any, Literal, Optional, TypedDict
 import ib_insync as ibi
 import numpy as np
 
+from ib_tools.base import Atom
 from ib_tools.bracket_legs import AbstractBracketLeg
-from ib_tools.trader import TRADER
+from ib_tools.manager import CONTROLLER
 
 from . import misc
 
@@ -26,7 +27,7 @@ class Params(TypedDict):
     close: dict[str, Any]
 
 
-class AbstractExecModel(ABC):
+class AbstractExecModel(Atom, ABC):
     """
     Intermediary between Portfolio and Trader.  Allows for fine tuning
     of order types used, order monitoring, post-order events, etc.
@@ -41,7 +42,7 @@ class AbstractExecModel(ABC):
     close_order: dict[str, Any]
 
     def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
-        self.contract: Optional[ibi.Contract] = None
+        self.active_contract: Optional[ibi.Contract] = None
         self.position: float = 0.0
         self.params: Params = {"open": {}, "close": {}}
 
@@ -83,7 +84,7 @@ class AbstractExecModel(ABC):
         return ibi.Order(**params)
 
     @abstractmethod
-    def execute(self, data: dict) -> tuple[ibi.Trade, str]:
+    def onData(self, data: dict, *args) -> None:
         """
         Must use :meth:`self.trade`(:class:`ibi.Contract`,
         :class:`ibi.Order`, strategy_key, reason) to send orders for
@@ -113,7 +114,7 @@ class AbstractExecModel(ABC):
         of the transaction (open, close, stop, etc.)
         """
         # TODO: what if more than one order issued????
-        ...
+        data["exec_model"] = self
 
 
 class BaseExecModel(AbstractExecModel):
@@ -124,9 +125,6 @@ class BaseExecModel(AbstractExecModel):
     to get more complex behaviour.
     """
 
-    def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
-        super().__init__(orders)
-
     open_order = {
         "orderType": "MKT",
         "algoStrategy": "Adaptive",
@@ -135,50 +133,61 @@ class BaseExecModel(AbstractExecModel):
     }
     close_order = {"oderType": "MKT", "tif": "GTC"}
 
-    def execute(self, data: dict) -> tuple[ibi.Trade, str]:
+    def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
+        super().__init__(orders)
+        self.position = 0
+        self.active_contract = None
+
+    def onData(self, data: dict, *args) -> None:
+        data["exec_model"] = self
         if data["action"] == "OPEN":
             self.params["open"].update(data)
-            note = "OPEN"
             trade = self.open(data)
-            trade.filledEvent += self.register_contract
+            trade.filledEvent += self.save_contract
         elif data["action"] == "CLOSE":
-            # double check if position exists / or is it checked by signal already?
-            # make sure correct contract used (from params dict?)
             self.params["close"].update(data)
-            note = "CLOSE"
             trade = self.close(data)
         trade.fillEvent += self.register_position
 
-        return trade, note
+    def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+        if fill.execution.side == "BOT":
+            self.position += fill.execution.shares
+        elif fill.execution.side == "SLD":
+            self.position -= fill.execution.shares
+        else:
+            log.critical(
+                f"Abiguous fill: {fill} for order: {trade.order} for "
+                f"{trade.contract.localSymbol}"
+            )
 
-    def register_position(self, trade: ibi.Fill) -> None:
-        # TODO: if several different contracts, this is screwed
-        self.position += trade.execution.shares
-
-    def register_contract(self, trade: ibi.Trade) -> None:
+    def save_contract(self, trade: ibi.Trade) -> None:
         # TODO: handle situation if contract is a list of ibi.Contract ???
-        self.contract = trade.contract
+        self.active_contract = trade.contract
 
     def open(self, data: dict) -> ibi.Trade:
-        contract = data["contract"]
-        signal = data["signal"]
-        amount = int(data["amount"])
+        try:
+            contract = data["contract"]
+            signal = data["signal"]
+            amount = int(data["amount"])
+        except KeyError as e:
+            log.error("Insufficient data to execute OPEN transaction", e)
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         order = self._order("open_order", order_kwargs)
         key = data["key"]
         log.debug(f"{key} {contract.localSymbol} executing OPEN signal {signal}.", data)
-        return TRADER.trade(contract, order, "OPEN", key)
+        return CONTROLLER.trade(contract, order, "OPEN", key)
 
     def close(self, data: dict) -> ibi.Trade:
         signal = -np.sign(self.position)
         order_kwargs = {"action": misc.action(signal), "totalQuantity": self.position}
         order = self._order("close_order", order_kwargs)
-        assert self.contract is not None
+        assert self.active_contract is not None
         key = data["key"]
         log.debug(
-            f"{key} {self.contract.localSymbol} executing close signal {signal}", data
+            f"{key} {self.active_contract.localSymbol} executing close signal {signal}",
+            data,
         )
-        return TRADER.trade(self.contract, order, "CLOSE", key)
+        return CONTROLLER.trade(self.active_contract, order, "CLOSE", key)
 
     def __repr__(self):
         items = (f"{k}={v}" for k, v in self.__dict__.items())
@@ -197,19 +206,23 @@ class EventDrivenExecModel(BaseExecModel):
     existing position.
     """
 
-    stop_order: dict[str, Any] = {}
-    tp_order: dict[str, Any] = {}
+    stop_order: dict[str, Any]
+    tp_order: dict[str, Any]
 
     contract: ibi.Contract  # or should it be a list of ibi.Contract ?
     brackets: list[ibi.Trade]
 
     def __init__(
         self,
+        orders: Optional[dict[OrderKey, Any]] = None,
         stop: Optional[AbstractBracketLeg] = None,
         take_profit: Optional[AbstractBracketLeg] = None,
     ):
+        super().__init__(orders)
         if not stop:
-            log.error("EventDrivenExecModel must be initialized with a stop order")
+            log.error(
+                f"{self.__class__.__name__} must be initialized with a stop order"
+            )
         self.stop = stop
         self.take_profit = take_profit
         self.brackets = []
@@ -248,10 +261,11 @@ class EventDrivenExecModel(BaseExecModel):
                 bracket_kwargs.update(self._dynamic_bracket_kwargs)  # type: ignore
                 order = self._order(order_key, bracket_kwargs)  # type: ignore
                 log.debug(f"bracket order: {order}")
-                bracket_trade = TRADER.trade(
+                bracket_trade = CONTROLLER.trade(
                     trade.contract, order, label, params["key"]
                 )
                 self.brackets.append(bracket_trade)
+                bracket_trade.fillEvent += self.register_position
                 bracket_trade.filledEvent += self.bracket_filled_callback
 
     def remove_bracket(self, trade: ibi.Trade) -> None:
@@ -259,7 +273,7 @@ class EventDrivenExecModel(BaseExecModel):
         # irrelevant here
         for bracket in self.brackets.copy():
             if not bracket.isDone():
-                TRADER.cancel(bracket)
+                CONTROLLER.cancel(bracket)
                 self.brackets.remove(bracket)
 
     bracket_filled_callback = remove_bracket
@@ -275,10 +289,11 @@ class OcaExecModel(EventDrivenExecModel):
 
     def __init__(
         self,
+        orders: Optional[dict[OrderKey, Any]] = None,
         stop: Optional[AbstractBracketLeg] = None,
         take_profit: Optional[AbstractBracketLeg] = None,
     ):
-        super().__init__(stop, take_profit)
+        super().__init__(orders, stop, take_profit)
         self.counter = itertools.count(
             100000 * self.counter_seed(), 1  # type: ignore
         ).__next__

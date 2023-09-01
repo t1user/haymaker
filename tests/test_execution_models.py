@@ -3,7 +3,7 @@ from ib_tools.execution_models import OcaExecModel
 
 
 def test_oca_group():
-    e = OcaExecModel(FixedStop(1))
+    e = OcaExecModel(stop=FixedStop(1))
     oca_group = e.oca_group()
     assert isinstance(oca_group, str)
     assert len(oca_group) > 10

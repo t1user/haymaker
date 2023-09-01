@@ -3,14 +3,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import partial
-from typing import Final, NamedTuple, Optional
+from typing import TYPE_CHECKING, NamedTuple, Optional
 
 import ib_insync as ibi
 import numpy as np
 
 from .base import Atom
-from .execution_models import AbstractExecModel
 from .misc import Lock
+
+if TYPE_CHECKING:
+    from .execution_models import AbstractExecModel
+
 
 log = logging.getLogger("__name__")
 
@@ -164,6 +167,3 @@ class StateMachine(Atom):
 
     def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
         pass
-
-
-STATE_MACHINE: Final[StateMachine] = StateMachine()

@@ -52,7 +52,6 @@ class AbstractBracketLeg(ABC):
             log.critical(
                 f"No details for contract {self.contract}. "
                 f"Will attempt to send bracket order with minTick 0.25 "
-                f" - POTENTIALLY TERMINAL."
             )
             minTick = 0.25
         return minTick

@@ -8,8 +8,6 @@ from typing import Final, Optional
 import ib_insync as ibi
 
 from ib_tools.blotter import AbstractBaseBlotter, CsvBlotter
-from ib_tools.manager import IB
-from ib_tools.state_machine import STATE_MACHINE
 
 log = logging.getLogger(__name__)
 
@@ -20,12 +18,13 @@ class Trader:
     def __init__(
         self,
         ib: ibi.IB,
+        state_machine,
         trade_handler: Optional["BaseTradeHandler"] = None,
     ) -> None:
         self.ib = ib
-        self.state_machine = STATE_MACHINE
+        self.state_machine = state_machine
         self.trade_handler = trade_handler or ReportTradeHandler()
-        self.ib.newOrderEvent += self.trace_manual_orders
+        # self.ib.newOrderEvent += self.trace_manual_orders
         log.debug("Trader initialized")
 
     def trades(self) -> list[ibi.Trade]:
@@ -44,11 +43,11 @@ class Trader:
         trade = self.ib.placeOrder(contract, order)
         self.state_machine.register_order(strategy_key, reason, trade)
 
-        if reason:
-            self.trade_handler.attach_events(trade, reason)
-            log.debug(f"{contract.localSymbol} order placed: {order}")
-        else:
-            log.debug(f"{contract.localSymbol} order updated: {order}")
+        # if reason:
+        #     self.trade_handler.attach_events(trade, reason)
+        #     log.debug(f"{contract.localSymbol} order placed: {order}")
+        # else:
+        #     log.debug(f"{contract.localSymbol} order updated: {order}")
         return trade
 
     def modify(self, contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:
@@ -61,15 +60,15 @@ class Trader:
         log.info(f"Cancelled {order.orderType} for " f"{trade.contract.localSymbol}")
         return cancelled_trade
 
-    def trace_manual_orders(self, trade: ibi.Trade) -> None:
-        """
-        Attempt to attach reporting events for orders entered
-        outside of the framework. This will not work if framework is not
-        connected with clientId == 0.
-        """
-        if trade.order.orderId <= 0:
-            log.debug("manual trade reporting event attached")
-            self.trade_handler.attach_events(trade, "MANUAL TRADE")
+    # def trace_manual_orders(self, trade: ibi.Trade) -> None:
+    #     """
+    #     Attempt to attach reporting events for orders entered
+    #     outside of the framework. This will not work if framework is not
+    #     connected with clientId == 0.
+    #     """
+    #     if trade.order.orderId <= 0:
+    #         log.debug("manual trade reporting event attached")
+    #         self.trade_handler.attach_events(trade, "MANUAL TRADE")
 
     def trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
         """Return open trades for a given contract."""
@@ -86,19 +85,17 @@ class Trader:
 
 
 class BaseTradeHandler:
-    def attach_events(self, trade: ibi.Trade, reason: str) -> None:
-        report_trade = partial(self.onFilled, reason)
-        report_commission = partial(self.onCommissionReport, reason)
+    def attach_events(self, trade: ibi.Trade) -> None:
         trade.statusEvent += self.onStatus
         trade.modifyEvent += self.onModify
         trade.fillEvent += self.onFill
-        trade.commissionReportEvent += report_commission
-        trade.filledEvent += report_trade
+        trade.commissionReportEvent += self.onCommissionReport
+        trade.filledEvent += self.onFilled
         trade.cancelEvent += self.onCancel
         trade.cancelledEvent += self.onCancelled
 
         log.debug(
-            f"Reporting events attached for {trade.contract.localSymbol}"
+            f"Events attached for {trade.contract.localSymbol}"
             f" {trade.order.action} {trade.order.totalQuantity}"
             f" {trade.order.orderType}"
         )
@@ -113,15 +110,11 @@ class BaseTradeHandler:
         pass
 
     def onCommissionReport(
-        self,
-        reason: str,
-        trade: ibi.Trade,
-        fill: ibi.Fill,
-        report: ibi.CommissionReport,
+        self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ) -> None:
         pass
 
-    def onFilled(self, reason: str, trade: ibi.Trade) -> None:
+    def onFilled(self, trade: ibi.Trade) -> None:
         pass
 
     def onCancel(self, trade: ibi.Trade) -> None:
@@ -138,6 +131,17 @@ class BaseTradeHandler:
 class ReportTradeHandler(BaseTradeHandler):
     def __init__(self, blotter: AbstractBaseBlotter = CSV_BLOTTER) -> None:
         self.blotter = blotter
+
+    def attach_events(self, trade: ibi.Trade, reason: str = "") -> None:
+        report_trade = partial(self.onFilled, reason)
+        report_commission = partial(self.onCommissionReport, reason)
+        trade.statusEvent += self.onStatus
+        trade.modifyEvent += self.onModify
+        trade.fillEvent += self.onFill
+        trade.commissionReportEvent += report_commission
+        trade.filledEvent += report_trade
+        trade.cancelEvent += self.onCancel
+        trade.cancelledEvent += self.onCancelled
 
     def report_trade(self, reason: str, trade: ibi.Trade) -> None:
         message = (
@@ -167,6 +171,3 @@ class ReportTradeHandler(BaseTradeHandler):
         report: ibi.CommissionReport,
     ) -> None:
         self.blotter.log_commission(trade, fill, report, reason)
-
-
-TRADER: Final[Trader] = Trader(IB)
