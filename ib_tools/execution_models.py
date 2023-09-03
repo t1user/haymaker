@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import logging
 import random
@@ -27,6 +28,24 @@ class Params(TypedDict):
     close: dict[str, Any]
 
 
+class OrderFieldValidator:
+    allowed_keys: set[str] = set(dataclasses.asdict(ibi.Order()).keys())
+
+    def __set_name__(self, owner, name) -> None:
+        self.private_name = "_" + name
+
+    def __get__(self, obj, objtype=None) -> dict[str, Any]:
+        return getattr(obj, self.private_name)
+
+    def __set__(self, obj, value: dict[str, Any]) -> None:
+        if diff := self.validate(value):
+            raise ValueError(f"Wrong fields for {self.private_name}: {diff}")
+        setattr(obj, self.private_name, value)
+
+    def validate(self, value: dict[str, Any]) -> set:
+        return set(value.keys()) - self.allowed_keys
+
+
 class AbstractExecModel(Atom, ABC):
     """
     Intermediary between Portfolio and Trader.  Allows for fine tuning
@@ -38,8 +57,10 @@ class AbstractExecModel(Atom, ABC):
     All execution models must inherit from this class.
     """
 
-    open_order: dict[str, Any]
-    close_order: dict[str, Any]
+    _open_order: dict[str, Any]
+    _close_order: dict[str, Any]
+    open_order = OrderFieldValidator()
+    close_order = OrderFieldValidator()
 
     def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
         self.active_contract: Optional[ibi.Contract] = None
@@ -125,13 +146,13 @@ class BaseExecModel(AbstractExecModel):
     to get more complex behaviour.
     """
 
-    open_order = {
+    _open_order = {
         "orderType": "MKT",
         "algoStrategy": "Adaptive",
         "algoParams": [ibi.TagValue("adaptivePriority", "Normal")],
         "tif": "Day",
     }
-    close_order = {"oderType": "MKT", "tif": "GTC"}
+    _close_order = {"oderType": "MKT", "tif": "GTC"}
 
     def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
         super().__init__(orders)
@@ -140,13 +161,21 @@ class BaseExecModel(AbstractExecModel):
 
     def onData(self, data: dict, *args) -> None:
         data["exec_model"] = self
-        if data["action"] == "OPEN":
+        try:
+            action = data["action"]
+        except KeyError as e:
+            log.error(f"Missing data for {self}", e)
+            return
+        if action == "OPEN":
             self.params["open"].update(data)
             trade = self.open(data)
             trade.filledEvent += self.save_contract
-        elif data["action"] == "CLOSE":
+        elif action == "CLOSE":
             self.params["close"].update(data)
             trade = self.close(data)
+        else:
+            log.error(f"Ambiguous action: {action} for {self}")
+            return
         trade.fillEvent += self.register_position
 
     def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
@@ -206,8 +235,10 @@ class EventDrivenExecModel(BaseExecModel):
     existing position.
     """
 
-    stop_order: dict[str, Any]
-    tp_order: dict[str, Any]
+    _stop_order: dict[str, Any]
+    _tp_order: dict[str, Any]
+    stop_order = OrderFieldValidator()
+    tp_order = OrderFieldValidator()
 
     contract: ibi.Contract  # or should it be a list of ibi.Contract ?
     brackets: list[ibi.Trade]
