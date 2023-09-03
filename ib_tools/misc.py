@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import wraps
-from typing import Literal, Tuple
+from typing import Literal
 
 
 def action(signal: int) -> str:
@@ -13,13 +13,8 @@ def action(signal: int) -> str:
     return "BUY" if signal == 1 else "SELL"
 
 
-P = Literal[-1, 0, 1]
-S = Literal[-2, -1, 0, 1, 2]
-
 Operation = Literal["entry", "close", "reverse", None]
 # position, signal, operation
-PS = Tuple[P, S, Operation]
-
 
 Lock = Literal[-1, 0, 1]
 Signal = Literal[-1, 0, 1]

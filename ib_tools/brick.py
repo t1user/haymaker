@@ -2,57 +2,54 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any, Optional
 
 import ib_insync as ibi
 import pandas as pd
 
-from ib_tools import misc
 from ib_tools.base import Atom
-from ib_tools.execution_models import BaseExecModel
 
 
 @dataclass
 class AbstractBaseBrick(Atom, ABC):
     key: str
     contract: ibi.Contract
-    exec_model: BaseExecModel
 
     def __post_init__(self):
         Atom.__init__(self)
 
     def onData(self, data, *args) -> None:
-        signal, kwargs = self._signal(data)
-        if signal:
-            self.dataEvent.emit(self._params(signal, **kwargs))
+        self.dataEvent.emit(self._params(**self._signal(data)))
 
     @abstractmethod
-    def _signal(self, data) -> tuple[misc.PS, dict]:
+    def _signal(self, data) -> dict:
+        """
+        Must return a dict with any params required by the strategy.
+        May also contain logging information.  Must have key
+        ``signal`` interpretable by subsequent bricks.
+        """
         ...
 
-    def _params(self, signal, **kwargs) -> dict:
-        """
-        Return a dict with all params required by `Portfolio` and
-        `Execution Model`.  The dict may also be used to pass logging
-        information.
-        """
-
+    def _params(self, **kwargs) -> dict[str, Any]:
         params = {
-            "signal": signal,
-            "contract": self.contract,
             "key": self.key,
-            "exec_model": self.exec_model,
+            "contract": self.contract,
         }
-        params.update(kwargs)
+        params.update(**kwargs)
         return params
 
 
 @dataclass
 class AbstractDfBrick(AbstractBaseBrick):
     signal_column: str = "signal"
+    df_columns: Optional[list[str]] = None
 
-    def _signal(self, data) -> tuple[misc.PS, dict]:
-        df_row = self.df_row(data).to_dict()
-        return df_row[self.signal_column]
+    def _signal(self, data) -> dict:
+        d = self.df_row(data).to_dict()
+        if self.df_columns:
+            d = {k: v for k, v in d.items() if k in self.df_columns}
+        d["signal"] = d[self.signal_column]
+        return d
 
     def df_row(self, data) -> pd.Series:
         return self.df(data).iloc[-1]
