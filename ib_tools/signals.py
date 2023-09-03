@@ -1,119 +1,234 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from functools import wraps
-from typing import Protocol
+import logging
+from typing import Any, Optional, Type, TypedDict
 
 import numpy as np
 
+from ib_tools.base import Atom
 from ib_tools.manager import STATE_MACHINE
-from ib_tools.misc import PS, P
+from ib_tools.misc import Action, Signal
+from ib_tools.state_machine import StateMachine
+
+log = logging.getLogger(__name__)
 
 
-class SignalProcessor(ABC):
+class Result(TypedDict):
+    signal: Signal
+    action: Action
+
+
+class BinarySignalProcessor(Atom):
     """
-    Any processing that needs to happen between `Brick` and
-    `Portfolio` objects.  It's the user's responsibility to make sure
-    that signal sent by Brick and processed by SignalProcessor can be
-    correctly interpreted by Portfolio.
+    Process binary signals, i.e. long/short/off, as opposed to
+    descrete signals, where signal strength is meaningful (e.g. signal
+    assuming values -10...10 based on strength of conviction).
 
-    If either `Brick` or `Portfolio` needs to check current state or
-    market situation, it should be done here.
+    Actual position size or even whether the position should be taken
+    at all is not determined here, it's the job of `Portfolio`.
 
-    It's not obligatory for `Brick` to use :class:`.SignalProcessor`
+    * Zero signal means close position if position exists, ignored
+    otherwise
 
-    Returns:
-    ========
+    * Non-zero signal means:
 
-    (dict) Dict with keys interpretable by `Portfolio` and `ExecModel`.
+    ** open new position if there is no position for the strategy
+
+    ** ignore signal if it's in the same direction as existing
+    position
+
+    ** reverse position if the signal is in the direction opposite to
+    existing position
+
+    This behaviour can be modified in sub-classes, by overriding
+    methods: :meth:`process_position` and :meth:`process_no_position`.
+
+    Whatever the meaning of the signal coming in, signal coming out
+    means strategy wants to take `action` in the direction of
+    `signal`, as indicated by keys `action` and `signal` in the
+    emitted dict.  Incoming signals that don't require any action will
+    be stopped here and not propagated down the chain.
     """
 
-    def __call__(self, func):
-        """
-        The object can be used as a decorator on the signal
-        producing method of Brick.
-        """
+    def __init__(self, state_machine: Optional[StateMachine] = None) -> None:
+        self.sm = state_machine or STATE_MACHINE
+        super().__init__()
 
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            signal, context = func(*args, **kwargs)
-            return self.process_signal(signal, context)
+    def onData(self, data: dict[str, Any], *args) -> None:
+        try:
+            key = data["key"]
+            signal = data["signal"]
+        except KeyError:
+            log.error("Missing signal data", data, self)
+        if result := self.process_signal(key, signal):
+            data.update({"action": result})
+            self.dataEvent.emit(data)
 
-        return wrapper
-
-    @abstractmethod
-    def process_signal(self, signal: P, context) -> PS:
-        """
-        Given signal, should return desired position.
-        """
-        ...
-
-    def __repr__(self):
-        return self.__class__.__name__ + "()"
-
-
-class BinarySignalContext(Protocol):
-    key: str
-    lockable: bool
-    always_on: bool
-
-
-class StateCheckerProtocol(Protocol):
-    def position(self, key: str) -> P:
-        ...
-
-    def locked(self, key: str) -> bool:
-        ...
-
-
-class LockableMixin:
-    pass
-
-
-class AlwaysOnMixin:
-    pass
-
-
-class BinarySignalProcessor(SignalProcessor):
-    def __init__(self) -> None:
-        self.sm = STATE_MACHINE
-
-    def process_signal(self, signal: P, context: BinarySignalContext) -> PS:
-        if self.position(signal, context):
-            return self.process_position(signal, context)
+    def process_signal(self, key: str, signal: Signal) -> Optional[Action]:
+        if not self.position(key):
+            return self.process_no_position(key, signal)
+        elif not self.same_direction(key, signal):
+            return self.process_position(key, signal)
         else:
-            return self.proces_no_position(signal, context)
+            return None
 
-    def position(self, signal: P, context: BinarySignalContext) -> P:
-        return np.sign(self.sm.position(context.key))
+    def position(self, key: str) -> Signal:
+        """
+        Which side of the market is position on: (short: -1, long: 1,
+        no position: 0)
+        """
+        return np.sign(self.sm.position(key))
 
-    def locked(self, signal: P, context: BinarySignalContext) -> bool:
-        return self.sm.locked(context.key)
+    def same_direction(self, key: str, signal: Signal) -> bool:
+        """Is signal and position in the same direction?"""
+        return self.position(key) == signal
 
-    def direction(self, signal: P, context: BinarySignalContext) -> bool:
-        return signal == self.position
-
-    def same_direction(self, signal: P, context: BinarySignalContext) -> bool:
-        return self.position(signal, context) == signal
-
-    def process_position(self, signal: P, context: BinarySignalContext) -> PS:
+    def process_position(self, key: str, signal: Signal) -> Optional[Action]:
         if signal == 0:
-            if context.lockable:
-                return 0, -self.position(signal, context), "close"
-            else:
-                return self.position(signal, context), 0, None
-        elif self.same_direction(signal, context):
-            return signal, 0, None
-        elif context.always_on:
-            return signal, 2 * signal, "reverse"  # type: ignore
+            return self.process_zero_signal_position(key, signal)
         else:
-            return 0, signal, "close"
+            return self.process_non_zero_signal_position(key, signal)
 
-    def proces_no_position(self, signal: P, context: BinarySignalContext) -> PS:
-        if context.lockable & (self.locked(signal, context) == signal):
-            return 0, 0, None
+    def process_no_position(self, key: str, signal: Signal) -> Optional[Action]:
+        if signal == 0:
+            return self.process_zero_signal_no_position(key, signal)
         else:
-            if signal != 0:
-                return signal, signal, "entry"
-            else:
-                return signal, signal, None
+            return self.process_non_zero_signal_no_position(key, signal)
+
+    def process_zero_signal_position(self, key, signal):
+        return None
+
+    def process_zero_signal_no_position(self, key, signal):
+        return None
+
+    def process_non_zero_signal_position(self, key, signal):
+        # We've already checked signal is not same direction as position
+        return "CLOSE"
+
+    def process_non_zero_signal_no_position(self, key, signal):
+        return "OPEN"
+
+
+class LockableBinarySignalProcessor(BinarySignalProcessor):
+    """
+    * Signals in the direction of last position are ignored (one side
+    of the market is 'locked').  It's up to :class:`StateMachine` to
+    determine which side is 'locked' based on position actually taken
+    in the market (not just previously generated signals).
+
+    * Zero signal means close position if position exists, ignored
+    otherwise
+    """
+
+    def locked(self, key: str, signal: Signal) -> bool:
+        return self.sm.locked(key) == signal
+
+    def process_zero_signal_position(self, key, signal):
+        return "CLOSE"
+
+    def process_non_zero_signal_no_position(self, key, signal):
+        if self.locked(key, signal):
+            return None
+        else:
+            return "OPEN"
+
+
+class AlwaysOnLockableBinarySignalProcessor(LockableBinarySignalProcessor):
+    def process_non_zero_signal_position(self, key, signal):
+        return "REVERSE"
+
+
+class AlwaysOnBinarySignalProcessor(BinarySignalProcessor):
+    def process_non_zero_signal_position(self, key, signal):
+        return "REVERSE"
+
+
+def binary_signal_processor_factory(
+    lockable=False, always_on=False
+) -> Type[BinarySignalProcessor]:
+    if lockable and always_on:
+        return AlwaysOnLockableBinarySignalProcessor
+    elif lockable:
+        return LockableBinarySignalProcessor
+    elif always_on:
+        return AlwaysOnBinarySignalProcessor
+    else:
+        return BinarySignalProcessor
+
+
+class __BinarySignalProcessor(Atom):
+    """
+    Process binary signals, i.e. long/short/off, as opposed to
+    descrete signals, where signal strength is meaningful (e.g. signal
+    assuming values -10...10 based on strength of conviction).
+
+    Actual position size or even whether the position should be taken
+    at all is not determined here, it's the job of `Portfolio`.
+
+    * Zero signal means close position if position exists, ignored
+    otherwise
+
+    * Non-zero signal means:
+
+    ** open new position if there is no position for the strategy
+
+    ** ignore signal if it's in the same direction as existing
+    position
+
+    ** reverse position if the signal is in the direction opposite to
+    existing position
+
+    This behaviour can be modified in sub-classes, by overriding
+    methods: :meth:`process_position` and :meth:`process_no_position`.
+
+    Whatever the meaning of the signal coming in, signal coming out
+    means strategy wants to take `action` in the direction of
+    `signal`, as indicated by keys `action` and `signal` in the
+    emitted dict.  Incoming signals that don't require any action will
+    be stopped here and not propagated down the chain.
+    """
+
+    def __init__(self, state_machine: Optional[StateMachine] = None) -> None:
+        self.sm = state_machine or STATE_MACHINE
+        super().__init__()
+
+    def onData(self, data: dict[str, Any], *args) -> None:
+        try:
+            key = data["key"]
+            signal = data["signal"]
+        except KeyError:
+            log.error("Missing signal data", data, self)
+        if result := self.process_signal(key, signal):
+            data.update({"action": result})
+            self.dataEvent.emit(data)
+
+    def process_signal(self, key: str, signal: Signal) -> Optional[Action]:
+        if not self.position(key):
+            return self.process_no_position(key, signal)
+        elif not self.same_direction(key, signal):
+            return self.process_position(key, signal)
+        else:
+            return None
+
+    def position(self, key: str) -> Signal:
+        """
+        Which side of the market is position on: (short: -1, long: 1,
+        no position: 0)
+        """
+        return np.sign(self.sm.position(key))
+
+    def same_direction(self, key: str, signal: Signal) -> bool:
+        """Is signal and position in the same direction?"""
+        return self.position(key) == signal
+
+    def process_position(self, key: str, signal: Signal) -> Optional[Action]:
+        if signal == 0:
+            return "CLOSE"
+        else:
+            return "REVERSE"
+
+    def process_no_position(self, key: str, signal: Signal) -> Optional[Action]:
+        if signal != 0:
+            return "OPEN"
+        else:
+            return None
