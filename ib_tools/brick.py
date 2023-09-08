@@ -12,7 +12,7 @@ from ib_tools.base import Atom
 
 @dataclass
 class AbstractBaseBrick(Atom, ABC):
-    key: str
+    strategy: str
     contract: ibi.Contract
 
     def __post_init__(self):
@@ -32,7 +32,7 @@ class AbstractBaseBrick(Atom, ABC):
 
     def _params(self, **kwargs) -> dict[str, Any]:
         params = {
-            "key": self.key,
+            "strategy": self.strategy,
             "contract": self.contract,
         }
         params.update(**kwargs)

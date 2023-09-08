@@ -1,70 +1,62 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Callable, Optional
+
 import ib_insync as ibi
 
-from .base import Atom
+from . import misc
 from .handlers import IBHandlers
 from .logger import Logger
 from .state_machine import StateMachine
 from .trader import Trader
 
+if TYPE_CHECKING:
+    from .execution_models import AbstractExecModel
+
 log = Logger(__name__)
 
 
-class Controller(Atom):
+class Controller:
     """
-    Code here should work for every kind of `brick`, `portfolio` and
-    `execution model`.  Those elements can be specific to each other
-    (i.e. require that they're complementary), it's user's
-    responsibility to use matching elements.  However, :class:`.Controller`
-    should be agnostic to type of other modules.  It shouldn't be
-    neccessary for user to modify or subclass it.
+    Intermediary between execution models (which are off ramps for
+    strategies) and `trader` and `state_machine`.  Use information
+    provided by `state_machine` to make sure that positions held in
+    the market reflect what is requested by strategies.
+
+    It shouldn't be neccessary for user to modify or subclass
+    :class:`.Controller`.
     """
 
-    def __init__(self, state_machine: StateMachine):
-        # It's Atom so it already inherits access to IB
+    def __init__(self, state_machine: StateMachine, ib: ibi.IB):
         super().__init__()
         self.sm = state_machine
+        self.ib = ib
         self.trader = Trader(self.ib, self.sm)
 
-    def onData(self, data: dict, *args) -> None:
-        """
-        Pass control to exec_model, get `ibi.Trade` object and pass
-        it to `state_machine`.
+    def trade(
+        self,
+        contract: ibi.Contract,
+        order: ibi.Order,
+        action: str,
+        exec_model: AbstractExecModel,
+        callback: Optional[misc.Callback] = None,
+    ) -> None:
+        self.sm.register_strategy(exec_model)
+        trade = self.trader.trade(contract, order)
+        if callback is not None:
+            callback(trade)
+        self.sm.register_order(exec_model.strategy, action, trade)
 
-        Args:
-        -----
-
-        data (dict) : must have keys:
-            * exec_model
-            * contract
-            * signal
-            * amount
-
-            otherwise an error will be logged and transaction will not be processed.
-
-            * and any params required by the execution model
-        """
-        try:
-            exec_model = data["exec_model"]
-            contract = data["contract"]
-            signal = data["signal"]
-            amount = data["amount"]
-        except KeyError as e:
-            log.error("Missing data!", e)
-            return
-        trade_object, blotter_note = exec_model.execute(contract, signal, amount)
-        # what about info for trade blotter?
-        # self.sm.book_trade(
-        #     trade_object, exec_model, blotter_note
-        # )  # figure out how you wanna do it
-        self.dataEvent.emit(data)
-
-    def trade(self, *args, **kwargs) -> ibi.Trade:
-        return self.trader.trade(*args, **kwargs)
-
-    def cancel(self, *args, **kwargs) -> ibi.Trade:
-        return self.trader.cancel(*args, **kwargs)
+    def cancel(
+        self,
+        trade: ibi.Trade,
+        exec_model: AbstractExecModel,
+        callback: Optional[Callable[[ibi.Trade], None]] = None,
+    ) -> None:
+        trade = self.trader.cancel(trade)
+        if callback is not None:
+            callback(trade)
+        self.sm.register_cancel(trade, exec_model)
 
 
 class Handlers(IBHandlers):

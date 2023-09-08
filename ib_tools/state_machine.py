@@ -19,8 +19,8 @@ log = logging.getLogger("__name__")
 
 
 class OrderInfo(NamedTuple):
-    key: str
-    reason: str
+    strategy: str
+    action: str
     trade: ibi.Trade
 
 
@@ -93,37 +93,37 @@ class StateMachine(Atom):
         self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
 
-    def position(self, key: str) -> float:
+    def position(self, strategy: str) -> float:
         """
         Return information about position held by strategy identified
-        by `key`.
+        by `strategy`.
 
-        If this `key` hasn't been created, than there is no position
+        If this `strategy` hasn't been created, than there is no position
         for it.  Otherwise :class:`AbstractExecModel` contains info
-        about `key`'s position.
+        about `strategy`'s position.
         """
-        exec_model_or_none = self._data.get(key)
+        exec_model_or_none = self._data.get(strategy)
         if exec_model_or_none:
             return exec_model_or_none.position
         else:
             return 0.0
 
-    def locked(self, key: str) -> Lock:
-        lock_or_none = self._locks.get(key)
+    def locked(self, strategy: str) -> Lock:
+        lock_or_none = self._locks.get(strategy)
         if lock_or_none:
             return lock_or_none
         else:
             return 0
 
-    def register_lock(self, strategy_key: str, trade: ibi.Trade) -> None:
-        self._locks[strategy_key] = np.sign(trade.filled())
+    def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
+        self._locks[strategy] = np.sign(trade.filled())
 
-    def new_position_callbacks(self, strategy_key: str, trade: ibi.Trade) -> None:
+    def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
         """Additional methods may be added in sub-class"""
 
-        self.register_lock(strategy_key, trade)
+        self.register_lock(strategy, trade)
 
-    def register_order(self, strategy_key: str, reason: str, trade: ibi.Trade) -> None:
+    def register_order(self, strategy: str, action: str, trade: ibi.Trade) -> None:
         """
         Register order, register lock, verify that position has been registered.
 
@@ -133,24 +133,22 @@ class StateMachine(Atom):
         it doesn't matter here, locks are registered for all
         positions).  Verify that position has been registered.
 
-        This method is called by :class:`Trader`.
+        This method is called by :class:`Controller`.
         """
-        self.orders[trade.order.orderId] = OrderInfo(strategy_key, reason, trade)
+        self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade)
 
-        if reason.upper() in ("OPEN", "REVERSE"):
-            trade.filledEvent += partial(self.new_position_callbacks, strategy_key)
+        if action.upper() == "OPEN":
+            trade.filledEvent += partial(self.new_position_callbacks, strategy)
 
-        # What exactly is the purpose of this? Check if python dictionaries work???
-        ibi.util.sleep(0.5)
-        if not self._data.get(strategy_key):
-            log.error(f"Unknown trade: {trade}")
+    def register_cancel(self, trade, exec_model):
+        del self.order[trade.order.orderId]
 
-    def onData(self, data, *args) -> None:
+    def register_strategy(self, exec_model: AbstractExecModel) -> None:
         """
         Save data sent by :class:`Controller` about recently sent
         open/close order.
         """
-        self._data[data["key"]] = data["exec_model"]
+        self._data["strategy"] = exec_model
 
     async def handleNewOrderEvent(self, trade: ibi.Trade) -> None:
         """
@@ -158,8 +156,7 @@ class StateMachine(Atom):
         to the broker.
 
         This is an event handler (callback).  Connected (subscribed)
-        to :meth:`ibi.IB.newOrderEvent` in
-        :meth:`State_Machine.__init__`
+        to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
         """
         await asyncio.sleep(0.1)
         if not self.orders.get(trade.order.orderId):

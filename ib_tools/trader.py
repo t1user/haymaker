@@ -18,11 +18,9 @@ class Trader:
     def __init__(
         self,
         ib: ibi.IB,
-        state_machine,
         trade_handler: Optional["BaseTradeHandler"] = None,
     ) -> None:
         self.ib = ib
-        self.state_machine = state_machine
         self.trade_handler = trade_handler or ReportTradeHandler()
         # self.ib.newOrderEvent += self.trace_manual_orders
         log.debug("Trader initialized")
@@ -37,11 +35,10 @@ class Trader:
         self,
         contract: ibi.Contract,
         order: ibi.Order,
-        reason: str = "",
+        action: str = "",
         strategy_key: str = "unknown",
     ) -> ibi.Trade:
         trade = self.ib.placeOrder(contract, order)
-        self.state_machine.register_order(strategy_key, reason, trade)
 
         # if reason:
         #     self.trade_handler.attach_events(trade, reason)

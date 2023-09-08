@@ -56,56 +56,56 @@ class BinarySignalProcessor(Atom):
 
     def onData(self, data: dict[str, Any], *args) -> None:
         try:
-            key = data["key"]
+            strategy = data["strategy"]
             signal = data["signal"]
         except KeyError:
             log.error("Missing signal data", data, self)
-        if result := self.process_signal(key, signal):
+        if result := self.process_signal(strategy, signal):
             data.update({"action": result})
             self.dataEvent.emit(data)
 
-    def process_signal(self, key: str, signal: Signal) -> Optional[Action]:
-        if not self.position(key):
-            return self.process_no_position(key, signal)
-        elif not self.same_direction(key, signal):
-            return self.process_position(key, signal)
+    def process_signal(self, strategy: str, signal: Signal) -> Optional[Action]:
+        if not self.position(strategy):
+            return self.process_no_position(strategy, signal)
+        elif not self.same_direction(strategy, signal):
+            return self.process_position(strategy, signal)
         else:
             return None
 
-    def position(self, key: str) -> Signal:
+    def position(self, strategy: str) -> Signal:
         """
         Which side of the market is position on: (short: -1, long: 1,
         no position: 0)
         """
-        return np.sign(self.sm.position(key))
+        return np.sign(self.sm.position(strategy))
 
-    def same_direction(self, key: str, signal: Signal) -> bool:
+    def same_direction(self, strategy: str, signal: Signal) -> bool:
         """Is signal and position in the same direction?"""
-        return self.position(key) == signal
+        return self.position(strategy) == signal
 
-    def process_position(self, key: str, signal: Signal) -> Optional[Action]:
+    def process_position(self, strategy: str, signal: Signal) -> Optional[Action]:
         if signal == 0:
-            return self.process_zero_signal_position(key, signal)
+            return self.process_zero_signal_position(strategy, signal)
         else:
-            return self.process_non_zero_signal_position(key, signal)
+            return self.process_non_zero_signal_position(strategy, signal)
 
-    def process_no_position(self, key: str, signal: Signal) -> Optional[Action]:
+    def process_no_position(self, strategy: str, signal: Signal) -> Optional[Action]:
         if signal == 0:
-            return self.process_zero_signal_no_position(key, signal)
+            return self.process_zero_signal_no_position(strategy, signal)
         else:
-            return self.process_non_zero_signal_no_position(key, signal)
+            return self.process_non_zero_signal_no_position(strategy, signal)
 
-    def process_zero_signal_position(self, key, signal):
+    def process_zero_signal_position(self, strategy, signal):
         return None
 
-    def process_zero_signal_no_position(self, key, signal):
+    def process_zero_signal_no_position(self, strategy, signal):
         return None
 
-    def process_non_zero_signal_position(self, key, signal):
+    def process_non_zero_signal_position(self, strategy, signal):
         # We've already checked signal is not same direction as position
         return "CLOSE"
 
-    def process_non_zero_signal_no_position(self, key, signal):
+    def process_non_zero_signal_no_position(self, strategy, signal):
         return "OPEN"
 
 
@@ -120,26 +120,26 @@ class LockableBinarySignalProcessor(BinarySignalProcessor):
     otherwise
     """
 
-    def locked(self, key: str, signal: Signal) -> bool:
-        return self.sm.locked(key) == signal
+    def locked(self, strategy: str, signal: Signal) -> bool:
+        return self.sm.locked(strategy) == signal
 
-    def process_zero_signal_position(self, key, signal):
+    def process_zero_signal_position(self, strategy, signal):
         return "CLOSE"
 
-    def process_non_zero_signal_no_position(self, key, signal):
-        if self.locked(key, signal):
+    def process_non_zero_signal_no_position(self, strategy, signal):
+        if self.locked(strategy, signal):
             return None
         else:
             return "OPEN"
 
 
 class AlwaysOnLockableBinarySignalProcessor(LockableBinarySignalProcessor):
-    def process_non_zero_signal_position(self, key, signal):
+    def process_non_zero_signal_position(self, strategy, signal):
         return "REVERSE"
 
 
 class AlwaysOnBinarySignalProcessor(BinarySignalProcessor):
-    def process_non_zero_signal_position(self, key, signal):
+    def process_non_zero_signal_position(self, strategy, signal):
         return "REVERSE"
 
 
@@ -194,40 +194,40 @@ class __BinarySignalProcessor(Atom):
 
     def onData(self, data: dict[str, Any], *args) -> None:
         try:
-            key = data["key"]
+            strategy = data["strategy"]
             signal = data["signal"]
         except KeyError:
             log.error("Missing signal data", data, self)
-        if result := self.process_signal(key, signal):
+        if result := self.process_signal(strategy, signal):
             data.update({"action": result})
             self.dataEvent.emit(data)
 
-    def process_signal(self, key: str, signal: Signal) -> Optional[Action]:
-        if not self.position(key):
-            return self.process_no_position(key, signal)
-        elif not self.same_direction(key, signal):
-            return self.process_position(key, signal)
+    def process_signal(self, strategy: str, signal: Signal) -> Optional[Action]:
+        if not self.position(strategy):
+            return self.process_no_position(strategy, signal)
+        elif not self.same_direction(strategy, signal):
+            return self.process_position(strategy, signal)
         else:
             return None
 
-    def position(self, key: str) -> Signal:
+    def position(self, strategy: str) -> Signal:
         """
         Which side of the market is position on: (short: -1, long: 1,
         no position: 0)
         """
-        return np.sign(self.sm.position(key))
+        return np.sign(self.sm.position(strategy))
 
-    def same_direction(self, key: str, signal: Signal) -> bool:
+    def same_direction(self, strategy: str, signal: Signal) -> bool:
         """Is signal and position in the same direction?"""
-        return self.position(key) == signal
+        return self.position(strategy) == signal
 
-    def process_position(self, key: str, signal: Signal) -> Optional[Action]:
+    def process_position(self, strategy: str, signal: Signal) -> Optional[Action]:
         if signal == 0:
             return "CLOSE"
         else:
             return "REVERSE"
 
-    def process_no_position(self, key: str, signal: Signal) -> Optional[Action]:
+    def process_no_position(self, strategy: str, signal: Signal) -> Optional[Action]:
         if signal != 0:
             return "OPEN"
         else:
