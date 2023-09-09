@@ -124,9 +124,7 @@ class DataWriter:
         self._objects: List[DownloadContainer] = []
         self._queue: List[DownloadContainer] = []
         self._current_object: Optional[DownloadContainer] = None
-        print(f"About to schedule task for: {self.contract}, head: {self.head}")
         self.schedule_tasks()
-        print("Success!!!!! Task schdeudled")
         log.info(f"Object initialized: {self}")
 
     def onPulse(self, time: datetime):
