@@ -31,7 +31,7 @@ class Controller:
         super().__init__()
         self.sm = state_machine
         self.ib = ib
-        self.trader = Trader(self.ib, self.sm)
+        self.trader = Trader(self.ib)
 
     def trade(
         self,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Type, TypedDict
+from typing import Any, Optional, Type
 
 import numpy as np
 
@@ -11,11 +11,6 @@ from ib_tools.misc import Action, Signal
 from ib_tools.state_machine import StateMachine
 
 log = logging.getLogger(__name__)
-
-
-class Result(TypedDict):
-    signal: Signal
-    action: Action
 
 
 class BinarySignalProcessor(Atom):

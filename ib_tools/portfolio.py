@@ -15,6 +15,11 @@ class AbstractBasePortfolio(Atom, ABC):
     """
     Decides what, if and how much to trade based on received signals
     and queries to [SM?].
+
+    Each strategy should have its own instance of portfolio to ensure
+    that signals form various strategies should not be mixed-up.
+    Actual singleton `porfolio` object should be passed to those
+    instances, which should delegate allocation to this object.
     """
 
     def onData(self, data: dict, *args) -> None:
@@ -32,7 +37,7 @@ class AbstractBasePortfolio(Atom, ABC):
 
 
 class FixedPortfolio(AbstractBasePortfolio):
-    def __init__(self, amount: float) -> None:
+    def __init__(self, amount: float = 1) -> None:
         self.amount = amount
         super().__init__()
 

@@ -35,7 +35,7 @@ def test_data_passed_correct(brick):
     brick.dataEvent += recorder
     brick.onData(1)
     assert x == {
-        "key": "eska_NQ",
+        "strategy": "eska_NQ",
         "contract": ibi.ContFuture("NQ", "CME"),
         "signal": 1,
         "dupa": "xyz",
@@ -113,7 +113,7 @@ def test_column_selection_works(df_connected_brick, data_for_df):
     brick.df_columns = ["price", "signal", "price_plus"]
     brick.onData(data_for_df)
     assert list(atom.data.keys()) == [
-        "key",
+        "strategy",
         "contract",
         "price",
         "signal",

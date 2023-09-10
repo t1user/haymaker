@@ -14,6 +14,7 @@ import numpy as np
 
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import AbstractBracketLeg
+from ib_tools.controller import Controller
 from ib_tools.manager import CONTROLLER
 
 from . import misc
@@ -64,11 +65,17 @@ class AbstractExecModel(Atom, ABC):
     open_order = OrderFieldValidator()
     close_order = OrderFieldValidator()
 
-    def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
+    def __init__(
+        self,
+        orders: Optional[dict[OrderKey, Any]] = None,
+        *,
+        controller: Optional[Controller] = None,
+    ) -> None:
         self.active_contract: Optional[ibi.Contract] = None
         self.position: float = 0.0
         self.strategy: str = ""
         self.params: Params = {"open": {}, "close": {}}
+        self.controller = controller or CONTROLLER
 
         if orders:
             for key, order_kwargs in orders.items():
@@ -158,8 +165,13 @@ class BaseExecModel(AbstractExecModel):
     _close_order = {"oderType": "MKT", "tif": "GTC"}
     _reverse_order = _open_order
 
-    def __init__(self, orders: Optional[dict[OrderKey, Any]] = None) -> None:
-        super().__init__(orders)
+    def __init__(
+        self,
+        orders: Optional[dict[OrderKey, Any]] = None,
+        *,
+        controller: Optional[Controller] = None,
+    ) -> None:
+        super().__init__(orders, controller=controller)
         self.position = 0
         self.active_contract = None
 
@@ -170,7 +182,7 @@ class BaseExecModel(AbstractExecModel):
         action: str,
         callback: Optional[Callable[[ibi.Trade], None]] = None,
     ) -> None:
-        CONTROLLER.trade(
+        self.controller.trade(
             contract,
             order,
             action,
@@ -183,7 +195,7 @@ class BaseExecModel(AbstractExecModel):
     ) -> None:
         if callback is None:
             callback = self.cancel_callback
-        CONTROLLER.cancel(trade, self, callback)
+        self.controller.cancel(trade, self, callback)
 
     def trade_callback(
         self, trade: ibi.Trade, callback: Optional[misc.Callback] = None
@@ -291,10 +303,12 @@ class EventDrivenExecModel(BaseExecModel):
     def __init__(
         self,
         orders: Optional[dict[OrderKey, Any]] = None,
+        *,
         stop: Optional[AbstractBracketLeg] = None,
         take_profit: Optional[AbstractBracketLeg] = None,
+        controller: Optional[Controller] = None,
     ):
-        super().__init__(orders)
+        super().__init__(orders, controller=controller)
         if not stop:
             log.error(
                 f"{self.__class__.__name__} must be initialized with a stop order"
@@ -371,10 +385,14 @@ class OcaExecModel(EventDrivenExecModel):
     def __init__(
         self,
         orders: Optional[dict[OrderKey, Any]] = None,
+        *,
         stop: Optional[AbstractBracketLeg] = None,
         take_profit: Optional[AbstractBracketLeg] = None,
+        controller: Optional[Controller] = None,
     ):
-        super().__init__(orders, stop, take_profit)
+        super().__init__(
+            orders, stop=stop, take_profit=take_profit, controller=controller
+        )
         self.counter = itertools.count(
             100000 * self.counter_seed(), 1  # type: ignore
         ).__next__
