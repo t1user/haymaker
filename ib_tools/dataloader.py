@@ -364,9 +364,9 @@ class DownloadContainer:
                     self.retries = 0
                     return None
         # this is likely irrelevant. Check. TODO.
-        # if self.current_date:
-        #     if self.from_date < self.current_date < self.to_date:
-        #         return self.current_date
+        if self.current_date:
+            if self.from_date < self.current_date < self.to_date:
+                return self.current_date
         return None
 
     @property
@@ -783,7 +783,9 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
             f'Bar size: {contract.params["barSizeSetting"]} '
         )
         async with pacer:
-            chunk = await ib.reqHistoricalDataAsync(**contract.params, formatDate=2)
+            chunk = await ib.reqHistoricalDataAsync(
+                **contract.params, formatDate=2, timeout=0
+            )
 
         contract.save_chunk(chunk)
         if contract.next_date:
