@@ -4,10 +4,11 @@ import os
 import random
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Deque, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import pandas as pd
+import pytz
 from ib_insync import IB, BarDataList, ContFuture, Contract, Event, Future, util
 from logbook import Logger  # type: ignore
 from typing_extensions import Protocol
@@ -103,14 +104,15 @@ class DataWriter:
         barSize: str,
         wts: str,
         aggression: float = 2,
-        now: datetime = datetime.now(),
+        now: Optional[datetime] = None,
     ) -> None:
         self.store = store
         self.contract = contract
         self.head = head
         self.barSize = bar_size_validator(barSize)
         self.wts = wts_validator(wts)
-        self.now = now
+        if now is None:
+            self.now = datetime.now(pytz.timezone("Europe/Berlin"))
         self.aggression = aggression
 
         self.c = self.contract.localSymbol
@@ -225,8 +227,10 @@ class DataWriter:
         to_date = self.to_date
         if to_date:
             dt = min(self.expiry, self.now) if self.expiry else self.now
+
             if dt > to_date:
                 return dt
+
         return None
 
     def fill_gaps(self) -> List[NamedTuple]:
@@ -290,7 +294,11 @@ class DataWriter:
     def expiry(self) -> Optional[datetime]:  # this maybe an error
         """Expiry date for expirable contracts or ''"""
         e = self.contract.lastTradeDateOrContractMonth
-        return None if not e else datetime.strptime(e, "%Y%m%d")
+        return (
+            None
+            if not e
+            else datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
+        )
 
     @property
     def data(self) -> Optional[pd.DataFrame]:
@@ -431,8 +439,9 @@ class ContractHolder:
             self.items = []
             for o in objects:
                 headTimeStamp = self.ib.reqHeadTimeStamp(
-                    o, whatToShow=self.wts, useRTH=False
+                    o, whatToShow=self.wts, useRTH=False, formatDate=2
                 )
+
                 if headTimeStamp == []:
                     log.warning(
                         (
@@ -441,6 +450,7 @@ class ContractHolder:
                         )
                     )
                     continue
+
                 self.items.append(
                     DataWriter(
                         self.store,
@@ -773,9 +783,8 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
             f'Bar size: {contract.params["barSizeSetting"]} '
         )
         async with pacer:
-            chunk = await ib.reqHistoricalDataAsync(
-                **contract.params, timeout=0, formatDate=2
-            )
+            chunk = await ib.reqHistoricalDataAsync(**contract.params, formatDate=2)
+
         contract.save_chunk(chunk)
         if contract.next_date:
             if validate_age(contract):

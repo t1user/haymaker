@@ -1,5 +1,6 @@
 # import asyncio
 import sys
+from random import randint
 from typing import Callable
 
 from ib_insync import IB, Contract, util
@@ -107,7 +108,7 @@ class StartNoWatchdog(IBHandlers):
         IBHandlers.__init__(self, ib, func)
         self.host = "localhost"
         self.port = 4002  # this is for paper account
-        # self.id = 12
+        # self.id = randint(2, 1000)
         self.get_clientId()
 
     def get_clientId(self) -> None:
