@@ -22,6 +22,10 @@ class AbstractBasePortfolio(Atom, ABC):
     instances, which should delegate allocation to this object.
     """
 
+    def __init__(self):
+        self.strategy: str = ""
+        super().__init__()
+
     def onData(self, data: dict, *args) -> None:
         amount = self.allocate(data)
         data.update({"amount": amount})

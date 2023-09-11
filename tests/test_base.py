@@ -371,3 +371,78 @@ class Test_keep_adding_contracts:
         assert "y" in CONTRACT_LIST
         assert "z" in CONTRACT_LIST
         assert "z" in Atom.contracts
+
+
+def test_onData_sets_attribute_if_dict_passed():
+    class Source(Atom):
+        def run(self):
+            self.startEvent.emit({"strategy": "xxx"})
+
+    class Output(Atom):
+        pass
+
+    source = Source()
+    out = Output()
+    source += out
+    source.run()
+
+    assert out.strategy == "xxx"
+
+
+def test_onData_emits_self_if_dict_passed():
+    class Source(Atom):
+        def run(self):
+            self.startEvent.emit({"strategy": "xxx"})
+
+    class NewAtom(Atom):
+        pass
+
+    class Output(Atom):
+        data = None
+        args = None
+
+        def onStart(self, data, *args):
+            self.data = data
+            self.args = args
+
+    source = Source()
+    inner = NewAtom()
+    out = Output()
+    Pipe(source, inner, out)
+    source.run()
+    assert isinstance(out.args[0], NewAtom)
+
+
+def test_onData_ignores_attribute_if_no_dict_passed():
+    class Source(Atom):
+        def run(self):
+            self.startEvent.emit(("strategy", "xxx"))
+
+    class Output(Atom):
+        pass
+
+    source = Source()
+    out = Output()
+    source += out
+    source.run()
+
+    with pytest.raises(AttributeError):
+        out.strategy
+
+
+def test_onData_sets_attribute_downstream_if_dict_passed():
+    class Source(Atom):
+        def run(self):
+            self.startEvent.emit({"strategy": "xxx"})
+
+    class NewAtom(Atom):
+        pass
+
+    source = Source()
+    inner1 = NewAtom()
+    inner2 = NewAtom()
+    out = NewAtom()
+    Pipe(source, inner1, inner2, out)
+    source.run()
+
+    assert out.strategy == inner1.strategy == inner2.strategy == "xxx"

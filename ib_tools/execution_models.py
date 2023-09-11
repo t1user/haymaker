@@ -71,6 +71,7 @@ class AbstractExecModel(Atom, ABC):
         *,
         controller: Optional[Controller] = None,
     ) -> None:
+        super().__init__()
         self.active_contract: Optional[ibi.Contract] = None
         self.position: float = 0.0
         self.strategy: str = ""
@@ -146,6 +147,7 @@ class AbstractExecModel(Atom, ABC):
         """
         # TODO: what if more than one order issued????
         data["exec_model"] = self
+        self.dataEvent.emit(data)
 
 
 class BaseExecModel(AbstractExecModel):
@@ -225,6 +227,7 @@ class BaseExecModel(AbstractExecModel):
         else:
             log.error(f"Ambiguous action: {action} for {self}")
             return
+        self.dataEvent.emit(data)
 
     def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         if fill.execution.side == "BOT":
@@ -249,9 +252,9 @@ class BaseExecModel(AbstractExecModel):
         self.active_contract = contract
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         order = self._order("open_order", order_kwargs)
-        strategy = data["strategy"]
         log.debug(
-            f"{strategy} {contract.localSymbol} executing OPEN signal {signal}.", data
+            f"{self.strategy} {contract.localSymbol} executing OPEN signal {signal}.",
+            data,
         )
         self.trade(contract, order, "OPEN", callback)
 
@@ -261,9 +264,8 @@ class BaseExecModel(AbstractExecModel):
         order_kwargs = {"action": misc.action(signal), "totalQuantity": self.position}
         order = self._order("close_order", order_kwargs)
         assert self.active_contract is not None
-        strategy = data["strategy"]
         log.debug(
-            f"{strategy} {self.active_contract.localSymbol} executing close signal"
+            f"{self.strategy} {self.active_contract.localSymbol} executing close signal"
             f" {signal}",
             data,
         )

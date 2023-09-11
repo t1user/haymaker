@@ -41,7 +41,6 @@ class Controller:
         exec_model: AbstractExecModel,
         callback: Optional[misc.Callback] = None,
     ) -> None:
-        self.sm.register_strategy(exec_model)
         trade = self.trader.trade(contract, order)
         if callback is not None:
             callback(trade)

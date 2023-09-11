@@ -18,6 +18,9 @@ class AbstractBaseBrick(Atom, ABC):
     def __post_init__(self):
         Atom.__init__(self)
 
+    def onStart(self, data, *args):
+        self.startEvent.emit({"strategy": self.strategy}, self)
+
     def onData(self, data, *args) -> None:
         self.dataEvent.emit(self._params(**self._signal(data)))
 

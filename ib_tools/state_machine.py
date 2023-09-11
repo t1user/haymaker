@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from functools import partial
-from typing import TYPE_CHECKING, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 import ib_insync as ibi
-import numpy as np
 
 from .base import Atom
 from .misc import Lock
@@ -77,10 +77,6 @@ class StateMachine(Atom):
 
     _instance: Optional["StateMachine"] = None
 
-    _data: dict[str, AbstractExecModel] = {}
-    _locks: dict[str, Lock] = {}
-    orders: dict[int, OrderInfo] = {}
-
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -92,6 +88,19 @@ class StateMachine(Atom):
         super().__init__()
         self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
+
+        self._data: dict[str, AbstractExecModel] = {}
+        self._locks: dict[str, Lock] = {}
+        self._position_dict: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
+        self.orders: dict[int, OrderInfo] = {}
+
+    def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
+        strategy = data["strategy"]
+        exec_model, *_ = args
+        self._data[strategy] = exec_model
+
+    def onData(self, *args) -> None:
+        pass
 
     def position(self, strategy: str) -> float:
         """
@@ -116,12 +125,35 @@ class StateMachine(Atom):
             return 0
 
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
-        self._locks[strategy] = np.sign(trade.filled())
+        self._locks[strategy] = 1 if trade.order.action == "BUY" else -1
 
     def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
         """Additional methods may be added in sub-class"""
 
         self.register_lock(strategy, trade)
+
+    def register_position(self, strategy: str, trade: ibi.Trade):
+        self._position_dict[trade.contract].append(strategy)
+        self.verify_positions()
+
+    def total_positions(self, contract: ibi.Contract) -> float:
+        total = 0.0
+        for strategy_key in self._position_dict[contract]:
+            total += self._data[strategy_key].position
+        return total
+
+    def verify_positions(self) -> list[ibi.Contract]:
+        difference = []
+        broker_positions = self.ib.positions()
+        for position in broker_positions:
+            if position.position != self.total_positions(position.contract):
+                log.error(
+                    f"Position discrepancy for {position.contract}, "
+                    f"mine: {self.total_positions(position.contract)}, "
+                    f"theirs: {position.position}"
+                )
+                difference.append(position.contract)
+        return difference
 
     def register_order(self, strategy: str, action: str, trade: ibi.Trade) -> None:
         """
@@ -140,15 +172,10 @@ class StateMachine(Atom):
         if action.upper() == "OPEN":
             trade.filledEvent += partial(self.new_position_callbacks, strategy)
 
+        trade.filledEvent += partial(self.register_position, strategy)
+
     def register_cancel(self, trade, exec_model):
         del self.order[trade.order.orderId]
-
-    def register_strategy(self, exec_model: AbstractExecModel) -> None:
-        """
-        Save data sent by :class:`Controller` about recently sent
-        open/close order.
-        """
-        self._data["strategy"] = exec_model
 
     async def handleNewOrderEvent(self, trade: ibi.Trade) -> None:
         """
@@ -163,4 +190,13 @@ class StateMachine(Atom):
             log.critical(f"Unknown trade in the system {trade}")
 
     def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
+        if trade.orderStatus.status == ibi.OrderStatus.Inactive:
+            messages = ";".join([m.message for m in trade.log])
+            log.error(f"Rejected order: {trade.order}, messages: {messages}")
+
+    def handleErrorEvent(
+        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+    ) -> None:
+        # reqId is most likely orderId
+        # order rejected is errorCode = 201
         pass

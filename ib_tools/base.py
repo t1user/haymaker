@@ -50,7 +50,10 @@ class Atom:
         self.dataEvent = ibi.Event("dataEvent")
 
     def onStart(self, data, *args) -> None:
-        pass
+        if isinstance(data, dict):
+            for k, v in data.items():
+                setattr(self, k, v)
+            self.startEvent.emit(data, self)
 
     def onData(self, data, *args) -> None:
         pass
