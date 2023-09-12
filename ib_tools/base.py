@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import ClassVar, Protocol, Sequence, Type, Union
+from typing import Any, ClassVar, Coroutine, Protocol, Sequence, Type, Union
 
 import ib_insync as ibi
 from logbook import Logger  # type: ignore
@@ -55,7 +55,7 @@ class Atom:
                 setattr(self, k, v)
             self.startEvent.emit(data, self)
 
-    def onData(self, data, *args) -> None:
+    def onData(self, data, *args) -> Union[Coroutine[Any, Any, None], None]:
         pass
 
     def connect(self, *targets) -> "Atom":

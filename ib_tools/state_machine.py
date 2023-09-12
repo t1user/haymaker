@@ -7,9 +7,10 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 import ib_insync as ibi
+import numpy as np
 
 from .base import Atom
-from .misc import Lock
+from .misc import Lock, Signal
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
@@ -84,7 +85,7 @@ class StateMachine(Atom):
         else:
             raise TypeError("Attampt to instantiate StateMachine more than once.")
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
@@ -99,8 +100,29 @@ class StateMachine(Atom):
         exec_model, *_ = args
         self._data[strategy] = exec_model
 
-    def onData(self, *args) -> None:
-        pass
+    async def onData(self, data, *args) -> None:
+        try:
+            strategy = data["strategy"]
+            amount = data["amount"]
+            target_position = data["target_position"]
+            exec_model = data["exec_model"]
+            await asyncio.sleep(60)
+            self.verify_integrity(strategy, amount, target_position, exec_model)
+        except KeyError as e:
+            log.error("Unable to verify transaction integrity", data, e)
+
+    def verify_integrity(
+        self,
+        strategy: str,
+        amount: float,
+        target_position: Signal,
+        exec_model: AbstractExecModel,
+    ) -> None:
+        try:
+            assert np.sign(exec_model.position) == target_position
+            assert exec_model.position == abs(amount)
+        except AssertionError as e:
+            log.critical(f"Wrong position for {strategy}", e)
 
     def position(self, strategy: str) -> float:
         """
