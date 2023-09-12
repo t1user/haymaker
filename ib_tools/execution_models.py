@@ -272,8 +272,11 @@ class BaseExecModel(AbstractExecModel):
         self.trade(self.active_contract, order, "CLOSE", callback)
 
     def reverse(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
+        def open_after_close(trade, data):
+            self.open(data)
+
         def connect_open_after_close(trade):
-            trade += partial(self.close, data)
+            trade.filledEvent += partial(open_after_close, data=data)
 
         self.close(data, connect_open_after_close)
 
