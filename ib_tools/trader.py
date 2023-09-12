@@ -35,8 +35,8 @@ class Trader:
         self,
         contract: ibi.Contract,
         order: ibi.Order,
-        action: str = "",
-        strategy_key: str = "unknown",
+        #     action: str = "",
+        #     strategy_key: str = "unknown",
     ) -> ibi.Trade:
         trade = self.ib.placeOrder(contract, order)
 
