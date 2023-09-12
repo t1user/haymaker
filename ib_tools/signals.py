@@ -68,7 +68,7 @@ class BinarySignalProcessor(Atom):
             )
             self.dataEvent.emit(data)
 
-    def target_position(self, signal, result):
+    def target_position(self, signal: Signal, result: Action):
         if result == "OPEN":
             return signal
         elif result == "CLOSE":

@@ -37,14 +37,14 @@ class Controller:
         self,
         contract: ibi.Contract,
         order: ibi.Order,
-        action: str,
+        label: str,
         exec_model: AbstractExecModel,
         callback: Optional[misc.Callback] = None,
     ) -> None:
         trade = self.trader.trade(contract, order)
         if callback is not None:
             callback(trade)
-        self.sm.register_order(exec_model.strategy, action, trade)
+        self.sm.register_order(exec_model.strategy, label, trade)
 
     def cancel(
         self,

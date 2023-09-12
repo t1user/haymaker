@@ -7,7 +7,7 @@ import random
 import string
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Any, Callable, Literal, Optional, TypedDict
+from typing import Any, Callable, Literal, NamedTuple, Optional, TypedDict
 
 import ib_insync as ibi
 import numpy as np
@@ -25,10 +25,19 @@ OrderKey = Literal[
     "open_order", "close_order", "stop_order", "tp_order", "reverse_order"
 ]
 
+BracketLabel = Literal["STOP_LOSS", "TAKE_PROFIT"]
+
 
 class Params(TypedDict):
     open: dict[str, Any]
     close: dict[str, Any]
+
+
+class Bracket(NamedTuple):
+    label: BracketLabel
+    order_key: OrderKey
+    order_kwargs: dict
+    trade: ibi.Trade
 
 
 class OrderFieldValidator:
@@ -181,13 +190,13 @@ class BaseExecModel(AbstractExecModel):
         self,
         contract: ibi.Contract,
         order: ibi.Order,
-        action: str,
+        label: str,
         callback: Optional[Callable[[ibi.Trade], None]] = None,
     ) -> None:
         self.controller.trade(
             contract,
             order,
-            action,
+            label,
             self,
             partial(self.trade_callback, callback=callback),
         )
@@ -303,7 +312,6 @@ class EventDrivenExecModel(BaseExecModel):
     tp_order = OrderFieldValidator()
 
     contract: ibi.Contract  # or should it be a list of ibi.Contract ?
-    brackets: list[ibi.Trade]
 
     def __init__(
         self,
@@ -320,7 +328,7 @@ class EventDrivenExecModel(BaseExecModel):
             )
         self.stop = stop
         self.take_profit = take_profit
-        self.brackets = []
+        self.brackets: list[Bracket] = []
         log.debug(f"execution model initialized {self}")
 
     def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
@@ -330,29 +338,25 @@ class EventDrivenExecModel(BaseExecModel):
         """
         attach_bracket = partial(self._attach_bracket, params=data)
 
-        def callback_attach_bracket(trade):
+        def callback_open_trade(trade):
             trade.filledEvent += attach_bracket
 
-        super().open(data, callback_attach_bracket)
+        super().open(data, callback_open_trade)
 
     def close(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
         """
         Attach events that will cancel any brackets on order completion.
         """
 
-        def callback_remove_bracket(trade: ibi.Trade) -> None:
+        def callback_close_trade(trade: ibi.Trade) -> None:
             trade.filledEvent += self.remove_bracket
 
-        super().close(data, callback_remove_bracket)
+        super().close(data, callback_close_trade)
 
     def _dynamic_bracket_kwargs(self) -> dict[str, Any]:
         return {}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
-        def callback_bracket_filled(trade):
-            trade.filledEvent += self.bracket_filled_callback
-            self.brackets.append(trade)
-
         for bracket, order_key, label in zip(
             (self.stop, self.take_profit),
             ("stop_order", "tp_order"),
@@ -362,9 +366,49 @@ class EventDrivenExecModel(BaseExecModel):
             if bracket:
                 bracket_kwargs = bracket(params, trade)
                 bracket_kwargs.update(self._dynamic_bracket_kwargs)  # type: ignore
-                order = self._order(order_key, bracket_kwargs)  # type: ignore
-                log.debug(f"bracket order: {order}")
-                self.trade(trade.contract, order, label)
+                self._place_bracket(trade.contract, order_key, label, bracket_kwargs)
+
+    def _place_bracket(self, contract, order_key, label, bracket_kwargs):
+        def save_bracket(
+            label: BracketLabel,
+            order_key: OrderKey,
+            bracket_kwargs: dict,
+            trade: ibi.Trade,
+        ):
+            self.brackets.append(Bracket(label, order_key, bracket_kwargs, trade))
+
+        def callback_bracket_trade(trade, label="", bracket_kwargs=None):
+            trade.filledEvent += self.bracket_filled_callback
+            save_bracket(label, bracket_kwargs, trade)
+
+        order = self._order(order_key, bracket_kwargs)  # type: ignore
+        log.debug(f"bracket order: {order}")
+        self.trade(
+            contract,
+            order,
+            label,
+            partial(
+                callback_bracket_trade,
+                label=label,
+                bracket_kwargs=bracket_kwargs,
+            ),
+        )
+
+    def re_attach_brackets(self):
+        """
+        Possibly used by :class:`Controller` if it's determined that a bracket
+        is missing.
+        """
+
+        for bracket in self.brackets.copy():
+            log.info("attempt to re-attach bracket", bracket)
+            self.brackets.remove(bracket)
+            self._place_bracket(
+                bracket.trade.contract,
+                bracket.order_key,
+                bracket.label,
+                bracket.bracket_kwargs,
+            )
 
     def remove_bracket(self, trade: ibi.Trade) -> None:
         # trade is for a bracket order that has just been filled!!!
@@ -372,8 +416,8 @@ class EventDrivenExecModel(BaseExecModel):
         # for the same position
 
         for bracket in self.brackets.copy():
-            if not bracket.isDone():
-                self.cancel(bracket)
+            if not bracket.trade.isDone():
+                self.cancel(bracket.trade)
                 self.brackets.remove(bracket)
 
     bracket_filled_callback = remove_bracket
