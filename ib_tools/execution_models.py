@@ -3,8 +3,6 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import logging
-import random
-import string
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import Any, Callable, Literal, NamedTuple, Optional, TypedDict
@@ -185,6 +183,13 @@ class BaseExecModel(AbstractExecModel):
         super().__init__(orders, controller=controller)
         self.position = 0
         self.active_contract = None
+        self.position_id_generator = misc.Counter()
+        self._position_id = ""
+
+    def position_id(self, reset=False):
+        if reset or not self._position_id:
+            self._position_id = self.position_id_generator()
+        return self._position_id
 
     def trade(
         self,
@@ -251,6 +256,7 @@ class BaseExecModel(AbstractExecModel):
 
     def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
         self.params["close"] = {}
+        data["position_id"] = self.position_id(True)
         self.params["open"].update(data)
         try:
             contract = data["contract"]
@@ -268,6 +274,7 @@ class BaseExecModel(AbstractExecModel):
         self.trade(contract, order, "OPEN", callback)
 
     def close(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
+        data["position_id"] = self.position_id()
         self.params["close"].update(data)
         signal = -np.sign(self.position)
         order_kwargs = {"action": misc.action(signal), "totalQuantity": self.position}
@@ -412,12 +419,14 @@ class EventDrivenExecModel(BaseExecModel):
 
     def remove_bracket(self, trade: ibi.Trade) -> None:
         # trade is for a bracket order that has just been filled!!!
-        # irrelevant here, because we want to cancel potential other bracket(s)
-        # for the same position
-
+        # it may be either a close transaction or one of the brackets
+        # in either case position is closed and we need to remove
+        # remaining brackets if any
         for bracket in self.brackets.copy():
             if not bracket.trade.isDone():
-                self.cancel(bracket.trade)
+                # trade may be one of the brackets
+                if bracket.trade != trade:
+                    self.cancel(bracket.trade)
                 self.brackets.remove(bracket)
 
     bracket_filled_callback = remove_bracket
@@ -442,13 +451,7 @@ class OcaExecModel(EventDrivenExecModel):
         super().__init__(
             orders, stop=stop, take_profit=take_profit, controller=controller
         )
-        self.counter = itertools.count(
-            100000 * self.counter_seed(), 1  # type: ignore
-        ).__next__
-        self.character_string = "".join(random.choices(string.ascii_letters, k=5))
-
-    def oca_group(self):
-        return f"{self.character_string}{self.counter()}"
+        self.oca_group = misc.Counter()
 
     def _dynamic_bracket_kwargs(self):
         return {"ocaGroup": self.oca_group(), "ocaType": 1}

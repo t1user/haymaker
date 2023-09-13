@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import itertools
+import random
+import string
+from enum import Enum
 from functools import wraps
-from typing import Literal
+from typing import Callable, Literal
+
+import ib_insync as ibi
 
 
 def action(signal: int) -> str:
@@ -13,12 +19,50 @@ def action(signal: int) -> str:
     return "BUY" if signal == 1 else "SELL"
 
 
-Operation = Literal["entry", "close", "reverse", None]
-# position, signal, operation
+def action_to_signal(action: str) -> Literal[-1, 1]:
+    assert action.upper() in ("BUY", "SELL"), "Invalid trade signal"
+    return 1 if action == "BUY" else -1
+
+
+class Sigact(str, Enum):
+    """
+    Signal action.  Indication from a strategy what kind of action is
+    required.
+    """
+
+    open = "OPEN"
+    close = "CLOSE"
+    reverse = "REVERSE"
+    OPEN = "OPEN"
+    CLOSE = "CLOSE"
+    REVERSE = "REVERSE"
+
 
 Lock = Literal[-1, 0, 1]
 Signal = Literal[-1, 0, 1]
 Action = Literal["OPEN", "CLOSE", "REVERSE"]
+Callback = Callable[[ibi.Trade], None]
+
+
+class Counter:
+    """
+    Generate a string of consecutive numbers preceded by a character
+    string, which is very unlikely to be repeated after multiple class
+    re-instantiations.
+    """
+
+    counter_seed = itertools.count(1, 1).__next__
+
+    def __init__(self, number_of_letters=5, number_of_numbers=6):
+        self.counter = itertools.count(
+            100000 * self.counter_seed(), 1  # type: ignore
+        ).__next__
+        self.character_string = "".join(
+            random.choices(string.ascii_letters, k=number_of_letters)
+        )
+
+    def __call__(self) -> str:
+        return f"{self.character_string}{self.counter()}"
 
 
 def round_tick(price: float, tick_size: float) -> float:
