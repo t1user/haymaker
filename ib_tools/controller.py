@@ -57,6 +57,72 @@ class Controller:
             callback(trade)
         self.sm.register_cancel(trade, exec_model)
 
+    @staticmethod
+    def check_for_orphan_positions(
+        trades: list[ibi.Trade], positions: list[ibi.Position]
+    ) -> list[ibi.Position]:
+        """
+        Positions that don't have associated stop-loss orders.
+        """
+
+        trade_contracts = set(
+            [t.contract for t in trades if t.order.orderType in ("STP", "TRAIL")]
+        )
+        position_contracts = set([p.contract for p in positions])
+        orphan_contracts = position_contracts - trade_contracts
+        orphan_positions = [
+            position for position in positions if position.contract in orphan_contracts
+        ]
+        return orphan_positions
+
+    @staticmethod
+    def check_for_orphan_trades(
+        trades: list[ibi.Trade], positions: list[ibi.Position]
+    ) -> list[ibi.Trade]:
+        """
+        Trades for stop-loss orders without associated positions.
+        """
+
+        trade_contracts = set(
+            [t.contract for t in trades if t.order.orderType in ("STP", "TRAIL")]
+        )
+        position_contracts = set([p.contract for p in positions])
+        orphan_contracts = trade_contracts - position_contracts
+        orphan_trades = [
+            trade for trade in trades if trade.contract in orphan_contracts
+        ]
+        return orphan_trades
+
+    @staticmethod
+    def positions_and_stop_losses(
+        trades: list[ibi.Trade], positions: list[ibi.Position]
+    ) -> dict[ibi.Contract, tuple[float, float]]:
+        positions_by_contract = {
+            position.contract: position.position for position in positions
+        }
+
+        trades_by_contract = {
+            trade.contract: (
+                trade.order.totalQuantity * -misc.action_to_signal(trade.order.action)
+            )
+            for trade in trades
+            if trade.order.orderType in ("STP", "TRAIL")
+        }
+
+        contracts = set([*positions_by_contract.keys(), *trades_by_contract.keys()])
+        contracts_dict = {
+            contract: (
+                positions_by_contract.get(contract, 0),
+                trades_by_contract.get(contract, 0),
+            )
+            for contract in contracts
+        }
+        diff = {}
+        for contract, amounts in contracts_dict.items():
+            if amounts[0] != amounts[1]:
+                diff[contract] = amounts
+        return diff
+
 
 class Handlers(IBHandlers):
     def __init__(self, ib):
