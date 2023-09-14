@@ -37,8 +37,7 @@ class StateMachine(Atom):
             - Which portion of the position in a contract is allocated
               to this strategy
 
-        2. Is strategy locked?  # NOT SURE ABOUT THIS ONE.  MAYBE
-           SIGNAL SHOULD DO IT.
+        2. Is strategy locked?
 
         3. After (re)start:
 
@@ -90,15 +89,19 @@ class StateMachine(Atom):
         self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
 
-        self._data: dict[str, AbstractExecModel] = {}
+        self.data: dict[str, AbstractExecModel] = {}
         self._locks: dict[str, Lock] = {}
         self._position_dict: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
         self.orders: dict[int, OrderInfo] = {}
 
     def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
+        """
+        Register all strategies that are in use.
+        """
+
         strategy = data["strategy"]
         exec_model, *_ = args
-        self._data[strategy] = exec_model
+        self.data[strategy] = exec_model
 
     async def onData(self, data, *args) -> None:
         try:
@@ -107,17 +110,24 @@ class StateMachine(Atom):
             target_position = data["target_position"]
             exec_model = data["exec_model"]
             await asyncio.sleep(60)
-            self.verify_integrity(strategy, amount, target_position, exec_model)
+            self.verify_transaction_integrity(
+                strategy, amount, target_position, exec_model
+            )
         except KeyError as e:
             log.error("Unable to verify transaction integrity", data, e)
 
-    def verify_integrity(
+    def verify_transaction_integrity(
         self,
         strategy: str,
         amount: float,
         target_position: Signal,
         exec_model: AbstractExecModel,
     ) -> None:
+        """
+        Is the postion resulting from transaction the same as was
+        required?
+        """
+
         try:
             assert np.sign(exec_model.position) == target_position
             assert exec_model.position == abs(amount)
@@ -133,11 +143,16 @@ class StateMachine(Atom):
         for it.  Otherwise :class:`AbstractExecModel` contains info
         about `strategy`'s position.
         """
-        exec_model_or_none = self._data.get(strategy)
+
+        exec_model_or_none = self.data.get(strategy)
         if exec_model_or_none:
             return exec_model_or_none.position
         else:
             return 0.0
+
+    # def verify_positions_and_orders(self):
+    #     positions = self.ib.positions()
+    #     orders = self.ib.openOrders()
 
     def locked(self, strategy: str) -> Lock:
         lock_or_none = self._locks.get(strategy)
@@ -161,10 +176,15 @@ class StateMachine(Atom):
     def total_positions(self, contract: ibi.Contract) -> float:
         total = 0.0
         for strategy_key in self._position_dict[contract]:
-            total += self._data[strategy_key].position
+            total += self.data[strategy_key].position
         return total
 
     def verify_positions(self) -> list[ibi.Contract]:
+        """
+        Compare positions actually held with broker with position
+        records.  Return differences if any and log an error.
+        """
+
         difference = []
         broker_positions = self.ib.positions()
         for position in broker_positions:
@@ -189,6 +209,7 @@ class StateMachine(Atom):
 
         This method is called by :class:`Controller`.
         """
+
         self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade)
 
         if action.upper() == "OPEN":
@@ -207,6 +228,7 @@ class StateMachine(Atom):
         This is an event handler (callback).  Connected (subscribed)
         to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
         """
+
         await asyncio.sleep(0.1)
         if not self.orders.get(trade.order.orderId):
             log.critical(f"Unknown trade in the system {trade}")

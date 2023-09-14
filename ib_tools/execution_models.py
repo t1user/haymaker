@@ -82,6 +82,7 @@ class AbstractExecModel(Atom, ABC):
         self.active_contract: Optional[ibi.Contract] = None
         self.position: float = 0.0
         self.strategy: str = ""
+        self.position_id = ""
         self.params: Params = {"open": {}, "close": {}}
         self.controller = controller or CONTROLLER
 
@@ -195,13 +196,13 @@ class BaseExecModel(AbstractExecModel):
         self,
         contract: ibi.Contract,
         order: ibi.Order,
-        label: str,
+        action: str,
         callback: Optional[Callable[[ibi.Trade], None]] = None,
     ) -> None:
         self.controller.trade(
             contract,
             order,
-            label,
+            action,
             self,
             partial(self.trade_callback, callback=callback),
         )

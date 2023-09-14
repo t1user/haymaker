@@ -30,7 +30,7 @@ class AbstractBaseBlotter(ABC):
     to be logged and filter out some known issues with ib-insync reports.
 
     Blotter works in one of two modes:
-    - tade by trades save to store: suitable for live trading
+    - trade by trades save to store: suitable for live trading
     - save to store only full blotter: suitable for backtest (save time
       on i/o)
     """
@@ -41,9 +41,7 @@ class AbstractBaseBlotter(ABC):
         self.unsaved_trades: Dict = {}
         self.com_reports: Dict = {}
 
-    def log_trade(
-        self, trade: Trade, comms: List[CommissionReport], reason: str = ""
-    ) -> None:
+    def log_trade(self, trade: Trade, comms: List[CommissionReport], **kwargs) -> None:
         sys_time = datetime.now()
         time = trade.log[-1].time
         contract = trade.contract.localSymbol
@@ -59,7 +57,6 @@ class AbstractBaseBlotter(ABC):
         ]
         order_id = trade.order.orderId
         perm_id = trade.order.permId
-        reason = reason
         row = {
             "sys_time": sys_time,  # actual system time
             "time": time,  # what ib considers to be current time
@@ -70,15 +67,16 @@ class AbstractBaseBlotter(ABC):
             "exec_ids": exec_ids,  # list of execution ids
             "order_id": order_id,  # non unique
             "perm_id": perm_id,  # unique trade id
-            "reason": reason,  # note passed by the trading system
             "commission": sum([comm.commission for comm in comms]),
             "realizedPNL": sum([comm.realizedPNL for comm in comms]),
         }
+        if kwargs:
+            row.update(kwargs)
         self.save_report(row)
         log.debug(f"trade report saved: {row}")
 
     def log_commission(
-        self, trade: Trade, fill: Fill, comm_report: CommissionReport, reason: str
+        self, trade: Trade, fill: Fill, comm_report: CommissionReport, **kwargs
     ):
         """
         Get trades that have all CommissionReport filled and log them.
@@ -95,7 +93,7 @@ class AbstractBaseBlotter(ABC):
             fill for fill in trade.fills if fill.execution.permId == trade.order.permId
         ]
         if trade.isDone() and (len(comms) == len(fills)):
-            self.log_trade(trade, comms, reason)
+            self.log_trade(trade, comms, **kwargs)
 
     def save_report(self, report: Dict[str, Any]) -> None:
         """
