@@ -214,3 +214,139 @@ class Handlers(WatchdogHandlers, IBHandlers):
     def __init__(self, ib, dog):
         IBHandlers.__init__(self, ib)
         WatchdogHandlers.__init__(self, dog)
+
+
+class Handlers(IBHandlers):
+    def __init__(self, ib):
+        IBHandlers.__init__(self, ib)
+        # self.ib.newOrderEvent += self.onNewOrder
+        # self.ib.openOrderEvent += self.onOpenOrder
+        # self.ib.cancelOrderEvent += self.onCancelOrder
+        # self.ib.orderModifyEvent += self.onModifyOrder
+        # self.ib.orderStatusEvent += self.onOrderStatus
+        # ib.execDetailsEvent += self.onExecDetails
+        # ib.commissionReportEvent += self.onCommissionReport
+        # self.ib.positionEvent += self.onPosition
+        # self.ib.accountValueEvent += self.onAccountValue
+        # self.ib.accountSummaryEvent += self.onAccountSummary
+
+    def onNewOrder(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onOpenOrder(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onCancelOrder(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onModifyOrder(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onOrderStatus(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onExecDetails(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+        pass
+
+    def onCommissionReport(
+        self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
+    ) -> None:
+        pass
+
+    def onPosition(self, trade: ibi.Position) -> None:
+        pass
+
+    def onAccountValue(self, value: ibi.AccountValue) -> None:
+        pass
+
+    def onAccountSummary(self, value: ibi.AccountValue) -> None:
+        pass
+
+
+class BaseTradeHandler:
+    def attach_events(self, trade: ibi.Trade) -> None:
+        trade.statusEvent += self.onStatus
+        trade.modifyEvent += self.onModify
+        trade.fillEvent += self.onFill
+        trade.commissionReportEvent += self.onCommissionReport
+        trade.filledEvent += self.onFilled
+        trade.cancelEvent += self.onCancel
+        trade.cancelledEvent += self.onCancelled
+
+        log.debug(
+            f"Events attached for {trade.contract.localSymbol}"
+            f" {trade.order.action} {trade.order.totalQuantity}"
+            f" {trade.order.orderType}"
+        )
+
+    def onStatus(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onModify(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onFill(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+        pass
+
+    def onCommissionReport(
+        self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
+    ) -> None:
+        pass
+
+    def onFilled(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onCancel(self, trade: ibi.Trade) -> None:
+        pass
+
+    def onCancelled(self, trade: ibi.Trade) -> None:
+        pass
+
+    def __repr__(self):
+        items = (f"{k}={v}" for k, v in self.__dict__.items())
+        return f"{self.__class__.__name__}({', '.join(items)})"
+
+
+class ReportTradeHandler(BaseTradeHandler):
+    def __init__(self, blotter: AbstractBaseBlotter = CSV_BLOTTER) -> None:
+        self.blotter = blotter
+
+    def attach_events(self, trade: ibi.Trade, reason: str = "") -> None:
+        report_trade = partial(self.onFilled, reason)
+        report_commission = partial(self.onCommissionReport, reason)
+        trade.statusEvent += self.onStatus
+        trade.modifyEvent += self.onModify
+        trade.fillEvent += self.onFill
+        trade.commissionReportEvent += report_commission
+        trade.filledEvent += report_trade
+        trade.cancelEvent += self.onCancel
+        trade.cancelledEvent += self.onCancelled
+
+    def report_trade(self, reason: str, trade: ibi.Trade) -> None:
+        message = (
+            f"{reason} trade filled: {trade.contract.localSymbol} "
+            f"{trade.order.action} {trade.orderStatus.filled}"
+            f"@{trade.orderStatus.avgFillPrice}"
+        )
+        log.info(message)
+
+    def report_cancel(self, trade: ibi.Trade) -> None:
+        message = (
+            f"{trade.order.orderType} order {trade.order.action} "
+            f"{trade.orderStatus.remaining} (of "
+            f"{trade.order.totalQuantity}) for "
+            f"{trade.contract.localSymbol} cancelled"
+        )
+        log.info(message)
+
+    def report_modification(self, trade):
+        log.debug(f"Order modified: {trade.order}")
+
+    def report_commission(
+        self,
+        reason: str,
+        trade: ibi.Trade,
+        fill: ibi.Fill,
+        report: ibi.CommissionReport,
+    ) -> None:
+        self.blotter.log_commission(trade, fill, report, reason)
