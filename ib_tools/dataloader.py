@@ -124,20 +124,33 @@ class DataWriter:
         self._objects: List[DownloadContainer] = []
         self._queue: List[DownloadContainer] = []
         self._current_object: Optional[DownloadContainer] = None
+        print(f"About to schedule task for: {self.contract}, head: {self.head}")
         self.schedule_tasks()
+        print("Success!!!!! Task schdeudled")
         log.info(f"Object initialized: {self}")
 
     def onPulse(self, time: datetime):
         self.write_to_store()
 
     def schedule_tasks(self):
-        update = self.update()
-        backfill = self.backfill()
-        fill_gaps = self.fill_gaps()
-
-        log.debug(f"update for {self.c}: {update}")
-        log.debug(f"backfill for {self.c}: {backfill}")
-        log.debug(f"fill_gaps for {self.c}: {fill_gaps}")
+        try:
+            update = self.update()
+            log.debug(f"update for {self.c}: {update}")
+        except Exception as e1:
+            log.error(f"Exception for update, line 139: {e1} ignored, {self.c}")
+            update = None
+        try:
+            backfill = self.backfill()
+            log.debug(f"backfill for {self.c}: {backfill}")
+        except Exception as e2:
+            log.error(f"Exception for backfill, line 144: {e2} ignored, {self.c}")
+            backfill = None
+        try:
+            fill_gaps = self.fill_gaps()
+            log.debug(f"fill_gaps for {self.c}: {fill_gaps}")
+        except Exception as e3:
+            log.error(f"Exception for fill_gaps, line 149: {e3} ignored, {self.c}")
+            fill_gaps = None
 
         if backfill:
             log.debug(f"{self.c} queued for backfill")
@@ -191,7 +204,12 @@ class DataWriter:
             self.schedule_next()
 
     def write_to_store(self):
-        _data = self._current_object.data
+        try:
+            _data = self._current_object.data
+        except AttributeError:
+            log.warning("Ignoring data, line 210")
+            _data = None
+
         if _data is not None:
             data = self.data
             if data is None:
@@ -276,10 +294,11 @@ class DataWriter:
         # this gets string and datetime error TODO
         try:
             delta = self.next_date - self._current_object.from_date
-        except:
+        except Exception as e:
             log.error(
                 f"next date: {self.next_date}, "
-                f"from_date: {self._current_object.from_date}"
+                f"from_date: {self._current_object.from_date}",
+                e,
             )
             raise
 
@@ -314,7 +333,9 @@ class DataWriter:
     @property
     def to_date(self) -> Optional[datetime]:
         """Latest point in datastore"""
-        return self.data.index.max() if self.data is not None else None
+        date = self.data.index.max() if self.data is not None else None
+        # if data.tzinfo is None or data.tzinfo.utcoffset(data) is None:
+        return date
 
     def __repr__(self):
         return (
@@ -347,7 +368,7 @@ class DownloadContainer:
             self.bars.append(bars)
             self.current_date = bars[0].date
         elif self.current_date:
-            log.error(f"Cannot download data past {self.current_date}")
+            log.warning(f"Cannot download data past {self.current_date}")
             # might be a bank holiday (TODO: this needs to be tested)
             # self.current_date -= timedelta(days=1)
             return None
@@ -378,9 +399,11 @@ class DownloadContainer:
             # TODO: this throws errors occationally
             try:
                 return self.df.index.min() <= self.from_date
-            except:
+            except Exception as e:
                 log.error(
-                    f"ERROR index.min: {self.df.index.min()}, from_date: {self.from_date}"
+                    f"ERROR index.min: {self.df.index.min()}, "
+                    f"from_date: {self.from_date}",
+                    e,
                 )
                 raise
         else:
@@ -450,17 +473,20 @@ class ContractHolder:
                         )
                     )
                     continue
-
-                self.items.append(
-                    DataWriter(
-                        self.store,
-                        o,
-                        headTimeStamp,
-                        barSize=self.barSize,
-                        wts=self.wts,
-                        aggression=self.aggression,
+                try:
+                    self.items.append(
+                        DataWriter(
+                            self.store,
+                            o,
+                            headTimeStamp,
+                            barSize=self.barSize,
+                            wts=self.wts,
+                            aggression=self.aggression,
+                        )
                     )
-                )
+                except Exception as e:
+                    log.warning(f"Error ignored for object {o}", e)
+                    raise
 
         def __call__(self):
             log.debug("holder called")
