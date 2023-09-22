@@ -213,6 +213,21 @@ class TestPipe:
         assert pipe[1].onStart_checksum == 1
         assert pipe[2].onStart_checksum == 1
 
+    def test_one_atom_in_multiple_pipes(self):
+        a = NewAtom("a")
+        b = NewAtom("b")
+        c = NewAtom("c")
+        d = NewAtom("d")
+        e = NewAtom("e")
+        Pipe(a, b, c)
+        Pipe(a, d, e)
+        a.dataEvent.emit("test_message")
+        a.startEvent.emit("another_test_message")
+        assert c.onData_string == "test_message_b"
+        assert e.onData_string == "test_message_d"
+        assert c.onStart_string == "another_test_message_b"
+        assert e.onStart_string == "another_test_message_d"
+
 
 class TestUnionPipe:
     @pytest.fixture
@@ -446,3 +461,18 @@ def test_onData_sets_attribute_downstream_if_dict_passed():
     source.run()
 
     assert out.strategy == inner1.strategy == inner2.strategy == "xxx"
+
+
+def test_event_error_logged(caplog):
+    class CustomException(Exception):
+        pass
+
+    class ErrorRaisingAtom(NewAtom):
+        def onData(*args):
+            raise CustomException("CustomError")
+
+    a = NewAtom("a")
+    b = ErrorRaisingAtom("b")
+    a.connect(b)
+    a.dataEvent.emit("xxx")
+    assert "Event error dataEvent: CustomError" in caplog.messages

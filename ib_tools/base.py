@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from typing import Any, ClassVar, Coroutine, Protocol, Sequence, Type, Union
 
 import ib_insync as ibi
-from logbook import Logger  # type: ignore
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 ContractOrSequence = Union[Sequence[ibi.Contract], ibi.Contract]
@@ -32,6 +32,7 @@ class Atom:
 
     def __init__(self) -> None:
         self._createEvents()
+        self._log = logging.getLogger(f"{self.__module__}.{self.__class__.__name__}")
 
     def __setattr__(self, prop, val):
         if prop == "contract":
@@ -49,6 +50,9 @@ class Atom:
         self.startEvent = ibi.Event("startEven")
         self.dataEvent = ibi.Event("dataEvent")
 
+    def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
+        self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
+
     def onStart(self, data, *args) -> None:
         if isinstance(data, dict):
             for k, v in data.items():
@@ -58,16 +62,19 @@ class Atom:
     def onData(self, data, *args) -> Union[Coroutine[Any, Any, None], None]:
         pass
 
-    def connect(self, *targets) -> "Atom":
+    def connect(self, *targets: Atom) -> "Atom":
         for t in targets:
             self.startEvent.disconnect_obj(t)
-            self.startEvent.connect(t.onStart, keep_ref=True)
+            self.startEvent.connect(
+                t.onStart, error=self._log_event_error, keep_ref=True
+            )
             self.dataEvent.disconnect_obj(t)
-            self.dataEvent.connect(t.onData, keep_ref=True)
+            self.dataEvent.connect(t.onData, error=self._log_event_error, keep_ref=True)
         return self
 
     def disconnect(self, *targets) -> "Atom":
         for t in targets:
+            # the same target cannot be connected more than once
             self.startEvent.disconnect_obj(t)
             self.dataEvent.disconnect_obj(t)
         return self
@@ -76,7 +83,7 @@ class Atom:
         self.startEvent.clear()
         self.dataEvent.clear()
 
-    def pipe(self, *targets: "Atom") -> Pipe:
+    def pipe(self, *targets: Atom) -> Pipe:
         return Pipe(self, *targets)
 
     def union(self, *targets: "Atom") -> "Atom":
@@ -89,7 +96,11 @@ class Atom:
 
     def __repr__(self) -> str:
         attrs = ", ".join(
-            (f"{i}={j}" for i, j in self.__dict__.items() if "Event" not in str(i))
+            (
+                f"{i}={j}"
+                for i, j in self.__dict__.items()
+                if "Event" not in str(i) and i != "_log"
+            )
         )
         return f"{self.__class__.__name__}({attrs})"
 
@@ -106,15 +117,12 @@ class Pipe(Atom):
         self.startEvent = self.first.startEvent
         self.dataEvent = self.first.dataEvent
 
-    def connect(self, *targets) -> "Pipe":
+    def connect(self, *targets: Atom) -> "Pipe":
         for target in targets:
-            self.last.startEvent.disconnect_obj(target)
-            self.last.startEvent.connect(target.onStart, keep_ref=True)
-            self.last.dataEvent.disconnect_obj(target)
-            self.last.dataEvent.connect(target.onData, keep_ref=True)
+            self.last.connect(target)
         return self
 
-    def disconnect(self, *targets) -> "Pipe":
+    def disconnect(self, *targets: Atom) -> "Pipe":
         for target in targets:
             self.last.startEvent.disconnect_obj(target)
             self.last.dataEvent.disconnect_obj(target)
