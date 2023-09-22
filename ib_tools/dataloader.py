@@ -137,12 +137,14 @@ class DataWriter:
         except Exception as e1:
             log.error(f"Exception for update, line 139: {e1} ignored, {self.c}")
             update = None
+
         try:
             backfill = self.backfill()
             log.debug(f"backfill for {self.c}: {backfill}")
         except Exception as e2:
             log.error(f"Exception for backfill, line 144: {e2} ignored, {self.c}")
             backfill = None
+
         try:
             fill_gaps = self.fill_gaps()
             log.debug(f"fill_gaps for {self.c}: {fill_gaps}")

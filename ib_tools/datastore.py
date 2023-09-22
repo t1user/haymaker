@@ -390,10 +390,14 @@ class ArcticStore(AbstractBaseStore):
         self.store = self.db[lib]
 
     def write(
-        self, symbol: Union[str, Contract], data: pd.DataFrame, meta: dict = {}
+        self,
+        symbol: Union[str, Contract],
+        data: pd.DataFrame,
+        meta: Optional[dict] = None,
     ) -> str:
         metadata = self._metadata(symbol)
-        metadata.update(meta)
+        if meta is not None:
+            metadata.update(meta)
         version = self.store.write(
             self._symbol(symbol),
             self._clean(data),

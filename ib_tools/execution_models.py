@@ -110,7 +110,7 @@ class AbstractExecModel(Atom, ABC):
         :meth:`self.__init__`, examples of good orders potentially
         defined this way: `stop_order`, `tp_order`
 
-        params: must be a dict of keywords and values accepted by
+        params: must be a :py:`dict` of keywords and values accepted by
         ibi.Order
 
         Returns:
