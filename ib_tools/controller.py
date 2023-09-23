@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Final, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import ib_insync as ibi
-
-from ib_tools.blotter import CsvBlotter
 
 from . import misc
 from .blotter import AbstractBaseBlotter

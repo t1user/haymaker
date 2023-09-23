@@ -82,13 +82,20 @@ class AbstractExecModel(Atom, ABC):
         self.active_contract: Optional[ibi.Contract] = None
         self.position: float = 0.0
         self.strategy: str = ""
-        self.position_id = ""
         self.params: Params = {"open": {}, "close": {}}
         self.controller = controller or CONTROLLER
 
         if orders:
             for key, order_kwargs in orders.items():
                 setattr(self, key, order_kwargs)
+
+        self.position_id_generator = misc.Counter()
+        self._position_id = ""
+
+    def position_id(self, reset=False):
+        if reset or not self._position_id:
+            self._position_id = self.position_id_generator()
+        return self._position_id
 
     def _order(self, key: OrderKey, params: dict) -> ibi.Order:
         """
@@ -184,13 +191,6 @@ class BaseExecModel(AbstractExecModel):
         super().__init__(orders, controller=controller)
         self.position = 0
         self.active_contract = None
-        self.position_id_generator = misc.Counter()
-        self._position_id = ""
-
-    def position_id(self, reset=False):
-        if reset or not self._position_id:
-            self._position_id = self.position_id_generator()
-        return self._position_id
 
     def trade(
         self,
