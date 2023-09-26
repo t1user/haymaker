@@ -594,8 +594,12 @@ def perf(
         if len(sorted_gains) > 0:
             stats["Best trade"] = sorted_gains[-1]
             stats["Worst trade"] = sorted_gains[0]
-            stats["Best trade as % of pnl"] = sorted_gains[-1] / positions["pnl"].sum()
-            stats["Worst trade as % of pnl"] = sorted_gains[0] / positions["pnl"].sum()
+            stats["Best trade as % of pnl"] = abs(
+                sorted_gains[-1] / positions["pnl"].sum()
+            )
+            stats["Worst trade as % of pnl"] = abs(
+                sorted_gains[0] / positions["pnl"].sum()
+            )
         days = daily.returns.count()
         num_pos = win_pos.pnl.count() + loss_pos.pnl.count()
         stats["Positions per day"] = num_pos / days
