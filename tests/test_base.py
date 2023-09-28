@@ -1,9 +1,10 @@
+import logging
 from typing import Sequence, Union
 
 import ib_insync as ibi
 import pytest
 
-from ib_tools.base import CONTRACT_LIST, Atom, Pipe
+from ib_tools.base import Atom, Pipe
 
 
 class NewAtom(Atom):
@@ -337,7 +338,7 @@ class TestContractList:
                 self.contract = x
 
         NewNewAtom("a")
-        assert "a" in CONTRACT_LIST
+        assert "a" in Atom.contracts
 
     def test_newly_added_contract_in_Atom_list(self, atom_with_contract):
         atom_with_contract.contract = "b"
@@ -358,7 +359,7 @@ class TestContractList:
         self, atom_with_contract, contract
     ):
         atom_with_contract
-        alt_list = CONTRACT_LIST
+        alt_list = Atom.contracts
         assert alt_list == [contract]
 
     def test_contract_list_works_with_lists(
@@ -378,13 +379,13 @@ class Test_keep_adding_contracts:
 
     def test_single(self):
         self.atom("a")
-        assert "a" in CONTRACT_LIST
+        assert "a" in Atom.contracts
 
     def test_list(self):
         self.atom(["x", "y", "z"])
-        assert "x" in CONTRACT_LIST
-        assert "y" in CONTRACT_LIST
-        assert "z" in CONTRACT_LIST
+        assert "x" in Atom.contracts
+        assert "y" in Atom.contracts
+        assert "z" in Atom.contracts
         assert "z" in Atom.contracts
 
 
@@ -476,3 +477,21 @@ def test_event_error_logged(caplog):
     a.connect(b)
     a.dataEvent.emit("xxx")
     assert "Event error dataEvent: CustomError" in caplog.messages
+
+
+def test_event_error_logged_with_correct_logger(caplog):
+    class CustomException(Exception):
+        pass
+
+    class ErrorRaisingAtom(NewAtom):
+        def onData(*args):
+            raise CustomException("CustomError")
+
+    a = NewAtom("a")
+    b = ErrorRaisingAtom("b")
+    a.connect(b)
+    a.dataEvent.emit("xxx")
+    print(caplog.messages)
+    assert caplog.record_tuples == [
+        ("test_base.NewAtom", logging.ERROR, "Event error dataEvent: CustomError")
+    ]
