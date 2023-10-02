@@ -4,7 +4,7 @@ from typing import Sequence, Union
 import ib_insync as ibi
 import pytest
 
-from ib_tools.base import Atom, Pipe
+from ib_tools.base import CONTRACT_LIST, Atom, Pipe
 
 
 class NewAtom(Atom):
@@ -338,7 +338,7 @@ class TestContractList:
                 self.contract = x
 
         NewNewAtom("a")
-        assert "a" in Atom.contracts
+        assert "a" in CONTRACT_LIST
 
     def test_newly_added_contract_in_Atom_list(self, atom_with_contract):
         atom_with_contract.contract = "b"
@@ -359,7 +359,7 @@ class TestContractList:
         self, atom_with_contract, contract
     ):
         atom_with_contract
-        alt_list = Atom.contracts
+        alt_list = CONTRACT_LIST
         assert alt_list == [contract]
 
     def test_contract_list_works_with_lists(
@@ -379,13 +379,13 @@ class Test_keep_adding_contracts:
 
     def test_single(self):
         self.atom("a")
-        assert "a" in Atom.contracts
+        assert "a" in CONTRACT_LIST
 
     def test_list(self):
         self.atom(["x", "y", "z"])
-        assert "x" in Atom.contracts
-        assert "y" in Atom.contracts
-        assert "z" in Atom.contracts
+        assert "x" in CONTRACT_LIST
+        assert "y" in CONTRACT_LIST
+        assert "z" in CONTRACT_LIST
         assert "z" in Atom.contracts
 
 

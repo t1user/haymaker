@@ -10,6 +10,7 @@ log = logging.getLogger(__name__)
 
 
 ContractOrSequence = Union[Sequence[ibi.Contract], ibi.Contract]
+CONTRACT_LIST: list[ibi.Contract] = list()
 
 
 class Atom:
@@ -22,7 +23,7 @@ class Atom:
     _contract: ContractOrSequence
     events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
 
-    contracts: list[ibi.Contract] = list()
+    contracts = CONTRACT_LIST
 
     @classmethod
     def set_ib(cls, ib: ibi.IB) -> None:
