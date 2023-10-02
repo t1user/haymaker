@@ -47,8 +47,10 @@ class AbstractBaseBrick(Atom, ABC):
 
 @dataclass
 class AbstractDfBrick(AbstractBaseBrick):
-    signal_column: str = "signal"
-    df_columns: Optional[list[str]] = None
+    strategy: str
+    contract: ibi.Contract
+    signal_column: str
+    df_columns: Optional[list[str]]
 
     def _signal(self, data) -> dict:
         d = self.df_row(data).to_dict()
