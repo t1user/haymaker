@@ -229,8 +229,8 @@ class BaseExecModel(AbstractExecModel):
         data["exec_model"] = self
         try:
             action = data["action"]
-        except KeyError as e:
-            log.error(f"Missing data for {self}", e)
+        except KeyError:
+            log.exception(f"Missing data for {self}")
             return
 
         if action == "OPEN":
@@ -263,14 +263,14 @@ class BaseExecModel(AbstractExecModel):
             contract = data["contract"]
             signal = data["signal"]
             amount = int(data["amount"])
-        except KeyError as e:
-            log.error("Insufficient data to execute OPEN transaction", e)
+        except KeyError:
+            log.exception("Insufficient data to execute OPEN transaction")
         self.active_contract = contract
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         order = self._order("open_order", order_kwargs)
         log.debug(
             f"{self.strategy} {contract.localSymbol} executing OPEN signal {signal}.",
-            data,
+            extra={"data": data},
         )
         self.trade(contract, order, "OPEN", callback)
 
@@ -284,7 +284,7 @@ class BaseExecModel(AbstractExecModel):
         log.debug(
             f"{self.strategy} {self.active_contract.localSymbol} executing close signal"
             f" {signal}",
-            data,
+            extra={"data": data},
         )
         self.trade(self.active_contract, order, "CLOSE", callback)
 
@@ -409,7 +409,7 @@ class EventDrivenExecModel(BaseExecModel):
         """
 
         for bracket in self.brackets.copy():
-            log.info("attempt to re-attach bracket", bracket)
+            log.info(f"attempt to re-attach bracket {bracket}")
             self.brackets.remove(bracket)
             self._place_bracket(
                 bracket.trade.contract,

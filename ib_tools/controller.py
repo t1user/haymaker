@@ -189,7 +189,7 @@ class Controller:
             try:
                 exec_model = self.sm.data["strategy"]
             except KeyError:
-                log.error(
+                log.exception(
                     "Missing strategy records in `state machine`. "
                     "Unable to write full transaction data to blotter."
                 )

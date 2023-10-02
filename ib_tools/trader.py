@@ -14,7 +14,7 @@ class Trader:
         ib: ibi.IB,
     ) -> None:
         self.ib = ib
-        log.debug("Trader initialized", self)
+        log.debug(f"Trader initialized: {self}")
 
     def trades(self) -> list[ibi.Trade]:
         return self.ib.openTrades()

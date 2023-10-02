@@ -113,8 +113,10 @@ class StateMachine(Atom):
             self.verify_transaction_integrity(
                 strategy, amount, target_position, exec_model
             )
-        except KeyError as e:
-            log.error("Unable to verify transaction integrity", data, e)
+        except KeyError:
+            log.exception(
+                "Unable to verify transaction integrity", extra={"data": data}
+            )
 
     def verify_transaction_integrity(
         self,
@@ -131,8 +133,8 @@ class StateMachine(Atom):
         try:
             assert np.sign(exec_model.position) == target_position
             assert exec_model.position == abs(amount)
-        except AssertionError as e:
-            log.critical(f"Wrong position for {strategy}", e)
+        except AssertionError:
+            log.critical(f"Wrong position for {strategy}", exc_info=True)
 
     def position(self, strategy: str) -> float:
         """

@@ -34,10 +34,10 @@ def update_details(
         try:
             contract = eval(store.read_metadata(key)["repr"])
         except TypeError:
-            log.error(f"Metadata missing for {key}")
+            log.exception(f"Metadata missing for {key}")
             continue
         except NameError as e:
-            log.error(f"Wrong name: {e}")
+            log.exception(f"Wrong name: {e}")
             print(e)
             continue
         contract.update(includeExpired=True)
@@ -65,7 +65,7 @@ def update_details(
         try:
             commissions[k] = ib.whatIfOrder(v, order).commission
         except AttributeError:
-            log.error(f"Commission unavailable for: {k}")
+            log.exception(f"Commission unavailable for: {k}")
             commissions[k] = np.nan
         print(f"Commission for {k} saved.")
 

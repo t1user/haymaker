@@ -55,7 +55,9 @@ class BinarySignalProcessor(Atom):
             strategy = data["strategy"]
             signal = data["signal"]
         except KeyError:
-            log.error("Missing signal data", data, self)
+            log.exception(
+                "Missing signal data", extra={"data": data, "signal_processor": self}
+            )
         if result := self.process_signal(strategy, signal):
             if self.strategy is None:
                 self.strategy = strategy  # TODO: fix this

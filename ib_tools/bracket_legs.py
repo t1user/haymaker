@@ -51,7 +51,8 @@ class AbstractBracketLeg(ABC):
         except KeyError:
             log.critical(
                 f"No details for contract {self.contract}. "
-                f"Will attempt to send bracket order with minTick 0.25 "
+                f"Will attempt to send bracket order with minTick 0.25 ",
+                exc_info=True,
             )
             minTick = 0.25
         return minTick

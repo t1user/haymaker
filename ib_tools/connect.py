@@ -1,6 +1,5 @@
 # import asyncio
 import sys
-from random import randint
 from typing import Callable
 
 from ib_insync import IB, Contract, util

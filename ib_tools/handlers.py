@@ -1,15 +1,15 @@
 import asyncio
+import logging
 from contextlib import suppress
 from functools import partial
 from typing import Dict, Set, Tuple
 
 import ib_insync as ibi
 from ib_insync.ibcontroller import Watchdog
-from logbook import Logger  # type: ignore
 
 from ib_tools.blotter import AbstractBaseBlotter
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 class WatchdogHandlers:
@@ -73,7 +73,7 @@ class IBHandlers:
         self.ib.setTimeout()
 
     def onConnected(self):
-        log.debug("Connection established")
+        log.info("Connection established")
         self.account = self.ib.client.getAccounts()[0]
         self.ib.accountSummary()
         self.ib.reqPnL(self.account)
@@ -91,19 +91,19 @@ class IBHandlers:
         pass
 
     def onNewOrder(self, trade: ibi.Trade):
-        log.info(f"New order: {trade.contract.localSymbol} {trade.order}")
+        log.debug(f"New order: {trade.contract.localSymbol} {trade.order}")
 
     def onModifyOrder(self, trade: ibi.Trade):
-        log.info(f"Order modified: {trade.contract.localSymbol} {trade.order}")
+        log.debug(f"Order modified: {trade.contract.localSymbol} {trade.order}")
 
     def onCancelOrder(self, trade: ibi.Trade):
-        log.info(f"Order canceled: {trade.contract.localSymbol} {trade.order}")
+        log.debug(f"Order canceled: {trade.contract.localSymbol} {trade.order}")
 
     def onOpenOrder(self, trade: ibi.Trade):
         pass
 
     def onOrderStatus(self, trade: ibi.Trade):
-        log.info(
+        log.debug(
             f"Order status {trade.contract.localSymbol} "
             f"{trade.order.action} {trade.order.totalQuantity} "
             f"{trade.order.orderType} - "
@@ -181,7 +181,7 @@ class IBHandlers:
             10182,
             1100,
         ):
-            log.error(f"ERROR: {errorCode} {errorString} {contract}")
+            log.debug(f"ERROR: {errorCode} {errorString} {contract}")
 
     async def onTimeout(self, idlePeriod: float):
         # Possibly better to just use modified Watchdog instead of that
@@ -343,7 +343,7 @@ class ReportTradeHandler(BaseTradeHandler):
         log.info(message)
 
     def report_modification(self, trade):
-        log.debug(f"Order modified: {trade.order}")
+        log.info(f"Order modified: {trade.order}")
 
     def report_commission(
         self,
