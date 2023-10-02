@@ -67,8 +67,7 @@ def df_brick():
             return df
 
     return Brick(
-        "eska_NQ",
-        ibi.ContFuture("NQ", "CME"),
+        "eska_NQ", ibi.ContFuture("NQ", "CME"), signal_column="signal", df_columns=None
     )
 
 

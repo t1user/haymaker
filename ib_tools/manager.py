@@ -14,12 +14,12 @@ log = logging.getLogger(__name__)
 
 # ### Singletons ####
 IB: Final[ibi.IB] = ibi.IB()
+Atom.set_ib(IB)
 STATE_MACHINE: Final[StateMachine] = StateMachine()
 CONTROLLER: Final[Controller] = Controller(STATE_MACHINE, IB)
 CONTRACT_DETAILS: dict[ibi.Contract, ibi.ContractDetails] = {}
 # ###################
 
-Atom.set_ib(IB)
 
 logging.basicConfig(level=logging.DEBUG)
 
