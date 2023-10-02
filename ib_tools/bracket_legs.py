@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
 import ib_insync as ibi
 
-from .logger import Logger
 from .misc import round_tick
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 # ====================================================================================
 # Parameters for various types of orders packaged into objects required by exec models

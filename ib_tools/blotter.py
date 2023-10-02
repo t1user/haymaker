@@ -1,4 +1,5 @@
 import csv
+import logging
 import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -11,12 +12,11 @@ from arctic import TICK_STORE, Arctic  # type: ignore
 from ib_insync import util
 from ib_insync.objects import CommissionReport, Fill
 from ib_insync.order import Trade
-from logbook import Logger  # type: ignore
 from pymongo import MongoClient  # type: ignore
 
 from ib_tools.utilities import default_path
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 class AbstractBaseBlotter(ABC):

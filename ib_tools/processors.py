@@ -1,12 +1,12 @@
+import logging
 from typing import List, Union
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
-from logbook import Logger  # type: ignore
 
 from ib_tools.base import Atom
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 class BarAggregator(Atom):

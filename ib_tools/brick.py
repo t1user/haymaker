@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -8,6 +9,8 @@ import ib_insync as ibi
 import pandas as pd
 
 from ib_tools.base import Atom
+
+log = logging.getLogger(__name__)
 
 
 @dataclass

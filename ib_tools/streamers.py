@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Awaitable, Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
-from logbook import Logger  # type: ignore
 
 from ib_tools.base import Atom
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 class Streamer(Atom):

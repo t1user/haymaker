@@ -1,24 +1,25 @@
 import sys
 from datetime import datetime
+
 from logbook import (  # type: ignore
-    Logger,  # type: ignore
-    StreamHandler,
-    TimedRotatingFileHandler,
-    FileHandler,
     DEBUG,
     INFO,
+    FileHandler,
+    Logger,
+    StreamHandler,
+    TimedRotatingFileHandler,
     set_datetime_format,
 )
 
 from ib_tools.utilities import default_path
 
-
 log = Logger(__name__)
 
 
 def logger(
-    name: str, stream_level=DEBUG, file_level=DEBUG, folder: str = default_path("logs")
+    name: str, stream_level=DEBUG, file_level=DEBUG, folder_: str = ""
 ) -> Logger:
+    folder = default_path(folder_ or "logs")
     set_datetime_format("local")
     StreamHandler(sys.stdout, level=stream_level, bubble=True).push_application()
     # filename = __file__.split('/')[-1][:-3]
@@ -32,11 +33,9 @@ def logger(
 
 
 def rotating_logger_with_shell(
-    name: str,
-    stream_level=DEBUG,
-    file_level=DEBUG,
-    folder: str = default_path("test_logs"),
+    name: str, stream_level=DEBUG, file_level=DEBUG, folder_: str = ""
 ) -> Logger:
+    folder = default_path(folder_ or "logs")
     set_datetime_format("local")
     StreamHandler(sys.stdout, level=stream_level, bubble=True).push_application()
     TimedRotatingFileHandler(
@@ -49,9 +48,8 @@ def rotating_logger_with_shell(
     return Logger(name)
 
 
-def rotating_logger(
-    name: str, level=INFO, folder: str = default_path("test_logs")
-) -> Logger:
+def rotating_logger(name: str, level=INFO, folder_: str = "") -> Logger:
+    folder = default_path(folder_ or "logs")
     set_datetime_format("local")
     TimedRotatingFileHandler(
         f"{folder}/{name}.log",

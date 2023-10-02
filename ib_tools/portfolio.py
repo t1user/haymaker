@@ -22,7 +22,7 @@ class AbstractBasePortfolio(Atom, ABC):
     instances, which should delegate allocation to this object.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.strategy: str = ""
         super().__init__()
 

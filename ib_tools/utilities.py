@@ -1,16 +1,15 @@
-from typing import Optional, Union, List
-from pathlib import Path
+import logging
 from os import makedirs, path
+from pathlib import Path
+from typing import List, Optional, Union
 
 import numpy as np
-from ib_insync import IB, MarketOrder, ContFuture, Future  # noqa
-from logbook import Logger  # type: ignore
 from arctic import Arctic  # type: ignore
+from ib_insync import IB, ContFuture, Future, MarketOrder  # noqa
 
 from ib_tools.datastore import AbstractBaseStore
 
-
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 def update_details(

@@ -1,10 +1,13 @@
 import asyncio
 from contextlib import suppress
+from functools import partial
 from typing import Dict, Set, Tuple
 
 import ib_insync as ibi
 from ib_insync.ibcontroller import Watchdog
 from logbook import Logger  # type: ignore
+
+from ib_tools.blotter import AbstractBaseBlotter
 
 log = Logger(__name__)
 
@@ -216,7 +219,7 @@ class Handlers(WatchdogHandlers, IBHandlers):
         WatchdogHandlers.__init__(self, dog)
 
 
-class Handlers(IBHandlers):
+class AltHandlers(IBHandlers):
     def __init__(self, ib):
         IBHandlers.__init__(self, ib)
         # self.ib.newOrderEvent += self.onNewOrder
@@ -308,7 +311,7 @@ class BaseTradeHandler:
 
 
 class ReportTradeHandler(BaseTradeHandler):
-    def __init__(self, blotter: AbstractBaseBlotter = CSV_BLOTTER) -> None:
+    def __init__(self, blotter: AbstractBaseBlotter) -> None:
         self.blotter = blotter
 
     def attach_events(self, trade: ibi.Trade, reason: str = "") -> None:
@@ -349,4 +352,4 @@ class ReportTradeHandler(BaseTradeHandler):
         fill: ibi.Fill,
         report: ibi.CommissionReport,
     ) -> None:
-        self.blotter.log_commission(trade, fill, report, reason)
+        self.blotter.log_commission(trade, fill, report, reason=reason)

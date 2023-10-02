@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Optional
@@ -5,10 +6,9 @@ from typing import List, Optional
 import pandas as pd
 from arctic import Arctic
 
-from ib_tools.logger import Logger
 from ib_tools.utilities import default_path
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 class AbstractBaseSaver(ABC):

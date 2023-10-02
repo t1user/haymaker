@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Callable, Optional
 
 import ib_insync as ibi
 
 from . import misc
 from .blotter import AbstractBaseBlotter
-from .logger import Logger
 from .state_machine import StateMachine
 from .trader import Trader
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 class Controller:
@@ -194,7 +194,7 @@ class Controller:
                     "Unable to write full transaction data to blotter."
                 )
             if exec_model:
-                position_id = exec_model.position_id
+                position_id = exec_model.position_id()
                 params = exec_model.params.get(action.lower(), {})
             else:
                 position_id = ""
