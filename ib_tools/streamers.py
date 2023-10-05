@@ -18,13 +18,20 @@ class Streamer(Atom):
     instances: list["Streamer"] = []
 
     def __new__(cls, *args, **kwargs):
+        """
+        Keep track of all :class:`.Streamer` instances created so that they
+        can be re-started on reboot.
+        """
         obj = super().__new__(cls)
         cls.instances.append(obj)
         return obj
 
     @classmethod
     def awaitables(cls) -> list[Awaitable]:
-        """All instantiated streamers. Used to put in asyncio.gather"""
+        """
+        Coroutines from all instantiated streamers.  Used to put in
+        :py:`asyncio.gather`
+        """
         return [s.run() for s in cls.instances]
 
     def streaming_func(self):
@@ -83,7 +90,7 @@ class HistoricalDataStreamer(Streamer):
         # TODO: consider if it's needed
         self.ib.reqMktData(self.contract, "221")
 
-    async def run(self):
+    async def run(self) -> None:
         self.onStart(None, None)
         log.debug(f"Requesting bars for {self.contract.localSymbol}")
         if self.last_bar_date:

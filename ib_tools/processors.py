@@ -10,15 +10,28 @@ log = logging.getLogger(__name__)
 
 
 class BarAggregator(Atom):
-    def __init__(self, filter: Union["CountBars", "VolumeBars", "TimeBars"]):
+    def __init__(
+        self,
+        filter: Union["CountBars", "VolumeBars", "TimeBars"],
+        incremental_only: bool = False,
+    ):
         Atom.__init__(self)
+        self._incremental_only = incremental_only
         self._filter = filter
         self._filter += self.onDataBar
 
     def onDataBar(self, bars, *args):
-        self.dataEvent.emit(bars[-1])
+        if self._incremental_only:
+            self.dataEvent.emit(bars[-1])
+        else:
+            self.dataEvent.emit(bars)
 
     def onData(self, data, *args) -> None:
+        if isinstance(data, list):
+            log.warning(
+                "Streamers with incremental_only=False have not been properly tested!"
+            )
+            data = data[-1]
         self._filter.on_source(data)
 
 
@@ -75,9 +88,7 @@ class VolumeBars(ev.Op):
         self.bars = BarList()
 
     def on_source(self, new_bar: ibi.BarData, *args):
-        if not self.bars or abs(self.bars[-1].volume) >= abs(
-            self._volume
-        ):  # remove abs!!!
+        if not self.bars or self.bars[-1].volume >= self._volume:
             bar = new_bar
             bar.average = bar.average * bar.volume
             self.bars.append(bar)
@@ -89,7 +100,8 @@ class VolumeBars(ev.Op):
             bar.volume += new_bar.volume
             bar.average = new_bar.average * new_bar.volume
             bar.barCount += new_bar.barCount
-        if bar.volume == self._volume:
+            # log.debug(f"accumulated volume: {bar.volume}/{self._volume}")
+        if bar.volume >= self._volume:
             bar.average = bar.average / bar.volume
             self.bars.updateEvent.emit(self.bars, True)
             self.emit(self.bars)

@@ -23,12 +23,14 @@ class AbstractBasePortfolio(Atom, ABC):
     """
 
     def __init__(self) -> None:
-        self.strategy: str = ""
         super().__init__()
+        self.strategy: str = ""
+        log.debug(f"Porfolio initiated: {self}")
 
     def onData(self, data: dict, *args) -> None:
         amount = self.allocate(data)
         data.update({"amount": amount})
+        log.debug(f"Portfolio processed data: {data}")
         self.dataEvent.emit(data)
 
     @abstractmethod
@@ -42,8 +44,8 @@ class AbstractBasePortfolio(Atom, ABC):
 
 class FixedPortfolio(AbstractBasePortfolio):
     def __init__(self, amount: float = 1) -> None:
-        self.amount = amount
         super().__init__()
+        self.amount = amount
 
     def allocate(self, data) -> float:
         if data["signal"] == "CLOSE":

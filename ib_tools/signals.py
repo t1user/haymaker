@@ -46,9 +46,12 @@ class BinarySignalProcessor(Atom):
     """
 
     def __init__(self, state_machine: Optional[StateMachine] = None) -> None:
+        super().__init__()
         self.sm = state_machine or STATE_MACHINE
         self.strategy: Optional[str] = None
-        super().__init__()
+        log.debug(f"Signal processor initialized: {self}")
+
+    # onStart should set strategy
 
     def onData(self, data: dict[str, Any], *args) -> None:
         try:
@@ -59,6 +62,7 @@ class BinarySignalProcessor(Atom):
                 "Missing signal data", extra={"data": data, "signal_processor": self}
             )
         if result := self.process_signal(strategy, signal):
+            # ######### WHAT THE FUCK???? ###############
             if self.strategy is None:
                 self.strategy = strategy  # TODO: fix this
 
@@ -82,6 +86,10 @@ class BinarySignalProcessor(Atom):
             )
 
     def process_signal(self, strategy: str, signal: Signal) -> Optional[Action]:
+        if signal:
+            log.debug(
+                f"strategy: {strategy}, position: {self.position(strategy)}, signal: {signal}"
+            )
         if not self.position(strategy):
             return self.process_no_position(strategy, signal)
         elif not self.same_direction(strategy, signal):
@@ -124,6 +132,9 @@ class BinarySignalProcessor(Atom):
 
     def process_non_zero_signal_no_position(self, strategy, signal):
         return "OPEN"
+
+    def __repr__(self):
+        return self.__class__.__name__ + "()"
 
 
 class LockableBinarySignalProcessor(BinarySignalProcessor):
