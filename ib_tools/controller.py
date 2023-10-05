@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional
 
 import ib_insync as ibi
@@ -38,14 +39,16 @@ class Controller:
         self.ib = ib
         self.trader = Trader(self.ib)
         self._attach_logging_events()
+        self.blotter = blotter
         if blotter:
-            self.blotter = blotter
             self.ib.commissionReportEvent += self.onCommissionReport
+        log.debug(f"Controller initiated: {self}")
 
     def _attach_logging_events(self):
-        self.ib.newOrderEvent += self.log_trade
+        self.ib.newOrderEvent += self.log_new_order
         self.ib.cancelOrderEvent += self.log_cancel
         self.ib.orderModifyEvent += self.log_modification
+        self.ib.errorEvent += self.log_error
 
     def trade(
         self,
@@ -59,6 +62,7 @@ class Controller:
         if callback is not None:
             callback(trade)
         self.sm.register_order(exec_model.strategy, action, trade)
+        trade.filledEvent += partial(self.log_trade, reason=action)
 
     def cancel(
         self,
@@ -205,7 +209,11 @@ class Controller:
                 "position_id": position_id,
                 "params": params,
             }
+            assert self.blotter is not None
             self.blotter.log_commission(trade, fill, report, **kwargs)
+
+    def log_new_order(self, trade: ibi.Trade) -> None:
+        log.debug(f"New order {trade.order} for {trade.contract.localSymbol}")
 
     def log_trade(self, trade: ibi.Trade, reason: str = "") -> None:
         log.info(
@@ -225,6 +233,21 @@ class Controller:
     def log_modification(self, trade: ibi.Trade) -> None:
         log.debug(f"Order modified: {trade.order}")
 
+    def log_error(
+        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+    ) -> None:
+        if errorCode < 400:
+            try:
+                strategy, action, trade = self.sm.orders[reqId]
+                order = trade.order
+            except KeyError:
+                strategy, action, trade, order = None, None, None, None
+
+            log.error(
+                f"Error {errorCode}: {errorString} {contract}, "
+                f"{strategy} | {action} | {order}"
+            )
+
     # def trace_manual_orders(self, trade: ibi.Trade) -> None:
     #     """
     #     Attempt to attach reporting events for orders entered
@@ -242,3 +265,6 @@ class Controller:
     #         log.debug(f"{contract.localSymbol} order placed: {order}")
     #     else:
     #         log.debug(f"{contract.localSymbol} order updated: {order}")
+
+    def __repr__(self):
+        return f"{__class__.__name__}({self.sm, self.ib, self.blotter})"
