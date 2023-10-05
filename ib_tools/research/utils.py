@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 import pandas as pd  # type: ignore
 
+from ib_tools.indicators import combine_signals, range_crosser, signal_generator  # noqa
 from ib_tools.research.signal_converters import sig_pos
 from ib_tools.research.stop import stop_loss
 from ib_tools.research.vector_backtester import Results
@@ -181,20 +182,6 @@ def m_proc(dfs, func):
     results = [pool.apply_async(func, args=(df,)) for df in dfs]
     output = [p.get() for p in results]
     return output
-
-
-def signal_generator(series: pd.Series, threshold: float = 0) -> pd.Series:
-    return (
-        (series > threshold) * 1 - (series < threshold) * 1 + (series == threshold) * 0
-    )
-
-
-def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
-    """
-    Series2 is filter. If input signals disagree, no signal is
-    output. If they agree, series1 signal is the output.
-    """
-    return ((np.sign(series1) == np.sign(series2)) * series1).astype(int, copy=False)
 
 
 def crosser(ind: pd.Series, threshold: float) -> pd.Series:
@@ -393,71 +380,6 @@ def upsample(
     joined_df[propagate] = joined_df[propagate].ffill()
     warn_blip(propagate)
     return joined_df.dropna().astype(types)  # type: ignore
-
-
-def inout_range(
-    s: pd.Series, threshold: float = 0, inout: Literal["inside", "outside"] = "inside"
-) -> pd.Series:
-    """Given a threshold, return True/False series indicating whether s prices
-    are inside/outside (-threshold, threshold) range.
-    """
-
-    if threshold == 0:
-        raise ValueError("theshold cannot be zero, use: <zero_crosser>")
-    threshold = abs(threshold)
-    excess = s.abs() - threshold
-    if inout == "outside":
-        result = excess > 0
-    elif inout == "inside":
-        result = excess < 0
-    else:
-        raise ValueError("'inout' parameter must be either 'inside' or 'outside'")
-    result.name = inout
-    return result
-
-
-def _range_entry(s: pd.Series) -> pd.Series:
-    """
-    s is the output of inout_range
-    """
-
-    return -((s.shift() - s) * s).fillna(0)
-
-
-def _signed_range_entry(entry: pd.Series, sign: pd.Series) -> pd.Series:
-    """
-    entry is the output of _range_entry
-
-    entry will be signed same as price when entering range.
-    """
-
-    return (_range_entry(entry) * np.sign(sign)).astype(int)
-
-
-def range_blip(
-    indicator: pd.Series,
-    threshold: float = 0,
-    inout: Literal["inside", "outside"] = "inside",
-) -> pd.Series:
-    """
-    Blip when indicator enters or leaves range. Blip is signed the same as sign of
-    the indicator.
-    """
-
-    indicator = indicator.dropna()
-
-    r = inout_range(indicator, threshold, inout)
-    return _signed_range_entry(_range_entry(r), indicator)
-
-
-def zero_crosser(indicator: pd.Series) -> pd.Series:
-    """
-    Blip when indicator crosses zero. Blip is signed the same as sign of the indicator.
-    When indicator value is exactly zero at some point, next value will be treated as
-    having crossed zero.
-    """
-    indicator = indicator.fillna(0)
-    return (((indicator.shift() * indicator) <= 0) * np.sign(indicator)).astype(int)
 
 
 def rolling_weighted_mean(
