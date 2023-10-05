@@ -70,6 +70,11 @@ class AbstractBracketLeg(ABC):
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
         ...
 
+    def __repr__(self):
+        attrs = ", ".join((f"{i}={j}" for i, j in self.__dict__.items()))
+
+        return f"{__class__.__name__}({attrs})"
+
 
 class FixedStop(AbstractBracketLeg):
     """

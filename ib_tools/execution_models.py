@@ -269,7 +269,7 @@ class BaseExecModel(AbstractExecModel):
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         order = self._order("open_order", order_kwargs)
         log.debug(
-            f"{self.strategy} {contract.localSymbol} executing OPEN signal {signal}.",
+            f"{self.strategy} {contract.localSymbol} processing OPEN signal {signal}",
             extra={"data": data},
         )
         self.trade(contract, order, "OPEN", callback)
@@ -298,8 +298,11 @@ class BaseExecModel(AbstractExecModel):
         self.close(data, connect_open_after_close)
 
     def __repr__(self):
-        items = (f"{k}={v}" for k, v in self.__dict__.items())
-        return f"{self.__class__.__name__}({', '.join(items)})"
+        return self.__class__.__name__ + "()"
+
+    # def __repr__(self):
+    #     items = (f"{k}={v}" for k, v in self.__dict__.items())
+    #     return f"{self.__class__.__name__}({', '.join(items)})"
 
 
 class EventDrivenExecModel(BaseExecModel):
@@ -314,8 +317,8 @@ class EventDrivenExecModel(BaseExecModel):
     existing position.
     """
 
-    _stop_order: dict[str, Any]
-    _tp_order: dict[str, Any]
+    _stop_order: dict[str, Any] = {}
+    _tp_order: dict[str, Any] = {}
     stop_order = OrderFieldValidator()
     tp_order = OrderFieldValidator()
 
@@ -332,7 +335,7 @@ class EventDrivenExecModel(BaseExecModel):
         super().__init__(orders, controller=controller)
         if not stop:
             log.error(
-                f"{self.__class__.__name__} must be initialized with a stop order"
+                f"{self.__class__.__name__} must be initialized with a stop bracket leg"
             )
         self.stop = stop
         self.take_profit = take_profit
@@ -373,13 +376,12 @@ class EventDrivenExecModel(BaseExecModel):
             # take profit may be None
             if bracket:
                 bracket_kwargs = bracket(params, trade)
-                bracket_kwargs.update(self._dynamic_bracket_kwargs)  # type: ignore
+                bracket_kwargs.update(self._dynamic_bracket_kwargs())
                 self._place_bracket(trade.contract, order_key, label, bracket_kwargs)
 
     def _place_bracket(self, contract, order_key, label, bracket_kwargs):
         def save_bracket(
             label: BracketLabel,
-            order_key: OrderKey,
             bracket_kwargs: dict,
             trade: ibi.Trade,
         ):
@@ -389,7 +391,7 @@ class EventDrivenExecModel(BaseExecModel):
             trade.filledEvent += self.bracket_filled_callback
             save_bracket(label, bracket_kwargs, trade)
 
-        order = self._order(order_key, bracket_kwargs)  # type: ignore
+        order = self._order(order_key, bracket_kwargs)
         log.debug(f"bracket order: {order}")
         self.trade(
             contract,
@@ -431,6 +433,9 @@ class EventDrivenExecModel(BaseExecModel):
                 self.brackets.remove(bracket)
 
     bracket_filled_callback = remove_bracket
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.stop}, {self.take_profit})"
 
 
 class OcaExecModel(EventDrivenExecModel):

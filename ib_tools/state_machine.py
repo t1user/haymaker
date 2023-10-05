@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
 
 
-log = logging.getLogger("__name__")
+log = logging.getLogger(__name__)
 
 
 class OrderInfo(NamedTuple):
@@ -93,6 +93,8 @@ class StateMachine(Atom):
         self._locks: dict[str, Lock] = {}
         self._position_dict: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
         self.orders: dict[int, OrderInfo] = {}
+        # keeps open orders for every strategy
+        self._orders_by_strategy: defaultdict[str, list[ibi.Order]] = defaultdict(list)
 
     def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
         """
@@ -109,7 +111,7 @@ class StateMachine(Atom):
             amount = data["amount"]
             target_position = data["target_position"]
             exec_model = data["exec_model"]
-            await asyncio.sleep(60)
+            await asyncio.sleep(10)
             self.verify_transaction_integrity(
                 strategy, amount, target_position, exec_model
             )
@@ -145,11 +147,24 @@ class StateMachine(Atom):
         for it.  Otherwise :class:`AbstractExecModel` contains info
         about `strategy`'s position.
         """
-
+        # Check not only position but pending position openning orders
+        # THIS IS NOT READY !!!!
         exec_model_or_none = self.data.get(strategy)
         if exec_model_or_none:
             return exec_model_or_none.position
         else:
+            log.debug(
+                f"Verifying open orders for {strategy}: "
+                f"{self._orders_by_strategy[strategy]}"
+            )
+            if orders := self._orders_by_strategy[strategy]:
+                log.debug(f"Existing orders: {orders}")
+                for order in orders:
+                    log.debug(f"Orders record: {self.orders[order.orderId]}")
+                    if self.orders[order.orderId].action == "OPEN":
+                        return order.totalQuantity * (
+                            1 if order.action.upper() == "BUY" else -1
+                        )
             return 0.0
 
     # def verify_positions_and_orders(self):
@@ -165,10 +180,11 @@ class StateMachine(Atom):
 
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
         self._locks[strategy] = 1 if trade.order.action == "BUY" else -1
+        log.debug(f"Registered lock: {strategy}: {self._locks[strategy]}")
 
     def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
         """Additional methods may be added in sub-class"""
-
+        # When exactly should the lock be registered to prevent double-dip?
         self.register_lock(strategy, trade)
 
     def register_position(self, strategy: str, trade: ibi.Trade):
@@ -213,11 +229,16 @@ class StateMachine(Atom):
         """
 
         self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade)
+        self._orders_by_strategy[strategy].append(trade.order)
 
         if action.upper() == "OPEN":
             trade.filledEvent += partial(self.new_position_callbacks, strategy)
 
         trade.filledEvent += partial(self.register_position, strategy)
+        log.debug(
+            f"Registered order: {trade.order.orderId}, orders: {self.orders}, "
+            f"orders_by_strategy: {self._orders_by_strategy}"
+        )
 
     def register_cancel(self, trade, exec_model):
         del self.order[trade.order.orderId]
@@ -239,6 +260,10 @@ class StateMachine(Atom):
         if trade.orderStatus.status == ibi.OrderStatus.Inactive:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
+        if trade.isDone():
+            strategy = self.orders[trade.order.orderId].strategy
+            self._orders_by_strategy[strategy].remove(trade.order)
+            log.debug(f"Order removed from active list: {trade.order}")
 
     def handleErrorEvent(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
@@ -246,3 +271,6 @@ class StateMachine(Atom):
         # reqId is most likely orderId
         # order rejected is errorCode = 201
         pass
+
+    def __repr__(self):
+        return self.__class__.__name__ + "()"
