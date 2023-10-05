@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Optional
+from functools import singledispatchmethod
+from typing import Any, Optional, Union
 
 import ib_insync as ibi
 import pandas as pd
 
 from ib_tools.base import Atom
+from ib_tools.processors import BarList
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ class AbstractBaseBrick(Atom, ABC):
 
     def __post_init__(self):
         Atom.__init__(self)
+        self._log = logging.getLogger(f"{self.strategy}.{self.__class__.__name__}")
 
     def onStart(self, data, *args):
         self.startEvent.emit({"strategy": self.strategy}, self)
@@ -59,9 +62,19 @@ class AbstractDfBrick(AbstractBaseBrick):
         d["signal"] = d[self.signal_column]
         return d
 
+    @singledispatchmethod
     def df_row(self, data) -> pd.Series:
+        return self.df(pd.DataFrame(data)).iloc[-1]
+
+    @df_row.register
+    def _(self, data: pd.DataFrame) -> pd.Series:
         return self.df(data).iloc[-1]
 
+    @df_row.register(BarList)
+    @df_row.register(ibi.BarDataList)
+    def _(self, data: Union[BarList, ibi.BarDataList]) -> pd.Series:
+        return self.df(ibi.util.df(data)).iloc[-1]
+
     @abstractmethod
-    def df(self, data) -> pd.DataFrame:
+    def df(self, data: pd.DataFrame) -> pd.DataFrame:
         ...

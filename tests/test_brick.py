@@ -1,6 +1,10 @@
+import os
+import pickle
+
 import ib_insync as ibi
 import pandas as pd
 import pytest
+from config import TEST_ROOT  # type: ignore
 
 from ib_tools.base import Atom
 from ib_tools.brick import AbstractBaseBrick, AbstractDfBrick
@@ -61,8 +65,7 @@ def data_for_df():
 @pytest.fixture
 def df_brick():
     class Brick(AbstractDfBrick):
-        def df(self, data):
-            df = pd.DataFrame(data)
+        def df(self, df):
             df["price_plus"] = df["price"] + 1
             return df
 
@@ -118,3 +121,35 @@ def test_column_selection_works(df_connected_brick, data_for_df):
         "signal",
         "price_plus",
     ]
+
+
+@pytest.fixture
+def basic_df_brick():
+    class Brick(AbstractDfBrick):
+        def df(self, df):
+            return df
+
+    return Brick(
+        "eska_NQ", ibi.ContFuture("NQ", "CME"), signal_column="signal", df_columns=None
+    )
+
+
+def test_dispatchmethod_df(basic_df_brick, data_for_df):
+    df = pd.DataFrame(data_for_df)
+    row = basic_df_brick.df_row(df)
+    # hard to compare two Series, easier with dicts, result the same
+    assert row.to_dict() == df.iloc[-1].to_dict()
+
+
+def test_dispatchmethod_barList(basic_df_brick):
+    with open(os.path.join(TEST_ROOT, "data/data_from_streamer.pickle"), "rb") as f:
+        data = pickle.loads(f.read())
+    row_dict = data[-1].dict()
+    row = basic_df_brick.df_row(data)
+    assert row_dict == row.to_dict()
+
+
+def test_dispatchmethod_dict(basic_df_brick, data_for_df):
+    out = basic_df_brick.df_row(data_for_df)
+    should_be = pd.DataFrame(data_for_df).iloc[-1]
+    assert out.to_dict() == should_be.to_dict()
