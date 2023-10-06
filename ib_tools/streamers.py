@@ -89,6 +89,7 @@ class HistoricalDataStreamer(Streamer):
         # this starts subscription so that current price is readily available from ib
         # TODO: consider if it's needed
         self.ib.reqMktData(self.contract, "221")
+        self.startEvent.emit(data, self)
 
     async def run(self) -> None:
         self.onStart(None, None)

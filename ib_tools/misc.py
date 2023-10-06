@@ -14,7 +14,8 @@ def action(signal: int) -> str:
     Convert numerical trade direction signal (-1, or 1) to string
     ('BUY' or 'SELL').
     """
-    assert signal in (-1, 1), "Invalid trade signal"
+    assert signal in (-1, 1), f"Invalid trade signal {signal}"
+
     return "BUY" if signal == 1 else "SELL"
 
 

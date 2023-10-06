@@ -13,7 +13,7 @@ import numpy as np
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import AbstractBracketLeg
 from ib_tools.controller import Controller
-from ib_tools.manager import CONTROLLER
+from ib_tools.manager import CONTROLLER, STATE_MACHINE
 
 from . import misc
 
@@ -91,6 +91,10 @@ class AbstractExecModel(Atom, ABC):
 
         self.position_id_generator = misc.Counter()
         self._position_id = ""
+        self.connect_state_machine()
+
+    def connect_state_machine(self):
+        self += STATE_MACHINE
 
     def position_id(self, reset=False):
         if reset or not self._position_id:
@@ -179,7 +183,7 @@ class BaseExecModel(AbstractExecModel):
         "algoParams": [ibi.TagValue("adaptivePriority", "Normal")],
         "tif": "Day",
     }
-    _close_order = {"oderType": "MKT", "tif": "GTC"}
+    _close_order = {"orderType": "MKT", "tif": "GTC"}
     _reverse_order = _open_order
 
     def __init__(
@@ -189,8 +193,6 @@ class BaseExecModel(AbstractExecModel):
         controller: Optional[Controller] = None,
     ) -> None:
         super().__init__(orders, controller=controller)
-        self.position = 0
-        self.active_contract = None
 
     def trade(
         self,
@@ -247,8 +249,14 @@ class BaseExecModel(AbstractExecModel):
     def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         if fill.execution.side == "BOT":
             self.position += fill.execution.shares
+            log.debug(
+                f"Registered BUY for {self.strategy} --> position: {self.position}"
+            )
         elif fill.execution.side == "SLD":
             self.position -= fill.execution.shares
+            log.debug(
+                f"Registered SELL for {self.strategy} --> position: {self.position}"
+            )
         else:
             log.critical(
                 f"Abiguous fill: {fill} for order: {trade.order} for "
@@ -277,13 +285,22 @@ class BaseExecModel(AbstractExecModel):
     def close(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
         data["position_id"] = self.position_id()
         self.params["close"].update(data)
+        # THIS IS TEMPORARY ----> FIX ---> TODO
+        if self.position == 0:
+            log.error("Abandoning CLOSE position for {self.contract}")
+            return
+
         signal = -np.sign(self.position)
-        order_kwargs = {"action": misc.action(signal), "totalQuantity": self.position}
+
+        order_kwargs = {
+            "action": misc.action(signal),
+            "totalQuantity": self.position,
+        }
         order = self._order("close_order", order_kwargs)
         assert self.active_contract is not None
         log.debug(
             f"{self.strategy} {self.active_contract.localSymbol} executing close signal"
-            f" {signal}",
+            f" {signal}, current position: {self.position}",
             extra={"data": data},
         )
         self.trade(self.active_contract, order, "CLOSE", callback)
@@ -435,7 +452,10 @@ class EventDrivenExecModel(BaseExecModel):
     bracket_filled_callback = remove_bracket
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({self.stop}, {self.take_profit})"
+        return (
+            f"{self.__class__.__name__}(stop={self.stop}, "
+            f"take_profit={self.take_profit})"
+        )
 
 
 class OcaExecModel(EventDrivenExecModel):

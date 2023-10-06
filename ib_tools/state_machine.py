@@ -104,6 +104,7 @@ class StateMachine(Atom):
         strategy = data["strategy"]
         exec_model, *_ = args
         self.data[strategy] = exec_model
+        log.info(f"Registered execution models {self.data}")
 
     async def onData(self, data, *args) -> None:
         try:
@@ -148,24 +149,18 @@ class StateMachine(Atom):
         about `strategy`'s position.
         """
         # Check not only position but pending position openning orders
-        # THIS IS NOT READY !!!!
+        # THIS IS NOT READY !!!! -----> TODO
         exec_model_or_none = self.data.get(strategy)
-        if exec_model_or_none:
+        assert exec_model_or_none
+        if exec_model_or_none.position:
             return exec_model_or_none.position
-        else:
-            log.debug(
-                f"Verifying open orders for {strategy}: "
-                f"{self._orders_by_strategy[strategy]}"
-            )
-            if orders := self._orders_by_strategy[strategy]:
-                log.debug(f"Existing orders: {orders}")
-                for order in orders:
-                    log.debug(f"Orders record: {self.orders[order.orderId]}")
-                    if self.orders[order.orderId].action == "OPEN":
-                        return order.totalQuantity * (
-                            1 if order.action.upper() == "BUY" else -1
-                        )
-            return 0.0
+        elif orders := self._orders_by_strategy[strategy]:
+            for order in orders:
+                if self.orders[order.orderId].action == "OPEN":
+                    return order.totalQuantity * (
+                        1 if order.action.upper() == "BUY" else -1
+                    )
+        return 0.0
 
     # def verify_positions_and_orders(self):
     #     positions = self.ib.positions()
@@ -189,13 +184,28 @@ class StateMachine(Atom):
 
     def register_position(self, strategy: str, trade: ibi.Trade):
         self._position_dict[trade.contract].append(strategy)
+        log.debug(
+            f"Registered position for {trade.contract}, position: "
+            f"{self._position_dict[trade.contract]}"
+        )
         self.verify_positions()
 
-    def total_positions(self, contract: ibi.Contract) -> float:
-        total = 0.0
-        for strategy_key in self._position_dict[contract]:
-            total += self.data[strategy_key].position
-        return total
+    # def total_positions(self, contract: ibi.Contract) -> float:
+    #     total = 0.0
+    #     log.debug(f"self._position_dict[contract]={self._position_dict[contract]}")
+    #     for strategy_key in self._position_dict[contract]:
+    #         total += self.data[strategy_key].position
+    #     return total
+
+    def total_positions(self) -> defaultdict[ibi.Contract, float]:
+        d: defaultdict[ibi.Contract, float] = defaultdict(float)
+        for exec_model in self.data.values():
+            if exec_model.active_contract:
+                d[exec_model.active_contract] += exec_model.position
+        return d
+
+    def position_for_contract(self, contract: ibi.Contract) -> float:
+        return self.total_positions().get(contract) or 0.0
 
     def verify_positions(self) -> list[ibi.Contract]:
         """
@@ -206,13 +216,15 @@ class StateMachine(Atom):
         difference = []
         broker_positions = self.ib.positions()
         for position in broker_positions:
-            if position.position != self.total_positions(position.contract):
+            if position.position != self.total_positions()[position.contract]:
                 log.error(
                     f"Position discrepancy for {position.contract}, "
-                    f"mine: {self.total_positions(position.contract)}, "
+                    f"mine: {self.position_for_contract(position.contract)}, "
                     f"theirs: {position.position}"
                 )
                 difference.append(position.contract)
+            else:
+                log.info(f"Position for {position.contract} checks out.")
         return difference
 
     def register_order(self, strategy: str, action: str, trade: ibi.Trade) -> None:
@@ -235,13 +247,11 @@ class StateMachine(Atom):
             trade.filledEvent += partial(self.new_position_callbacks, strategy)
 
         trade.filledEvent += partial(self.register_position, strategy)
-        log.debug(
-            f"Registered order: {trade.order.orderId}, orders: {self.orders}, "
-            f"orders_by_strategy: {self._orders_by_strategy}"
-        )
 
     def register_cancel(self, trade, exec_model):
-        del self.order[trade.order.orderId]
+        strategy = self.orders[trade.order.orderId].strategy
+        del self.orders[trade.order.orderId]
+        self._orders_by_strategy[strategy].remove(trade.order)
 
     async def handleNewOrderEvent(self, trade: ibi.Trade) -> None:
         """
@@ -260,7 +270,7 @@ class StateMachine(Atom):
         if trade.orderStatus.status == ibi.OrderStatus.Inactive:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
-        if trade.isDone():
+        elif trade.isDone():
             strategy = self.orders[trade.order.orderId].strategy
             self._orders_by_strategy[strategy].remove(trade.order)
             log.debug(f"Order removed from active list: {trade.order}")

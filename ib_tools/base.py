@@ -56,7 +56,7 @@ class Atom:
         if isinstance(data, dict):
             for k, v in data.items():
                 setattr(self, k, v)
-            self.startEvent.emit(data, self)
+        self.startEvent.emit(data, self)
 
     def onData(self, data, *args) -> Union[Coroutine[Any, Any, None], None]:
         pass

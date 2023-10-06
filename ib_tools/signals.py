@@ -86,10 +86,6 @@ class BinarySignalProcessor(Atom):
             )
 
     def process_signal(self, strategy: str, signal: Signal) -> Optional[Action]:
-        if signal:
-            log.debug(
-                f"strategy: {strategy}, position: {self.position(strategy)}, signal: {signal}"
-            )
         if not self.position(strategy):
             return self.process_no_position(strategy, signal)
         elif not self.same_direction(strategy, signal):
