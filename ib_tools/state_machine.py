@@ -132,7 +132,11 @@ class StateMachine(Atom):
         Is the postion resulting from transaction the same as was
         required?
         """
-
+        log.debug(
+            f"Verifying transaction integrity: "
+            f"target_position direction: {target_position}, "
+            f"position: {np.sign(exec_model.position)}"
+        )
         try:
             assert np.sign(exec_model.position) == target_position
             assert exec_model.position == abs(amount)
@@ -197,15 +201,16 @@ class StateMachine(Atom):
     #         total += self.data[strategy_key].position
     #     return total
 
-    def total_positions(self) -> defaultdict[ibi.Contract, float]:
-        d: defaultdict[ibi.Contract, float] = defaultdict(float)
+    def total_positions(self) -> defaultdict[int, float]:
+        d: defaultdict[int, float] = defaultdict(float)
         for exec_model in self.data.values():
             if exec_model.active_contract:
-                d[exec_model.active_contract] += exec_model.position
+                d[exec_model.active_contract.conId] += exec_model.position
+        log.debug(f"Total positions: {d}")
         return d
 
-    def position_for_contract(self, contract: ibi.Contract) -> float:
-        return self.total_positions().get(contract) or 0.0
+    def position_for_contract(self, conId: int) -> float:
+        return self.total_positions().get(conId) or 0.0
 
     def verify_positions(self) -> list[ibi.Contract]:
         """
@@ -213,13 +218,15 @@ class StateMachine(Atom):
         records.  Return differences if any and log an error.
         """
 
-        difference = []
+        # list of contracts where differences occur
+        difference: list[ibi.Contract] = []
+
         broker_positions = self.ib.positions()
         for position in broker_positions:
-            if position.position != self.total_positions()[position.contract]:
+            if position.position != self.position_for_contract(position.contract.conId):
                 log.error(
-                    f"Position discrepancy for {position.contract}, "
-                    f"mine: {self.position_for_contract(position.contract)}, "
+                    f"Position discrepancy for {position.contract.conId}, "
+                    f"mine: {self.position_for_contract(position.contract.conId)}, "
                     f"theirs: {position.position}"
                 )
                 difference.append(position.contract)
@@ -263,17 +270,25 @@ class StateMachine(Atom):
         """
 
         await asyncio.sleep(0.1)
-        if not self.orders.get(trade.order.orderId):
-            log.critical(f"Unknown trade in the system {trade}")
+        existing_order_record = self.orders.get(trade.order.orderId)
+        if not existing_order_record:
+            log.critical(f"Unknown trade in the system {trade.order}")
+        else:
+            self._orders_by_strategy[existing_order_record.strategy].append(trade.order)
 
     def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
-        if trade.orderStatus.status == ibi.OrderStatus.Inactive:
+        if trade.order.orderId < 0:
+            log.error(f"Manual trade: {trade}")
+        elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
-            strategy = self.orders[trade.order.orderId].strategy
-            self._orders_by_strategy[strategy].remove(trade.order)
-            log.debug(f"Order removed from active list: {trade.order}")
+            try:
+                strategy = self.orders[trade.order.orderId].strategy
+                self._orders_by_strategy[strategy].remove(trade.order)
+                log.debug(f"Order removed from active list: {trade.order}")
+            except KeyError:
+                log.error(f"Unknown trade in the system: {trade}")
 
     def handleErrorEvent(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract

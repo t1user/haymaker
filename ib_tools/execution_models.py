@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import itertools
 import logging
@@ -287,7 +288,7 @@ class BaseExecModel(AbstractExecModel):
         self.params["close"].update(data)
         # THIS IS TEMPORARY ----> FIX ---> TODO
         if self.position == 0:
-            log.error("Abandoning CLOSE position for {self.contract}")
+            log.error(f"Abandoning CLOSE position for {self.active_contract}")
             return
 
         signal = -np.sign(self.position)
@@ -339,7 +340,7 @@ class EventDrivenExecModel(BaseExecModel):
     stop_order = OrderFieldValidator()
     tp_order = OrderFieldValidator()
 
-    contract: ibi.Contract  # or should it be a list of ibi.Contract ?
+    # contract: ibi.Contract  # or should it be a list of ibi.Contract ?
 
     def __init__(
         self,
@@ -358,6 +359,9 @@ class EventDrivenExecModel(BaseExecModel):
         self.take_profit = take_profit
         self.brackets: list[Bracket] = []
         log.debug(f"execution model initialized {self}")
+
+    def onData(self, data, *args):
+        super().onData(data, *args)
 
     def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
         """
