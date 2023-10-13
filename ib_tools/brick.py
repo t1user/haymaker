@@ -25,10 +25,19 @@ class AbstractBaseBrick(Atom, ABC):
         self._log = logging.getLogger(f"{self.strategy}.{self.__class__.__name__}")
 
     def onStart(self, data, *args):
-        self.startEvent.emit({"strategy": self.strategy}, self)
+        if isinstance(data, dict):
+            data["strategy"] = self.strategy
+            log.log(5, f"Updated dict on start: {data}")
+        super().onStart(data, *args)
+
+        # self.startEvent.emit({"strategy": self.strategy}, self)
 
     def onData(self, data, *args) -> None:
-        self.dataEvent.emit(self._params(**self._signal(data)))
+        startup = self.__dict__.get("startup")
+        if not startup:
+            d = self._params(**self._signal(data))
+            self._log.log(5, d)
+            self.dataEvent.emit(d)
 
     @abstractmethod
     def _signal(self, data) -> dict:
@@ -62,18 +71,28 @@ class AbstractDfBrick(AbstractBaseBrick):
         d["signal"] = d[self.signal_column]
         return d
 
-    @singledispatchmethod
     def df_row(self, data) -> pd.Series:
-        return self.df(pd.DataFrame(data)).iloc[-1]
+        return self._create_df(data).reset_index().iloc[-1]
 
-    @df_row.register
-    def _(self, data: pd.DataFrame) -> pd.Series:
-        return self.df(data).iloc[-1]
+    @singledispatchmethod
+    def _create_df(self, data) -> pd.DataFrame:
+        try:
+            d = pd.DataFrame(data).set_index("date")
+        except KeyError:
+            d = pd.DataFrame(data)
+        return self.df(d)
 
-    @df_row.register(BarList)
-    @df_row.register(ibi.BarDataList)
-    def _(self, data: Union[BarList, ibi.BarDataList]) -> pd.Series:
-        return self.df(ibi.util.df(data)).iloc[-1]
+    @_create_df.register(pd.DataFrame)
+    def _(self, data: pd.DataFrame) -> pd.DataFrame:
+        try:
+            return self.df(data).set_index("date")
+        except KeyError:
+            return self.df(data)
+
+    @_create_df.register(BarList)
+    @_create_df.register(ibi.BarDataList)
+    def _(self, data: Union[BarList, ibi.BarDataList]) -> pd.DataFrame:
+        return self.df(ibi.util.df(data).set_index("date"))
 
     @abstractmethod
     def df(self, data: pd.DataFrame) -> pd.DataFrame:

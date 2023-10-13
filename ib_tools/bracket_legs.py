@@ -87,11 +87,11 @@ class FixedStop(AbstractBracketLeg):
         )
         log.info(f"STOP LOSS PRICE: {sl_price}")
         return {
-            "order_type": "STP",
+            "orderType": "STP",
             "action": params["reverseAction"],
             "totalQuantity": params["amount"],
-            "stopPrice": sl_price,
-            "outsideRth": True,
+            "auxPrice": sl_price,
+            # "outsideRth": True,
             "tif": "GTC",
         }
 
@@ -109,52 +109,167 @@ class TrailingStop(AbstractBracketLeg):
             "action": params["reverseAction"],
             "totalQuantity": params["amount"],
             "auxPrice": distance,
-            "outsideRth": True,
+            # "outsideRth": True,
             "tif": "GTC",
         }
 
 
-class TrailingFixedStop(TrailingStop):
+class AdjustableTrailingFixedStop(TrailingStop):
     """
-    Trailing stop loss that will adjust itself to fixed stop-loss after
-    reaching specified trigger expressed as multiple of trailing points.
-    """
+    Trailing stop loss that will adjust itself to fixed stop-loss
+    after reaching specified trigger expressed as multiple of trailing
+    points.
 
-    def __init__(self, stop_multiple: float, trigger_multiple: float = 2) -> None:
-        super().__init__(stop_multiple)
-        self.trigger_multiple = trigger_multiple
+    Args:
+    =====
 
-    def _order(self, params: dict[str, Any]) -> dict[str, Any]:
-        k = super()._order(params)
-        k["adjustedOrderType"] = "STP"
-        k["adjustedStopPrice"] = (
-            params["price"] - params["direction"] * self.stop_multiple * k["auxPrice"]
-        )
+    stop_multiple: Multiple of ``vol_field`` at which the TRAIL will
+    be trailing
 
-        log.debug(f"adjusted stop price: {k['adjustedStopPrice']}")
-        k["triggerPrice"] = k["adjustedStopPrice"] - k["direction"] * k["auxPrice"]
-        log.debug(
-            f"stop loss for {params['contract'].localSymbol} "
-            f"fixed at {k['triggerPrice']}"
-        )
-        return k
+    trigger_multiple: Multiple of ``stop_multiple`` at which order
+    will be adjusted to STP
 
+    fixed_stop_multiple: Multiple of ``stop_multiple`` to calculate stop
+    price as.  Stop price distance from entry price is
+    ``fixed_stop_multiple`` * ``stop_multiple`` * ``vol_filed``
 
-class TrailingAdjustableStop(TrailingStop):
-    """
-    Trailing stop-loss that will widen trailing distance after reaching
-    pre-specified trigger.
+    vol_field: (default: ``atr``) Volatility measure used to calculate
+    stop loss distance from entry price
     """
 
     def __init__(
         self,
         stop_multiple: float,
-        sl_trigger_multiple: float,
-        sl_adjusted_multiple: float,
+        trigger_multiple: float,
+        fixed_stop_multiple: float,
+        **kwargs,
     ) -> None:
-        super().__init__(stop_multiple)
-        self.sl_trigger_multiple = sl_trigger_multiple
-        self.sl_adjusted_multiple = sl_adjusted_multiple
+        super().__init__(stop_multiple, **kwargs)
+        self.trigger_multiple = trigger_multiple
+        self.fixed_stop_multiple = fixed_stop_multiple
+
+    def _order(self, params: dict[str, Any]) -> dict[str, Any]:
+        k = super()._order(params)
+
+        # k is from super order, params is from Trade object
+        # k['auxPrice] is: stop_multiple * vol_field (a.k.a. self.sl_points)
+
+        # when trigger price is penetrated
+        k["triggerPrice"] = (
+            k["price"] - k["direction"] * k["auxPrice"] * k["trigger_multiple"]
+        )
+        # the parent order will be turned into s STP order
+        k["adjustedOrderType"] = "STP"
+        # with the given STP price
+        k["adjustedStopPrice"] = (
+            k["triggerPrice"]
+            + params["direction"] * self.fixed_stop_multiple * k["auxPrice"]
+        )
+        log.debug(
+            f"{params['contract'].localSymbol} TRAIL of: {k['auxPrice']} with trigger:"
+            f"{k['triggerPrice']} will be fixed to {k['adjustedStopPrice']}"
+        )
+        return k
+
+
+class AdjustableFixedTrailingStop(FixedStop):
+    """
+    Fixed stop loss that will adjust itself to trailing stop-loss
+    after reaching specified trigger expressed as multiple of trailing
+    points.
+
+    Args:
+    =====
+
+    stop_multiple: Multiple of ``vol_filed`` will be the distance of
+    initial STP
+
+    trigger_multiple: Multiple of ``stop_multiple`` at which
+    adjustment will be triggered
+
+    trail_multiple: Multiple of ``stop_multiple`` at which TRAIL will be
+    trialing post adjustment
+
+    vol_field: (default: ``atr``) Volatility measure used to calculate
+    stop loss distance from entry price
+    """
+
+    def __init__(
+        self,
+        stop_multiple: float,
+        trigger_multiple: float,
+        trail_multiple: float,
+        **kwargs,
+    ) -> None:
+        super().__init__(stop_multiple, **kwargs)
+        self.trigger_multiple = trigger_multiple
+        self.trail_multiple = trail_multiple
+
+    def _order(self, params: dict[str, Any]) -> dict[str, Any]:
+        k = super()._order(params)
+
+        # k is from super order, params is from Trade object
+        # k['auxPrice] is: stop_multiple * vol_field (a.k.a. self.sl_points)
+
+        # when trigger price is penetrated
+        k["triggerPrice"] = round_tick(
+            params["price"]
+            - params["sl_points"] * self.trigger_multiple * params["direction"],
+            self.min_tick,
+        )
+        # the parent order will be turned int a TRAIL order
+        k["adjustedOrderType"] = "TRAIL"
+        # trailing by an amount (0) or a percent (100)...
+        k["adjustableTrailingUnit"] = 0
+        # of ...
+        k["adjustedTrailingAmount"] = round_tick(
+            self.trail_multiple * params["sl_points"], self.min_tick
+        )
+        # with a stop price
+        k["adjustedStopPrice"] = (
+            k["triggerPrice"] + k["adjustedTrailingAmount"] * params["direction"]
+        )
+
+        log.debug(
+            f"{params['contract'].localSymbol} STP at {k['auxPrice']} "
+            f"with trigger: {k['triggerPrice']} will TRAIL at: "
+            f"{k['adjustedTrailingAmount']}"
+        )
+        return k
+
+
+class AdjustableTrailingStop(TrailingStop):
+    """
+    Trailing stop-loss that will widen trailing distance after
+    reaching pre-specified trigger.
+
+    Args:
+    =====
+
+    stop_multiple: Multiple of ``vol_field`` at which the TRAIL will
+    initially be trailing
+
+    trigger_multiple: Multiple of ``stop_multiple`` at which order
+    trailing distance will be adjusted
+
+    adjusted_multiple: Multiple of ``stop_multiple`` at which TRAIL
+    will be trailing after adjustment; i.e. the trailing amount will be:
+    ``vol_field`` * ``stop_multiple`` * ``adjusted_multiple``
+
+    vol_field: (default: ``atr``) Volatility measure used to calculate
+    stop loss distance from entry price
+    """
+
+    def __init__(
+        self,
+        stop_multiple: float,
+        trigger_multiple: float,
+        adjusted_multiple: float,
+        **kwargs,
+    ) -> None:
+        super().__init__(stop_multiple, **kwargs)
+        self.trigger_multiple = trigger_multiple
+        self.adjusted_multiple = adjusted_multiple
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
         k = super()._order(params)
@@ -162,19 +277,21 @@ class TrailingAdjustableStop(TrailingStop):
         # when trigger is penetrated
         k["triggerPrice"] = (
             params["price"]
-            - params["direction"] * self.sl_trigger_multiple * k["auxPrice"]
+            - params["direction"] * self.trigger_multiple * k["auxPrice"]
         )
         # sl order will remain trailing order
         k["adjustedOrderType"] = "TRAIL"
         # with a stop price of
         k["adjustedStopPrice"] = (
             k["triggerPrice"]
-            + params["direction"] * k["auxPrice"] * self.sl_adjusted_multiple
+            + params["direction"] * k["auxPrice"] * self.adjusted_multiple
         )
         # being trailed by fixed amount
         k["adjustableTrailingUnit"] = 0
         # of:
-        k["adjustedTrailingAmount"] = k["auxPrice"] * self.sl_adjusted_multiple
+        k["adjustedTrailingAmount"] = round_tick(
+            k["auxPrice"] * self.adjusted_multiple, self.min_tick
+        )
         return k
 
 
@@ -185,8 +302,8 @@ class TakeProfitAsStopMultiple(AbstractBracketLeg):
     initialization.
     """
 
-    def __init__(self, stop_multiple: float, tp_multiple: float = 2) -> None:
-        super().__init__(stop_multiple)
+    def __init__(self, stop_multiple: float, tp_multiple: float, **kwargs) -> None:
+        super().__init__(stop_multiple, **kwargs)
         self.tp_multiple = tp_multiple
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -214,8 +331,8 @@ class FlexibleTakeProfitAsStopMultiple(AbstractBracketLeg):
 
     """
 
-    def __init__(self, stop_multiple: float, tp_multiple: float) -> None:
-        super().__init__(stop_multiple)
+    def __init__(self, stop_multiple: float, tp_multiple: float, **kwargs) -> None:
+        super().__init__(stop_multiple, **kwargs)
         self.tp_multiple = tp_multiple
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:

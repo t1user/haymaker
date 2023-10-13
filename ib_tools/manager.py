@@ -19,15 +19,17 @@ print("About to setup logger...")
 logging.basicConfig(
     format="[%(asctime)s] %(levelname)8s: %(name)20s | %(message)s"
     " | %(module)s %(funcName)s %(lineno)d",
-    level=logging.DEBUG,
+    level=5,
 )
 print("...logger set up")
 
-ib_log = logging.getLogger("ib_insync")
-ib_log.setLevel(logging.CRITICAL)
-asyncio_log = logging.getLogger("asyncio")
-asyncio_log.setLevel(logging.DEBUG)
+logging.addLevelName(5, "DATA")
+logging.addLevelName(60, "NOTIFY")
 
+# shut up foreign loggers
+logging.getLogger("ib_insync").setLevel(logging.ERROR)
+logging.getLogger("asyncio").setLevel(logging.DEBUG)
+logging.getLogger("numba").setLevel(logging.CRITICAL)
 
 IB: Final[ibi.IB] = ibi.IB()
 Atom.set_ib(IB)
@@ -50,18 +52,20 @@ def acquire_contract_details():
         details = IB.reqContractDetails(contract)
         assert len(details) == 1, f"Ambiguous contract: {contract}. Critical error."
         details = details[0]
-    try:
-        CONTRACT_DETAILS[details.contract] = details
-    except Exception:
-        log.exception()
-        raise
+        try:
+            CONTRACT_DETAILS[details.contract] = details
+        except Exception:
+            log.exception()
+            raise
 
 
 async def prepare():
     await IB.qualifyContractsAsync(*CONTRACT_LIST)
-    log.debug(f"contracts qualified {CONTRACT_LIST}")
+    log.debug(f"contracts qualified {set([c.symbol for c in CONTRACT_LIST])}")
     acquire_contract_details()
-    log.debug(f"Details aquired: {CONTRACT_DETAILS}")
+    # log.debug(f"Details acquired: {list(CONTRACT_DETAILS.keys())}")
+    log.debug(f"Details aquired: {set([k.symbol for k in CONTRACT_DETAILS.keys()])}")
+
     await asyncio.gather(*Streamer.awaitables(), return_exceptions=True)
 
 

@@ -7,10 +7,9 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 import ib_insync as ibi
-import numpy as np
 
 from .base import Atom
-from .misc import Lock, Signal
+from .misc import Lock, Signal, sign
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
@@ -104,7 +103,7 @@ class StateMachine(Atom):
         strategy = data["strategy"]
         exec_model, *_ = args
         self.data[strategy] = exec_model
-        log.info(f"Registered execution models {self.data}")
+        log.log(5, f"Registered execution models {list(self.data.keys())}")
 
     async def onData(self, data, *args) -> None:
         try:
@@ -133,13 +132,14 @@ class StateMachine(Atom):
         required?
         """
         log.debug(
-            f"Verifying transaction integrity: "
-            f"target_position direction: {target_position}, "
-            f"position: {np.sign(exec_model.position)}"
+            f"Transaction OK? {sign(exec_model.position) == target_position} "
+            f"target_position: {target_position}, position: {sign(exec_model.position)}"
+            f"->> {exec_model.strategy}"
         )
         try:
-            assert np.sign(exec_model.position) == target_position
-            assert exec_model.position == abs(amount)
+            assert sign(exec_model.position) == target_position
+            # Investigate why this may be necessary:
+            # assert exec_model.position == abs(amount)
         except AssertionError:
             log.critical(f"Wrong position for {strategy}", exc_info=True)
 
@@ -159,8 +159,10 @@ class StateMachine(Atom):
         if exec_model_or_none.position:
             return exec_model_or_none.position
         elif orders := self._orders_by_strategy[strategy]:
+            log.debug(f"Orders for strategy {strategy}: {orders}")
             for order in orders:
-                if self.orders[order.orderId].action == "OPEN":
+                order_info = self.orders[order.orderId]
+                if order_info.action == "OPEN" and order_info.trade.isActive():
                     return order.totalQuantity * (
                         1 if order.action.upper() == "BUY" else -1
                     )
@@ -187,11 +189,13 @@ class StateMachine(Atom):
         self.register_lock(strategy, trade)
 
     def register_position(self, strategy: str, trade: ibi.Trade):
+        # This is most likely redundand
         self._position_dict[trade.contract].append(strategy)
-        log.debug(
-            f"Registered position for {trade.contract}, position: "
-            f"{self._position_dict[trade.contract]}"
-        )
+
+        # log.debug(
+        #     f"Registered position for {trade.contract.symbol}, position: "
+        #     f"{self._position_dict[trade.contract]}"
+        # )
         self.verify_positions()
 
     # def total_positions(self, contract: ibi.Contract) -> float:
@@ -230,8 +234,7 @@ class StateMachine(Atom):
                     f"theirs: {position.position}"
                 )
                 difference.append(position.contract)
-            else:
-                log.info(f"Position for {position.contract} checks out.")
+
         return difference
 
     def register_order(self, strategy: str, action: str, trade: ibi.Trade) -> None:
@@ -278,7 +281,7 @@ class StateMachine(Atom):
 
     def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
         if trade.order.orderId < 0:
-            log.error(f"Manual trade: {trade}")
+            log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
         elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
@@ -288,7 +291,16 @@ class StateMachine(Atom):
                 self._orders_by_strategy[strategy].remove(trade.order)
                 log.debug(f"Order removed from active list: {trade.order}")
             except KeyError:
-                log.error(f"Unknown trade in the system: {trade}")
+                log.warning(
+                    f"Order status {trade.orderStatus} on order: {trade.order}, "
+                    f"for contract: {trade.contract.symbol} unknown order."
+                )
+        else:
+            # log.error(
+            #     f"Order status: {trade.orderStatus} for order: {trade.order} "
+            #     f"contract: {trade.contract.symbol}"
+            # )
+            pass
 
     def handleErrorEvent(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract

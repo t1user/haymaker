@@ -8,6 +8,7 @@ from ib_tools.signals import (
     AlwaysOnLockableBinarySignalProcessor,
     BinarySignalProcessor,
     LockableBinarySignalProcessor,
+    LockableBlipBinarySignalProcessor,
     binary_signal_processor_factory,
 )
 
@@ -87,7 +88,7 @@ def test_target_position_included_in_output(pipe):
 # Testing actions
 # =================================================
 
-# Some comments are nonsens
+# Some comments are nonsense
 
 
 @pytest.mark.parametrize(
@@ -297,6 +298,57 @@ def test_signal_paths_LockableBinarySignalProcessor(test_input, expected):
     sm = FakeStateMachine()
 
     processor_instance = LockableBinarySignalProcessor(sm)
+    action = processor_instance.process_signal("x", signal)
+
+    assert action == expected
+
+
+@pytest.mark.parametrize(
+    "test_input,expected",
+    [
+        # pos, signal, lock
+        ((0, 0, 0), None),
+        ((0, 1, 0), "OPEN"),
+        ((0, -1, 0), "OPEN"),
+        ((1, 0, 0), None),
+        ((-1, 0, 0), None),
+        ((1, 1, 0), None),
+        ((1, -1, 0), "CLOSE"),
+        ((-1, 1, 0), "CLOSE"),
+        ((-1, -1, 0), None),
+        ((0, 0, 1), None),
+        ((0, 1, 1), None),
+        ((0, -1, 1), "OPEN"),
+        ((1, 0, 1), None),
+        ((-1, 0, 1), None),
+        ((1, 1, 1), None),
+        ((1, -1, 1), "CLOSE"),
+        # ((-1, 1, 1), "CLOSE"), IMPOSSIBLE
+        ((-1, -1, 1), None),
+        ((0, 0, -1), None),
+        ((0, 1, -1), "OPEN"),
+        ((0, -1, -1), None),
+        ((1, 0, -1), None),
+        ((-1, 0, -1), None),
+        ((1, 1, -1), None),
+        # ((1, -1, -1), "CLOSE"), IMPOSSIBLE
+        ((-1, 1, -1), "CLOSE"),
+        ((-1, -1, -1), None),
+    ],
+)
+def test_signal_paths_LockableBlipBinarySignalProcessor(test_input, expected):
+    position, signal, lock = test_input
+
+    class FakeStateMachine:
+        def position(self, key):
+            return position
+
+        def locked(self, key):
+            return lock
+
+    sm = FakeStateMachine()
+
+    processor_instance = LockableBlipBinarySignalProcessor(sm)
     action = processor_instance.process_signal("x", signal)
 
     assert action == expected

@@ -461,8 +461,8 @@ def stop_loss(
 
     mode - stop loss type to apply, possible values: 'fixed', 'trail'
 
-    tp_multiple - take profit distance in price points or omitted if
-    none
+    tp_multiple - take profit distance in price points equals
+    ``tp_multiple`` * ``distance``; omitted if none
 
     adjust - whether stop loss should be adjusted based on distance
     from entry price, if so adjustment should be given as 3 tuple

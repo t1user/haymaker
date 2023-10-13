@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Type
-
-import numpy as np
+from typing import Any, Literal, Optional, Type
 
 from ib_tools.base import Atom
 from ib_tools.manager import STATE_MACHINE
-from ib_tools.misc import Action, Signal
+from ib_tools.misc import Action, Signal, sign
 from ib_tools.state_machine import StateMachine
 
 log = logging.getLogger(__name__)
@@ -48,34 +46,31 @@ class BinarySignalProcessor(Atom):
     def __init__(self, state_machine: Optional[StateMachine] = None) -> None:
         super().__init__()
         self.sm = state_machine or STATE_MACHINE
-        self.strategy: Optional[str] = None
+        self.strategy: str = ""
         log.debug(f"Signal processor initialized: {self}")
 
     # onStart should set strategy
 
     def onData(self, data: dict[str, Any], *args) -> None:
         try:
-            strategy = data["strategy"]
             signal = data["signal"]
         except KeyError:
-            log.exception(
-                "Missing signal data", extra={"data": data, "signal_processor": self}
-            )
+            log.exception(f"Missing signal data {data}")
+        strategy = data.get("strategy") or self.strategy
         if result := self.process_signal(strategy, signal):
-            # ######### WHAT THE FUCK???? ###############
-            if self.strategy is None:
-                self.strategy = strategy  # TODO: fix this
-
             data.update(
                 {
                     "action": result,
                     "target_position": self.target_position(signal, result),
+                    "existing_position": self.position(strategy),
                 }
             )
             self.dataEvent.emit(data)
 
-    def target_position(self, signal: Signal, result: Action):
+    def target_position(self, signal, result):
         if result == "OPEN":
+            return signal
+        elif result == "REVERSE":
             return signal
         elif result == "CLOSE":
             return 0
@@ -98,7 +93,7 @@ class BinarySignalProcessor(Atom):
         Which side of the market is position on: (short: -1, long: 1,
         no position: 0)
         """
-        return np.sign(self.sm.position(strategy))
+        return sign(self.sm.position(strategy))
 
     def same_direction(self, strategy: str, signal: Signal) -> bool:
         """Is signal and position in the same direction?"""
@@ -144,19 +139,6 @@ class LockableBinarySignalProcessor(BinarySignalProcessor):
     otherwise
     """
 
-    def target_position(self, signal, result):
-        if result == "OPEN":
-            return signal
-        elif result == "REVERSE":
-            return signal
-        elif result == "CLOSE":
-            return 0
-        else:
-            log.error(
-                f"{self} generated unknown signal: {result} for strategy: "
-                f"{self.strategy}"
-            )
-
     def locked(self, strategy: str, signal: Signal) -> bool:
         return self.sm.locked(strategy) == signal
 
@@ -173,6 +155,29 @@ class LockableBinarySignalProcessor(BinarySignalProcessor):
             return None
         else:
             return "OPEN"
+
+
+class LockableBlipBinarySignalProcessor(LockableBinarySignalProcessor):
+    """
+    * Signals in the direction of last position are ignored (one side
+    of the market is 'locked').  It's up to :class:`StateMachine` to
+    determine which side is 'locked' based on position actually taken
+    in the market (not just previously generated signals).
+
+    * Zero signal means close position if position exists, ignored
+    otherwise
+    """
+
+    def process_zero_signal_position(self, strategy, signal):
+        return None
+
+    def process_zero_signal_no_position(self, strategy, signal):
+        return None
+
+    def process_non_zero_signal_position(self, strategy, signal):
+        # We've already checked signal is not same direction as position
+        # Zero signal means "CLOSE", oppposite signal means "REVERSE"
+        return "CLOSE"
 
 
 class AlwaysOnLockableBinarySignalProcessor(LockableBinarySignalProcessor):

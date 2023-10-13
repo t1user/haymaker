@@ -55,6 +55,7 @@ def test_data_passed_correct(brick):
 @pytest.fixture
 def data_for_df():
     return {
+        "date": ["2023-10-09", "2023-10-09", "2023-10-09", "2023-10-09", "2023-10-09"],
         "price": [123, 123, 125, 124, 128],
         "position": [1, 0, 1, 1, 0],
         "signal": [1, 1, 1, 1, 1],
@@ -151,5 +152,6 @@ def test_dispatchmethod_barList(basic_df_brick):
 
 def test_dispatchmethod_dict(basic_df_brick, data_for_df):
     out = basic_df_brick.df_row(data_for_df)
+
     should_be = pd.DataFrame(data_for_df).iloc[-1]
     assert out.to_dict() == should_be.to_dict()

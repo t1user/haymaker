@@ -33,12 +33,14 @@ class Controller:
         state_machine: StateMachine,
         ib: ibi.IB,
         blotter: Optional[AbstractBaseBlotter] = None,
+        log_events: bool = False,
     ):
         super().__init__()
         self.sm = state_machine
         self.ib = ib
         self.trader = Trader(self.ib)
-        self._attach_logging_events()
+        if log_events:
+            self._attach_logging_events()
         self.blotter = blotter
         if blotter:
             self.ib.commissionReportEvent += self.onCommissionReport
@@ -62,7 +64,9 @@ class Controller:
         if callback is not None:
             callback(trade)
         self.sm.register_order(exec_model.strategy, action, trade)
-        trade.filledEvent += partial(self.log_trade, reason=action)
+        trade.filledEvent += partial(
+            self.log_trade, reason=action, strategy=exec_model.strategy
+        )
 
     def cancel(
         self,
@@ -215,11 +219,11 @@ class Controller:
     def log_new_order(self, trade: ibi.Trade) -> None:
         log.debug(f"New order {trade.order} for {trade.contract.localSymbol}")
 
-    def log_trade(self, trade: ibi.Trade, reason: str = "") -> None:
+    def log_trade(self, trade: ibi.Trade, reason: str = "", strategy="") -> None:
         log.info(
             f"{reason} trade filled: {trade.contract.localSymbol} "
             f"{trade.order.action} {trade.orderStatus.filled}"
-            f"@{trade.orderStatus.avgFillPrice}"
+            f"@{trade.orderStatus.avgFillPrice} --> {strategy}"
         )
 
     def log_cancel(self, trade: ibi.Trade) -> None:
@@ -236,12 +240,13 @@ class Controller:
     def log_error(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
+        pass
         if errorCode < 400:
             try:
                 strategy, action, trade = self.sm.orders[reqId]
                 order = trade.order
             except KeyError:
-                strategy, action, trade, order = None, None, None, None
+                strategy, action, trade, order = "", "", "", ""  # type: ignore
 
             log.error(
                 f"Error {errorCode}: {errorString} {contract}, "

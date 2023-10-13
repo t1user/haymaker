@@ -5,7 +5,13 @@ import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 import pandas as pd  # type: ignore
 
-from ib_tools.indicators import combine_signals, range_crosser, signal_generator  # noqa
+from ib_tools.indicators import (  # noqa
+    combine_signals,
+    range_blip,
+    range_crosser,
+    signal_generator,
+    zero_crosser,
+)
 from ib_tools.research.signal_converters import sig_pos
 from ib_tools.research.stop import stop_loss
 from ib_tools.research.vector_backtester import Results

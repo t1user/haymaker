@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import itertools
 import logging
@@ -9,7 +8,6 @@ from functools import partial
 from typing import Any, Callable, Literal, NamedTuple, Optional, TypedDict
 
 import ib_insync as ibi
-import numpy as np
 
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import AbstractBracketLeg
@@ -251,17 +249,19 @@ class BaseExecModel(AbstractExecModel):
         if fill.execution.side == "BOT":
             self.position += fill.execution.shares
             log.debug(
-                f"Registered BUY for {self.strategy} --> position: {self.position}"
+                f"Registered BUY {trade.order.orderType} for {self.strategy} "
+                f"--> position: {self.position}"
             )
         elif fill.execution.side == "SLD":
             self.position -= fill.execution.shares
             log.debug(
-                f"Registered SELL for {self.strategy} --> position: {self.position}"
+                f"Registered SELL {trade.order.orderType} for {self.strategy} "
+                f"--> position: {self.position}"
             )
         else:
             log.critical(
                 f"Abiguous fill: {fill} for order: {trade.order} for "
-                f"{trade.contract.localSymbol}"
+                f"{trade.contract.localSymbol} strategy: {self.strategy}"
             )
 
     def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
@@ -288,20 +288,24 @@ class BaseExecModel(AbstractExecModel):
         self.params["close"].update(data)
         # THIS IS TEMPORARY ----> FIX ---> TODO
         if self.position == 0:
-            log.error(f"Abandoning CLOSE position for {self.active_contract}")
+            log.error(
+                f"Abandoning CLOSE position for {self.active_contract} "
+                f"(No position, but close signal)"
+            )
             return
 
-        signal = -np.sign(self.position)
+        signal = -misc.sign(self.position)
 
         order_kwargs = {
             "action": misc.action(signal),
-            "totalQuantity": self.position,
+            "totalQuantity": -self.position,
         }
         order = self._order("close_order", order_kwargs)
         assert self.active_contract is not None
         log.debug(
-            f"{self.strategy} {self.active_contract.localSymbol} executing close signal"
-            f" {signal}, current position: {self.position}",
+            f"{self.strategy} {self.active_contract.localSymbol} "
+            f"processing CLOSE signal {signal}, current position: {self.position},"
+            f" order: {order_kwargs['action']} {order_kwargs['totalQuantity']}",
             extra={"data": data},
         )
         self.trade(self.active_contract, order, "CLOSE", callback)
@@ -317,10 +321,6 @@ class BaseExecModel(AbstractExecModel):
 
     def __repr__(self):
         return self.__class__.__name__ + "()"
-
-    # def __repr__(self):
-    #     items = (f"{k}={v}" for k, v in self.__dict__.items())
-    #     return f"{self.__class__.__name__}({', '.join(items)})"
 
 
 class EventDrivenExecModel(BaseExecModel):
@@ -386,9 +386,13 @@ class EventDrivenExecModel(BaseExecModel):
         super().close(data, callback_close_trade)
 
     def _dynamic_bracket_kwargs(self) -> dict[str, Any]:
+        # make sure to call only once for sl/tp pair!!!!
         return {}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
+        # called once for sl/tp pair! Don't put inside the for loop!
+        dynamic_bracket_kwargs = self._dynamic_bracket_kwargs()
+
         for bracket, order_key, label in zip(
             (self.stop, self.take_profit),
             ("stop_order", "tp_order"),
@@ -397,7 +401,7 @@ class EventDrivenExecModel(BaseExecModel):
             # take profit may be None
             if bracket:
                 bracket_kwargs = bracket(params, trade)
-                bracket_kwargs.update(self._dynamic_bracket_kwargs())
+                bracket_kwargs.update(dynamic_bracket_kwargs)
                 self._place_bracket(trade.contract, order_key, label, bracket_kwargs)
 
     def _place_bracket(self, contract, order_key, label, bracket_kwargs):

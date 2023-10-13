@@ -71,3 +71,7 @@ def round_tick(price: float, tick_size: float) -> float:
     if remainder > (tick_size / 2):
         floor += 1
     return round(floor * tick_size, 4)
+
+
+def sign(x: float) -> Literal[-1, 0, 1]:
+    return 0 if x == 0 else -1 if x < 0 else 1

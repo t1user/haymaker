@@ -56,6 +56,7 @@ class HistoricalDataStreamer(Streamer):
     useRTH: bool = False
     formatDate: int = 2
     incremental_only: bool = True
+    startup_seconds: float = 5
     last_bar_date: Optional[datetime] = None
 
     def __post_init__(self):
@@ -88,16 +89,19 @@ class HistoricalDataStreamer(Streamer):
     def onStart(self, data, *args) -> None:
         # this starts subscription so that current price is readily available from ib
         # TODO: consider if it's needed
-        self.ib.reqMktData(self.contract, "221")
+        # self.ib.reqMktData(self.contract, "221")
         self.startEvent.emit(data, self)
 
     async def run(self) -> None:
-        self.onStart(None, None)
         log.debug(f"Requesting bars for {self.contract.localSymbol}")
         if self.last_bar_date:
             self.durationStr = f"{self.date_to_delta(self.last_bar_date)} S"
+        # if self.bars:
+        #    self.ib.cancelHistoricalData(self.bars)
         bars = await self.streaming_func()
         log.debug(f"Historical bars received for {self.contract.localSymbol}")
+
+        self.onStart({"startup": True})
         if self.last_bar_date:
             stream = (
                 ev.Sequence(bars[:-1])
@@ -107,11 +111,14 @@ class HistoricalDataStreamer(Streamer):
         else:
             stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
         await stream
+        await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
 
-        async for bars, hasNewBar in bars.updateEvent:
+        self.onStart({"startup": False})
+
+        async for bars_, hasNewBar in bars.updateEvent:
             if hasNewBar:
-                self.last_bar_date = bars[-2].date
-                self.on_new_bar(bars[:-1])
+                self.last_bar_date = bars_[-2].date
+                self.on_new_bar(bars_[:-1])
 
     def on_new_bar(self, bars: ibi.BarDataList) -> None:
         if self.incremental_only:

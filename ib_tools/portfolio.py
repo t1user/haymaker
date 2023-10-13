@@ -30,10 +30,11 @@ class AbstractBasePortfolio(Atom, ABC):
     def onData(self, data: dict, *args) -> None:
         amount = self.allocate(data)
         data.update({"amount": amount})
-        log.debug(
-            f"Portfolio processed data - action: {data['action']}, "
-            f"signal: {data['signal']}, target_position: {data['target_position']}"
-        )
+        log.debug(f"Portfolio processed data - date: {data}")
+        #     "{data['date']}, "
+        #     f"action: {data['action']}, "
+        #     f"signal: {data['signal']}, target_position: {data['target_position']}",
+
         self.dataEvent.emit(data)
 
     @abstractmethod
