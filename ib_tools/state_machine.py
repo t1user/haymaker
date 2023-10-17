@@ -288,18 +288,26 @@ class StateMachine(Atom):
         elif trade.isDone():
             try:
                 strategy = self.orders[trade.order.orderId].strategy
-                self._orders_by_strategy[strategy].remove(trade.order)
-                log.debug(f"Order removed from active list: {trade.order}")
             except KeyError:
                 log.warning(
                     f"Order status {trade.orderStatus} on order: {trade.order}, "
                     f"for contract: {trade.contract.symbol} unknown order."
                 )
+            try:
+                self._orders_by_strategy[strategy].remove(trade.order)
+                log.debug(f"Order removed from active list: {trade.order}")
+            except ValueError:
+                log.error(
+                    f"Strategy {strategy} not in _orders_by_strategy: "
+                    f"{self._orders_by_strategy}. !!!!!!!!FIX THIS ERROR!!!!!!!!!!!"
+                )
+
         else:
-            # log.error(
-            #     f"Order status: {trade.orderStatus} for order: {trade.order} "
-            #     f"contract: {trade.contract.symbol}"
-            # )
+            log.debug(
+                f"Order IS ACTIVE? {trade.isActive()} status: {trade.orderStatus} for "
+                f"order: {trade.order} "
+                f"contract: {trade.contract.symbol}"
+            )
             pass
 
     def handleErrorEvent(

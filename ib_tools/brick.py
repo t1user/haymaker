@@ -89,6 +89,7 @@ class AbstractDfBrick(AbstractBaseBrick):
         except KeyError:
             return self.df(data)
 
+    # this is most likely redundand as dataframe constructor can handle these types
     @_create_df.register(BarList)
     @_create_df.register(ibi.BarDataList)
     def _(self, data: Union[BarList, ibi.BarDataList]) -> pd.DataFrame:

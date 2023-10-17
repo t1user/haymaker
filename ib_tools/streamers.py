@@ -112,7 +112,7 @@ class HistoricalDataStreamer(Streamer):
             stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
         await stream
         await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
-
+        log.info(f"Backfilled from {self.last_bar_date or bars[0]} to {bars[-2]}")
         self.onStart({"startup": False})
 
         async for bars_, hasNewBar in bars.updateEvent:

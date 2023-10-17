@@ -298,7 +298,7 @@ class BaseExecModel(AbstractExecModel):
 
         order_kwargs = {
             "action": misc.action(signal),
-            "totalQuantity": -self.position,
+            "totalQuantity": abs(self.position),
         }
         order = self._order("close_order", order_kwargs)
         assert self.active_contract is not None

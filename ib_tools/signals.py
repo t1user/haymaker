@@ -47,6 +47,7 @@ class BinarySignalProcessor(Atom):
         super().__init__()
         self.sm = state_machine or STATE_MACHINE
         self.strategy: str = ""
+        self._position: float = 0.0
         log.debug(f"Signal processor initialized: {self}")
 
     # onStart should set strategy
@@ -62,7 +63,7 @@ class BinarySignalProcessor(Atom):
                 {
                     "action": result,
                     "target_position": self.target_position(signal, result),
-                    "existing_position": self.position(strategy),
+                    "existing_position": self._position,
                 }
             )
             self.dataEvent.emit(data)
@@ -93,7 +94,8 @@ class BinarySignalProcessor(Atom):
         Which side of the market is position on: (short: -1, long: 1,
         no position: 0)
         """
-        return sign(self.sm.position(strategy))
+        self._position = sign(self.sm.position(strategy))
+        return self._position
 
     def same_direction(self, strategy: str, signal: Signal) -> bool:
         """Is signal and position in the same direction?"""
@@ -139,8 +141,19 @@ class LockableBinarySignalProcessor(BinarySignalProcessor):
     otherwise
     """
 
+    def __init__(self, state_machine: Optional[StateMachine] = None) -> None:
+        self._lock_direction = 0
+        self._lock = False
+        super().__init__(state_machine)
+
+    def onData(self, data: dict[str, Any], *args) -> None:
+        data.update({"lock_direction": self._lock_direction, "lock": self._lock})
+        super().onData(data, *args)
+
     def locked(self, strategy: str, signal: Signal) -> bool:
-        return self.sm.locked(strategy) == signal
+        self._lock_direction = self.sm.locked(strategy)
+        self._lock = self._lock_direction == signal
+        return self._lock
 
     def process_zero_signal_position(self, strategy, signal):
         return "CLOSE"
