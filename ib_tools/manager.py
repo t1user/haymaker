@@ -9,6 +9,7 @@ import ib_insync as ibi
 
 from ib_tools.base import CONTRACT_LIST, Atom, Pipe
 from ib_tools.controller import Controller
+from ib_tools.queue_logger import setup_logging_queue
 from ib_tools.runner import App
 from ib_tools.state_machine import StateMachine
 from ib_tools.streamers import Streamer
@@ -30,6 +31,8 @@ logging.addLevelName(60, "NOTIFY")
 logging.getLogger("ib_insync").setLevel(logging.ERROR)
 logging.getLogger("asyncio").setLevel(logging.DEBUG)
 logging.getLogger("numba").setLevel(logging.CRITICAL)
+
+setup_logging_queue()
 
 IB: Final[ibi.IB] = ibi.IB()
 Atom.set_ib(IB)

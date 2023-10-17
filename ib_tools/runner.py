@@ -32,7 +32,12 @@ class App:
             ) -> None:
                 if errorCode not in (2158, 2104, 2107, 2106):
                     log.debug(f"Error: {errorCode}, {errorString}, {contract}")
-                elif errorCode in (1101, 1102):
+                # don't change it to elif you dumb fuck
+                if errorCode in (1101, 1102, 10182, 2105):
+                    # 10182 - failed to request live updates
+                    # 1101 - connection restored, data lost
+                    # 1102 - connection restored, data maintained
+                    # consider adding 2105, 2103 ("data connection is broken")
                     ib.disconnect()
                     raise ReconnectionError()
 
