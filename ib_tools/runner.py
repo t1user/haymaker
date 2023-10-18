@@ -22,34 +22,35 @@ class App:
         log.debug("App instiated.")
 
     async def _run(self) -> None:
+        def onError(
+            reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+        ) -> None:
+            if errorCode not in (2158, 2104, 2107, 2106):
+                log.debug(f"Error: {errorCode}, {errorString}, {contract}")
+            # don't change it to elif you dumb fuck
+            if errorCode in (1101, 1102, 10182, 2105):
+                # 10182 - failed to request live updates
+                # 1101 - connection restored, data lost
+                # 1102 - connection restored, data maintained
+                # consider adding 2105, 2103 ("data connection is broken")
+                ib.disconnect()
+                # raise ReconnectionError
+
+        def onApiError(msg) -> None:
+            log.error(msg)
+            if msg == "Peer closed connection.":
+                for t in asyncio.Task.all_tasks():
+                    t.cancel()
+                self.run()
+
         # clientId != 0 will not see orders from other clients
         log.debug("About to connect.")
         with await self.ib.connectAsync(port=4002, clientId=0, timeout=7) as ib:
             log.info("Connected!")
 
-            def onError(
-                reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
-            ) -> None:
-                if errorCode not in (2158, 2104, 2107, 2106):
-                    log.debug(f"Error: {errorCode}, {errorString}, {contract}")
-                # don't change it to elif you dumb fuck
-                if errorCode in (1101, 1102, 10182, 2105):
-                    # 10182 - failed to request live updates
-                    # 1101 - connection restored, data lost
-                    # 1102 - connection restored, data maintained
-                    # consider adding 2105, 2103 ("data connection is broken")
-                    ib.disconnect()
-                    raise ReconnectionError()
-
-            def onApiError(msg) -> None:
-                log.error(msg)
-                if msg == "Peer closed connection.":
-                    for t in asyncio.Task.all_tasks():
-                        t.cancel()
-                    self.run()
-
             ib.errorEvent += onError
             ib.client.apiError += onApiError
+
             try:
                 log.debug(f"Will attempt to run coros: {self.coro}")
                 # await asyncio.gather(self.coro, return_exceptions=True)
@@ -59,7 +60,8 @@ class App:
             except Exception:
                 log.exception("ERROR ON RUNNING CORO")
                 raise
-        log.info("Out of connection context")
+
+        log.info("Out of connection context.")
 
     def stop(self) -> None:
         self.ib.disconnect()
@@ -83,6 +85,7 @@ class App:
                 log.info("Asyncio timeout error ignored.")
             except ReconnectionError:
                 log.error("Reconnection error ignored. RESTART HERE?")
+                time.sleep(5)
             except Exception:
                 log.exception("Error")
                 break

@@ -4,18 +4,20 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Awaitable, Optional
+from functools import partial
+from typing import Awaitable, ClassVar, Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
+from ib_tools import misc
 from ib_tools.base import Atom
 
 log = logging.getLogger(__name__)
 
 
 class Streamer(Atom):
-    instances: list["Streamer"] = []
+    instances: ClassVar[list["Streamer"]] = []
 
     def __new__(cls, *args, **kwargs):
         """
@@ -58,6 +60,7 @@ class HistoricalDataStreamer(Streamer):
     incremental_only: bool = True
     startup_seconds: float = 5
     last_bar_date: Optional[datetime] = None
+    timeout: float = 0.0
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -73,6 +76,23 @@ class HistoricalDataStreamer(Streamer):
             formatDate=self.formatDate,
             keepUpToDate=True,
             timeout=0,
+        )
+
+    def _timeout_callback(self, data, *args) -> None:
+        log.debug(
+            f"No data for {self.timeout} secs. Acitve?: "
+            f"{misc.test_if_active(self.trading_hours[self.contract])}"
+        )
+
+    def _reset_timeout(
+        self, old_timeout_event: ev.Event, event: ev.Event, *args
+    ) -> None:
+        event.disconnect(old_timeout_event)
+        self._set_timeout(event)
+
+    def _set_timeout(self, event: ev.Event) -> None:
+        event.timeout(self.timeout).connect(
+            self._timeout_callback, done=partial(self._reset_timeout, event=event)
         )
 
     def date_to_delta(self, date: datetime) -> int:
@@ -112,8 +132,13 @@ class HistoricalDataStreamer(Streamer):
             stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
         await stream
         await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
-        log.info(f"Backfilled from {self.last_bar_date or bars[0]} to {bars[-2]}")
+        log.info(
+            f"Backfilled from {self.last_bar_date or bars[0].date} to {bars[-2].date}"
+        )
         self.onStart({"startup": False})
+
+        if self.timeout:
+            self._set_timeout(bars.updateEvent)
 
         async for bars_, hasNewBar in bars.updateEvent:
             if hasNewBar:

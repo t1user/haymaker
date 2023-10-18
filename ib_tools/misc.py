@@ -3,10 +3,12 @@ from __future__ import annotations
 import itertools
 import random
 import string
+from datetime import datetime
 from enum import Enum
-from typing import Callable, Literal
+from typing import Callable, Literal, Optional
 
 import ib_insync as ibi
+import pytz
 
 
 def action(signal: int) -> str:
@@ -75,3 +77,58 @@ def round_tick(price: float, tick_size: float) -> float:
 
 def sign(x: float) -> Literal[-1, 0, 1]:
     return 0 if x == 0 else -1 if x < 0 else 1
+
+
+def process_trading_hours(th: str) -> list[tuple[datetime, datetime]]:
+    """
+    Given string from :attr:`ibi.ContractDetails.tradingHours` return
+    active hours as a list of (from, to) tuples.
+    """
+
+    def datetime_tuples(
+        s: str, tzname="US/Central"
+    ) -> tuple[Optional[datetime], Optional[datetime]]:
+        def from_to(s: str) -> list[str]:
+            return s.split("-")
+
+        def to_datetime(datetime_string: str) -> Optional[datetime]:
+            if datetime_string[-6:] == "CLOSED":
+                return None
+            else:
+                return (
+                    datetime.strptime(datetime_string, "%Y%m%d:%H%M")
+                    .replace(tzinfo=pytz.timezone(tzname))
+                    .astimezone(tz=pytz.timezone("UTC"))
+                )
+
+        try:
+            f, t = from_to(s)
+        except ValueError:
+            return (None, None)
+
+        return to_datetime(f), to_datetime(t)
+
+    out = []
+    for i in th.split(";"):
+        tuples = datetime_tuples(i)
+        if not tuples[0]:
+            continue
+        else:
+            out.append(tuples)
+    return out  # type: ignore
+
+
+def test_if_active(time_tuples: list[tuple[datetime, datetime]]) -> bool:
+    """
+    Given list of trading hours tuples from `.process_trading_hours`
+    check if the market is active at the moment.
+    """
+    now = datetime.now(tz=pytz.timezone("UTC"))
+
+    def test_p(t):
+        return t[0] < now < t[1]
+
+    for t in time_tuples:
+        if test_p(t):
+            return True
+    return False

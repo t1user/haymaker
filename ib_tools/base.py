@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from datetime import datetime
 from typing import Any, ClassVar, Coroutine, Protocol, Sequence, Type, Union
 
 import ib_insync as ibi
@@ -20,6 +21,7 @@ class Atom:
     """
 
     ib: ClassVar[ibi.IB]
+    trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]]
     _contract: ContractOrSequence
     events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
 
