@@ -79,14 +79,23 @@ def sign(x: float) -> Literal[-1, 0, 1]:
     return 0 if x == 0 else -1 if x < 0 else 1
 
 
-def process_trading_hours(th: str) -> list[tuple[datetime, datetime]]:
+def process_trading_hours(
+    th: str, tzname: str = "US/Central", *, output_tzname: str = "UTC"
+) -> list[tuple[datetime, datetime]]:
     """
     Given string from :attr:`ibi.ContractDetails.tradingHours` return
     active hours as a list of (from, to) tuples.
+
+    Args:
+    -----
+
+    tzname: instrument's timezone output_tzname: output will be
+    converted to this timezone (best if left at UTC); this param is
+    really for testing
     """
 
     def datetime_tuples(
-        s: str, tzname="US/Central"
+        s: str, tzname=tzname
     ) -> tuple[Optional[datetime], Optional[datetime]]:
         def from_to(s: str) -> list[str]:
             return s.split("-")
@@ -98,7 +107,7 @@ def process_trading_hours(th: str) -> list[tuple[datetime, datetime]]:
                 return (
                     datetime.strptime(datetime_string, "%Y%m%d:%H%M")
                     .replace(tzinfo=pytz.timezone(tzname))
-                    .astimezone(tz=pytz.timezone("UTC"))
+                    .astimezone(tz=pytz.timezone(output_tzname))
                 )
 
         try:
@@ -118,12 +127,15 @@ def process_trading_hours(th: str) -> list[tuple[datetime, datetime]]:
     return out  # type: ignore
 
 
-def test_if_active(time_tuples: list[tuple[datetime, datetime]]) -> bool:
+def is_active(
+    time_tuples: list[tuple[datetime, datetime]], *, now: Optional[datetime] = None
+) -> bool:
     """
     Given list of trading hours tuples from `.process_trading_hours`
     check if the market is active at the moment.
     """
-    now = datetime.now(tz=pytz.timezone("UTC"))
+    if not now:
+        now = datetime.now(tz=pytz.timezone("UTC"))
 
     def test_p(t):
         return t[0] < now < t[1]

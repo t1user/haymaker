@@ -491,7 +491,51 @@ def test_event_error_logged_with_correct_logger(caplog):
     b = ErrorRaisingAtom("b")
     a.connect(b)
     a.dataEvent.emit("xxx")
-    print(caplog.messages)
     assert caplog.record_tuples == [
         ("test_base.NewAtom", logging.ERROR, "Event error dataEvent: CustomError")
     ]
+
+
+def test_trading_hours():
+    class MockAtom(Atom):
+        def __init__(self, contract):
+            self.contract = contract
+            super().__init__()
+
+    a = MockAtom("contract_1")
+    a.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
+    assert a.trading_hours == [(1, 2), (4, 5)]
+
+
+def test_trading_hours_no_data_for_contract():
+    class MockAtom(Atom):
+        def __init__(self, contract):
+            self.contract = contract
+            super().__init__()
+
+    a = MockAtom("contract_2")
+    a.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
+    assert a.trading_hours == {"contract_1": [(1, 2), (4, 5)]}
+
+
+def test_trading_hours_no_data_for_contract_must_log(caplog):
+    caplog.set_level(logging.DEBUG)
+
+    class MockAtom(Atom):
+        def __init__(self, contract):
+            self.contract = contract
+            super().__init__()
+
+    a = MockAtom("contract_2")
+    a.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
+    a.trading_hours
+    assert "No trading hours data for contract_2." in caplog.messages
+
+
+def test_trading_hours_no_contract():
+    class MockAtom(Atom):
+        pass
+
+    a = MockAtom()
+    a.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
+    assert a.trading_hours == {"contract_1": [(1, 2), (4, 5)]}

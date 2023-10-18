@@ -21,7 +21,7 @@ class Atom:
     """
 
     ib: ClassVar[ibi.IB]
-    trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]]
+    _trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]]
     _contract: ContractOrSequence
     events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
 
@@ -31,14 +31,45 @@ class Atom:
     def set_ib(cls, ib: ibi.IB) -> None:
         cls.ib = ib
 
+    @classmethod
+    def set_trading_hours(
+        cls, trading_hours: dict[ibi.Contract, list[tuple[datetime, datetime]]]
+    ) -> None:
+        cls._trading_hours = trading_hours
+
     def __init__(self) -> None:
         self._createEvents()
         self._log = logging.getLogger(f"{self.__module__}.{self.__class__.__name__}")
 
     def __setattr__(self, prop, val):
+        """
+        Register all `:class:ibi.Contract` objects to be qualified
+        with the broker.
+        """
         if prop == "contract":
             self._register_contract(val)
         super().__setattr__(prop, val)
+
+    def __getattr__(self, name):
+        """
+        If `:attr:contract` is set and ``trading_hours`` will be
+        received only for this contract, otherwise
+        `:attr:trading_hours` will return all available trading hours
+        """
+        if name == "trading_hours":
+            th = self.__class__.__dict__.get("_trading_hours")
+            if th:
+                try:
+                    th_for_contract_or_none = th.get(self.contract)
+                except AttributeError:  # attribute contract is not set
+                    return th
+
+                if th_for_contract_or_none:
+                    return th_for_contract_or_none
+                else:
+                    log.warning(f"No trading hours data for {self.contract}.")
+                    return th
+        raise AttributeError(name)
 
     def _register_contract(self, value) -> None:
         if getattr(value, "__iter__", None):

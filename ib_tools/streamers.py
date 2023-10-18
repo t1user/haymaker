@@ -81,7 +81,7 @@ class HistoricalDataStreamer(Streamer):
     def _timeout_callback(self, data, *args) -> None:
         log.debug(
             f"No data for {self.timeout} secs. Acitve?: "
-            f"{misc.test_if_active(self.trading_hours[self.contract])}"
+            f"{misc.is_active(self.trading_hours)}"
         )
 
     def _reset_timeout(
