@@ -79,7 +79,7 @@ async def prepare():
     # log.debug(f"Details acquired: {list(CONTRACT_DETAILS.keys())}")
     log.debug(f"Details aquired: {set([k.symbol for k in CONTRACT_DETAILS.keys()])}")
     set_trading_hours()
-    Atom.trading_hours = TRADING_HOURS
+    Atom.set_trading_hours(TRADING_HOURS)
 
     await asyncio.gather(
         *[
