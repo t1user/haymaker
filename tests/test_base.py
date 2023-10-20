@@ -503,7 +503,7 @@ def test_trading_hours():
             super().__init__()
 
     a = MockAtom("contract_1")
-    a.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
+    Atom.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
     assert a.trading_hours == [(1, 2), (4, 5)]
 
 
@@ -514,7 +514,7 @@ def test_trading_hours_no_data_for_contract():
             super().__init__()
 
     a = MockAtom("contract_2")
-    a.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
+    Atom.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
     assert a.trading_hours == {"contract_1": [(1, 2), (4, 5)]}
 
 
@@ -527,7 +527,7 @@ def test_trading_hours_no_data_for_contract_must_log(caplog):
             super().__init__()
 
     a = MockAtom("contract_2")
-    a.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
+    Atom.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
     a.trading_hours
     assert "No trading hours data for contract_2." in caplog.messages
 
@@ -537,5 +537,5 @@ def test_trading_hours_no_contract():
         pass
 
     a = MockAtom()
-    a.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
+    Atom.set_trading_hours({"contract_1": [(1, 2), (4, 5)]})
     assert a.trading_hours == {"contract_1": [(1, 2), (4, 5)]}
