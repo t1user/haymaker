@@ -22,32 +22,42 @@ class App:
         log.debug("App instiated.")
 
     async def _run(self) -> None:
-        def onError(
-            reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
-        ) -> None:
-            if errorCode not in (2158, 2104, 2107, 2106):
-                log.debug(f"Error: {errorCode}, {errorString}, {contract}")
-            # don't change it to elif you dumb fuck
-            if errorCode in (1101, 1102, 10182, 2105):
-                # 10182 - failed to request live updates
-                # 1101 - connection restored, data lost
-                # 1102 - connection restored, data maintained
-                # consider adding 2105, 2103 ("data connection is broken")
-                ib.disconnect()
-                # raise ReconnectionError
-
-        def onApiError(msg) -> None:
-            log.error(msg)
-            if msg == "Peer closed connection.":
-                for t in asyncio.Task.all_tasks():
-                    t.cancel()
-                self.run()
-
         # clientId != 0 will not see orders from other clients
         log.debug("About to connect.")
+
         with await self.ib.connectAsync(port=4002, clientId=0, timeout=7) as ib:
             log.info("Connected!")
 
+            def onDisconnected():
+                log.error("IB disconnected!")
+
+            def onConnected():
+                log.info("IB connected (callback)")
+
+            def onError(
+                reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+            ) -> None:
+                if errorCode not in (2158, 2104, 2107, 2106):
+                    log.debug(f"Error: {errorCode}, {errorString}, {contract}")
+                # don't change it to elif you dumb fuck
+                if errorCode in (1101, 10182, 2105):
+                    # 10182 - failed to request live updates
+                    # 1101 - connection restored, data lost
+                    # 1102 - connection restored, data maintained
+                    # consider adding 2105, 2103 ("data connection is broken")
+                    log.debug(f"About to disconnect {ib}")
+                    ib.disconnect()
+                    raise ReconnectionError
+
+            def onApiError(msg) -> None:
+                log.error(msg)
+                if msg == "Peer closed connection.":
+                    for t in asyncio.Task.all_tasks():
+                        t.cancel()
+                    self.run()
+
+            ib.connectedEvent += onConnected
+            ib.disconnectedEvent += onDisconnected
             ib.errorEvent += onError
             ib.client.apiError += onApiError
 

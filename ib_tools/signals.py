@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal, Optional, Type
+from typing import Any, Optional, Type
 
 from ib_tools.base import Atom
 from ib_tools.manager import STATE_MACHINE

@@ -251,6 +251,7 @@ class StateMachine(Atom):
         """
 
         self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade)
+        # isn't it handled by ib event callback in state_machine?
         self._orders_by_strategy[strategy].append(trade.order)
 
         if action.upper() == "OPEN":

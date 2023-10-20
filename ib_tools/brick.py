@@ -22,7 +22,6 @@ class AbstractBaseBrick(Atom, ABC):
 
     def __post_init__(self):
         Atom.__init__(self)
-        self._log = logging.getLogger(f"{self.strategy}.{self.__class__.__name__}")
 
     def onStart(self, data, *args):
         if isinstance(data, dict):
@@ -36,7 +35,7 @@ class AbstractBaseBrick(Atom, ABC):
         startup = self.__dict__.get("startup")
         if not startup:
             d = self._params(**self._signal(data))
-            self._log.log(5, d)
+            self.log.log(5, d)
             self.dataEvent.emit(d)
 
     @abstractmethod

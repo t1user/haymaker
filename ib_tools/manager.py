@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 print("About to setup logger...")
 logging.basicConfig(
-    format="%(asctime)s | %(levelname)-8s: | %(name)20s | %(message)s"
+    format="%(asctime)s | %(levelname)-12s | %(name)-20s | %(message)s"
     " | %(module)s %(funcName)s %(lineno)d",
     level=5,
 )
@@ -80,14 +80,17 @@ async def prepare():
     log.debug(f"Details aquired: {set([k.symbol for k in CONTRACT_DETAILS.keys()])}")
     set_trading_hours()
     Atom.set_trading_hours(TRADING_HOURS)
-
-    await asyncio.gather(
-        *[
-            create_task(s, logger=log, message="asyncio error")
-            for s in Streamer.awaitables()
-        ],
-        return_exceptions=True,
-    )
+    log.debug("Trading hours set.")
+    try:
+        await asyncio.gather(
+            *[
+                create_task(s, logger=log, message="asyncio error")
+                for s in Streamer.awaitables()
+            ],
+            return_exceptions=True,
+        )
+    except asyncio.CancelledError:
+        log.exception("manager cancelled error")
 
 
 log.debug("Will instantiate the App...")
