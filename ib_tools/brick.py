@@ -35,7 +35,7 @@ class AbstractBaseBrick(Atom, ABC):
         startup = self.__dict__.get("startup")
         if not startup:
             d = self._params(**self._signal(data))
-            self.log.log(5, d)
+            log.log(5, d)
             self.dataEvent.emit(d)
 
     @abstractmethod
