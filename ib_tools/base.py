@@ -50,25 +50,25 @@ class Atom:
             self._register_contract(val)
         super().__setattr__(prop, val)
 
-    def __getattr__(self, name):
+    @property
+    def trading_hours(self):
         """
         If :attr:`contract` is set  ``trading_hours`` will be
         received only for this contract, otherwise
         :attr:`trading_hours` will return all available trading hours
         """
-        if name == "trading_hours":
-            th = Atom._trading_hours
-            try:
-                th_for_contract_or_none = th.get(self.contract)
-            except AttributeError:  # attribute contract is not set
-                return th
 
-            if th_for_contract_or_none:
-                return th_for_contract_or_none
-            else:
-                log.warning(f"No trading hours data for {self.contract}.")
-                return th
-        raise AttributeError(name)
+        th = Atom._trading_hours
+        try:
+            th_for_contract_or_none = th.get(self.contract)
+        except AttributeError:  # attribute contract is not set
+            return th
+
+        if th_for_contract_or_none:
+            return th_for_contract_or_none
+        else:
+            log.warning(f"No trading hours data for {self.contract}.")
+            return th
 
     def _register_contract(self, value) -> None:
         if getattr(value, "__iter__", None):

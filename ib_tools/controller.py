@@ -63,7 +63,7 @@ class Controller:
         trade = self.trader.trade(contract, order)
         if callback is not None:
             callback(trade)
-        self.sm.register_order(exec_model.strategy, action, trade)
+        self.sm.register_order(exec_model.strategy, action, trade, callback)
         trade.filledEvent += partial(
             self.log_trade, reason=action, strategy=exec_model.strategy
         )
@@ -193,7 +193,7 @@ class Controller:
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ):
         if trade.isDone():
-            strategy, action, trade = self.sm.orders[trade.order.orderId]
+            strategy, action, trade, _ = self.sm.orders[trade.order.orderId]
             try:
                 exec_model = self.sm.data["strategy"]
             except KeyError:
@@ -243,7 +243,7 @@ class Controller:
         pass
         if errorCode < 400:
             try:
-                strategy, action, trade = self.sm.orders[reqId]
+                strategy, action, trade, _ = self.sm.orders[reqId]
                 order = trade.order
             except KeyError:
                 strategy, action, trade, order = "", "", "", ""  # type: ignore

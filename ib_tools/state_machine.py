@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 import ib_insync as ibi
 
 from .base import Atom
-from .misc import Lock, Signal, sign
+from .misc import Callback, Lock, Signal, sign
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
@@ -22,6 +22,7 @@ class OrderInfo(NamedTuple):
     strategy: str
     action: str
     trade: ibi.Trade
+    callback: Optional[Callback]
 
 
 class StateMachine(Atom):
@@ -93,6 +94,7 @@ class StateMachine(Atom):
         self._position_dict: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
         self.orders: dict[int, OrderInfo] = {}
         # keeps open orders for every strategy
+        # STOP LOSSES WHEN HIT RAISE ERRORS HERE (KeyError)
         self._orders_by_strategy: defaultdict[str, list[ibi.Order]] = defaultdict(list)
 
     def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
@@ -106,6 +108,10 @@ class StateMachine(Atom):
         log.log(5, f"Registered execution models {list(self.data.keys())}")
 
     async def onData(self, data, *args) -> None:
+        """
+        After obtaining transaction details from execution model,
+        verify if the intended effect is the same as achieved effect.
+        """
         try:
             strategy = data["strategy"]
             amount = data["amount"]
@@ -237,7 +243,13 @@ class StateMachine(Atom):
 
         return difference
 
-    def register_order(self, strategy: str, action: str, trade: ibi.Trade) -> None:
+    def register_order(
+        self,
+        strategy: str,
+        action: str,
+        trade: ibi.Trade,
+        callback: Optional[Callback] = None,
+    ) -> None:
         """
         Register order, register lock, verify that position has been registered.
 
@@ -250,7 +262,7 @@ class StateMachine(Atom):
         This method is called by :class:`Controller`.
         """
 
-        self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade)
+        self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade, callback)
         # isn't it handled by ib event callback in state_machine?
         self._orders_by_strategy[strategy].append(trade.order)
 
@@ -288,6 +300,7 @@ class StateMachine(Atom):
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
             try:
+                # local variable strategy referenced before assignment
                 strategy = self.orders[trade.order.orderId].strategy
             except KeyError:
                 log.warning(

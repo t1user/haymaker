@@ -91,7 +91,7 @@ class FixedStop(AbstractBracketLeg):
             "action": params["reverseAction"],
             "totalQuantity": params["amount"],
             "auxPrice": sl_price,
-            # "outsideRth": True,
+            "outsideRth": True,
             "tif": "GTC",
         }
 
@@ -109,7 +109,7 @@ class TrailingStop(AbstractBracketLeg):
             "action": params["reverseAction"],
             "totalQuantity": params["amount"],
             "auxPrice": distance,
-            # "outsideRth": True,
+            "outsideRth": True,
             "tif": "GTC",
         }
 
@@ -131,7 +131,7 @@ class AdjustableTrailingFixedStop(TrailingStop):
 
     fixed_stop_multiple: Multiple of ``stop_multiple`` to calculate stop
     price as.  Stop price distance from entry price is
-    ``fixed_stop_multiple`` * ``stop_multiple`` * ``vol_filed``
+    ``fixed_stop_multiple`` * ``stop_multiple`` * ``vol_field``
 
     vol_field: (default: ``atr``) Volatility measure used to calculate
     stop loss distance from entry price
