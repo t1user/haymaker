@@ -1,3 +1,4 @@
+import asyncio
 import random
 from itertools import count
 
@@ -5,6 +6,7 @@ import ib_insync as ibi
 import pytest
 
 from ib_tools.controller import Controller
+from ib_tools.manager import IB
 
 
 @pytest.fixture
@@ -101,3 +103,15 @@ def test_check_for_orphan_positions(trades_and_positions, controller):
     trades.pop()
     orphan_positions = controller.check_for_orphan_positions(trades, positions)
     assert orphan_positions == [positions[-1]]
+
+
+@pytest.mark.asyncio
+async def test_StateMachine_linked_to_ib_newOrderEvent(caplog):
+    IB.newOrderEvent.emit(ibi.Trade(order=ibi.Order(orderId=123)))
+    await asyncio.sleep(0.2)
+    assert "123" in caplog.text
+
+
+def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):
+    """TODO: This doesnt test anythin yet."""
+    IB.orderStatusEvent.emit(456)

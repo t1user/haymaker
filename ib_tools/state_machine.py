@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
+from collections import UserDict, defaultdict
 from functools import partial
-from typing import TYPE_CHECKING, Any, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, Iterator, NamedTuple, Optional
+from weakref import ref
 
 import ib_insync as ibi
 
@@ -23,6 +24,11 @@ class OrderInfo(NamedTuple):
     action: str
     trade: ibi.Trade
     callback: Optional[Callback]
+
+
+class OrderContainer(UserDict):
+    def strategy(self, strategy: str) -> Iterator[OrderInfo]:
+        return (oi for oi in self.data.values() if oi.strategy == strategy)
 
 
 class StateMachine(Atom):
@@ -86,16 +92,11 @@ class StateMachine(Atom):
 
     def __init__(self) -> None:
         super().__init__()
-        self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
-        self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
 
         self.data: dict[str, AbstractExecModel] = {}
         self._locks: dict[str, Lock] = {}
-        self._position_dict: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
-        self.orders: dict[int, OrderInfo] = {}
-        # keeps open orders for every strategy
-        # STOP LOSSES WHEN HIT RAISE ERRORS HERE (KeyError)
-        self._orders_by_strategy: defaultdict[str, list[ibi.Order]] = defaultdict(list)
+        # self._position_dict: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
+        self.orders = OrderContainer()
 
     def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
         """
@@ -117,7 +118,7 @@ class StateMachine(Atom):
             amount = data["amount"]
             target_position = data["target_position"]
             exec_model = data["exec_model"]
-            await asyncio.sleep(10)
+            await asyncio.sleep(15)
             self.verify_transaction_integrity(
                 strategy, amount, target_position, exec_model
             )
@@ -138,7 +139,7 @@ class StateMachine(Atom):
         required?
         """
         log.debug(
-            f"Transaction OK? {sign(exec_model.position) == target_position} "
+            f"Transaction OK? ->{sign(exec_model.position) == target_position}<- "
             f"target_position: {target_position}, position: {sign(exec_model.position)}"
             f"->> {exec_model.strategy}"
         )
@@ -148,100 +149,6 @@ class StateMachine(Atom):
             # assert exec_model.position == abs(amount)
         except AssertionError:
             log.critical(f"Wrong position for {strategy}", exc_info=True)
-
-    def position(self, strategy: str) -> float:
-        """
-        Return information about position held by strategy identified
-        by `strategy`.
-
-        If this `strategy` hasn't been created, than there is no position
-        for it.  Otherwise :class:`AbstractExecModel` contains info
-        about `strategy`'s position.
-        """
-        # Check not only position but pending position openning orders
-        # THIS IS NOT READY !!!! -----> TODO
-        exec_model_or_none = self.data.get(strategy)
-        assert exec_model_or_none
-        if exec_model_or_none.position:
-            return exec_model_or_none.position
-        elif orders := self._orders_by_strategy[strategy]:
-            log.debug(f"Orders for strategy {strategy}: {orders}")
-            for order in orders:
-                order_info = self.orders[order.orderId]
-                if order_info.action == "OPEN" and order_info.trade.isActive():
-                    return order.totalQuantity * (
-                        1 if order.action.upper() == "BUY" else -1
-                    )
-        return 0.0
-
-    # def verify_positions_and_orders(self):
-    #     positions = self.ib.positions()
-    #     orders = self.ib.openOrders()
-
-    def locked(self, strategy: str) -> Lock:
-        lock_or_none = self._locks.get(strategy)
-        if lock_or_none:
-            return lock_or_none
-        else:
-            return 0
-
-    def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
-        self._locks[strategy] = 1 if trade.order.action == "BUY" else -1
-        log.debug(f"Registered lock: {strategy}: {self._locks[strategy]}")
-
-    def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
-        """Additional methods may be added in sub-class"""
-        # When exactly should the lock be registered to prevent double-dip?
-        self.register_lock(strategy, trade)
-
-    def register_position(self, strategy: str, trade: ibi.Trade):
-        # This is most likely redundand
-        self._position_dict[trade.contract].append(strategy)
-
-        # log.debug(
-        #     f"Registered position for {trade.contract.symbol}, position: "
-        #     f"{self._position_dict[trade.contract]}"
-        # )
-        self.verify_positions()
-
-    # def total_positions(self, contract: ibi.Contract) -> float:
-    #     total = 0.0
-    #     log.debug(f"self._position_dict[contract]={self._position_dict[contract]}")
-    #     for strategy_key in self._position_dict[contract]:
-    #         total += self.data[strategy_key].position
-    #     return total
-
-    def total_positions(self) -> defaultdict[int, float]:
-        d: defaultdict[int, float] = defaultdict(float)
-        for exec_model in self.data.values():
-            if exec_model.active_contract:
-                d[exec_model.active_contract.conId] += exec_model.position
-        log.debug(f"Total positions: {d}")
-        return d
-
-    def position_for_contract(self, conId: int) -> float:
-        return self.total_positions().get(conId) or 0.0
-
-    def verify_positions(self) -> list[ibi.Contract]:
-        """
-        Compare positions actually held with broker with position
-        records.  Return differences if any and log an error.
-        """
-
-        # list of contracts where differences occur
-        difference: list[ibi.Contract] = []
-
-        broker_positions = self.ib.positions()
-        for position in broker_positions:
-            if position.position != self.position_for_contract(position.contract.conId):
-                log.error(
-                    f"Position discrepancy for {position.contract.conId}, "
-                    f"mine: {self.position_for_contract(position.contract.conId)}, "
-                    f"theirs: {position.position}"
-                )
-                difference.append(position.contract)
-
-        return difference
 
     def register_order(
         self,
@@ -263,73 +170,87 @@ class StateMachine(Atom):
         """
 
         self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade, callback)
-        # isn't it handled by ib event callback in state_machine?
-        self._orders_by_strategy[strategy].append(trade.order)
 
         if action.upper() == "OPEN":
             trade.filledEvent += partial(self.new_position_callbacks, strategy)
 
-        trade.filledEvent += partial(self.register_position, strategy)
+    def delete_order(self, orderId: int) -> None:
+        del self.orders[orderId]
+
+    def get_order(self, orderId: int) -> Optional[OrderInfo]:
+        return self.orders.get(orderId)
+
+    def position(self, strategy: str) -> float:
+        """
+        Return position for strategy.  Orders openning strategy are
+        treated as if they were already open.
+        """
+        # Check not only position but pending position openning orders
+        exec_model = self.data.get(strategy)
+        assert exec_model
+        if exec_model.position:
+            return exec_model.position
+        elif orders := self.orders.strategy(strategy):
+            log.debug(
+                f"Orders for {strategy}: {list(map(lambda x: x.trade.order, orders))}"
+            )
+            for order_info in orders:
+                trade = order_info.trade
+                if order_info.action == "OPEN" and trade.isActive():
+                    return trade.order.totalQuantity * (
+                        1.0 if trade.order.action.upper() == "BUY" else -1.0
+                    )
+        return 0.0
+
+    def locked(self, strategy: str) -> Lock:
+        return self._locks.get(strategy, 0)
+
+    # ### TODO: Re-do this
+    def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
+        self._locks[strategy] = 1 if trade.order.action == "BUY" else -1
+        log.debug(f"Registered lock: {strategy}: {self._locks[strategy]}")
+
+    def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
+        # When exactly should the lock be registered to prevent double-dip?
+        self.register_lock(strategy, trade)
+
+    # ###
+
+    def total_positions(self) -> defaultdict[ibi.Contract, float]:
+        d: defaultdict[ibi.Contract, float] = defaultdict(float)
+        for exec_model in self.data.values():
+            if exec_model.active_contract:
+                d[exec_model.active_contract] += exec_model.position
+        log.debug(f"Total positions: {d}")
+        return d
+
+    def position_for_contract(self, contract: ibi.Contract) -> float:
+        return self.total_positions().get(contract) or 0.0
+
+    def verify_positions(self) -> list[ibi.Contract]:
+        """
+        NOT IN USE
+        Compare positions actually held with broker with position
+        records.  Return differences if any and log an error.
+        """
+
+        # list of contracts where differences occur
+        difference: list[ibi.Contract] = []
+
+        broker_positions = self.ib.positions()
+        for position in broker_positions:
+            if position.position != self.position_for_contract(position.contract):
+                log.error(
+                    f"Position discrepancy for {position.contract}, "
+                    f"mine: {self.position_for_contract(position.contract)}, "
+                    f"theirs: {position.position}"
+                )
+                difference.append(position.contract)
+
+        return difference
 
     def register_cancel(self, trade, exec_model):
-        strategy = self.orders[trade.order.orderId].strategy
         del self.orders[trade.order.orderId]
-        self._orders_by_strategy[strategy].remove(trade.order)
-
-    async def handleNewOrderEvent(self, trade: ibi.Trade) -> None:
-        """
-        Check if the system knows about the order that was just posted
-        to the broker.
-
-        This is an event handler (callback).  Connected (subscribed)
-        to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
-        """
-
-        await asyncio.sleep(0.1)
-        existing_order_record = self.orders.get(trade.order.orderId)
-        if not existing_order_record:
-            log.critical(f"Unknown trade in the system {trade.order}")
-        else:
-            self._orders_by_strategy[existing_order_record.strategy].append(trade.order)
-
-    def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
-        if trade.order.orderId < 0:
-            log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
-        elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
-            messages = ";".join([m.message for m in trade.log])
-            log.error(f"Rejected order: {trade.order}, messages: {messages}")
-        elif trade.isDone():
-            try:
-                # local variable strategy referenced before assignment
-                strategy = self.orders[trade.order.orderId].strategy
-            except KeyError:
-                log.warning(
-                    f"Order status {trade.orderStatus} on order: {trade.order}, "
-                    f"for contract: {trade.contract.symbol} unknown order."
-                )
-            try:
-                self._orders_by_strategy[strategy].remove(trade.order)
-                log.debug(f"Order removed from active list: {trade.order}")
-            except ValueError:
-                log.error(
-                    f"Strategy {strategy} not in _orders_by_strategy: "
-                    f"{self._orders_by_strategy}. !!!!!!!!FIX THIS ERROR!!!!!!!!!!!"
-                )
-
-        else:
-            log.debug(
-                f"Order IS ACTIVE? {trade.isActive()} status: {trade.orderStatus} for "
-                f"order: {trade.order} "
-                f"contract: {trade.contract.symbol}"
-            )
-            pass
-
-    def handleErrorEvent(
-        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
-    ) -> None:
-        # reqId is most likely orderId
-        # order rejected is errorCode = 201
-        pass
 
     def __repr__(self):
         return self.__class__.__name__ + "()"

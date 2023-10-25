@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional
@@ -44,6 +45,10 @@ class Controller:
         self.blotter = blotter
         if blotter:
             self.ib.commissionReportEvent += self.onCommissionReport
+
+        self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
+        self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
+
         log.debug(f"Controller initiated: {self}")
 
     def _attach_logging_events(self):
@@ -189,6 +194,34 @@ class Controller:
                 diff[contract] = (amounts[0], amounts[1])
         return diff
 
+    async def handleNewOrderEvent(self, trade: ibi.Trade) -> None:
+        """
+        Check if the system knows about the order that was just posted
+        to the broker.
+
+        This is an event handler (callback).  Connected (subscribed)
+        to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
+        """
+
+        await asyncio.sleep(0.1)
+        existing_order_record = self.sm.get_order(trade.order.orderId)
+        if not existing_order_record:
+            log.critical(f"Unknown trade in the system {trade.order}")
+
+    def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
+        if trade.order.orderId < 0:
+            log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
+        elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
+            messages = ";".join([m.message for m in trade.log])
+            log.error(f"Rejected order: {trade.order}, messages: {messages}")
+        elif trade.isDone():
+            self.sm.delete_order(trade.order.orderId)
+        else:
+            log.debug(
+                f"{trade.contract.symbol}: OrderStatus ->{trade.orderStatus.status}<-"
+                f" for order: {trade.order},"
+            )
+
     def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ):
@@ -242,6 +275,8 @@ class Controller:
     ) -> None:
         pass
         if errorCode < 400:
+            # reqId is most likely orderId
+            # order rejected is errorCode = 201
             try:
                 strategy, action, trade, _ = self.sm.orders[reqId]
                 order = trade.order
