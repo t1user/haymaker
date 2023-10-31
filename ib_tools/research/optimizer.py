@@ -198,7 +198,6 @@ class Optimizer:
         sp_1: Iterable[float],
         sp_2: Iterable[float],
     ) -> List[Tuple[float, float]]:
-
         return [(p_1, p_2) for p_1 in sp_1 for p_2 in sp_2]
 
     def args_kwargs(
@@ -283,7 +282,7 @@ class Optimizer:
                 self.field_trans[i]: type(self.raw_stats[self.pairs[-50]].loc[i])
                 for i in self._fields
             }
-        except IndexError:
+        except (IndexError, KeyError):
             # if it's not a full table, just try the last item
             dtypes = {
                 self.field_trans[i]: type(self.raw_stats[self.pairs[-1]].loc[i])
@@ -496,7 +495,6 @@ class OptiWrapper:
 def plot_grid(
     data: Optimizer, fields: List[str] = ["annual_return", "sharpe_ratio"]
 ) -> None:
-
     if isinstance(fields, str):
         fields = ["annual_return", fields]
 
