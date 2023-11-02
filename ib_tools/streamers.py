@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
-from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
-from typing import Awaitable, ClassVar, Optional
+from typing import Awaitable, Callable, ClassVar, Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -20,8 +22,54 @@ class StaleDataError(Exception):
     pass
 
 
-class Streamer(Atom):
+class Timer:
+    def __init__(
+        self,
+        time: float,
+        event: ev.Event,
+        trading_hours: list[tuple[datetime, datetime]],
+        name: str = "",
+    ) -> None:
+        self.time = time
+        self.trading_hours = trading_hours
+        self.name = name
+        self._set_timeout(event)
+
+    is_active = staticmethod(misc.is_active)
+
+    def _on_timeout_error(self):
+        log.error(f"{self!s} Timeout broken...")
+
+    def _timeout_callback(self, *args) -> None:
+        log.debug(
+            f"{self!s} - No data for {self.time} secs. Market active?: "
+            f"{self.is_active(self.trading_hours)}"
+        )
+        if self.is_active(self.trading_hours):
+            log.error(f"{self!s} reset data?")
+            # raise StaleDataError(f"Stale data for {self.name}")
+
+    async def _reset_timeout(
+        self, timeout_event: ev.Event, event: ev.Event, *args
+    ) -> None:
+        log.debug(f"{self!s} Will reset timeout.")
+        event.disconnect(timeout_event)
+        self._set_timeout(event)
+
+    def _set_timeout(self, event: ev.Event) -> None:
+        timeout = event.timeout(self.time)
+        timeout.connect(
+            self._timeout_callback,
+            error=self._on_timeout_error,
+            done=partial(self._reset_timeout, event=event),
+        )
+        log.debug(f"{self!s} - Timeout set: {timeout}")
+
+
+class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
+    _counter: ClassVar[Callable[[], int]] = itertools.count().__next__
+    _name: Optional[str] = None
 
     def __new__(cls, *args, **kwargs):
         """
@@ -32,6 +80,9 @@ class Streamer(Atom):
         cls.instances.append(obj)
         return obj
 
+    # def __init__(self, name: Optional[str] = None):
+    #     self.name = name or STREAMER_ID()
+
     @classmethod
     def awaitables(cls) -> list[Awaitable]:
         """
@@ -40,17 +91,40 @@ class Streamer(Atom):
         """
         return [s.run() for s in cls.instances]
 
+    @abstractmethod
     def streaming_func(self):
         raise NotImplementedError
 
     async def run(self):
-        self.onStart(None, None)
+        """
+        Start subscription and start emitting data.  This is the main
+        entry point into the streamer.
+        """
+        self.onStart({})
         while True:
             await asyncio.sleep(0)
 
     def onStart(self, data, *args) -> None:
         ticker = self.streaming_func()
         ticker.updateEvent += self.dataEvent
+        self.startEvent.emit(data, self)
+
+    @property
+    def name(self):
+        if self._name:
+            return self._name
+        elif getattr(self, "contract", None):
+            identifier = self.contract.symbol
+        else:
+            identifier = self._counter()
+        return f"{self.__class__.__name__}<{identifier}>"
+
+    @name.setter
+    def name(self, value):
+        self._name = value
+
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}("{self.name}")'
 
 
 @dataclass
@@ -82,37 +156,6 @@ class HistoricalDataStreamer(Streamer):
             timeout=0,
         )
 
-    def _on_timeout_error(self):
-        log.error("TIMEOUT ERROR")
-
-    def _timeout_callback(self, *args) -> None:
-        log.debug(
-            f"No data for {self.timeout} secs. Market acitve?: "
-            f"{misc.is_active(self.trading_hours)}"
-        )
-        if misc.is_active(self.trading_hours):
-            raise StaleDataError
-
-    async def _reset_timeout(
-        self, timeout_event: ev.Event, event: ev.Event, *args
-    ) -> None:
-        log.debug("Will reset timout.")
-        event.disconnect(timeout_event)
-        self._set_timeout(event)
-
-    def _set_timeout(self, event: ev.Event) -> None:
-        timeout = event.timeout(self.timeout)
-        timeout.connect(
-            self._timeout_callback,
-            error=self._on_timeout_error,
-            done=partial(self._reset_timeout, event=event),
-        )
-        log.debug(f"Timeout connected {timeout}")
-        # loop = asyncio.get_event_loop()
-        # loop.call_soon(timeout)
-
-        log.debug("Timeout set")
-
     def date_to_delta(self, date: datetime) -> int:
         """
         Return number of bars (as per barSizeSetting) since date. Used to determine
@@ -130,22 +173,9 @@ class HistoricalDataStreamer(Streamer):
         # self.ib.reqMktData(self.contract, "221")
         self.startEvent.emit(data, self)
 
-    async def run(self) -> None:
-        log.debug(f"Requesting bars for {self.contract.localSymbol}")
-
-        if self.last_bar_date:
-            self.durationStr = f"{self.date_to_delta(self.last_bar_date)} S"
-
-        # if self.bars:
-        #    self.ib.cancelHistoricalData(self.bars)
-        bars = await self.streaming_func()
-        log.debug(f"Historical bars received for {self.contract.localSymbol}")
-
-        if self.timeout:
-            self._set_timeout(bars.updateEvent)
-
-        # ### this is startup (backfill) ###
+    async def backfill(self, bars):
         self.onStart({"startup": True})
+        log.debug(f"Starting backfill {self.name}, pulled {len(bars)} bars.")
         if self.last_bar_date:
             stream = (
                 ev.Sequence(bars[:-1])
@@ -156,12 +186,35 @@ class HistoricalDataStreamer(Streamer):
             stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
         await stream
         await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
-        log.debug(f"bars[0]: {bars[0]}, bars[-2] {bars[-2]}")
-        log.info(
-            f"Backfilled from {self.last_bar_date or bars[0].date} to {bars[-2].date}"
-        )
+        log.debug(f"{self.name}: bars[0]: {bars[0]}, bars[-2] {bars[-2]}")
+        try:
+            log.info(
+                f"{self.name} backfilled from {self.last_bar_date or bars[0].date} to "
+                f"{bars[-2].date}"
+            )
+            log.debug(f"Backfill completed {self.name}")
+        except Exception:
+            log.exception(f"Exception while trying to log bars: {bars}")
         self.onStart({"startup": False})
-        # ### end of startup (backfill) ###
+
+    async def run(self) -> None:
+        log.debug(f"Requesting bars for {self.contract.localSymbol}")
+
+        if self.last_bar_date:
+            self.durationStr = f"{self.date_to_delta(self.last_bar_date)} S"
+            log.debug(f"{self.name} duration str: {self.durationStr}")
+
+        bars = await self.streaming_func()
+        log.debug(f"Historical bars received for {self.contract.localSymbol}")
+
+        if bars:
+            log.debug(f"{self.name} first bar: {bars[0]}, last bar: {bars[-1]}")
+            await self.backfill(bars)
+        else:
+            log.debug(f"No backfill neccessary, bars: {bars}")
+
+        # if self.timeout:
+        #     Timer(self.timeout, bars.updateEvent, self.trading_hours)
 
         async for bars_, hasNewBar in bars.updateEvent:
             if hasNewBar:
@@ -181,7 +234,6 @@ class MktDataStreamer(Streamer):
     tickList: str
 
     def __post_init__(self):
-        """Relevant only if inherited by a dataclass."""
         Atom.__init__(self)
 
     def streaming_func(self) -> ibi.Ticker:
@@ -207,7 +259,7 @@ class RealTimeBarsStreamer(Streamer):
         )
 
     def onStart(self, data, *args) -> None:
-        # this is a sync function
+        self.startEvent.emit(data, self)
         self._run()
 
     def _run(self):
