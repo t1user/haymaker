@@ -3,7 +3,19 @@ from __future__ import annotations
 import dataclasses
 import logging
 from datetime import datetime
-from typing import Any, ClassVar, Coroutine, Protocol, Sequence, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Coroutine,
+    Protocol,
+    Sequence,
+    Type,
+    Union,
+)
+
+if TYPE_CHECKING:
+    from ib_tools.manager import InitData
 
 import ib_insync as ibi
 
@@ -11,7 +23,6 @@ log = logging.getLogger(__name__)
 
 
 ContractOrSequence = Union[Sequence[ibi.Contract], ibi.Contract]
-CONTRACT_LIST: list[ibi.Contract] = list()
 
 
 class Atom:
@@ -21,21 +32,22 @@ class Atom:
     """
 
     ib: ClassVar[ibi.IB]
+    _contract_details: ClassVar[dict[ibi.Contract, ibi.ContractDetails]]
     _trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]]
     _contract: ContractOrSequence
     events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
 
-    contracts = CONTRACT_LIST
+    contracts: list[ibi.Contract] = list()
+
+    # @classmethod
+    # def set_ib(cls, ib: ibi.IB) -> None:
+    #     cls.ib = ib
 
     @classmethod
-    def set_ib(cls, ib: ibi.IB) -> None:
-        cls.ib = ib
-
-    @classmethod
-    def set_trading_hours(
-        cls, trading_hours: dict[ibi.Contract, list[tuple[datetime, datetime]]]
-    ) -> None:
-        cls._trading_hours = trading_hours
+    def set_init_data(cls, data: InitData) -> None:
+        cls.ib = data.ib
+        cls._trading_hours = data.trading_hours
+        cls._contract_details = data.contract_details
 
     def __init__(self) -> None:
         self._createEvents()
