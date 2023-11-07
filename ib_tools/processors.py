@@ -25,7 +25,7 @@ class BarAggregator(Atom):
 
     def onStart(self, data, *args):
         if isinstance(data, dict):
-            startup = data["startup"]
+            startup = data.get("startup")
             # prevent logging messages during startup phase
             if startup and not self._debug:
                 log.setLevel(logging.ERROR)
@@ -35,14 +35,21 @@ class BarAggregator(Atom):
 
     def onDataBar(self, bars, *args):
         if self._incremental_only:
-            self.dataEvent.emit(bars[-1])
+            try:
+                self.dataEvent.emit(bars[-1])
+            except KeyError:
+                log.debug(f"Empty input from filter {self._filter}")
         else:
             self.dataEvent.emit(bars)
 
     def onData(self, data, *args) -> None:
         if isinstance(data, ibi.BarDataList):
             # Streamers with incremental_only=False have not been properly tested!
-            data = data[-1]
+            log.critical("WE SHOULD NOT BE HERE")
+            try:
+                data = data[-1]
+            except KeyError:
+                log.debug("Empty input from streamer.")
         self._filter.on_source(data)
 
 
@@ -104,6 +111,9 @@ class VolumeBars(ev.Op):
         self.label = label
 
     def on_source(self, new_bar: ibi.BarData, *args) -> None:
+        # filter out faulty bars emitted as first daily bars
+        if new_bar.volume < 0 or new_bar.barCount < 0:
+            return
         if not self.bars or self.bars[-1].volume >= self._volume:
             bar = new_bar
             bar.average = bar.average * bar.volume

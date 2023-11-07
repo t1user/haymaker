@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import itertools
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from typing import Awaitable, Callable, ClassVar, Optional
@@ -86,7 +87,7 @@ class Streamer(Atom, ABC):
     @classmethod
     def awaitables(cls) -> list[Awaitable]:
         """
-        Coroutines from all instantiated streamers.  Used to put in
+        Coroutines from all instantiated streamers.  Can be passed to
         :py:`asyncio.gather`
         """
         return [s.run() for s in cls.instances]
@@ -124,7 +125,7 @@ class Streamer(Atom, ABC):
         self._name = value
 
     def __str__(self) -> str:
-        return f'{self.__class__.__name__}("{self.name}")'
+        return self.name
 
 
 @dataclass
@@ -176,18 +177,24 @@ class HistoricalDataStreamer(Streamer):
     async def backfill(self, bars):
         self.onStart({"startup": True})
         log.debug(f"Starting backfill {self.name}, pulled {len(bars)} bars.")
+        log.debug(f"{self.name} last bar date: {self.last_bar_date}")
+        log.debug(f"{self.name} last bar: {bars[-1]}")
         if self.last_bar_date:
+            log.debug(f"{self.name} in")
             stream = (
                 ev.Sequence(bars[:-1])
                 .pipe(ev.Filter(lambda x: x.date > self.last_bar_date))
                 .connect(self.dataEvent)
             )
+            log.debug(f"{self.name} out")
         else:
             stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
+        log.debug(f"{self.name} about to await stream")
         await stream
+        log.debug(f"{self.name} stream awaited.")
         await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
-        log.debug(f"{self.name}: bars[0]: {bars[0]}, bars[-2] {bars[-2]}")
         try:
+            log.debug(f"{self.name}: bars[0]: {bars[0]}, bars[-2] {bars[-2]}")
             log.info(
                 f"{self.name} backfilled from {self.last_bar_date or bars[0].date} to "
                 f"{bars[-2].date}"
@@ -207,11 +214,14 @@ class HistoricalDataStreamer(Streamer):
         bars = await self.streaming_func()
         log.debug(f"Historical bars received for {self.contract.localSymbol}")
 
-        if bars:
+        backfill_predicate = (not self.last_bar_date) or (
+            self.last_bar_date < bars[-2].date
+        )
+        if bars and backfill_predicate:
             log.debug(f"{self.name} first bar: {bars[0]}, last bar: {bars[-1]}")
             await self.backfill(bars)
         else:
-            log.debug(f"No backfill neccessary, bars: {bars}")
+            log.debug(f"{self!s}: No backfill needed.")
 
         # if self.timeout:
         #     Timer(self.timeout, bars.updateEvent, self.trading_hours)

@@ -57,6 +57,14 @@ class Controller:
         self.ib.orderModifyEvent += self.log_modification
         self.ib.errorEvent += self.log_error
 
+    async def init(self, *args, **kwargs) -> None:
+        for trade in self.ib.openTrades():
+            self.sm.orders.update_trade(trade)
+            log.debug(
+                f"Order updated: {trade.order.orderId} {trade.order.action}"
+                f" {trade.order.orderType} {trade.contract.symbol}"
+            )
+
     def trade(
         self,
         contract: ibi.Contract,
@@ -82,7 +90,8 @@ class Controller:
         trade = self.trader.cancel(trade)
         if callback is not None:
             callback(trade)
-        self.sm.register_cancel(trade, exec_model)
+        # orders are cancelled by callbacks so this is duplicating
+        # self.sm.register_cancel(trade, exec_model)
 
     @staticmethod
     def check_for_orphan_positions(
@@ -215,7 +224,18 @@ class Controller:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
-            self.sm.delete_order(trade.order.orderId)
+            try:
+                self.sm.delete_order(trade.order.orderId)
+                log.debug(
+                    f"{trade.contract.symbol}: order {trade.order.orderType} done"
+                    f" {trade.orderStatus.status}."
+                )
+            except KeyError:
+                log.debug(
+                    f"Unknown order cancelled id: {trade.order.orderId} "
+                    f"{trade.order.action} {trade.contract.symbol}"
+                )
+
         else:
             log.debug(
                 f"{trade.contract.symbol}: OrderStatus ->{trade.orderStatus.status}<-"

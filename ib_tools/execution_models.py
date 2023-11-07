@@ -181,9 +181,13 @@ class BaseExecModel(AbstractExecModel):
         "algoStrategy": "Adaptive",
         "algoParams": [ibi.TagValue("adaptivePriority", "Normal")],
         "tif": "Day",
+        # "useRTH": False, TODO: investigate
     }
-    _close_order = {"orderType": "MKT", "tif": "GTC"}
-    _reverse_order = _open_order
+    _close_order = {
+        "orderType": "MKT",
+        "tif": "GTC",
+        # "useRTH": False TODO: investigate
+    }
 
     def __init__(
         self,
@@ -218,6 +222,7 @@ class BaseExecModel(AbstractExecModel):
     def trade_callback(
         self, trade: ibi.Trade, callback: Optional[misc.Callback] = None
     ) -> None:
+        trade.fillEvent -= self.register_position
         trade.fillEvent += self.register_position
         if callback is not None:
             callback(trade)
@@ -360,9 +365,6 @@ class EventDrivenExecModel(BaseExecModel):
         self.brackets: list[Bracket] = []
         log.debug(f"execution model initialized {self}")
 
-    def onData(self, data, *args):
-        super().onData(data, *args)
-
     def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
         """
         Save information required for bracket orders and attach events
@@ -371,6 +373,7 @@ class EventDrivenExecModel(BaseExecModel):
         attach_bracket = partial(self._attach_bracket, params=data)
 
         def callback_open_trade(trade):
+            trade.filledEvent -= attach_bracket
             trade.filledEvent += attach_bracket
 
         super().open(data, callback_open_trade)
@@ -381,6 +384,7 @@ class EventDrivenExecModel(BaseExecModel):
         """
 
         def callback_close_trade(trade: ibi.Trade) -> None:
+            trade.filledEvent -= self.remove_bracket
             trade.filledEvent += self.remove_bracket
 
         super().close(data, callback_close_trade)
@@ -413,6 +417,7 @@ class EventDrivenExecModel(BaseExecModel):
             self.brackets.append(Bracket(label, order_key, bracket_kwargs, trade))
 
         def callback_bracket_trade(trade, label="", bracket_kwargs=None):
+            trade.filledEvent += self.bracket_filled_callback
             trade.filledEvent += self.bracket_filled_callback
             save_bracket(label, bracket_kwargs, trade)
 

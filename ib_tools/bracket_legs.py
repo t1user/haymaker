@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import ib_insync as ibi
 
-from .manager import CONTRACT_DETAILS
+from .manager import INIT_DATA
 from .misc import round_tick
 
 log = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class AbstractBracketLeg(ABC):
     parameters for appropriate bracket order.
     """
 
-    details = CONTRACT_DETAILS
+    details = INIT_DATA.contract_details
     vol_field: str = "atr"
 
     def __init__(self, stop_multiple: float, vol_field: Optional[str] = None) -> None:

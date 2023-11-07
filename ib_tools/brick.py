@@ -29,13 +29,11 @@ class AbstractBaseBrick(Atom, ABC):
             log.log(5, f"Updated dict on start: {data}")
         super().onStart(data, *args)
 
-        # self.startEvent.emit({"strategy": self.strategy}, self)
-
     def onData(self, data, *args) -> None:
         startup = self.__dict__.get("startup")
         if not startup:
             d = self._params(**self._signal(data))
-            log.log(5, d)
+            # log.log(5, d)
             self.dataEvent.emit(d)
 
     @abstractmethod

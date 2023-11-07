@@ -5,7 +5,6 @@ import logging
 from collections import UserDict, defaultdict
 from functools import partial
 from typing import TYPE_CHECKING, Any, Iterator, NamedTuple, Optional
-from weakref import ref
 
 import ib_insync as ibi
 
@@ -29,6 +28,13 @@ class OrderInfo(NamedTuple):
 class OrderContainer(UserDict):
     def strategy(self, strategy: str) -> Iterator[OrderInfo]:
         return (oi for oi in self.data.values() if oi.strategy == strategy)
+
+    def update_trade(self, trade) -> None:
+        oi = self.get(trade.order.orderId)
+        if oi:
+            oi.callback(trade)
+            new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.callback)
+            self[trade.order.orderId] = new_oi
 
 
 class StateMachine(Atom):
@@ -107,6 +113,7 @@ class StateMachine(Atom):
         exec_model, *_ = args
         self.data[strategy] = exec_model
         log.log(5, f"Registered execution models {list(self.data.keys())}")
+        self.init()
 
     async def onData(self, data, *args) -> None:
         """
@@ -168,7 +175,10 @@ class StateMachine(Atom):
 
         This method is called by :class:`Controller`.
         """
-
+        log.debug(
+            f"{trade.order.orderType} orderId: {trade.order.orderId} registered for: "
+            f"{trade.contract.localSymbol}"
+        )
         self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade, callback)
 
         if action.upper() == "OPEN":
@@ -185,36 +195,45 @@ class StateMachine(Atom):
         Return position for strategy.  Orders openning strategy are
         treated as if they were already open.
         """
-        # Check not only position but pending position openning orders
+        # Verify that broker's position records are the same as mine
+
         exec_model = self.data.get(strategy)
         assert exec_model
+
         if exec_model.position:
             return exec_model.position
+
+        # Check not only position but pending position openning orders
         elif orders := self.orders.strategy(strategy):
             log.debug(
                 f"Orders for {strategy}: {list(map(lambda x: x.trade.order, orders))}"
             )
             for order_info in orders:
                 trade = order_info.trade
-                if order_info.action == "OPEN" and trade.isActive():
+                log.debug(
+                    f"Order action: {order_info.action} is active: {trade.isActive()}"
+                    f"amount: {trade.order.totalQuantity}, "
+                    f"direction {trade.order.action.upper()}"
+                )
+                if order_info.action == "OPEN":  # and trade.isActive():
                     return trade.order.totalQuantity * (
                         1.0 if trade.order.action.upper() == "BUY" else -1.0
                     )
         return 0.0
 
+    def verify_position_for_contract(self, contract):
+        my_position = self.position_for_contract[contract]
+        ib_position = self.ib_position_for_contract[contract]
+
     def locked(self, strategy: str) -> Lock:
         return self._locks.get(strategy, 0)
 
-    # ### TODO: Re-do this
-    def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
-        self._locks[strategy] = 1 if trade.order.action == "BUY" else -1
-        log.debug(f"Registered lock: {strategy}: {self._locks[strategy]}")
+    def position_for_contract(self, contract: ibi.Contract) -> float:
+        return self.total_positions().get(contract) or 0.0
 
-    def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
-        # When exactly should the lock be registered to prevent double-dip?
-        self.register_lock(strategy, trade)
-
-    # ###
+    def ib_position_for_contract(self, contract: ibi.Contract) -> float:
+        positions = {p.contract: p.position for p in self.ib.positions()}
+        return positions.get(contract, 0.0)
 
     def total_positions(self) -> defaultdict[ibi.Contract, float]:
         d: defaultdict[ibi.Contract, float] = defaultdict(float)
@@ -223,9 +242,6 @@ class StateMachine(Atom):
                 d[exec_model.active_contract] += exec_model.position
         log.debug(f"Total positions: {d}")
         return d
-
-    def position_for_contract(self, contract: ibi.Contract) -> float:
-        return self.total_positions().get(contract) or 0.0
 
     def verify_positions(self) -> list[ibi.Contract]:
         """
@@ -249,8 +265,19 @@ class StateMachine(Atom):
 
         return difference
 
-    def register_cancel(self, trade, exec_model):
-        del self.orders[trade.order.orderId]
+    # ### TODO: Re-do this
+    def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
+        self._locks[strategy] = 1 if trade.order.action == "BUY" else -1
+        log.debug(f"Registered lock: {strategy}: {self._locks[strategy]}")
+
+    def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
+        # When exactly should the lock be registered to prevent double-dip?
+        self.register_lock(strategy, trade)
+
+    # ###
+
+    # def register_cancel(self, trade, exec_model):
+    #     del self.orders[trade.order.orderId]
 
     def __repr__(self):
         return self.__class__.__name__ + "()"
