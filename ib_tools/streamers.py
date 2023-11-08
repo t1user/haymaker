@@ -232,7 +232,17 @@ class HistoricalDataStreamer(Streamer):
                 self.on_new_bar(bars_[:-1])
 
     def on_new_bar(self, bars: ibi.BarDataList) -> None:
-        if self.incremental_only:
+        if any(
+            (
+                bars[-1].close <= 0,
+                bars[-1].open <= 0,
+                bars[-1].high <= 0,
+                bars[-1].low <= 0,
+                bars[-1].average <= 0,
+            )
+        ):
+            return
+        elif self.incremental_only:
             self.dataEvent.emit(bars[-1])
         else:
             self.dataEvent.emit(bars)

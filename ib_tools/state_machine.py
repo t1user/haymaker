@@ -113,7 +113,6 @@ class StateMachine(Atom):
         exec_model, *_ = args
         self.data[strategy] = exec_model
         log.log(5, f"Registered execution models {list(self.data.keys())}")
-        self.init()
 
     async def onData(self, data, *args) -> None:
         """

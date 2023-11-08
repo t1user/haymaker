@@ -65,7 +65,7 @@ class AbstractDfBrick(AbstractBaseBrick):
         d = self.df_row(data).to_dict()
         if self.df_columns:
             d = {k: v for k, v in d.items() if k in self.df_columns}
-        d["signal"] = d[self.signal_column]
+        d["signal"] = int(d[self.signal_column])
         return d
 
     def df_row(self, data) -> pd.Series:

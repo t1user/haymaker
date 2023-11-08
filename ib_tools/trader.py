@@ -38,7 +38,10 @@ class Trader:
     def cancel(self, trade: ibi.Trade):
         order = trade.order
         cancelled_trade = self.ib.cancelOrder(order)
-        log.info(f"Cancelled {order.orderType} for {trade.contract.localSymbol}")
+        log.info(
+            f"Cancelled {order.orderType} {order.orderId} "
+            f"for {trade.contract.localSymbol}"
+        )
         return cancelled_trade
 
     def trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
