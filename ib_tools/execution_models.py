@@ -254,14 +254,14 @@ class BaseExecModel(AbstractExecModel):
         if fill.execution.side == "BOT":
             self.position += fill.execution.shares
             log.debug(
-                f"Registered BUY {trade.order.orderType} for {self.strategy} "
-                f"--> position: {self.position}"
+                f"Registered {trade.order.orderId} BUY {trade.order.orderType} "
+                f"for {self.strategy} --> position: {self.position}"
             )
         elif fill.execution.side == "SLD":
             self.position -= fill.execution.shares
             log.debug(
-                f"Registered SELL {trade.order.orderType} for {self.strategy} "
-                f"--> position: {self.position}"
+                f"Registered {trade.order.orderId} SELL {trade.order.orderType} "
+                f"for {self.strategy} --> position: {self.position}"
             )
         else:
             log.critical(
@@ -362,7 +362,7 @@ class EventDrivenExecModel(BaseExecModel):
             )
         self.stop = stop
         self.take_profit = take_profit
-        self.brackets: list[Bracket] = []
+        self.brackets: dict[int, Bracket] = {}
         log.debug(f"execution model initialized {self}")
 
     def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
@@ -414,7 +414,9 @@ class EventDrivenExecModel(BaseExecModel):
             bracket_kwargs: dict,
             trade: ibi.Trade,
         ):
-            self.brackets.append(Bracket(label, order_key, bracket_kwargs, trade))
+            self.brackets[trade.order.orderId] = Bracket(
+                label, order_key, bracket_kwargs, trade
+            )
 
         def callback_bracket_trade(trade, label="", bracket_kwargs=None):
             trade.filledEvent += self.bracket_filled_callback
@@ -440,9 +442,9 @@ class EventDrivenExecModel(BaseExecModel):
         is missing.
         """
 
-        for bracket in self.brackets.copy():
+        for orderId, bracket in self.brackets.copy().items():
             log.info(f"attempt to re-attach bracket {bracket}")
-            self.brackets.remove(bracket)
+            del self.brackets[orderId]
             self._place_bracket(
                 bracket.trade.contract,
                 bracket.order_key,
@@ -455,12 +457,18 @@ class EventDrivenExecModel(BaseExecModel):
         # it may be either a close transaction or one of the brackets
         # in either case position is closed and we need to remove
         # remaining brackets if any
-        for bracket in self.brackets.copy():
+        for orderId, bracket in self.brackets.copy().items():
             if not bracket.trade.isDone():
                 # trade may be one of the brackets
-                if bracket.trade != trade:
+                if orderId != trade.order.orderId:
+                    log.debug(
+                        f"Will attempt to remove: {bracket.label} "
+                        f"{trade.order.orderId} {trade.contract.symbol} "
+                        f"{trade.order.orderType} {trade.order.action}"
+                        f"trade object id: {id(trade)}"
+                    )
                     self.cancel(bracket.trade)
-                self.brackets.remove(bracket)
+                del self.brackets[orderId]
 
     bracket_filled_callback = remove_bracket
 

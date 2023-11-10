@@ -39,10 +39,6 @@ class Atom:
 
     contracts: list[ibi.Contract] = list()
 
-    # @classmethod
-    # def set_ib(cls, ib: ibi.IB) -> None:
-    #     cls.ib = ib
-
     @classmethod
     def set_init_data(cls, data: InitData) -> None:
         cls.ib = data.ib
@@ -69,8 +65,11 @@ class Atom:
         received only for this contract, otherwise
         :attr:`trading_hours` will return all available trading hours
         """
-
-        th = Atom._trading_hours
+        try:
+            th = Atom._trading_hours
+        except AttributeError:
+            log.warning("Trading hours not set.")
+            return {}
         try:
             th_for_contract_or_none = th.get(self.contract)
         except AttributeError:  # attribute contract is not set

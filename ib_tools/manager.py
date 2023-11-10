@@ -4,12 +4,13 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Final, Protocol, cast
+from typing import Final, Optional, Protocol, cast
 
 import ib_insync as ibi
 
 from ib_tools import misc
 from ib_tools.base import Atom
+from ib_tools.blotter import AbstractBaseBlotter
 from ib_tools.controller import Controller
 from ib_tools.logging import setup_logging_queue
 
@@ -21,28 +22,53 @@ log = logging.getLogger(__name__)
 
 ibi.util.patchAsyncio()
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s"
-    " | %(module)s %(funcName)s %(lineno)d",
-    level=5,
-)
-
+# ------------ logging setup ---------------
+level = 5
 logging.addLevelName(5, "DATA")
 logging.addLevelName(60, "NOTIFY")
 
+logger = logging.getLogger("ib_tools")
+logger.setLevel(level)
+
+
+formatter = logging.Formatter(
+    "%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s"
+    " | %(module)s %(funcName)s %(lineno)d"
+)
+
+rfh = logging.handlers.TimedRotatingFileHandler(
+    "/home/tomek/ib_data/test_logs/dummy.log", when="D"
+)
+rfh.setLevel(level)
+rfh.setFormatter(formatter)
+
+sh = logging.StreamHandler()
+sh.setLevel(level)
+sh.setFormatter(formatter)
+
+logger.addHandler(rfh)
+logger.addHandler(sh)
+
+# logging.basicConfig(
+#     format="%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s"
+#     " | %(module)s %(funcName)s %(lineno)d",
+#     level=5,
+# )
+
 # shut up foreign loggers
-logging.getLogger("ib_insync").setLevel(logging.ERROR)
+# logging.getLogger("ib_insync").setLevel(logging.ERROR)
 
-stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.INFO)
-watchdog_logger = logging.getLogger("ib_insync.Watchdog")
-watchdog_logger.setLevel(logging.INFO)
-watchdog_logger.addHandler(stream_handler)
+# stream_handler = logging.StreamHandler()
+# stream_handler.setLevel(logging.INFO)
+# watchdog_logger = logging.getLogger("ib_insync.Watchdog")
+# watchdog_logger.setLevel(logging.INFO)
+# watchdog_logger.addHandler(stream_handler)
 
-logging.getLogger("asyncio").setLevel(logging.INFO)
-logging.getLogger("numba").setLevel(logging.CRITICAL)
+# logging.getLogger("asyncio").setLevel(logging.INFO)
+# logging.getLogger("numba").setLevel(logging.CRITICAL)
 
 setup_logging_queue()
+# ------------ end logging setup ---------------
 
 
 @dataclass
@@ -69,7 +95,7 @@ class InitData:
 
     async def acquire_contract_details(self) -> "InitData":
         for contract in set(self.contract_list):
-            log.debug(f"Acquiring details for: {contract}")
+            log.debug(f"Acquiring details for: {contract.symbol}")
             details_ = await IB.reqContractDetailsAsync(contract)
             try:
                 assert len(details_) == 1
@@ -114,10 +140,23 @@ class Jobs:
 
     async def __call__(self):
         await self.init_data()
-        log.info(f"Open positions on restart: {IB.positions()}")
-        log.info(f"Orders on restart: {IB.openOrders()}")
+
+        log.info(
+            f"Open positions on restart: "
+            f"{ {p.contract.symbol: p.position for p in IB.positions()} }"
+        )
+        order_dict = {
+            t.contract.symbol: (
+                t.order.orderId,
+                t.order.orderType,
+                t.order.totalQuantity,
+            )
+            for t in IB.openTrades()
+        }
+        log.info(f"Orders on restart: {order_dict}")
+
         for streamer in self.streamers:
-            task = asyncio.create_task(streamer.run(), name=f"{streamer!s}")
+            task = asyncio.create_task(streamer.run(), name=f"{streamer!s}, ")
             log.debug(f"Task created: {task}")
 
             # Add task to the set. This creates a strong reference.
@@ -129,7 +168,7 @@ class Jobs:
             task.add_done_callback(self._tasks.discard)
             # ensure errors are logged for debugging
             task.add_done_callback(self._handle_error)
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await asyncio.gather(*self._tasks, return_exceptions=False)
 
 
 IB: Final[ibi.IB] = ibi.IB()
@@ -173,9 +212,12 @@ class App:
     retryDelay: float = 2
     probeContract: ibi.Contract = ibi.Forex("EURUSD")
     probeTimeout: float = 4
+    blotter: Optional[AbstractBaseBlotter] = None
 
     def __post_init__(self):
         self.ib.errorEvent += self.onError
+        if self.blotter:
+            CONTROLLER.config(blotter=self.blotter)
 
         self.watchdog = ibi.Watchdog(
             self.ibc,  # type: ignore
