@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 import itertools
 import logging
 from abc import ABC, abstractmethod
+from collections import UserDict, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
-from typing import Awaitable, Callable, ClassVar, Optional
+from typing import Awaitable, Callable, ClassVar, Optional, cast
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -23,18 +23,20 @@ class StaleDataError(Exception):
     pass
 
 
+@dataclass
 class Timer:
-    def __init__(
-        self,
-        time: float,
-        event: ev.Event,
-        trading_hours: list[tuple[datetime, datetime]],
-        name: str = "",
-    ) -> None:
-        self.time = time
-        self.trading_hours = trading_hours
-        self.name = name
-        self._set_timeout(event)
+    time: float
+    event: ev.Event
+    trading_hours: Optional[list[tuple[datetime, datetime]]] = None
+    name: str = ""
+    debug: bool = True
+    reset_delay: float = 0  # zero means no reset
+    init_delay: float = 70  # wait for system to initialize
+    _triggered: bool = False
+
+    def __post_init__(self):
+        if self.time:
+            asyncio.create_task(self._set_timeout(self.event))
 
     is_active = staticmethod(misc.is_active)
 
@@ -47,30 +49,72 @@ class Timer:
             f"{self.is_active(self.trading_hours)}"
         )
         if self.is_active(self.trading_hours):
-            log.error(f"{self!s} reset data?")
+            self.triggered_action()
+
+    def triggered_action(self):
+        self._triggered = True
+        if self.debug:
+            log.error(f"Stale streamer {self!s} Reset?")
+            return True
+        else:
+            pass
             # raise StaleDataError(f"Stale data for {self.name}")
 
     async def _reset_timeout(
         self, timeout_event: ev.Event, event: ev.Event, *args
     ) -> None:
+        if not self.reset_delay:
+            return
         log.debug(f"{self!s} Will reset timeout.")
         event.disconnect(timeout_event)
-        self._set_timeout(event)
+        await asyncio.sleep(self.reset_delay)
+        self._triggered = False
+        await self._set_timeout(event)
 
-    def _set_timeout(self, event: ev.Event) -> None:
+    async def _set_timeout(self, event: ev.Event) -> None:
+        await asyncio.sleep(self.init_delay)
         timeout = event.timeout(self.time)
         timeout.connect(
             self._timeout_callback,
             error=self._on_timeout_error,
             done=partial(self._reset_timeout, event=event),
         )
-        log.debug(f"{self!s} - Timeout set: {timeout}")
+        log.debug(f"Timeout set: {self!s}")
+
+    def __str__(self) -> str:
+        return f"Timer <{self.time}s> for {self.name}"
+
+
+class TimerContainerDefaultdict(defaultdict):
+    def __missing__(self, key):
+        self[key] = self.default_factory(key)
+        return self[key]
+
+
+class TimerContainer(UserDict):
+    def __init__(self, streamer: "Streamer"):
+        self.streamer = streamer
+        super().__init__()
+
+    def __setitem__(self, key: str, obj) -> None:
+        if isinstance(obj, ev.Event):
+            obj = Timer(
+                self.streamer.timeout,
+                obj,
+                self.streamer.trading_hours,
+                str(self.streamer),
+            )
+        super().__setitem__(key, obj)
 
 
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
+    timeout: float = 0
     _counter: ClassVar[Callable[[], int]] = itertools.count().__next__
     _name: Optional[str] = None
+    _timers: TimerContainerDefaultdict = TimerContainerDefaultdict(
+        cast(Callable, TimerContainer)
+    )
 
     def __new__(cls, *args, **kwargs):
         """
@@ -80,9 +124,6 @@ class Streamer(Atom, ABC):
         obj = super().__new__(cls)
         cls.instances.append(obj)
         return obj
-
-    # def __init__(self, name: Optional[str] = None):
-    #     self.name = name or STREAMER_ID()
 
     @classmethod
     def awaitables(cls) -> list[Awaitable]:
@@ -111,6 +152,17 @@ class Streamer(Atom, ABC):
         self.startEvent.emit(data, self)
 
     @property
+    def timers(self) -> dict[str, ev.Event]:
+        return self._timers[self]
+
+    @timers.setter
+    def timers(self, event: ev.Event) -> None:
+        raise ValueError(
+            "Stream event cannot be overridden. "
+            "Try using: `self.stream_event[key] = event`"
+        )
+
+    @property
     def name(self):
         if self._name:
             return self._name
@@ -128,7 +180,7 @@ class Streamer(Atom, ABC):
         return self.name
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class HistoricalDataStreamer(Streamer):
     contract: ibi.Contract
     durationStr: str
@@ -212,6 +264,7 @@ class HistoricalDataStreamer(Streamer):
             log.debug(f"{self.name} duration str: {self.durationStr}")
 
         bars = await self.streaming_func()
+        self.timers["bars"] = bars.updateEvent
         log.debug(f"Historical bars received for {self.contract.localSymbol}")
 
         backfill_predicate = (not self.last_bar_date) or (
@@ -223,11 +276,10 @@ class HistoricalDataStreamer(Streamer):
         else:
             log.debug(f"{self!s}: No backfill needed.")
 
-        # if self.timeout:
-        #     Timer(self.timeout, bars.updateEvent, self.trading_hours)
-
         async for bars_, hasNewBar in bars.updateEvent:
-            if hasNewBar:
+            if hasNewBar and (
+                (not self.last_bar_date) or (bars[-2].date > self.last_bar_date)
+            ):
                 self.last_bar_date = bars_[-2].date
                 self.on_new_bar(bars_[:-1])
 
@@ -248,7 +300,7 @@ class HistoricalDataStreamer(Streamer):
             self.dataEvent.emit(bars)
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class MktDataStreamer(Streamer):
     contract: ibi.Contract
     tickList: str
@@ -260,7 +312,7 @@ class MktDataStreamer(Streamer):
         return self.ib.reqMktData(self.contract, self.tickList)
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class RealTimeBarsStreamer(Streamer):
     contract: ibi.Contract
     whatToShow: str
@@ -295,7 +347,7 @@ class RealTimeBarsStreamer(Streamer):
                 self.dataEvent.emit(bars)
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class TickByTickStreamer(Streamer):
     contract: ibi.Contract
     tickType: str
