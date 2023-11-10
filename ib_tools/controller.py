@@ -29,25 +29,24 @@ class Controller:
     :class:`.Controller`.
     """
 
+    blotter: Optional[AbstractBaseBlotter] = None
+    log_events: bool = False
+
     def __init__(
         self,
         state_machine: StateMachine,
         ib: ibi.IB,
-        blotter: Optional[AbstractBaseBlotter] = None,
-        log_events: bool = False,
     ):
         super().__init__()
         self.sm = state_machine
         self.ib = ib
         self.trader = Trader(self.ib)
-        if log_events:
-            self._attach_logging_events()
-        self.blotter = blotter
-        if blotter:
-            self.ib.commissionReportEvent += self.onCommissionReport
 
         self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
+
+        log.debug("hold set")
+        self.hold = True
 
         log.debug(f"Controller initiated: {self}")
 
@@ -61,9 +60,23 @@ class Controller:
         for trade in self.ib.openTrades():
             self.sm.orders.update_trade(trade)
             log.debug(
-                f"Order updated: {trade.order.orderId} {trade.order.action}"
-                f" {trade.order.orderType} {trade.contract.symbol}"
+                f"Events re-attached for order: {trade.order.orderId} "
+                f"{trade.order.orderType} {trade.order.action} {trade.contract.symbol}"
             )
+        self.hold = False
+        log.debug("hold released")
+
+    def config(
+        self,
+        blotter: Optional[AbstractBaseBlotter] = None,
+        log_events: bool = False,
+    ) -> None:
+        if blotter:
+            self.blotter = blotter
+            self.ib.commissionReportEvent += self.onCommissionReport
+        if log_events:
+            self._attach_logging_events()
+        log.debug(f"Config done: {self}")
 
     def trade(
         self,
@@ -76,7 +89,7 @@ class Controller:
         trade = self.trader.trade(contract, order)
         if callback is not None:
             callback(trade)
-        self.sm.register_order(exec_model.strategy, action, trade, callback)
+        self.sm.register_order(exec_model.strategy, action, trade, exec_model, callback)
         trade.filledEvent += partial(
             self.log_trade, reason=action, strategy=exec_model.strategy
         )
@@ -227,8 +240,8 @@ class Controller:
             try:
                 self.sm.delete_order(trade.order.orderId)
                 log.debug(
-                    f"{trade.contract.symbol}: order {trade.order.orderType} done"
-                    f" {trade.orderStatus.status}."
+                    f"{trade.contract.symbol}: order {trade.order.orderId} "
+                    f"{trade.order.orderType} done {trade.orderStatus.status}."
                 )
             except KeyError:
                 log.debug(
@@ -242,37 +255,41 @@ class Controller:
                 f" for order: {trade.order},"
             )
 
-    def onCommissionReport(
+    async def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
-    ):
-        if trade.isDone():
-            strategy, action, trade, _ = self.sm.orders[trade.order.orderId]
-            try:
-                exec_model = self.sm.data["strategy"]
-            except KeyError:
-                log.exception(
-                    "Missing strategy records in `state machine`. "
-                    "Unable to write full transaction data to blotter."
-                )
-            if exec_model:
-                position_id = exec_model.position_id()
-                params = exec_model.params.get(action.lower(), {})
-            else:
-                position_id = ""
-                params = {}
+    ) -> None:
+        # prevent writing all orders from session on startup
+        if self.hold:
+            return
+        data = self.sm.orders.get(trade.order.orderId)
+        if data:
+            strategy, action, _, exec_model, _, _ = data
+            position_id = exec_model.position_id()
+            params = exec_model.params.get(action.lower(), {})
             kwargs = {
                 "strategy": strategy,
                 "action": action,
                 "position_id": position_id,
                 "params": params,
             }
-            assert self.blotter is not None
-            self.blotter.log_commission(trade, fill, report, **kwargs)
+        else:
+            log.debug(
+                f"Missing strategy records in `state machine`. "
+                f"Unable to write transaction data to blotter. "
+                f"{trade.order.orderId} {trade.contract.symbol} {trade.order.orderType}"
+            )
+            return
+        assert self.blotter is not None
+        log.debug(
+            f"Will write trade to blotter: {trade.contract.symbol} "
+            f"{trade.order.orderId} {trade.order.action} {trade.order.orderType}"
+        )
+        self.blotter.log_commission(trade, fill, report, **kwargs)
 
     def log_new_order(self, trade: ibi.Trade) -> None:
         log.debug(f"New order {trade.order} for {trade.contract.localSymbol}")
 
-    def log_trade(self, trade: ibi.Trade, reason: str = "", strategy="") -> None:
+    def log_trade(self, trade: ibi.Trade, reason: str = "", strategy: str = "") -> None:
         log.info(
             f"{reason} trade filled: {trade.contract.localSymbol} "
             f"{trade.order.action} {trade.orderStatus.filled}"

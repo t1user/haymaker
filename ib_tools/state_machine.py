@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import UserDict, defaultdict
+from collections import ChainMap, UserDict, defaultdict
+from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Iterator, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 import ib_insync as ibi
 
@@ -18,22 +19,61 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class OrderInfo(NamedTuple):
+@dataclass
+class OrderInfo:
     strategy: str
     action: str
     trade: ibi.Trade
-    callback: Optional[Callback]
+    exec_model: AbstractExecModel
+    callback: Optional[Callback] = None
+    active: bool = True
+
+    def __iter__(self):
+        return iter(
+            (
+                self.strategy,
+                self.action,
+                self.trade,
+                self.exec_model,
+                self.callback,
+                self.active,
+            )
+        )
 
 
 class OrderContainer(UserDict):
+    def __init__(self, dict=None, /, **kwargs):
+        super().__init__(dict, **kwargs)
+        self.done = {}
+        self.active = self.data
+        self._combined = ChainMap(self.done, self.active)
+
     def strategy(self, strategy: str) -> Iterator[OrderInfo]:
+        # returns only active orders
         return (oi for oi in self.data.values() if oi.strategy == strategy)
+
+    def __delitem__(self, key):
+        self.done[key] = self[key]
+        self.done[key].active = False
+        super().__delitem__(key)
+
+    def __missing__(self, key):
+        # if missing try in done, which will raise KeyError if missing
+        return self.done[key]
+
+    def get(self, key, default=None, active_only=False):
+        if active_only:
+            return self.data.get(key, default)
+        else:
+            return self._combined.get(key, default)
 
     def update_trade(self, trade) -> None:
         oi = self.get(trade.order.orderId)
         if oi:
             oi.callback(trade)
-            new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.callback)
+            new_oi = OrderInfo(
+                oi.strategy, oi.action, trade, oi.exec_model, oi.callback
+            )
             self[trade.order.orderId] = new_oi
 
 
@@ -161,6 +201,7 @@ class StateMachine(Atom):
         strategy: str,
         action: str,
         trade: ibi.Trade,
+        exec_model: AbstractExecModel,
         callback: Optional[Callback] = None,
     ) -> None:
         """
@@ -174,14 +215,19 @@ class StateMachine(Atom):
 
         This method is called by :class:`Controller`.
         """
+
+        self.orders[trade.order.orderId] = OrderInfo(
+            strategy, action, trade, exec_model, callback
+        )
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} registered for: "
             f"{trade.contract.localSymbol}"
         )
-        self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade, callback)
 
         if action.upper() == "OPEN":
-            trade.filledEvent += partial(self.new_position_callbacks, strategy)
+            trade.filledEvent += partial(
+                self.new_position_callbacks, exec_model.strategy
+            )
 
     def delete_order(self, orderId: int) -> None:
         del self.orders[orderId]
@@ -204,9 +250,9 @@ class StateMachine(Atom):
 
         # Check not only position but pending position openning orders
         elif orders := self.orders.strategy(strategy):
-            log.debug(
-                f"Orders for {strategy}: {list(map(lambda x: x.trade.order, orders))}"
-            )
+            # log.debug(
+            #     f"Orders for {strategy}: {list(map(lambda x: x.trade.order, orders))}"
+            # )
             for order_info in orders:
                 trade = order_info.trade
                 log.debug(

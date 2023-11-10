@@ -39,7 +39,7 @@ class Trader:
         order = trade.order
         cancelled_trade = self.ib.cancelOrder(order)
         log.info(
-            f"Cancelled {order.orderType} {order.orderId} "
+            f"Sent cancel request for {order.orderType} {order.orderId} "
             f"for {trade.contract.localSymbol}"
         )
         return cancelled_trade

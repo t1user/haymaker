@@ -128,12 +128,16 @@ def process_trading_hours(
 
 
 def is_active(
-    time_tuples: list[tuple[datetime, datetime]], *, now: Optional[datetime] = None
+    time_tuples: Optional[list[tuple[datetime, datetime]]] = None,
+    now: Optional[datetime] = None,
 ) -> bool:
     """
     Given list of trading hours tuples from `.process_trading_hours`
     check if the market is active at the moment.
     """
+    if not time_tuples:
+        return True
+
     if not now:
         now = datetime.now(tz=pytz.timezone("UTC"))
 

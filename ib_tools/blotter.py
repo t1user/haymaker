@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import csv
 import logging
 import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -35,13 +37,13 @@ class AbstractBaseBlotter(ABC):
       on i/o)
     """
 
-    def __init__(self, save_to_file: bool = True) -> None:
-        self.save_to_file = save_to_file
-        self.blotter: List[Dict] = []
-        self.unsaved_trades: Dict = {}
-        self.com_reports: Dict = {}
+    def __init__(self, save_immediately: bool = True) -> None:
+        self.save_immediately = save_immediately
+        self.blotter: list[dict] = []
+        self.unsaved_trades: dict = {}
+        self.com_reports: dict = {}
 
-    def log_trade(self, trade: Trade, comms: List[CommissionReport], **kwargs) -> None:
+    def log_trade(self, trade: Trade, comms: list[CommissionReport], **kwargs) -> None:
         sys_time = datetime.now()
         time = trade.log[-1].time
         contract = trade.contract.localSymbol
@@ -95,18 +97,18 @@ class AbstractBaseBlotter(ABC):
         if trade.isDone() and (len(comms) == len(fills)):
             self.log_trade(trade, comms, **kwargs)
 
-    def save_report(self, report: Dict[str, Any]) -> None:
+    def save_report(self, report: dict[str, Any]) -> None:
         """
         Choose whether row of data (report) should be written to permanent
         store immediately or just kept in self.blotter for later.
         """
-        if self.save_to_file:
+        if self.save_immediately:
             self.write_to_file(report)
         else:
             self.blotter.append(report)
 
     @abstractmethod
-    def write_to_file(self, data: Dict[str, Any]) -> None:
+    def write_to_file(self, data: dict[str, Any]) -> None:
         """
         Write single line of data to the store.
         """
@@ -120,7 +122,7 @@ class AbstractBaseBlotter(ABC):
         pass
 
     @abstractmethod
-    def delete(self, query: Dict) -> str:
+    def delete(self, query: dict) -> str:
         """
         Delete items from blotter.
         """
@@ -147,11 +149,11 @@ class AbstractBaseBlotter(ABC):
 
 
 class CsvBlotter(AbstractBaseBlotter):
-    fieldnames: List[str] = []
+    fieldnames: list[str] = []
 
     def __init__(
         self,
-        save_to_file: bool = True,
+        save_immediately: bool = True,
         filename: Optional[str] = None,
         path: Optional[str] = None,
         note: str = "",
@@ -164,14 +166,14 @@ class CsvBlotter(AbstractBaseBlotter):
             f"{path}/{filename}_"
             f'{datetime.today().strftime("%Y-%m-%d_%H-%M")}{note}.csv'
         )
-        super().__init__(save_to_file)
+        super().__init__(save_immediately)
 
     def create_header(self) -> None:
         with open(self.file, "w") as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writeheader()
 
-    def write_to_file(self, data: Dict[str, Any]) -> None:
+    def write_to_file(self, data: dict[str, Any]) -> None:
         if not self.fieldnames:
             self.fieldnames = list(data.keys())
             self.create_header()
@@ -187,7 +189,7 @@ class CsvBlotter(AbstractBaseBlotter):
             for item in self.blotter:
                 writer.writerow(item)
 
-    def delete(self, query: Dict) -> str:
+    def delete(self, query: dict) -> str:
         raise NotImplementedError
 
     def clear(self) -> str:
@@ -197,7 +199,7 @@ class CsvBlotter(AbstractBaseBlotter):
 class MongoBlotter(AbstractBaseBlotter):
     def __init__(
         self,
-        save_to_file: bool = True,
+        save_immediately: bool = True,
         host: str = "localhost",
         port: int = 27017,
         db: str = "blotter",
@@ -206,9 +208,9 @@ class MongoBlotter(AbstractBaseBlotter):
         self.client = MongoClient(host, port)
         self.db = self.client[db]
         self.collection = self.db[collection]
-        super().__init__(save_to_file)
+        super().__init__(save_immediately)
 
-    def write_to_file(self, data: Dict[str, Any]) -> None:
+    def write_to_file(self, data: dict[str, Any]) -> None:
         self.collection.insert_one(data)
 
     def save(self) -> None:
@@ -217,7 +219,7 @@ class MongoBlotter(AbstractBaseBlotter):
     def read(self) -> pd.DataFrame:
         return util.df([i for i in self.collection.find()])
 
-    def delete(self, querry: Dict) -> str:
+    def delete(self, querry: dict) -> str:
         results = self.collection.find(querry)
         for doc in results:
             print(doc)
@@ -240,7 +242,7 @@ class MongoBlotter(AbstractBaseBlotter):
 
     #     def __init__(
     #         self,
-    #         save_to_file: bool = True,
+    #         save_immediately: bool = True,
     #         host: str = "localhost",
     #         port: int = 27017,
     #         db: str = "blotter",
@@ -249,12 +251,12 @@ class MongoBlotter(AbstractBaseBlotter):
     #         self.client = motor.motor_asyncio.AsyncIOMotorClient(host, port)
     #         self.db = self.client[db]
     #         self.collection = self.db[collection]
-    #         super().__init__(save_to_file)
+    #         super().__init__(save_immediately)
     #
-    # async def _write_to_file(self, data: Dict[str, Any]) -> None:
+    # async def _write_to_file(self, data: dict[str, Any]) -> None:
     #     await self.collection.insert_one(data)
 
-    # def write_to_file(self, data: Dict[str, Any]) -> None:
+    # def write_to_file(self, data: dict[str, Any]) -> None:
     #     util.run(self._write_to_file(data))
 
     # async def _save(self) -> None:
@@ -267,7 +269,7 @@ class MongoBlotter(AbstractBaseBlotter):
 class TickBlotter(AbstractBaseBlotter):
     def __init__(
         self,
-        save_to_file: bool = True,
+        save_immediately: bool = True,
         host: str = "localhost",
         library: str = "tick_blotter",
         collection: str = "test_blotter",
@@ -277,7 +279,7 @@ class TickBlotter(AbstractBaseBlotter):
         self.store = self.db[library]
         self.collection = collection
 
-    def write_to_file(self, data: Dict[str, Any]) -> None:
+    def write_to_file(self, data: dict[str, Any]) -> None:
         data["index"] = pd.to_datetime(data["time"], utc=True)
         self.store.write(self.collection, [data])
 
@@ -288,7 +290,7 @@ class TickBlotter(AbstractBaseBlotter):
             data.append(d)
         self.store.write(self.collection, data)
 
-    def delete(self, querry: Dict) -> str:
+    def delete(self, querry: dict) -> str:
         raise NotImplementedError
 
     def clear(self) -> str:
