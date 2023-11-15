@@ -177,8 +177,7 @@ class LockableBlipBinarySignalProcessor(LockableBinarySignalProcessor):
     determine which side is 'locked' based on position actually taken
     in the market (not just previously generated signals).
 
-    * Zero signal means close position if position exists, ignored
-    otherwise
+    * Zero signals ignored
     """
 
     def process_zero_signal_position(self, strategy, signal):

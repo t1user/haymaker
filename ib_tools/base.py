@@ -2,17 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Coroutine,
-    Protocol,
-    Sequence,
-    Type,
-    Union,
-)
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, ClassVar, Protocol, Sequence, Type, Union
 
 if TYPE_CHECKING:
     from ib_tools.manager import InitData
@@ -95,14 +86,14 @@ class Atom:
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
 
-    def onStart(self, data, *args) -> None:
+    def onStart(self, data, *args):
         if isinstance(data, dict):
             for k, v in data.items():
                 setattr(self, k, v)
         self.startEvent.emit(data, self)
 
-    def onData(self, data, *args) -> Union[Coroutine[Any, Any, None], None]:
-        pass
+    def onData(self, data, *args):
+        data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
 
     def connect(self, *targets: Atom) -> "Atom":
         for t in targets:

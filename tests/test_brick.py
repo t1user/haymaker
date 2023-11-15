@@ -38,6 +38,7 @@ def test_data_passed_correct(brick):
 
     brick.dataEvent += recorder
     brick.onData(1)
+    del x["Brick_ts"]
     assert x == {
         "strategy": "eska_NQ",
         "contract": ibi.ContFuture("NQ", "CME"),
@@ -121,6 +122,7 @@ def test_column_selection_works(df_connected_brick, data_for_df):
         "price",
         "signal",
         "price_plus",
+        "Brick_ts",
     ]
 
 

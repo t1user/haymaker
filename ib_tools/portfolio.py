@@ -34,7 +34,7 @@ class AbstractBasePortfolio(Atom, ABC):
         #     "{data['date']}, "
         #     f"action: {data['action']}, "
         #     f"signal: {data['signal']}, target_position: {data['target_position']}",
-
+        super().onData(data)  # timestamp on departure
         self.dataEvent.emit(data)
 
     @abstractmethod

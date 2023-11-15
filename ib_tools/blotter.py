@@ -4,7 +4,7 @@ import csv
 import logging
 import sys
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import pandas as pd
@@ -44,8 +44,8 @@ class AbstractBaseBlotter(ABC):
         self.com_reports: dict = {}
 
     def log_trade(self, trade: Trade, comms: list[CommissionReport], **kwargs) -> None:
-        sys_time = datetime.now()
-        time = trade.log[-1].time
+        sys_time = datetime.now(timezone.utc)
+        last_fill_time = trade.log[-1].time
         contract = trade.contract.localSymbol
         action = trade.order.action
         amount = trade.orderStatus.filled
@@ -60,10 +60,10 @@ class AbstractBaseBlotter(ABC):
         order_id = trade.order.orderId
         perm_id = trade.order.permId
         row = {
-            "sys_time": sys_time,  # actual system time
-            "time": time,  # what ib considers to be current time
+            "sys_time": sys_time,  # system time
+            "last_fill_time": last_fill_time,
             "contract": contract,  # 4 letter symbol string
-            "action": action,  # buy or sell
+            "side": action,  # buy or sell
             "amount": amount,  # unsigned amount
             "price": price,
             "exec_ids": exec_ids,  # list of execution ids
@@ -71,6 +71,7 @@ class AbstractBaseBlotter(ABC):
             "perm_id": perm_id,  # unique trade id
             "commission": sum([comm.commission for comm in comms]),
             "realizedPNL": sum([comm.realizedPNL for comm in comms]),
+            "fills": [fill.execution.dict() for fill in trade.fills],  # type: ignore
         }
         if kwargs:
             row.update(kwargs)

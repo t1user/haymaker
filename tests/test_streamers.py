@@ -6,7 +6,7 @@ import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
 
-from ib_tools.streamers import HistoricalDataStreamer, Streamer, Timer
+from ib_tools.streamers import HistoricalDataStreamer, Streamer, Timeout
 
 
 def test_Streamer_is_abstract():
@@ -89,9 +89,9 @@ def test_timer_cannot_be_overriden():
 
 
 @pytest.fixture
-def timer() -> Type[Timer]:
+def timeout() -> Type[Timeout]:
     @dataclass
-    class TimerForTesting(Timer):
+    class TimerForTesting(Timeout):
         triggered: bool = False
 
         def triggered_action(self) -> None:
@@ -101,15 +101,15 @@ def timer() -> Type[Timer]:
 
 
 @pytest.mark.asyncio
-async def test_timer_not_triggered(timer):
-    t = timer(2, ev.Event(), None, "xxx")
+async def test_timer_not_triggered(timeout):
+    t = timeout(2, ev.Event(), None, "xxx")
     await asyncio.sleep(0.1)
     assert not t.triggered
 
 
 @pytest.mark.asyncio
-async def test_timer_triggered(timer):
-    t = timer(
+async def test_timer_triggered(timeout):
+    t = timeout(
         time=0.1,
         event=ev.Event(),
         trading_hours=None,

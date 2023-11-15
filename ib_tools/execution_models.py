@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import itertools
 import logging
@@ -134,7 +135,7 @@ class AbstractExecModel(Atom, ABC):
         return ibi.Order(**params)
 
     @abstractmethod
-    def onData(self, data: dict, *args) -> None:
+    def onData(self, data: dict, *args):
         """
         Must use :meth:`self.trade`(:class:`ibi.Contract`,
         :class:`ibi.Order`, strategy_key, reason) to send orders for
@@ -164,6 +165,7 @@ class AbstractExecModel(Atom, ABC):
         of the transaction (open, close, stop, etc.)
         """
         # TODO: what if more than one order issued????
+        super().onData(data)
         data["exec_model"] = self
         self.dataEvent.emit(data)
 
@@ -196,6 +198,16 @@ class BaseExecModel(AbstractExecModel):
         controller: Optional[Controller] = None,
     ) -> None:
         super().__init__(orders, controller=controller)
+        self.ticker: Optional[ibi.Ticker] = None
+
+    async def onStart(self, data, *args) -> None:
+        super().onStart(data)
+        while not self.ticker:
+            await asyncio.sleep(5)
+            for t in self.ib.tickers():
+                if t.contract == self._contract:
+                    self.ticker = t
+                    break
 
     def trade(
         self,
@@ -231,8 +243,25 @@ class BaseExecModel(AbstractExecModel):
         # override this in subclass if needed
         pass
 
-    def onData(self, data: dict, *args) -> None:
+    async def live_ticker(self):
+        if self.ticker:
+            n = 1
+            while not self.ticker.hasBidAsk():
+                await asyncio.sleep(0.1)
+                n += 1
+                if n > 50:
+                    break
+            else:
+                return self.ticker
+        else:
+            log.info(f"No subscription for live ticker {self.active_contract}")
+
+    async def onData(self, data: dict, *args):
         data["exec_model"] = self
+
+        if await (ticker := self.live_ticker()):
+            data["arrival_price"] = {"bid": ticker.bid, "ask": ticker.ask}
+
         try:
             action = data["action"]
         except KeyError:

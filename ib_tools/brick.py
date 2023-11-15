@@ -26,6 +26,7 @@ class AbstractBaseBrick(Atom, ABC):
     def onStart(self, data, *args):
         if isinstance(data, dict):
             data["strategy"] = self.strategy
+            data["_contract"] = self.contract
             log.log(5, f"Updated dict on start: {data}")
         super().onStart(data, *args)
 
@@ -33,6 +34,7 @@ class AbstractBaseBrick(Atom, ABC):
         startup = self.__dict__.get("startup")
         if not startup:
             d = self._params(**self._signal(data))
+            super().onData(d)  # timestamp on departure
             # log.log(5, d)
             self.dataEvent.emit(d)
 

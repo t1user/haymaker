@@ -275,15 +275,11 @@ class Controller:
         else:
             log.debug(
                 f"Missing strategy records in `state machine`. "
-                f"Unable to write transaction data to blotter. "
+                f"Incomplete data for blotter."
                 f"{trade.order.orderId} {trade.contract.symbol} {trade.order.orderType}"
             )
-            return
+            kwargs = {"action": "MANUAL TRADE"}
         assert self.blotter is not None
-        log.debug(
-            f"Will write trade to blotter: {trade.contract.symbol} "
-            f"{trade.order.orderId} {trade.order.action} {trade.order.orderType}"
-        )
         self.blotter.log_commission(trade, fill, report, **kwargs)
 
     def log_new_order(self, trade: ibi.Trade) -> None:

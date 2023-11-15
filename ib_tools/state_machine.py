@@ -159,6 +159,7 @@ class StateMachine(Atom):
         After obtaining transaction details from execution model,
         verify if the intended effect is the same as achieved effect.
         """
+        super().onData(data)
         try:
             strategy = data["strategy"]
             amount = data["amount"]
