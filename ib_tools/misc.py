@@ -89,17 +89,15 @@ def process_trading_hours(
     Args:
     -----
 
-    tzname: instrument's timezone output_tzname: output will be
-    converted to this timezone (best if left at UTC); this param is
-    really for testing
+    tzname: instrument's timezone
+
+    output_tzname: output will be converted to this timezone (best if
+    left at UTC); this param is really for testing
     """
 
     def datetime_tuples(
         s: str, tzname=tzname
     ) -> tuple[Optional[datetime], Optional[datetime]]:
-        def from_to(s: str) -> list[str]:
-            return s.split("-")
-
         def to_datetime(datetime_string: str) -> Optional[datetime]:
             if datetime_string[-6:] == "CLOSED":
                 return None
@@ -111,7 +109,7 @@ def process_trading_hours(
                 )
 
         try:
-            f, t = from_to(s)
+            f, t = s.split("-")
         except ValueError:
             return (None, None)
 
@@ -148,3 +146,25 @@ def is_active(
         if test_p(t):
             return True
     return False
+
+
+def next_open(
+    time_tuples: Optional[list[tuple[datetime, datetime]]] = None,
+    now: Optional[datetime] = None,
+) -> datetime:
+    """
+    Given list of trading hours tuples from `.process_trading_hours`
+    return time of nearest market re-open (regardless if market is
+    open now).  Should be used after it has been tested that
+    `.is_active` is False.
+    """
+
+    if not now:
+        now = datetime.now(tz=pytz.timezone("UTC"))
+
+    if not time_tuples:
+        return now
+
+    left_edges = [e[0] for e in time_tuples if e[0] > now]
+    # print(left_edges)
+    return left_edges[0]

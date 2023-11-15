@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 import pytz
 
-from ib_tools.misc import Counter, is_active, process_trading_hours, sign
+from ib_tools.misc import Counter, is_active, next_open, process_trading_hours, sign
 
 
 def test_Counter():
@@ -43,6 +43,33 @@ def test_process_trading_hours_returns_no_errors():
     assert isinstance(process_trading_hours(trading_hours_string), list)
 
 
+def test_process_trading_hours():
+    tz_info = pytz.timezone("US/Central")
+    output = [
+        (
+            datetime(2023, 10, 16, 17, 00, tzinfo=tz_info),
+            datetime(2023, 10, 17, 16, 00, tzinfo=tz_info),
+        ),
+        (
+            datetime(2023, 10, 17, 17, 00, tzinfo=tz_info),
+            datetime(2023, 10, 18, 16, 00, tzinfo=tz_info),
+        ),
+        (
+            datetime(2023, 10, 18, 17, 00, tzinfo=tz_info),
+            datetime(2023, 10, 19, 16, 00, tzinfo=tz_info),
+        ),
+        (
+            datetime(2023, 10, 19, 17, 00, tzinfo=tz_info),
+            datetime(2023, 10, 20, 16, 00, tzinfo=tz_info),
+        ),  # non trading day is just skipped
+        (
+            datetime(2023, 10, 22, 17, 00, tzinfo=tz_info),
+            datetime(2023, 10, 23, 16, 00, tzinfo=tz_info),
+        ),
+    ]
+    assert process_trading_hours(trading_hours_string, tzname="US/Central") == output
+
+
 @pytest.mark.parametrize(
     "datetimetuple,result",
     [
@@ -56,3 +83,28 @@ def test_is_active(datetimetuple, result):
     hours = process_trading_hours(trading_hours_string, tzname="US/Central")
     now = datetime(*datetimetuple, tzinfo=pytz.timezone("US/Central"))
     assert is_active(hours, now=now) == result
+
+
+@pytest.mark.parametrize(
+    "datetimetuple,result",
+    [
+        (
+            (2023, 10, 16, 17, 15),
+            (2023, 10, 17, 17, 00),
+        ),  # from first tuple, market is active
+        (
+            (2023, 10, 17, 20, 15),
+            (2023, 10, 18, 17, 00),
+        ),  # from non-first tuple, market is active
+        ((2023, 10, 17, 16, 30), (2023, 10, 17, 17, 00)),  # during daily off hours
+        ((2023, 10, 21, 17, 15), (2023, 10, 22, 17, 00)),  # during closed day]
+    ],
+)
+def test_next_open(datetimetuple, result):
+    hours = process_trading_hours(
+        trading_hours_string, tzname="US/Central", output_tzname="US/Central"
+    )
+    now = datetime(*datetimetuple, tzinfo=pytz.timezone("US/Central"))
+    assert next_open(hours, now=now) == datetime(
+        *result, tzinfo=pytz.timezone("US/Central")
+    )

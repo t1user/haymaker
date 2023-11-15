@@ -6,8 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections import UserDict, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
-from functools import partial
+from datetime import datetime, timezone
 from typing import Awaitable, Callable, ClassVar, Optional, cast
 
 import eventkit as ev  # type: ignore
@@ -24,32 +23,40 @@ class StaleDataError(Exception):
 
 
 @dataclass
-class Timer:
+class Timeout:
     time: float
     event: ev.Event
     trading_hours: Optional[list[tuple[datetime, datetime]]] = None
     name: str = ""
     debug: bool = True
-    reset_delay: float = 0  # zero means no reset
-    init_delay: float = 70  # wait for system to initialize
-    _triggered: bool = False
 
     def __post_init__(self):
         if self.time:
-            asyncio.create_task(self._set_timeout(self.event))
+            self._set_timeout(self.event)
 
     is_active = staticmethod(misc.is_active)
+    next_open = staticmethod(misc.next_open)
 
     def _on_timeout_error(self):
         log.error(f"{self!s} Timeout broken...")
 
-    def _timeout_callback(self, *args) -> None:
+    async def _timeout_callback(self, *args) -> None:
         log.debug(
             f"{self!s} - No data for {self.time} secs. Market active?: "
             f"{self.is_active(self.trading_hours)}"
         )
         if self.is_active(self.trading_hours):
             self.triggered_action()
+        else:
+            reactivate_time = self.next_open(self.trading_hours)
+
+            sleep_time = (reactivate_time - datetime.now(tz=timezone.utc)).seconds
+            log.debug(
+                f"{self} will sleep till market reopen at: {reactivate_time} i.e. "
+                f"{sleep_time}seconds"
+            )
+            await asyncio.sleep(sleep_time)
+            self._set_timeout(self.event)
 
     def triggered_action(self):
         self._triggered = True
@@ -60,49 +67,33 @@ class Timer:
             pass
             # raise StaleDataError(f"Stale data for {self.name}")
 
-    async def _reset_timeout(
-        self, timeout_event: ev.Event, event: ev.Event, *args
-    ) -> None:
-        if not self.reset_delay:
-            return
-        log.debug(f"{self!s} Will reset timeout.")
-        event.disconnect(timeout_event)
-        await asyncio.sleep(self.reset_delay)
-        self._triggered = False
-        await self._set_timeout(event)
-
-    async def _set_timeout(self, event: ev.Event) -> None:
-        await asyncio.sleep(self.init_delay)
+    def _set_timeout(self, event: ev.Event) -> None:
         timeout = event.timeout(self.time)
-        timeout.connect(
-            self._timeout_callback,
-            error=self._on_timeout_error,
-            done=partial(self._reset_timeout, event=event),
-        )
+        timeout.connect(self._timeout_callback)
         log.debug(f"Timeout set: {self!s}")
 
     def __str__(self) -> str:
-        return f"Timer <{self.time}s> for {self.name}"
+        return f"Timeout <{self.time}s> for {self.name}"
 
 
-class TimerContainerDefaultdict(defaultdict):
+class TimeoutContainerDefaultdict(defaultdict):
     def __missing__(self, key):
         self[key] = self.default_factory(key)
         return self[key]
 
 
-class TimerContainer(UserDict):
+class TimeoutContainer(UserDict):
     def __init__(self, streamer: "Streamer"):
         self.streamer = streamer
         super().__init__()
 
     def __setitem__(self, key: str, obj) -> None:
         if isinstance(obj, ev.Event):
-            obj = Timer(
+            obj = Timeout(
                 self.streamer.timeout,
                 obj,
                 self.streamer.trading_hours,
-                str(self.streamer),
+                f"{str(self.streamer)}-<<{key}>>",
             )
         super().__setitem__(key, obj)
 
@@ -112,8 +103,8 @@ class Streamer(Atom, ABC):
     timeout: float = 0
     _counter: ClassVar[Callable[[], int]] = itertools.count().__next__
     _name: Optional[str] = None
-    _timers: TimerContainerDefaultdict = TimerContainerDefaultdict(
-        cast(Callable, TimerContainer)
+    _timers: TimeoutContainerDefaultdict = TimeoutContainerDefaultdict(
+        cast(Callable, TimeoutContainer)
     )
 
     def __new__(cls, *args, **kwargs):
@@ -191,7 +182,7 @@ class HistoricalDataStreamer(Streamer):
     incremental_only: bool = True
     startup_seconds: float = 5
     last_bar_date: Optional[datetime] = None
-    timeout: float = 0.0
+    timeout: float = 300  # 5 minutes without data
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -222,8 +213,8 @@ class HistoricalDataStreamer(Streamer):
 
     def onStart(self, data, *args) -> None:
         # this starts subscription so that current price is readily available from ib
-        # TODO: consider if it's needed
-        # self.ib.reqMktData(self.contract, "221")
+        stream = self.ib.reqMktData(self.contract, "221")
+        self.timers["ticks"] = stream.updateEvent
         self.startEvent.emit(data, self)
 
     async def backfill(self, bars):

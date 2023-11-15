@@ -1,4 +1,6 @@
 import asyncio
+from dataclasses import dataclass
+from typing import Type
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -86,55 +88,33 @@ def test_timer_cannot_be_overriden():
         ConcreteStreamer()
 
 
-@pytest.mark.asyncio
-async def test_timer_not_triggered():
-    t = Timer(2, ev.Event(), None, "xxx")
-    await asyncio.sleep(0.2)
-    assert not t._triggered
+@pytest.fixture
+def timer() -> Type[Timer]:
+    @dataclass
+    class TimerForTesting(Timer):
+        triggered: bool = False
+
+        def triggered_action(self) -> None:
+            self.triggered = True
+
+    return TimerForTesting
 
 
 @pytest.mark.asyncio
-async def test_timer_triggered():
-    t = Timer(
-        time=0.2,
+async def test_timer_not_triggered(timer):
+    t = timer(2, ev.Event(), None, "xxx")
+    await asyncio.sleep(0.1)
+    assert not t.triggered
+
+
+@pytest.mark.asyncio
+async def test_timer_triggered(timer):
+    t = timer(
+        time=0.1,
         event=ev.Event(),
         trading_hours=None,
         name="xxx",
         debug=True,
-        reset_delay=0,
-        init_delay=0,
     )
-    await asyncio.sleep(0.3)
-    assert t._triggered
-
-
-@pytest.mark.asyncio
-async def test_timer_auto_resets():
-    event = ev.Event()
-    t = Timer(
-        time=0.2,
-        event=event,
-        trading_hours=None,
-        name="xxx",
-        debug=True,
-        reset_delay=0.2,
-        init_delay=0,
-    )
-    await asyncio.sleep(0.3)
-    # timer is triggered at this point
     await asyncio.sleep(0.2)
-    # should be reset at this point
-    event.emit()  # prevent from triggering
-    assert not t._triggered
-
-
-@pytest.mark.asyncio
-async def test_timer_doesnt_auto_reset():
-    event = ev.Event()
-    t = Timer(0.2, event, None, "xxx", True, 0, 0)
-    await asyncio.sleep(0.3)
-    # timer is triggered at this point
-    await asyncio.sleep(0.2)
-    # should be reset at this point
-    event.emit()  # prevent from triggering
-    assert t._triggered
+    assert t.triggered
