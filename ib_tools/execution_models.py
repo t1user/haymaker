@@ -200,14 +200,14 @@ class BaseExecModel(AbstractExecModel):
         super().__init__(orders, controller=controller)
         self.ticker: Optional[ibi.Ticker] = None
 
-    async def onStart(self, data, *args) -> None:
+    def onStart(self, data, *args) -> None:
         super().onStart(data)
-        while not self.ticker:
-            await asyncio.sleep(5)
-            for t in self.ib.tickers():
-                if t.contract == self._contract:
-                    self.ticker = t
-                    break
+        for t in self.ib.tickers():
+            if t.contract == self._contract:
+                self.ticker = t
+                log.debug(f"Ticker set {self.ticker}")
+                return
+        log.debug(f"No ticker for {self._contract}")
 
     def trade(
         self,
@@ -256,11 +256,18 @@ class BaseExecModel(AbstractExecModel):
         else:
             log.info(f"No subscription for live ticker {self.active_contract}")
 
-    async def onData(self, data: dict, *args):
+    def onData(self, data: dict, *args):
         data["exec_model"] = self
 
-        if await (ticker := self.live_ticker()):
-            data["arrival_price"] = {"bid": ticker.bid, "ask": ticker.ask}
+        # if await (ticker := self.live_ticker()):
+        #     data["arrival_price"] = {"bid": ticker.bid, "ask": ticker.ask}
+
+        if self.ticker:
+            data["arrival_price"] = {
+                "time": self.ticker.time,
+                "bid": self.ticker.bid,
+                "ask": self.ticker.ask,
+            }
 
         try:
             action = data["action"]
