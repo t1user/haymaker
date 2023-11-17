@@ -149,6 +149,7 @@ class Jobs:
             t.contract.symbol: (
                 t.order.orderId,
                 t.order.orderType,
+                t.order.action,
                 t.order.totalQuantity,
             )
             for t in IB.openTrades()

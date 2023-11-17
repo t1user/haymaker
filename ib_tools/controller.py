@@ -272,13 +272,20 @@ class Controller:
                 "position_id": position_id,
                 "params": params,
             }
+
+        elif trade.order.totalQuantity == 0:
+            return
+        elif trade.order.orderId < 0:
+            kwargs = {"action": "MANUAL TRADE"}
         else:
+            kwargs = {"action": "UNKNOW"}
             log.debug(
                 f"Missing strategy records in `state machine`. "
                 f"Incomplete data for blotter."
-                f"{trade.order.orderId} {trade.contract.symbol} {trade.order.orderType}"
+                f"orderId: {trade.order.orderId} symbol: {trade.contract.symbol} "
+                f"orderType: {trade.order.orderType}"
             )
-            kwargs = {"action": "MANUAL TRADE"}
+
         assert self.blotter is not None
         self.blotter.log_commission(trade, fill, report, **kwargs)
 

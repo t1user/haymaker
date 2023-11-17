@@ -21,6 +21,8 @@ def pipe(df_brick, data_for_df):  # noqa
     sm = FakeStateMachine()
 
     class FakeController:
+        out = None
+
         def trade(self, contract, order, action, exec_model, callback):
             self.out = contract, order, action, exec_model, callback
 
