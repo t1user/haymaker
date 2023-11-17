@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import random
 import string
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Literal, Optional
 
@@ -80,7 +80,7 @@ def sign(x: float) -> Literal[-1, 0, 1]:
 
 
 def process_trading_hours(
-    th: str, tzname: str = "US/Central", *, output_tzname: str = "UTC"
+    th: str, input_tz: str = "US/Central", *, output_tz: str = "UTC"
 ) -> list[tuple[datetime, datetime]]:
     """
     Given string from :attr:`ibi.ContractDetails.tradingHours` return
@@ -94,19 +94,17 @@ def process_trading_hours(
     output_tzname: output will be converted to this timezone (best if
     left at UTC); this param is really for testing
     """
+    input_tz_ = pytz.timezone(input_tz)
+    output_tz_ = pytz.timezone(output_tz)
 
-    def datetime_tuples(
-        s: str, tzname=tzname
-    ) -> tuple[Optional[datetime], Optional[datetime]]:
+    def datetime_tuples(s: str) -> tuple[Optional[datetime], Optional[datetime]]:
         def to_datetime(datetime_string: str) -> Optional[datetime]:
             if datetime_string[-6:] == "CLOSED":
                 return None
             else:
-                return (
+                return input_tz_.localize(
                     datetime.strptime(datetime_string, "%Y%m%d:%H%M")
-                    .replace(tzinfo=pytz.timezone(tzname))
-                    .astimezone(tz=pytz.timezone(output_tzname))
-                )
+                ).astimezone(tz=output_tz_)
 
         try:
             f, t = s.split("-")
@@ -137,7 +135,7 @@ def is_active(
         return True
 
     if not now:
-        now = datetime.now(tz=pytz.timezone("UTC"))
+        now = datetime.now(tz=timezone.utc)
 
     def test_p(t):
         return t[0] < now < t[1]
