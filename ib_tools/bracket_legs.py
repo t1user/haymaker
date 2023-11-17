@@ -35,17 +35,16 @@ class AbstractBracketLeg(ABC):
 
     def __call__(self, params: dict, trade: ibi.Trade) -> dict[str, Any]:
         trade_params = self._extract_trade(trade)
-        self.contract = trade_params["contract"]
+        trade_params["min_tick"] = self.min_tick(trade_params["contract"])
         trade_params["sl_points"] = self.stop_multiple * params[self.vol_field]
         return self._order(trade_params)
 
-    @property
-    def min_tick(self):
+    def min_tick(self, contract):
         try:
-            minTick = self.details[self.contract].minTick
+            minTick = self.details[contract].minTick
         except KeyError:
             log.critical(
-                f"No details for contract {self.contract}. "
+                f"No details for contract {contract}. "
                 f"Will attempt to send bracket order with minTick 0.25 ",
                 exc_info=True,
             )
@@ -73,7 +72,7 @@ class AbstractBracketLeg(ABC):
     def __repr__(self):
         attrs = ", ".join((f"{i}={j}" for i, j in self.__dict__.items()))
 
-        return f"{__class__.__name__}({attrs})"
+        return f"{__class__.__qualname__}({attrs})"
 
 
 class FixedStop(AbstractBracketLeg):
@@ -83,7 +82,8 @@ class FixedStop(AbstractBracketLeg):
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
         sl_price = round_tick(
-            params["price"] + params["sl_points"] * params["direction"], self.min_tick
+            params["price"] + params["sl_points"] * params["direction"],
+            params["min_tick"],
         )
         log.info(f"STOP LOSS PRICE: {sl_price}")
         return {
@@ -102,7 +102,7 @@ class TrailingStop(AbstractBracketLeg):
     """
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
-        distance = round_tick(params["sl_points"], self.min_tick)
+        distance = round_tick(params["sl_points"], params["min_tick"])
         log.info(f"TRAILING STOP LOSS DISTANCE: {distance}")
         return {
             "orderType": "TRAIL",
@@ -215,7 +215,7 @@ class AdjustableFixedTrailingStop(FixedStop):
         k["triggerPrice"] = round_tick(
             params["price"]
             - params["sl_points"] * self.trigger_multiple * params["direction"],
-            self.min_tick,
+            params["min_tick"],
         )
         # the parent order will be turned int a TRAIL order
         k["adjustedOrderType"] = "TRAIL"
@@ -223,7 +223,7 @@ class AdjustableFixedTrailingStop(FixedStop):
         k["adjustableTrailingUnit"] = 0
         # of ...
         k["adjustedTrailingAmount"] = round_tick(
-            self.trail_multiple * params["sl_points"], self.min_tick
+            self.trail_multiple * params["sl_points"], params["min_tick"]
         )
         # with a stop price
         k["adjustedStopPrice"] = (
@@ -290,7 +290,7 @@ class AdjustableTrailingStop(TrailingStop):
         k["adjustableTrailingUnit"] = 0
         # of:
         k["adjustedTrailingAmount"] = round_tick(
-            k["auxPrice"] * self.adjusted_multiple, self.min_tick
+            k["auxPrice"] * self.adjusted_multiple, params["min_tick"]
         )
         return k
 
@@ -310,7 +310,7 @@ class TakeProfitAsStopMultiple(AbstractBracketLeg):
         tp_price = round_tick(
             params["price"]
             - params["sl_points"] * params["direction"] * self.tp_multiple,
-            self.min_tick,
+            params["min_tick"],
         )
         log.info(f"TAKE PROFIT PRICE: {tp_price}")
         return {
@@ -339,7 +339,7 @@ class FlexibleTakeProfitAsStopMultiple(AbstractBracketLeg):
         tp_price = round_tick(
             params["price"]
             - params["sl_points"] * params["direction"] * self.tp_multiple,
-            self.min_tick,
+            params["min_tick"],
         )
         log.info(f"TAKE PROFIT PRICE: {tp_price}")
         return {
