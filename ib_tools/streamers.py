@@ -219,32 +219,24 @@ class HistoricalDataStreamer(Streamer):
 
     async def backfill(self, bars):
         self.onStart({"startup": True})
-        log.debug(f"Starting backfill {self.name}, pulled {len(bars)} bars.")
-        log.debug(f"{self.name} last bar date: {self.last_bar_date}")
-        log.debug(f"{self.name} last bar: {bars[-1]}")
+        log.debug(
+            f"Starting backfill {self.name}, pulled {len(bars)} bars, "
+            f"last bar: {bars[-1]}"
+        )
         if self.last_bar_date:
-            log.debug(f"{self.name} in")
             stream = (
                 ev.Sequence(bars[:-1])
                 .pipe(ev.Filter(lambda x: x.date > self.last_bar_date))
                 .connect(self.dataEvent)
             )
-            log.debug(f"{self.name} out")
         else:
             stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
-        log.debug(f"{self.name} about to await stream")
         await stream
-        log.debug(f"{self.name} stream awaited.")
         await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
-        try:
-            log.debug(f"{self.name}: bars[0]: {bars[0]}, bars[-2] {bars[-2]}")
-            log.info(
-                f"{self.name} backfilled from {self.last_bar_date or bars[0].date} to "
-                f"{bars[-2].date}"
-            )
-            log.debug(f"Backfill completed {self.name}")
-        except Exception:
-            log.exception(f"Exception while trying to log bars: {bars}")
+        log.info(
+            f"{self.name} backfilled from {self.last_bar_date or bars[0].date} to "
+            f"{bars[-2].date}"
+        )
         self.onStart({"startup": False})
 
     async def run(self) -> None:
@@ -262,7 +254,6 @@ class HistoricalDataStreamer(Streamer):
             self.last_bar_date < bars[-2].date
         )
         if bars and backfill_predicate:
-            log.debug(f"{self.name} first bar: {bars[0]}, last bar: {bars[-1]}")
             await self.backfill(bars)
         else:
             log.debug(f"{self!s}: No backfill needed.")
