@@ -191,24 +191,6 @@ class BaseExecModel(AbstractExecModel):
         # "useRTH": False TODO: investigate
     }
 
-    def __init__(
-        self,
-        orders: Optional[dict[OrderKey, Any]] = None,
-        *,
-        controller: Optional[Controller] = None,
-    ) -> None:
-        super().__init__(orders, controller=controller)
-        self.ticker: Optional[ibi.Ticker] = None
-
-    def onStart(self, data, *args) -> None:
-        super().onStart(data)
-        for t in self.ib.tickers():
-            if t.contract == self._contract:
-                self.ticker = t
-                log.debug(f"Ticker set {self.ticker}")
-                return
-        log.debug(f"No ticker for {self._contract}")
-
     def trade(
         self,
         contract: ibi.Contract,
@@ -256,17 +238,23 @@ class BaseExecModel(AbstractExecModel):
         else:
             log.info(f"No subscription for live ticker {self.active_contract}")
 
+    def get_ticker(self, contract) -> Optional[ibi.Ticker]:
+        for t in self.ib.tickers():
+            if t.contract == contract:
+                return t
+        return None
+
     def onData(self, data: dict, *args):
         data["exec_model"] = self
 
         # if await (ticker := self.live_ticker()):
         #     data["arrival_price"] = {"bid": ticker.bid, "ask": ticker.ask}
-
-        if self.ticker:
+        contract = data.get("contract")
+        if contract and (ticker := self.get_ticker(data["contract"])):
             data["arrival_price"] = {
-                "time": self.ticker.time,
-                "bid": self.ticker.bid,
-                "ask": self.ticker.ask,
+                "time": ticker.time,
+                "bid": ticker.bid,
+                "ask": ticker.ask,
             }
 
         try:

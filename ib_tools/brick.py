@@ -26,7 +26,6 @@ class AbstractBaseBrick(Atom, ABC):
     def onStart(self, data, *args):
         if isinstance(data, dict):
             data["strategy"] = self.strategy
-            data["_contract"] = self.contract
             log.log(5, f"Updated dict on start: {data}")
         super().onStart(data, *args)
 
