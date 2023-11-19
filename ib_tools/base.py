@@ -69,7 +69,9 @@ class Atom:
         if th_for_contract_or_none:
             return th_for_contract_or_none
         else:
-            log.warning(f"No trading hours data for {self.contract}.")
+            log.warning(
+                f"{self.__class__.__name__} no trading hours data for {self.contract}."
+            )
             return th
 
     def _register_contract(self, value) -> None:
@@ -132,7 +134,7 @@ class Atom:
             (
                 f"{i}={j}"
                 for i, j in self.__dict__.items()
-                if "Event" not in str(i) and i != "_log"
+                if "Event" not in str(i) and i != "_log" and j
             )
         )
         return f"{self.__class__.__name__}({attrs})"

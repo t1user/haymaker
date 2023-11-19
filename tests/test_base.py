@@ -529,7 +529,7 @@ def test_trading_hours_no_data_for_contract_must_log(caplog):
     a = MockAtom("contract_2")
     Atom._trading_hours = {"contract_1": [(1, 2), (4, 5)]}
     a.trading_hours
-    assert "No trading hours data for contract_2." in caplog.messages
+    assert "MockAtom no trading hours data for contract_2." in caplog.messages
 
 
 def test_trading_hours_no_contract():

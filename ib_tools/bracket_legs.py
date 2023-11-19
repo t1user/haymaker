@@ -72,7 +72,7 @@ class AbstractBracketLeg(ABC):
     def __repr__(self):
         attrs = ", ".join((f"{i}={j}" for i, j in self.__dict__.items()))
 
-        return f"{__class__.__qualname__}({attrs})"
+        return f"{self.__class__.__name__}({attrs})"
 
 
 class FixedStop(AbstractBracketLeg):

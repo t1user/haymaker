@@ -44,39 +44,38 @@ class AbstractBaseBlotter(ABC):
         self.com_reports: dict = {}
 
     def log_trade(self, trade: Trade, comms: list[CommissionReport], **kwargs) -> None:
-        sys_time = datetime.now(timezone.utc)
-        last_fill_time = trade.log[-1].time
-        contract = trade.contract.localSymbol
-        action = trade.order.action
-        amount = trade.orderStatus.filled
-        price = trade.orderStatus.avgFillPrice
-        # ib_insync issue: sometimes fills relate to wrong transaction
-        # fill.contract == trade.contract to prevent that
-        exec_ids = [
-            fill.execution.execId
-            for fill in trade.fills
-            if fill.contract == trade.contract
-        ]
-        order_id = trade.order.orderId
-        perm_id = trade.order.permId
         row = {
-            "sys_time": sys_time,  # system time
-            "last_fill_time": last_fill_time,
-            "contract": contract,  # 4 letter symbol string
-            "side": action,  # buy or sell
-            "amount": amount,  # unsigned amount
-            "price": price,
-            "exec_ids": exec_ids,  # list of execution ids
-            "order_id": order_id,  # non unique
-            "perm_id": perm_id,  # unique trade id
+            "local_time": datetime.now(),
+            "sys_time": datetime.now(timezone.utc),  # system time
+            "last_fill_time": trade.log[-1].time,
+            "contract": trade.contract.localSymbol,  # 4 letter symbol string
+            "symbol": trade.contract.symbol,
+            "side": trade.order.action,  # buy or sell
+            "order_type": trade.order.orderType,  # order type
+            "order_price": trade.order.auxPrice,  # order price
+            "amount": trade.orderStatus.filled,  # unsigned amount
+            "price": trade.orderStatus.avgFillPrice,
+            "order_id": trade.order.orderId,  # non unique
+            "perm_id": trade.order.permId,  # unique trade id
             "commission": sum([comm.commission for comm in comms]),
             "realizedPNL": sum([comm.realizedPNL for comm in comms]),
             "fills": [fill.execution.dict() for fill in trade.fills],  # type: ignore
         }
+
         if kwargs:
+            try:
+                row.update(
+                    {
+                        "price_time": kwargs["arrival_price"]["time"],
+                        "bid": kwargs["arrival_price"]["bid"],
+                        "ask": kwargs["arrival_price"]["ask"],
+                    }
+                )
+            except KeyError:
+                pass
             row.update(kwargs)
         self.save_report(row)
-        log.debug(f"trade report saved: {row}")
+        log.debug(f"trade report saved: {row['order_id'], row['side'], row['symbol']}")
 
     def log_commission(
         self, trade: Trade, fill: Fill, comm_report: CommissionReport, **kwargs
