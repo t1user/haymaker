@@ -5,7 +5,7 @@ import itertools
 import logging
 from abc import ABC, abstractmethod
 from collections import UserDict, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, ClassVar, Optional, cast
 
@@ -29,6 +29,7 @@ class Timeout:
     trading_hours: Optional[list[tuple[datetime, datetime]]] = None
     name: str = ""
     debug: bool = True
+    _timeout: Optional[ev.Event] = field(repr=False, default=None)
 
     def __post_init__(self):
         if self.time:
@@ -37,8 +38,8 @@ class Timeout:
     is_active = staticmethod(misc.is_active)
     next_open = staticmethod(misc.next_open)
 
-    def _on_timeout_error(self):
-        log.error(f"{self!s} Timeout broken...")
+    def _on_timeout_error(self, *args):
+        log.error(f"{self!s} Timeout broken... {args}")
 
     async def _timeout_callback(self, *args) -> None:
         log.debug(
@@ -59,7 +60,6 @@ class Timeout:
             self._set_timeout(self.event)
 
     def triggered_action(self):
-        self._triggered = True
         if self.debug:
             log.error(f"Stale streamer {self!s} Reset?")
             return True
@@ -68,12 +68,12 @@ class Timeout:
             # raise StaleDataError(f"Stale data for {self.name}")
 
     def _set_timeout(self, event: ev.Event) -> None:
-        timeout = event.timeout(self.time)
-        timeout.connect(self._timeout_callback)
+        self._timeout = event.timeout(self.time)
+        self._timeout.connect(self._timeout_callback)
         log.debug(f"Timeout set: {self!s}")
 
     def __str__(self) -> str:
-        return f"Timeout <{self.time}s> for {self.name}"
+        return f"Timeout <{self.time}s> for {self.name}  id: {id(self._timeout)}"
 
 
 class TimeoutContainerDefaultdict(defaultdict):
