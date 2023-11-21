@@ -63,16 +63,6 @@ class AbstractBaseBlotter(ABC):
         }
 
         if kwargs:
-            try:
-                row.update(
-                    {
-                        "price_time": kwargs["arrival_price"]["time"],
-                        "bid": kwargs["arrival_price"]["bid"],
-                        "ask": kwargs["arrival_price"]["ask"],
-                    }
-                )
-            except KeyError:
-                pass
             row.update(kwargs)
         self.save_report(row)
         log.debug(f"trade report saved: {row['order_id'], row['side'], row['symbol']}")

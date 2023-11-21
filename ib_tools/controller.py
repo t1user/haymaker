@@ -273,6 +273,15 @@ class Controller:
                 "params": params,
             }
 
+            if arrival_price := params.get("arrival_price"):
+                kwargs.update(
+                    {
+                        "price_time": arrival_price["time"],
+                        "bid": arrival_price["bid"],
+                        "ask": arrival_price["ask"],
+                    }
+                )
+
         elif trade.order.totalQuantity == 0:
             return
         elif trade.order.orderId < 0:
