@@ -1,0 +1,30 @@
+version: 1
+disable_existing_loggers: False
+
+
+formatters:
+  default:
+    (): UTCFormatter
+    format:  "%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s | %(module)s %(funcName)s %(lineno)d"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: 5
+    formatter: default
+    stream: ext://sys.stdout
+
+
+  timed_rotating_file:
+    (): timed_rotating_file_setup
+    level: 5
+    formatter: default
+    filename: haymakerLog.log
+    when: "midnight"
+
+loggers:
+  ib_tools:
+    level: 5
+    handlers: [console, timed_rotating_file]
+
+    

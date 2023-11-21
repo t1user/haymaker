@@ -6,60 +6,14 @@ from typing import Optional, Protocol
 import ib_insync as ibi
 
 from ib_tools.blotter import AbstractBaseBlotter
-from ib_tools.logging import setup_logging_queue
+from ib_tools.logging import setup_logging
 from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs
-
-ibi.util.patchAsyncio()
 
 log = logging.getLogger(__name__)
 
-# ------------ logging setup ---------------
-level = 5
-logging.addLevelName(5, "DATA")
-logging.addLevelName(60, "NOTIFY")
+ibi.util.patchAsyncio()
 
-logger = logging.getLogger("ib_tools")
-logger.setLevel(level)
-
-
-formatter = logging.Formatter(
-    "%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s"
-    " | %(module)s %(funcName)s %(lineno)d"
-)
-
-rfh = logging.handlers.TimedRotatingFileHandler(
-    "/home/tomek/ib_data/test_logs/dummy.log", when="D"
-)
-rfh.setLevel(level)
-rfh.setFormatter(formatter)
-
-sh = logging.StreamHandler()
-sh.setLevel(level)
-sh.setFormatter(formatter)
-
-logger.addHandler(rfh)
-logger.addHandler(sh)
-
-# logging.basicConfig(
-#     format="%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s"
-#     " | %(module)s %(funcName)s %(lineno)d",
-#     level=5,
-# )
-
-# shut up foreign loggers
-# logging.getLogger("ib_insync").setLevel(logging.ERROR)
-
-# stream_handler = logging.StreamHandler()
-# stream_handler.setLevel(logging.INFO)
-# watchdog_logger = logging.getLogger("ib_insync.Watchdog")
-# watchdog_logger.setLevel(logging.INFO)
-# watchdog_logger.addHandler(stream_handler)
-
-# logging.getLogger("asyncio").setLevel(logging.INFO)
-# logging.getLogger("numba").setLevel(logging.CRITICAL)
-
-setup_logging_queue()
-# ------------ end logging setup ---------------
+setup_logging()
 
 
 class IBC(Protocol):
@@ -99,6 +53,8 @@ class App:
 
     def __post_init__(self):
         self.ib.errorEvent += self.onError
+        self.ib.connectedEvent += self.onConnected
+
         if self.blotter:
             CONTROLLER.config(blotter=self.blotter)
 
@@ -114,16 +70,34 @@ class App:
             probeTimeout=self.probeTimeout,
         )
 
+        self.watchdog.startingEvent += self.onStarting
+        self.watchdog.startedEvent += self.onStarted
+        self.watchdog.softTimeoutEvent += self.onSoftTimeout
+        self.watchdog.hardTimeoutEvent += self.onHardTimeout
+
     def onError(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
-        log.debug(f"Error event: {reqId} {errorCode} {errorString} {contract}")
+        if errorCode not in (
+            2104,  # Market data farm connection is ok
+            2108,  # Market data farm [...] is inactive but [...~ok]
+        ):
+            log.debug(f"Error event: {reqId} {errorCode} {errorString} {contract}")
 
-    def handle_soft_timeout(self, watchdog: ibi.Watchdog):
+    def onSoftTimeout(self, watchdog: ibi.Watchdog) -> None:
         log.debug("Soft timeout event.")
 
-    def handle_hard_timeout(self, watchdog: ibi.Watchdog):
+    def onHardTimeout(self, watchdog: ibi.Watchdog) -> None:
         log.debug("Hard timeout event.")
+
+    def onStarting(self, watchdog: ibi.Watchdog) -> None:
+        log.debug("Starting...")
+
+    def onStarted(self, *args) -> None:
+        log.debug("Watchdog started")
+
+    def onConnected(self, *args) -> None:
+        log.debug("IB Connected")
 
     def run(self):
         # this is the main entry point into strategy
