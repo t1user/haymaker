@@ -74,7 +74,7 @@ class AbstractExecModel(Atom, ABC):
 
     def __init__(
         self,
-        orders: Optional[dict[OrderKey, Any]] = None,
+        orders: Optional[dict[OrderKey, dict[str, Any]]] = None,
         *,
         controller: Optional[Controller] = None,
     ) -> None:
@@ -172,6 +172,24 @@ class AbstractExecModel(Atom, ABC):
 
 class BaseExecModel(AbstractExecModel):
     """
+    Orders generated based on data sent to :meth:`.onData`, of which
+    following keys are required:
+
+        - ``action``: must be one of: ``OPEN``, ``CLOSE``, ``REVERSE``
+
+        - ``signal`` determines transaction direction, must be one of
+          {-1, 1} for sell/buy respectively
+
+        - ``contract`` - this :class:`ibi.Contract` instance will be
+          traded
+
+        - ``amount`` - quantity of ``contract``s that will be traded
+
+        - ``target_position`` - one of {-1, 0, 1} determining
+          direction AFTER transaction is executed; will be used by
+          :class:`.StateMachine` to verify if the transaction's effect
+          was as desired
+
     Enters and closes positions based on params sent to
     :meth:`.execute`.  Orders composed by :meth:`.open` and
     :meth:`.close`, which can be overridden or extended in subclasses

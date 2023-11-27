@@ -1,5 +1,12 @@
+import logging
+from datetime import datetime, timezone
+from typing import Optional
+
+import ib_insync as ibi
 import pytest
 
+from ib_tools import misc
+from ib_tools.base import Atom
 from ib_tools.bracket_legs import FixedStop
 from ib_tools.execution_models import (
     AbstractExecModel,
@@ -64,3 +71,176 @@ def test_oca_group_is_not_position_id():
     oca_group = e.oca_group()
     position_id = e.position_id()
     assert oca_group != position_id
+
+
+@pytest.fixture
+def objects():
+    class FakeController:
+        contract = None
+        order = None
+        action = None
+
+        def trade(
+            self,
+            contract: ibi.Contract,
+            order: ibi.Order,
+            action: str,
+            exec_model: AbstractExecModel,
+            callback: Optional[misc.Callback],
+        ):
+            trade = ibi.Trade(order=order, contract=contract)
+
+            if callback is not None:
+                callback(trade)
+
+            self.contract = contract
+            self.order = order
+            self.action = action
+            fill = ibi.Fill(
+                contract,
+                ibi.Execution(
+                    execId="0000e1a7.656447c6.01.01",
+                    time=datetime.now(timezone.utc),
+                    side="SLD" if order.action == "SELL" else "BOT",
+                    shares=order.totalQuantity,
+                ),
+                ibi.CommissionReport(),
+                datetime.now(timezone.utc),
+            )
+            trade.fills.append(fill)
+            trade.fillEvent.emit(trade, fill)
+            trade.filledEvent.emit(trade)
+
+    class Source(Atom):
+        pass
+
+    controller = FakeController()
+    source = Source()
+    em = BaseExecModel(controller=controller)
+    source += em
+
+    return controller, source, em
+
+
+def test_BaseExecModel_open_signal_generates_order(objects):
+    controller, source, em = objects
+    data = {
+        "signal": 1,
+        "action": "OPEN",
+        "amount": 1,
+        "target_position": 1,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+    source.dataEvent.emit(data)
+    assert controller.order.action == "BUY"
+
+
+def test_BaseExecModel_no_close_order_without_position(objects):
+    controller, source, em = objects
+    data = {
+        "signal": -1,
+        "action": "CLOSE",
+        "amount": 1,
+        "target_position": 0,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+    source.dataEvent.emit(data)
+    assert controller.order is None
+
+
+def test_BaseExecModel_faulty_close_order_logs(objects, caplog):
+    controller, source, em = objects
+    data = {
+        "signal": -1,
+        "action": "CLOSE",
+        "amount": 1,
+        "target_position": 0,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+    source.dataEvent.emit(data)
+    assert caplog.record_tuples[0][1] == logging.ERROR
+
+
+def test_BaseExecModel_close_signal_generates_order(objects):
+    controller, source, em = objects
+    data_open = {
+        "signal": 1,
+        "action": "OPEN",
+        "amount": 1,
+        "target_position": 1,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+    source.dataEvent.emit(data_open)
+    data_close = {
+        "signal": -1,
+        "action": "CLOSE",
+        "amount": 1,
+        "target_position": 0,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+    source.dataEvent.emit(data_close)
+    assert controller.order.action == "SELL"
+
+
+def test_BaseExecModel_position_updated_after_BUY_trade(objects):
+    controller, source, em = objects
+    data = {
+        "signal": 1,
+        "action": "OPEN",
+        "amount": 1,
+        "target_position": 1,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+    source.dataEvent.emit(data)
+    assert em.position == 1
+
+
+def test_BaseExecModel_position_updated_after_SELL_trade(objects):
+    controller, source, em = objects
+    data = {
+        "signal": -1,
+        "action": "OPEN",
+        "amount": 1,
+        "target_position": -1,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+    source.dataEvent.emit(data)
+    assert em.position == -1
+
+
+def test_passed_order_kwargs_update_defaults():
+    class FakeController:
+        contract = None
+        order = None
+        action = None
+
+        def trade(
+            self,
+            contract: ibi.Contract,
+            order: ibi.Order,
+            action: str,
+            exec_model: AbstractExecModel,
+            callback: Optional[misc.Callback],
+        ):
+            self.contract = contract
+            self.order = order
+            self.action = action
+
+    controller = FakeController()
+    em = BaseExecModel(orders={"open_order": {"algoParams": ""}}, controller=controller)
+
+    class Source(Atom):
+        pass
+
+    source = Source()
+    source += em
+    source.dataEvent.emit(
+        {
+            "signal": 1,
+            "action": "OPEN",
+            "amount": 1,
+            "target_position": 1,
+            "contract": ibi.ContFuture("NQ", "CME"),
+        }
+    )
+    assert controller.order.algoParams == ""
