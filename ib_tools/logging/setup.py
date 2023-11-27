@@ -2,7 +2,8 @@ import logging
 import logging.config
 import sys
 import time
-from typing import Optional, Union
+from pathlib import Path
+from typing import Union
 
 import yaml
 
@@ -10,6 +11,7 @@ from . import setup_logging_queue
 
 log = logging.getLogger(__name__)
 
+module_directory = Path(__file__).parents[0]
 
 level = 5
 logging.addLevelName(5, "DATA")
@@ -26,16 +28,16 @@ class UTCFormatter(logging.Formatter):
 def timed_rotating_file_setup(**kwargs):
     filename = kwargs.pop("filename")
     # TODO: This has to be read from config
-    dirname = "/home/tomek/ib_data/test_logs"
-    full_path = dirname + filename
+    dirname = Path("/home/tomek/ib_data/test_logs")
+    full_path = dirname / filename
     return logging.handlers.TimedRotatingFileHandler(filename=full_path, **kwargs)
 
 
 def setup_logging(
-    config_file: Optional[str] = None, level: Union[str, int, None] = None
+    config_file: Union[str, Path, None] = None, level: Union[str, int, None] = None
 ) -> None:
     if not config_file:
-        config_file = "logging_config.yaml"
+        config_file = module_directory / "logging_config.yaml"
 
     try:
         with open(config_file) as f:
@@ -49,7 +51,7 @@ def setup_logging(
     logging.config.dictConfig(config)
 
     if isinstance(level, str):
-        level = logging._nameToLevel[level]
+        level = logging._nameToLevel.get(level.upper(), 0)
     if level:
         logging.getLogger("ib_tools").setLevel(level)
 

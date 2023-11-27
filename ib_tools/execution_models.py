@@ -183,12 +183,10 @@ class BaseExecModel(AbstractExecModel):
         "algoStrategy": "Adaptive",
         "algoParams": [ibi.TagValue("adaptivePriority", "Normal")],
         "tif": "Day",
-        # "useRTH": False, TODO: investigate
     }
     _close_order = {
         "orderType": "MKT",
         "tif": "GTC",
-        # "useRTH": False TODO: investigate
     }
 
     def trade(
@@ -226,6 +224,7 @@ class BaseExecModel(AbstractExecModel):
         pass
 
     async def live_ticker(self):
+        # NOT IN USE
         if self.ticker:
             n = 1
             while not self.ticker.hasBidAsk():
@@ -379,7 +378,6 @@ class EventDrivenExecModel(BaseExecModel):
         take_profit: Optional[AbstractBracketLeg] = None,
         controller: Optional[Controller] = None,
     ):
-        super().__init__(orders, controller=controller)
         if not stop:
             log.error(
                 f"{self.__class__.__name__} must be initialized with a stop bracket leg"
@@ -387,7 +385,7 @@ class EventDrivenExecModel(BaseExecModel):
         self.stop = stop
         self.take_profit = take_profit
         self.brackets: dict[int, Bracket] = {}
-        log.debug(f"execution model initialized {self}")
+        super().__init__(orders, controller=controller)
 
     def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
         """

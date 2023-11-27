@@ -35,6 +35,7 @@ class Timeout:
         if self.time:
             self._set_timeout(self.event)
 
+    # these two process trading hours
     is_active = staticmethod(misc.is_active)
     next_open = staticmethod(misc.next_open)
 
@@ -42,9 +43,10 @@ class Timeout:
         log.error(f"{self!s} Timeout broken... {args}")
 
     async def _timeout_callback(self, *args) -> None:
-        log.debug(
+        log.log(
+            5,
             f"{self!s} - No data for {self.time} secs. Market active?: "
-            f"{self.is_active(self.trading_hours)}"
+            f"{self.is_active(self.trading_hours)}",
         )
         if self.is_active(self.trading_hours):
             self.triggered_action()
@@ -52,9 +54,10 @@ class Timeout:
             reactivate_time = self.next_open(self.trading_hours)
 
             sleep_time = (reactivate_time - datetime.now(tz=timezone.utc)).seconds
-            log.debug(
+            log.log(
+                5,
                 f"{self} will sleep till market reopen at: {reactivate_time} i.e. "
-                f"{sleep_time}seconds"
+                f"{sleep_time}seconds",
             )
             await asyncio.sleep(sleep_time)
             self._set_timeout(self.event)
@@ -73,7 +76,7 @@ class Timeout:
         log.debug(f"Timeout set: {self!s}")
 
     def __str__(self) -> str:
-        return f"Timeout <{self.time}s> for {self.name}  id: {id(self._timeout)}"
+        return f"Timeout <{self.time}s> for {self.name}  event id: {id(self._timeout)}"
 
 
 class TimeoutContainerDefaultdict(defaultdict):

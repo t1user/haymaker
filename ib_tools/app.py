@@ -80,7 +80,9 @@ class App:
     ) -> None:
         if errorCode not in (
             2104,  # Market data farm connection is ok
+            2106,  # data farm connection is OK
             2108,  # Market data farm [...] is inactive but [...~ok]
+            2158,  # Sec-def data farm connection is OK
         ):
             log.debug(f"Error event: {reqId} {errorCode} {errorString} {contract}")
 

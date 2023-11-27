@@ -61,7 +61,8 @@ class Controller:
             self.sm.orders.update_trade(trade)
             log.debug(
                 f"Events re-attached for order: {trade.order.orderId} "
-                f"{trade.order.orderType} {trade.order.action} {trade.contract.symbol}"
+                f"{trade.order.orderType} {trade.order.action} "
+                f"{trade.order.totalQuantity}{trade.contract.symbol}"
             )
         self.hold = False
         log.debug("hold released")
@@ -258,6 +259,11 @@ class Controller:
     async def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ) -> None:
+        """
+        Writing commission on :class:`ibi.Trade` is the final stage of order
+        execution.  After that trade object is ready for stroring in
+        blotter.
+        """
         # prevent writing all orders from session on startup
         if self.hold:
             return
@@ -270,7 +276,7 @@ class Controller:
                 "strategy": strategy,
                 "action": action,
                 "position_id": position_id,
-                "params": params,
+                "params": ibi.util.tree(params),  # TODO: serialize this, done?
             }
 
             if arrival_price := params.get("arrival_price"):
@@ -296,6 +302,7 @@ class Controller:
             )
 
         assert self.blotter is not None
+        log.debug(f"Order will be logged: {trade.order.nonDefaults()}")  # type: ignore
         self.blotter.log_commission(trade, fill, report, **kwargs)
 
     def log_new_order(self, trade: ibi.Trade) -> None:

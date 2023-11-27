@@ -25,7 +25,6 @@ class AbstractBasePortfolio(Atom, ABC):
     def __init__(self) -> None:
         super().__init__()
         self.strategy: str = ""
-        log.debug(f"Porfolio initiated: {self}")
 
     def onData(self, data: dict, *args) -> None:
         amount = self.allocate(data)

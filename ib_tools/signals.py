@@ -44,14 +44,12 @@ class BinarySignalProcessor(Atom):
     """
 
     def __init__(self, state_machine: Optional[StateMachine] = None) -> None:
-        super().__init__()
         self.sm = state_machine or STATE_MACHINE
         self.strategy: str = ""
         self._position: float = 0.0
-        log.debug(f"Signal processor initialized: {self}")
+        super().__init__()
 
     # onStart should set strategy
-
     def onData(self, data: dict[str, Any], *args) -> None:
         try:
             signal = data["signal"]

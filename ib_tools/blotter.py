@@ -7,13 +7,15 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import ib_insync as ibi
 import pandas as pd
 
 # import motor.motor_asyncio  # type: ignore
 from arctic import TICK_STORE, Arctic  # type: ignore
-from ib_insync import util
-from ib_insync.objects import CommissionReport, Fill
-from ib_insync.order import Trade
+
+# from ib_insync import util
+# from ib_insync.objects import CommissionReport, Fill
+# from ib_insync.order import Trade
 from pymongo import MongoClient  # type: ignore
 
 from ib_tools.utilities import default_path
@@ -43,7 +45,9 @@ class AbstractBaseBlotter(ABC):
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
 
-    def log_trade(self, trade: Trade, comms: list[CommissionReport], **kwargs) -> None:
+    def log_trade(
+        self, trade: ibi.Trade, comms: list[ibi.CommissionReport], **kwargs
+    ) -> None:
         row = {
             "local_time": datetime.now(),
             "sys_time": datetime.now(timezone.utc),  # system time
@@ -61,14 +65,18 @@ class AbstractBaseBlotter(ABC):
             "realizedPNL": sum([comm.realizedPNL for comm in comms]),
             "fills": [fill.execution.dict() for fill in trade.fills],  # type: ignore
         }
-
+        row["trade"] = ibi.util.tree(trade)
         if kwargs:
             row.update(kwargs)
         self.save_report(row)
         log.debug(f"trade report saved: {row['order_id'], row['side'], row['symbol']}")
 
     def log_commission(
-        self, trade: Trade, fill: Fill, comm_report: CommissionReport, **kwargs
+        self,
+        trade: ibi.Trade,
+        fill: ibi.Fill,
+        comm_report: ibi.CommissionReport,
+        **kwargs,
     ):
         """
         Get trades that have all CommissionReport filled and log them.
@@ -207,7 +215,7 @@ class MongoBlotter(AbstractBaseBlotter):
         self.collection.insert_many(self.blotter)
 
     def read(self) -> pd.DataFrame:
-        return util.df([i for i in self.collection.find()])
+        return ibi.util.df([i for i in self.collection.find()])
 
     def delete(self, querry: dict) -> str:
         results = self.collection.find(querry)

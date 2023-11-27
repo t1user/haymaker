@@ -82,7 +82,7 @@ class Jobs:
         try:
             task.result()
         except asyncio.CancelledError:
-            pass
+            log.debug(f"task {task} has been cancelled.")
         except Exception as e:
             log.exception(e)
 
@@ -106,7 +106,7 @@ class Jobs:
 
         for streamer in self.streamers:
             task = asyncio.create_task(streamer.run(), name=f"{streamer!s}, ")
-            log.debug(f"Task created: {task}")
+            log.debug(f"Task created: {task.get_name()}")
 
             # Add task to the set. This creates a strong reference.
             self._tasks.add(task)

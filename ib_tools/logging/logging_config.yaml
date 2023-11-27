@@ -1,10 +1,10 @@
 version: 1
-disable_existing_loggers: False
+disable_existing_loggers: false
 
 
 formatters:
   default:
-    (): UTCFormatter
+    (): ib_tools.logging.setup.UTCFormatter
     format:  "%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s | %(module)s %(funcName)s %(lineno)d"
 
 handlers:
@@ -16,11 +16,11 @@ handlers:
 
 
   timed_rotating_file:
-    (): timed_rotating_file_setup
+    (): ib_tools.logging.setup.timed_rotating_file_setup
     level: 5
     formatter: default
     filename: haymakerLog.log
-    when: "midnight"
+    when: midnight
 
 loggers:
   ib_tools:
