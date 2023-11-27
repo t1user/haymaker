@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import itertools
 import logging
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import Any, Callable, Literal, NamedTuple, Optional, TypedDict
+from uuid import uuid4
 
 import ib_insync as ibi
 
@@ -89,8 +89,7 @@ class AbstractExecModel(Atom, ABC):
             for key, order_kwargs in orders.items():
                 setattr(self, key, order_kwargs)
 
-        self.position_id_generator = misc.Counter()
-        self._position_id = ""
+        self._position_id = 0
         self.connect_state_machine()
 
     def connect_state_machine(self):
@@ -98,7 +97,7 @@ class AbstractExecModel(Atom, ABC):
 
     def position_id(self, reset=False):
         if reset or not self._position_id:
-            self._position_id = self.position_id_generator()
+            self._position_id = int(uuid4())
         return self._position_id
 
     def _order(self, key: OrderKey, params: dict) -> ibi.Order:
@@ -459,7 +458,7 @@ class EventDrivenExecModel(BaseExecModel):
             )
 
         def callback_bracket_trade(trade, label="", bracket_kwargs=None):
-            trade.filledEvent += self.bracket_filled_callback
+            trade.filledEvent -= self.bracket_filled_callback
             trade.filledEvent += self.bracket_filled_callback
             save_bracket(label, bracket_kwargs, trade)
 
@@ -525,7 +524,7 @@ class OcaExecModel(EventDrivenExecModel):
     stop-loss and take-profit.
     """
 
-    counter_seed = itertools.count(1, 1).__next__
+    # counter_seed = itertools.count(1, 1).__next__
 
     def __init__(
         self,
@@ -538,10 +537,10 @@ class OcaExecModel(EventDrivenExecModel):
         super().__init__(
             orders, stop=stop, take_profit=take_profit, controller=controller
         )
-        self.oca_group = misc.Counter()
+        self.oca_group = str(uuid4())
 
     def _dynamic_bracket_kwargs(self):
-        return {"ocaGroup": self.oca_group(), "ocaType": 1}
+        return {"ocaGroup": self.oca_group, "ocaType": 1}
 
     def report_bracket(self, trade: ibi.Trade) -> None:
         log.debug(f"Bracketing order filled: {trade.order}")

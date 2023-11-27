@@ -1,11 +1,12 @@
 import logging
+import random
 from datetime import datetime, timezone
 from typing import Optional
 
 import ib_insync as ibi
 import pytest
 
-from ib_tools import misc
+from ib_tools import bracket_legs, misc
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import FixedStop
 from ib_tools.execution_models import (
@@ -60,15 +61,14 @@ def test_position_id_reset():
 
 def test_oca_group_OcaExecModel():
     e = OcaExecModel(stop=FixedStop(1))
-    oca_group = e.oca_group()
+    oca_group = e.oca_group
     assert isinstance(oca_group, str)
     assert len(oca_group) > 10
-    assert oca_group.endswith("00000")
 
 
 def test_oca_group_is_not_position_id():
     e = OcaExecModel(stop=FixedStop(1))
-    oca_group = e.oca_group()
+    oca_group = e.oca_group
     position_id = e.position_id()
     assert oca_group != position_id
 
@@ -88,6 +88,7 @@ def objects():
             exec_model: AbstractExecModel,
             callback: Optional[misc.Callback],
         ):
+            order.orderId = random.randint(1, 100)
             trade = ibi.Trade(order=order, contract=contract)
 
             if callback is not None:
@@ -120,6 +121,28 @@ def objects():
     source += em
 
     return controller, source, em
+
+
+def test_OcaExecModel_brackets_have_same_oca(objects):
+    controller, source, _ = objects
+    em = OcaExecModel(
+        stop=bracket_legs.TrailingStop(3),
+        take_profit=bracket_legs.TakeProfitAsStopMultiple(3, 3),
+        controller=controller,
+    )
+    source += em
+    source.dataEvent.emit(
+        {
+            "signal": 1,
+            "action": "OPEN",
+            "amount": 1,
+            "target_position": 1,
+            "atr": 5,
+            "contract": ibi.ContFuture("NQ", "CME", conId=1),
+        }
+    )
+    brackets = list(em.brackets.values())
+    assert brackets[0].trade.order.ocaGroup == brackets[1].trade.order.ocaGroup
 
 
 def test_BaseExecModel_open_signal_generates_order(objects):
