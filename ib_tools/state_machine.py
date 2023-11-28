@@ -151,8 +151,6 @@ class StateMachine(Atom):
         super().__init__()
 
         self.data: dict[str, AbstractExecModel] = {}
-        self._locks: dict[str, Lock] = {}
-        # self._position_dict: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
         self.orders = OrderContainer()
 
     def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
@@ -283,7 +281,7 @@ class StateMachine(Atom):
         ib_position = self.ib_position_for_contract[contract]
 
     def locked(self, strategy: str) -> Lock:
-        return self._locks.get(strategy, 0)
+        return self.data["strategy"].lock
 
     def position_for_contract(self, contract: ibi.Contract) -> float:
         return self.total_positions().get(contract) or 0.0
@@ -324,8 +322,8 @@ class StateMachine(Atom):
 
     # ### TODO: Re-do this
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
-        self._locks[strategy] = 1 if trade.order.action == "BUY" else -1
-        log.debug(f"Registered lock: {strategy}: {self._locks[strategy]}")
+        self.data[strategy].lock = 1 if trade.order.action == "BUY" else -1
+        log.debug(f"Registered lock: {strategy}: {self.data[strategy]}")
 
     def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
         # When exactly should the lock be registered to prevent double-dip?

@@ -83,6 +83,7 @@ class AbstractExecModel(Atom, ABC):
         self.position: float = 0.0
         self.strategy: str = ""
         self.params: Params = {"open": {}, "close": {}}
+        self.lock: misc.Lock = 0
         self.controller = controller or CONTROLLER
 
         if orders:
@@ -200,10 +201,12 @@ class BaseExecModel(AbstractExecModel):
         "algoStrategy": "Adaptive",
         "algoParams": [ibi.TagValue("adaptivePriority", "Normal")],
         "tif": "Day",
+        "outsideRth": True,
     }
     _close_order = {
         "orderType": "MKT",
         "tif": "GTC",
+        "outsideRth": True,
     }
 
     def trade(
