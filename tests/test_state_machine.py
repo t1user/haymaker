@@ -182,3 +182,60 @@ def test_OrderContainer_default_in_get_works():
 
     assert orders.get(3, "Not Found") == "Not Found"
     assert orders.get(3, "Not Found", active_only=True) == "Not Found"
+
+
+def test_OrderContainer_done_limited_in_size():
+    orders = OrderContainer(
+        {
+            i: OrderInfo(
+                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
+            )
+            for i in range(20)
+        },
+    )
+    # orders with keys 0..14 moved to done
+    for i in range(15):
+        del orders[i]
+
+    # done should keep only 10 last items
+    assert len(orders.done) == 10
+
+
+def test_OrderContainer_done_limited_in_size_and_keep_parameter_works():
+    orders = OrderContainer(
+        {
+            i: OrderInfo(
+                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
+            )
+            for i in range(20)
+        },
+        keep=5,
+    )
+    # orders with keys 0..14 moved to done
+    for i in range(15):
+        del orders[i]
+
+    # done should keep only 10 last items
+    assert len(orders.done) == 5
+
+
+def test_OrderContainer_done_drops_oldest():
+    orders = OrderContainer(
+        {
+            i: OrderInfo(
+                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
+            )
+            for i in range(20)
+        }
+    )
+    # orders with keys 0..14 moved to done
+    for i in range(15):
+        del orders[i]
+
+    # orders with keys 0...4 discarded so first kept it 5
+    first_key = list(orders.done.keys())[0]
+    assert first_key == 5
+
+    # this is the last of keys removed from the main dict
+    last_key = list(orders.done.keys())[-1]
+    assert last_key == 14

@@ -41,10 +41,21 @@ class OrderInfo:
         )
 
 
-class OrderContainer(UserDict):
-    def __init__(self, dict=None, /, **kwargs):
+class MaxSizeContainer(UserDict):
+    def __init__(self, dict=None, /, max_size: int = 10, **kwargs) -> None:
+        self.max_size = max_size
         super().__init__(dict, **kwargs)
-        self.done = {}
+
+    def __setitem__(self, key, item):
+        if len(self.data) >= self.max_size:
+            self.data.pop(min(self.data.keys()))
+        super().__setitem__(key, item)
+
+
+class OrderContainer(UserDict):
+    def __init__(self, dict=None, /, keep: int = 10, **kwargs) -> None:
+        super().__init__(dict, **kwargs)
+        self.done = MaxSizeContainer(max_size=keep)
         self.active = self.data
         self._combined = ChainMap(self.done, self.active)
 
