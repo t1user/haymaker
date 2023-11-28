@@ -399,7 +399,7 @@ class EventDrivenExecModel(BaseExecModel):
         controller: Optional[Controller] = None,
     ):
         if not stop:
-            log.error(
+            raise TypeError(
                 f"{self.__class__.__name__} must be initialized with a stop bracket leg"
             )
         self.stop = stop
@@ -540,10 +540,16 @@ class OcaExecModel(EventDrivenExecModel):
         super().__init__(
             orders, stop=stop, take_profit=take_profit, controller=controller
         )
-        self.oca_group = str(uuid4())
+        if not (stop and take_profit):
+            raise TypeError(
+                f"{self.__class__.__name__} must be initialized with stop loss "
+                f"and take profit"
+            )
+
+        self.oca_group = lambda: str(uuid4())
 
     def _dynamic_bracket_kwargs(self):
-        return {"ocaGroup": self.oca_group, "ocaType": 1}
+        return {"ocaGroup": self.oca_group(), "ocaType": 1}
 
     def report_bracket(self, trade: ibi.Trade) -> None:
         log.debug(f"Bracketing order filled: {trade.order}")

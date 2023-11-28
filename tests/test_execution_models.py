@@ -8,7 +8,7 @@ import pytest
 
 from ib_tools import bracket_legs, misc
 from ib_tools.base import Atom
-from ib_tools.bracket_legs import FixedStop
+from ib_tools.bracket_legs import FixedStop, TakeProfitAsStopMultiple
 from ib_tools.execution_models import (
     AbstractExecModel,
     BaseExecModel,
@@ -28,8 +28,13 @@ def test_BaseExecModel_instantiates():
 
 
 def test_EventDrivenExecModel_instantiates():
-    edem = EventDrivenExecModel()
+    edem = EventDrivenExecModel(stop=FixedStop(1))
     assert isinstance(edem, EventDrivenExecModel)
+
+
+def test_EventDrivenExecModel_requires_stop():
+    with pytest.raises(TypeError):
+        EventDrivenExecModel()
 
 
 def test_BaseExecModel_order_validator_works_with_correct_keys():
@@ -60,17 +65,29 @@ def test_position_id_reset():
 
 
 def test_oca_group_OcaExecModel():
-    e = OcaExecModel(stop=FixedStop(1))
-    oca_group = e.oca_group
+    e = OcaExecModel(stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2))
+    oca_group = e.oca_group()
     assert isinstance(oca_group, str)
     assert len(oca_group) > 10
 
 
+def test_oca_group_unique_OcaExecModel():
+    e = OcaExecModel(stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2))
+    oca_group1 = e.oca_group()
+    oca_group2 = e.oca_group()
+    assert oca_group1 != oca_group2
+
+
 def test_oca_group_is_not_position_id():
-    e = OcaExecModel(stop=FixedStop(1))
+    e = OcaExecModel(stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2))
     oca_group = e.oca_group
     position_id = e.position_id()
     assert oca_group != position_id
+
+
+def test_OcaExecModel_requires_two_brackets():
+    with pytest.raises(TypeError):
+        OcaExecModel(stop=FixedStop(1))
 
 
 @pytest.fixture
