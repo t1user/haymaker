@@ -56,13 +56,6 @@ class Controller:
         self.ib.errorEvent += self.log_error
 
     async def init(self, *args, **kwargs) -> None:
-        for trade in self.ib.openTrades():
-            self.sm.orders.update_trade(trade)
-            log.debug(
-                f"Events re-attached for order: {trade.order.orderId} "
-                f"{trade.order.orderType} {trade.order.action} "
-                f"{trade.order.totalQuantity}{trade.contract.symbol}"
-            )
         self.hold = False
         log.debug("hold released")
 
@@ -84,12 +77,9 @@ class Controller:
         order: ibi.Order,
         action: str,
         exec_model: AbstractExecModel,
-        callback: Optional[misc.Callback] = None,
     ) -> ibi.Trade:
         trade = self.trader.trade(contract, order)
-        if callback is not None:
-            callback(trade)
-        self.sm.register_order(exec_model.strategy, action, trade, exec_model, callback)
+        self.sm.register_order(exec_model.strategy, action, trade, exec_model)
         trade.filledEvent += partial(
             self.log_trade, reason=action, strategy=exec_model.strategy
         )

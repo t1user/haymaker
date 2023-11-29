@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional
 import ib_insync as ibi
 
 from .base import Atom
-from .misc import Callback, Lock, Signal, sign
+from .misc import Lock, Signal, sign
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
@@ -25,7 +25,6 @@ class OrderInfo:
     action: str
     trade: ibi.Trade
     exec_model: AbstractExecModel
-    callback: Optional[Callback] = None
     active: bool = True
 
     def __iter__(self):
@@ -35,7 +34,6 @@ class OrderInfo:
                 self.action,
                 self.trade,
                 self.exec_model,
-                self.callback,
                 self.active,
             )
         )
@@ -77,15 +75,6 @@ class OrderContainer(UserDict):
             return self.data.get(key, default)
         else:
             return self._combined.get(key, default)
-
-    def update_trade(self, trade) -> None:
-        oi = self.get(trade.order.orderId)
-        if oi:
-            oi.callback(trade)
-            new_oi = OrderInfo(
-                oi.strategy, oi.action, trade, oi.exec_model, oi.callback
-            )
-            self[trade.order.orderId] = new_oi
 
 
 class StateMachine(Atom):
@@ -212,7 +201,6 @@ class StateMachine(Atom):
         action: str,
         trade: ibi.Trade,
         exec_model: AbstractExecModel,
-        callback: Optional[Callback] = None,
     ) -> None:
         """
         Register order, register lock, verify that position has been registered.
@@ -227,7 +215,7 @@ class StateMachine(Atom):
         """
 
         self.orders[trade.order.orderId] = OrderInfo(
-            strategy, action, trade, exec_model, callback
+            strategy, action, trade, exec_model
         )
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} registered for: "

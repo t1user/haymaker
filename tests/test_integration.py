@@ -27,8 +27,8 @@ def pipe(df_brick, data_for_df):  # noqa
     class FakeController:
         out = None
 
-        def trade(self, contract, order, action, exec_model, callback):
-            self.out = contract, order, action, exec_model, callback
+        def trade(self, contract, order, action, exec_model):
+            self.out = contract, order, action, exec_model
 
     controller = FakeController()
 
@@ -54,17 +54,17 @@ def pipe(df_brick, data_for_df):  # noqa
 
 
 def test_exec_model_is_exec_model(pipe):
-    contract, order, action, exec_model, callback = pipe
+    contract, order, action, exec_model = pipe
     assert isinstance(exec_model, EventDrivenExecModel)
 
 
 def test_contract_is_contract(pipe):
-    contract, order, action, exec_model, callback = pipe
+    contract, order, action, exec_model = pipe
     assert isinstance(contract, ibi.Contract)
 
 
 def test_required_fields_in_data_present(pipe):
-    _, _, _, exec_model, _ = pipe
+    _, _, _, exec_model = pipe
     data = exec_model.params["open"]
     assert set(
         ["strategy", "contract", "exec_model", "amount", "signal", "action"]
@@ -72,23 +72,18 @@ def test_required_fields_in_data_present(pipe):
 
 
 def test_order_is_order(pipe):
-    _, order, _, _, _ = pipe
+    _, order, _, _ = pipe
     assert isinstance(order, ibi.Order)
 
 
 def test_order_is_a_buy_order(pipe):
-    _, order, _, _, _ = pipe
+    _, order, _, __ = pipe
     assert order.action == "BUY"
 
 
 def test_order_is_for_one_contract(pipe):
-    _, order, _, _, _ = pipe
+    _, order, _, __ = pipe
     assert order.totalQuantity == 1
-
-
-def test_callback_is_callable(pipe):
-    _, _, _, _, callback = pipe
-    assert callable(callback)
 
 
 # #####################################

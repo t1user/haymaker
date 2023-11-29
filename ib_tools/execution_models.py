@@ -5,7 +5,7 @@ import dataclasses
 import logging
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Any, Callable, Literal, NamedTuple, Optional, TypedDict
+from typing import Any, Literal, NamedTuple, Optional, TypedDict, cast
 from uuid import uuid4
 
 import ib_insync as ibi
@@ -214,34 +214,16 @@ class BaseExecModel(AbstractExecModel):
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
-        callback: Optional[Callable[[ibi.Trade], None]] = None,
-    ) -> None:
-        self.controller.trade(
+    ) -> ibi.Trade:
+        return self.controller.trade(
             contract,
             order,
             action,
             self,
-            partial(self.trade_callback, callback=callback),
         )
 
-    def cancel(
-        self, trade: ibi.Trade, callback: Optional[misc.Callback] = None
-    ) -> None:
-        if callback is None:
-            callback = self.cancel_callback
-        self.controller.cancel(trade, self, callback)
-
-    def trade_callback(
-        self, trade: ibi.Trade, callback: Optional[misc.Callback] = None
-    ) -> None:
-        # trade.fillEvent -= self.register_position
-        # trade.fillEvent += self.register_position
-        if callback is not None:
-            callback(trade)
-
-    def cancel_callback(self, trade, callback: Optional[misc.Callback] = None) -> None:
-        # override this in subclass if needed
-        pass
+    def cancel(self, trade: ibi.Trade) -> None:
+        self.controller.cancel(trade, self)
 
     async def live_ticker(self):
         # NOT IN USE
@@ -293,31 +275,11 @@ class BaseExecModel(AbstractExecModel):
             return
         self.dataEvent.emit(data)
 
-    # def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
-    #     if fill.execution.side == "BOT":
-    #         self.position += fill.execution.shares
-    #         log.debug(
-    #             f"Registered {trade.order.orderId} BUY {trade.order.orderType} "
-    #             f"for {self.strategy} --> position: {self.position}"
-    #         )
-    #     elif fill.execution.side == "SLD":
-    #         self.position -= fill.execution.shares
-    #         log.debug(
-    #             f"Registered {trade.order.orderId} SELL {trade.order.orderType} "
-    #             f"for {self.strategy} --> position: {self.position}"
-    #         )
-    #     else:
-    #         log.critical(
-    #             f"Abiguous fill: {fill} for order: {trade.order} for "
-    #             f"{trade.contract.localSymbol} strategy: {self.strategy}"
-    #         )
-
     def open(
         self,
         data: dict,
-        callback: Optional[misc.Callback] = None,
         dynamic_order_kwargs: Optional[dict] = None,
-    ) -> None:
+    ) -> ibi.Trade:
         self.params["close"] = {}
         data["position_id"] = self.position_id(True)
         self.params["open"].update(data)
@@ -336,14 +298,13 @@ class BaseExecModel(AbstractExecModel):
             f"{self.strategy} {contract.localSymbol} processing OPEN signal {signal}",
             extra={"data": data},
         )
-        self.trade(contract, order, "OPEN", callback)
+        return self.trade(contract, order, "OPEN")
 
     def close(
         self,
         data: dict,
-        callback: Optional[misc.Callback] = None,
         dynamic_order_kwargs: Optional[dict] = None,
-    ) -> None:
+    ) -> Optional[ibi.Trade]:
         data["position_id"] = self.position_id()
         self.params["close"].update(data)
         # THIS IS TEMPORARY ----> FIX ---> TODO
@@ -352,7 +313,7 @@ class BaseExecModel(AbstractExecModel):
                 f"Abandoning CLOSE position for {self.active_contract} "
                 f"(No position, but close signal)"
             )
-            return
+            return None
 
         signal = -misc.sign(self.position)
 
@@ -370,16 +331,16 @@ class BaseExecModel(AbstractExecModel):
             f" order: {order_kwargs['action']} {order_kwargs['totalQuantity']}",
             extra={"data": data},
         )
-        self.trade(self.active_contract, order, "CLOSE", callback)
+        return self.trade(
+            self.active_contract,
+            order,
+            "CLOSE",
+        )
 
-    def reverse(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
-        def open_after_close(trade, data):
-            self.open(data)
-
-        def connect_open_after_close(trade):
-            trade.filledEvent += partial(open_after_close, data=data)
-
-        self.close(data, connect_open_after_close)
+    def reverse(self, data: dict) -> None:
+        close_trade = self.close(data)
+        if close_trade:
+            close_trade.filledEvent += partial(self.open, data=data)
 
     def __repr__(self):
         return self.__class__.__name__ + "()"
@@ -426,48 +387,39 @@ class EventDrivenExecModel(BaseExecModel):
     def open(
         self,
         data: dict,
-        callback: Optional[misc.Callback] = None,
         dynamic_order_kwargs: Optional[dict] = None,
-    ) -> None:
+    ) -> ibi.Trade:
         """
         Save information required for bracket orders and attach events
         that will attach brackets after order completion.
         """
         attach_bracket = partial(self._attach_bracket, params=data)
 
-        def callback_open_trade(trade):
-            trade.filledEvent -= attach_bracket
-            trade.filledEvent += attach_bracket
-
         # reset any previous oca_group settings
         self.oca_group = None
 
-        super().open(data, callback_open_trade)
+        trade = super().open(data)
+        trade.filledEvent += attach_bracket
+        return trade
 
     def close(
         self,
         data: dict,
-        callback: Optional[misc.Callback] = None,
         dynamic_order_kwargs: Optional[dict] = None,
-    ) -> None:
+    ) -> Optional[ibi.Trade]:
         """
-        Attach events that will cancel any brackets on order completion.
+        Attach oca that will cancel any brackets after order execution.
         """
 
-        def callback_close_trade(trade: ibi.Trade) -> None:
-            # trade.filledEvent -= self.remove_bracket
-            # trade.filledEvent += self.remove_bracket
-            pass
-
-        super().close(data, callback_close_trade, self._dynamic_bracket_kwargs())
+        return super().close(data, self._dynamic_bracket_kwargs())
 
     def _dynamic_bracket_kwargs(self) -> dict[str, Any]:
-        return {"ocaGroup": self.oca_group or self.oca_group_generator(), "ocaType": 1}
+        self.oca_group = self.oca_group or self.oca_group_generator()
+        return {"ocaGroup": self.oca_group, "ocaType": 1}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
         # called once for sl/tp pair! Don't put inside the for loop!
         dynamic_bracket_kwargs = self._dynamic_bracket_kwargs()
-
         for bracket, order_key, label in zip(
             (self.stop, self.take_profit),
             ("stop_order", "tp_order"),
@@ -477,35 +429,20 @@ class EventDrivenExecModel(BaseExecModel):
             if bracket:
                 bracket_kwargs = bracket(params, trade)
                 bracket_kwargs.update(dynamic_bracket_kwargs)
-                self._place_bracket(trade.contract, order_key, label, bracket_kwargs)
+                order = self._order(cast(OrderKey, order_key), bracket_kwargs)
 
-    def _place_bracket(self, contract, order_key, label, bracket_kwargs):
-        def save_bracket(
-            label: BracketLabel,
-            bracket_kwargs: dict,
-            trade: ibi.Trade,
-        ):
-            self.brackets[trade.order.orderId] = Bracket(
-                label, order_key, bracket_kwargs, trade
-            )
-
-        def callback_bracket_trade(trade, label="", bracket_kwargs=None):
-            trade.filledEvent -= self.bracket_filled_callback
-            trade.filledEvent += self.bracket_filled_callback
-            save_bracket(label, bracket_kwargs, trade)
-
-        order = self._order(order_key, bracket_kwargs)
-        log.debug(f"bracket order: {order}")
-        self.trade(
-            contract,
-            order,
-            label,
-            partial(
-                callback_bracket_trade,
-                label=label,
-                bracket_kwargs=bracket_kwargs,
-            ),
-        )
+                log.debug(f"bracket order: {order}")
+                bracket_trade = self.trade(
+                    trade.contract,
+                    order,
+                    label,
+                )
+                self.brackets[bracket_trade.order.orderId] = Bracket(
+                    cast(BracketLabel, label),
+                    cast(OrderKey, order_key),
+                    bracket_kwargs,
+                    bracket_trade,
+                )
 
     def re_attach_brackets(self):
         """
@@ -522,29 +459,6 @@ class EventDrivenExecModel(BaseExecModel):
                 bracket.label,
                 bracket.bracket_kwargs,
             )
-
-    # def remove_bracket(self, trade: ibi.Trade) -> None:
-    #     # trade is for a bracket order that has just been filled!!!
-    #     # it may be either a close transaction or one of the brackets
-    #     # in either case position is closed and we need to remove
-    #     # remaining brackets if any
-    #     for orderId, bracket in self.brackets.copy().items():
-    #         if not bracket.trade.isDone():
-    #             # trade may be one of the brackets
-    #             if orderId != trade.order.orderId:
-    #                 log.debug(
-    #                     f"Will attempt to remove: {bracket.label} "
-    #                     f"{trade.order.orderId} {trade.contract.symbol} "
-    #                     f"{trade.order.orderType} {trade.order.action}"
-    #                     f"trade object id: {id(trade)}"
-    #                 )
-    #                 self.cancel(bracket.trade)
-    #             del self.brackets[orderId]
-
-    def report_bracket(self, trade: ibi.Trade) -> None:
-        log.debug(f"Bracketing order filled: {trade.order}")
-
-    bracket_filled_callback = report_bracket
 
     def __repr__(self):
         return (

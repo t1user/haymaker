@@ -23,10 +23,9 @@ def test_StateMachine_is_singleton(state_machine):
 
 def test_OrderInfo_unpackable():
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    strategy, action, trade, exec_model, callback, active = o1
+    strategy, action, trade, exec_model, active = o1
     assert strategy == "coolstrategy"
     assert action == "OPEN"
-    assert callback is None
     assert active
 
 

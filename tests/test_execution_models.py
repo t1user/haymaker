@@ -1,12 +1,11 @@
 import logging
 import random
 from datetime import datetime, timezone
-from typing import Optional
 
 import ib_insync as ibi
 import pytest
 
-from ib_tools import bracket_legs, misc
+from ib_tools import bracket_legs
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import FixedStop, TakeProfitAsStopMultiple
 from ib_tools.execution_models import (
@@ -96,6 +95,7 @@ def objects():
         contract = None
         order = None
         action = None
+        trade_object = None
 
         def trade(
             self,
@@ -103,14 +103,9 @@ def objects():
             order: ibi.Order,
             action: str,
             exec_model: AbstractExecModel,
-            callback: Optional[misc.Callback],
         ):
             order.orderId = random.randint(1, 100)
-            trade = ibi.Trade(order=order, contract=contract)
-
-            if callback is not None:
-                callback(trade)
-
+            trade_object = ibi.Trade(order=order, contract=contract)
             self.contract = contract
             self.order = order
             self.action = action
@@ -125,23 +120,26 @@ def objects():
                 ibi.CommissionReport(),
                 datetime.now(timezone.utc),
             )
-            trade.fills.append(fill)
-            trade.fillEvent.emit(trade, fill)
-            trade.filledEvent.emit(trade)
+            trade_object.fills.append(fill)
+            self.trade_object = trade_object
+            self.fill = fill
+            return trade_object
+
+        def trade_done(self):
+            self.trade_object.fillEvent.emit(self.trade_object, self.fill)
+            self.trade_object.filledEvent.emit(self.trade_object)
 
     class Source(Atom):
         pass
 
     controller = FakeController()
     source = Source()
-    em = BaseExecModel(controller=controller)
-    source += em
 
-    return controller, source, em
+    return controller, source
 
 
 def test_EventDrivenExecModel_brackets_have_same_oca(objects):
-    controller, source, _ = objects
+    controller, source = objects
     em = EventDrivenExecModel(
         stop=bracket_legs.TrailingStop(3),
         take_profit=bracket_legs.TakeProfitAsStopMultiple(3, 3),
@@ -158,12 +156,13 @@ def test_EventDrivenExecModel_brackets_have_same_oca(objects):
             "contract": ibi.ContFuture("NQ", "CME", conId=1),
         }
     )
+    controller.trade_done()
     brackets = list(em.brackets.values())
     assert brackets[0].trade.order.ocaGroup == brackets[1].trade.order.ocaGroup
 
 
 def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
-    controller, source, _ = objects
+    controller, source = objects
     em = EventDrivenExecModel(
         stop=bracket_legs.TrailingStop(3),
         take_profit=bracket_legs.TakeProfitAsStopMultiple(3, 3),
@@ -180,7 +179,9 @@ def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
             "contract": ibi.ContFuture("NQ", "CME", conId=1),
         }
     )
+    controller.trade_done()
     brackets = list(em.brackets.values())
+    em.position = 1
     source.dataEvent.emit(
         {
             "signal": -1,
@@ -189,11 +190,14 @@ def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
             "target_position": 0,
         }
     )
+    controller.trade_done()
     assert controller.order.ocaGroup == brackets[0].trade.order.ocaGroup
 
 
 def test_BaseExecModel_open_signal_generates_order(objects):
-    controller, source, em = objects
+    controller, source = objects
+    em = BaseExecModel(controller=controller)
+    source += em
     data = {
         "signal": 1,
         "action": "OPEN",
@@ -206,7 +210,10 @@ def test_BaseExecModel_open_signal_generates_order(objects):
 
 
 def test_BaseExecModel_no_close_order_without_position(objects):
-    controller, source, em = objects
+    controller, source = objects
+    em = BaseExecModel(controller=controller)
+    source += em
+
     data = {
         "signal": -1,
         "action": "CLOSE",
@@ -219,7 +226,10 @@ def test_BaseExecModel_no_close_order_without_position(objects):
 
 
 def test_BaseExecModel_faulty_close_order_logs(objects, caplog):
-    controller, source, em = objects
+    controller, source = objects
+    em = BaseExecModel(controller=controller)
+    source += em
+
     data = {
         "signal": -1,
         "action": "CLOSE",
@@ -232,7 +242,10 @@ def test_BaseExecModel_faulty_close_order_logs(objects, caplog):
 
 
 def test_BaseExecModel_close_signal_generates_order(objects):
-    controller, source, em = objects
+    controller, source = objects
+    em = BaseExecModel(controller=controller)
+    source += em
+
     data_open = {
         "signal": 1,
         "action": "OPEN",
@@ -291,7 +304,6 @@ def test_passed_order_kwargs_update_defaults():
             order: ibi.Order,
             action: str,
             exec_model: AbstractExecModel,
-            callback: Optional[misc.Callback],
         ):
             self.contract = contract
             self.order = order
