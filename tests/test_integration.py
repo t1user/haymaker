@@ -1,10 +1,14 @@
+from datetime import datetime, timezone
+
 import ib_insync as ibi
 import pytest
 from test_brick import data_for_df, df_brick  # noqa
 
 from ib_tools.base import Atom, Pipe
 from ib_tools.bracket_legs import FixedStop
-from ib_tools.execution_models import EventDrivenExecModel
+from ib_tools.controller import Controller
+from ib_tools.execution_models import BaseExecModel, EventDrivenExecModel
+from ib_tools.manager import STATE_MACHINE
 from ib_tools.portfolio import FixedPortfolio
 from ib_tools.signals import BinarySignalProcessor
 
@@ -85,3 +89,97 @@ def test_order_is_for_one_contract(pipe):
 def test_callback_is_callable(pipe):
     _, _, _, _, callback = pipe
     assert callable(callback)
+
+
+# #####################################
+# Test sending orders
+# #####################################
+
+
+# THIS IS A SHITTY TEST BECAUSE IT WORKS WITH GLOBAL STATE
+@pytest.fixture
+def new_setup():
+    class FakeTrader:
+        def trade(self, contract: ibi.Contract, order: ibi.Order):
+            return ibi.Trade(contract, order)
+
+    class FakeController(Controller):
+        trade_object = None
+
+        def trade(self, *args, **kwargs):
+            print(f"trade received: {args} {kwargs}")
+            self.trade_object = super().trade(*args, **kwargs)
+
+    ib = ibi.IB()
+    controller = FakeController(STATE_MACHINE, ib, trader=FakeTrader())
+
+    class Source(Atom):
+        pass
+
+    source = Source()
+    em = BaseExecModel(controller=controller)
+    source += em
+
+    source.startEvent.emit({"strategy": "xxx", "execution_model": em})
+
+    return ib, controller, source, em
+
+
+def test_buy_position_registered(new_setup):
+    ib, controller, source, em = new_setup
+
+    data = {
+        "signal": 1,
+        "action": "OPEN",
+        "amount": 1,
+        "target_position": 1,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+
+    source.dataEvent.emit(data)
+    trade_object = controller.trade_object
+    trade_object.fills.append(
+        ibi.Fill(
+            contract=trade_object.contract,
+            execution=ibi.Execution(
+                execId="0000e1a7.656447c6.01.01",
+                shares=trade_object.order.totalQuantity,
+                side="SLD" if trade_object.order.action == "SELL" else "BOT",
+            ),
+            commissionReport=ibi.CommissionReport(commission=1.0, realizedPNL=0.0),
+            time=datetime.now(timezone.utc),
+        )
+    )
+    ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
+
+    assert em.position == 1
+
+
+def test_sell_position_registered(new_setup):
+    ib, controller, source, em = new_setup
+
+    data = {
+        "signal": -1,
+        "action": "OPEN",
+        "amount": 1,
+        "target_position": -1,
+        "contract": ibi.ContFuture("NQ", "CME"),
+    }
+
+    source.dataEvent.emit(data)
+    trade_object = controller.trade_object
+    trade_object.fills.append(
+        ibi.Fill(
+            contract=trade_object.contract,
+            execution=ibi.Execution(
+                execId="0000e1a7.656447c6.01.01",
+                shares=trade_object.order.totalQuantity,
+                side="SLD" if trade_object.order.action == "SELL" else "BOT",
+            ),
+            commissionReport=ibi.CommissionReport(commission=1.0, realizedPNL=0.0),
+            time=datetime.now(timezone.utc),
+        )
+    )
+    ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
+
+    assert em.position == -1

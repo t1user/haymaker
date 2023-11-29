@@ -234,8 +234,8 @@ class BaseExecModel(AbstractExecModel):
     def trade_callback(
         self, trade: ibi.Trade, callback: Optional[misc.Callback] = None
     ) -> None:
-        trade.fillEvent -= self.register_position
-        trade.fillEvent += self.register_position
+        # trade.fillEvent -= self.register_position
+        # trade.fillEvent += self.register_position
         if callback is not None:
             callback(trade)
 
@@ -293,24 +293,24 @@ class BaseExecModel(AbstractExecModel):
             return
         self.dataEvent.emit(data)
 
-    def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
-        if fill.execution.side == "BOT":
-            self.position += fill.execution.shares
-            log.debug(
-                f"Registered {trade.order.orderId} BUY {trade.order.orderType} "
-                f"for {self.strategy} --> position: {self.position}"
-            )
-        elif fill.execution.side == "SLD":
-            self.position -= fill.execution.shares
-            log.debug(
-                f"Registered {trade.order.orderId} SELL {trade.order.orderType} "
-                f"for {self.strategy} --> position: {self.position}"
-            )
-        else:
-            log.critical(
-                f"Abiguous fill: {fill} for order: {trade.order} for "
-                f"{trade.contract.localSymbol} strategy: {self.strategy}"
-            )
+    # def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+    #     if fill.execution.side == "BOT":
+    #         self.position += fill.execution.shares
+    #         log.debug(
+    #             f"Registered {trade.order.orderId} BUY {trade.order.orderType} "
+    #             f"for {self.strategy} --> position: {self.position}"
+    #         )
+    #     elif fill.execution.side == "SLD":
+    #         self.position -= fill.execution.shares
+    #         log.debug(
+    #             f"Registered {trade.order.orderId} SELL {trade.order.orderType} "
+    #             f"for {self.strategy} --> position: {self.position}"
+    #         )
+    #     else:
+    #         log.critical(
+    #             f"Abiguous fill: {fill} for order: {trade.order} for "
+    #             f"{trade.contract.localSymbol} strategy: {self.strategy}"
+    #         )
 
     def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
         self.params["close"] = {}

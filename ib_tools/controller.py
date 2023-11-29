@@ -33,17 +33,16 @@ class Controller:
     log_events: bool = False
 
     def __init__(
-        self,
-        state_machine: StateMachine,
-        ib: ibi.IB,
+        self, state_machine: StateMachine, ib: ibi.IB, trader: Optional[Trader] = None
     ):
         super().__init__()
         self.sm = state_machine
         self.ib = ib
-        self.trader = Trader(self.ib)
+        self.trader = trader or Trader(self.ib)
 
-        self.ib.newOrderEvent.connect(self.handleNewOrderEvent)
-        self.ib.orderStatusEvent.connect(self.handleOrderStatusEvent)
+        self.ib.execDetailsEvent.connect(self.onExecDetailsEvent)
+        self.ib.newOrderEvent.connect(self.onNewOrderEvent)
+        self.ib.orderStatusEvent.connect(self.onOrderStatusEvent)
 
         log.debug("hold set")
         self.hold = True
@@ -86,7 +85,7 @@ class Controller:
         action: str,
         exec_model: AbstractExecModel,
         callback: Optional[misc.Callback] = None,
-    ) -> None:
+    ) -> ibi.Trade:
         trade = self.trader.trade(contract, order)
         if callback is not None:
             callback(trade)
@@ -94,6 +93,7 @@ class Controller:
         trade.filledEvent += partial(
             self.log_trade, reason=action, strategy=exec_model.strategy
         )
+        return trade
 
     def cancel(
         self,
@@ -217,7 +217,7 @@ class Controller:
                 diff[contract] = (amounts[0], amounts[1])
         return diff
 
-    async def handleNewOrderEvent(self, trade: ibi.Trade) -> None:
+    async def onNewOrderEvent(self, trade: ibi.Trade) -> None:
         """
         Check if the system knows about the order that was just posted
         to the broker.
@@ -231,7 +231,7 @@ class Controller:
         if not existing_order_record:
             log.critical(f"Unknown trade in the system {trade.order}")
 
-    def handleOrderStatusEvent(self, trade: ibi.Trade) -> None:
+    def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
         if trade.order.orderId < 0:
             log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
         elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
@@ -256,7 +256,32 @@ class Controller:
                 f" for order: {trade.order},"
             )
 
-    async def onCommissionReport(
+    def register_position(
+        self, strategy: AbstractExecModel, trade: ibi.Trade, fill: ibi.Fill
+    ) -> None:
+        if fill.execution.side == "BOT":
+            strategy.position += fill.execution.shares
+            log.debug(
+                f"Registered {trade.order.orderId} BUY {trade.order.orderType} "
+                f"for {strategy.strategy} --> position: {strategy.position}"
+            )
+        elif fill.execution.side == "SLD":
+            strategy.position -= fill.execution.shares
+            log.debug(
+                f"Registered {trade.order.orderId} SELL {trade.order.orderType} "
+                f"for {strategy.strategy} --> position: {strategy.position}"
+            )
+        else:
+            log.critical(
+                f"Abiguous fill: {fill} for order: {trade.order} for "
+                f"{trade.contract.localSymbol} strategy: {strategy.strategy}"
+            )
+
+    def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+        exec_model = self.sm.orders.get(trade.order.orderId).exec_model
+        self.register_position(exec_model, trade, fill)
+
+    def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ) -> None:
         """
