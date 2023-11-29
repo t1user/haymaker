@@ -13,7 +13,6 @@ from ib_tools.execution_models import (
     AbstractExecModel,
     BaseExecModel,
     EventDrivenExecModel,
-    OcaExecModel,
 )
 
 
@@ -64,30 +63,31 @@ def test_position_id_reset():
     assert id1 != id2
 
 
-def test_oca_group_OcaExecModel():
-    e = OcaExecModel(stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2))
-    oca_group = e.oca_group()
+def test_oca_group_EventDrivenExecModel():
+    e = EventDrivenExecModel(
+        stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2)
+    )
+    oca_group = e.oca_group_generator()
     assert isinstance(oca_group, str)
     assert len(oca_group) > 10
 
 
-def test_oca_group_unique_OcaExecModel():
-    e = OcaExecModel(stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2))
-    oca_group1 = e.oca_group()
-    oca_group2 = e.oca_group()
+def test_oca_group_unique_EventDrivenExecModel():
+    e = EventDrivenExecModel(
+        stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2)
+    )
+    oca_group1 = e.oca_group_generator()
+    oca_group2 = e.oca_group_generator()
     assert oca_group1 != oca_group2
 
 
 def test_oca_group_is_not_position_id():
-    e = OcaExecModel(stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2))
-    oca_group = e.oca_group
+    e = EventDrivenExecModel(
+        stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2)
+    )
+    oca_group = e.oca_group_generator()
     position_id = e.position_id()
     assert oca_group != position_id
-
-
-def test_OcaExecModel_requires_two_brackets():
-    with pytest.raises(TypeError):
-        OcaExecModel(stop=FixedStop(1))
 
 
 @pytest.fixture
@@ -140,9 +140,9 @@ def objects():
     return controller, source, em
 
 
-def test_OcaExecModel_brackets_have_same_oca(objects):
+def test_EventDrivenExecModel_brackets_have_same_oca(objects):
     controller, source, _ = objects
-    em = OcaExecModel(
+    em = EventDrivenExecModel(
         stop=bracket_legs.TrailingStop(3),
         take_profit=bracket_legs.TakeProfitAsStopMultiple(3, 3),
         controller=controller,
@@ -160,6 +160,36 @@ def test_OcaExecModel_brackets_have_same_oca(objects):
     )
     brackets = list(em.brackets.values())
     assert brackets[0].trade.order.ocaGroup == brackets[1].trade.order.ocaGroup
+
+
+def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
+    controller, source, _ = objects
+    em = EventDrivenExecModel(
+        stop=bracket_legs.TrailingStop(3),
+        take_profit=bracket_legs.TakeProfitAsStopMultiple(3, 3),
+        controller=controller,
+    )
+    source += em
+    source.dataEvent.emit(
+        {
+            "signal": 1,
+            "action": "OPEN",
+            "amount": 1,
+            "target_position": 1,
+            "atr": 5,
+            "contract": ibi.ContFuture("NQ", "CME", conId=1),
+        }
+    )
+    brackets = list(em.brackets.values())
+    source.dataEvent.emit(
+        {
+            "signal": -1,
+            "action": "CLOSE",
+            "amount": 1,
+            "target_position": 0,
+        }
+    )
+    assert controller.order.ocaGroup == brackets[0].trade.order.ocaGroup
 
 
 def test_BaseExecModel_open_signal_generates_order(objects):

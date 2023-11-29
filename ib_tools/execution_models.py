@@ -312,7 +312,12 @@ class BaseExecModel(AbstractExecModel):
     #             f"{trade.contract.localSymbol} strategy: {self.strategy}"
     #         )
 
-    def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
+    def open(
+        self,
+        data: dict,
+        callback: Optional[misc.Callback] = None,
+        dynamic_order_kwargs: Optional[dict] = None,
+    ) -> None:
         self.params["close"] = {}
         data["position_id"] = self.position_id(True)
         self.params["open"].update(data)
@@ -324,6 +329,8 @@ class BaseExecModel(AbstractExecModel):
             log.exception("Insufficient data to execute OPEN transaction")
         self.active_contract = contract
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
+        if dynamic_order_kwargs:
+            order_kwargs.update(dynamic_order_kwargs)
         order = self._order("open_order", order_kwargs)
         log.debug(
             f"{self.strategy} {contract.localSymbol} processing OPEN signal {signal}",
@@ -331,7 +338,12 @@ class BaseExecModel(AbstractExecModel):
         )
         self.trade(contract, order, "OPEN", callback)
 
-    def close(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
+    def close(
+        self,
+        data: dict,
+        callback: Optional[misc.Callback] = None,
+        dynamic_order_kwargs: Optional[dict] = None,
+    ) -> None:
         data["position_id"] = self.position_id()
         self.params["close"].update(data)
         # THIS IS TEMPORARY ----> FIX ---> TODO
@@ -348,6 +360,8 @@ class BaseExecModel(AbstractExecModel):
             "action": misc.action(signal),
             "totalQuantity": abs(self.position),
         }
+        if dynamic_order_kwargs:
+            order_kwargs.update(dynamic_order_kwargs)
         order = self._order("close_order", order_kwargs)
         assert self.active_contract is not None
         log.debug(
@@ -405,9 +419,16 @@ class EventDrivenExecModel(BaseExecModel):
         self.stop = stop
         self.take_profit = take_profit
         self.brackets: dict[int, Bracket] = {}
+        self.oca_group_generator = lambda: str(uuid4())
+        self.oca_group: Optional[str] = None
         super().__init__(orders, controller=controller)
 
-    def open(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
+    def open(
+        self,
+        data: dict,
+        callback: Optional[misc.Callback] = None,
+        dynamic_order_kwargs: Optional[dict] = None,
+    ) -> None:
         """
         Save information required for bracket orders and attach events
         that will attach brackets after order completion.
@@ -418,22 +439,30 @@ class EventDrivenExecModel(BaseExecModel):
             trade.filledEvent -= attach_bracket
             trade.filledEvent += attach_bracket
 
+        # reset any previous oca_group settings
+        self.oca_group = None
+
         super().open(data, callback_open_trade)
 
-    def close(self, data: dict, callback: Optional[misc.Callback] = None) -> None:
+    def close(
+        self,
+        data: dict,
+        callback: Optional[misc.Callback] = None,
+        dynamic_order_kwargs: Optional[dict] = None,
+    ) -> None:
         """
         Attach events that will cancel any brackets on order completion.
         """
 
         def callback_close_trade(trade: ibi.Trade) -> None:
-            trade.filledEvent -= self.remove_bracket
-            trade.filledEvent += self.remove_bracket
+            # trade.filledEvent -= self.remove_bracket
+            # trade.filledEvent += self.remove_bracket
+            pass
 
-        super().close(data, callback_close_trade)
+        super().close(data, callback_close_trade, self._dynamic_bracket_kwargs())
 
     def _dynamic_bracket_kwargs(self) -> dict[str, Any]:
-        # make sure to call only once for sl/tp pair!!!!
-        return {}
+        return {"ocaGroup": self.oca_group or self.oca_group_generator(), "ocaType": 1}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
         # called once for sl/tp pair! Don't put inside the for loop!
@@ -494,64 +523,31 @@ class EventDrivenExecModel(BaseExecModel):
                 bracket.bracket_kwargs,
             )
 
-    def remove_bracket(self, trade: ibi.Trade) -> None:
-        # trade is for a bracket order that has just been filled!!!
-        # it may be either a close transaction or one of the brackets
-        # in either case position is closed and we need to remove
-        # remaining brackets if any
-        for orderId, bracket in self.brackets.copy().items():
-            if not bracket.trade.isDone():
-                # trade may be one of the brackets
-                if orderId != trade.order.orderId:
-                    log.debug(
-                        f"Will attempt to remove: {bracket.label} "
-                        f"{trade.order.orderId} {trade.contract.symbol} "
-                        f"{trade.order.orderType} {trade.order.action}"
-                        f"trade object id: {id(trade)}"
-                    )
-                    self.cancel(bracket.trade)
-                del self.brackets[orderId]
+    # def remove_bracket(self, trade: ibi.Trade) -> None:
+    #     # trade is for a bracket order that has just been filled!!!
+    #     # it may be either a close transaction or one of the brackets
+    #     # in either case position is closed and we need to remove
+    #     # remaining brackets if any
+    #     for orderId, bracket in self.brackets.copy().items():
+    #         if not bracket.trade.isDone():
+    #             # trade may be one of the brackets
+    #             if orderId != trade.order.orderId:
+    #                 log.debug(
+    #                     f"Will attempt to remove: {bracket.label} "
+    #                     f"{trade.order.orderId} {trade.contract.symbol} "
+    #                     f"{trade.order.orderType} {trade.order.action}"
+    #                     f"trade object id: {id(trade)}"
+    #                 )
+    #                 self.cancel(bracket.trade)
+    #             del self.brackets[orderId]
 
-    bracket_filled_callback = remove_bracket
+    def report_bracket(self, trade: ibi.Trade) -> None:
+        log.debug(f"Bracketing order filled: {trade.order}")
+
+    bracket_filled_callback = report_bracket
 
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(stop={self.stop}, "
             f"take_profit={self.take_profit})"
         )
-
-
-class OcaExecModel(EventDrivenExecModel):
-    """
-    Use Interactive Brokers OCA (one cancells another) orders for
-    stop-loss and take-profit.
-    """
-
-    # counter_seed = itertools.count(1, 1).__next__
-
-    def __init__(
-        self,
-        orders: Optional[dict[OrderKey, Any]] = None,
-        *,
-        stop: Optional[AbstractBracketLeg] = None,
-        take_profit: Optional[AbstractBracketLeg] = None,
-        controller: Optional[Controller] = None,
-    ):
-        super().__init__(
-            orders, stop=stop, take_profit=take_profit, controller=controller
-        )
-        if not (stop and take_profit):
-            raise TypeError(
-                f"{self.__class__.__name__} must be initialized with stop loss "
-                f"and take profit"
-            )
-
-        self.oca_group = lambda: str(uuid4())
-
-    def _dynamic_bracket_kwargs(self):
-        return {"ocaGroup": self.oca_group(), "ocaType": 1}
-
-    def report_bracket(self, trade: ibi.Trade) -> None:
-        log.debug(f"Bracketing order filled: {trade.order}")
-
-    bracket_filled_callback = report_bracket
