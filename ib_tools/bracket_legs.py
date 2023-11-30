@@ -33,11 +33,18 @@ class AbstractBracketLeg(ABC):
         if vol_field:
             self.vol_field = vol_field
 
-    def __call__(self, params: dict, trade: ibi.Trade) -> dict[str, Any]:
+    def __call__(
+        self, params: dict, trade: ibi.Trade, memo: Optional[dict] = None
+    ) -> dict[str, Any]:
         trade_params = self._extract_trade(trade)
         trade_params["min_tick"] = self.min_tick(trade_params["contract"])
         trade_params["sl_points"] = self.stop_multiple * params[self.vol_field]
-        return self._order(trade_params)
+        order = self._order(trade_params)
+        # any notes made on this object will be accessible for logging by caller
+        # sub-classes can add keys to trade_params thus logging their parameters
+        if memo:
+            memo.update(trade_params)
+        return order
 
     def min_tick(self, contract):
         try:
@@ -81,16 +88,16 @@ class FixedStop(AbstractBracketLeg):
     """
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
-        sl_price = round_tick(
+        params["sl_price"] = round_tick(
             params["price"] + params["sl_points"] * params["direction"],
             params["min_tick"],
         )
-        log.info(f"STOP LOSS PRICE: {sl_price}")
+        log.info(f"STOP LOSS PRICE: {params['sl_price']}")
         return {
             "orderType": "STP",
             "action": params["reverseAction"],
             "totalQuantity": params["amount"],
-            "auxPrice": sl_price,
+            "auxPrice": params["sl_price"],
             "outsideRth": True,
             "tif": "GTC",
         }
@@ -102,13 +109,13 @@ class TrailingStop(AbstractBracketLeg):
     """
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
-        distance = round_tick(params["sl_points"], params["min_tick"])
-        log.info(f"TRAILING STOP LOSS DISTANCE: {distance}")
+        params["distance"] = round_tick(params["sl_points"], params["min_tick"])
+        log.info(f"TRAILING STOP LOSS DISTANCE: {params['distance']}")
         return {
             "orderType": "TRAIL",
             "action": params["reverseAction"],
             "totalQuantity": params["amount"],
-            "auxPrice": distance,
+            "auxPrice": params["distance"],
             "outsideRth": True,
             "tif": "GTC",
         }

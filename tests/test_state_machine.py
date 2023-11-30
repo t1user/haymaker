@@ -56,6 +56,95 @@ def test_OrderContainer_del_works_correctly():
     assert list(orders.strategy("coolstrategy")) == [o2]
 
 
+def test_OrderContainer_get_order():
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+
+    orders = OrderContainer()
+    orders[1] = o1
+    orders[2] = o2
+    orders[3] = o3
+    assert orders.get(1) == o1
+
+
+def test_OrderContainer_get_order_default():
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+
+    orders = OrderContainer()
+    orders[1] = o1
+    orders[2] = o2
+    orders[3] = o3
+    assert orders.get(10, "xyz") == "xyz"
+
+
+def test_OrderContainer_get_item():
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+
+    orders = OrderContainer()
+    orders[1] = o1
+    orders[2] = o2
+    orders[3] = o3
+    assert orders[1] == o1
+
+
+def test_OrderContainer_delete_order():
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+
+    orders = OrderContainer()
+    orders[1] = o1
+    orders[2] = o2
+    orders[3] = o3
+    del orders[1]
+    assert list(orders.values()) == [o1, o2, o3]
+
+
+def test_OrderContainer_old_accessible():
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+
+    orders = OrderContainer()
+    orders[1] = o1
+    orders[2] = o2
+    orders[3] = o3
+    del orders[1]
+    assert orders.old == {1: o1}
+
+
+def test_OrderContainer_active_accessible():
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+
+    orders = OrderContainer()
+    orders[1] = o1
+    orders[2] = o2
+    orders[3] = o3
+    del orders[1]
+
+    assert orders.active == {2: o2, 3: o3}
+
+
+def test_OrderContainer_old_accessible():
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+
+    orders = OrderContainer()
+    orders[1] = o1
+    orders[2] = o2
+    orders[3] = o3
+    del orders[1]
+    assert list(orders.keys()) == [1, 2, 3]
+
+
 def test_state_machine_get_order(state_machine):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
@@ -80,7 +169,7 @@ def test_state_machine_delete_order(state_machine):
     orders[3] = o3
     state_machine.orders = orders
     state_machine.delete_order(1)
-    assert list(state_machine.orders.values()) == [o2, o3]
+    assert list(state_machine.orders.values()) == [o1, o2, o3]
 
 
 #### record of done orders included
@@ -184,7 +273,7 @@ def test_OrderContainer_default_in_get_works():
 
 
 def test_OrderContainer_done_limited_in_size():
-    orders = OrderContainer(
+    orders = OrderContainer.from_items(
         {
             i: OrderInfo(
                 "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
@@ -201,7 +290,7 @@ def test_OrderContainer_done_limited_in_size():
 
 
 def test_OrderContainer_done_limited_in_size_and_keep_parameter_works():
-    orders = OrderContainer(
+    orders = OrderContainer.from_items(
         {
             i: OrderInfo(
                 "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
@@ -219,7 +308,7 @@ def test_OrderContainer_done_limited_in_size_and_keep_parameter_works():
 
 
 def test_OrderContainer_done_drops_oldest():
-    orders = OrderContainer(
+    orders = OrderContainer.from_items(
         {
             i: OrderInfo(
                 "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None

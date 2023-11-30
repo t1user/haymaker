@@ -5,7 +5,7 @@ import logging
 from collections import ChainMap, UserDict, defaultdict
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Mapping, Optional
 
 import ib_insync as ibi
 
@@ -24,7 +24,7 @@ class OrderInfo:
     strategy: str
     action: str
     trade: ibi.Trade
-    exec_model: AbstractExecModel
+    params: dict
     active: bool = True
 
     def __iter__(self):
@@ -33,7 +33,7 @@ class OrderInfo:
                 self.strategy,
                 self.action,
                 self.trade,
-                self.exec_model,
+                self.params,
                 self.active,
             )
         )
@@ -50,37 +50,59 @@ class MaxSizeContainer(UserDict):
         super().__setitem__(key, item)
 
 
-class OrderContainer(UserDict):
-    def __init__(self, dict=None, /, keep: int = 10, **kwargs) -> None:
-        super().__init__(dict, **kwargs)
+class OrderContainer(ChainMap):
+    def __init__(self, /, keep: int = 10) -> None:
+        self.active: dict[int, OrderInfo] = {}
         self.done = MaxSizeContainer(max_size=keep)
-        self.active = self.data
-        self._combined = ChainMap(self.done, self.active)
+        super().__init__(self.active, self.done)
 
     def strategy(self, strategy: str) -> Iterator[OrderInfo]:
+        """Get active orders associated with strategy."""
         # returns only active orders
-        return (oi for oi in self.data.values() if oi.strategy == strategy)
+        return (oi for oi in self.active.values() if oi.strategy == strategy)
 
     def __delitem__(self, key):
-        self.done[key] = self[key]
+        """Delete order record from active and move it to done."""
+        self.done[key] = self.active[key]
         self.done[key].active = False
-        super().__delitem__(key)
+        try:
+            del self.active[key]
+        except KeyError:
+            raise KeyError("Order not found in the active orders: {!r}".format(key))
 
     def __missing__(self, key):
         # if missing try in done, which will raise KeyError if missing
         return self.done[key]
 
     def get(self, key, default=None, active_only=False):
+        """Get records for an order."""
         if active_only:
-            return self.data.get(key, default)
+            return self.active.get(key, default)
         else:
-            return self._combined.get(key, default)
+            return super().get(key, default)
 
     def update_trade(self, trade) -> None:
+        """
+        Update trade object for a given order.  Used after re-start to
+        bring records up to date with IB
+        """
         oi = self.get(trade.order.orderId)
         if oi:
             new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.exec_model)
             self[trade.order.orderId] = new_oi
+
+    @classmethod
+    def from_items(
+        cls, items: Mapping[int, OrderInfo], /, keep: int = 10
+    ) -> OrderContainer:
+        container = cls(keep=keep)
+
+        for key, value in items.items():
+            if value.active:
+                container.active[key] = value
+            else:
+                container.done[key] = value
+        return container
 
 
 class StateMachine(Atom):
@@ -219,10 +241,8 @@ class StateMachine(Atom):
 
         This method is called by :class:`Controller`.
         """
-
-        self.orders[trade.order.orderId] = OrderInfo(
-            strategy, action, trade, exec_model
-        )
+        params = exec_model.params.get(action.lower(), {})
+        self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade, params)
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} registered for: "
             f"{trade.contract.localSymbol}"

@@ -50,15 +50,15 @@ def test_BaseExecModel_order_validator_raises_with_incorrect_keys():
 
 def test_position_id():
     em = EventDrivenExecModel(stop=FixedStop(10))
-    id1 = em.position_id()
-    id2 = em.position_id()
+    id1 = em.get_position_id()
+    id2 = em.get_position_id()
     assert id1 == id2
 
 
 def test_position_id_reset():
     em = EventDrivenExecModel(stop=FixedStop(10))
-    id1 = em.position_id()
-    id2 = em.position_id(True)
+    id1 = em.get_position_id()
+    id2 = em.get_position_id(True)
     assert id1 != id2
 
 
@@ -85,7 +85,7 @@ def test_oca_group_is_not_position_id():
         stop=FixedStop(1), take_profit=TakeProfitAsStopMultiple(1, 2)
     )
     oca_group = e.oca_group_generator()
-    position_id = e.position_id()
+    position_id = e.get_position_id()
     assert oca_group != position_id
 
 

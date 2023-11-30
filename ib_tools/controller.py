@@ -273,8 +273,12 @@ class Controller:
             )
 
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
-        exec_model = self.sm.orders.get(trade.order.orderId).exec_model
-        self.register_position(exec_model, trade, fill)
+        strategy = self.sm.orders.get(trade.order.orderId).strategy
+        exec_model = self.sm.data.get(strategy)
+        if exec_model:
+            self.register_position(exec_model, trade, fill)
+        else:
+            log.critical(f"Unknow trade: {trade}")
 
     def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
@@ -289,9 +293,9 @@ class Controller:
             return
         data = self.sm.orders.get(trade.order.orderId)
         if data:
-            strategy, action, _, exec_model, _, _ = data
-            position_id = exec_model.position_id()
-            params = exec_model.params.get(action.lower(), {})
+            strategy, action, _, params, _ = data
+            position_id = params.get("position_id")
+
             kwargs = {
                 "strategy": strategy,
                 "action": action,

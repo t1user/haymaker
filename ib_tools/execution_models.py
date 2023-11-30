@@ -4,8 +4,9 @@ import asyncio
 import dataclasses
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from functools import partial
-from typing import Any, Literal, NamedTuple, Optional, TypedDict, cast
+from typing import Any, Literal, NamedTuple, Optional, cast
 from uuid import uuid4
 
 import ib_insync as ibi
@@ -24,11 +25,6 @@ OrderKey = Literal[
 ]
 
 BracketLabel = Literal["STOP_LOSS", "TAKE_PROFIT"]
-
-
-class Params(TypedDict):
-    open: dict[str, Any]
-    close: dict[str, Any]
 
 
 class Bracket(NamedTuple):
@@ -82,7 +78,7 @@ class AbstractExecModel(Atom, ABC):
         self.active_contract: Optional[ibi.Contract] = None
         self.position: float = 0.0
         self.strategy: str = ""
-        self.params: Params = {"open": {}, "close": {}}
+        self.params: dict[str, Any] = {}
         self.lock: misc.Lock = 0
         self.controller = controller or CONTROLLER
 
@@ -90,16 +86,16 @@ class AbstractExecModel(Atom, ABC):
             for key, order_kwargs in orders.items():
                 setattr(self, key, order_kwargs)
 
-        self._position_id = 0
+        self.position_id = 0
         self.connect_state_machine()
 
     def connect_state_machine(self):
         self += STATE_MACHINE
 
-    def position_id(self, reset=False):
-        if reset or not self._position_id:
-            self._position_id = int(uuid4())
-        return self._position_id
+    def get_position_id(self, reset=False):
+        if reset or not self.position_id:
+            self.position_id = int(uuid4())
+        return self.position_id
 
     def _order(self, key: OrderKey, params: dict) -> ibi.Order:
         """
@@ -281,8 +277,8 @@ class BaseExecModel(AbstractExecModel):
         dynamic_order_kwargs: Optional[dict] = None,
     ) -> ibi.Trade:
         self.params["close"] = {}
-        data["position_id"] = self.position_id(True)
-        self.params["open"].update(data)
+        data["position_id"] = self.get_position_id(True)
+        self.params["open"] = data
         try:
             contract = data["contract"]
             signal = data["signal"]
@@ -305,8 +301,8 @@ class BaseExecModel(AbstractExecModel):
         data: dict,
         dynamic_order_kwargs: Optional[dict] = None,
     ) -> Optional[ibi.Trade]:
-        data["position_id"] = self.position_id()
-        self.params["close"].update(data)
+        self.params["close"] = data
+        data["position_id"] = self.get_position_id()
         # THIS IS TEMPORARY ----> FIX ---> TODO
         if self.position == 0:
             log.error(
@@ -427,8 +423,16 @@ class EventDrivenExecModel(BaseExecModel):
         ):
             # take profit may be None
             if bracket:
-                bracket_kwargs = bracket(params, trade)
+                memo: dict[str, Any] = {}
+                bracket_kwargs = bracket(params, trade, memo)
                 bracket_kwargs.update(dynamic_bracket_kwargs)
+                memo.update(
+                    {
+                        "position_id": self.get_position_id(),
+                        "bracket_timestamp": datetime.now(timezone.utc),
+                    }
+                )
+                self.params[label.lower()] = memo
                 order = self._order(cast(OrderKey, order_key), bracket_kwargs)
 
                 log.debug(f"bracket order: {order}")
