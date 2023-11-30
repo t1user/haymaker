@@ -38,7 +38,9 @@ class AbstractBracketLeg(ABC):
     ) -> dict[str, Any]:
         trade_params = self._extract_trade(trade)
         trade_params["min_tick"] = self.min_tick(trade_params["contract"])
-        trade_params["sl_points"] = self.stop_multiple * params[self.vol_field]
+        trade_params["vol_field_name"] = self.vol_field
+        trade_params["vol_field_value"] = params[self.vol_field]
+        trade_params["sl_points"] = self.stop_multiple * trade_params["vol_field_value"]
         order = self._order(trade_params)
         # any notes made on this object will be accessible for logging by caller
         # sub-classes can add keys to trade_params thus logging their parameters
