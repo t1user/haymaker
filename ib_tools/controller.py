@@ -25,8 +25,6 @@ class Controller:
     provided by `state_machine` to make sure that positions held in
     the market reflect what is requested by strategies.
 
-    It shouldn't be neccessary for user to modify or subclass
-    :class:`.Controller`.
     """
 
     blotter: Optional[AbstractBaseBlotter] = None
@@ -56,6 +54,13 @@ class Controller:
         self.ib.errorEvent += self.log_error
 
     async def init(self, *args, **kwargs) -> None:
+        for trade in self.ib.openTrades():
+            self.sm.orders.update_trade(trade)
+            log.debug(
+                f"Events re-attached for order: {trade.order.orderId} "
+                f"{trade.order.orderType} {trade.order.action} "
+                f"{trade.order.totalQuantity}{trade.contract.symbol}"
+            )
         self.hold = False
         log.debug("hold released")
 

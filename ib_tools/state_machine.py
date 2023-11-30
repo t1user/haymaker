@@ -76,6 +76,12 @@ class OrderContainer(UserDict):
         else:
             return self._combined.get(key, default)
 
+    def update_trade(self, trade) -> None:
+        oi = self.get(trade.order.orderId)
+        if oi:
+            new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.exec_model)
+            self[trade.order.orderId] = new_oi
+
 
 class StateMachine(Atom):
     """
