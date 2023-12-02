@@ -29,6 +29,13 @@ def test_OrderInfo_unpackable():
     assert active
 
 
+def test_OrderInfo_iterator():
+    trade = ibi.Trade()
+    o1 = OrderInfo("coolstrategy", "OPEN", trade, None)
+    for i, j in zip(o1, ["coolstrategy", "OPEN", trade, None]):
+        assert i == j
+
+
 def test_OrderContainer_strategy_gets_correct_orders():
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
@@ -115,7 +122,7 @@ def test_OrderContainer_old_accessible():
     orders[2] = o2
     orders[3] = o3
     del orders[1]
-    assert orders.old == {1: o1}
+    assert orders.done == {1: o1}
 
 
 def test_OrderContainer_active_accessible():
@@ -132,7 +139,7 @@ def test_OrderContainer_active_accessible():
     assert orders.active == {2: o2, 3: o3}
 
 
-def test_OrderContainer_old_accessible():
+def test_OrderContainer_old_accessible_from_parent():
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
     o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)

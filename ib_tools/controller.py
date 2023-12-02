@@ -300,7 +300,7 @@ class Controller:
                 "strategy": strategy,
                 "action": action,
                 "position_id": position_id,
-                "params": ibi.util.tree(params),  # TODO: serialize this, done?
+                "params": ibi.util.tree(params),
             }
 
             if arrival_price := params.get("arrival_price"):

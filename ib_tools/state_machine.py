@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import ChainMap, UserDict, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from functools import partial
 from typing import TYPE_CHECKING, Any, Iterator, Mapping, Optional
 
@@ -27,16 +27,9 @@ class OrderInfo:
     params: dict
     active: bool = True
 
-    def __iter__(self):
-        return iter(
-            (
-                self.strategy,
-                self.action,
-                self.trade,
-                self.params,
-                self.active,
-            )
-        )
+    def __iter__(self) -> Iterator[Any]:
+        for f in fields(self):
+            yield getattr(self, f.name)
 
 
 class MaxSizeContainer(UserDict):
@@ -162,7 +155,7 @@ class StateMachine(Atom):
             cls._instance = super().__new__(cls)
             return cls._instance
         else:
-            raise TypeError("Attampt to instantiate StateMachine more than once.")
+            raise TypeError("Attempt to instantiate StateMachine more than once.")
 
     def __init__(self) -> None:
         super().__init__()
@@ -190,11 +183,9 @@ class StateMachine(Atom):
             strategy = data["strategy"]
             amount = data["amount"]
             target_position = data["target_position"]
-            exec_model = data["exec_model"]
+            # exec_model = data["exec_model"]
             await asyncio.sleep(15)
-            self.verify_transaction_integrity(
-                strategy, amount, target_position, exec_model
-            )
+            self.verify_transaction_integrity(strategy, amount, target_position)
         except KeyError:
             log.exception(
                 "Unable to verify transaction integrity", extra={"data": data}
@@ -205,23 +196,27 @@ class StateMachine(Atom):
         strategy: str,
         amount: float,
         target_position: Signal,
-        exec_model: AbstractExecModel,
     ) -> None:
         """
         Is the postion resulting from transaction the same as was
         required?
         """
-        log.debug(
-            f"Transaction OK? ->{sign(exec_model.position) == target_position}<- "
-            f"target_position: {target_position}, position: {sign(exec_model.position)}"
-            f"->> {exec_model.strategy}"
-        )
-        try:
-            assert sign(exec_model.position) == target_position
-            # Investigate why this may be necessary:
-            # assert exec_model.position == abs(amount)
-        except AssertionError:
-            log.critical(f"Wrong position for {strategy}", exc_info=True)
+        exec_model = self.data.get(strategy)
+        if exec_model:
+            log.debug(
+                f"Transaction OK? ->{sign(exec_model.position) == target_position}<- "
+                f"target_position: {target_position}, "
+                f"position: {sign(exec_model.position)}"
+                f"->> {exec_model.strategy}"
+            )
+            try:
+                assert sign(exec_model.position) == target_position
+                # Investigate why this may be necessary:
+                # assert exec_model.position == abs(amount)
+            except AssertionError:
+                log.critical(f"Wrong position for {strategy}", exc_info=True)
+        else:
+            log.critical(f"Attempt to trade for unknow strategy: {strategy}")
 
     def register_order(
         self,

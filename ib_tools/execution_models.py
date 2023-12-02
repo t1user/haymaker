@@ -162,7 +162,6 @@ class AbstractExecModel(Atom, ABC):
         """
         # TODO: what if more than one order issued????
         super().onData(data)
-        data["exec_model"] = self
         self.dataEvent.emit(data)
 
 
@@ -242,8 +241,6 @@ class BaseExecModel(AbstractExecModel):
         return None
 
     def onData(self, data: dict, *args):
-        data["exec_model"] = self
-
         # if await (ticker := self.live_ticker()):
         #     data["arrival_price"] = {"bid": ticker.bid, "ask": ticker.ask}
         contract = data.get("contract")
