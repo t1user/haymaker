@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Literal
+from typing import ClassVar, Literal, Optional, Type
 
 from ib_tools.base import Atom
 
@@ -11,7 +11,32 @@ log = logging.getLogger(__name__)
 note = Literal[-1, 0, 1]
 
 
-class AbstractBasePortfolio(Atom, ABC):
+# class _PortfolioWrapper(Atom):
+#     _master_class = None
+#     _master_instance = None
+
+#     @classmethod
+#     def setup(cls, master_class, master_instance):
+#         cls._master_instance = master_instance
+#         return cls
+
+#     def onStart(self, data, *args):
+#         super().onStart(data, *args)
+
+#     def onData(self, data, *args):
+#         print("Called!!")
+#         super().onData(data, *args)
+#         print("Success")
+#         self.dataEvent.emit(data)
+
+#     def __getattr__(self, name):
+#         return getattr(self._master_instance, name)
+
+#     def __setattr__(self, name, value):
+#         setattr(self._master_instance, name, value)
+
+
+class AbstractBasePortfolio(ABC):
     """
     Decides what, if and how much to trade based on received signals
     and queries to [SM?].
@@ -22,19 +47,12 @@ class AbstractBasePortfolio(Atom, ABC):
     instances, which should delegate allocation to this object.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.strategy: str = ""
+    _instance: Optional[AbstractBasePortfolio] = None
 
-    def onData(self, data: dict, *args) -> None:
-        amount = self.allocate(data)
-        data.update({"amount": amount})
-        log.debug(f"Portfolio processed data: {data}")
-        #     "{data['date']}, "
-        #     f"action: {data['action']}, "
-        #     f"signal: {data['signal']}, target_position: {data['target_position']}",
-        super().onData(data)  # timestamp on departure
-        self.dataEvent.emit(data)
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
     @abstractmethod
     def allocate(self, data: dict) -> float:
@@ -45,7 +63,36 @@ class AbstractBasePortfolio(Atom, ABC):
         ...
 
 
-class FixedPortfolio(AbstractBasePortfolio):
+class PortfolioWrapper(Atom):
+    portfolio: ClassVar[AbstractBasePortfolio]
+
+    @classmethod
+    def setup(
+        cls, portfolio_class: Type[AbstractBasePortfolio], *args, **kwargs
+    ) -> Type[PortfolioWrapper]:
+        cls.portfolio = portfolio_class(*args, **kwargs)
+        return cls
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.strategy: str = ""
+
+    def onData(self, data: dict, *args) -> None:
+        amount = self.allocate(data)
+        data.update({"amount": amount})
+        log.debug(f"Portfolio processed data: {data}")
+        super().onData(data)  # timestamp on departure
+        self.dataEvent.emit(data)
+
+    def allocate(self, data: dict) -> float:
+        return self.portfolio.allocate(data)
+
+
+def wrap(cls, *args, **kwargs):
+    return PortfolioWrapper.setup(cls, *args, **kwargs)
+
+
+class FixedPortfolio(AbstractBasePortfolio, PortfolioWrapper):
     def __init__(self, amount: float = 1) -> None:
         super().__init__()
         self.amount = amount

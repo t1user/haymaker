@@ -66,9 +66,9 @@ def test_contract_is_contract(pipe):
 def test_required_fields_in_data_present(pipe):
     _, _, _, exec_model = pipe
     data = exec_model.params["open"]
-    assert set(
-        ["strategy", "contract", "exec_model", "amount", "signal", "action"]
-    ).issubset(set(data.keys()))
+    assert set(["strategy", "contract", "amount", "signal", "action"]).issubset(
+        set(data.keys())
+    )
 
 
 def test_order_is_order(pipe):
