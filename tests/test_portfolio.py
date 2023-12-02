@@ -1,7 +1,7 @@
 import pytest
 
 from ib_tools.base import Atom
-from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, wrap
+from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, wrap_portfolio
 
 
 def test_abstract_portoflio_is_abstract():
@@ -22,7 +22,7 @@ def test_portfolio_is_a_singleton():
 
 @pytest.fixture
 def portfolio():
-    @wrap
+    @wrap_portfolio
     class Portfolio(AbstractBasePortfolio):
         def allocate(self, data):
             print(id(self))

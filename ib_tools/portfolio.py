@@ -88,7 +88,7 @@ class PortfolioWrapper(Atom):
         return self.portfolio.allocate(data)
 
 
-def wrap(cls, *args, **kwargs):
+def wrap_portfolio(cls, *args, **kwargs):
     return PortfolioWrapper.setup(cls, *args, **kwargs)
 
 
