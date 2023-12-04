@@ -38,7 +38,7 @@ class Atom:
 
     def __init__(self) -> None:
         self._createEvents()
-        self._log = logging.getLogger(f"{self.__module__}.{self.__class__.__name__}")
+        self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
 
     def __setattr__(self, prop, val):
         """

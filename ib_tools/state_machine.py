@@ -290,7 +290,7 @@ class StateMachine(Atom):
         ib_position = self.ib_position_for_contract[contract]
 
     def locked(self, strategy: str) -> Lock:
-        return self.data["strategy"].lock
+        return self.data[strategy].lock
 
     def position_for_contract(self, contract: ibi.Contract) -> float:
         return self.total_positions().get(contract) or 0.0

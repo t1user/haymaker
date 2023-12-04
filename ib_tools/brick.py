@@ -34,7 +34,7 @@ class AbstractBaseBrick(Atom, ABC):
         if not startup:
             d = self._params(**self._signal(data))
             super().onData(d)  # timestamp on departure
-            # log.log(5, d)
+            self._log.debug(d)
             self.dataEvent.emit(d)
 
     @abstractmethod
