@@ -36,6 +36,8 @@ class AbstractBracketLeg(ABC):
     def __call__(
         self, params: dict, trade: ibi.Trade, memo: Optional[dict] = None
     ) -> dict[str, Any]:
+        # trade params are params extracted from trade
+        # params are passed by the caller
         trade_params = self._extract_trade(trade)
         trade_params["min_tick"] = self.min_tick(trade_params["contract"])
         trade_params["vol_field_name"] = self.vol_field
@@ -44,8 +46,9 @@ class AbstractBracketLeg(ABC):
         order = self._order(trade_params)
         # any notes made on this object will be accessible for logging by caller
         # sub-classes can add keys to trade_params thus logging their parameters
-        if memo:
+        if memo is not None:
             memo.update(trade_params)
+            memo.update(self.__dict__)
         return order
 
     def min_tick(self, contract):
@@ -159,13 +162,14 @@ class AdjustableTrailingFixedStop(TrailingStop):
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
         k = super()._order(params)
-
+        log.debug(f"super order: {k}")
         # k is from super order, params is from Trade object
         # k['auxPrice] is: stop_multiple * vol_field (a.k.a. self.sl_points)
 
         # when trigger price is penetrated
         k["triggerPrice"] = (
-            k["price"] - k["direction"] * k["auxPrice"] * k["trigger_multiple"]
+            params["price"]
+            - params["direction"] * k["auxPrice"] * self.trigger_multiple
         )
         # the parent order will be turned into s STP order
         k["adjustedOrderType"] = "STP"

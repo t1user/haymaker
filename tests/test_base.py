@@ -492,7 +492,7 @@ def test_event_error_logged_with_correct_logger(caplog):
     a.connect(b)
     a.dataEvent.emit("xxx")
     assert caplog.record_tuples == [
-        ("test_base.NewAtom", logging.ERROR, "Event error dataEvent: CustomError")
+        ("strategy.NewAtom", logging.ERROR, "Event error dataEvent: CustomError")
     ]
 
 

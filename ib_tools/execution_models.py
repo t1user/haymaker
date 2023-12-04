@@ -392,6 +392,7 @@ class EventDrivenExecModel(BaseExecModel):
         self.oca_group = None
 
         trade = super().open(data)
+
         trade.filledEvent += attach_bracket
         return trade
 
@@ -432,7 +433,6 @@ class EventDrivenExecModel(BaseExecModel):
                 self.params[label.lower()] = memo
                 order = self._order(cast(OrderKey, order_key), bracket_kwargs)
 
-                log.debug(f"bracket order: {order}")
                 bracket_trade = self.trade(
                     trade.contract,
                     order,
