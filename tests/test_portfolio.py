@@ -1,7 +1,17 @@
 import pytest
 
 from ib_tools.base import Atom
-from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, wrap_portfolio
+from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
+
+
+@pytest.fixture
+def portfolio_1():
+    class Portfolio(AbstractBasePortfolio):
+        def allocate(self, data):
+            return 1
+
+    yield Portfolio
+    AbstractBasePortfolio._instance = None
 
 
 def test_abstract_portoflio_is_abstract():
@@ -9,23 +19,46 @@ def test_abstract_portoflio_is_abstract():
         AbstractBasePortfolio()
 
 
-def test_portfolio_is_a_singleton():
-    class Portfolio(AbstractBasePortfolio):
-        def allocate(self):
+def test_portfolio_instantiates_and_returns_a_wrapper(portfolio_1):
+    p = portfolio_1()
+    assert isinstance(p, PortfolioWrapper)
+
+
+def test_portfolio_is_a_singleton(portfolio_1):
+    p1 = portfolio_1()
+    p2 = portfolio_1()
+
+    assert p1._portfolio is p2._portfolio
+
+
+@pytest.fixture
+def atom_portfolio():
+    class Portfolio(AbstractBasePortfolio, Atom):
+        def allocate(self, data):
             return 1
 
-    p1 = Portfolio()
-    p2 = Portfolio()
+    portfolio = Portfolio
+    yield portfolio
+    AbstractBasePortfolio._instance = None
+    del portfolio
 
-    assert p1 is p2
+
+def test_portfolio_is_not_Atom(atom_portfolio):
+    with pytest.raises(TypeError):
+        atom_portfolio()
+
+
+@pytest.mark.parametrize("attribute", ["onStart", "onData", "startEven", "dataEvent"])
+def test_portfolio_will_not_implement_Atom_attributes(attribute, portfolio_1):
+    p = portfolio_1()
+    with pytest.raises(AttributeError):
+        setattr(p._instance, attribute, "x")
 
 
 @pytest.fixture
 def portfolio():
-    @wrap_portfolio
     class Portfolio(AbstractBasePortfolio):
         def allocate(self, data):
-            print(id(self))
             return self.other_method()
 
         def other_method(self):
@@ -35,8 +68,8 @@ def portfolio():
     yield portfolio_class
 
     # ensure any existing singleton is destroyed
-    portfolio_class._instance = None
     del portfolio_class
+    AbstractBasePortfolio._instance = None
 
 
 def test_every_PortfolioWrapper_instance_unique(portfolio):
@@ -81,7 +114,6 @@ def test_onData_separate_for_each_instance(portfolio):
     portfolio_.connect(target)
 
     source.dataEvent.emit({"test_data": "test_data"})
-    print(target.data)
     assert target.data["test_data"] == "test_data"
 
 
@@ -138,8 +170,6 @@ def test_allocate_shared_among_instances_1(portfolio):
 
     source.dataEvent.emit({"test_data": "test_data"})
     source_1.dataEvent.emit({"test_data": "test_data_1"})
-    print(target.data)
-    print(target_1.data)
     assert target.data["amount"] == target_1.data["amount"]
 
 
