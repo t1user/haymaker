@@ -54,26 +54,35 @@ class Controller:
         self.ib.errorEvent += self.log_error
 
     async def init(self, *args, **kwargs) -> None:
+        log.debug(f"Controller init...")
         for trade in self.ib.openTrades():
+            log.debug(f"Will update trade...")
             self.sm.orders.update_trade(trade)
+            log.debug(f"Trade updated.")
             log.debug(
-                f"Events re-attached for order: {trade.order.orderId} "
+                f"Trade object updated for order: {trade.order.orderId} "
                 f"{trade.order.orderType} {trade.order.action} "
                 f"{trade.order.totalQuantity}{trade.contract.symbol}"
             )
         self.hold = False
         log.debug("hold released")
 
+    def restart(self):
+        self.sm.restore_from_backup()
+
     def config(
         self,
         blotter: Optional[AbstractBaseBlotter] = None,
         log_events: bool = False,
+        cold_restart: bool = True,
     ) -> None:
         if blotter:
             self.blotter = blotter
             self.ib.commissionReportEvent += self.onCommissionReport
         if log_events:
             self._attach_logging_events()
+        if not cold_restart:
+            self.restart()
         log.debug(f"Config done: {self}")
 
     def trade(

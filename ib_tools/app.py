@@ -85,6 +85,7 @@ class App:
             2158,  # Sec-def data farm connection is OK
         ):
             log.debug(f"Error event: {reqId} {errorCode} {errorString} {contract}")
+            # Consider handling 2103 - Market data connection is broken
 
     def onSoftTimeout(self, watchdog: ibi.Watchdog) -> None:
         log.debug("Soft timeout event.")

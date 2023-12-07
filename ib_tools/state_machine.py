@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Mapping, Optional
 import ib_insync as ibi
 
 from .base import Atom
-from .misc import Lock, Signal, sign
+from .misc import Lock, Signal, sign, tree
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
@@ -81,7 +81,8 @@ class OrderContainer(ChainMap):
         """
         oi = self.get(trade.order.orderId)
         if oi:
-            new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.exec_model)
+            log.debug(f"Trade found: {oi}")
+            new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params, oi.active)
             self[trade.order.orderId] = new_oi
 
     @classmethod
@@ -162,6 +163,11 @@ class StateMachine(Atom):
 
         self.data: dict[str, AbstractExecModel] = {}
         self.orders = OrderContainer()
+
+    def restore_from_backup(self):
+        # self.data
+        # self.orders
+        pass
 
     def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
         """
@@ -275,7 +281,7 @@ class StateMachine(Atom):
             for order_info in orders:
                 trade = order_info.trade
                 log.debug(
-                    f"Order action: {order_info.action} is active: {trade.isActive()}"
+                    f"Order action: {order_info.action} is active: {trade.isActive()} "
                     f"amount: {trade.order.totalQuantity}, "
                     f"direction {trade.order.action.upper()}"
                 )
@@ -296,8 +302,12 @@ class StateMachine(Atom):
         return self.total_positions().get(contract) or 0.0
 
     def ib_position_for_contract(self, contract: ibi.Contract) -> float:
-        positions = {p.contract: p.position for p in self.ib.positions()}
-        return positions.get(contract, 0.0)
+        return next(
+            (v.position for v in self.ib.positions() if v.contract == contract), 0
+        )
+
+        # positions = {p.contract: p.position for p in self.ib.positions()}
+        # return positions.get(contract, 0.0)
 
     def total_positions(self) -> defaultdict[ibi.Contract, float]:
         d: defaultdict[ibi.Contract, float] = defaultdict(float)
