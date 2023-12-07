@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import datetime as dt
 import itertools
 import random
 import string
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional, Union
 
 import ib_insync as ibi
 import pytz
@@ -166,3 +167,83 @@ def next_open(
     left_edges = [e[0] for e in time_tuples if e[0] > now]
     # print(left_edges)
     return left_edges[0]
+
+
+# ###### Serializer ########
+
+
+def tree(obj):
+    """
+    Convert object to a tree of lists, dicts and simple values.
+    The result can be serialized to JSON.
+    """
+    if isinstance(obj, (bool, int, float, str, bytes)):
+        return obj
+    elif isinstance(obj, (dt.date, dt.time)):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: tree(v) for k, v in obj.items()}
+    elif ibi.util.isnamedtupleinstance(obj):
+        return {obj.__class__.__name__: {f: tree(getattr(obj, f)) for f in obj._fields}}
+    elif isinstance(obj, (list, tuple, set)):
+        return [tree(i) for i in obj]
+    elif ibi.util.is_dataclass(obj):
+        return {obj.__class__.__qualname__: tree(ibi.util.dataclassNonDefaults(obj))}
+    else:
+        return str(obj)
+
+
+# ###### De-serializer ########
+
+
+def decode_tree(obj: Any) -> Any:
+    """
+    Convert simple values created with :func:`.tree` back to orginal objects.
+
+    """
+
+    obj_list = ibi.__all__
+
+    def process_value(
+        value: Any,
+    ) -> Union[bool, int, float, bytes, list, datetime, str]:
+        if isinstance(value, dict):
+            v = process_dict(value)
+            return v
+        elif isinstance(value, (bool, int, float, bytes)):
+            return value
+        elif isinstance(value, list):
+            return [process_value(i) for i in value]
+        elif isinstance(value, str):
+            try:
+                return dt.datetime.fromisoformat(value)
+            except ValueError:
+                return value
+        else:
+            return value
+
+    def process_key(k: str, v: Any) -> Any:
+        if k in obj_list:
+            # `Order` subclassess will get errors on some values
+            # so making sure to use only the superclass
+            if k.endswith("Order"):
+                k = "Order"
+            obj = eval(f"ibi.{k}")
+            # `Contract` must be created using its `create` staticmethod
+            obj = getattr(obj, "create", None) or obj
+            return obj(**v)
+        else:
+            return k
+
+    def process_dict(d: dict) -> Any:
+        output = {}
+        for k, v in d.items():
+            value_ = process_value(v)
+            key_ = process_key(k, value_)
+            if isinstance(key_, str):
+                output[key_] = value_
+            else:
+                return key_
+        return output
+
+    return process_value(obj)
