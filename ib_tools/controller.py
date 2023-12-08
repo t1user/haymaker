@@ -54,16 +54,11 @@ class Controller:
         self.ib.errorEvent += self.log_error
 
     async def init(self, *args, **kwargs) -> None:
-        log.debug(f"Controller init...")
-        for trade in self.ib.openTrades():
-            log.debug(f"Will update trade...")
-            self.sm.orders.update_trade(trade)
-            log.debug(f"Trade updated.")
-            log.debug(
-                f"Trade object updated for order: {trade.order.orderId} "
-                f"{trade.order.orderType} {trade.order.action} "
-                f"{trade.order.totalQuantity}{trade.contract.symbol}"
-            )
+        log.debug("Controller init...")
+        if errors := self.sm.update_trades(*self.ib.openTrades()):
+            for error_trade in errors:
+                log.critical(f"Unknow trade in the system: {error_trade}")
+        log.debug("Trade records updated.")
         self.hold = False
         log.debug("hold released")
 
@@ -243,7 +238,7 @@ class Controller:
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
             try:
-                self.sm.delete_order(trade.order.orderId)
+                self.sm.done_order(trade.order.orderId)
                 log.debug(
                     f"{trade.contract.symbol}: order {trade.order.orderId} "
                     f"{trade.order.orderType} done {trade.orderStatus.status}."
@@ -282,8 +277,10 @@ class Controller:
             )
 
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
-        strategy = self.sm.orders.get(trade.order.orderId).strategy
-        exec_model = self.sm.data.get(strategy)
+        order_info = self.sm.get_order(trade.order.orderId)
+        if order_info:
+            strategy = order_info.strategy
+        exec_model = self.sm.get_strategy(strategy)
         if exec_model:
             self.register_position(exec_model, trade, fill)
         else:
@@ -300,7 +297,7 @@ class Controller:
         # prevent writing all orders from session on startup
         if self.hold:
             return
-        data = self.sm.orders.get(trade.order.orderId)
+        data = self.sm.get_order(trade.order.orderId)
         if data:
             strategy, action, _, params, _ = data
             position_id = params.get("position_id")
@@ -366,10 +363,11 @@ class Controller:
         if errorCode < 400:
             # reqId is most likely orderId
             # order rejected is errorCode = 201
-            try:
-                strategy, action, trade, _ = self.sm.orders[reqId]
+            order_info = self.sm.get_order(reqId)
+            if order_info:
+                strategy, action, trade, _ = order_info
                 order = trade.order
-            except KeyError:
+            else:
                 strategy, action, trade, order = "", "", "", ""  # type: ignore
 
             log.error(

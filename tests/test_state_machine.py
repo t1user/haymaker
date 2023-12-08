@@ -36,6 +36,15 @@ def test_OrderInfo_iterator():
         assert i == j
 
 
+def test_OrderInfo_active():
+    trade1 = ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Filled"))
+    trade2 = ibi.Trade()
+    o1 = OrderInfo("coolstrategy", "STOP", trade1, None)
+    o2 = OrderInfo("coolstrategy", "STOP", trade2, None)
+    assert o1.active is False
+    assert o2.active is True
+
+
 def test_OrderContainer_strategy_gets_correct_orders():
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
@@ -99,59 +108,6 @@ def test_OrderContainer_get_item():
     assert orders[1] == o1
 
 
-def test_OrderContainer_delete_order():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-    orders[3] = o3
-    del orders[1]
-    assert list(orders.values()) == [o1, o2, o3]
-
-
-def test_OrderContainer_old_accessible():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-    orders[3] = o3
-    del orders[1]
-    assert orders.done == {1: o1}
-
-
-def test_OrderContainer_active_accessible():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-    orders[3] = o3
-    del orders[1]
-
-    assert orders.active == {2: o2, 3: o3}
-
-
-def test_OrderContainer_old_accessible_from_parent():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-    orders[3] = o3
-    del orders[1]
-    assert list(orders.keys()) == [1, 2, 3]
-
-
 def test_state_machine_get_order(state_machine):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
@@ -176,161 +132,96 @@ def test_state_machine_delete_order(state_machine):
     orders[3] = o3
     state_machine.orders = orders
     state_machine.delete_order(1)
-    assert list(state_machine.orders.values()) == [o1, o2, o3]
-
-
-#### record of done orders included
-
-
-def test_OrderContainer_del_moves_to_done():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-    orders[3] = o3
-    del orders[1]
-
-    assert orders.done[1] == o1
-
-
-def test_OrderContainer_done_included_in_get():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-
-    del orders[1]
-
-    assert orders.get(1) == o1
-
-
-def test_OrderContainer_active_included_in_get():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-
-    del orders[1]
-
-    assert orders.get(2) == o2
-
-
-def test_OrderContainer_getting_active_and_done_items():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-    orders[3] = o3
-
-    del orders[1]
-
-    assert orders[1] == o1
-    assert orders[2] == o2
-
-
-def test_OrderContainer_sets_correct_active_attributes():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-
-    orders = OrderContainer()
-    orders[1] = o1
-    orders[2] = o2
-
-    del orders[1]
-
-    assert not orders[1].active
-    assert orders[2].active
+    assert list(state_machine.orders.values()) == [o2, o3]
 
 
 def test_OrderContainer_active_only_flag_in_get():
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o2 = OrderInfo(
+        "coolstrategy",
+        "STOP",
+        ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Filled")),
+        None,
+    )
 
     orders = OrderContainer()
     orders[1] = o1
     orders[2] = o2
-
-    del orders[1]
-
-    assert orders.get(1, active_only=True) is None
+    assert orders.get(2, active_only=True) is None
 
 
 def test_OrderContainer_default_in_get_works():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), {})
+    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade, {})
 
     orders = OrderContainer()
     orders[1] = o1
     orders[2] = o2
-
-    del orders[1]
 
     assert orders.get(3, "Not Found") == "Not Found"
     assert orders.get(3, "Not Found", active_only=True) == "Not Found"
 
 
-def test_OrderContainer_done_limited_in_size():
-    orders = OrderContainer.from_items(
-        {
-            i: OrderInfo(
-                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
-            )
-            for i in range(20)
-        },
+def test_OrderContainer_default_in_get_works_if_active_only_not_found():
+    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), {})
+    o2 = OrderInfo(
+        "coolstrategy",
+        "STOP",
+        ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Filled")),
+        {},
     )
-    # orders with keys 0..14 moved to done
-    for i in range(15):
-        del orders[i]
 
-    # done should keep only 10 last items
-    assert len(orders.done) == 10
+    orders = OrderContainer()
+    orders[1] = o1
+    orders[2] = o2
+    assert orders.get(2, "Not Found", active_only=True) == "Not Found"
 
 
-def test_OrderContainer_done_limited_in_size_and_keep_parameter_works():
-    orders = OrderContainer.from_items(
+def test_OrderContainer_limited_in_size():
+    orders = OrderContainer(
         {
             i: OrderInfo(
-                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
-            )
-            for i in range(20)
-        },
-        keep=5,
-    )
-    # orders with keys 0..14 moved to done
-    for i in range(15):
-        del orders[i]
-
-    # done should keep only 10 last items
-    assert len(orders.done) == 5
-
-
-def test_OrderContainer_done_drops_oldest():
-    orders = OrderContainer.from_items(
-        {
-            i: OrderInfo(
-                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
+                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), {}
             )
             for i in range(20)
         }
     )
-    # orders with keys 0..14 moved to done
-    for i in range(15):
-        del orders[i]
 
-    # orders with keys 0...4 discarded so first kept it 5
-    first_key = list(orders.done.keys())[0]
-    assert first_key == 5
+    # done should keep only 10 last items
+    assert len(orders) == 10
 
-    # this is the last of keys removed from the main dict
-    last_key = list(orders.done.keys())[-1]
-    assert last_key == 14
+
+def test_OrderContainer_limited_in_size_and_max_size_parameter_works():
+    orders = OrderContainer(
+        {
+            i: OrderInfo(
+                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
+            )
+            for i in range(20)
+        },
+        max_size=5,
+    )
+
+    # done should keep only 10 last items
+    assert len(orders) == 5
+
+
+def test_OrderContainer_drops_oldest():
+    # create dict with keys: 0...19, but keep only last 10 elements
+    orders = OrderContainer(
+        {
+            i: OrderInfo(
+                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
+            )
+            for i in range(20)
+        },
+        max_size=10,
+    )
+
+    # only last 10 keys kept: 10...19, so first item in dict should be 10
+    first_key = list(orders.keys())[0]
+    assert first_key == 10
+
+    # this is the last key, which should not have been affected
+    last_key = list(orders.keys())[-1]
+    assert last_key == 19

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import ChainMap, UserDict, defaultdict
+from collections import UserDict, defaultdict
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import TYPE_CHECKING, Any, Iterator, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 import ib_insync as ibi
 
 from .base import Atom
-from .misc import Lock, Signal, sign, tree
+from .misc import Lock, Signal, decode_tree, sign, tree
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
@@ -25,78 +25,63 @@ class OrderInfo:
     action: str
     trade: ibi.Trade
     params: dict
-    active: bool = True
+
+    @property
+    def active(self):
+        return not self.trade.isDone()
 
     def __iter__(self) -> Iterator[Any]:
-        for f in fields(self):
-            yield getattr(self, f.name)
+        for f in [*(x.name for x in fields(self)), "active"]:
+            yield getattr(self, f)
 
 
-class MaxSizeContainer(UserDict):
-    def __init__(self, dict=None, /, max_size: int = 10, **kwargs) -> None:
+class OrderContainer(UserDict):
+    def __init__(self, dict=None, /, max_size: int = 10) -> None:
         self.max_size = max_size
-        super().__init__(dict, **kwargs)
+        super().__init__(dict)
 
     def __setitem__(self, key, item):
         if len(self.data) >= self.max_size:
             self.data.pop(min(self.data.keys()))
         super().__setitem__(key, item)
 
-
-class OrderContainer(ChainMap):
-    def __init__(self, /, keep: int = 10) -> None:
-        self.active: dict[int, OrderInfo] = {}
-        self.done = MaxSizeContainer(max_size=keep)
-        super().__init__(self.active, self.done)
-
     def strategy(self, strategy: str) -> Iterator[OrderInfo]:
         """Get active orders associated with strategy."""
         # returns only active orders
-        return (oi for oi in self.active.values() if oi.strategy == strategy)
-
-    def __delitem__(self, key):
-        """Delete order record from active and move it to done."""
-        self.done[key] = self.active[key]
-        self.done[key].active = False
-        try:
-            del self.active[key]
-        except KeyError:
-            raise KeyError("Order not found in the active orders: {!r}".format(key))
-
-    def __missing__(self, key):
-        # if missing try in done, which will raise KeyError if missing
-        return self.done[key]
+        return (oi for oi in self.values() if (oi.strategy == strategy and oi.active))
 
     def get(self, key, default=None, active_only=False):
         """Get records for an order."""
-        if active_only:
-            return self.active.get(key, default)
-        else:
-            return super().get(key, default)
+        value = self.data.get(key, None)
+        if value:
+            if (not active_only) or value.active:
+                return value
+        return default
 
-    def update_trade(self, trade) -> None:
+    def update_trades(self, *trades: ibi.Trade) -> Optional[list[ibi.Trade]]:
         """
         Update trade object for a given order.  Used after re-start to
         bring records up to date with IB
         """
-        oi = self.get(trade.order.orderId)
-        if oi:
-            log.debug(f"Trade found: {oi}")
-            new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params, oi.active)
-            self[trade.order.orderId] = new_oi
-
-    @classmethod
-    def from_items(
-        cls, items: Mapping[int, OrderInfo], /, keep: int = 10
-    ) -> OrderContainer:
-        container = cls(keep=keep)
-
-        for key, value in items.items():
-            if value.active:
-                container.active[key] = value
+        error_trades = []
+        for trade in trades:
+            oi = self.get(trade.order.orderId)
+            if oi:
+                log.debug(f"Trade will be updated: {oi}")
+                new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
+                self[trade.order.orderId] = new_oi
             else:
-                container.done[key] = value
-        return container
+                error_trades.append(trade)
+        if error_trades:
+            return error_trades
+        else:
+            return None
+
+    def encode(self) -> dict[str, dict]:
+        return tree(self.data)
+
+    def decode(self, data: dict):
+        self.update(**decode_tree(data))
 
 
 class StateMachine(Atom):
@@ -163,6 +148,9 @@ class StateMachine(Atom):
 
         self.data: dict[str, AbstractExecModel] = {}
         self.orders = OrderContainer()
+
+    def update_trades(self, **trades: ibi.Trade) -> Optional[list[ibi.Trade]]:
+        return self.orders.update_trades(**trades)
 
     def restore_from_backup(self):
         # self.data
@@ -254,11 +242,17 @@ class StateMachine(Atom):
                 self.new_position_callbacks, exec_model.strategy
             )
 
-    def delete_order(self, orderId: int) -> None:
+    def done_order(self, orderId: int) -> None:
         del self.orders[orderId]
 
     def get_order(self, orderId: int) -> Optional[OrderInfo]:
         return self.orders.get(orderId)
+
+    def delete_order(self, orderId: int) -> None:
+        del self.orders[orderId]
+
+    def get_strategy(self, strategy: str) -> Optional[AbstractExecModel]:
+        return self.data.get(strategy)
 
     def position(self, strategy: str) -> float:
         """
