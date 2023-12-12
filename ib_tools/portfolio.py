@@ -9,23 +9,6 @@ from ib_tools.base import Atom
 log = logging.getLogger(__name__)
 
 
-class PortfolioWrapper(Atom):
-    def __init__(self, portfolio: AbstractBasePortfolio) -> None:
-        super().__init__()
-        self.strategy: str = ""
-        self._portfolio = portfolio
-
-    def onData(self, data: dict, *args) -> None:
-        amount = self.allocate(data)
-        data.update({"amount": amount})
-        log.debug(f"Portfolio processed data: {data}")
-        super().onData(data)  # timestamp on departure
-        self.dataEvent.emit(data)
-
-    def allocate(self, data: dict) -> float:
-        return self._portfolio.allocate(data)
-
-
 class AbstractBasePortfolio(ABC):
     """
     Decides what, if and how much to trade based on received signals
@@ -37,17 +20,15 @@ class AbstractBasePortfolio(ABC):
     instances, which should delegate allocation to this object.
     """
 
-    _instance: Optional[AbstractBasePortfolio] = None
+    instance: Optional[AbstractBasePortfolio] = None
 
     def __new__(cls, *args, **kwargs):
         if Atom in cls.__mro__:
             raise TypeError("Portfolio cannot be an Atom.")
 
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance.__init__(*args, **kwargs)
-        wrapper = PortfolioWrapper(cls._instance)
-        return wrapper
+        if cls.instance is None:
+            AbstractBasePortfolio.instance = super().__new__(cls)
+        return cls.instance
 
     def __setattr__(self, key, value):
         if key in ("onStart", "onData", "startEvent", "dataEvent"):
@@ -76,3 +57,23 @@ class FixedPortfolio(AbstractBasePortfolio):
             return 0
         else:
             return self.amount
+
+
+class PortfolioWrapper(Atom):
+    def __init__(self) -> None:
+        super().__init__()
+        self.strategy: str = ""
+        if AbstractBasePortfolio.instance:
+            self._portfolio = AbstractBasePortfolio.instance
+        else:
+            raise TypeError("Portfolio must be instantiated before PortfolioWrapper.")
+
+    def onData(self, data: dict, *args) -> None:
+        amount = self.allocate(data)
+        data.update({"amount": amount})
+        log.debug(f"Portfolio processed data: {data}")
+        super().onData(data)  # timestamp on departure
+        self.dataEvent.emit(data)
+
+    def allocate(self, data: dict) -> float:
+        return self._portfolio.allocate(data)
