@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 import ib_insync as ibi
 
 from . import misc
-from .blotter import AbstractBaseBlotter
+from .blotter import Blotter
 from .state_machine import StateMachine
 from .trader import Trader
 
@@ -27,7 +27,7 @@ class Controller:
 
     """
 
-    blotter: Optional[AbstractBaseBlotter] = None
+    blotter: Optional[Blotter] = None
     log_events: bool = False
 
     def __init__(
@@ -67,7 +67,7 @@ class Controller:
 
     def config(
         self,
-        blotter: Optional[AbstractBaseBlotter] = None,
+        blotter: Optional[Blotter] = None,
         log_events: bool = False,
         cold_restart: bool = True,
     ) -> None:
@@ -238,7 +238,7 @@ class Controller:
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
             try:
-                self.sm.done_order(trade.order.orderId)
+                self.sm.report_done_order(trade.order.orderId)
                 log.debug(
                     f"{trade.contract.symbol}: order {trade.order.orderId} "
                     f"{trade.order.orderType} done {trade.orderStatus.status}."

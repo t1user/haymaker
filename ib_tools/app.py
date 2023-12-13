@@ -1,11 +1,11 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Protocol
 
 import ib_insync as ibi
 
-from ib_tools.blotter import AbstractBaseBlotter
+from ib_tools.blotter import Blotter
 from ib_tools.logging import setup_logging
 from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs
 
@@ -49,14 +49,14 @@ class App:
     retryDelay: float = 2
     probeContract: ibi.Contract = ibi.Forex("EURUSD")
     probeTimeout: float = 4
-    blotter: Optional[AbstractBaseBlotter] = None
+    blotter: bool = True
 
     def __post_init__(self):
         self.ib.errorEvent += self.onError
         self.ib.connectedEvent += self.onConnected
 
         if self.blotter:
-            CONTROLLER.config(blotter=self.blotter)
+            CONTROLLER.config(blotter=Blotter())
 
         self.watchdog = ibi.Watchdog(
             self.ibc,  # type: ignore
