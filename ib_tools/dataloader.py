@@ -453,6 +453,7 @@ class ContractHolder:
         def get_items(self):
             log.debug("getting items")
             objects = ContractObjectSelector(self.ib, self.source)
+            log.debug("ContractObjectSelector ok")
             if self.cont_only:
                 objects = objects.cont_list
             else:
@@ -461,18 +462,23 @@ class ContractHolder:
 
             self.items = []
             for o in objects:
-                headTimeStamp = self.ib.reqHeadTimeStamp(
-                    o, whatToShow=self.wts, useRTH=False, formatDate=2
-                )
-
-                if headTimeStamp == []:
-                    log.warning(
-                        (
-                            f"Unavailable headTimeStamp for {o.localSymbol}. "
-                            f"No data will be downloaded"
-                        )
+                try:
+                    headTimeStamp = self.ib.reqHeadTimeStamp(
+                        o, whatToShow=self.wts, useRTH=False, formatDate=2
                     )
+
+                    if headTimeStamp == []:
+                        log.warning(
+                            (
+                                f"Unavailable headTimeStamp for {o.localSymbol}. "
+                                f"No data will be downloaded"
+                            )
+                        )
+                        continue
+                except Exception:
+                    log.exception("Exception while getting headTimeStamp")
                     continue
+
                 try:
                     self.items.append(
                         DataWriter(
@@ -485,14 +491,15 @@ class ContractHolder:
                         )
                     )
                 except Exception as e:
-                    log.warning(f"Error ignored for object {o}", e)
-                    raise
+                    log.exception(f"Error ignored for object {o}", e)
+                    # raise
 
         def __call__(self):
             log.debug("holder called")
             log.debug(f"items: {self.items}")
             if self.items is None:
                 self.get_items()
+                log.debug(f"items obtained: {self.items}")
             return self.items
 
     __instance = None
@@ -826,7 +833,9 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
 
 
 async def main(holder: ContractHolder, ib: IB) -> None:
+    log.debug("THIS IS MAIN")
     contracts = holder()
+    log.debug(f"Holder: {contracts}")
     number_of_workers = min(len(contracts), MAX_NUMBER_OF_WORKERS)
 
     log.debug(
@@ -837,7 +846,9 @@ async def main(holder: ContractHolder, ib: IB) -> None:
     for contract in contracts:
         await queue.put(contract)
     p = pacer(
-        holder.barSize, holder.wts, restrictions=[(2, 6), (600, 60 - number_of_workers)]
+        holder.barSize,
+        holder.wts,
+        restrictions=[(2, 6), (1200, 60 - number_of_workers)],
     )
     log.debug(f"Pacer initialized: {p}")
     workers: List[asyncio.Task] = [

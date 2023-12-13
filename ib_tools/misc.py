@@ -184,7 +184,9 @@ def tree(obj):
     elif isinstance(obj, dict):
         return {k: tree(v) for k, v in obj.items()}
     elif ibi.util.isnamedtupleinstance(obj):
-        return {obj.__class__.__name__: {f: tree(getattr(obj, f)) for f in obj._fields}}
+        return {
+            obj.__class__.__qualname__: {f: tree(getattr(obj, f)) for f in obj._fields}
+        }
     elif isinstance(obj, (list, tuple, set)):
         return [tree(i) for i in obj]
     elif ibi.util.is_dataclass(obj):

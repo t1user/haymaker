@@ -9,12 +9,20 @@ from ib_tools.bracket_legs import FixedStop
 from ib_tools.controller import Controller
 from ib_tools.execution_models import BaseExecModel, EventDrivenExecModel
 from ib_tools.manager import STATE_MACHINE
-from ib_tools.portfolio import FixedPortfolio
+from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
 from ib_tools.signals import BinarySignalProcessor
 
 
 @pytest.fixture
-def pipe(df_brick, data_for_df):  # noqa
+def portfolio():
+    portfolio = FixedPortfolio()
+
+    yield portfolio
+    AbstractBasePortfolio.instance = None
+
+
+@pytest.fixture
+def pipe(df_brick, data_for_df, portfolio):  # noqa
     class FakeStateMachine:
         def position(self, key):
             return 0
@@ -31,13 +39,11 @@ def pipe(df_brick, data_for_df):  # noqa
             self.out = contract, order, action, exec_model
 
     controller = FakeController()
-
     # signal is 1, contract is NQ
     brick = df_brick
     # so this should result in action "OPEN"
     signal = BinarySignalProcessor(sm)
-    # this porfolio does fixed amount = 1
-    portfolio = FixedPortfolio()
+
     # on which exec_model should act by issuing Buy order
     exec_model = EventDrivenExecModel(stop=FixedStop(5), controller=controller)
 
@@ -47,7 +53,7 @@ def pipe(df_brick, data_for_df):  # noqa
 
     source = SourceAtom()
 
-    Pipe(source, brick, signal, portfolio, exec_model)
+    Pipe(source, brick, signal, PortfolioWrapper(), exec_model)
     source.run()
 
     return controller.out

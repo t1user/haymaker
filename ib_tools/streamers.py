@@ -181,7 +181,7 @@ class HistoricalDataStreamer(Streamer):
     barSizeSetting: str
     whatToShow: str
     useRTH: bool = False
-    formatDate: int = 2
+    formatDate: int = 2  # don't change
     incremental_only: bool = True
     startup_seconds: float = 5
     last_bar_date: Optional[datetime] = None

@@ -70,7 +70,6 @@ class IBHandlers:
         scheduledUpdate += self.onScheduledUpdate
         self.ib = ib
         self.portfolio_items: Dict[str, Tuple[float, float, float]] = {}
-        self.ib.setTimeout()
 
     def onConnected(self):
         log.info("Connection established")
@@ -91,19 +90,19 @@ class IBHandlers:
         pass
 
     def onNewOrder(self, trade: ibi.Trade):
-        log.debug(f"New order: {trade.contract.localSymbol} {trade.order}")
+        log.info(f"New order: {trade.contract.localSymbol} {trade.order}")
 
     def onModifyOrder(self, trade: ibi.Trade):
-        log.debug(f"Order modified: {trade.contract.localSymbol} {trade.order}")
+        log.info(f"Order modified: {trade.contract.localSymbol} {trade.order}")
 
     def onCancelOrder(self, trade: ibi.Trade):
-        log.debug(f"Order canceled: {trade.contract.localSymbol} {trade.order}")
+        log.info(f"Order canceled: {trade.contract.localSymbol} {trade.order}")
 
     def onOpenOrder(self, trade: ibi.Trade):
-        pass
+        log.info(f"Open order: {trade}")
 
     def onOrderStatus(self, trade: ibi.Trade):
-        log.debug(
+        log.info(
             f"Order status {trade.contract.localSymbol} "
             f"{trade.order.action} {trade.order.totalQuantity} "
             f"{trade.order.orderType} - "
@@ -119,7 +118,7 @@ class IBHandlers:
     def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ):
-        # log.debug(f'Commission report: {report}')
+        # log.info(f'Commission report: {report}')
         pass
 
     def onUpdatePortfolio(self, item: ibi.PortfolioItem):
@@ -127,18 +126,18 @@ class IBHandlers:
         unrealized = round(item.unrealizedPNL, 2)
         total = round(realized + unrealized)
         report = (item.contract.localSymbol, realized, unrealized, total)
-        log.debug(f"Portfolio item: {report}")
+        log.info(f"Portfolio item: {report}")
         self.portfolio_items[item.contract.localSymbol] = (realized, unrealized, total)
 
     def onPosition(self, position: ibi.Position):
-        log.debug(
+        log.info(
             f"Position update: {position.contract.localSymbol}: "
             f"{position.position}, avg cost: {position.avgCost}"
         )
 
     def onAccountValue(self, value: ibi.AccountValue):
         if value.tag == "NetLiquidation":
-            log.debug(value)
+            log.info(value)
 
     def onAccountSummary(self, value: ibi.AccountValue):
         """
@@ -181,21 +180,10 @@ class IBHandlers:
             10182,
             1100,
         ):
-            log.debug(f"ERROR: {errorCode} {errorString} {contract}")
+            log.error(f"ERROR: {errorCode} {errorString} {contract}")
 
-    async def onTimeout(self, idlePeriod: float):
-        # Possibly better to just use modified Watchdog instead of that
-        log.warning(f"Timeout! Idle period: {idlePeriod}")
-
-        probe = self.ib.reqHistoricalDataAsync(
-            ibi.ContFuture("ES", "CME"), "", "30 S", "5 secs", "MIDPOINT", False
-        )
-        bars = None
-        with suppress(asyncio.TimeoutError):
-            bars = await asyncio.wait_for(probe, 60)
-        if not bars:
-            log.error("No connection!")
-        self.ib.setTimeout()
+    def onTimeout(self, idlePeriod: float):
+        pass
 
     def onScheduledUpdate(self, time):
         log.info(f"pnl: {self.ib.pnl()}")
@@ -210,7 +198,6 @@ class IBHandlers:
         log.info(message)
         positions = [(p.contract.localSymbol, p.position) for p in self.ib.positions()]
         log.info(f"POSITIONS: {positions}")
-        self.manager.onScheduledUpdate()
 
 
 class Handlers(WatchdogHandlers, IBHandlers):
