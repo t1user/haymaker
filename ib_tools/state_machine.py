@@ -7,6 +7,7 @@ from dataclasses import dataclass, fields
 from functools import partial
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
+import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from .base import Atom
@@ -31,8 +32,14 @@ class OrderInfo:
         return not self.trade.isDone()
 
     def __iter__(self) -> Iterator[Any]:
-        for f in [*(x.name for x in fields(self)), "active"]:
+        for f in (*(x.name for x in fields(self)), "active"):
             yield getattr(self, f)
+
+    def encode(self) -> dict[str, Any]:
+        return tree(self)
+
+    def decode(self, data: dict[str, Any]) -> None:
+        self.__dict__.update(**decode_tree(data))
 
 
 class OrderContainer(UserDict):
@@ -41,7 +48,7 @@ class OrderContainer(UserDict):
         super().__init__(dict)
 
     def __setitem__(self, key, item):
-        if len(self.data) >= self.max_size:
+        if self.max_size and (len(self.data) >= self.max_size):
             self.data.pop(min(self.data.keys()))
         super().__setitem__(key, item)
 
@@ -127,7 +134,7 @@ class StateMachine(Atom):
 
         6. Are orders linked to strategies?
 
-        7. Make sure order events connected to call-backs
+        7. /No longer valid/ Make sure order events connected to call-backs
 
     Collect all information needed to restore state.  This info will
     be stored to database.  If the app crashes, after restart, all
@@ -152,7 +159,10 @@ class StateMachine(Atom):
     def update_trades(self, **trades: ibi.Trade) -> Optional[list[ibi.Trade]]:
         return self.orders.update_trades(**trades)
 
-    def restore_from_backup(self):
+    def setup_store(self):
+        self.saveEvent = ev.Event()
+
+    def restore_from_store(self):
         # self.data
         # self.orders
         pass
@@ -242,8 +252,14 @@ class StateMachine(Atom):
                 self.new_position_callbacks, exec_model.strategy
             )
 
-    def done_order(self, orderId: int) -> None:
-        del self.orders[orderId]
+    def report_done_order(self, orderId: int) -> None:
+        # del self.orders[orderId]
+        # TODO
+        # save data AND orders?
+        order_info = self.orders.get(orderId)
+        self.saveEvent.emit(order_info, self.orders)
+        self.saveEvent.emit(self.data.get(order_info.strategy), self.data)
+        pass
 
     def get_order(self, orderId: int) -> Optional[OrderInfo]:
         return self.orders.get(orderId)

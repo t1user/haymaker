@@ -225,3 +225,17 @@ def test_OrderContainer_drops_oldest():
     # this is the last key, which should not have been affected
     last_key = list(orders.keys())[-1]
     assert last_key == 19
+
+
+def test_OrderContainer_max_size_ignored_if_zero():
+    orders = OrderContainer(
+        {
+            i: OrderInfo(
+                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
+            )
+            for i in range(20)
+        },
+        max_size=0,
+    )
+
+    assert len(orders) == 20
