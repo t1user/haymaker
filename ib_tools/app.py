@@ -6,14 +6,11 @@ from typing import Protocol
 import ib_insync as ibi
 
 from ib_tools.blotter import Blotter
-from ib_tools.logging import setup_logging
 from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs
 
 log = logging.getLogger(__name__)
 
 ibi.util.patchAsyncio()
-
-setup_logging()
 
 
 class IBC(Protocol):
@@ -25,7 +22,7 @@ class IBC(Protocol):
 
 
 @dataclass
-class FakeIBC:
+class FakeIBC(IBC):
     restart_time: int = 60
 
     async def startAsync(self):

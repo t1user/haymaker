@@ -62,7 +62,10 @@ class Blotter:
         if kwargs:
             row.update(kwargs)
         self.save_report(row)
-        log.debug(f"trade report saved: {row['order_id'], row['side'], row['symbol']}")
+        log.debug(
+            f"trade report will be  saved to blotter: "
+            f"{row['order_id'], row['side'], row['symbol']}"
+        )
 
     def log_commission(
         self,

@@ -16,7 +16,7 @@ def brick():
         def _signal(self, data):
             return {"signal": 1, "dupa": "xyz", "kamieni_kupa": 5}
 
-    return Brick("eska_NQ", ibi.ContFuture("NQ", "CME"))
+    return Brick("eska_NQ", ibi.Future("NQ", "CME"))
 
 
 def test_brick_instantiates(brick):
@@ -41,7 +41,7 @@ def test_data_passed_correct(brick):
     del x["Brick_ts"]
     assert x == {
         "strategy": "eska_NQ",
-        "contract": ibi.ContFuture("NQ", "CME"),
+        "contract": ibi.Future("NQ", "CME"),
         "signal": 1,
         "dupa": "xyz",
         "kamieni_kupa": 5,
@@ -72,7 +72,7 @@ def df_brick():
             return df
 
     return Brick(
-        "eska_NQ", ibi.ContFuture("NQ", "CME"), signal_column="signal", df_columns=None
+        "eska_NQ", ibi.Future("NQ", "CME"), signal_column="signal", df_columns=None
     )
 
 
@@ -133,7 +133,7 @@ def basic_df_brick():
             return df
 
     return Brick(
-        "eska_NQ", ibi.ContFuture("NQ", "CME"), signal_column="signal", df_columns=None
+        "eska_NQ", ibi.Future("NQ", "CME"), signal_column="signal", df_columns=None
     )
 
 

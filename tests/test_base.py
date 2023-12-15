@@ -278,10 +278,10 @@ class TestContract:
 
     @pytest.fixture
     def atom(self):
-        return AtomWithContract(ibi.ContFuture("NQ", "CME"))
+        return AtomWithContract(ibi.Future("NQ", "CME"))
 
     def test_can_assign_and_get_contract(self, atom):
-        assert isinstance(atom.contract, ibi.ContFuture)
+        assert isinstance(atom.contract, ibi.Future)
 
     def test_same_contract_returned_as_assigned(self, contract):
         c = contract

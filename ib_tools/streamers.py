@@ -57,7 +57,7 @@ class Timeout:
             log.log(
                 5,
                 f"{self} will sleep till market reopen at: {reactivate_time} i.e. "
-                f"{sleep_time}seconds",
+                f"{sleep_time} seconds",
             )
             await asyncio.sleep(sleep_time)
             self._set_timeout(self.event)

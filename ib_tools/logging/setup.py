@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 
 module_directory = Path(__file__).parents[0]
 
+# TODO: this has to be determined by config
 level = 5
 logging.addLevelName(5, "DATA")
 logging.addLevelName(60, "NOTIFY")

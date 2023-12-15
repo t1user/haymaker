@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import collections.abc
 import dataclasses
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, ClassVar, Protocol, Sequence, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    Optional,
+    Protocol,
+    Sequence,
+    Type,
+    Union,
+    cast,
+)
 
 if TYPE_CHECKING:
     from ib_tools.manager import InitData
@@ -16,6 +26,33 @@ log = logging.getLogger(__name__)
 ContractOrSequence = Union[Sequence[ibi.Contract], ibi.Contract]
 
 
+class ContractManagingDescriptor:
+    def __set_name__(self, obj: Atom, name: str) -> None:
+        self.name = name
+
+    def __set__(self, obj: Atom, value: ibi.Contract) -> None:
+        obj.__dict__[self.name] = value
+        self._register_contract(obj, value)
+
+    def __get__(self, obj: Atom, type=None) -> Optional[ibi.Contract]:
+        contract = obj.__dict__.get(self.name)
+        if isinstance(contract, ibi.ContFuture):
+            for i in obj.contracts:
+                if isinstance(i, ibi.Future) and i.conId == contract.conId:
+                    obj.__dict__[f"_{self.name}"] = i
+                    return i
+        return contract
+
+    def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
+        if getattr(value, "__iter__", None):
+            assert isinstance(value, collections.abc.Sequence)
+            for v in value:
+                obj.contracts.append(v)
+        else:
+            assert isinstance(value, ibi.Contract)
+            obj.contracts.append(value)
+
+
 class Atom:
     """
     Abstract base object from which all other objects inherit.
@@ -25,10 +62,10 @@ class Atom:
     ib: ClassVar[ibi.IB]
     _contract_details: ClassVar[dict[ibi.Contract, ibi.ContractDetails]]
     _trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]]
-    _contract: ContractOrSequence
     events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
 
     contracts: list[ibi.Contract] = list()
+    contract = cast(ibi.Contract, ContractManagingDescriptor())
 
     @classmethod
     def set_init_data(cls, data: InitData) -> None:
@@ -39,15 +76,6 @@ class Atom:
     def __init__(self) -> None:
         self._createEvents()
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
-
-    def __setattr__(self, prop, val):
-        """
-        Register all `:class:ibi.Contract` objects to be qualified
-        with the broker.
-        """
-        if prop == "contract":
-            self._register_contract(val)
-        super().__setattr__(prop, val)
 
     @property
     def trading_hours(self):
@@ -73,13 +101,6 @@ class Atom:
                 f"{self.__class__.__name__} no trading hours data for {self.contract}."
             )
             return th
-
-    def _register_contract(self, value) -> None:
-        if getattr(value, "__iter__", None):
-            for v in value:
-                self.contracts.append(v)
-        else:
-            self.contracts.append(value)
 
     def _createEvents(self):
         self.startEvent = ibi.Event("startEven")

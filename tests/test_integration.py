@@ -134,7 +134,7 @@ def test_buy_position_registered(new_setup):
         "action": "OPEN",
         "amount": 1,
         "target_position": 1,
-        "contract": ibi.ContFuture("NQ", "CME"),
+        "contract": ibi.Future("NQ", "CME"),
     }
 
     source.dataEvent.emit(data)
@@ -164,7 +164,7 @@ def test_sell_position_registered(new_setup):
         "action": "OPEN",
         "amount": 1,
         "target_position": -1,
-        "contract": ibi.ContFuture("NQ", "CME"),
+        "contract": ibi.Future("NQ", "CME"),
     }
 
     source.dataEvent.emit(data)

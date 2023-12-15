@@ -11,12 +11,13 @@ import ib_insync as ibi
 from ib_tools import misc
 from ib_tools.base import Atom
 from ib_tools.controller import Controller
-
-# from ib_tools.runner import App
+from ib_tools.logging import setup_logging
 from ib_tools.state_machine import StateMachine
 from ib_tools.streamers import Streamer
 
 log = logging.getLogger(__name__)
+
+setup_logging()
 
 
 @dataclass
@@ -37,7 +38,24 @@ class InitData:
         return self
 
     async def qualify_contracts(self) -> "InitData":
+        # "reset" conId to make IB check what the current contract is
+        for c in self.contract_list:
+            if isinstance(c, ibi.ContFuture):
+                c.conId = 0
+                log.debug(f"ContFuture reset: {c}")
+
+        # qualify
         await self.ib.qualifyContractsAsync(*self.contract_list)
+
+        # for every ContFuture add regular Future object, that will be actually
+        # used by Atoms
+        futures_for_cont_futures = [
+            ibi.Future(conId=c.conId)
+            for c in self.contract_list
+            if isinstance(c, ibi.ContFuture)
+        ]
+        await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
+        self.contract_list.extend(futures_for_cont_futures)
         log.debug(f"contracts qualified {set([c.symbol for c in self.contract_list])}")
         return self
 
