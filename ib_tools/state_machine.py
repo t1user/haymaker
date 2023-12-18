@@ -7,8 +7,9 @@ from dataclasses import dataclass, fields
 from functools import partial
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
-import eventkit as ev  # type: ignore
 import ib_insync as ibi
+
+from ib_tools.saver import MongoSaver, SaveManager
 
 from .base import Atom
 from .misc import Lock, Signal, decode_tree, sign, tree
@@ -36,10 +37,17 @@ class OrderInfo:
             yield getattr(self, f)
 
     def encode(self) -> dict[str, Any]:
-        return tree(self)
+        return {
+            "orderId": self.trade.order.orderId,
+            **{k: tree(v) for k, v in self.__dict__.items()},
+            "active": self.active,
+        }
 
     def decode(self, data: dict[str, Any]) -> None:
-        self.__dict__.update(**decode_tree(data))
+        data_ = decode_tree(data)
+        data_.pop("actve")
+        data_.pop("orderId")
+        self.__dict__.update(**data_)
 
 
 class OrderContainer(UserDict):
@@ -65,30 +73,10 @@ class OrderContainer(UserDict):
                 return value
         return default
 
-    def update_trades(self, *trades: ibi.Trade) -> Optional[list[ibi.Trade]]:
-        """
-        Update trade object for a given order.  Used after re-start to
-        bring records up to date with IB
-        """
-        error_trades = []
-        for trade in trades:
-            oi = self.get(trade.order.orderId)
-            if oi:
-                log.debug(f"Trade will be updated: {oi}")
-                new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
-                self[trade.order.orderId] = new_oi
-            else:
-                error_trades.append(trade)
-        if error_trades:
-            return error_trades
-        else:
-            return None
 
-    def encode(self) -> dict[str, dict]:
-        return tree(self.data)
-
-    def decode(self, data: dict):
-        self.update(**decode_tree(data))
+class ExecModelContainer(dict):
+    def encode(self) -> dict[str, Any]:
+        return tree({k: v.encode() for k, v in self.items()})
 
 
 class StateMachine(Atom):
@@ -143,6 +131,10 @@ class StateMachine(Atom):
 
     _instance: Optional["StateMachine"] = None
 
+    # TODO: determined by CONFIG
+    save_order = SaveManager(MongoSaver("orders", query_key="orderId"))
+    save_model = SaveManager(MongoSaver("models"))
+
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -153,14 +145,62 @@ class StateMachine(Atom):
     def __init__(self) -> None:
         super().__init__()
 
-        self.data: dict[str, AbstractExecModel] = {}
-        self.orders = OrderContainer()
+        self.data = ExecModelContainer()  # dict of ExecModel
+        self.orders = OrderContainer()  # dict of OrderInfo
 
-    def update_trades(self, **trades: ibi.Trade) -> Optional[list[ibi.Trade]]:
-        return self.orders.update_trades(**trades)
+    def update_trades(self, *trades: ibi.Trade) -> list[ibi.Trade]:
+        """
+        Update trade object for a given order.  Used after re-start to
+        bring records up to date with IB
+        """
+        error_trades = []
+        for trade in trades:
+            oi = self.orders.get(trade.order.orderId)
+            if oi:
+                log.debug(f"Trade will be updated: {oi}")
+                new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
+                self.orders[trade.order.orderId] = new_oi
+                self.save_order(new_oi.encode())
+                # TODO: What about trades that became incactive while disconnected?
+            else:
+                log.debug(f"Error trade: {trade}")
+                error_trades.append(trade)
+        return error_trades
 
-    def setup_store(self):
-        self.saveEvent = ev.Event()
+    def review_trades(self, *trades: ibi.Trade) -> list[ibi.Trade]:
+        """
+        On restart review all trades on record and compare their
+        status with IB.
+
+        Args:
+        -----
+
+        *trades - list of open trades from :meth:`ibi.openTrades()`.
+
+        Returns:
+        --------
+
+        List of trades that we have as open, while IB has them as
+        done.  We have to reconcile those trades' status and report
+        them as appropriate.
+        """
+        unresolved_trades = []
+        open_trades = {trade.order.orderId: trade for trade in trades}
+        for orderId, oi in self.orders.copy().items():
+            if orderId not in open_trades:
+                # if inactive it's already been dealt with before restart
+                if oi.active:
+                    # this is a trade that we have as active in self.orders
+                    # but IB doesn't have it in open orders
+                    # we have to figure out what happened to this trade
+                    # while we were disconnected and report it as appropriate
+                    unresolved_trades.append(oi)
+                else:
+                    # this order is no longer of interest
+                    # it's inactive in our orders and inactive in IB
+                    self.orders.pop(orderId)
+
+        return unresolved_trades
 
     def restore_from_store(self):
         # self.data
@@ -241,7 +281,8 @@ class StateMachine(Atom):
         This method is called by :class:`Controller`.
         """
         params = exec_model.params.get(action.lower(), {})
-        self.orders[trade.order.orderId] = OrderInfo(strategy, action, trade, params)
+        order_info = OrderInfo(strategy, action, trade, params)
+        self.orders[trade.order.orderId] = order_info
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} registered for: "
             f"{trade.contract.localSymbol}"
@@ -252,14 +293,29 @@ class StateMachine(Atom):
                 self.new_position_callbacks, exec_model.strategy
             )
 
-    def report_done_order(self, orderId: int) -> None:
-        # del self.orders[orderId]
-        # TODO
-        # save data AND orders?
-        order_info = self.orders.get(orderId)
-        self.saveEvent.emit(order_info, self.orders)
-        self.saveEvent.emit(self.data.get(order_info.strategy), self.data)
-        pass
+        self.save_order(order_info.encode())
+        self.save_model(self.data.encode())
+
+    def report_done_order(self, trade: ibi.Trade) -> Optional[OrderInfo]:
+        order_info = self.orders.get(trade.order.orderId)
+        if order_info:
+            dict_for_saving = order_info.encode()
+        else:
+            dict_for_saving = {
+                "orderId": trade.order.orderId,
+                "strategy": "unknown",
+                "action": "unknown",
+                "trade": trade,
+                "params": {},
+            }
+        log.debug("Reporting done order")
+        self.save_order(dict_for_saving)
+        self.save_model(self.data.encode())
+        return order_info
+
+    def report_new_order(self, trade: ibi.Trade) -> None:
+        log.debug("Reporting new order.")
+        self.save_model(self.data.encode())
 
     def get_order(self, orderId: int) -> Optional[OrderInfo]:
         return self.orders.get(orderId)

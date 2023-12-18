@@ -3,19 +3,67 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import partial
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Final, Optional
 
 import ib_insync as ibi
 
 from . import misc
 from .blotter import Blotter
-from .state_machine import StateMachine
+from .manager import IB, STATE_MACHINE
 from .trader import Trader
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
+    from .state_machine import StateMachine
 
 log = logging.getLogger(__name__)
+
+
+class ReStartSyncStrategy:
+    def __init__(self) -> None:
+        # IB has trades that we don't know about
+        self.unknown_trades: list[ibi.Trade] = []  # <-We're fucked
+        # Our active trades that IB doesn't report as active
+        self.question_trades: list[ibi.Trade] = []
+        # Question trades that we managed to match to IB
+        self.matched_trades: list[ibi.Trade] = []
+        # Trades on record that we cannot resolve with IB
+        self.unmatched_trades: list[ibi.Trade] = []  # <- We're fucked
+
+    @classmethod
+    def run(cls):
+        return cls().update_trades().review_trades().handle_question_trades().report()
+
+    def update_trades(self):
+        # update order records with current Trade objects
+        self.unknown_trades = STATE_MACHINE.update_trades(*IB.openTrades())
+        return self
+
+    def review_trades(self):
+        # Report trades on which we can find information
+        self.question_trades = STATE_MACHINE.review_trades(*IB.openTrades())
+        return self
+
+    def handle_question_trades(self):
+        # these are active trades on record that haven't been matched to
+        # open trades in IB
+        # try finding in closed trades from the session
+        known_trades = {trade.order.permId: trade for trade in IB.trades()}
+        matched_trades = {
+            trade.order.permId: trade
+            for trade in self.question_trades
+            if trade.order.permId in known_trades
+        }
+        self.unmatched_trades = [
+            trade
+            for trade in self.question_trades
+            if trade.order.permId not in matched_trades
+        ]
+        self.matched_trades = list(matched_trades.values())
+        return self
+
+    def report(self):
+        return self.unknown_trades, self.matched_trades, self.unmatched_trades
 
 
 class Controller:
@@ -31,11 +79,13 @@ class Controller:
     log_events: bool = False
 
     def __init__(
-        self, state_machine: StateMachine, ib: ibi.IB, trader: Optional[Trader] = None
+        self,
+        state_machine: Optional[StateMachine] = None,
+        ib: Optional[ibi.IB] = None,
+        trader: Optional[Trader] = None,
     ):
-        super().__init__()
-        self.sm = state_machine
-        self.ib = ib
+        self.sm = state_machine or STATE_MACHINE
+        self.ib = ib or IB
         self.trader = trader or Trader(self.ib)
 
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent)
@@ -55,12 +105,45 @@ class Controller:
 
     async def init(self, *args, **kwargs) -> None:
         log.debug("Controller init...")
-        if errors := self.sm.update_trades(*self.ib.openTrades()):
-            for error_trade in errors:
-                log.critical(f"Unknow trade in the system: {error_trade}")
-        log.debug("Trade records updated.")
+
+        try:
+            unknown, matched, unmatched = ReStartSyncStrategy.run()
+            log.debug(
+                f"Trades on re-start - unknown: {len(unknown)}, "
+                f"matched: {len(matched)}, unmatched: {len(unmatched)}"
+            )
+        except Exception:
+            log.exception(Exception)
+            raise
+
+        # update order records with current Trade objects
+        for error_trade in unknown:
+            log.critical(f"Unknow trade in the system: {error_trade}. We are fucked...")
+
+        # From here IB events will be handled...
         self.hold = False
         log.debug("hold released")
+
+        # so that matched trades can be sent to blotter
+
+        for trade in matched:
+            self.report_unresolved_trade(trade)
+
+        # don't know what to do with that yet:
+        for trade in unmatched:
+            log.debug(f"Don't know how to handle trade: {trade}. We are fucked...")
+
+    def report_unresolved_trade(self, trade: ibi.Trade):
+        log.debug(
+            f"Back-reporting trade: {trade.contract.symbol} "
+            f"{trade.order.action} {trade.order.totalQuantity} "
+            f"order id: {trade.order.orderId}"
+        )
+
+        self.ib.orderStatusEvent.emit(trade)
+        self.ib.commissionReportEvent.emit(
+            trade, trade.fills[-1], trade.fills[-1].commissionReport
+        )
 
     def restart(self):
         self.sm.restore_from_backup()
@@ -230,6 +313,10 @@ class Controller:
         if not existing_order_record:
             log.critical(f"Unknown trade in the system {trade.order}")
 
+        # Give exec_model a chance to save bracket
+        await asyncio.sleep(0.5)
+        self.sm.report_new_order(trade)
+
     def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
         if trade.order.orderId < 0:
             log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
@@ -237,13 +324,13 @@ class Controller:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
-            try:
-                self.sm.report_done_order(trade.order.orderId)
+            # TODO: FIX THIS
+            if self.sm.report_done_order(trade):
                 log.debug(
                     f"{trade.contract.symbol}: order {trade.order.orderId} "
                     f"{trade.order.orderType} done {trade.orderStatus.status}."
                 )
-            except KeyError:
+            else:
                 log.debug(
                     f"Unknown order cancelled id: {trade.order.orderId} "
                     f"{trade.order.action} {trade.contract.symbol}"
@@ -395,3 +482,6 @@ class Controller:
 
     def __repr__(self):
         return f"{__class__.__name__}({self.sm, self.ib, self.blotter})"
+
+
+CONTROLLER: Final[Controller] = Controller()

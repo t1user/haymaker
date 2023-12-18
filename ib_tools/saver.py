@@ -27,13 +27,17 @@ async def saving_function(data: Any, saver: AbstractBaseSaver, *args: str):
     await loop.run_in_executor(None, saver.save, data, *args)
 
 
+def error_reporting_function(event, exception: Exception) -> None:
+    log.error(f"Event error: {event.name()}: {exception}", exc_info=True)
+
+
 class SaveManager:
     """
     This class can be used both: as a descriptor and a regular class.
     """
 
     saveEvent = ev.Event("saveEvent")
-    saveEvent += saving_function
+    saveEvent.connect(saving_function, error=error_reporting_function)
 
     def __init__(self, saver: AbstractBaseSaver, note="", timestamp: bool = True):
         self.saver = saver
@@ -46,13 +50,16 @@ class SaveManager:
 
     __call__ = save
 
+    def __repr__(self):
+        return f"SaveManager({self.saver})"
+
 
 class AbstractBaseSaver(ABC):
     """
     Api for saving data during trading/simulation.
     """
 
-    def __init__(self, note: str = "", timestamp: bool = True):
+    def __init__(self, note: str = "", timestamp: bool = True) -> None:
         if timestamp:
             timestamp_ = datetime.now(timezone.utc).strftime("%Y%m%d_%H_%M")
             self.note = f"{note}_{timestamp_}"
@@ -112,7 +119,7 @@ class PickleSaver(AbstractBaseSaver):
 class CsvSaver(AbstractBaseSaver):
     _fieldnames: Optional[list[str]]
 
-    def __init__(self, folder: str, note: str = "", timestamp: bool = True):
+    def __init__(self, folder: str, note: str = "", timestamp: bool = True) -> None:
         self.path = default_path(folder)
         self._fieldnames = None
         super().__init__(note, timestamp)
@@ -190,17 +197,33 @@ class ArcticSaver(AbstractBaseSaver):
 class MongoSaver(AbstractBaseSaver):
     def __init__(
         self,
+        collection: str,
+        db: str = "test_data",
         host: str = "localhost",
         port: int = 27017,
-        db: str = "blotter",
-        collection: "str" = "test_blotter",
+        query_key: Optional[str] = None,
     ) -> None:
         self.client = MongoClient(host, port)
         self.db = self.client[db]
         self.collection = self.db[collection]
+        self.query_key = query_key
 
     def save(self, data: dict[str, Any], *args) -> None:
-        self.collection.insert_one(data)
+        try:
+            log.debug("WILL SAVE OBJECT")
+            if self.query_key and (key := data.get(self.query_key)):
+                log.debug("UPDATE ONE")
+                result = self.collection.update_one(
+                    {self.query_key: key}, {"$set": data}, upsert=True
+                )
+            else:
+                log.debug("INSERT ONE")
+                result = self.collection.insert_one(data)
+        except Exception:
+            log.exception(Exception)
+            log.debug(f"Data that caused error: {data}")
+            raise
+        log.debug(f"RESULT: {result}")
 
     def save_many(self, data: list[dict[str, Any]]) -> None:
         self.collection.insert_many(data)

@@ -13,8 +13,8 @@ import ib_insync as ibi
 
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import AbstractBracketLeg
-from ib_tools.controller import Controller
-from ib_tools.manager import CONTROLLER, STATE_MACHINE
+from ib_tools.controller import CONTROLLER, Controller
+from ib_tools.manager import STATE_MACHINE
 
 from . import misc
 
@@ -81,12 +81,20 @@ class AbstractExecModel(Atom, ABC):
         self.params: dict[str, Any] = {}
         self.lock: misc.Lock = 0
         self.controller = controller or CONTROLLER
+        self._attrs = [
+            "active_contract",
+            "position",
+            "strategy",
+            "params",
+            "lock",
+            "position_id",
+        ]
 
         if orders:
             for key, order_kwargs in orders.items():
                 setattr(self, key, order_kwargs)
 
-        self.position_id = 0
+        self.position_id = ""  # 0
         self.connect_state_machine()
 
     def connect_state_machine(self):
@@ -94,7 +102,7 @@ class AbstractExecModel(Atom, ABC):
 
     def get_position_id(self, reset=False):
         if reset or not self.position_id:
-            self.position_id = int(uuid4())
+            self.position_id = misc.COUNTER()  # int(uuid4())
         return self.position_id
 
     def _order(self, key: OrderKey, params: dict) -> ibi.Order:
@@ -163,6 +171,12 @@ class AbstractExecModel(Atom, ABC):
         # TODO: what if more than one order issued????
         super().onData(data)
         self.dataEvent.emit(data)
+
+    def encode(self):
+        return misc.tree({k: getattr(self, k) for k in self._attrs})
+
+    def decode(self, data: dict):
+        self.__dict__.update(**data)
 
 
 class BaseExecModel(AbstractExecModel):
@@ -372,10 +386,11 @@ class EventDrivenExecModel(BaseExecModel):
             )
         self.stop = stop
         self.take_profit = take_profit
-        self.brackets: dict[int, Bracket] = {}
+        self.brackets: dict[str, Bracket] = {}
         self.oca_group_generator = lambda: str(uuid4())
         self.oca_group: Optional[str] = None
         super().__init__(orders, controller=controller)
+        self._attrs.extend(["brackets", "oca_group"])
 
     def open(
         self,
@@ -438,7 +453,7 @@ class EventDrivenExecModel(BaseExecModel):
                     order,
                     label,
                 )
-                self.brackets[bracket_trade.order.orderId] = Bracket(
+                self.brackets[str(bracket_trade.order.orderId)] = Bracket(
                     cast(BracketLabel, label),
                     cast(OrderKey, order_key),
                     bracket_kwargs,

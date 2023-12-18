@@ -6,7 +6,8 @@ from typing import Protocol
 import ib_insync as ibi
 
 from ib_tools.blotter import Blotter
-from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs
+from ib_tools.controller import CONTROLLER
+from ib_tools.manager import IB, JOBS, Jobs
 
 log = logging.getLogger(__name__)
 

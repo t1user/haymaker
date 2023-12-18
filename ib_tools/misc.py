@@ -68,6 +68,9 @@ class Counter:
         return f"{self.character_string}{self.counter()}"
 
 
+COUNTER = Counter()
+
+
 def round_tick(price: float, tick_size: float) -> float:
     floor = price // tick_size
     remainder = price % tick_size
@@ -177,7 +180,7 @@ def tree(obj):
     Convert object to a tree of lists, dicts and simple values.
     The result can be serialized to JSON.
     """
-    if isinstance(obj, (bool, int, float, str, bytes)):
+    if isinstance(obj, (bool, float, int, str, bytes)):
         return obj
     elif isinstance(obj, (dt.date, dt.time)):
         return obj.isoformat()
