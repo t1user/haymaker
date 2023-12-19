@@ -18,6 +18,11 @@ from ib_tools.utilities import default_path
 log = logging.getLogger(__name__)
 
 
+async def async_runner(func: Callable, *args):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func, *args)
+
+
 async def saving_function(data: Any, saver: AbstractBaseSaver, *args: str):
     """
     Funcion that actually peforms all saving.  All objects wishing to
@@ -228,8 +233,14 @@ class MongoSaver(AbstractBaseSaver):
     def save_many(self, data: list[dict[str, Any]]) -> None:
         self.collection.insert_many(data)
 
-    def read(self) -> list:
-        return [i for i in self.collection.find()]
+    def read(self, query: Optional[dict] = None) -> list:
+        if query is None:
+            query = {}
+        return [i for i in self.collection.find(query)]
+
+    def read_latest(self) -> dict:
+        log.debug(f"{self} will read latest.")
+        return self.collection.find_one({"$query": {}, "$orderby": {"$natural": -1}})
 
     def __repr__(self) -> str:
         return f"MongoBlotter(db={self.db}, collection={self.collection})"

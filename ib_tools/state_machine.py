@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 import ib_insync as ibi
 
-from ib_tools.saver import MongoSaver, SaveManager
+from ib_tools.saver import MongoSaver, SaveManager, async_runner
 
 from .base import Atom
 from .misc import Lock, Signal, decode_tree, sign, tree
@@ -44,10 +44,9 @@ class OrderInfo:
         }
 
     def decode(self, data: dict[str, Any]) -> None:
-        data_ = decode_tree(data)
-        data_.pop("actve")
-        data_.pop("orderId")
-        self.__dict__.update(**data_)
+        data.pop("actve")
+        data.pop("orderId")
+        self.__dict__.update(**data)
 
 
 class OrderContainer(UserDict):
@@ -73,10 +72,51 @@ class OrderContainer(UserDict):
                 return value
         return default
 
+    def decode(self, data: dict) -> None:
+        try:
+            log.debug(f"{self} will decode data: {len(data.keys())} keys.")
+        except Exception:
+            log.debug(f"data for decoding: {data}")
+
+        decoded = decode_tree(data)
+        for k, v in decoded.items():
+            try:
+                v.pop("_id")
+            except KeyError:
+                pass
+            self[k].decode(v)
+
+    def __repr__(self) -> str:
+        return f"OrderContainer(max_size={self.max_size})"
+
 
 class ExecModelContainer(dict):
     def encode(self) -> dict[str, Any]:
         return tree({k: v.encode() for k, v in self.items()})
+
+    def decode(self, data: dict) -> None:
+        try:
+            log.debug(f"{self} will decode data: {len(data.keys())} keys.")
+        except Exception:
+            log.debug(f"data for decoding: {data}")
+
+        decoded = decode_tree(data)
+
+        try:
+            decoded.pop("_id")
+        except KeyError:
+            pass
+
+        for k, v in decoded.items():
+            self[k].decode(v)
+
+    def __repr__(self) -> str:
+        return "ExecModelContainer()"
+
+
+# Consider allowing for use of different savers
+model_saver = MongoSaver("models")
+order_saver = MongoSaver("orders", query_key="orderId")
 
 
 class StateMachine(Atom):
@@ -131,9 +171,8 @@ class StateMachine(Atom):
 
     _instance: Optional["StateMachine"] = None
 
-    # TODO: determined by CONFIG
-    save_order = SaveManager(MongoSaver("orders", query_key="orderId"))
-    save_model = SaveManager(MongoSaver("models"))
+    save_order = SaveManager(order_saver)
+    save_model = SaveManager(model_saver)
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -202,10 +241,11 @@ class StateMachine(Atom):
 
         return unresolved_trades
 
-    def restore_from_store(self):
-        # self.data
-        # self.orders
-        pass
+    async def read_from_store(self):
+        model_data = await async_runner(model_saver.read_latest)
+        order_data = await async_runner(order_saver.read, {"active": True})
+        self.data.decode(model_data)
+        self.orders.decode(order_data)
 
     def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
         """

@@ -88,6 +88,10 @@ class Controller:
         self.ib = ib or IB
         self.trader = trader or Trader(self.ib)
 
+        # TODO: this should be read from config
+        self.cold_restart = False
+
+        # these are essential events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.onOrderStatusEvent)
@@ -98,6 +102,7 @@ class Controller:
         log.debug(f"Controller initiated: {self}")
 
     def _attach_logging_events(self):
+        # these are non-essential events
         self.ib.newOrderEvent += self.log_new_order
         self.ib.cancelOrderEvent += self.log_cancel
         self.ib.orderModifyEvent += self.log_modification
@@ -106,19 +111,27 @@ class Controller:
     async def init(self, *args, **kwargs) -> None:
         log.debug("Controller init...")
 
+        if self.cold_restart:
+            self.cold_restart = False
+        else:
+            try:
+                await self.sm.read_from_store()
+            except Exception as e:
+                log.exception(e)
+
         try:
             unknown, matched, unmatched = ReStartSyncStrategy.run()
             log.debug(
                 f"Trades on re-start - unknown: {len(unknown)}, "
                 f"matched: {len(matched)}, unmatched: {len(unmatched)}"
             )
-        except Exception:
-            log.exception(Exception)
+        except Exception as e:
+            log.exception(e)
             raise
 
         # update order records with current Trade objects
         for error_trade in unknown:
-            log.critical(f"Unknow trade in the system: {error_trade}. We are fucked...")
+            log.critical(f"Unknow trade in the system: {error_trade}.")
 
         # From here IB events will be handled...
         self.hold = False
@@ -131,7 +144,7 @@ class Controller:
 
         # don't know what to do with that yet:
         for trade in unmatched:
-            log.debug(f"Don't know how to handle trade: {trade}. We are fucked...")
+            log.error(f"!!!!!!!!!!! Don't know how to handle trade: {trade} !!!!!!!!")
 
     def report_unresolved_trade(self, trade: ibi.Trade):
         log.debug(
@@ -145,9 +158,6 @@ class Controller:
             trade, trade.fills[-1], trade.fills[-1].commissionReport
         )
 
-    def restart(self):
-        self.sm.restore_from_backup()
-
     def config(
         self,
         blotter: Optional[Blotter] = None,
@@ -159,8 +169,6 @@ class Controller:
             self.ib.commissionReportEvent += self.onCommissionReport
         if log_events:
             self._attach_logging_events()
-        if not cold_restart:
-            self.restart()
         log.debug(f"Config done: {self}")
 
     def trade(
