@@ -5,7 +5,7 @@ import logging
 from collections import UserDict, defaultdict
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import TYPE_CHECKING, Any, Iterator, Optional
+from typing import Any, Iterator, Optional, Union
 
 import ib_insync as ibi
 
@@ -13,10 +13,6 @@ from ib_tools.saver import MongoSaver, SaveManager, async_runner
 
 from .base import Atom
 from .misc import Lock, Signal, decode_tree, sign, tree
-
-if TYPE_CHECKING:
-    from .execution_models import AbstractExecModel
-
 
 log = logging.getLogger(__name__)
 
@@ -44,9 +40,13 @@ class OrderInfo:
         }
 
     def decode(self, data: dict[str, Any]) -> None:
-        data.pop("actve")
-        data.pop("orderId")
+        data.pop("active")
         self.__dict__.update(**data)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> OrderInfo:
+        data.pop("active")
+        return cls(**data)
 
 
 class OrderContainer(UserDict):
@@ -74,25 +74,56 @@ class OrderContainer(UserDict):
 
     def decode(self, data: dict) -> None:
         try:
-            log.debug(f"{self} will decode data: {len(data.keys())} keys.")
+            log.debug(f"{self} will decode data: {len(data)} items.")
         except Exception:
-            log.debug(f"data for decoding: {data}")
+            log.debug(f"{self} data for decoding: {data}")
 
         decoded = decode_tree(data)
-        for k, v in decoded.items():
-            try:
-                v.pop("_id")
-            except KeyError:
-                pass
-            self[k].decode(v)
+
+        for item in decoded:
+            item.pop("_id")
+            orderId = item.pop("orderId")
+            if existing := self.data.get(orderId):
+                existing.decode(item)
+            else:
+                self.data[orderId] = OrderInfo.from_dict(item)
+            log.debug(
+                f"Order for : {item['trade'].order.orderId} "
+                f"{item['trade'].contract.symbol} decoded."
+            )
 
     def __repr__(self) -> str:
         return f"OrderContainer(max_size={self.max_size})"
 
 
-class ExecModelContainer(dict):
+class Model(dict):
+    def __getattr__(self, key):
+        return self.get(key)
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    def __delattr__(self, key):
+        self.__delitem__(key)
+
+    def __repr__(self) -> str:
+        return "Model()"
+
+
+class ModelContainer(UserDict):
+    def __setitem__(self, key: str, item: dict):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"{self.__class__.__qualname__} can be used to store only dicts."
+            )
+        self.data[key] = Model(item)
+
+    def __missing__(self, key):
+        self.data[key] = Model()
+        return self.data[key]
+
     def encode(self) -> dict[str, Any]:
-        return tree({k: v.encode() for k, v in self.items()})
+        return tree(self.data)
 
     def decode(self, data: dict) -> None:
         try:
@@ -105,13 +136,12 @@ class ExecModelContainer(dict):
         try:
             decoded.pop("_id")
         except KeyError:
-            pass
+            log.warning("It's weird, no '_id' in data from mongo.")
 
-        for k, v in decoded.items():
-            self[k].decode(v)
+        self.data.update(**decoded)
 
     def __repr__(self) -> str:
-        return "ExecModelContainer()"
+        return "ModelContainer()"
 
 
 # Consider allowing for use of different savers
@@ -184,7 +214,7 @@ class StateMachine(Atom):
     def __init__(self) -> None:
         super().__init__()
 
-        self.data = ExecModelContainer()  # dict of ExecModel
+        self.data = ModelContainer()  # dict of ExecModel data
         self.orders = OrderContainer()  # dict of OrderInfo
 
     def update_trades(self, *trades: ibi.Trade) -> list[ibi.Trade]:
@@ -200,7 +230,7 @@ class StateMachine(Atom):
                 new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
                 self.orders[trade.order.orderId] = new_oi
                 self.save_order(new_oi.encode())
-                # TODO: What about trades that became incactive while disconnected?
+                # TODO: What about trades that became inactive while disconnected?
             else:
                 log.debug(f"Error trade: {trade}")
                 error_trades.append(trade)
@@ -214,7 +244,7 @@ class StateMachine(Atom):
         Args:
         -----
 
-        *trades - list of open trades from :meth:`ibi.openTrades()`.
+        *trades - list of open trades from :meth:`ibi.IB.openTrades()`.
 
         Returns:
         --------
@@ -233,29 +263,30 @@ class StateMachine(Atom):
                     # but IB doesn't have it in open orders
                     # we have to figure out what happened to this trade
                     # while we were disconnected and report it as appropriate
-                    unresolved_trades.append(oi)
+                    unresolved_trades.append(oi.trade)
                 else:
                     # this order is no longer of interest
                     # it's inactive in our orders and inactive in IB
                     self.orders.pop(orderId)
-
         return unresolved_trades
+
+    def override_inactive_trades(self, *trades: ibi.Trade) -> None:
+        """
+        Trades that we have as active but IB doesn't know about them.
+        Used for cold restarts.
+        """
+        for trade in trades:
+            log.debug(f"Will delete trade: {trade.order.orderId}")
+            oi_dict = self.orders[int(trade.order.orderId)].encode()
+            oi_dict.update({"active": False})
+            self.save_order(oi_dict)
+            del self.orders[int(trade.order.orderId)]
 
     async def read_from_store(self):
         model_data = await async_runner(model_saver.read_latest)
         order_data = await async_runner(order_saver.read, {"active": True})
         self.data.decode(model_data)
         self.orders.decode(order_data)
-
-    def onStart(self, data: dict[str, Any], *args: AbstractExecModel) -> None:
-        """
-        Register all strategies that are in use.
-        """
-
-        strategy = data["strategy"]
-        exec_model, *_ = args
-        self.data[strategy] = exec_model
-        log.log(5, f"Registered execution models {list(self.data.keys())}")
 
     async def onData(self, data, *args) -> None:
         """
@@ -267,7 +298,6 @@ class StateMachine(Atom):
             strategy = data["strategy"]
             amount = data["amount"]
             target_position = data["target_position"]
-            # exec_model = data["exec_model"]
             await asyncio.sleep(15)
             self.verify_transaction_integrity(strategy, amount, target_position)
         except KeyError:
@@ -285,16 +315,16 @@ class StateMachine(Atom):
         Is the postion resulting from transaction the same as was
         required?
         """
-        exec_model = self.data.get(strategy)
-        if exec_model:
+        data = self.data.get(strategy)
+        if data:
             log.debug(
-                f"Transaction OK? ->{sign(exec_model.position) == target_position}<- "
+                f"Transaction OK? ->{sign(data.position) == target_position}<- "
                 f"target_position: {target_position}, "
-                f"position: {sign(exec_model.position)}"
-                f"->> {exec_model.strategy}"
+                f"position: {sign(data.position)}"
+                f"->> {strategy}"
             )
             try:
-                assert sign(exec_model.position) == target_position
+                assert sign(data.position) == target_position
                 # Investigate why this may be necessary:
                 # assert exec_model.position == abs(amount)
             except AssertionError:
@@ -303,11 +333,7 @@ class StateMachine(Atom):
             log.critical(f"Attempt to trade for unknow strategy: {strategy}")
 
     def register_order(
-        self,
-        strategy: str,
-        action: str,
-        trade: ibi.Trade,
-        exec_model: AbstractExecModel,
+        self, strategy: str, action: str, trade: ibi.Trade, data: Model
     ) -> None:
         """
         Register order, register lock, verify that position has been registered.
@@ -320,7 +346,7 @@ class StateMachine(Atom):
 
         This method is called by :class:`Controller`.
         """
-        params = exec_model.params.get(action.lower(), {})
+        params = data["params"].get(action.lower(), {})
         order_info = OrderInfo(strategy, action, trade, params)
         self.orders[trade.order.orderId] = order_info
         log.debug(
@@ -329,9 +355,7 @@ class StateMachine(Atom):
         )
 
         if action.upper() == "OPEN":
-            trade.filledEvent += partial(
-                self.new_position_callbacks, exec_model.strategy
-            )
+            trade.filledEvent += partial(self.new_position_callbacks, strategy)
 
         self.save_order(order_info.encode())
         self.save_model(self.data.encode())
@@ -354,8 +378,9 @@ class StateMachine(Atom):
         return order_info
 
     def report_new_order(self, trade: ibi.Trade) -> None:
-        log.debug("Reporting new order.")
-        self.save_model(self.data.encode())
+        # log.debug("Reporting new order.")
+        # self.save_model(self.data.encode())
+        pass
 
     def get_order(self, orderId: int) -> Optional[OrderInfo]:
         return self.orders.get(orderId)
@@ -363,7 +388,7 @@ class StateMachine(Atom):
     def delete_order(self, orderId: int) -> None:
         del self.orders[orderId]
 
-    def get_strategy(self, strategy: str) -> Optional[AbstractExecModel]:
+    def get_strategy(self, strategy: str) -> Optional[Model]:
         return self.data.get(strategy)
 
     def position(self, strategy: str) -> float:
@@ -373,11 +398,11 @@ class StateMachine(Atom):
         """
         # Verify that broker's position records are the same as mine
 
-        exec_model = self.data.get(strategy)
-        assert exec_model
+        data = self.data.get(strategy)
+        assert data
 
-        if exec_model.position:
-            return exec_model.position
+        if data.position:
+            return data.position
 
         # Check not only position but pending position openning orders
         elif orders := self.orders.strategy(strategy):
@@ -397,9 +422,11 @@ class StateMachine(Atom):
                     )
         return 0.0
 
-    def verify_position_for_contract(self, contract):
-        my_position = self.position_for_contract[contract]
-        ib_position = self.ib_position_for_contract[contract]
+    def verify_position_for_contract(self, contract) -> Union[bool, float]:
+        # NOT IN USE
+        my_position = self.position_for_contract(contract)
+        ib_position = self.ib_position_for_contract(contract)
+        return (my_position == ib_position) or (my_position - ib_position)
 
     def locked(self, strategy: str) -> Lock:
         return self.data[strategy].lock
@@ -417,15 +444,14 @@ class StateMachine(Atom):
 
     def total_positions(self) -> defaultdict[ibi.Contract, float]:
         d: defaultdict[ibi.Contract, float] = defaultdict(float)
-        for exec_model in self.data.values():
-            if exec_model.active_contract:
-                d[exec_model.active_contract] += exec_model.position
+        for data in self.data.values():
+            if data.active_contract:
+                d[data.active_contract] += data.position
         log.debug(f"Total positions: {d}")
         return d
 
     def verify_positions(self) -> list[ibi.Contract]:
         """
-        NOT IN USE
         Compare positions actually held with broker with position
         records.  Return differences if any and log an error.
         """
@@ -453,11 +479,6 @@ class StateMachine(Atom):
     def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
         # When exactly should the lock be registered to prevent double-dip?
         self.register_lock(strategy, trade)
-
-    # ###
-
-    # def register_cancel(self, trade, exec_model):
-    #     del self.orders[trade.order.orderId]
 
     def __repr__(self):
         return self.__class__.__name__ + "()"

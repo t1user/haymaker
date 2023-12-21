@@ -14,12 +14,12 @@ from .trader import Trader
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
-    from .state_machine import StateMachine
+    from .state_machine import Model, StateMachine
 
 log = logging.getLogger(__name__)
 
 
-class ReStartSyncStrategy:
+class OrderSyncStrategy:
     def __init__(self) -> None:
         # IB has trades that we don't know about
         self.unknown_trades: list[ibi.Trade] = []  # <-We're fucked
@@ -66,6 +66,25 @@ class ReStartSyncStrategy:
         return self.unknown_trades, self.matched_trades, self.unmatched_trades
 
 
+class PositionSyncStrategy:
+    """
+    Must be called after :class:`.OrderSyncStrategy`
+    """
+
+    def __init__(self):
+        self.errors = []
+
+    @classmethod
+    def run(cls):
+        return cls().verify_positions().report()
+
+    def verify_positions(self):
+        self.errors = STATE_MACHINE.verify_positions()
+
+    def report(self):
+        return self.errors
+
+
 class Controller:
     """
     Intermediary between execution models (which are off ramps for
@@ -89,7 +108,8 @@ class Controller:
         self.trader = trader or Trader(self.ib)
 
         # TODO: this should be read from config
-        self.cold_restart = False
+        # desired value assigned in self.config
+        self.cold_start = True
 
         # these are essential events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent)
@@ -111,16 +131,17 @@ class Controller:
     async def init(self, *args, **kwargs) -> None:
         log.debug("Controller init...")
 
-        if self.cold_restart:
-            self.cold_restart = False
+        if self.cold_start:
+            self.cold_start = False
         else:
             try:
+                log.debug("Reading from store...")
                 await self.sm.read_from_store()
             except Exception as e:
                 log.exception(e)
 
         try:
-            unknown, matched, unmatched = ReStartSyncStrategy.run()
+            unknown, matched, unmatched = OrderSyncStrategy.run()
             log.debug(
                 f"Trades on re-start - unknown: {len(unknown)}, "
                 f"matched: {len(matched)}, unmatched: {len(unmatched)}"
@@ -136,15 +157,20 @@ class Controller:
         # From here IB events will be handled...
         self.hold = False
         log.debug("hold released")
-
-        # so that matched trades can be sent to blotter
+        # ...so that matched trades can be sent to blotter
 
         for trade in matched:
             self.report_unresolved_trade(trade)
 
         # don't know what to do with that yet:
-        for trade in unmatched:
-            log.error(f"!!!!!!!!!!! Don't know how to handle trade: {trade} !!!!!!!!")
+        if self.cold_start:
+            self.sm.override_inactive_trades(*unmatched)
+        else:
+            for trade in unmatched:
+                log.error(f"We have trade that IB doesn't know about: {trade}")
+
+        if error_positions := PositionSyncStrategy.run():
+            log.critical(f"Wrong positions on restart: {error_positions}")
 
     def report_unresolved_trade(self, trade: ibi.Trade):
         log.debug(
@@ -162,27 +188,27 @@ class Controller:
         self,
         blotter: Optional[Blotter] = None,
         log_events: bool = False,
-        cold_restart: bool = True,
+        cold_start: bool = True,
     ) -> None:
         if blotter:
             self.blotter = blotter
             self.ib.commissionReportEvent += self.onCommissionReport
         if log_events:
             self._attach_logging_events()
+        self.cold_start = cold_start
         log.debug(f"Config done: {self}")
 
     def trade(
         self,
+        strategy: str,
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
-        exec_model: AbstractExecModel,
+        data: Model,
     ) -> ibi.Trade:
         trade = self.trader.trade(contract, order)
-        self.sm.register_order(exec_model.strategy, action, trade, exec_model)
-        trade.filledEvent += partial(
-            self.log_trade, reason=action, strategy=exec_model.strategy
-        )
+        self.sm.register_order(strategy, action, trade, data)
+        trade.filledEvent += partial(self.log_trade, reason=action, strategy=strategy)
         return trade
 
     def cancel(
@@ -351,33 +377,33 @@ class Controller:
             )
 
     def register_position(
-        self, strategy: AbstractExecModel, trade: ibi.Trade, fill: ibi.Fill
+        self, strategy: str, model: Model, trade: ibi.Trade, fill: ibi.Fill
     ) -> None:
         if fill.execution.side == "BOT":
-            strategy.position += fill.execution.shares
+            model.position += fill.execution.shares
             log.debug(
                 f"Registered {trade.order.orderId} BUY {trade.order.orderType} "
-                f"for {strategy.strategy} --> position: {strategy.position}"
+                f"for {strategy} --> position: {model.position}"
             )
         elif fill.execution.side == "SLD":
-            strategy.position -= fill.execution.shares
+            model.position -= fill.execution.shares
             log.debug(
                 f"Registered {trade.order.orderId} SELL {trade.order.orderType} "
-                f"for {strategy.strategy} --> position: {strategy.position}"
+                f"for {strategy} --> position: {model.position}"
             )
         else:
             log.critical(
                 f"Abiguous fill: {fill} for order: {trade.order} for "
-                f"{trade.contract.localSymbol} strategy: {strategy.strategy}"
+                f"{trade.contract.localSymbol} strategy: {strategy}"
             )
 
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         order_info = self.sm.get_order(trade.order.orderId)
         if order_info:
             strategy = order_info.strategy
-        exec_model = self.sm.get_strategy(strategy)
-        if exec_model:
-            self.register_position(exec_model, trade, fill)
+        model = self.sm.get_strategy(strategy)
+        if model:
+            self.register_position(strategy, model, trade, fill)
         else:
             log.critical(f"Unknow trade: {trade}")
 

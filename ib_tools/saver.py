@@ -215,20 +215,17 @@ class MongoSaver(AbstractBaseSaver):
 
     def save(self, data: dict[str, Any], *args) -> None:
         try:
-            log.debug("WILL SAVE OBJECT")
             if self.query_key and (key := data.get(self.query_key)):
-                log.debug("UPDATE ONE")
                 result = self.collection.update_one(
                     {self.query_key: key}, {"$set": data}, upsert=True
                 )
             else:
-                log.debug("INSERT ONE")
                 result = self.collection.insert_one(data)
         except Exception:
             log.exception(Exception)
             log.debug(f"Data that caused error: {data}")
             raise
-        log.debug(f"RESULT: {result}")
+        log.debug(f"{self}: transaction result: {result}")
 
     def save_many(self, data: list[dict[str, Any]]) -> None:
         self.collection.insert_many(data)
@@ -242,5 +239,8 @@ class MongoSaver(AbstractBaseSaver):
         log.debug(f"{self} will read latest.")
         return self.collection.find_one({"$query": {}, "$orderby": {"$natural": -1}})
 
+    def delete(self, query: dict) -> None:
+        log.debug(f"Will delete data: {query}")
+
     def __repr__(self) -> str:
-        return f"MongoBlotter(db={self.db}, collection={self.collection})"
+        return f"MongoSaver(db={self.db}, collection={self.collection})"

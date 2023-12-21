@@ -35,8 +35,8 @@ def pipe(df_brick, data_for_df, portfolio):  # noqa
     class FakeController:
         out = None
 
-        def trade(self, contract, order, action, exec_model):
-            self.out = contract, order, action, exec_model
+        def trade(self, strategy, contract, order, action, data):
+            self.out = strategy, contract, order, action, data
 
     controller = FakeController()
     # signal is 1, contract is NQ
@@ -49,6 +49,10 @@ def pipe(df_brick, data_for_df, portfolio):  # noqa
 
     class SourceAtom(Atom):
         def run(self):
+            # this should ensure setting "strategy" attr on exec_model
+            # brick has this attr so it will emit it on start
+            # and every subsequent Atom down the chain should set it on start
+            self.startEvent.emit({})
             self.dataEvent.emit(data_for_df)
 
     source = SourceAtom()
@@ -59,36 +63,43 @@ def pipe(df_brick, data_for_df, portfolio):  # noqa
     return controller.out
 
 
-def test_exec_model_is_exec_model(pipe):
-    contract, order, action, exec_model = pipe
-    assert isinstance(exec_model, EventDrivenExecModel)
+def test_strategy_is_strategy(pipe):
+    strategy, contract, order, action, data = pipe
+    # this is the strategy that was set on Brick object
+    assert strategy == "eska_NQ"
+
+
+def test_data_is_dict(pipe):
+    strategy, contract, order, action, data = pipe
+
+    assert isinstance(data, dict)
 
 
 def test_contract_is_contract(pipe):
-    contract, order, action, exec_model = pipe
+    strategy, contract, order, action, data = pipe
     assert isinstance(contract, ibi.Contract)
 
 
 def test_required_fields_in_data_present(pipe):
-    _, _, _, exec_model = pipe
-    data = exec_model.params["open"]
+    _, _, _, _, data = pipe
+    data_ = data.params["open"]
     assert set(["strategy", "contract", "amount", "signal", "action"]).issubset(
-        set(data.keys())
+        set(data_.keys())
     )
 
 
 def test_order_is_order(pipe):
-    _, order, _, _ = pipe
+    _, _, order, _, _ = pipe
     assert isinstance(order, ibi.Order)
 
 
 def test_order_is_a_buy_order(pipe):
-    _, order, _, __ = pipe
+    _, _, order, _, _ = pipe
     assert order.action == "BUY"
 
 
 def test_order_is_for_one_contract(pipe):
-    _, order, _, __ = pipe
+    _, _, order, _, __ = pipe
     assert order.totalQuantity == 1
 
 
@@ -108,7 +119,6 @@ def new_setup():
         trade_object = None
 
         def trade(self, *args, **kwargs):
-            print(f"trade received: {args} {kwargs}")
             self.trade_object = super().trade(*args, **kwargs)
 
     ib = ibi.IB()
@@ -153,7 +163,7 @@ def test_buy_position_registered(new_setup):
     )
     ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
 
-    assert em.position == 1
+    assert em.data.position == 1
 
 
 def test_sell_position_registered(new_setup):
@@ -183,4 +193,4 @@ def test_sell_position_registered(new_setup):
     )
     ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
 
-    assert em.position == -1
+    assert em.data.position == -1

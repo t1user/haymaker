@@ -75,35 +75,33 @@ class AbstractExecModel(Atom, ABC):
         controller: Optional[Controller] = None,
     ) -> None:
         super().__init__()
-        self.active_contract: Optional[ibi.Contract] = None
-        self.position: float = 0.0
-        self.strategy: str = ""
-        self.params: dict[str, Any] = {}
-        self.lock: misc.Lock = 0
+        # self.data: Model = Model()  # this is just a placeholder, defined in onStart
+        self.strategy: str = ""  # placeholder, defined in onStart
         self.controller = controller or CONTROLLER
-        self._attrs = [
-            "active_contract",
-            "position",
-            "strategy",
-            "params",
-            "lock",
-            "position_id",
-        ]
 
         if orders:
             for key, order_kwargs in orders.items():
                 setattr(self, key, order_kwargs)
 
-        self.position_id = ""  # 0
         self.connect_state_machine()
 
     def connect_state_machine(self):
         self += STATE_MACHINE
 
+    def onStart(self, data, *args) -> None:
+        super().onStart(data, *args)
+        # super just set strategy, only now subsequent is possible
+        self.data = STATE_MACHINE.data[self.strategy]
+        self.data.active_contract = None
+        self.data.position = 0.0
+        self.data.params = {}
+        self.data.lock = 0
+        self.data.position_id = ""  # 0
+
     def get_position_id(self, reset=False):
-        if reset or not self.position_id:
-            self.position_id = misc.COUNTER()  # int(uuid4())
-        return self.position_id
+        if reset or not self.data.position_id:
+            self.data.position_id = misc.COUNTER()  # int(uuid4())
+        return self.data.position_id
 
     def _order(self, key: OrderKey, params: dict) -> ibi.Order:
         """
@@ -150,7 +148,7 @@ class AbstractExecModel(Atom, ABC):
         :class:`ibi.Contract` that has been used.
 
         Must keep track of current position in the market by updating
-        :attr:`self.position`.
+        :attr:`self.data.position`.
 
         Args:
         =====
@@ -171,12 +169,6 @@ class AbstractExecModel(Atom, ABC):
         # TODO: what if more than one order issued????
         super().onData(data)
         self.dataEvent.emit(data)
-
-    def encode(self):
-        return misc.tree({k: getattr(self, k) for k in self._attrs})
-
-    def decode(self, data: dict):
-        self.__dict__.update(**data)
 
 
 class BaseExecModel(AbstractExecModel):
@@ -224,12 +216,7 @@ class BaseExecModel(AbstractExecModel):
         order: ibi.Order,
         action: str,
     ) -> ibi.Trade:
-        return self.controller.trade(
-            contract,
-            order,
-            action,
-            self,
-        )
+        return self.controller.trade(self.strategy, contract, order, action, self.data)
 
     def cancel(self, trade: ibi.Trade) -> None:
         self.controller.cancel(trade, self)
@@ -246,7 +233,7 @@ class BaseExecModel(AbstractExecModel):
             else:
                 return self.ticker
         else:
-            log.info(f"No subscription for live ticker {self.active_contract}")
+            log.info(f"No subscription for live ticker {self.data.active_contract}")
 
     def get_ticker(self, contract) -> Optional[ibi.Ticker]:
         for t in self.ib.tickers():
@@ -287,16 +274,16 @@ class BaseExecModel(AbstractExecModel):
         data: dict,
         dynamic_order_kwargs: Optional[dict] = None,
     ) -> ibi.Trade:
-        self.params["close"] = {}
+        self.data.params["close"] = {}
         data["position_id"] = self.get_position_id(True)
-        self.params["open"] = data
+        self.data.params["open"] = data
         try:
             contract = data["contract"]
             signal = data["signal"]
             amount = int(data["amount"])
         except KeyError:
             log.exception("Insufficient data to execute OPEN transaction")
-        self.active_contract = contract
+        self.data.active_contract = contract
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         if dynamic_order_kwargs:
             order_kwargs.update(dynamic_order_kwargs)
@@ -312,34 +299,34 @@ class BaseExecModel(AbstractExecModel):
         data: dict,
         dynamic_order_kwargs: Optional[dict] = None,
     ) -> Optional[ibi.Trade]:
-        self.params["close"] = data
+        self.data.params["close"] = data
         data["position_id"] = self.get_position_id()
         # THIS IS TEMPORARY ----> FIX ---> TODO
-        if self.position == 0:
+        if self.data.position == 0:
             log.error(
-                f"Abandoning CLOSE position for {self.active_contract} "
+                f"Abandoning CLOSE position for {self.data.active_contract} "
                 f"(No position, but close signal)"
             )
             return None
 
-        signal = -misc.sign(self.position)
+        signal = -misc.sign(self.data.position)
 
         order_kwargs = {
             "action": misc.action(signal),
-            "totalQuantity": abs(self.position),
+            "totalQuantity": abs(self.data.position),
         }
         if dynamic_order_kwargs:
             order_kwargs.update(dynamic_order_kwargs)
         order = self._order("close_order", order_kwargs)
-        assert self.active_contract is not None
+        assert self.data.active_contract is not None
         log.debug(
-            f"{self.strategy} {self.active_contract.localSymbol} "
-            f"processing CLOSE signal {signal}, current position: {self.position},"
+            f"{self.strategy} {self.data.active_contract.localSymbol} "
+            f"processing CLOSE signal {signal}, current position: {self.data.position},"
             f" order: {order_kwargs['action']} {order_kwargs['totalQuantity']}",
             extra={"data": data},
         )
         return self.trade(
-            self.active_contract,
+            self.data.active_contract,
             order,
             "CLOSE",
         )
@@ -386,11 +373,12 @@ class EventDrivenExecModel(BaseExecModel):
             )
         self.stop = stop
         self.take_profit = take_profit
-        self.brackets: dict[str, Bracket] = {}
         self.oca_group_generator = lambda: str(uuid4())
-        self.oca_group: Optional[str] = None
         super().__init__(orders, controller=controller)
-        self._attrs.extend(["brackets", "oca_group"])
+
+    def onStart(self, data, *args):
+        super().onStart(data, *args)
+        self.data.brackets = {}
 
     def open(
         self,
@@ -404,7 +392,7 @@ class EventDrivenExecModel(BaseExecModel):
         attach_bracket = partial(self._attach_bracket, params=data)
 
         # reset any previous oca_group settings
-        self.oca_group = None
+        self.data.oca_group = None
 
         trade = super().open(data)
 
@@ -423,8 +411,10 @@ class EventDrivenExecModel(BaseExecModel):
         return super().close(data, self._dynamic_bracket_kwargs())
 
     def _dynamic_bracket_kwargs(self) -> dict[str, Any]:
-        self.oca_group = self.oca_group or self.oca_group_generator()
-        return {"ocaGroup": self.oca_group, "ocaType": 1}
+        self.data.oca_group = (
+            self.data.get("oca_group", None) or self.oca_group_generator()
+        )
+        return {"ocaGroup": self.data.oca_group, "ocaType": 1}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
         # called once for sl/tp pair! Don't put inside the for loop!
@@ -445,7 +435,7 @@ class EventDrivenExecModel(BaseExecModel):
                         "bracket_timestamp": datetime.now(timezone.utc),
                     }
                 )
-                self.params[label.lower()] = memo
+                self.data.params[label.lower()] = memo
                 order = self._order(cast(OrderKey, order_key), bracket_kwargs)
 
                 bracket_trade = self.trade(
@@ -453,7 +443,7 @@ class EventDrivenExecModel(BaseExecModel):
                     order,
                     label,
                 )
-                self.brackets[str(bracket_trade.order.orderId)] = Bracket(
+                self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
                     cast(BracketLabel, label),
                     cast(OrderKey, order_key),
                     bracket_kwargs,
@@ -466,9 +456,9 @@ class EventDrivenExecModel(BaseExecModel):
         is missing.
         """
 
-        for orderId, bracket in self.brackets.copy().items():
+        for orderId, bracket in self.data.brackets.copy().items():
             log.info(f"attempt to re-attach bracket {bracket}")
-            del self.brackets[orderId]
+            del self.data.brackets[orderId]
             self._place_bracket(
                 bracket.trade.contract,
                 bracket.order_key,
