@@ -1,0 +1,95 @@
+open_order:
+  orderType: MKT
+  algoStrategy: Adaptive
+  algoParams:
+  - !!python/object/apply:ib_insync.TagValue
+      - adaptivePriority
+      - Normal
+  tif: Day
+  outsideRth: True
+    
+close_order:
+  orderType: MKT
+  tif: GTC
+  outsideRth: True
+    
+stop_order:
+  orderType: TRAIL
+  outsideRth: True
+  tif: GTC
+
+tp_order:
+  orderType: MKT
+  algoStrategy: Adaptive
+  algoParams:
+  - !!python/object/apply:ib_insync.TagValue
+      - adaptivePriority
+      - Normal
+  outsideRth: True
+
+data_folder:
+  ib_data # folder inside home folder, will be created if doesn't exist
+
+
+app:
+  host: 127.0.0.1
+  port: 4002
+  clientId: 0 # do not change
+  appStartupTime: 0
+  appTimeout: 20
+  retryDelay: 2
+  probeContract:
+    !!python/object/apply:ib_insync.Forex
+      - EURUSD
+  probeTimeout: 4
+
+  
+streamers:
+  timeout:
+    debug: False
+    timeout: 300
+
+blotter_save_immediately: True
+coldstart: False
+
+# consider making this a dict of params passed to blotter to instantiate the class
+blotter_saver:
+  !!python/object/apply:ib_tools.saver.CsvSaver
+   - blotter
+   - blotter
+  # alternative:
+  # args: []
+  # kwds: {folder: blotter, note: blotter}
+  # !!python/object/apply:ib_tools.saver.MongoSaver
+  # kwds: {collection: blotter}
+    
+  
+ArcticSaver:
+  host: localhost
+  library: test_log
+  note: ""
+  timestamp: False
+
+  
+MongoSaver:
+  host: localhost
+  port: 27017
+  db: test_data
+  
+
+
+dataloader:
+  file: contracts.csv
+  barSize: 30secs
+  wts: TRADES
+  aggression: 2
+  continuous_futures_only: True
+  watchdog: False
+
+  
+
+  
+  
+
+
+
