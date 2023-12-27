@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import ib_insync as ibi
 
-from ib_tools.saver import CsvSaver, SaveManager
+from ib_tools.config import CONFIG
+from ib_tools.saver import CsvSaver, MongoSaver, SaveManager  # noqa
 
 log = logging.getLogger(__name__)
 
 
-BLOTTER_SAVER = CsvSaver(
-    folder="blotter", note="blotter"
-)  # TODO: this has to be read from CONFIG
+blotter_dict = cast(dict, CONFIG.get("blotter_saver"))
+blotter_class = blotter_dict["class"]
+blotter_kwargs = blotter_dict["kwds"]
+BLOTTER_SAVER = eval(f"{blotter_class}(**{blotter_kwargs})")
 
 
 class Blotter:
@@ -25,18 +27,20 @@ class Blotter:
     to be logged and filter out some known issues with ib-insync reports.
 
     Blotter works in one of two modes:
-    - trade by trades save to store: suitable for live trading
+    - trade by trade save to store: suitable for live trading
     - save to store only full blotter: suitable for backtest (save time
       on i/o)
     """
 
     save = SaveManager(BLOTTER_SAVER)
 
-    def __init__(self, save_immediately: bool = True) -> None:
+    def __init__(self, save_immediately: bool = True, *args, **kwargs) -> None:
+        # this option should be False for backtester, True otherwise
         self.save_immediately = save_immediately
         self.blotter: list[dict] = []
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
+        log.debug(f"Blotter initiated: {self}")
 
     def log_trade(
         self, trade: ibi.Trade, comms: list[ibi.CommissionReport], **kwargs
@@ -108,4 +112,6 @@ class Blotter:
         BLOTTER_SAVER.save_many(self.blotter)
 
     def __repr__(self):
-        return f"Blotter(save_immediately={self.save_immediately})"
+        return (
+            f"Blotter(save_immediately={self.save_immediately}, saver={BLOTTER_SAVER})"
+        )

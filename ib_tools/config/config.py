@@ -8,7 +8,7 @@ import os
 import sys
 from collections import ChainMap
 from pathlib import Path
-from typing import Optional
+from typing import Final, Optional
 
 import yaml
 
@@ -84,3 +84,6 @@ def get_options(argv: list[str] = sys.argv[1:]) -> ChainMap:
 
     combined = ChainMap(vars(cmdline), config_file, os.environ, defaults)
     return combined
+
+
+CONFIG: Final[Config] = Config()

@@ -13,6 +13,7 @@ import ib_insync as ibi
 
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import AbstractBracketLeg
+from ib_tools.config import CONFIG
 from ib_tools.controller import CONTROLLER, Controller
 from ib_tools.manager import STATE_MACHINE
 
@@ -75,7 +76,6 @@ class AbstractExecModel(Atom, ABC):
         controller: Optional[Controller] = None,
     ) -> None:
         super().__init__()
-        # self.data: Model = Model()  # this is just a placeholder, defined in onStart
         self.strategy: str = ""  # placeholder, defined in onStart
         self.controller = controller or CONTROLLER
 
@@ -92,11 +92,6 @@ class AbstractExecModel(Atom, ABC):
         super().onStart(data, *args)
         # super just set strategy, only now subsequent is possible
         self.data = STATE_MACHINE.data[self.strategy]
-        self.data.active_contract = None
-        self.data.position = 0.0
-        self.data.params = {}
-        self.data.lock = 0
-        self.data.position_id = ""  # 0
 
     def get_position_id(self, reset=False):
         if reset or not self.data.position_id:
@@ -197,18 +192,8 @@ class BaseExecModel(AbstractExecModel):
     to get more complex behaviour.
     """
 
-    _open_order = {
-        "orderType": "MKT",
-        "algoStrategy": "Adaptive",
-        "algoParams": [ibi.TagValue("adaptivePriority", "Normal")],
-        "tif": "Day",
-        "outsideRth": True,
-    }
-    _close_order = {
-        "orderType": "MKT",
-        "tif": "GTC",
-        "outsideRth": True,
-    }
+    _open_order = {**cast(dict, CONFIG.get("open_order")), "orderType": "MKT"}
+    _close_order = {**cast(dict, CONFIG.get("close_order")), "orderType": "MKT"}
 
     def trade(
         self,
@@ -414,7 +399,7 @@ class EventDrivenExecModel(BaseExecModel):
         self.data.oca_group = (
             self.data.get("oca_group", None) or self.oca_group_generator()
         )
-        return {"ocaGroup": self.data.oca_group, "ocaType": 1}
+        return {"ocaGroup": self.data.oca_group, "ocaType": CONFIG.get("oca_type") or 1}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
         # called once for sl/tp pair! Don't put inside the for loop!
@@ -428,6 +413,7 @@ class EventDrivenExecModel(BaseExecModel):
             if bracket:
                 memo: dict[str, Any] = {}
                 bracket_kwargs = bracket(params, trade, memo)
+                bracket_kwargs.update(CONFIG.get(order_key))  # type: ignore
                 bracket_kwargs.update(dynamic_bracket_kwargs)
                 memo.update(
                     {

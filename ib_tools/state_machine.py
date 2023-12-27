@@ -93,7 +93,7 @@ class OrderContainer(UserDict):
             )
 
     def __repr__(self) -> str:
-        return f"OrderContainer(max_size={self.max_size})"
+        return f"OrderContainer({self.data}, max_size={self.max_size})"
 
 
 class Model(dict):
@@ -106,9 +106,6 @@ class Model(dict):
     def __delattr__(self, key):
         self.__delitem__(key)
 
-    def __repr__(self) -> str:
-        return "Model()"
-
 
 class ModelContainer(UserDict):
     def __setitem__(self, key: str, item: dict):
@@ -119,7 +116,14 @@ class ModelContainer(UserDict):
         self.data[key] = Model(item)
 
     def __missing__(self, key):
-        self.data[key] = Model()
+        log.debug(f"Will reset data for {key}")
+        data = Model()
+        data.active_contract = None
+        data.position = 0.0
+        data.params = {}
+        data.lock = 0
+        data.position_id = ""  # 0
+        self.data[key] = data
         return self.data[key]
 
     def encode(self) -> dict[str, Any]:
@@ -127,7 +131,7 @@ class ModelContainer(UserDict):
 
     def decode(self, data: dict) -> None:
         try:
-            log.debug(f"{self} will decode data: {len(data.keys())} keys.")
+            log.debug(f"{self} will decode data: {len(data.keys())-1} keys.")
         except Exception:
             log.debug(f"data for decoding: {data}")
 
@@ -137,11 +141,11 @@ class ModelContainer(UserDict):
             decoded.pop("_id")
         except KeyError:
             log.warning("It's weird, no '_id' in data from mongo.")
-
-        self.data.update(**decoded)
+        log.debug(f"Decoded keys: {list(decoded.keys())}")
+        self.data.update(**{k: Model(v) for k, v in decoded.items()})
 
     def __repr__(self) -> str:
-        return "ModelContainer()"
+        return f"ModelContainer({self.data})"
 
 
 # Consider allowing for use of different savers
@@ -226,7 +230,10 @@ class StateMachine(Atom):
         for trade in trades:
             oi = self.orders.get(trade.order.orderId)
             if oi:
-                log.debug(f"Trade will be updated: {oi}")
+                log.debug(
+                    f"Trade will be updated - id: {oi.trade.order.orderId} "
+                    f"permId: {oi.trade.order.permId}"
+                )
                 new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
                 self.orders[trade.order.orderId] = new_oi
                 self.save_order(new_oi.encode())
@@ -277,12 +284,13 @@ class StateMachine(Atom):
         """
         for trade in trades:
             log.debug(f"Will delete trade: {trade.order.orderId}")
-            oi_dict = self.orders[int(trade.order.orderId)].encode()
+            oi_dict = self.orders[trade.order.orderId].encode()
             oi_dict.update({"active": False})
             self.save_order(oi_dict)
-            del self.orders[int(trade.order.orderId)]
+            del self.orders[trade.order.orderId]
 
     async def read_from_store(self):
+        log.debug("Will read data from store...")
         model_data = await async_runner(model_saver.read_latest)
         order_data = await async_runner(order_saver.read, {"active": True})
         self.data.decode(model_data)
@@ -397,7 +405,6 @@ class StateMachine(Atom):
         treated as if they were already open.
         """
         # Verify that broker's position records are the same as mine
-
         data = self.data.get(strategy)
         assert data
 
@@ -406,17 +413,9 @@ class StateMachine(Atom):
 
         # Check not only position but pending position openning orders
         elif orders := self.orders.strategy(strategy):
-            # log.debug(
-            #     f"Orders for {strategy}: {list(map(lambda x: x.trade.order, orders))}"
-            # )
             for order_info in orders:
                 trade = order_info.trade
-                log.debug(
-                    f"Order action: {order_info.action} is active: {trade.isActive()} "
-                    f"amount: {trade.order.totalQuantity}, "
-                    f"direction {trade.order.action.upper()}"
-                )
-                if order_info.action == "OPEN":  # and trade.isActive():
+                if order_info.action == "OPEN":
                     return trade.order.totalQuantity * (
                         1.0 if trade.order.action.upper() == "BUY" else -1.0
                     )

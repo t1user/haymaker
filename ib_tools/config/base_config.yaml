@@ -1,5 +1,23 @@
+restart_time: 30 # after disconnection, time to wait before reconnection attempt
+host: 127.0.0.1
+port: 4002
+clientId: 0 # do not change
+appStartupTime: 0
+appTimeout: 20
+retryDelay: 2
+probeContract:
+  !!python/object/apply:ib_insync.Forex
+  - EURUSD
+probeTimeout: 4
+
+# Controller config:
+use_blotter: True
+coldstart: False
+log_IB_events: False
+
+# These are default order params that will be used by every execution model
+# unless different orders are passes to exec model __init__
 open_order:
-  orderType: MKT
   algoStrategy: Adaptive
   algoParams:
   - !!python/object/apply:ib_insync.TagValue
@@ -9,74 +27,53 @@ open_order:
   outsideRth: True
     
 close_order:
-  orderType: MKT
   tif: GTC
   outsideRth: True
     
 stop_order:
-  orderType: TRAIL
   outsideRth: True
   tif: GTC
 
 tp_order:
-  orderType: MKT
   algoStrategy: Adaptive
   algoParams:
   - !!python/object/apply:ib_insync.TagValue
       - adaptivePriority
       - Normal
   outsideRth: True
-
-data_folder:
-  ib_data # folder inside home folder, will be created if doesn't exist
-
-
-app:
-  host: 127.0.0.1
-  port: 4002
-  clientId: 0 # do not change
-  appStartupTime: 0
-  appTimeout: 20
-  retryDelay: 2
-  probeContract:
-    !!python/object/apply:ib_insync.Forex
-      - EURUSD
-  probeTimeout: 4
-
   
+# all linked orders will use this oca_type (as per IB definition)
+oca_type: 1
+
 streamers:
   timeout:
     debug: False
     timeout: 300
 
-blotter_save_immediately: True
-coldstart: False
-
 # consider making this a dict of params passed to blotter to instantiate the class
 blotter_saver:
-  !!python/object/apply:ib_tools.saver.CsvSaver
-   - blotter
-   - blotter
+  class: CsvSaver
+  kwds:
+    folder: blotter
+    name: blotter
   # alternative:
   # args: []
   # kwds: {folder: blotter, note: blotter}
   # !!python/object/apply:ib_tools.saver.MongoSaver
   # kwds: {collection: blotter}
-    
+
+# All savers saving to files will create sub-directories here:
+data_folder:
+  ib_data # folder inside home folder, will be created if doesn't exist
   
 ArcticSaver:
   host: localhost
   library: test_log
-  note: ""
-  timestamp: False
-
   
 MongoSaver:
   host: localhost
   port: 27017
   db: test_data
-  
-
 
 dataloader:
   file: contracts.csv

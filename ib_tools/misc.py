@@ -6,10 +6,14 @@ import random
 import string
 from datetime import datetime, timezone
 from enum import Enum
+from os import makedirs, path
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Union
 
 import ib_insync as ibi
 import pytz
+
+from ib_tools.config import CONFIG
 
 
 def action(signal: int) -> str:
@@ -211,7 +215,7 @@ def decode_tree(obj: Any) -> Any:
 
     def process_value(
         value: Any,
-    ) -> Union[bool, int, float, bytes, list, datetime, str]:
+    ) -> Union[bool, int, float, bytes, list, datetime, str, None]:
         if isinstance(value, dict):
             v = process_dict(value)
             return v
@@ -220,6 +224,8 @@ def decode_tree(obj: Any) -> Any:
         elif isinstance(value, list):
             return [process_value(i) for i in value]
         elif isinstance(value, str):
+            if value == "None":
+                return None
             try:
                 return dt.datetime.fromisoformat(value)
             except ValueError:
@@ -252,3 +258,16 @@ def decode_tree(obj: Any) -> Any:
         return output
 
     return process_value(obj)
+
+
+def default_path(*dirnames: str) -> str:
+    """
+    Return path created by joining  ~/ib_data/ and recursively all dirnames
+    If the path doesn't exist create it.
+    """
+    home = Path.home()
+    default_directory = CONFIG.get("data_folder") or "ib_data"
+    dirnames_str = " / ".join(dirnames)
+    if not Path.exists(home / default_directory / dirnames_str):
+        makedirs(home.joinpath(default_directory, *dirnames))
+    return path.join(str(home), default_directory, *dirnames)

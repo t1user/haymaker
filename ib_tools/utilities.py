@@ -1,6 +1,4 @@
 import logging
-from os import makedirs, path
-from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
@@ -94,18 +92,6 @@ def copy_meta(store):
             continue
 
     print("Data writtten to store")
-
-
-def default_path(*dirnames: str) -> str:
-    """
-    Return path created by joining  ~/ib_data/ and recursively all dirnames
-    If the path doesn't exist create it.
-    """
-    home = Path.home()
-    dirnames_str = " / ".join(dirnames)
-    if not Path.exists(home / "ib_data" / dirnames_str):
-        makedirs(home.joinpath("ib_data", *dirnames))
-    return path.join(str(home), "ib_data", *dirnames)
 
 
 def quota_checker(store: Arctic) -> None:

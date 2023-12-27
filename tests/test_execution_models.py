@@ -5,9 +5,8 @@ from datetime import datetime, timezone
 import ib_insync as ibi
 import pytest
 
-from ib_tools import bracket_legs
 from ib_tools.base import Atom
-from ib_tools.bracket_legs import FixedStop, TakeProfitAsStopMultiple
+from ib_tools.bracket_legs import FixedStop, TakeProfitAsStopMultiple, TrailingStop
 from ib_tools.execution_models import (
     AbstractExecModel,
     BaseExecModel,
@@ -148,8 +147,8 @@ def objects():
 def test_EventDrivenExecModel_brackets_have_same_oca(objects):
     controller, source = objects
     em = EventDrivenExecModel(
-        stop=bracket_legs.TrailingStop(3),
-        take_profit=bracket_legs.TakeProfitAsStopMultiple(3, 3),
+        stop=TrailingStop(3),
+        take_profit=TakeProfitAsStopMultiple(3, 3),
         controller=controller,
     )
     em.onStart({"strategy": "xxx"})
@@ -172,8 +171,8 @@ def test_EventDrivenExecModel_brackets_have_same_oca(objects):
 def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
     controller, source = objects
     em = EventDrivenExecModel(
-        stop=bracket_legs.TrailingStop(3),
-        take_profit=bracket_legs.TakeProfitAsStopMultiple(3, 3),
+        stop=TrailingStop(3),
+        take_profit=TakeProfitAsStopMultiple(3, 3),
         controller=controller,
     )
     em.onStart({"strategy": "xxx"})

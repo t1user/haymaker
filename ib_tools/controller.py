@@ -9,6 +9,7 @@ import ib_insync as ibi
 
 from . import misc
 from .blotter import Blotter
+from .config import CONFIG
 from .manager import IB, STATE_MACHINE
 from .trader import Trader
 
@@ -48,18 +49,32 @@ class OrderSyncStrategy:
         # these are active trades on record that haven't been matched to
         # open trades in IB
         # try finding in closed trades from the session
-        known_trades = {trade.order.permId: trade for trade in IB.trades()}
+        log.debug(
+            f"ib trades: "
+            f"{[(trade.order.orderId, trade.order.permId) for trade in IB.trades()]}"
+        )
+        log.debug(
+            f"ib open trades: "
+            f"{[(trade.order.orderId, trade.order.permId) for trade in IB.openTrades()]}"
+        )
+        known_trades = {trade.order.orderId: trade for trade in IB.trades()}
+        log.debug(
+            f"Known trades: "
+            f"{known_trades.keys()} {[(v.order.orderId, v.order.permId) for k, v in known_trades.items()]}"
+        )
+        log.debug(f"Question trades: {[t.order.orderId for t in self.question_trades]}")
         matched_trades = {
-            trade.order.permId: trade
+            trade.order.orderId: trade
             for trade in self.question_trades
-            if trade.order.permId in known_trades
+            if trade.order.orderId in known_trades
         }
         self.unmatched_trades = [
             trade
             for trade in self.question_trades
-            if trade.order.permId not in matched_trades
+            if trade.order.orderId not in matched_trades
         ]
         self.matched_trades = list(matched_trades.values())
+        log.debug(f"matched trades: {self.matched_trades}")
         return self
 
     def report(self):
@@ -80,6 +95,7 @@ class PositionSyncStrategy:
 
     def verify_positions(self):
         self.errors = STATE_MACHINE.verify_positions()
+        return self
 
     def report(self):
         return self.errors
@@ -94,9 +110,6 @@ class Controller:
 
     """
 
-    blotter: Optional[Blotter] = None
-    log_events: bool = False
-
     def __init__(
         self,
         state_machine: Optional[StateMachine] = None,
@@ -107,10 +120,6 @@ class Controller:
         self.ib = ib or IB
         self.trader = trader or Trader(self.ib)
 
-        # TODO: this should be read from config
-        # desired value assigned in self.config
-        self.cold_start = True
-
         # these are essential events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent)
@@ -118,6 +127,15 @@ class Controller:
 
         log.debug("hold set")
         self.hold = True
+
+        if CONFIG.get("use_blotter"):
+            self.blotter = Blotter()
+            self.ib.commissionReportEvent += self.onCommissionReport
+
+        if CONFIG.get("log_IB_events"):
+            self._attach_logging_events()
+
+        self.cold_start = CONFIG.get("coldstart")
 
         log.debug(f"Controller initiated: {self}")
 
@@ -128,10 +146,11 @@ class Controller:
         self.ib.orderModifyEvent += self.log_modification
         self.ib.errorEvent += self.log_error
 
-    async def init(self, *args, **kwargs) -> None:
-        log.debug("Controller init...")
+    async def sync(self, *args, **kwargs) -> None:
+        log.debug("Sync...")
 
         if self.cold_start:
+            log.debug("Starting cold...")
             self.cold_start = False
         else:
             try:
@@ -159,18 +178,30 @@ class Controller:
         log.debug("hold released")
         # ...so that matched trades can be sent to blotter
 
-        for trade in matched:
-            self.report_unresolved_trade(trade)
+        try:
+            for trade in matched:
+                self.report_unresolved_trade(trade)
+        except Exception as e:
+            log.exception(f"Error with unresolved trade: {e}")
 
-        # don't know what to do with that yet:
-        if self.cold_start:
+        try:
+            # don't know what to do with that yet:
             self.sm.override_inactive_trades(*unmatched)
-        else:
-            for trade in unmatched:
-                log.error(f"We have trade that IB doesn't know about: {trade}")
+            # if self.cold_start:
+            #     self.sm.override_inactive_trades(*unmatched)
+            # else:
+            #     for trade in unmatched:
+            #         log.error(f"We have trade that IB doesn't know about: {trade}")
 
-        if error_positions := PositionSyncStrategy.run():
-            log.critical(f"Wrong positions on restart: {error_positions}")
+        except Exception as e:
+            log.exception(f"Error handling unmatched trades: {e}")
+
+        try:
+            if error_positions := PositionSyncStrategy.run():
+                log.critical(f"Wrong positions on restart: {error_positions}")
+            log.debug("Sync completed.")
+        except Exception as e:
+            log.exception(f"Error handling wrong position on restart: {e}")
 
     def report_unresolved_trade(self, trade: ibi.Trade):
         log.debug(
@@ -183,20 +214,6 @@ class Controller:
         self.ib.commissionReportEvent.emit(
             trade, trade.fills[-1], trade.fills[-1].commissionReport
         )
-
-    def config(
-        self,
-        blotter: Optional[Blotter] = None,
-        log_events: bool = False,
-        cold_start: bool = True,
-    ) -> None:
-        if blotter:
-            self.blotter = blotter
-            self.ib.commissionReportEvent += self.onCommissionReport
-        if log_events:
-            self._attach_logging_events()
-        self.cold_start = cold_start
-        log.debug(f"Config done: {self}")
 
     def trade(
         self,

@@ -1,11 +1,13 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, cast
 
 import ib_insync as ibi
 
-from ib_tools.blotter import Blotter
+from ib_tools.config import CONFIG
+
+# from ib_tools.blotter import Blotter
 from ib_tools.controller import CONTROLLER
 from ib_tools.manager import IB, JOBS, Jobs
 
@@ -24,7 +26,7 @@ class IBC(Protocol):
 
 @dataclass
 class FakeIBC(IBC):
-    restart_time: int = 60
+    restart_time: int = cast(int, CONFIG.get("restart_time"))
 
     async def startAsync(self):
         pass
@@ -39,22 +41,19 @@ class App:
     ib: ibi.IB = IB
     jobs: Jobs = JOBS
     ibc: IBC = field(default_factory=FakeIBC)
-    host: str = "127.0.0.1"
-    port: float = 4002
-    clientId: float = 0
-    appStartupTime: float = 0
-    appTimeout: float = 20
-    retryDelay: float = 2
-    probeContract: ibi.Contract = ibi.Forex("EURUSD")
-    probeTimeout: float = 4
-    blotter: bool = True
+    host: str = CONFIG.get("host") or "127.0.0.1"
+    port: float = CONFIG.get("port") or 4002
+    clientId: float = CONFIG.get("cliendId") or 0
+    appStartupTime: float = CONFIG.get("appStartupTime") or 0
+    appTimeout: float = CONFIG.get("appTimeout") or 20
+    retryDelay: float = CONFIG.get("retryDelay") or 2
+    probeContract: ibi.Contract = CONFIG.get("probeContract") or ibi.Forex("EURUSD")
+    probeTimeout: float = CONFIG.get("probeTimeout") or 4
+    # blotter: bool = True
 
     def __post_init__(self):
         self.ib.errorEvent += self.onError
         self.ib.connectedEvent += self.onConnected
-
-        if self.blotter:
-            CONTROLLER.config(blotter=Blotter())
 
         self.watchdog = ibi.Watchdog(
             self.ibc,  # type: ignore
@@ -109,5 +108,5 @@ class App:
         self.ib.run()
 
     async def _run(self, *args) -> None:
-        await CONTROLLER.init()
+        await CONTROLLER.sync()
         await self.jobs()

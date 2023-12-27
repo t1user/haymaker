@@ -13,7 +13,8 @@ import pandas as pd
 from arctic import Arctic
 from pymongo import MongoClient  # type: ignore
 
-from ib_tools.utilities import default_path
+from ib_tools.config import CONFIG
+from ib_tools.misc import default_path
 
 log = logging.getLogger(__name__)
 
@@ -38,13 +39,36 @@ def error_reporting_function(event, exception: Exception) -> None:
 
 class SaveManager:
     """
-    This class can be used both: as a descriptor and a regular class.
+    Abstract away the process of perfoming save operations.  Use
+    :class:`eventkit.Event` to put :func:`.saving_function` into
+    asyncio loop.
+
+    This class can be used both: as a descriptor and a regular class:
+
+    ```
+    class Example:
+
+        save = SaveManager(saver_instance)
+
+        ...
+    ```
+
+    or:
+
+    ```
+    class Example:
+
+        def __init__(self):
+            self.save = SaveManager(saver_instance)
+
+        ...
+    ```
     """
 
     saveEvent = ev.Event("saveEvent")
     saveEvent.connect(saving_function, error=error_reporting_function)
 
-    def __init__(self, saver: AbstractBaseSaver, note="", timestamp: bool = True):
+    def __init__(self, saver: AbstractBaseSaver, name="", timestamp: bool = True):
         self.saver = saver
 
     def __get__(self, obj, objtype=None) -> Callable:
@@ -64,24 +88,24 @@ class AbstractBaseSaver(ABC):
     Api for saving data during trading/simulation.
     """
 
-    def __init__(self, note: str = "", timestamp: bool = True) -> None:
+    def __init__(self, name: str = "", timestamp: bool = True) -> None:
         if timestamp:
             timestamp_ = datetime.now(timezone.utc).strftime("%Y%m%d_%H_%M")
-            self.note = f"{note}_{timestamp_}"
+            self.name = f"{name}_{timestamp_}"
         else:
-            self.note = note
+            self.name = name
 
     def name_str(self, *args: str) -> str:
         """
         Return string under which the data is to be saved.  Timestamp
-        and/or note may be included in the name depending on how the
+        and/or 'name' may be included in the name depending on how the
         object was initialized.
 
         This name can be used by :meth:`.save`to build filename,
         database collection name, key-value store key, etc.
         """
         args_str = "_".join(args)
-        return f"{self.note}_{args_str}"
+        return f"{self.name}_{args_str}"
 
     @abstractmethod
     def save(self, data: Any, *args: str) -> None:
@@ -101,11 +125,20 @@ class AbstractBaseSaver(ABC):
     def save_many(self, data: list[dict[str, Any]]):
         raise NotImplementedError
 
+    def read(self, key):
+        raise NotImplementedError
+
+    def read_latest(self):
+        raise NotImplementedError
+
+    def delete(self, query: dict) -> None:
+        raise NotImplementedError
+
 
 class PickleSaver(AbstractBaseSaver):
-    def __init__(self, folder: str, note: str = "", timestamp: bool = True) -> None:
+    def __init__(self, folder: str, name: str = "", timestamp: bool = True) -> None:
         self.path = default_path(folder)
-        super().__init__(note, timestamp)
+        super().__init__(name, timestamp)
 
     def _file(self, *args):
         return f"{self.path}/{self.name_str(*args)}.pickle"
@@ -118,16 +151,16 @@ class PickleSaver(AbstractBaseSaver):
                 f.write(pickle.dumps(data))
 
     def __repr__(self):
-        return f"PickleSaver({self.path}, {self.note})"
+        return f"PickleSaver({self.path}, {self.name})"
 
 
 class CsvSaver(AbstractBaseSaver):
     _fieldnames: Optional[list[str]]
 
-    def __init__(self, folder: str, note: str = "", timestamp: bool = True) -> None:
+    def __init__(self, folder: str, name: str = "", timestamp: bool = True) -> None:
         self.path = default_path(folder)
         self._fieldnames = None
-        super().__init__(note, timestamp)
+        super().__init__(name, timestamp)
 
     @property
     def _file(self):
@@ -156,7 +189,7 @@ class CsvSaver(AbstractBaseSaver):
                 writer.writerow(item)
 
     def __repr__(self):
-        return f"CsvSaver({self.path}, {self.note})"
+        return f"CsvSaver({self.path}, {self.name})"
 
 
 class ArcticSaver(AbstractBaseSaver):
@@ -168,20 +201,19 @@ class ArcticSaver(AbstractBaseSaver):
 
     def __init__(
         self,
-        host: str = "localhost",
-        library: str = "test_log",
-        note: str = "",
+        library: str = "",
+        name: str = "",
         timestamp=False,
     ) -> None:
         """
         Library given at init, collection determined by self.name_str.
         """
-        self.host = host
-        self.library = library
-        self.db = Arctic(host)
-        self.db.initialize_library(library)
-        self.store = self.db[library]
-        super().__init__(note, timestamp)
+        self.host = CONFIG["ArcticSaver"]["host"]
+        self.library = library or CONFIG["ArcticSaver"]["library"]
+        self.db = Arctic(self.host)
+        self.db.initialize_library(self.library)
+        self.store = self.db[self.library]
+        super().__init__(name, timestamp)
 
     def save(self, data: pd.DataFrame, *args: str):
         self.store.write(self.name_str(*args), data)
@@ -195,23 +227,22 @@ class ArcticSaver(AbstractBaseSaver):
     def __str__(self):
         return (
             f"ArcticSaver(host={self.host}, library={self.library}, "
-            f"note={self.note})"
+            f"name={self.name})"
         )
 
 
 class MongoSaver(AbstractBaseSaver):
     def __init__(
-        self,
-        collection: str,
-        db: str = "test_data",
-        host: str = "localhost",
-        port: int = 27017,
-        query_key: Optional[str] = None,
+        self, collection: str, query_key: Optional[str] = None, timestamp: bool = False
     ) -> None:
+        host = CONFIG["MongoSaver"]["host"]
+        port = CONFIG["MongoSaver"]["port"]
+        db = CONFIG["MongoSaver"]["db"]
         self.client = MongoClient(host, port)
         self.db = self.client[db]
         self.collection = self.db[collection]
         self.query_key = query_key
+        super().__init__("", timestamp)
 
     def save(self, data: dict[str, Any], *args) -> None:
         try:
@@ -225,7 +256,7 @@ class MongoSaver(AbstractBaseSaver):
             log.exception(Exception)
             log.debug(f"Data that caused error: {data}")
             raise
-        log.debug(f"{self}: transaction result: {result}")
+        # log.debug(f"{self}: transaction result: {result}")
 
     def save_many(self, data: list[dict[str, Any]]) -> None:
         self.collection.insert_many(data)
