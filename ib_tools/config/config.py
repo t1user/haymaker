@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import collections.abc
-import json
 import logging
 import os
 import sys
@@ -63,27 +62,6 @@ class Config(ChainMap):
     def parse_keys(self, d: dict) -> collections.abc.Mapping:
         new_dict: dict = {}
         return new_dict
-
-
-def get_options(argv: list[str] = sys.argv[1:]) -> ChainMap:
-    """Four Sources: comand line, file, OS environ, defaults."""
-    parser = argparse.ArgumentParser(description="Process some integers.")
-    parser.add_argument("-c", "--configuration", type=open, nargs="?")
-    parser.add_argument("-p", "--playerclass", type=str, nargs="?", default="Simple")
-    cmdline = parser.parse_args(argv)
-
-    if cmdline.configuration:
-        config_file = json.load(cmdline.configuration)
-        cmdline.configuration.close()
-    else:
-        config_file = {}
-
-    default_path = Path.cwd() / "Chapter_7" / "ch07_defaults.json"
-    with default_path.open() as default_file:
-        defaults = json.load(default_file)
-
-    combined = ChainMap(vars(cmdline), config_file, os.environ, defaults)
-    return combined
 
 
 CONFIG: Final[Config] = Config()
