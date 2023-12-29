@@ -10,14 +10,6 @@ from ib_tools.state_machine import (
 )
 
 
-@pytest.fixture
-def state_machine():
-    # ensure any existing singleton is destroyed
-    if StateMachine._instance:
-        StateMachine._instance = None
-    return StateMachine()
-
-
 def test_StateMachine_is_singleton(state_machine):
     """
     Atempt to instantiate :class:`StateMachine` more than once
@@ -303,4 +295,15 @@ def test_ModelContaner_new_strategy():
     m = ModelContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
     data = m["c"]
     data["x"] = 5
-    assert m.data == {"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}, "c": {"x": 5}}
+    assert m.data == {
+        "a": {"x": 1, "y": 2},
+        "b": {"x": 4, "y": 9},
+        "c": {
+            "x": 5,
+            "active_contract": None,
+            "position": 0.0,
+            "params": {},
+            "lock": 0,
+            "position_id": "",
+        },
+    }

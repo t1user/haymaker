@@ -10,13 +10,11 @@ import ib_insync as ibi
 
 from ib_tools import misc
 from ib_tools.base import Atom
-from ib_tools.logging import setup_logging
+from ib_tools.controller import Controller
 from ib_tools.state_machine import StateMachine
 from ib_tools.streamers import Streamer
 
 log = logging.getLogger(__name__)
-
-setup_logging()
 
 
 @dataclass
@@ -142,3 +140,4 @@ STATE_MACHINE: Final[StateMachine] = StateMachine()
 INIT_DATA = InitData(IB, Atom.contracts)
 JOBS = Jobs(INIT_DATA)
 Atom.set_init_data(INIT_DATA)
+CONTROLLER: Final[Controller] = Controller(STATE_MACHINE, IB)

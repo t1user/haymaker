@@ -10,7 +10,8 @@ import ib_insync as ibi
 from . import misc
 from .blotter import Blotter
 from .config import CONFIG
-from .manager import IB, STATE_MACHINE
+
+# from .manager import IB, STATE_MACHINE
 from .trader import Trader
 
 if TYPE_CHECKING:
@@ -21,7 +22,9 @@ log = logging.getLogger(__name__)
 
 
 class OrderSyncStrategy:
-    def __init__(self) -> None:
+    def __init__(self, ib: ibi.IB, sm: StateMachine) -> None:
+        self.ib = ib
+        self.sm = sm
         # IB has trades that we don't know about
         self.unknown_trades: list[ibi.Trade] = []  # <-We're fucked
         # Our active trades that IB doesn't report as active
@@ -32,17 +35,31 @@ class OrderSyncStrategy:
         self.unmatched_trades: list[ibi.Trade] = []  # <- We're fucked
 
     @classmethod
-    def run(cls):
-        return cls().update_trades().review_trades().handle_question_trades().report()
+    def run(cls, ib: ibi.IB, sm: StateMachine):
+        return (
+            cls(ib, sm)
+            .update_trades()
+            .review_trades()
+            .handle_question_trades()
+            .report()
+        )
 
     def update_trades(self):
         # update order records with current Trade objects
-        self.unknown_trades = STATE_MACHINE.update_trades(*IB.openTrades())
+        log.debug(
+            f"Trades before update: "
+            f"{[(i.trade.order.orderId, i.trade.order.permId) for i in self.sm.orders.values()]}"
+        )
+        self.unknown_trades = self.sm.update_trades(*self.ib.openTrades())
+        log.debug(
+            f"Trades after update: "
+            f"{[(i.trade.order.orderId, i.trade.order.permId) for i in self.sm.orders.values()]}"
+        )
         return self
 
     def review_trades(self):
         # Report trades on which we can find information
-        self.question_trades = STATE_MACHINE.review_trades(*IB.openTrades())
+        self.question_trades = self.sm.review_trades(*self.ib.openTrades())
         return self
 
     def handle_question_trades(self):
@@ -51,16 +68,17 @@ class OrderSyncStrategy:
         # try finding in closed trades from the session
         log.debug(
             f"ib trades: "
-            f"{[(trade.order.orderId, trade.order.permId) for trade in IB.trades()]}"
+            f"{[(trade.order.orderId, trade.order.permId) for trade in self.ib.trades()]}"
         )
         log.debug(
             f"ib open trades: "
-            f"{[(trade.order.orderId, trade.order.permId) for trade in IB.openTrades()]}"
+            f"{[(trade.order.orderId, trade.order.permId) for trade in self.ib.openTrades()]}"
         )
-        known_trades = {trade.order.orderId: trade for trade in IB.trades()}
+        known_trades = {trade.order.orderId: trade for trade in self.ib.trades()}
+        log.debug(f"len known trades: {len(known_trades)}")
         log.debug(
             f"Known trades: "
-            f"{known_trades.keys()} {[(v.order.orderId, v.order.permId) for k, v in known_trades.items()]}"
+            f"{known_trades.keys()}: {[(v.order.orderId, v.order.permId) for k, v in known_trades.items()]}"
         )
         log.debug(f"Question trades: {[t.order.orderId for t in self.question_trades]}")
         matched_trades = {
@@ -86,15 +104,17 @@ class PositionSyncStrategy:
     Must be called after :class:`.OrderSyncStrategy`
     """
 
-    def __init__(self):
-        self.errors = []
+    def __init__(self, ib: ibi.IB, sm: StateMachine):
+        self.ib = ib
+        self.sm = sm
+        self.errors: dict[ibi.Contract, float] = {}
 
     @classmethod
-    def run(cls):
-        return cls().verify_positions().report()
+    def run(cls, ib: ibi.IB, sm: StateMachine):
+        return cls(ib, sm).verify_positions().report()
 
-    def verify_positions(self):
-        self.errors = STATE_MACHINE.verify_positions()
+    def verify_positions(self) -> PositionSyncStrategy:
+        self.errors = self.sm.verify_positions()
         return self
 
     def report(self):
@@ -112,12 +132,12 @@ class Controller:
 
     def __init__(
         self,
-        state_machine: Optional[StateMachine] = None,
-        ib: Optional[ibi.IB] = None,
+        state_machine: StateMachine,
+        ib: ibi.IB,
         trader: Optional[Trader] = None,
     ):
-        self.sm = state_machine or STATE_MACHINE
-        self.ib = ib or IB
+        self.sm = state_machine
+        self.ib = ib
         self.trader = trader or Trader(self.ib)
 
         # these are essential events
@@ -151,16 +171,17 @@ class Controller:
 
         if self.cold_start:
             log.debug("Starting cold...")
-            self.cold_start = False
+            # self.cold_start = False
         else:
             try:
                 log.debug("Reading from store...")
                 await self.sm.read_from_store()
+                self.cold_start = True
             except Exception as e:
                 log.exception(e)
 
         try:
-            unknown, matched, unmatched = OrderSyncStrategy.run()
+            unknown, matched, unmatched = OrderSyncStrategy.run(self.ib, self.sm)
             log.debug(
                 f"Trades on re-start - unknown: {len(unknown)}, "
                 f"matched: {len(matched)}, unmatched: {len(unmatched)}"
@@ -197,11 +218,14 @@ class Controller:
             log.exception(f"Error handling unmatched trades: {e}")
 
         try:
-            if error_positions := PositionSyncStrategy.run():
+            if error_positions := PositionSyncStrategy.run(self.ib, self.sm):
                 log.critical(f"Wrong positions on restart: {error_positions}")
-            log.debug("Sync completed.")
+            else:
+                log.info("Positions matched to broker: OK.")
         except Exception as e:
             log.exception(f"Error handling wrong position on restart: {e}")
+
+        log.debug("Sync completed.")
 
     def report_unresolved_trade(self, trade: ibi.Trade):
         log.debug(
@@ -368,7 +392,7 @@ class Controller:
         await asyncio.sleep(0.5)
         self.sm.report_new_order(trade)
 
-    def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
+    async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
         if trade.order.orderId < 0:
             log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
         elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
@@ -376,7 +400,7 @@ class Controller:
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
             # TODO: FIX THIS
-            if self.sm.report_done_order(trade):
+            if await self.sm.report_done_order(trade):
                 log.debug(
                     f"{trade.contract.symbol}: order {trade.order.orderId} "
                     f"{trade.order.orderType} done {trade.orderStatus.status}."
@@ -415,10 +439,14 @@ class Controller:
             )
 
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+        print(f"SM Data pre lookup: {self.sm.data}")
+        print(f"SM id pre lookup: {id(self.sm.data)}")
         order_info = self.sm.get_order(trade.order.orderId)
         if order_info:
             strategy = order_info.strategy
         model = self.sm.get_strategy(strategy)
+        print(f"SM Data: {self.sm.data}")
+        print(f"Model id: {id(model)}")
         if model:
             self.register_position(strategy, model, trade, fill)
         else:
@@ -533,6 +561,3 @@ class Controller:
 
     def __repr__(self):
         return f"{__class__.__name__}({self.sm, self.ib, self.blotter})"
-
-
-CONTROLLER: Final[Controller] = Controller()

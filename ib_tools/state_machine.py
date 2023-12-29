@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections import UserDict, defaultdict
 from dataclasses import dataclass, fields
-from functools import partial
+from functools import partial  # , singledispatchmethod
 from typing import Any, Iterator, Optional, Union
 
 import ib_insync as ibi
@@ -113,18 +113,38 @@ class ModelContainer(UserDict):
             raise ValueError(
                 f"{self.__class__.__qualname__} can be used to store only dicts."
             )
+        print(f"------>>>>> SETTING KEY {key}: {item}")
         self.data[key] = Model(item)
 
     def __missing__(self, key):
         log.debug(f"Will reset data for {key}")
-        data = Model()
-        data.active_contract = None
-        data.position = 0.0
-        data.params = {}
-        data.lock = 0
-        data.position_id = ""  # 0
-        self.data[key] = data
+        self.data[key] = Model(
+            {
+                "active_contract": None,
+                "position": 0.0,
+                "params": {},
+                "lock": 0,
+                "position_id": "",
+            }
+        )
+        print(f"New Model: {id(self.data[key])}")
+        print(f"new key: {key}")
         return self.data[key]
+
+    # @singledispatchmethod
+    # def position(self, key: str) -> float:
+    #     if model := self.get(key):
+    #         return model.position
+    #     else:
+    #         return 0.0
+
+    # @position.register
+    # def _(self, key: ibi.Contract):
+    #     c: defaultdict[ibi.Contract, float] = defaultdict(float)
+    #     for model in self.data.values():
+    #         if model.get("active_contract"):
+    #             c[model["active_contract"]] += model["position"]
+    #     return c[key]
 
     def encode(self) -> dict[str, Any]:
         return tree(self.data)
@@ -141,6 +161,7 @@ class ModelContainer(UserDict):
             decoded.pop("_id")
         except KeyError:
             log.warning("It's weird, no '_id' in data from mongo.")
+
         log.debug(f"Decoded keys: {list(decoded.keys())}")
         self.data.update(**{k: Model(v) for k, v in decoded.items()})
 
@@ -358,7 +379,8 @@ class StateMachine(Atom):
         order_info = OrderInfo(strategy, action, trade, params)
         self.orders[trade.order.orderId] = order_info
         log.debug(
-            f"{trade.order.orderType} orderId: {trade.order.orderId} registered for: "
+            f"{trade.order.orderType} orderId: {trade.order.orderId} "
+            f"permId: {trade.order.permId} registered for: "
             f"{trade.contract.localSymbol}"
         )
 
@@ -368,8 +390,16 @@ class StateMachine(Atom):
         self.save_order(order_info.encode())
         self.save_model(self.data.encode())
 
-    def report_done_order(self, trade: ibi.Trade) -> Optional[OrderInfo]:
+    async def report_done_order(self, trade: ibi.Trade) -> Optional[OrderInfo]:
+        log.debug(f"reporting trade: {trade.order.orderId} {trade.order.permId}")
         order_info = self.orders.get(trade.order.orderId)
+        log.debug(
+            f"existing record: {order_info.trade.order.orderId} "
+            f"{order_info.trade.order.permId}"
+        )
+        if not trade.order.permId:
+            log.debug("Will wait for permId for 5 secs...")
+            await asyncio.sleep(5)
         if order_info:
             dict_for_saving = order_info.encode()
         else:
@@ -381,8 +411,8 @@ class StateMachine(Atom):
                 "params": {},
             }
         log.debug("Reporting done order")
-        self.save_order(dict_for_saving)
         self.save_model(self.data.encode())
+        self.save_order(dict_for_saving)
         return order_info
 
     def report_new_order(self, trade: ibi.Trade) -> None:
@@ -449,26 +479,37 @@ class StateMachine(Atom):
         log.debug(f"Total positions: {d}")
         return d
 
-    def verify_positions(self) -> list[ibi.Contract]:
+    def verify_positions(self) -> dict[ibi.Contract, float]:
         """
         Compare positions actually held with broker with position
         records.  Return differences if any and log an error.
         """
 
         # list of contracts where differences occur
-        difference: list[ibi.Contract] = []
+        # difference: list[ibi.Contract] = []
 
-        broker_positions = self.ib.positions()
-        for position in broker_positions:
-            if position.position != self.position_for_contract(position.contract):
-                log.error(
-                    f"Position discrepancy for {position.contract}, "
-                    f"mine: {self.position_for_contract(position.contract)}, "
-                    f"theirs: {position.position}"
-                )
-                difference.append(position.contract)
+        broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
+        my_positions_dict = self.total_positions()
+        log.debug(f"Broker positions: {broker_positions_dict}")
+        log.debug(f"My positions: {my_positions_dict}")
+        diff = {
+            i: (
+                (my_positions_dict.get(i) or 0.0)
+                - (broker_positions_dict.get(i) or 0.0)
+            )
+            for i in set([*broker_positions_dict.keys(), *my_positions_dict.keys()])
+        }
+        return {k: v for k, v in diff.items() if v != 0}
+        # for position in broker_positions:
+        #     if position.position != self.position_for_contract(position.contract):
+        #         log.error(
+        #             f"Position discrepancy for {position.contract}, "
+        #             f"mine: {self.position_for_contract(position.contract)}, "
+        #             f"theirs: {position.position}"
+        #         )
+        #         difference.append(position.contract)
 
-        return difference
+        # return difference
 
     # ### TODO: Re-do this
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:

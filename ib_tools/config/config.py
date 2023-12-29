@@ -23,6 +23,8 @@ class Config(ChainMap):
 
     @property
     def cmdline(self) -> collections.abc.MutableMapping:
+        if "test" in sys.argv[0]:
+            return {}
         argv = sys.argv[1:]
         parser = argparse.ArgumentParser(description="File with config or coldstart.")
         parser.add_argument("-f", "--file", type=str, nargs="?")
