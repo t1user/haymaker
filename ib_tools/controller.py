@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import partial
-from typing import TYPE_CHECKING, Callable, Final, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import ib_insync as ibi
 
@@ -540,24 +540,6 @@ class Controller:
                 f"Error {errorCode}: {errorString} {contract}, "
                 f"{strategy} | {action} | {order}"
             )
-
-    # def trace_manual_orders(self, trade: ibi.Trade) -> None:
-    #     """
-    #     Attempt to attach reporting events for orders entered
-    #     outside of the framework. This will not work if framework is not
-    #     connected with clientId == 0.
-    #     """
-    #     if trade.order.orderId <= 0:
-    #         log.debug("manual trade reporting event attached")
-    #         self.trade_handler.attach_events(trade, "MANUAL TRADE")
-
-    # def trade_(self, contract, reason):
-    #     if reason:
-    #         trade = self.trade(contract)
-    #         self.trade_handler.attach_events(trade, reason)
-    #         log.debug(f"{contract.localSymbol} order placed: {order}")
-    #     else:
-    #         log.debug(f"{contract.localSymbol} order updated: {order}")
 
     def __repr__(self):
         return f"{__class__.__name__}({self.sm, self.ib, self.blotter})"
