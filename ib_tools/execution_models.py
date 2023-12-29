@@ -18,6 +18,7 @@ from ib_tools.manager import CONTROLLER, STATE_MACHINE
 
 if TYPE_CHECKING:
     from ib_tools.controller import Controller
+    from ib_tools.state_machine import StateMachine
 
 from . import misc
 
@@ -76,10 +77,12 @@ class AbstractExecModel(Atom, ABC):
         orders: Optional[dict[OrderKey, dict[str, Any]]] = None,
         *,
         controller: Optional[Controller] = None,
+        state_machine: Optional[StateMachine] = None,
     ) -> None:
         super().__init__()
         self.strategy: str = ""  # placeholder, defined in onStart
         self.controller = controller or CONTROLLER
+        self.sm = state_machine or STATE_MACHINE
 
         if orders:
             for key, order_kwargs in orders.items():
@@ -88,15 +91,13 @@ class AbstractExecModel(Atom, ABC):
         self.connect_state_machine()
 
     def connect_state_machine(self):
-        self += STATE_MACHINE
+        self += self.sm
 
     def onStart(self, data, *args) -> None:
         super().onStart(data, *args)
         # super just set strategy, only now subsequent is possible
-        self.data = STATE_MACHINE.data[self.strategy]
+        self.data = self.sm.data[self.strategy]
         self.data.update(**data)
-        print(f"onStart: {id(self.data)}")
-        print(f"onStart: {self.data}")
 
     def get_position_id(self, reset=False):
         if reset or not self.data.position_id:
@@ -262,7 +263,6 @@ class BaseExecModel(AbstractExecModel):
         data: dict,
         dynamic_order_kwargs: Optional[dict] = None,
     ) -> ibi.Trade:
-        print(f"Open: {id(self.data)}")
         self.data.params["close"] = {}
         data["position_id"] = self.get_position_id(True)
         self.data.params["open"] = data
@@ -281,7 +281,6 @@ class BaseExecModel(AbstractExecModel):
             f"{self.strategy} {contract.localSymbol} processing OPEN signal {signal}",
             extra={"data": data},
         )
-        print(f"DATA: {self.data}")
         return self.trade(contract, order, "OPEN")
 
     def close(
@@ -356,6 +355,7 @@ class EventDrivenExecModel(BaseExecModel):
         stop: Optional[AbstractBracketLeg] = None,
         take_profit: Optional[AbstractBracketLeg] = None,
         controller: Optional[Controller] = None,
+        state_machine: Optional[StateMachine] = None,
     ):
         if not stop:
             raise TypeError(
@@ -364,11 +364,10 @@ class EventDrivenExecModel(BaseExecModel):
         self.stop = stop
         self.take_profit = take_profit
         self.oca_group_generator = lambda: str(uuid4())
-        super().__init__(orders, controller=controller)
+        super().__init__(orders, controller=controller, state_machine=state_machine)
 
     def onStart(self, data, *args):
         super().onStart(data, *args)
-        print(f"onStart subclass: {id(self.data)}")
         self.data.brackets = {}
 
     def open(
@@ -381,7 +380,6 @@ class EventDrivenExecModel(BaseExecModel):
         that will attach brackets after order completion.
         """
         attach_bracket = partial(self._attach_bracket, params=data)
-        print(f"Open sub-class: {id(self.data)}")
         # reset any previous oca_group settings
         self.data.oca_group = None
 

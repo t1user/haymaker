@@ -113,7 +113,6 @@ class ModelContainer(UserDict):
             raise ValueError(
                 f"{self.__class__.__qualname__} can be used to store only dicts."
             )
-        print(f"------>>>>> SETTING KEY {key}: {item}")
         self.data[key] = Model(item)
 
     def __missing__(self, key):
@@ -127,8 +126,6 @@ class ModelContainer(UserDict):
                 "position_id": "",
             }
         )
-        print(f"New Model: {id(self.data[key])}")
-        print(f"new key: {key}")
         return self.data[key]
 
     # @singledispatchmethod

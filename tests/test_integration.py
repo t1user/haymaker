@@ -117,29 +117,24 @@ def new_setup(state_machine):
         trade_object = None
 
         def trade(self, *args, **kwargs):
-            print(f"Controller got id: {id(args[-1])}")
             self.trade_object = super().trade(*args, **kwargs)
 
     ib = ibi.IB()
     controller = FakeController(state_machine, ib, trader=FakeTrader())
-    print(f"Inside setup: {controller.sm.data}")
 
     class Source(Atom):
         pass
 
     source = Source()
-    em = BaseExecModel(controller=controller)
+    em = BaseExecModel(controller=controller, state_machine=state_machine)
     source += em
 
-    source.startEvent.emit({"strategy": "xxx", "execution_model": em})
-    print(f"Inside setup post start: {controller.sm.data}")
+    source.startEvent.emit({"strategy": "xxx"})
     return ib, controller, source, em
 
 
 def test_buy_position_registered(new_setup):
     ib, controller, source, em = new_setup
-
-    print(f"Inside test: {controller.sm.data}")
 
     data = {
         "signal": 1,
@@ -148,7 +143,6 @@ def test_buy_position_registered(new_setup):
         "target_position": 1,
         "contract": ibi.Future("NQ", "CME"),
     }
-    print(f"StateMachine id: {id(controller.sm)}")
     source.dataEvent.emit(data)
     trade_object = controller.trade_object
     trade_object.fills.append(
@@ -164,7 +158,6 @@ def test_buy_position_registered(new_setup):
         )
     )
     ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
-    print(f"Inside test id: {id(em.data)}")
     assert em.data.position == 1
 
 
@@ -193,8 +186,4 @@ def test_sell_position_registered(new_setup):
         )
     )
     ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
-    print(f"SM2: {controller.sm.data}")
-    print(f"SM2 id: {id(controller.sm.data)}")
-    print(em.data)
-    print(f"sm id: {id(controller.sm)}")
     assert em.data.position == -1

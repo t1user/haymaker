@@ -124,11 +124,13 @@ class PositionSyncStrategy:
 class Controller:
     """
     Intermediary between execution models (which are off ramps for
-    strategies) and `trader` and `state_machine`.  Use information
-    provided by `state_machine` to make sure that positions held in
+    strategies), :class:`Trader` and :class:`StateMachine`.  Use information
+    provided by :class:`StateMachine` to make sure that positions held in
     the market reflect what is requested by strategies.
 
     """
+
+    blotter: Optional[Blotter]
 
     def __init__(
         self,
@@ -139,7 +141,6 @@ class Controller:
         self.sm = state_machine
         self.ib = ib
         self.trader = trader or Trader(self.ib)
-
         # these are essential events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent)
@@ -151,6 +152,8 @@ class Controller:
         if CONFIG.get("use_blotter"):
             self.blotter = Blotter()
             self.ib.commissionReportEvent += self.onCommissionReport
+        else:
+            self.blotter = None
 
         if CONFIG.get("log_IB_events"):
             self._attach_logging_events()
@@ -439,14 +442,10 @@ class Controller:
             )
 
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
-        print(f"SM Data pre lookup: {self.sm.data}")
-        print(f"SM id pre lookup: {id(self.sm.data)}")
         order_info = self.sm.get_order(trade.order.orderId)
         if order_info:
             strategy = order_info.strategy
         model = self.sm.get_strategy(strategy)
-        print(f"SM Data: {self.sm.data}")
-        print(f"Model id: {id(model)}")
         if model:
             self.register_position(strategy, model, trade, fill)
         else:
