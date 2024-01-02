@@ -46,15 +46,19 @@ class OrderSyncStrategy:
 
     def update_trades(self):
         # update order records with current Trade objects
-        log.debug(
-            f"Trades before update: "
-            f"{[(i.trade.order.orderId, i.trade.order.permId) for i in self.sm.orders.values()]}"
-        )
+        before_update = [
+            (i.trade.order.orderId, i.trade.order.permId)
+            for i in self.sm.orders.values()
+        ]
+
+        log.debug(f"Trades before update: {before_update}")
         self.unknown_trades = self.sm.update_trades(*self.ib.openTrades())
-        log.debug(
-            f"Trades after update: "
-            f"{[(i.trade.order.orderId, i.trade.order.permId) for i in self.sm.orders.values()]}"
-        )
+        after_update = [
+            (i.trade.order.orderId, i.trade.order.permId)
+            for i in self.sm.orders.values()
+        ]
+
+        log.debug(f"Trades after update: {after_update}")
         return self
 
     def review_trades(self):
@@ -66,19 +70,25 @@ class OrderSyncStrategy:
         # these are active trades on record that haven't been matched to
         # open trades in IB
         # try finding in closed trades from the session
-        log.debug(
-            f"ib trades: "
-            f"{[(trade.order.orderId, trade.order.permId) for trade in self.ib.trades()]}"
-        )
-        log.debug(
-            f"ib open trades: "
-            f"{[(trade.order.orderId, trade.order.permId) for trade in self.ib.openTrades()]}"
-        )
+        ib_all_trades = [
+            (trade.order.orderId, trade.order.permId) for trade in self.ib.trades()
+        ]
+
+        log.debug(f"ib trades: {ib_all_trades}")
+        ib_open_trades = [
+            (trade.order.orderId, trade.order.permId) for trade in self.ib.openTrades()
+        ]
+
+        log.debug(f"ib open trades: {ib_open_trades}")
         known_trades = {trade.order.orderId: trade for trade in self.ib.trades()}
         log.debug(f"len known trades: {len(known_trades)}")
+        known_trades_for_display = [
+            (v.order.orderId, v.order.permId) for k, v in known_trades.items()
+        ]
+
         log.debug(
-            f"Known trades: "
-            f"{known_trades.keys()}: {[(v.order.orderId, v.order.permId) for k, v in known_trades.items()]}"
+            f"Known trades keys: {known_trades.keys()}, "
+            f"known trades: {known_trades_for_display}"
         )
         log.debug(f"Question trades: {[t.order.orderId for t in self.question_trades]}")
         matched_trades = {
@@ -224,7 +234,7 @@ class Controller:
             if error_positions := PositionSyncStrategy.run(self.ib, self.sm):
                 log.critical(f"Wrong positions on restart: {error_positions}")
             else:
-                log.info("Positions matched to broker: OK.")
+                log.info("Positions matched to broker?: --> OK <--")
         except Exception as e:
             log.exception(f"Error handling wrong position on restart: {e}")
 
@@ -387,6 +397,7 @@ class Controller:
         """
 
         await asyncio.sleep(0.1)
+        log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
         existing_order_record = self.sm.get_order(trade.order.orderId)
         if not existing_order_record:
             log.critical(f"Unknown trade in the system {trade.order}")
@@ -396,6 +407,7 @@ class Controller:
         self.sm.report_new_order(trade)
 
     async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
+        log.debug(f"OrderStatus event: {trade.order.orderId}, {trade.order.permId}")
         if trade.order.orderId < 0:
             log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
         elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
@@ -442,6 +454,7 @@ class Controller:
             )
 
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+        log.debug(f"ExecDetailsEvent: {trade.order.orderId}, {trade.order.permId}")
         order_info = self.sm.get_order(trade.order.orderId)
         if order_info:
             strategy = order_info.strategy
@@ -459,6 +472,10 @@ class Controller:
         execution.  After that trade object is ready for stroring in
         blotter.
         """
+        log.debug(
+            f"CommissionReport event unfiltered: "
+            f"{trade.order.orderId}, {trade.order.permId}"
+        )
         # prevent writing all orders from session on startup
         if self.hold:
             return
@@ -508,6 +525,7 @@ class Controller:
             f"{reason} trade filled: {trade.contract.localSymbol} "
             f"{trade.order.action} {trade.orderStatus.filled}"
             f"@{trade.orderStatus.avgFillPrice} --> {strategy}"
+            f"orderId: {trade.order.orderId}, permId: {trade.order.permId}"
         )
 
     def log_cancel(self, trade: ibi.Trade) -> None:

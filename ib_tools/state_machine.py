@@ -388,7 +388,7 @@ class StateMachine(Atom):
         self.save_model(self.data.encode())
 
     async def report_done_order(self, trade: ibi.Trade) -> Optional[OrderInfo]:
-        log.debug(f"reporting trade: {trade.order.orderId} {trade.order.permId}")
+        log.debug(f"reporting done trade: {trade.order.orderId} {trade.order.permId}")
         order_info = self.orders.get(trade.order.orderId)
         log.debug(
             f"existing record: {order_info.trade.order.orderId} "
