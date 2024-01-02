@@ -1,5 +1,4 @@
 import logging
-from typing import Sequence, Union
 
 import ib_insync as ibi
 import pytest
@@ -8,25 +7,33 @@ from ib_tools.base import Atom, Pipe
 
 
 class NewAtom(Atom):
-    onStart_string = None
-    onData_string = None
+    onStart_string = ""
+    onData_string = ""
+    onFeedback_string = ""
     onData_checksum = 0
     onStart_checksum = 0
+    onFeedback_checksum = 0
 
     def __init__(self, name):
         self.name = name
         super().__init__()
 
     def onStart(self, data, *args):
-        self.onStart_string = data
+        self.onStart_string += data
         self.onStart_checksum += 1
         self.startEvent.emit(f"{data}_{self.name}")
         return data
 
     def onData(self, data, *args):
-        self.onData_string = data
+        self.onData_string += data
         self.onData_checksum += 1
         self.dataEvent.emit(f"{data}_{self.name}")
+        return data
+
+    def onFeedback(self, data, *args):
+        self.onFeedback_string += data
+        self.onFeedback_checksum += 1
+        self.feedbackEvent.emit(f"{data}_{self.name}")
         return data
 
 
@@ -59,11 +66,29 @@ class TestAtom:
         atom1.dataEvent.emit("data_test_string")
         assert atom2.onData_string == "data_test_string"
 
+    def test_connect_feedbackEvent(self, atom1, atom2):
+        atom1.connect(atom2)
+        atom2.feedbackEvent.emit("data_test_string")
+        assert atom1.onFeedback_string == "data_test_string"
+
     def test_disconnect(self, atom1, atom2):
         atom1.connect(atom2)
         atom1.disconnect(atom2)
         assert len(atom1.startEvent) == 0
         assert len(atom1.dataEvent) == 0
+        assert len(atom2.feedbackEvent) == 0
+
+    def test_disconnect_1(self, atom1, atom2):
+        atom1.connect(atom2)
+        atom1.disconnect(atom2)
+        atom1.startEvent.emit("test_data_string")
+        assert "test_data_string" not in atom2.onStart_string
+
+    def test_disconnect_2(self, atom1, atom2):
+        atom1.connect(atom2)
+        atom1.disconnect(atom2)
+        atom2.feedbackEvent.emit("test_data_string")
+        assert "test_data_string" not in atom1.onFeedback_string
 
     def test_clear(self, atom1, atom2):
         atom3 = NewAtom("atom3")
@@ -71,19 +96,23 @@ class TestAtom:
         atom3.clear()
         assert len(atom3.startEvent) == 0
         assert len(atom3.dataEvent) == 0
+        assert len(atom1.feedbackEvent) == 0
 
     def test_iadd(self, atom1, atom2):
         atom1 += atom2
         atom1.startEvent.emit("test_string")
         atom1.dataEvent.emit("test_string")
+        atom2.feedbackEvent.emit("new_test_string")
         assert atom2.onStart_string == "test_string"
         assert atom2.onData_string == "test_string"
+        assert atom1.onFeedback_string == "new_test_string"
 
     def test_isub(self, atom1, atom2):
         atom1.connect(atom2)
         atom1 -= atom2
         assert len(atom1.startEvent) == 0
         assert len(atom1.dataEvent) == 0
+        assert len(atom2.feedbackEvent) == 0
 
     def test_union(self, atom1, atom2):
         atom3 = NewAtom("atom3")
@@ -91,6 +120,12 @@ class TestAtom:
         atom3.startEvent.emit("test_string")
         assert atom1.onStart_string == "test_string"
         assert atom2.onStart_string == "test_string"
+
+    def test_union_1(self, atom1, atom2):
+        atom3 = NewAtom("atom3")
+        atom3.union(atom1, atom2)
+        atom2.feedbackEvent.emit("test_string")
+        assert atom3.onFeedback_string == "test_string"
 
     def test_unequality(self, atom1):
         ato = NewAtom("atom1")
@@ -102,18 +137,25 @@ class TestAtom:
     def test_no_duplicate_connections(self, atom1, atom2):
         atom1.connect(atom2)
         atom1.connect(atom2)
+        atom1.connect(atom2)
         atom1.startEvent.emit("test_string")
         atom1.dataEvent.emit("test_string")
+        atom2.feedbackEvent.emit("bla")
         assert len(atom1.startEvent) == 1
         assert len(atom1.dataEvent) == 1
+        assert len(atom2.feedbackEvent) == 1
 
     def test_no_duplicate_connections_1(self, atom1, atom2):
         atom1.connect(atom2)
         atom1.connect(atom2)
+        atom1.connect(atom2)
+        atom1.connect(atom2)
         atom1.startEvent.emit("test_string")
         atom1.dataEvent.emit("test_string")
+        atom2.feedbackEvent.emit("bla")
         assert atom2.onStart_checksum == 1
         assert atom2.onData_checksum == 1
+        assert atom1.onFeedback_checksum == 1
 
 
 class TestPipe:
@@ -137,6 +179,7 @@ class TestPipe:
         pipe.connect(end)
         start.startEvent.emit("StartEvent")
         start.dataEvent.emit("DataEvent")
+        end.feedbackEvent.emit("FeedbackEvent")
         return start, end, pipe
 
     def test_pipe_type(self, pipe_):
@@ -158,17 +201,17 @@ class TestPipe:
         assert pipe[1].onStart_string == "StartEvent_x"
         assert pipe[2].onStart_string == "StartEvent_x_y"
 
-    def test_inside_atoms_end(self, pass_through_pipe):
+    def test_inside_atoms_data_event(self, pass_through_pipe):
         _, _, pipe = pass_through_pipe
         assert pipe[0].onData_string == "DataEvent"
         assert pipe[1].onData_string == "DataEvent_x"
         assert pipe[2].onData_string == "DataEvent_x_y"
 
-    def test_inside_atoms_start_event_pass_through(self, pass_through_pipe):
-        start, end, pipe = pass_through_pipe
-        assert pipe[0].onStart_string == "StartEvent"
-        assert pipe[1].onStart_string == "StartEvent_x"
-        assert pipe[2].onStart_string == "StartEvent_x_y"
+    def test_inside_atoms_feedback_event(self, pass_through_pipe):
+        _, _, pipe = pass_through_pipe
+        assert pipe[2].onFeedback_string == "FeedbackEvent"
+        assert pipe[1].onFeedback_string == "FeedbackEvent_z"
+        assert pipe[0].onFeedback_string == "FeedbackEvent_z_y"
 
     def test_pass_through_startEvent(self, pass_through_pipe):
         start, end, pipe = pass_through_pipe
@@ -177,6 +220,10 @@ class TestPipe:
     def test_pass_through_dataEvent(self, pass_through_pipe):
         start, end, pipe = pass_through_pipe
         assert end.onData_string == "DataEvent_x_y_z"
+
+    def test_pass_through_feedbackEvent(self, pass_through_pipe):
+        start, end, pipe = pass_through_pipe
+        assert start.onFeedback_string == "FeedbackEvent_z_y_x"
 
     def test_connect_multiple_objects(self, atoms, pipe_):
         start = NewAtom("start")
@@ -187,6 +234,45 @@ class TestPipe:
         start.dataEvent.emit("test_string")
         assert end1.onData_string == "test_string_x_y_z"
         assert end1.onData_string == "test_string_x_y_z"
+
+    def test_connect_multiple_objects_1(self, atoms, pipe_):
+        start = NewAtom("start")
+        end1 = NewAtom("end1")
+        end2 = NewAtom("end2")
+        start.connect(pipe_)
+        pipe_.connect(end1, end2)
+        start.dataEvent.emit("test_string")
+        assert end1.onData_checksum == 1
+        assert end1.onData_checksum == 1
+
+    def test_connect_multiple_objects_feedback(self, atoms, pipe_):
+        start = NewAtom("start")
+        end1 = NewAtom("end1")
+        end2 = NewAtom("end2")
+        start.connect(pipe_)
+        pipe_.connect(end1, end2)
+        end1.feedbackEvent.emit("test_string")
+        assert start.onFeedback_string == "test_string_z_y_x"
+
+    def test_connect_multiple_objects_feedback_1(self, atoms, pipe_):
+        start = NewAtom("start")
+        end1 = NewAtom("end1")
+        end2 = NewAtom("end2")
+        start.connect(pipe_)
+        pipe_.connect(end1, end2)
+        end1.feedbackEvent.emit("test_string")
+        end2.feedbackEvent.emit("bla")
+        assert start.onFeedback_string == "test_string_z_y_xbla_z_y_x"
+
+    def test_connect_multiple_objects_feedback_2(self, atoms, pipe_):
+        start = NewAtom("start")
+        end1 = NewAtom("end1")
+        end2 = NewAtom("end2")
+        start.connect(pipe_)
+        pipe_.connect(end1, end2)
+        end1.feedbackEvent.emit("test_string")
+        end2.feedbackEvent.emit("bla")
+        assert start.onFeedback_checksum == 2
 
     def test_disconnect(self, atoms, pipe_):
         start = NewAtom("start")
@@ -200,8 +286,23 @@ class TestPipe:
         # this one is still connected
         assert end3.onData_string == "test_string_x_y_z"
         # those ones should be disconnected
-        assert end1.onData_string is None
-        assert end2.onData_string is None
+        assert end1.onData_string == ""
+        assert end2.onData_string == ""
+
+    def test_disconnect_feedback(self, atoms, pipe_):
+        start = NewAtom("start")
+        end1 = NewAtom("end1")
+        end2 = NewAtom("end2")
+        end3 = NewAtom("end3")
+        start.connect(pipe_)
+        pipe_.connect(end1, end2, end3)
+        pipe_.disconnect(end1, end2)
+        end3.feedbackEvent.emit("test_string")
+        end1.feedbackEvent.emit("bla")
+        end2.feedbackEvent.emit("bla")
+        # end1 is still connected, but end2 and end3 aren't
+        # if they were 'bla' would be captured
+        assert start.onFeedback_string == "test_string_z_y_x"
 
     def test_pass_through_startEvent_checksum(self, pass_through_pipe):
         """
@@ -213,6 +314,28 @@ class TestPipe:
         assert pipe[0].onStart_checksum == 1
         assert pipe[1].onStart_checksum == 1
         assert pipe[2].onStart_checksum == 1
+
+    def test_pass_through_onDataEvent_checksum(self, pass_through_pipe):
+        """
+        Each object in the chain should have been acted upon, except for the first.
+        """
+        start, end, pipe = pass_through_pipe
+        assert start.onData_checksum == 0
+        assert end.onData_checksum == 1
+        assert pipe[0].onData_checksum == 1
+        assert pipe[1].onData_checksum == 1
+        assert pipe[2].onData_checksum == 1
+
+    def test_pass_through_onFeedback_checksum(self, pass_through_pipe):
+        """
+        Each object in the chain should have been acted upon, except for the first.
+        """
+        start, end, pipe = pass_through_pipe
+        assert end.onFeedback_checksum == 0
+        assert start.onFeedback_checksum == 1
+        assert pipe[0].onFeedback_checksum == 1
+        assert pipe[1].onFeedback_checksum == 1
+        assert pipe[2].onFeedback_checksum == 1
 
     def test_one_atom_in_multiple_pipes(self):
         a = NewAtom("a")
@@ -228,6 +351,18 @@ class TestPipe:
         assert e.onData_string == "test_message_d"
         assert c.onStart_string == "another_test_message_b"
         assert e.onStart_string == "another_test_message_d"
+
+    def test_one_atom_in_multiple_pipes_feedback(self):
+        a = NewAtom("a")
+        b = NewAtom("b")
+        c = NewAtom("c")
+        d = NewAtom("d")
+        e = NewAtom("e")
+        Pipe(c, b, a)
+        Pipe(e, d, a)
+        a.feedbackEvent.emit("test_message")
+        assert c.onFeedback_string == "test_message_b"
+        assert e.onFeedback_string == "test_message_d"
 
 
 class TestUnionPipe:
@@ -247,7 +382,7 @@ class TestUnionPipe:
         pipe = Pipe(a, b, c)
         return pipe
 
-    def test_union_pipe(self, pipe1, pipe2, atoms):
+    def test_union_pipe_onStart(self, pipe1, pipe2, atoms):
         start, end = atoms
         p1 = pipe1
         p2 = pipe2
@@ -255,6 +390,31 @@ class TestUnionPipe:
         start.startEvent.emit("test_string")
         assert p1[-1].onStart_string == "test_string_x_y"
         assert p2[-1].onStart_string == "test_string_a_b"
+
+    def test_union_pipe_onData(self, pipe1, pipe2, atoms):
+        start, end = atoms
+        p1 = pipe1
+        p2 = pipe2
+        start.union(p1, p2)
+        start.dataEvent.emit("test_string")
+        assert p1[-1].onData_string == "test_string_x_y"
+        assert p2[-1].onData_string == "test_string_a_b"
+
+    def test_union_pipe_onFeedback_1(self, pipe1, pipe2, atoms):
+        start, end = atoms
+        p1 = pipe1
+        p2 = pipe2
+        start.union(p1, p2)
+        p1.feedbackEvent.emit("test_string")
+        assert start.onFeedback_string == "test_string"
+
+    def test_union_pipe_onFeedback_2(self, pipe1, pipe2, atoms):
+        start, end = atoms
+        p1 = pipe1
+        p2 = pipe2
+        start.union(p1, p2)
+        p2.feedbackEvent.emit("test_string")
+        assert start.onFeedback_string == "test_string"
 
     def test_union_pipe_output(self, pipe1, pipe2, atoms):
         start, end = atoms
@@ -265,9 +425,18 @@ class TestUnionPipe:
         start.startEvent.emit("test_string")
         assert end.onStart_string == "test_string_x_y_z"
 
+    def test_union_pipe_output_feedback(self, pipe1, pipe2, atoms):
+        start, end = atoms
+        p1 = pipe1
+        p2 = pipe2
+        start.union(p1, p2)
+        p1.connect(end)
+        end.feedbackEvent.emit("test_string")
+        assert start.onFeedback_string == "test_string_z_y_x"
+
 
 class AtomWithContract(Atom):
-    def __init__(self, contract: Union[ibi.Contract, Sequence[ibi.Contract]]):
+    def __init__(self, contract):
         self.contract = contract
 
 

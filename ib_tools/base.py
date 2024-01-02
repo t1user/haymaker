@@ -105,6 +105,7 @@ class Atom:
     def _createEvents(self):
         self.startEvent = ibi.Event("startEven")
         self.dataEvent = ibi.Event("dataEvent")
+        self.feedbackEvent = ibi.Event("feedbackEvent")
 
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
@@ -118,26 +119,36 @@ class Atom:
     def onData(self, data, *args):
         data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
 
+    def onFeedback(self, data, *args):
+        pass
+
     def connect(self, *targets: Atom) -> "Atom":
         for t in targets:
-            self.startEvent.disconnect_obj(t)
+            self.disconnect(t)
             self.startEvent.connect(
                 t.onStart, error=self._log_event_error, keep_ref=True
             )
-            self.dataEvent.disconnect_obj(t)
             self.dataEvent.connect(t.onData, error=self._log_event_error, keep_ref=True)
+            t.feedbackEvent.connect(
+                self.onFeedback, error=t._log_event_error, keep_ref=True
+            )
+
         return self
 
-    def disconnect(self, *targets) -> "Atom":
+    def disconnect(self, *targets: Atom) -> "Atom":
         for t in targets:
             # the same target cannot be connected more than once
             self.startEvent.disconnect_obj(t)
             self.dataEvent.disconnect_obj(t)
+            t.feedbackEvent.disconnect_obj(self)
         return self
 
     def clear(self):
+        connected_to = [i[0] for i in self.startEvent._slots]
         self.startEvent.clear()
         self.dataEvent.clear()
+        for obj in connected_to:
+            obj.feedbackEvent.clear()
 
     def pipe(self, *targets: Atom) -> Pipe:
         return Pipe(self, *targets)
@@ -172,6 +183,7 @@ class Pipe(Atom):
     def _createEvents(self):
         self.startEvent = self.first.startEvent
         self.dataEvent = self.first.dataEvent
+        self.feedbackEvent = self.first.feedbackEvent
 
     def connect(self, *targets: Atom) -> "Pipe":
         for target in targets:
@@ -182,6 +194,7 @@ class Pipe(Atom):
         for target in targets:
             self.last.startEvent.disconnect_obj(target)
             self.last.dataEvent.disconnect_obj(target)
+            target.feedbackEvent.disconnect_obj(self.last)
         return self
 
     def onStart(self, data, *args) -> None:
@@ -189,6 +202,9 @@ class Pipe(Atom):
 
     def onData(self, data, *args) -> None:
         self.first.onData(data, *args)
+
+    def onFeedback(self, data, *args) -> None:
+        self.last.onFeedback(data, *args)
 
     def pipe(self):
         for i, member in enumerate(self._members):
