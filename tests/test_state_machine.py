@@ -2,11 +2,11 @@ import ib_insync as ibi
 import pytest
 
 from ib_tools.state_machine import (
-    Model,
-    ModelContainer,
     OrderContainer,
     OrderInfo,
     StateMachine,
+    Strategy,
+    StrategyContainer,
 )
 
 
@@ -239,60 +239,60 @@ def test_OrderContainer_max_size_ignored_if_zero():
     assert len(orders) == 20
 
 
-def test_Model_dot_getitem():
-    m = Model({"x": 1, "y": 2, "z": 3})
+def test_Strategy_dot_getitem():
+    m = Strategy({"x": 1, "y": 2, "z": 3})
     assert m.x == 1
 
 
-def test_Model_dot_setitem():
-    m = Model({"x": 1, "y": 2, "z": 3})
+def test_Strategy_dot_setitem():
+    m = Strategy({"x": 1, "y": 2, "z": 3})
     m.a = 5
     assert m == {"x": 1, "y": 2, "z": 3, "a": 5}
 
 
-def test_Model_dot_get():
-    m = Model({"x": 1, "y": 2, "z": 3})
+def test_Strategy_dot_get():
+    m = Strategy({"x": 1, "y": 2, "z": 3})
     m.a = 5
     assert m.get("a") == 5
 
 
-def test_Model_dot_delete():
-    m = Model({"x": 1, "y": 2, "z": 3})
+def test_Strategy_dot_delete():
+    m = Strategy({"x": 1, "y": 2, "z": 3})
     del m.y
     assert m == {"x": 1, "z": 3}
 
 
-def test_Model_update():
-    m = Model({"x": 1, "y": 2, "z": 3})
+def test_Strategy_update():
+    m = Strategy({"x": 1, "y": 2, "z": 3})
     m.update({"a": 5, "b": 9, "c": 0})
     assert m == {"x": 1, "y": 2, "z": 3, "a": 5, "b": 9, "c": 0}
 
 
-def test_Model_contains():
-    m = Model({"x": 1, "y": 2, "z": 3})
+def test_Strategy_contains():
+    m = Strategy({"x": 1, "y": 2, "z": 3})
     m.a = 8
     assert "a" in m
 
 
-def test_ModelContainer_contains_only_Models():
-    m = ModelContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
-    assert isinstance(m["b"], Model)
+def test_StrategyContainer_contains_only_Strategies():
+    m = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+    assert isinstance(m["b"], Strategy)
     assert m["b"].x == 4
 
 
-def test_ModelContainer_add_key():
-    m = ModelContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+def test_StrategyContainer_add_key():
+    m = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
     m["c"] = {"x": 2, "c": 3}
-    assert isinstance(m["c"], Model)
+    assert isinstance(m["c"], Strategy)
 
 
-def test_ModelContainer_missing():
-    m = ModelContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
-    assert isinstance(m["not_set"], Model)
+def test_StrategyContainer_missing():
+    m = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+    assert isinstance(m["not_set"], Strategy)
 
 
-def test_ModelContaner_new_strategy():
-    m = ModelContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+def test_StrategyContaner_new_strategy():
+    m = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
     data = m["c"]
     data["x"] = 5
     assert m.data == {

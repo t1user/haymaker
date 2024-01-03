@@ -21,7 +21,7 @@ class BinarySignalProcessor(Atom):
     at all is not determined here, it's the job of `Portfolio`.
 
     * Zero signal means close position if position exists, ignored
-    otherwise
+    otherwise <<<<--- THIS IS WRONG
 
     * Non-zero signal means:
 

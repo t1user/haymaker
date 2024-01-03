@@ -12,7 +12,7 @@ from ib_tools.execution_models import (
     BaseExecModel,
     EventDrivenExecModel,
 )
-from ib_tools.state_machine import Model
+from ib_tools.state_machine import Strategy
 
 
 def test_AbstraExecModel_is_abstract():
@@ -108,7 +108,7 @@ def objects():
             contract: ibi.Contract,
             order: ibi.Order,
             action: str,
-            data: Model,
+            data: Strategy,
         ):
             order.orderId = random.randint(1, 100)
             trade_object = ibi.Trade(order=order, contract=contract)
@@ -316,7 +316,7 @@ def test_passed_order_kwargs_update_defaults():
             contract: ibi.Contract,
             order: ibi.Order,
             action: str,
-            model: Model,
+            model: Strategy,
         ):
             self.contract = contract
             self.order = order

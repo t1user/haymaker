@@ -7,6 +7,7 @@ from dataclasses import dataclass, fields
 from functools import partial  # , singledispatchmethod
 from typing import Any, Iterator, Optional, Union
 
+import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from ib_tools.saver import MongoSaver, SaveManager, async_runner
@@ -96,7 +97,7 @@ class OrderContainer(UserDict):
         return f"OrderContainer({self.data}, max_size={self.max_size})"
 
 
-class Model(dict):
+class Strategy(dict):
     def __getattr__(self, key):
         return self.get(key)
 
@@ -107,17 +108,17 @@ class Model(dict):
         self.__delitem__(key)
 
 
-class ModelContainer(UserDict):
+class StrategyContainer(UserDict):
     def __setitem__(self, key: str, item: dict):
         if not isinstance(item, dict):
             raise ValueError(
                 f"{self.__class__.__qualname__} can be used to store only dicts."
             )
-        self.data[key] = Model(item)
+        self.data[key] = Strategy(item)
 
     def __missing__(self, key):
         log.debug(f"Will reset data for {key}")
-        self.data[key] = Model(
+        self.data[key] = Strategy(
             {
                 "active_contract": None,
                 "position": 0.0,
@@ -160,10 +161,10 @@ class ModelContainer(UserDict):
             log.warning("It's weird, no '_id' in data from mongo.")
 
         log.debug(f"Decoded keys: {list(decoded.keys())}")
-        self.data.update(**{k: Model(v) for k, v in decoded.items()})
+        self.data.update(**{k: Strategy(v) for k, v in decoded.items()})
 
     def __repr__(self) -> str:
-        return f"ModelContainer({self.data})"
+        return f"StrategyContainer({self.data})"
 
 
 # Consider allowing for use of different savers
@@ -236,64 +237,34 @@ class StateMachine(Atom):
     def __init__(self) -> None:
         super().__init__()
 
-        self.data = ModelContainer()  # dict of ExecModel data
+        self.data = StrategyContainer()  # dict of ExecModel data
         self.orders = OrderContainer()  # dict of OrderInfo
 
-    def update_trades(self, *trades: ibi.Trade) -> list[ibi.Trade]:
+    def update_trade(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         """
         Update trade object for a given order.  Used after re-start to
         bring records up to date with IB
         """
-        error_trades = []
-        for trade in trades:
-            oi = self.orders.get(trade.order.orderId)
-            if oi:
-                log.debug(
-                    f"Trade will be updated - id: {oi.trade.order.orderId} "
-                    f"permId: {oi.trade.order.permId}"
-                )
-                new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
-                self.orders[trade.order.orderId] = new_oi
-                self.save_order(new_oi.encode())
-                # TODO: What about trades that became inactive while disconnected?
-            else:
-                log.debug(f"Error trade: {trade}")
-                error_trades.append(trade)
-        return error_trades
+        oi = self.orders.get(trade.order.orderId)
+        if oi:
+            log.debug(
+                f"Trade will be updated - id: {oi.trade.order.orderId} "
+                f"permId: {oi.trade.order.permId}"
+            )
+            new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
+            self.orders[trade.order.orderId] = new_oi
+            self.save_order(new_oi.encode())
+            # TODO: What about trades that became inactive while disconnected?
+            return None
+        else:
+            return trade
 
-    def review_trades(self, *trades: ibi.Trade) -> list[ibi.Trade]:
+    def prune_order(self, orderId) -> None:
         """
-        On restart review all trades on record and compare their
-        status with IB.
-
-        Args:
-        -----
-
-        *trades - list of open trades from :meth:`ibi.IB.openTrades()`.
-
-        Returns:
-        --------
-
-        List of trades that we have as open, while IB has them as
-        done.  We have to reconcile those trades' status and report
-        them as appropriate.
+        This order is no longer of interest it's inactive in our
+        orders and inactive in IB.  Called by startup sync routines.
         """
-        unresolved_trades = []
-        open_trades = {trade.order.orderId: trade for trade in trades}
-        for orderId, oi in self.orders.copy().items():
-            if orderId not in open_trades:
-                # if inactive it's already been dealt with before restart
-                if oi.active:
-                    # this is a trade that we have as active in self.orders
-                    # but IB doesn't have it in open orders
-                    # we have to figure out what happened to this trade
-                    # while we were disconnected and report it as appropriate
-                    unresolved_trades.append(oi.trade)
-                else:
-                    # this order is no longer of interest
-                    # it's inactive in our orders and inactive in IB
-                    self.orders.pop(orderId)
-        return unresolved_trades
+        self.orders.pop(orderId)
 
     def override_inactive_trades(self, *trades: ibi.Trade) -> None:
         """
@@ -309,9 +280,9 @@ class StateMachine(Atom):
 
     async def read_from_store(self):
         log.debug("Will read data from store...")
-        model_data = await async_runner(model_saver.read_latest)
+        strategy_data = await async_runner(model_saver.read_latest)
         order_data = await async_runner(order_saver.read, {"active": True})
-        self.data.decode(model_data)
+        self.data.decode(strategy_data)
         self.orders.decode(order_data)
 
     async def onData(self, data, *args) -> None:
@@ -349,6 +320,7 @@ class StateMachine(Atom):
                 f"position: {sign(data.position)}"
                 f"->> {strategy}"
             )
+            log.debug(self.verify_position_for_contract(data.active_contract))
             try:
                 assert sign(data.position) == target_position
                 # Investigate why this may be necessary:
@@ -359,7 +331,7 @@ class StateMachine(Atom):
             log.critical(f"Attempt to trade for unknow strategy: {strategy}")
 
     def register_order(
-        self, strategy: str, action: str, trade: ibi.Trade, data: Model
+        self, strategy: str, action: str, trade: ibi.Trade, data: Strategy
     ) -> None:
         """
         Register order, register lock, verify that position has been registered.
@@ -386,6 +358,28 @@ class StateMachine(Atom):
 
         self.save_order(order_info.encode())
         self.save_model(self.data.encode())
+
+        # ### following is for debugging, should be deleted ####
+        async def _nothing(*args):
+            n = 0
+            while not trade.order.permId:
+                n += 1
+                await asyncio.sleep(1)
+            log.debug(
+                f"register_order acquired permId after: {n} seconds."
+                f"{trade.order.orderId} {trade.order.permId}"
+            )
+
+        testing_event = ev.Event("testingEvent")
+        testing_event += _nothing
+
+        if not trade.order.permId:
+            testing_event.emit()
+        else:
+            log.debug(
+                f"register_order got permId without delay: "
+                f"{trade.order.orderId} {trade.order.permId}"
+            )
 
     async def report_done_order(self, trade: ibi.Trade) -> Optional[OrderInfo]:
         log.debug(f"reporting done trade: {trade.order.orderId} {trade.order.permId}")
@@ -423,7 +417,7 @@ class StateMachine(Atom):
     def delete_order(self, orderId: int) -> None:
         del self.orders[orderId]
 
-    def get_strategy(self, strategy: str) -> Optional[Model]:
+    def get_strategy(self, strategy: str) -> Optional[Strategy]:
         return self.data.get(strategy)
 
     def position(self, strategy: str) -> float:
@@ -511,7 +505,7 @@ class StateMachine(Atom):
     # ### TODO: Re-do this
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
         self.data[strategy].lock = 1 if trade.order.action == "BUY" else -1
-        log.debug(f"Registered lock: {strategy}: {self.data[strategy]}")
+        log.debug(f"Registered lock: {strategy}: {self.data[strategy].lock}")
 
     def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
         # When exactly should the lock be registered to prevent double-dip?

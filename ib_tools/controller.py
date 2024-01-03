@@ -16,7 +16,7 @@ from .trader import Trader
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
-    from .state_machine import Model, StateMachine
+    from .state_machine import StateMachine, Strategy
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +52,12 @@ class OrderSyncStrategy:
         ]
 
         log.debug(f"Trades before update: {before_update}")
-        self.unknown_trades = self.sm.update_trades(*self.ib.openTrades())
+
+        self.unknown_trades = []
+        for trade in self.ib.openTrades():
+            if ut := self.sm.update_trade(trade):
+                self.unknown_trades.append(ut)
+
         after_update = [
             (i.trade.order.orderId, i.trade.order.permId)
             for i in self.sm.orders.values()
@@ -62,8 +67,28 @@ class OrderSyncStrategy:
         return self
 
     def review_trades(self):
-        # Report trades on which we can find information
-        self.question_trades = self.sm.review_trades(*self.ib.openTrades())
+        """
+        Review all trades on record and compare their status with IB.
+
+        Produce a list of trades that we have as open, while IB has
+        them as done.  We have to reconcile those trades' status and
+        report them as appropriate.
+        """
+        self.question_trades = []
+        open_trades = {trade.order.orderId: trade for trade in self.ib.openTrades}
+        for orderId, oi in self.sm.orders.copy().items():
+            if orderId not in open_trades:
+                # if inactive it's already been dealt with before restart
+                if oi.active:
+                    # this is a trade that we have as active in self.orders
+                    # but IB doesn't have it in open orders
+                    # we have to figure out what happened to this trade
+                    # while we were disconnected and report it as appropriate
+                    self.question_trades.append(oi.trade)
+                else:
+                    # this order is no longer of interest
+                    # it's inactive in our orders and inactive in IB
+                    self.sm.prune_order(orderId)
         return self
 
     def handle_question_trades(self):
@@ -258,7 +283,7 @@ class Controller:
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
-        data: Model,
+        data: Strategy,
     ) -> ibi.Trade:
         trade = self.trader.trade(contract, order)
         self.sm.register_order(strategy, action, trade, data)
@@ -433,19 +458,21 @@ class Controller:
             )
 
     def register_position(
-        self, strategy: str, model: Model, trade: ibi.Trade, fill: ibi.Fill
+        self, strategy_str: str, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
     ) -> None:
         if fill.execution.side == "BOT":
-            model.position += fill.execution.shares
+            strategy.position += fill.execution.shares
             log.debug(
-                f"Registered {trade.order.orderId} BUY {trade.order.orderType} "
-                f"for {strategy} --> position: {model.position}"
+                f"Registered orderId: {trade.order.orderId} permId: "
+                f"{trade.order.permId} BUY {trade.order.orderType} "
+                f"for {strategy_str} --> position: {strategy.position}"
             )
         elif fill.execution.side == "SLD":
-            model.position -= fill.execution.shares
+            strategy.position -= fill.execution.shares
             log.debug(
                 f"Registered {trade.order.orderId} SELL {trade.order.orderType} "
-                f"for {strategy} --> position: {model.position}"
+                f"{trade.order.permId} BUY {trade.order.orderType} "
+                f"for {strategy_str} --> position: {strategy.position}"
             )
         else:
             log.critical(
@@ -457,10 +484,10 @@ class Controller:
         log.debug(f"ExecDetailsEvent: {trade.order.orderId}, {trade.order.permId}")
         order_info = self.sm.get_order(trade.order.orderId)
         if order_info:
-            strategy = order_info.strategy
-        model = self.sm.get_strategy(strategy)
-        if model:
-            self.register_position(strategy, model, trade, fill)
+            strategy_str = order_info.strategy
+        strategy = self.sm.get_strategy(strategy_str)
+        if strategy:
+            self.register_position(strategy_str, strategy, trade, fill)
         else:
             log.critical(f"Unknow trade: {trade}")
 
