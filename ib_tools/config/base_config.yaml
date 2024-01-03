@@ -35,11 +35,7 @@ stop_order:
   tif: GTC
 
 tp_order:
-  algoStrategy: Adaptive
-  algoParams:
-  - !!python/object/apply:ib_insync.TagValue
-      - adaptivePriority
-      - Normal
+  # don't use adaptive orders here as not complient with OCA
   outsideRth: True
   
 # all linked orders will use this oca_type (as per IB definition)

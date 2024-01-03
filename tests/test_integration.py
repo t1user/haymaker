@@ -10,6 +10,7 @@ from ib_tools.controller import Controller
 from ib_tools.execution_models import BaseExecModel, EventDrivenExecModel
 from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
 from ib_tools.signals import BinarySignalProcessor
+from ib_tools.state_machine import StrategyContainer
 
 
 @pytest.fixture
@@ -23,8 +24,7 @@ def portfolio():
 @pytest.fixture
 def pipe(df_brick, data_for_df, portfolio):  # noqa
     class FakeStateMachine:
-        def position(self, key):
-            return 0
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return 0

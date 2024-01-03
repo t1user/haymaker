@@ -11,6 +11,7 @@ from ib_tools.signals import (
     LockableBlipBinarySignalProcessor,
     binary_signal_processor_factory,
 )
+from ib_tools.state_machine import StrategyContainer
 
 
 def test_BinarySignalProcessor_instantiates():
@@ -47,8 +48,7 @@ def pipe():
     source = SourceAtom()
 
     class FakeStateMachine:
-        def position(self, key):
-            return 0
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return 0
@@ -130,13 +130,14 @@ def test_signal_paths_actions(test_input, expected):
     position, lock, signal, lockable, always_on = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return lock
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     processor = binary_signal_processor_factory(lockable, always_on)
     processor_instance = processor(sm)
@@ -189,13 +190,14 @@ def test_signal_paths_positions(test_input, expected):
     position, lock, signal, lockable, always_on = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return lock
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     class OutputAtom(Atom):
         out = {}
@@ -238,13 +240,14 @@ def test_signal_paths_BinarySignalProcessor(test_input, expected):
     position, signal = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             raise TypeError("Shouldn't be here")
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     processor_instance = BinarySignalProcessor(sm)
     action = processor_instance.process_signal("x", signal)
@@ -289,13 +292,14 @@ def test_signal_paths_LockableBinarySignalProcessor(test_input, expected):
     position, signal, lock = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return lock
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     processor_instance = LockableBinarySignalProcessor(sm)
     action = processor_instance.process_signal("x", signal)
@@ -340,13 +344,14 @@ def test_signal_paths_LockableBlipBinarySignalProcessor(test_input, expected):
     position, signal, lock = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return lock
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     processor_instance = LockableBlipBinarySignalProcessor(sm)
     action = processor_instance.process_signal("x", signal)
@@ -391,13 +396,14 @@ def test_signal_paths_AlwaysOnLockableBinarySignalProcessor(test_input, expected
     position, signal, lock = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return lock
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     processor_instance = AlwaysOnLockableBinarySignalProcessor(sm)
     action = processor_instance.process_signal("x", signal)
@@ -423,13 +429,11 @@ def test_signal_paths_AlwaysOnBinarySignalProcessor(test_input, expected):
     position, signal = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
-
-        def locked(self, key):
-            raise TypeError("Shouldn't be here")
+        strategy = StrategyContainer()
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     processor_instance = AlwaysOnBinarySignalProcessor(sm)
     action = processor_instance.process_signal("x", signal)
@@ -460,13 +464,14 @@ def test_signal_paths_positions_BinarySignalProcessor(test_input, expected):
     position, signal = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             raise TypeError("Shouldn't be here")
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     class OutputAtom(Atom):
         out = {}
@@ -521,13 +526,14 @@ def test_signal_paths_positions_LockableBinarySignalProcessor(test_input, expect
     position, signal, lock = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return lock
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     class OutputAtom(Atom):
         out = {}
@@ -586,13 +592,14 @@ def test_signal_paths_positions_AlwaysOnLockableBinarySignalProcessor(
     position, signal, lock = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
+        strategy = StrategyContainer()
 
         def locked(self, key):
             return lock
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     class OutputAtom(Atom):
         out = {}
@@ -629,13 +636,11 @@ def test_signal_paths_positions_AlwaysOnBinarySignalProcessor(test_input, expect
     position, signal = test_input
 
     class FakeStateMachine:
-        def position(self, key):
-            return position
-
-        def locked(self, key):
-            raise TypeError("Shouldn't be here")
+        strategy = StrategyContainer()
 
     sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
 
     class OutputAtom(Atom):
         out = {}

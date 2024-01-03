@@ -12,7 +12,7 @@ from .blotter import Blotter
 from .config import CONFIG
 
 # from .manager import IB, STATE_MACHINE
-from .trader import Trader
+from .trader import FakeTrader, Trader
 
 if TYPE_CHECKING:
     from .execution_models import AbstractExecModel
@@ -48,7 +48,7 @@ class OrderSyncStrategy:
         # update order records with current Trade objects
         before_update = [
             (i.trade.order.orderId, i.trade.order.permId)
-            for i in self.sm.orders.values()
+            for i in self.sm._orders.values()
         ]
 
         log.debug(f"Trades before update: {before_update}")
@@ -60,7 +60,7 @@ class OrderSyncStrategy:
 
         after_update = [
             (i.trade.order.orderId, i.trade.order.permId)
-            for i in self.sm.orders.values()
+            for i in self.sm._orders.values()
         ]
 
         log.debug(f"Trades after update: {after_update}")
@@ -75,8 +75,8 @@ class OrderSyncStrategy:
         report them as appropriate.
         """
         self.question_trades = []
-        open_trades = {trade.order.orderId: trade for trade in self.ib.openTrades}
-        for orderId, oi in self.sm.orders.copy().items():
+        open_trades = {trade.order.orderId: trade for trade in self.ib.openTrades()}
+        for orderId, oi in self.sm._orders.copy().items():
             if orderId not in open_trades:
                 # if inactive it's already been dealt with before restart
                 if oi.active:
@@ -420,10 +420,13 @@ class Controller:
         This is an event handler (callback).  Connected (subscribed)
         to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
         """
+        # THIS IS ALL POINTLESS
+        # TODO
+        # no permId here at all
 
         await asyncio.sleep(0.1)
         log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
-        existing_order_record = self.sm.get_order(trade.order.orderId)
+        existing_order_record = self.sm.order.get(trade.order.orderId)
         if not existing_order_record:
             log.critical(f"Unknown trade in the system {trade.order}")
 
@@ -440,7 +443,7 @@ class Controller:
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
             # TODO: FIX THIS
-            if await self.sm.report_done_order(trade):
+            if await self.sm.save_done_order(trade):
                 log.debug(
                     f"{trade.contract.symbol}: order {trade.order.orderId} "
                     f"{trade.order.orderType} done {trade.orderStatus.status}."
@@ -482,10 +485,10 @@ class Controller:
 
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         log.debug(f"ExecDetailsEvent: {trade.order.orderId}, {trade.order.permId}")
-        order_info = self.sm.get_order(trade.order.orderId)
+        order_info = self.sm.order.get(trade.order.orderId)
         if order_info:
             strategy_str = order_info.strategy
-        strategy = self.sm.get_strategy(strategy_str)
+        strategy = self.sm.strategy.get(strategy_str)
         if strategy:
             self.register_position(strategy_str, strategy, trade, fill)
         else:
@@ -506,7 +509,7 @@ class Controller:
         # prevent writing all orders from session on startup
         if self.hold:
             return
-        data = self.sm.get_order(trade.order.orderId)
+        data = self.sm.order.get(trade.order.orderId)
         if data:
             strategy, action, _, params, _ = data
             position_id = params.get("position_id")
@@ -573,7 +576,7 @@ class Controller:
         if errorCode < 400:
             # reqId is most likely orderId
             # order rejected is errorCode = 201
-            order_info = self.sm.get_order(reqId)
+            order_info = self.sm.order.get(reqId)
             if order_info:
                 strategy, action, trade, _ = order_info
                 order = trade.order
@@ -584,6 +587,24 @@ class Controller:
                 f"Error {errorCode}: {errorString} {contract}, "
                 f"{strategy} | {action} | {order}"
             )
+
+    def nuke(self):
+        """
+        Cancel all open orders, close existing positions and prevent
+        any further trading.  Response to a critical error or request
+        sent by administrator.
+        """
+        for order in self.ib.openOrders():
+            self.ib.cancelOrder(order)
+        for position in self.ib.positions:
+            self.trade(
+                position.contract,
+                ibi.MarketOrder(
+                    "BUY" if position.position < 0 else "SELL", abs(position.position)
+                ),
+            )
+        self.trader = FakeTrader()
+        log.critical("Self nuked!!!!! No more trades will be executed until restart.")
 
     def __repr__(self):
         return f"{__class__.__name__}({self.sm, self.ib, self.blotter})"

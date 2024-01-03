@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections import UserDict, defaultdict
 from dataclasses import dataclass, fields
-from functools import partial  # , singledispatchmethod
+from functools import partial
 from typing import Any, Iterator, Optional, Union
 
 import eventkit as ev  # type: ignore
@@ -129,20 +129,19 @@ class StrategyContainer(UserDict):
         )
         return self.data[key]
 
-    # @singledispatchmethod
-    # def position(self, key: str) -> float:
-    #     if model := self.get(key):
-    #         return model.position
-    #     else:
-    #         return 0.0
+    def total_positions(self) -> defaultdict[ibi.Contract, float]:
+        d: defaultdict[ibi.Contract, float] = defaultdict(float)
+        for data in self.data.values():
+            if data.active_contract:
+                d[data.active_contract] += data.position
+        return d
 
-    # @position.register
-    # def _(self, key: ibi.Contract):
-    #     c: defaultdict[ibi.Contract, float] = defaultdict(float)
-    #     for model in self.data.values():
-    #         if model.get("active_contract"):
-    #             c[model["active_contract"]] += model["position"]
-    #     return c[key]
+    def strategies_by_contract(self) -> defaultdict[ibi.Contract, list[str]]:
+        d: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
+        for data in self.data.values():
+            if data.active_contract:
+                d[data.active_contract].append(data.strategy)
+        return d
 
     def encode(self) -> dict[str, Any]:
         return tree(self.data)
@@ -165,6 +164,31 @@ class StrategyContainer(UserDict):
 
     def __repr__(self) -> str:
         return f"StrategyContainer({self.data})"
+
+
+@dataclass
+class StrategyWrapper:
+    _strategy: Strategy
+    _orders: OrderContainer
+
+    @property
+    def orders(self):
+        return self._orders.strategy(self._strategy)
+
+    def __getitem__(self, item):
+        return self._strategy[item]
+
+    def __setitem__(self, key, value):
+        self._strategy[key] = value
+
+    def __getattr__(self, key):
+        return self._strategy.get(key)
+
+    def __setattr__(self, key, value):
+        self._strategy[key] = value
+
+    def __delattr__(self, key):
+        self._strategy.__delitem__(key)
 
 
 # Consider allowing for use of different savers
@@ -237,22 +261,22 @@ class StateMachine(Atom):
     def __init__(self) -> None:
         super().__init__()
 
-        self.data = StrategyContainer()  # dict of ExecModel data
-        self.orders = OrderContainer()  # dict of OrderInfo
+        self._data = StrategyContainer()  # dict of ExecModel data
+        self._orders = OrderContainer()  # dict of OrderInfo
 
     def update_trade(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         """
         Update trade object for a given order.  Used after re-start to
         bring records up to date with IB
         """
-        oi = self.orders.get(trade.order.orderId)
+        oi = self._orders.get(trade.order.orderId)
         if oi:
             log.debug(
                 f"Trade will be updated - id: {oi.trade.order.orderId} "
                 f"permId: {oi.trade.order.permId}"
             )
             new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
-            self.orders[trade.order.orderId] = new_oi
+            self._orders[trade.order.orderId] = new_oi
             self.save_order(new_oi.encode())
             # TODO: What about trades that became inactive while disconnected?
             return None
@@ -264,7 +288,7 @@ class StateMachine(Atom):
         This order is no longer of interest it's inactive in our
         orders and inactive in IB.  Called by startup sync routines.
         """
-        self.orders.pop(orderId)
+        self._orders.pop(orderId)
 
     def override_inactive_trades(self, *trades: ibi.Trade) -> None:
         """
@@ -273,17 +297,17 @@ class StateMachine(Atom):
         """
         for trade in trades:
             log.debug(f"Will delete trade: {trade.order.orderId}")
-            oi_dict = self.orders[trade.order.orderId].encode()
+            oi_dict = self._orders[trade.order.orderId].encode()
             oi_dict.update({"active": False})
             self.save_order(oi_dict)
-            del self.orders[trade.order.orderId]
+            del self._orders[trade.order.orderId]
 
     async def read_from_store(self):
         log.debug("Will read data from store...")
         strategy_data = await async_runner(model_saver.read_latest)
         order_data = await async_runner(order_saver.read, {"active": True})
-        self.data.decode(strategy_data)
-        self.orders.decode(order_data)
+        self._data.decode(strategy_data)
+        self._orders.decode(order_data)
 
     async def onData(self, data, *args) -> None:
         """
@@ -312,7 +336,7 @@ class StateMachine(Atom):
         Is the postion resulting from transaction the same as was
         required?
         """
-        data = self.data.get(strategy)
+        data = self._data.get(strategy)
         if data:
             log.debug(
                 f"Transaction OK? ->{sign(data.position) == target_position}<- "
@@ -320,7 +344,10 @@ class StateMachine(Atom):
                 f"position: {sign(data.position)}"
                 f"->> {strategy}"
             )
-            log.debug(self.verify_position_for_contract(data.active_contract))
+            log.debug(
+                f"{data.active_contract.symbol}: "
+                f"{self.verify_position_for_contract(data.active_contract)}"
+            )
             try:
                 assert sign(data.position) == target_position
                 # Investigate why this may be necessary:
@@ -346,7 +373,7 @@ class StateMachine(Atom):
         """
         params = data["params"].get(action.lower(), {})
         order_info = OrderInfo(strategy, action, trade, params)
-        self.orders[trade.order.orderId] = order_info
+        self._orders[trade.order.orderId] = order_info
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} "
             f"permId: {trade.order.permId} registered for: "
@@ -357,16 +384,16 @@ class StateMachine(Atom):
             trade.filledEvent += partial(self.new_position_callbacks, strategy)
 
         self.save_order(order_info.encode())
-        self.save_model(self.data.encode())
+        self.save_model(self._data.encode())
 
         # ### following is for debugging, should be deleted ####
         async def _nothing(*args):
             n = 0
             while not trade.order.permId:
                 n += 1
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.1)
             log.debug(
-                f"register_order acquired permId after: {n} seconds."
+                f"register_order acquired permId after: {n*.1} seconds."
                 f"{trade.order.orderId} {trade.order.permId}"
             )
 
@@ -381,9 +408,9 @@ class StateMachine(Atom):
                 f"{trade.order.orderId} {trade.order.permId}"
             )
 
-    async def report_done_order(self, trade: ibi.Trade) -> Optional[OrderInfo]:
-        log.debug(f"reporting done trade: {trade.order.orderId} {trade.order.permId}")
-        order_info = self.orders.get(trade.order.orderId)
+    async def save_done_order(self, trade: ibi.Trade) -> Optional[OrderInfo]:
+        log.debug(f"saving done trade: {trade.order.orderId} {trade.order.permId}")
+        order_info = self._orders.get(trade.order.orderId)
         log.debug(
             f"existing record: {order_info.trade.order.orderId} "
             f"{order_info.trade.order.permId}"
@@ -401,60 +428,97 @@ class StateMachine(Atom):
                 "trade": trade,
                 "params": {},
             }
-        log.debug("Reporting done order")
-        self.save_model(self.data.encode())
+        self.save_model(self._data.encode())
         self.save_order(dict_for_saving)
         return order_info
 
     def report_new_order(self, trade: ibi.Trade) -> None:
         # log.debug("Reporting new order.")
-        # self.save_model(self.data.encode())
+        # self.save_model(self._data.encode())
         pass
 
-    def get_order(self, orderId: int) -> Optional[OrderInfo]:
-        return self.orders.get(orderId)
+    # ### These are data access and modification methods ###
+
+    @property
+    def strategy(self):
+        """
+        Access strategies by ``state_machine.strategy['strategy_name']``
+        or ``state_machine.strategy.get('strategy_name')``
+        """
+        return self._data
+
+    @property
+    def order(self):
+        """
+        Access order by ``state_machine.order[orderId]``
+        or ``state_machine.order.get(orderId)``
+        """
+        return self._orders
+
+    @property
+    def position(self) -> defaultdict[ibi.Contract, float]:
+        """
+        Access positions for given contract: ``state_machine.position[contract]``
+        or ``state_machine.position.get(contract)``
+        """
+        return self._data.total_positions()
+
+    @property
+    def for_contract(self) -> defaultdict[ibi.Contract, list[str]]:
+        """
+        Access strategies for given contract:
+        ``state_machine.for_contract[contract]`` or
+        ``state_machine.for_contract.get(contract)``
+        """
+        return self._data.strategies_by_contract()
+
+    # def get_order(self, orderId: int) -> Optional[OrderInfo]:
+    #     return self._orders.get(orderId)
 
     def delete_order(self, orderId: int) -> None:
-        del self.orders[orderId]
+        del self._orders[orderId]
 
-    def get_strategy(self, strategy: str) -> Optional[Strategy]:
-        return self.data.get(strategy)
+    # def get_strategy(self, strategy: str) -> Optional[Strategy]:
+    #     return self._data.get(strategy)
 
-    def position(self, strategy: str) -> float:
-        """
-        Return position for strategy.  Orders openning strategy are
-        treated as if they were already open.
-        """
-        # Verify that broker's position records are the same as mine
-        data = self.data.get(strategy)
-        assert data
+    def locked(self, strategy: str) -> Lock:
+        return self._data[strategy].lock
 
-        if data.position:
-            return data.position
+    # ### End data access and modification methods ###
 
-        # Check not only position but pending position openning orders
-        elif orders := self.orders.strategy(strategy):
-            for order_info in orders:
-                trade = order_info.trade
-                if order_info.action == "OPEN":
-                    return trade.order.totalQuantity * (
-                        1.0 if trade.order.action.upper() == "BUY" else -1.0
-                    )
-        return 0.0
+    # def position(self, strategy: str) -> float:
+    #     """
+    #     PROBABLY NOT IN USE
 
-    def verify_position_for_contract(self, contract) -> Union[bool, float]:
-        # NOT IN USE
-        my_position = self.position_for_contract(contract)
+    #     Return position for strategy.  Orders openning strategy are
+    #     treated as if they were already open.
+    #     """
+    #     # Verify that broker's position records are the same as mine
+    #     data = self._data.get(strategy)
+    #     assert data
+
+    #     if data.position:
+    #         return data.position
+
+    #     # Check not only position but pending position openning orders
+    #     elif orders := self._orders.strategy(strategy):
+    #         for order_info in orders:
+    #             trade = order_info.trade
+    #             if order_info.action == "OPEN":
+    #                 return trade.order.totalQuantity * (
+    #                     1.0 if trade.order.action.upper() == "BUY" else -1.0
+    #                 )
+    #     return 0.0
+
+    def verify_position_for_contract(
+        self, contract: ibi.Contract
+    ) -> Union[bool, float]:
+        my_position = self.position.get(contract, 0.0)
         ib_position = self.ib_position_for_contract(contract)
         return (my_position == ib_position) or (my_position - ib_position)
 
-    def locked(self, strategy: str) -> Lock:
-        return self.data[strategy].lock
-
-    def position_for_contract(self, contract: ibi.Contract) -> float:
-        return self.total_positions().get(contract) or 0.0
-
     def ib_position_for_contract(self, contract: ibi.Contract) -> float:
+        # MOVE THIS OUT OF THIS CLASS
         return next(
             (v.position for v in self.ib.positions() if v.contract == contract), 0
         )
@@ -462,25 +526,19 @@ class StateMachine(Atom):
         # positions = {p.contract: p.position for p in self.ib.positions()}
         # return positions.get(contract, 0.0)
 
-    def total_positions(self) -> defaultdict[ibi.Contract, float]:
-        d: defaultdict[ibi.Contract, float] = defaultdict(float)
-        for data in self.data.values():
-            if data.active_contract:
-                d[data.active_contract] += data.position
-        log.debug(f"Total positions: {d}")
-        return d
-
     def verify_positions(self) -> dict[ibi.Contract, float]:
         """
         Compare positions actually held with broker with position
         records.  Return differences if any and log an error.
         """
 
+        # NOT IN USE
+
         # list of contracts where differences occur
         # difference: list[ibi.Contract] = []
 
         broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
-        my_positions_dict = self.total_positions()
+        my_positions_dict = self._data.total_positions()
         log.debug(f"Broker positions: {broker_positions_dict}")
         log.debug(f"My positions: {my_positions_dict}")
         diff = {
@@ -504,8 +562,8 @@ class StateMachine(Atom):
 
     # ### TODO: Re-do this
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
-        self.data[strategy].lock = 1 if trade.order.action == "BUY" else -1
-        log.debug(f"Registered lock: {strategy}: {self.data[strategy].lock}")
+        self._data[strategy].lock = 1 if trade.order.action == "BUY" else -1
+        log.debug(f"Registered lock: {strategy}: {self._data[strategy].lock}")
 
     def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
         # When exactly should the lock be registered to prevent double-dip?

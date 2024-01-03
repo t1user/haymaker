@@ -115,8 +115,8 @@ def test_state_machine_get_order(state_machine):
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
-    state_machine.orders = orders
-    assert state_machine.get_order(1) == o1
+    state_machine._orders = orders
+    assert state_machine.order.get(1) == o1
 
 
 def test_state_machine_delete_order(state_machine):
@@ -128,9 +128,9 @@ def test_state_machine_delete_order(state_machine):
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
-    state_machine.orders = orders
+    state_machine._orders = orders
     state_machine.delete_order(1)
-    assert list(state_machine.orders.values()) == [o2, o3]
+    assert list(state_machine._orders.values()) == [o2, o3]
 
 
 def test_OrderContainer_active_only_flag_in_get():
@@ -307,3 +307,30 @@ def test_StrategyContaner_new_strategy():
             "position_id": "",
         },
     }
+
+
+def test_access_order_with_square_brackets(state_machine):
+    oi = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    state_machine.order[1234] = oi
+    assert state_machine.order[1234] == oi
+
+
+def test_access_strategy_with_square_brackets(state_machine):
+    st = {"a": {"x": 1, "y": 2}}
+    state_machine.strategy["xyz"] = st
+    assert state_machine.strategy["xyz"] == st
+
+
+def test_access_order_with_get(state_machine):
+    oi = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
+    state_machine.order[1234] = oi
+    assert state_machine.order.get(1234) == oi
+    assert state_machine.order.get(5678) is None
+
+
+def test_access_strategy_with_get(state_machine):
+    st = {"a": {"x": 1, "y": 2}}
+    state_machine.strategy["xyz"] = st
+    assert state_machine.strategy.get("xyz") == st
+    # get with unknown key creates new entry,
+    # so this is not symetrical to previous test

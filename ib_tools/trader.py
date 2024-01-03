@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from datetime import datetime, timezone
 
 import ib_insync as ibi
 
@@ -56,3 +57,23 @@ class Trader:
     def __repr__(self):
         items = (f"{k}={v}" for k, v in self.__dict__.items())
         return f"{self.__class__.__name__}({', '.join(items)})"
+
+
+class FakeTrader(Trader):
+    """
+    Object to replace real :class:`Trader` to prevent system from any
+    subsequent trading.
+    """
+
+    def trade(self, contract, order):
+        log.debug(f"Not trading: {contract} {order}")
+        return ibi.Trade(
+            contract=contract,
+            order=order,
+            log=[
+                ibi.TradeLogEntry(
+                    time=datetime.now(tz=timezone.utc),
+                    message="Ignored order in self nuke mode.",
+                )
+            ],
+        )

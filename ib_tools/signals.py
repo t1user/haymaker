@@ -92,7 +92,7 @@ class BinarySignalProcessor(Atom):
         Which side of the market is position on: (short: -1, long: 1,
         no position: 0)
         """
-        self._position = sign(self.sm.position(strategy))
+        self._position = sign(self.sm.strategy[strategy].position)
         return self._position
 
     def same_direction(self, strategy: str, signal: Signal) -> bool:
