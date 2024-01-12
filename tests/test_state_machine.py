@@ -1,3 +1,5 @@
+import asyncio
+
 import ib_insync as ibi
 import pytest
 
@@ -181,12 +183,12 @@ def test_OrderContainer_limited_in_size():
             i: OrderInfo(
                 "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), {}
             )
-            for i in range(20)
+            for i in range(100)
         }
     )
 
     # done should keep only 10 last items
-    assert len(orders) == 10
+    assert len(orders) == 50
 
 
 def test_OrderContainer_limited_in_size_and_max_size_parameter_works():
@@ -237,6 +239,42 @@ def test_OrderContainer_max_size_ignored_if_zero():
     )
 
     assert len(orders) == 20
+
+
+@pytest.mark.asyncio
+async def test_OrderContainer_recalls_permId():
+    orders = OrderContainer(
+        {
+            i: OrderInfo(
+                "coolstrategy",
+                "OPEN",
+                ibi.Trade(order=ibi.Order(orderId=i, permId=i * 100)),
+                None,
+            )
+            for i in range(1, 3)
+        },
+        max_size=0,
+    )
+    await asyncio.sleep(0)
+    assert orders[100] == orders[1]
+
+
+@pytest.mark.asyncio
+async def test_OrderContainer_get_recalls_permId():
+    orders = OrderContainer(
+        {
+            i: OrderInfo(
+                "coolstrategy",
+                "OPEN",
+                ibi.Trade(order=ibi.Order(orderId=i, permId=i * 100)),
+                None,
+            )
+            for i in range(1, 3)
+        },
+        max_size=0,
+    )
+    await asyncio.sleep(0)
+    assert orders.get(100) == orders[1]
 
 
 def test_Strategy_dot_getitem():

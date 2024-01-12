@@ -51,7 +51,7 @@ class OrderSyncStrategy:
             for i in self.sm._orders.values()
         ]
 
-        log.debug(f"Trades before update: {before_update}")
+        log.debug(f"SM trades before update: {before_update}")
 
         self.unknown_trades = []
         for trade in self.ib.openTrades():
@@ -63,7 +63,7 @@ class OrderSyncStrategy:
             for i in self.sm._orders.values()
         ]
 
-        log.debug(f"Trades after update: {after_update}")
+        log.debug(f"SM trades after update: {after_update}")
         return self
 
     def review_trades(self):
@@ -95,25 +95,19 @@ class OrderSyncStrategy:
         # these are active trades on record that haven't been matched to
         # open trades in IB
         # try finding in closed trades from the session
-        ib_all_trades = [
-            (trade.order.orderId, trade.order.permId) for trade in self.ib.trades()
-        ]
 
-        log.debug(f"ib trades: {ib_all_trades}")
-        ib_open_trades = [
-            (trade.order.orderId, trade.order.permId) for trade in self.ib.openTrades()
-        ]
-
-        log.debug(f"ib open trades: {ib_open_trades}")
-        known_trades = {trade.order.orderId: trade for trade in self.ib.trades()}
-        log.debug(f"len known trades: {len(known_trades)}")
+        known_trades = {
+            trade.order.orderId or trade.order.permId: trade
+            for trade in self.ib.trades()
+        }
+        log.debug(f"len IB known trades: {len(known_trades)}")
         known_trades_for_display = [
             (v.order.orderId, v.order.permId) for k, v in known_trades.items()
         ]
 
         log.debug(
-            f"Known trades keys: {known_trades.keys()}, "
-            f"known trades: {known_trades_for_display}"
+            f"Known IB trades keys: {known_trades.keys()}, "
+            f"known IB trades: {known_trades_for_display}"
         )
         log.debug(f"Question trades: {[t.order.orderId for t in self.question_trades]}")
         matched_trades = {
@@ -436,24 +430,17 @@ class Controller:
 
     async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
         log.debug(f"OrderStatus event: {trade.order.orderId}, {trade.order.permId}")
+        await self.sm.save_order_status(trade)
         if trade.order.orderId < 0:
             log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
         elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
         elif trade.isDone():
-            # TODO: FIX THIS
-            if await self.sm.save_done_order(trade):
-                log.debug(
-                    f"{trade.contract.symbol}: order {trade.order.orderId} "
-                    f"{trade.order.orderType} done {trade.orderStatus.status}."
-                )
-            else:
-                log.debug(
-                    f"Unknown order cancelled id: {trade.order.orderId} "
-                    f"{trade.order.action} {trade.contract.symbol}"
-                )
-
+            log.debug(
+                f"{trade.contract.symbol}: order {trade.order.orderId} "
+                f"{trade.order.orderType} done {trade.orderStatus.status}."
+            )
         else:
             log.debug(
                 f"{trade.contract.symbol}: OrderStatus ->{trade.orderStatus.status}<-"
@@ -535,7 +522,7 @@ class Controller:
         elif trade.order.orderId < 0:
             kwargs = {"action": "MANUAL TRADE"}
         else:
-            kwargs = {"action": "UNKNOW"}
+            kwargs = {"action": "UNKNOWN"}
             log.debug(
                 f"Missing strategy records in `state machine`. "
                 f"Incomplete data for blotter."

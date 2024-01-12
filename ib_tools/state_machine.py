@@ -29,6 +29,10 @@ class OrderInfo:
     def active(self):
         return not self.trade.isDone()
 
+    @property
+    def permId(self):
+        return self.trade.order.permId
+
     def __iter__(self) -> Iterator[Any]:
         for f in (*(x.name for x in fields(self)), "active"):
             yield getattr(self, f)
@@ -51,14 +55,38 @@ class OrderInfo:
 
 
 class OrderContainer(UserDict):
-    def __init__(self, dict=None, /, max_size: int = 10) -> None:
+    def __init__(self, dict=None, /, max_size: int = 50) -> None:
         self.max_size = max_size
+        self.index: dict[int, int] = {}
+        self.setitemEvent = ev.Event("setitemEvent")
+        self.setitemEvent += self.onSetitemEvent
         super().__init__(dict)
 
-    def __setitem__(self, key, item):
+    def __setitem__(self, key: int, item: OrderInfo) -> None:
         if self.max_size and (len(self.data) >= self.max_size):
             self.data.pop(min(self.data.keys()))
+        self.setitemEvent.emit(key, item)
         super().__setitem__(key, item)
+
+    def __getitem__(self, key):
+        if key in self.data:
+            return self.data[key]
+        elif key in self.index:
+            if self.index[key] in self.data:
+                return self.data[self.index[key]]
+        if hasattr(self.__class__, "__missing__"):
+            return self.__class__.__missing__(self, key)
+        raise KeyError(key)
+
+    def __delitem__(self, key):
+        if self.index.get(self.data[key].permId):
+            del self.index[self.data[key].permId]
+        super().__delitem__(key)
+
+    async def onSetitemEvent(self, key: int, item: OrderInfo) -> None:
+        while not item.permId:
+            await asyncio.sleep(0.1)
+        self.index[item.permId] = key
 
     def strategy(self, strategy: str) -> Iterator[OrderInfo]:
         """Get active orders associated with strategy."""
@@ -67,10 +95,14 @@ class OrderContainer(UserDict):
 
     def get(self, key, default=None, active_only=False):
         """Get records for an order."""
-        value = self.data.get(key, None)
-        if value:
-            if (not active_only) or value.active:
-                return value
+        try:
+            value = self[key]
+        except KeyError:
+            return default
+        # value = self.data.get(key, None)
+        # if value:
+        if (not active_only) or value.active:
+            return value
         return default
 
     def decode(self, data: dict) -> None:
@@ -168,6 +200,7 @@ class StrategyContainer(UserDict):
 
 @dataclass
 class StrategyWrapper:
+    # DOESN'T SEEM TO BE IN USE AND CAN'T REMEMBER WHAT IT WAS FOR
     _strategy: Strategy
     _orders: OrderContainer
 
@@ -408,8 +441,8 @@ class StateMachine(Atom):
                 f"{trade.order.orderId} {trade.order.permId}"
             )
 
-    async def save_done_order(self, trade: ibi.Trade) -> Optional[OrderInfo]:
-        log.debug(f"saving done trade: {trade.order.orderId} {trade.order.permId}")
+    async def save_order_status(self, trade: ibi.Trade) -> Optional[OrderInfo]:
+        log.debug(f"updating trade status: {trade.order.orderId} {trade.order.permId}")
         order_info = self._orders.get(trade.order.orderId)
         log.debug(
             f"existing record: {order_info.trade.order.orderId} "
@@ -424,16 +457,20 @@ class StateMachine(Atom):
             dict_for_saving = {
                 "orderId": trade.order.orderId,
                 "strategy": "unknown",
-                "action": "unknown",
+                "action": "MANUAL" if trade.order.orderId < 0 else "UNKNOWN",
                 "trade": trade,
                 "params": {},
             }
-        self.save_model(self._data.encode())
-        self.save_order(dict_for_saving)
+        log.debug(f"Dict for saving: {dict_for_saving}")
+        try:
+            self.save_model(self._data.encode())
+            self.save_order(dict_for_saving)
+        except Exception as e:
+            log.exception(e)
         return order_info
 
     def report_new_order(self, trade: ibi.Trade) -> None:
-        # log.debug("Reporting new order.")
+        log.debug(f"Reporting new order: {trade.order.orderId}, {trade.order.permId}.")
         # self.save_model(self._data.encode())
         pass
 

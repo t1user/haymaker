@@ -26,8 +26,9 @@ async def async_runner(func: Callable, *args):
 
 async def saving_function(data: Any, saver: AbstractBaseSaver, *args: str):
     """
-    Funcion that actually peforms all saving.  All objects wishing to
-    save should connect saving events to it or await it directly.
+    Funcion that actually peforms all saving.
+    :class:`AbstractBaseSaver` objects wishing to save should connect
+    events to it or await it directly.
     """
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, saver.save, data, *args)
