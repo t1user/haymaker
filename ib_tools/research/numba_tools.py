@@ -1,9 +1,9 @@
-import pandas as pd  # type: ignore
-import numpy as np
-from numpy.linalg import lstsq as lst
-from numba import jit, prange  # type: ignore
-from typing import Optional, Union, Literal, Tuple, Callable
+from typing import Callable, Literal, Optional, Tuple, Union
 
+import numpy as np
+import pandas as pd  # type: ignore
+from numba import jit, prange  # type: ignore
+from numpy.linalg import lstsq as lst
 
 # Swing trading signals ###
 
@@ -303,12 +303,21 @@ def volume_grouper(
     field: str = "volume",
     label: Literal["left", "right"] = "left",
 ) -> pd.DataFrame:
-
     if not set(["open", "high", "low", "close", field]).issubset(set(df.columns)):
         raise ValueError(
             f"df must have all of the columns: 'open', 'high', 'low',"
             f" 'close', '{field}'"
         )
+
+    df = df.copy().reset_index()
+    df["labels"] = _volume_grouper(df[field].to_numpy(), target)
+    return _grouper_prepare(df, label)
+
+
+def _grouper_prepare(
+    df: pd.DataFrame,
+    label: Literal["left", "right"] = "left",
+) -> pd.DataFrame:
     if label == "left":
         _label = "first"
     elif label == "right":
@@ -316,8 +325,6 @@ def volume_grouper(
     else:
         raise ValueError("label must be either 'left' or 'right'")
 
-    df = df.copy().reset_index()
-    df["labels"] = _volume_grouper(df[field].to_numpy(), target)
     field_dict = {
         "date": _label,
         "open": "first",
@@ -327,8 +334,6 @@ def volume_grouper(
         "volume": "sum",
         "barCount": "sum",
     }
-    if field not in field_dict:
-        field_dict.update({field: "sum"})
 
     return (
         df.groupby("labels")
@@ -341,6 +346,70 @@ def volume_grouper(
         )
         .set_index("date")
     )
+
+
+# not in use now, make it work
+
+
+@jit(nopython=True)
+def _renko_grouper(price: np.ndarray, spread: np.ndarray) -> np.ndarray:
+    value = np.zeros((price.shape[0]))
+    top = bottom = price[0]
+    label = 0
+    labels = np.zeros(price.shape, dtype=np.int64)
+
+    for i, p in enumerate(price):
+        if i == 0:
+            continue
+        labels[i] = label
+        if p > top + spread[i]:
+            top = top + spread[i]
+            bottom = top - spread[i]
+            label += 1
+            value[i] = top
+        elif p < bottom - spread[i]:
+            bottom = bottom - spread[i]
+            top = bottom + spread[i]
+            label += 1
+            value[i] = bottom
+        else:
+            value[i] = value[i - 1]
+
+    return labels
+
+
+def renko_grouper(
+    df: pd.DataFrame,
+    spread: Union[float, "str"] = "atr",
+    label: Literal["left", "right"] = "left",
+) -> pd.DataFrame:
+    """
+    Args:
+    df: must have column `close`
+
+    spread: absolute value or name of column with spread series
+
+    """
+
+    if "close" not in df.columns:
+        raise ValueError("df must have column: `close`")
+
+    if isinstance(spread, str):
+        if spread not in df.columns:
+            raise ValueError(f"Column `{spread}` not in df.")
+        else:
+            spread_ = df[spread]
+    elif isinstance(spread, (float, int)):
+        df["spread"] = spread
+        spread_ = df["spread"]
+    else:
+        raise ValueError(
+            f"spread must be a column name or absolute value not {type(spread)}"
+        )
+
+    df = df.copy().reset_index()
+    df["labels"] = _renko_grouper(df["close"].to_numpy(), spread_.to_numpy())
+    return _grouper_prepare(df, label)
 
 
 # pivot ###
@@ -357,7 +426,6 @@ def _pivot(
     extreme_index = 0
 
     for i, p in enumerate(price):
-
         # check for change of state
         if (state[i - 1] * p) < (state[i - 1] * (extreme - (state[i - 1] * f[i - 1]))):
             state[i] = -state[i - 1]
@@ -571,7 +639,6 @@ def mean_sd_z(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float]:
 
 @jit(nopython=True, parallel=True)
 def _process_chunk(arr, offset, func):
-
     out = np.zeros(
         (arr[offset:].shape[0], 3),
     )
