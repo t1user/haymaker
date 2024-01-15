@@ -6,7 +6,8 @@ import logging
 import pickle
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from pathlib import Path
+from typing import Any, Callable, Collection, Optional
 
 import eventkit as ev  # type: ignore
 import pandas as pd
@@ -160,32 +161,28 @@ class CsvSaver(AbstractBaseSaver):
 
     def __init__(self, folder: str, name: str = "", timestamp: bool = True) -> None:
         self.path = default_path(folder)
-        self._fieldnames = None
         super().__init__(name, timestamp)
 
     @property
     def _file(self):
         return f"{self.path}/{self.name_str()}.csv"
 
-    def _create_header(self) -> None:
+    def _create_header(self, keys: Collection) -> None:
         with open(self._file, "w") as f:
-            assert self._fieldnames
-            writer = csv.DictWriter(f, fieldnames=self._fieldnames)
+            writer = csv.DictWriter(f, fieldnames=keys)
             writer.writeheader()
 
     def save(self, data: dict[str, Any], *args: str) -> None:
-        if not self._fieldnames:
-            self._fieldnames = list(data.keys())
-            self._create_header()
+        if not Path(self._file).exists():
+            self._create_header(data.keys())
         with open(self._file, "a") as f:
-            writer = csv.DictWriter(f, fieldnames=self._fieldnames)
+            writer = csv.DictWriter(f, fieldnames=data.keys())
             writer.writerow(data)
 
     def save_many(self, data: list[dict[str, Any]]) -> None:
-        self._fieldnames = list(data[0].keys())
-        self._create_header()
+        self._create_header(data[0].keys())
         with open(self._file, "a") as f:
-            writer = csv.DictWriter(f, fieldnames=self._fieldnames)
+            writer = csv.DictWriter(f, fieldnames=data[0].keys())
             for item in data:
                 writer.writerow(item)
 

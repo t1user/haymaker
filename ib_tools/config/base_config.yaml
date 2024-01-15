@@ -35,7 +35,7 @@ stop_order:
   tif: GTC
 
 tp_order:
-  # don't use adaptive orders here as not complient with OCA
+  # don't use adaptive orders here as not compliant with OCA
   outsideRth: True
   
 # all linked orders will use this oca_type (as per IB definition)
@@ -52,6 +52,7 @@ blotter_saver:
   kwds:
     folder: blotter
     name: blotter
+    timestamp: False
   # alternative:
   # args: []
   # kwds: {folder: blotter, note: blotter}
