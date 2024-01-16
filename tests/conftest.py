@@ -1,5 +1,9 @@
+from types import SimpleNamespace
+
+import ib_insync as ibi
 import pytest
 
+from ib_tools.base import Atom
 from ib_tools.state_machine import StateMachine
 
 
@@ -12,3 +16,15 @@ def state_machine():
     if StateMachine._instance:
         StateMachine._instance = None
     return StateMachine()
+
+
+@pytest.fixture()
+def atom(state_machine):
+    data = SimpleNamespace()
+    data.ib = ibi.IB()
+
+    data.trading_hours = {}
+    data.contract_details = {}
+    sm = state_machine
+    Atom.set_init_data(data, sm)
+    return Atom

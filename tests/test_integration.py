@@ -4,7 +4,7 @@ import ib_insync as ibi
 import pytest
 from test_brick import data_for_df, df_brick  # noqa
 
-from ib_tools.base import Atom, Pipe
+from ib_tools.base import Pipe
 from ib_tools.bracket_legs import FixedStop
 from ib_tools.controller import Controller
 from ib_tools.execution_models import BaseExecModel, EventDrivenExecModel
@@ -22,7 +22,7 @@ def portfolio():
 
 
 @pytest.fixture
-def pipe(df_brick, data_for_df, portfolio):  # noqa
+def pipe(df_brick, data_for_df, portfolio, atom):  # noqa
     class FakeStateMachine:
         strategy = StrategyContainer()
 
@@ -31,7 +31,7 @@ def pipe(df_brick, data_for_df, portfolio):  # noqa
 
     sm = FakeStateMachine()
 
-    class FakeController:
+    class FakeController(atom):
         out = None
 
         def trade(self, strategy, contract, order, action, data):
@@ -46,7 +46,7 @@ def pipe(df_brick, data_for_df, portfolio):  # noqa
     # on which exec_model should act by issuing Buy order
     exec_model = EventDrivenExecModel(stop=FixedStop(5), controller=controller)
 
-    class SourceAtom(Atom):
+    class SourceAtom(atom):
         def run(self):
             # this should ensure setting "strategy" attr on exec_model
             # brick has this attr so it will emit it on start
@@ -108,7 +108,7 @@ def test_order_is_for_one_contract(pipe):
 
 
 @pytest.fixture
-def new_setup(state_machine):
+def new_setup(atom):
     class FakeTrader:
         def trade(self, contract: ibi.Contract, order: ibi.Order):
             return ibi.Trade(contract, order)
@@ -119,22 +119,22 @@ def new_setup(state_machine):
         def trade(self, *args, **kwargs):
             self.trade_object = super().trade(*args, **kwargs)
 
-    ib = ibi.IB()
-    controller = FakeController(state_machine, ib, trader=FakeTrader())
+    controller = FakeController(trader=FakeTrader())
 
-    class Source(Atom):
+    class Source(atom):
         pass
 
     source = Source()
-    em = BaseExecModel(controller=controller, state_machine=state_machine)
+    em = BaseExecModel(controller=controller)
+
     source += em
 
     source.startEvent.emit({"strategy": "xxx"})
-    return ib, controller, source, em
+    return controller, source, em
 
 
 def test_buy_position_registered(new_setup):
-    ib, controller, source, em = new_setup
+    controller, source, em = new_setup
 
     data = {
         "signal": 1,
@@ -157,12 +157,12 @@ def test_buy_position_registered(new_setup):
             time=datetime.now(timezone.utc),
         )
     )
-    ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
+    controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
     assert em.data.position == 1
 
 
 def test_sell_position_registered(new_setup):
-    ib, controller, source, em = new_setup
+    controller, source, em = new_setup
 
     data = {
         "signal": -1,
@@ -185,5 +185,5 @@ def test_sell_position_registered(new_setup):
             time=datetime.now(timezone.utc),
         )
     )
-    ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
+    controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
     assert em.data.position == -1

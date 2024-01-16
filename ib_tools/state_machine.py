@@ -13,7 +13,7 @@ import ib_insync as ibi
 from ib_tools.saver import MongoSaver, SaveManager, async_runner
 
 from .base import Atom
-from .misc import Lock, Signal, decode_tree, sign, tree
+from .misc import Lock, decode_tree, tree
 
 log = logging.getLogger(__name__)
 
@@ -341,54 +341,6 @@ class StateMachine(Atom):
         order_data = await async_runner(order_saver.read, {"active": True})
         self._data.decode(strategy_data)
         self._orders.decode(order_data)
-
-    async def onData(self, data, *args) -> None:
-        """
-        After obtaining transaction details from execution model,
-        verify if the intended effect is the same as achieved effect.
-        """
-        super().onData(data)
-        try:
-            strategy = data["strategy"]
-            amount = data["amount"]
-            target_position = data["target_position"]
-            await asyncio.sleep(15)
-            self.verify_transaction_integrity(strategy, amount, target_position)
-        except KeyError:
-            log.exception(
-                "Unable to verify transaction integrity", extra={"data": data}
-            )
-
-    def verify_transaction_integrity(
-        self,
-        strategy: str,
-        amount: float,
-        target_position: Signal,
-    ) -> None:
-        """
-        Is the postion resulting from transaction the same as was
-        required?
-        """
-        data = self._data.get(strategy)
-        if data:
-            log.debug(
-                f"Transaction OK? ->{sign(data.position) == target_position}<- "
-                f"target_position: {target_position}, "
-                f"position: {sign(data.position)}"
-                f"->> {strategy}"
-            )
-            log.debug(
-                f"{data.active_contract.symbol}: "
-                f"{self.verify_position_for_contract(data.active_contract)}"
-            )
-            try:
-                assert sign(data.position) == target_position
-                # Investigate why this may be necessary:
-                # assert exec_model.position == abs(amount)
-            except AssertionError:
-                log.critical(f"Wrong position for {strategy}", exc_info=True)
-        else:
-            log.critical(f"Attempt to trade for unknow strategy: {strategy}")
 
     def register_order(
         self, strategy: str, action: str, trade: ibi.Trade, data: Strategy

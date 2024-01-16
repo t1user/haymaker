@@ -17,6 +17,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from ib_tools.manager import InitData
+    from ib_tools.state_machine import StateMachine
 
 import ib_insync as ibi
 
@@ -60,7 +61,8 @@ class Atom:
     """
 
     ib: ClassVar[ibi.IB]
-    _contract_details: ClassVar[dict[ibi.Contract, ibi.ContractDetails]]
+    sm: StateMachine
+    _contract_details: ClassVar[dict[ibi.Contract, ibi.ContractDetails]] = {}
     _trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]]
     events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
 
@@ -68,8 +70,9 @@ class Atom:
     contract = cast(ibi.Contract, ContractManagingDescriptor())
 
     @classmethod
-    def set_init_data(cls, data: InitData) -> None:
+    def set_init_data(cls, data: InitData, sm: StateMachine) -> None:
         cls.ib = data.ib
+        cls.sm = sm
         cls._trading_hours = data.trading_hours
         cls._contract_details = data.contract_details
 
@@ -121,6 +124,17 @@ class Atom:
 
     def onFeedback(self, data, *args):
         pass
+
+    # @property
+    # def data(self):
+    #     try:
+    #         return self.sm.strategy[self.strategy]
+    #     except AttributeError:
+    #         pass
+
+    # @data.setter
+    # def data(self, key, value):
+    #     pass
 
     def connect(self, *targets: Atom) -> "Atom":
         for t in targets:

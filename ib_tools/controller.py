@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING, Callable, Optional
 import ib_insync as ibi
 
 from . import misc
+from .base import Atom
 from .blotter import Blotter
 from .config import CONFIG
+from .misc import Signal, sign
 
 # from .manager import IB, STATE_MACHINE
 from .trader import FakeTrader, Trader
@@ -150,7 +152,7 @@ class PositionSyncStrategy:
         return self.errors
 
 
-class Controller:
+class Controller(Atom):
     """
     Intermediary between execution models (which are off ramps for
     strategies), :class:`Trader` and :class:`StateMachine`.  Use information
@@ -163,14 +165,11 @@ class Controller:
 
     def __init__(
         self,
-        state_machine: StateMachine,
-        ib: ibi.IB,
         trader: Optional[Trader] = None,
     ):
-        self.sm = state_machine
-        self.ib = ib
+        super().__init__()
         self.trader = trader or Trader(self.ib)
-        # these are essential events
+        # these are essential (non-optional) events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.onOrderStatusEvent)
@@ -270,6 +269,54 @@ class Controller:
         self.ib.commissionReportEvent.emit(
             trade, trade.fills[-1], trade.fills[-1].commissionReport
         )
+
+    async def onData(self, data, *args) -> None:
+        """
+        After obtaining transaction details from execution model,
+        verify if the intended effect is the same as achieved effect.
+        """
+        super().onData(data)
+        try:
+            strategy = data["strategy"]
+            amount = data["amount"]
+            target_position = data["target_position"]
+            await asyncio.sleep(15)
+            self.verify_transaction_integrity(strategy, amount, target_position)
+        except KeyError:
+            log.exception(
+                "Unable to verify transaction integrity", extra={"data": data}
+            )
+
+    def verify_transaction_integrity(
+        self,
+        strategy: str,
+        amount: float,
+        target_position: Signal,
+    ) -> None:
+        """
+        Is the postion resulting from transaction the same as was
+        required?
+        """
+        data = self.sm.strategy.get(strategy)
+        if data:
+            log.debug(
+                f"Transaction OK? ->{sign(data.position) == target_position}<- "
+                f"target_position: {target_position}, "
+                f"position: {sign(data.position)}"
+                f"->> {strategy}"
+            )
+            log.debug(
+                f"{data.active_contract.symbol}: "
+                f"{self.sm.verify_position_for_contract(data.active_contract)}"
+            )
+            try:
+                assert sign(data.position) == target_position
+                # Investigate why this may be necessary:
+                # assert exec_model.position == abs(amount)
+            except AssertionError:
+                log.critical(f"Wrong position for {strategy}", exc_info=True)
+        else:
+            log.critical(f"Attempt to trade for unknow strategy: {strategy}")
 
     def trade(
         self,
@@ -489,10 +536,7 @@ class Controller:
         execution.  After that trade object is ready for stroring in
         blotter.
         """
-        log.debug(
-            f"CommissionReport event unfiltered: "
-            f"{trade.order.orderId}, {trade.order.permId}"
-        )
+
         # prevent writing all orders from session on startup
         if self.hold:
             return

@@ -136,8 +136,7 @@ class Jobs:
 
 
 IB: Final[ibi.IB] = ibi.IB()
-STATE_MACHINE: Final[StateMachine] = StateMachine()
 INIT_DATA = InitData(IB, Atom.contracts)
 JOBS = Jobs(INIT_DATA)
-Atom.set_init_data(INIT_DATA)
-CONTROLLER: Final[Controller] = Controller(STATE_MACHINE, IB)
+Atom.set_init_data(INIT_DATA, StateMachine())
+CONTROLLER: Final[Controller] = Controller()

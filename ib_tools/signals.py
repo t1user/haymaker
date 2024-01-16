@@ -4,7 +4,6 @@ import logging
 from typing import Any, Optional, Type
 
 from ib_tools.base import Atom
-from ib_tools.manager import STATE_MACHINE
 from ib_tools.misc import Action, Signal, sign
 from ib_tools.state_machine import StateMachine
 
@@ -44,7 +43,8 @@ class BinarySignalProcessor(Atom):
     """
 
     def __init__(self, state_machine: Optional[StateMachine] = None) -> None:
-        self.sm = state_machine or STATE_MACHINE
+        if state_machine:
+            self.sm = state_machine
         self.strategy: str = ""
         self._position: float = 0.0
         super().__init__()

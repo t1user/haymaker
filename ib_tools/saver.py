@@ -168,7 +168,7 @@ class CsvSaver(AbstractBaseSaver):
         return f"{self.path}/{self.name_str()}.csv"
 
     def _create_header(self, keys: Collection) -> None:
-        with open(self._file, "w") as f:
+        with open(self._file, "a") as f:
             writer = csv.DictWriter(f, fieldnames=keys)
             writer.writeheader()
 

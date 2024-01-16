@@ -14,11 +14,11 @@ import ib_insync as ibi
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import AbstractBracketLeg
 from ib_tools.config import CONFIG
-from ib_tools.manager import CONTROLLER, STATE_MACHINE
+
+# from ib_tools.manager import CONTROLLER
 
 if TYPE_CHECKING:
     from ib_tools.controller import Controller
-    from ib_tools.state_machine import StateMachine
 
 from . import misc
 
@@ -77,21 +77,26 @@ class AbstractExecModel(Atom, ABC):
         orders: Optional[dict[OrderKey, dict[str, Any]]] = None,
         *,
         controller: Optional[Controller] = None,
-        state_machine: Optional[StateMachine] = None,
     ) -> None:
         super().__init__()
         self.strategy: str = ""  # placeholder, defined in onStart
-        self.controller = controller or CONTROLLER
-        self.sm = state_machine or STATE_MACHINE
+        if controller:
+            self.controller = controller
+        else:
+            # importing from .manager creates singleton instances
+            # may screw up tests if test needs a specific mock
+            from ib_tools.manager import CONTROLLER
+
+            self.controller = CONTROLLER
 
         if orders:
             for key, order_kwargs in orders.items():
                 setattr(self, key, order_kwargs)
 
-        self.connect_state_machine()
+        self.connect_state_controller()
 
-    def connect_state_machine(self):
-        self += self.sm
+    def connect_state_controller(self):
+        self += self.controller
 
     def onStart(self, data, *args) -> None:
         super().onStart(data, *args)
@@ -355,7 +360,6 @@ class EventDrivenExecModel(BaseExecModel):
         stop: Optional[AbstractBracketLeg] = None,
         take_profit: Optional[AbstractBracketLeg] = None,
         controller: Optional[Controller] = None,
-        state_machine: Optional[StateMachine] = None,
     ):
         if not stop:
             raise TypeError(
@@ -364,7 +368,7 @@ class EventDrivenExecModel(BaseExecModel):
         self.stop = stop
         self.take_profit = take_profit
         self.oca_group_generator = lambda: str(uuid4())
-        super().__init__(orders, controller=controller, state_machine=state_machine)
+        super().__init__(orders, controller=controller)
 
     def onStart(self, data, *args):
         super().onStart(data, *args)

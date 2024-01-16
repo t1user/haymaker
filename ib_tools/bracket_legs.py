@@ -6,7 +6,9 @@ from typing import Any, Optional
 
 import ib_insync as ibi
 
-from .manager import INIT_DATA
+from .base import Atom
+
+# from .manager import INIT_DATA
 from .misc import round_tick
 
 log = logging.getLogger(__name__)
@@ -25,7 +27,7 @@ class AbstractBracketLeg(ABC):
     parameters for appropriate bracket order.
     """
 
-    details = INIT_DATA.contract_details
+    details = Atom._contract_details
     vol_field: str = "atr"
 
     def __init__(self, stop_multiple: float, vol_field: Optional[str] = None) -> None:
@@ -60,6 +62,7 @@ class AbstractBracketLeg(ABC):
                 f"Will attempt to send bracket order with minTick 0.25 ",
                 exc_info=True,
             )
+            log.debug(f"Details: {self.details}")
             minTick = 0.25
         return minTick
 

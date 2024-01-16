@@ -28,8 +28,8 @@ def trades_and_positions():
 
 
 @pytest.fixture()
-def controller(state_machine):
-    return Controller(state_machine, ibi.IB())
+def controller():
+    return Controller()
 
 
 def test_positions_and_stop_losses_no_diff(trades_and_positions, controller):
