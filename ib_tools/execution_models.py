@@ -101,7 +101,7 @@ class AbstractExecModel(Atom, ABC):
     def onStart(self, data, *args) -> None:
         super().onStart(data, *args)
         # super just set strategy, only now subsequent is possible
-        self.data = self.sm.strategy[self.strategy]
+        # self.data = self.sm.strategy[self.strategy]
         self.data.update(**data)
 
     def get_position_id(self, reset=False):

@@ -125,16 +125,12 @@ class Atom:
     def onFeedback(self, data, *args):
         pass
 
-    # @property
-    # def data(self):
-    #     try:
-    #         return self.sm.strategy[self.strategy]
-    #     except AttributeError:
-    #         pass
-
-    # @data.setter
-    # def data(self, key, value):
-    #     pass
+    @property
+    def data(self):
+        try:
+            return self.sm.strategy[self.strategy]
+        except AttributeError:
+            pass
 
     def connect(self, *targets: Atom) -> "Atom":
         for t in targets:

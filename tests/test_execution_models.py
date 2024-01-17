@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import ib_insync as ibi
 import pytest
 
-from ib_tools.base import Atom
 from ib_tools.bracket_legs import FixedStop, TakeProfitAsStopMultiple, TrailingStop
 from ib_tools.controller import Controller
 from ib_tools.execution_models import (
@@ -96,7 +95,7 @@ def test_oca_group_is_not_position_id():
 
 
 @pytest.fixture
-def objects():
+def objects(atom):
     class FakeController(Controller):
         contract = None
         order = None
@@ -136,7 +135,7 @@ def objects():
             self.trade_object.fillEvent.emit(self.trade_object, self.fill)
             self.trade_object.filledEvent.emit(self.trade_object)
 
-    class Source(Atom):
+    class Source(atom):
         pass
 
     controller = FakeController()
@@ -305,7 +304,7 @@ def test_BaseExecModel_close_signal_generates_order(objects):
 #     assert em.position == -1
 
 
-def test_passed_order_kwargs_update_defaults():
+def test_passed_order_kwargs_update_defaults(atom):
     class FakeController(Controller):
         contract = None
         order = None
@@ -326,7 +325,7 @@ def test_passed_order_kwargs_update_defaults():
     controller = FakeController()
     em = BaseExecModel(orders={"open_order": {"algoParams": ""}}, controller=controller)
 
-    class Source(Atom):
+    class Source(atom):
         pass
 
     source = Source()

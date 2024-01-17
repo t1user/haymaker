@@ -708,3 +708,86 @@ def test_trading_hours_no_contract():
     a = MockAtom()
     Atom._trading_hours = {"contract_1": [(1, 2), (4, 5)]}
     assert a.trading_hours == {"contract_1": [(1, 2), (4, 5)]}
+
+
+class Test_data_property:
+    # data property test depend on StateMachine being properly set as attribute of Atom
+    # and StateMachine singleton being destroyed betewen tests
+    # for this `atom` fixture should be used
+
+    def test_data_property_without_strategy(self, atom):
+        class A(atom):
+            pass
+
+        a = A()
+        assert a.data is None
+
+    def test_data_property_with_strategy_first_access(self, atom):
+        class A(atom):
+            def __init__(self, strategy):
+                self.strategy = strategy
+
+        a = A("xxx")
+
+        assert isinstance(a.data, dict)
+
+    def test_data_property_with_strategy_access_correct_essential_keys_in_data(
+        self, atom
+    ):
+        class A(atom):
+            def __init__(self, strategy):
+                self.strategy = strategy
+
+        a = A("xxx")
+
+        assert {"position", "lock"}.issubset(set(a.data.keys()))
+
+    def test_data_property_with_strategy_access_correct_position(self, atom):
+        class A(atom):
+            def __init__(self, strategy):
+                self.strategy = strategy
+
+        a = A("xxx")
+        b = A("xxx")
+
+        a.data.position += 1
+        assert b.data.position == 1
+
+    def test_data_property_multiple_strategies_access_correct_position(self, atom):
+        class A(atom):
+            pass
+
+        a = A()
+        b = A()
+        c = A()
+        d = A()
+
+        a.strategy = "xxx"
+        b.strategy = "xxx"
+        c.strategy = "yyy"
+        d.strategy = "yyy"
+
+        a.data.position += 1
+        b.data.position += 1
+        assert b.data.position == 2
+        assert c.data.position == 0
+
+    def test_data_property_multiple_strategies_access_correct_position_1(self, atom):
+        class A(atom):
+            pass
+
+        a = A()
+        b = A()
+        c = A()
+        d = A()
+
+        a.strategy = "xxx"
+        b.strategy = "xxx"
+        c.strategy = "yyy"
+        d.strategy = "yyy"
+
+        a.data.position += 1
+        b.data.position += 1
+        c.data.position += 1
+        assert a.data.position == 2
+        assert d.data.position == 1

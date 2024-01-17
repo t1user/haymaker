@@ -14,7 +14,7 @@ from ib_tools.brick import AbstractBaseBrick, AbstractDfBrick
 def brick():
     class Brick(AbstractBaseBrick):
         def _signal(self, data):
-            return {"signal": 1, "dupa": "xyz", "kamieni_kupa": 5}
+            return {"signal": 1, "abc": "xyz", "pqz": 5}
 
     return Brick("eska_NQ", ibi.Future("NQ", "CME"))
 
@@ -43,8 +43,8 @@ def test_data_passed_correct(brick):
         "strategy": "eska_NQ",
         "contract": ibi.Future("NQ", "CME"),
         "signal": 1,
-        "dupa": "xyz",
-        "kamieni_kupa": 5,
+        "abc": "xyz",
+        "pqz": 5,
     }
 
 
@@ -80,7 +80,7 @@ def df_brick():
 def df_connected_brick(df_brick):
     class NewAtom(Atom):
         def onData(self, data, *args):
-            self.data = data
+            self.memo = data
 
     new_atom = NewAtom()
     df_brick += new_atom
@@ -100,23 +100,23 @@ def test_AbstractDfBrick_is_abstract():
 def test_signal_correct(df_connected_brick, data_for_df):
     brick, atom = df_connected_brick
     brick.onData(data_for_df)
-    assert "signal" in atom.data.keys()
-    assert atom.data["signal"] == 1
+    assert "signal" in atom.memo.keys()
+    assert atom.memo["signal"] == 1
 
 
 def test_signal_column_selection_works(df_connected_brick, data_for_df):
     brick, atom = df_connected_brick
     brick.signal_column = "raw"
     brick.onData(data_for_df)
-    assert "signal" in atom.data.keys()
-    assert atom.data["signal"] == -1
+    assert "signal" in atom.memo.keys()
+    assert atom.memo["signal"] == -1
 
 
 def test_column_selection_works(df_connected_brick, data_for_df):
     brick, atom = df_connected_brick
     brick.df_columns = ["price", "signal", "price_plus"]
     brick.onData(data_for_df)
-    assert list(atom.data.keys()) == [
+    assert list(atom.memo.keys()) == [
         "strategy",
         "contract",
         "price",
