@@ -41,23 +41,17 @@ tp_order:
 # all linked orders will use this oca_type (as per IB definition)
 oca_type: 1
 
-streamers:
-  timeout:
-    debug: False
-    timeout: 300
+timeout:
+  debug: False # debug: True -> log; debug: False -> restart
+  time: 300 # zero means no timeout, can also be set individually on every streamer instance
 
-# consider making this a dict of params passed to blotter to instantiate the class
+
 blotter_saver:
   class: CsvSaver
   kwds:
     folder: blotter
     name: blotter
     timestamp: False
-  # alternative:
-  # args: []
-  # kwds: {folder: blotter, note: blotter}
-  # !!python/object/apply:ib_tools.saver.MongoSaver
-  # kwds: {collection: blotter}
 
 # All savers saving to files will create sub-directories here:
 data_folder:

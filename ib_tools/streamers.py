@@ -14,21 +14,20 @@ import ib_insync as ibi
 
 from ib_tools import misc
 from ib_tools.base import Atom
+from ib_tools.config import CONFIG
 
 log = logging.getLogger(__name__)
-
-
-class StaleDataError(Exception):
-    pass
 
 
 @dataclass
 class Timeout:
     time: float
     event: ev.Event
+    ib: ibi.IB
     trading_hours: Optional[list[tuple[datetime, datetime]]] = None
     name: str = ""
-    debug: bool = True
+    # take following two from config
+    debug: bool = CONFIG["timeout"]["debug"]
     _timeout: Optional[ev.Event] = field(repr=False, default=None)
 
     def __post_init__(self):
@@ -67,8 +66,8 @@ class Timeout:
             log.error(f"Stale streamer {self!s} Reset?")
             return True
         else:
-            pass
-            # raise StaleDataError(f"Stale data for {self.name}")
+            log.debug(f"Stale streamer {self!s} will disconnect ib...")
+            self.ib.disconnect()
 
     def _set_timeout(self, event: ev.Event) -> None:
         self._timeout = event.timeout(self.time)
@@ -95,6 +94,7 @@ class TimeoutContainer(UserDict):
             obj = Timeout(
                 self.streamer.timeout,
                 obj,
+                self.streamer.ib,
                 self.streamer.trading_hours,
                 f"{str(self.streamer)}-<<{key}>>",
             )
@@ -103,7 +103,7 @@ class TimeoutContainer(UserDict):
 
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
-    timeout: float = 0
+    timeout: float = CONFIG["timeout"]["time"]
     _counter: ClassVar[Callable[[], int]] = itertools.count().__next__
     _name: Optional[str] = None
     _timers: TimeoutContainerDefaultdict = TimeoutContainerDefaultdict(
@@ -184,8 +184,7 @@ class HistoricalDataStreamer(Streamer):
     formatDate: int = 2  # don't change
     incremental_only: bool = True
     startup_seconds: float = 5
-    last_bar_date: Optional[datetime] = None
-    timeout: float = 300  # 5 minutes without data
+    _last_bar_date: Optional[datetime] = None
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -226,10 +225,10 @@ class HistoricalDataStreamer(Streamer):
             f"Starting backfill {self.name}, pulled {len(bars)} bars, "
             f"last bar: {bars[-1]}"
         )
-        if self.last_bar_date:
+        if self._last_bar_date:
             stream = (
                 ev.Sequence(bars[:-1])
-                .pipe(ev.Filter(lambda x: x.date > self.last_bar_date))
+                .pipe(ev.Filter(lambda x: x.date > self._last_bar_date))
                 .connect(self.dataEvent)
             )
         else:
@@ -237,7 +236,7 @@ class HistoricalDataStreamer(Streamer):
         await stream
         await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
         log.info(
-            f"{self.name} backfilled from {self.last_bar_date or bars[0].date} to "
+            f"{self.name} backfilled from {self._last_bar_date or bars[0].date} to "
             f"{bars[-2].date}"
         )
         self.onStart({"startup": False})
@@ -245,16 +244,16 @@ class HistoricalDataStreamer(Streamer):
     async def run(self) -> None:
         log.debug(f"Requesting bars for {self.contract.localSymbol}")
 
-        if self.last_bar_date:
-            self.durationStr = f"{self.date_to_delta(self.last_bar_date)} S"
+        if self._last_bar_date:
+            self.durationStr = f"{self.date_to_delta(self._last_bar_date)} S"
             log.debug(f"{self.name} duration str: {self.durationStr}")
 
         bars = await self.streaming_func()
         self.timers["bars"] = bars.updateEvent
         log.debug(f"Historical bars received for {self.contract.localSymbol}")
 
-        backfill_predicate = (not self.last_bar_date) or (
-            self.last_bar_date < bars[-2].date
+        backfill_predicate = (not self._last_bar_date) or (
+            self._last_bar_date < bars[-2].date
         )
         if bars and backfill_predicate:
             await self.backfill(bars)
@@ -263,9 +262,9 @@ class HistoricalDataStreamer(Streamer):
 
         async for bars_, hasNewBar in bars.updateEvent:
             if hasNewBar and (
-                (not self.last_bar_date) or (bars[-2].date > self.last_bar_date)
+                (not self._last_bar_date) or (bars[-2].date > self._last_bar_date)
             ):
-                self.last_bar_date = bars_[-2].date
+                self._last_bar_date = bars_[-2].date
                 self.on_new_bar(bars_[:-1])
 
     def on_new_bar(self, bars: ibi.BarDataList) -> None:
