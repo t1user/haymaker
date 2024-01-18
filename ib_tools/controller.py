@@ -465,19 +465,21 @@ class Controller(Atom):
         # THIS IS ALL POINTLESS
         # TODO
         # no permId here at all
-
-        await asyncio.sleep(0.1)
+        # THIS IS A TEST IF IT WORKS
+        # await asyncio.sleep(0.1)
         log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
         existing_order_record = self.sm.order.get(trade.order.orderId)
         if not existing_order_record:
             log.critical(f"Unknown trade in the system {trade.order}")
 
         # Give exec_model a chance to save bracket
-        await asyncio.sleep(0.5)
+        # await asyncio.sleep(0.5)
         self.sm.report_new_order(trade)
 
     async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
-        log.debug(f"OrderStatus event: {trade.order.orderId}, {trade.order.permId}")
+        if self.hold:
+            return
+
         await self.sm.save_order_status(trade)
         if trade.order.orderId < 0:
             log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")

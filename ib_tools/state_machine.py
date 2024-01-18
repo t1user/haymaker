@@ -372,37 +372,30 @@ class StateMachine(Atom):
         self.save_model(self._data.encode())
 
         # ### following is for debugging, should be deleted ####
-        async def _nothing(*args):
-            n = 0
-            while not trade.order.permId:
-                n += 1
-                await asyncio.sleep(0.1)
-            log.debug(
-                f"register_order acquired permId after: {n*.1} seconds."
-                f"{trade.order.orderId} {trade.order.permId}"
-            )
+        # async def _nothing(*args):
+        #     n = 0
+        #     while not trade.order.permId:
+        #         n += 1
+        #         await asyncio.sleep(0.1)
+        #     log.debug(
+        #         f"register_order acquired permId after: {n*.1} seconds."
+        #         f"{trade.order.orderId} {trade.order.permId}"
+        #     )
 
-        testing_event = ev.Event("testingEvent")
-        testing_event += _nothing
+        # testing_event = ev.Event("testingEvent")
+        # testing_event += _nothing
 
-        if not trade.order.permId:
-            testing_event.emit()
-        else:
-            log.debug(
-                f"register_order got permId without delay: "
-                f"{trade.order.orderId} {trade.order.permId}"
-            )
+        # if not trade.order.permId:
+        #     testing_event.emit()
+        # else:
+        #     log.debug(
+        #         f"register_order got permId without delay: "
+        #         f"{trade.order.orderId} {trade.order.permId}"
+        #     )
 
     async def save_order_status(self, trade: ibi.Trade) -> Optional[OrderInfo]:
         log.debug(f"updating trade status: {trade.order.orderId} {trade.order.permId}")
         order_info = self._orders.get(trade.order.orderId)
-        log.debug(
-            f"existing record: {order_info.trade.order.orderId} "
-            f"{order_info.trade.order.permId}"
-        )
-        if not trade.order.permId:
-            log.debug("Will wait for permId for 5 secs...")
-            await asyncio.sleep(5)
         if order_info:
             dict_for_saving = order_info.encode()
         else:
@@ -410,10 +403,10 @@ class StateMachine(Atom):
                 "orderId": trade.order.orderId,
                 "strategy": "unknown",
                 "action": "MANUAL" if trade.order.orderId < 0 else "UNKNOWN",
-                "trade": trade,
+                "trade": tree(trade),
                 "params": {},
             }
-        log.debug(f"Dict for saving: {dict_for_saving}")
+
         try:
             self.save_model(self._data.encode())
             self.save_order(dict_for_saving)
@@ -473,32 +466,6 @@ class StateMachine(Atom):
     def locked(self, strategy: str) -> Lock:
         return self._data[strategy].lock
 
-    # ### End data access and modification methods ###
-
-    # def position(self, strategy: str) -> float:
-    #     """
-    #     PROBABLY NOT IN USE
-
-    #     Return position for strategy.  Orders openning strategy are
-    #     treated as if they were already open.
-    #     """
-    #     # Verify that broker's position records are the same as mine
-    #     data = self._data.get(strategy)
-    #     assert data
-
-    #     if data.position:
-    #         return data.position
-
-    #     # Check not only position but pending position openning orders
-    #     elif orders := self._orders.strategy(strategy):
-    #         for order_info in orders:
-    #             trade = order_info.trade
-    #             if order_info.action == "OPEN":
-    #                 return trade.order.totalQuantity * (
-    #                     1.0 if trade.order.action.upper() == "BUY" else -1.0
-    #                 )
-    #     return 0.0
-
     def verify_position_for_contract(
         self, contract: ibi.Contract
     ) -> Union[bool, float]:
@@ -538,16 +505,6 @@ class StateMachine(Atom):
             for i in set([*broker_positions_dict.keys(), *my_positions_dict.keys()])
         }
         return {k: v for k, v in diff.items() if v != 0}
-        # for position in broker_positions:
-        #     if position.position != self.position_for_contract(position.contract):
-        #         log.error(
-        #             f"Position discrepancy for {position.contract}, "
-        #             f"mine: {self.position_for_contract(position.contract)}, "
-        #             f"theirs: {position.position}"
-        #         )
-        #         difference.append(position.contract)
-
-        # return difference
 
     # ### TODO: Re-do this
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:

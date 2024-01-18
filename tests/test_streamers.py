@@ -112,6 +112,7 @@ async def test_timer_triggered(timeout):
     t = timeout(
         time=0.1,
         event=ev.Event(),
+        ib=ibi.IB(),
         trading_hours=None,
         name="xxx",
         debug=True,
