@@ -306,6 +306,7 @@ class Controller(Atom):
                 f"->> {strategy}"
             )
             log.debug(
+                f"Position records correct for contract "
                 f"{data.active_contract.symbol}: "
                 f"{self.sm.verify_position_for_contract(data.active_contract)}"
             )

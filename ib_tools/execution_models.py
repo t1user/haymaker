@@ -101,8 +101,10 @@ class AbstractExecModel(Atom, ABC):
     def onStart(self, data, *args) -> None:
         super().onStart(data, *args)
         # super just set strategy, only now subsequent is possible
-        # self.data = self.sm.strategy[self.strategy]
-        self.data.update(**data)
+        try:
+            self.data.update(**data)
+        except AttributeError:
+            log.error(f"{self} doesn't have `strategy` attribute set.")
 
     def get_position_id(self, reset=False):
         if reset or not self.data.position_id:
@@ -351,8 +353,6 @@ class EventDrivenExecModel(BaseExecModel):
     stop_order = OrderFieldValidator()
     tp_order = OrderFieldValidator()
 
-    # contract: ibi.Contract  # or should it be a list of ibi.Contract ?
-
     def __init__(
         self,
         orders: Optional[dict[OrderKey, Any]] = None,
@@ -425,6 +425,7 @@ class EventDrivenExecModel(BaseExecModel):
                 bracket_kwargs.update(dynamic_bracket_kwargs)
                 memo.update(
                     {
+                        "strategy": self.strategy,
                         "position_id": self.get_position_id(),
                         "bracket_timestamp": datetime.now(timezone.utc),
                     }
