@@ -16,7 +16,6 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from ib_tools.manager import InitData
     from ib_tools.state_machine import StateMachine
 
 import ib_insync as ibi
@@ -62,33 +61,31 @@ class Atom:
 
     ib: ClassVar[ibi.IB]
     sm: StateMachine
-    _contract_details: ClassVar[dict[ibi.Contract, ibi.ContractDetails]] = {}
-    _trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]]
+    contract_details: ClassVar[dict[ibi.Contract, ibi.ContractDetails]] = {}
+    trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]] = {}
     events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
 
     contracts: list[ibi.Contract] = list()
     contract = cast(ibi.Contract, ContractManagingDescriptor())
 
     @classmethod
-    def set_init_data(cls, data: InitData, sm: StateMachine) -> None:
-        cls.ib = data.ib
+    def set_init_data(cls, ib: ibi.IB, sm: StateMachine) -> None:
+        cls.ib = ib
         cls.sm = sm
-        cls._trading_hours = data.trading_hours
-        cls._contract_details = data.contract_details
 
     def __init__(self) -> None:
         self._createEvents()
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
 
     @property
-    def trading_hours(self):
+    def hours(self):
         """
         If :attr:`contract` is set  ``trading_hours`` will be
         received only for this contract, otherwise
         :attr:`trading_hours` will return all available trading hours
         """
         try:
-            th = Atom._trading_hours
+            th = Atom.trading_hours
         except AttributeError:
             log.warning("Trading hours not set.")
             return {}
@@ -104,6 +101,11 @@ class Atom:
                 f"{self.__class__.__name__} no trading hours data for {self.contract}."
             )
             return th
+
+    @property
+    def details(self):
+        # TODO: in line with hours
+        pass
 
     def _createEvents(self):
         self.startEvent = ibi.Event("startEven")

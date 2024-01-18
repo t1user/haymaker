@@ -91,7 +91,7 @@ class App:
         log.debug("Hard timeout event.")
 
     def onStarting(self, watchdog: ibi.Watchdog) -> None:
-        log.debug("Starting...")
+        log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")
 
     def onStarted(self, *args) -> None:
         log.debug("Watchdog started")

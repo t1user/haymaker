@@ -95,7 +95,7 @@ class TimeoutContainer(UserDict):
                 self.streamer.timeout,
                 obj,
                 self.streamer.ib,
-                self.streamer.trading_hours,
+                self.streamer.hours,
                 f"{str(self.streamer)}-<<{key}>>",
             )
         super().__setitem__(key, obj)

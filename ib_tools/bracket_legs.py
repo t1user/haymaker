@@ -27,7 +27,7 @@ class AbstractBracketLeg(ABC):
     parameters for appropriate bracket order.
     """
 
-    details = Atom._contract_details
+    details = Atom.contract_details
     vol_field: str = "atr"
 
     def __init__(self, stop_multiple: float, vol_field: Optional[str] = None) -> None:

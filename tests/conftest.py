@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import ib_insync as ibi
 import pytest
 
@@ -20,11 +18,6 @@ def state_machine():
 
 @pytest.fixture()
 def atom(state_machine):
-    data = SimpleNamespace()
-    data.ib = ibi.IB()
-
-    data.trading_hours = {}
-    data.contract_details = {}
     sm = state_machine
-    Atom.set_init_data(data, sm)
+    Atom.set_init_data(ibi.IB(), sm)
     return Atom
