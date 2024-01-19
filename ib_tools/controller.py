@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import partial
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import ib_insync as ibi
 
@@ -629,6 +629,22 @@ class Controller(Atom):
                 f"Error {errorCode}: {errorString} {contract}, "
                 f"{strategy} | {action} | {order}"
             )
+
+    def verify_position_for_contract(
+        self, contract: ibi.Contract
+    ) -> Union[bool, float]:
+        my_position = self.position.get(contract, 0.0)
+        ib_position = self.ib_position_for_contract(contract)
+        return (my_position == ib_position) or (my_position - ib_position)
+
+    def ib_position_for_contract(self, contract: ibi.Contract) -> float:
+        # CONSIDER MOVING TO TRADER
+        return next(
+            (v.position for v in self.ib.positions() if v.contract == contract), 0
+        )
+
+        # positions = {p.contract: p.position for p in self.ib.positions()}
+        # return positions.get(contract, 0.0)
 
     def nuke(self):
         """

@@ -5,14 +5,13 @@ import logging
 from collections import UserDict, defaultdict
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Iterator, Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from ib_tools.saver import MongoSaver, SaveManager, async_runner
 
-from .base import Atom
 from .config import CONFIG
 from .misc import Lock, decode_tree, tree
 
@@ -250,27 +249,6 @@ class StateMachine:
 
         2. Is strategy locked?
 
-        3. After (re)start:
-
-            - do all positions have stop-losses?
-
-            - has anything happened during blackout that needs to be
-              reported in blotter/logs?
-
-            - are all active orders accounted for (i.e. linked to
-              strategies)?
-
-            - compare position records with live update (do we hold
-              what we think we hold?)
-
-            - attach events (or check if events attached after another
-              object attaches them) for:
-
-                - reporting
-
-                - cancellation of redundand orders (tp after stop hit,
-                  etc)
-
         4. Was execution successful (i.e. record desired position
            after signal sent to execution model, then record actual
            live transactions)?
@@ -279,11 +257,9 @@ class StateMachine:
 
         6. Are orders linked to strategies?
 
-        7. /No longer valid/ Make sure order events connected to call-backs
-
-    Collect all information needed to restore state.  This info will
-    be stored to database.  If the app crashes, after restart, all
-    info about state required by any object must be found here.
+    Collect all information needed to restore state.  This info is
+    stored to database.  If the app crashes, after restart, all info
+    about state required by any object must be found here.
     """
 
     _instance: Optional["StateMachine"] = None
@@ -376,28 +352,6 @@ class StateMachine:
         self.save_order(order_info.encode())
         self.save_model(self._data.encode())
 
-        # ### following is for debugging, should be deleted ####
-        # async def _nothing(*args):
-        #     n = 0
-        #     while not trade.order.permId:
-        #         n += 1
-        #         await asyncio.sleep(0.1)
-        #     log.debug(
-        #         f"register_order acquired permId after: {n*.1} seconds."
-        #         f"{trade.order.orderId} {trade.order.permId}"
-        #     )
-
-        # testing_event = ev.Event("testingEvent")
-        # testing_event += _nothing
-
-        # if not trade.order.permId:
-        #     testing_event.emit()
-        # else:
-        #     log.debug(
-        #         f"register_order got permId without delay: "
-        #         f"{trade.order.orderId} {trade.order.permId}"
-        #     )
-
     async def save_order_status(self, trade: ibi.Trade) -> Optional[OrderInfo]:
         log.debug(f"updating trade status: {trade.order.orderId} {trade.order.permId}")
         order_info = self._orders.get(trade.order.orderId)
@@ -459,57 +413,14 @@ class StateMachine:
         """
         return self._data.strategies_by_contract()
 
-    # def get_order(self, orderId: int) -> Optional[OrderInfo]:
-    #     return self._orders.get(orderId)
-
     def delete_order(self, orderId: int) -> None:
         del self._orders[orderId]
-
-    # def get_strategy(self, strategy: str) -> Optional[Strategy]:
-    #     return self._data.get(strategy)
 
     def locked(self, strategy: str) -> Lock:
         return self._data[strategy].lock
 
-    def verify_position_for_contract(
-        self, contract: ibi.Contract
-    ) -> Union[bool, float]:
-        my_position = self.position.get(contract, 0.0)
-        ib_position = self.ib_position_for_contract(contract)
-        return (my_position == ib_position) or (my_position - ib_position)
-
-    def ib_position_for_contract(self, contract: ibi.Contract) -> float:
-        # MOVE THIS OUT OF THIS CLASS
-        return next(
-            (v.position for v in self.ib.positions() if v.contract == contract), 0
-        )
-
-        # positions = {p.contract: p.position for p in self.ib.positions()}
-        # return positions.get(contract, 0.0)
-
-    # def verify_positions(self) -> dict[ibi.Contract, float]:
-    #     """
-    #     Compare positions actually held with broker with position
-    #     records.  Return differences if any and log an error.
-    #     """
-
-    #     # list of contracts where differences occur
-    #     # difference: list[ibi.Contract] = []
-
-    #     broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
-    #     my_positions_dict = self._data.total_positions()
-    #     log.debug(f"Broker positions: {broker_positions_dict}")
-    #     log.debug(f"My positions: {my_positions_dict}")
-    #     diff = {
-    #         i: (
-    #             (my_positions_dict.get(i) or 0.0)
-    #             - (broker_positions_dict.get(i) or 0.0)
-    #         )
-    #         for i in set([*broker_positions_dict.keys(), *my_positions_dict.keys()])
-    #     }
-    #     return {k: v for k, v in diff.items() if v != 0}
-
     # ### TODO: Re-do this
+    # DOES THIS BELONG IN THIS CLASS?
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
         # TODO: move to controller
         self._data[strategy].lock = 1 if trade.order.action == "BUY" else -1
