@@ -129,7 +129,11 @@ class OrderContainer(UserDict):
             )
 
     def __repr__(self) -> str:
-        return f"OrderContainer({self.data}, max_size={self.max_size})"
+        if self.max_size:
+            ms = f", max_size={self.max_size}"
+        else:
+            ms = ""
+        return f"OrderContainer({self.data}{ms})"
 
 
 class Strategy(dict):
@@ -232,7 +236,7 @@ model_saver = MongoSaver("models")
 order_saver = MongoSaver("orders", query_key="orderId")
 
 
-class StateMachine(Atom):
+class StateMachine:
     """
     This class provides information.  It should be other classes that
     act on this information.
@@ -483,29 +487,27 @@ class StateMachine(Atom):
         # positions = {p.contract: p.position for p in self.ib.positions()}
         # return positions.get(contract, 0.0)
 
-    def verify_positions(self) -> dict[ibi.Contract, float]:
-        """
-        Compare positions actually held with broker with position
-        records.  Return differences if any and log an error.
-        """
+    # def verify_positions(self) -> dict[ibi.Contract, float]:
+    #     """
+    #     Compare positions actually held with broker with position
+    #     records.  Return differences if any and log an error.
+    #     """
 
-        # NOT IN USE
+    #     # list of contracts where differences occur
+    #     # difference: list[ibi.Contract] = []
 
-        # list of contracts where differences occur
-        # difference: list[ibi.Contract] = []
-
-        broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
-        my_positions_dict = self._data.total_positions()
-        log.debug(f"Broker positions: {broker_positions_dict}")
-        log.debug(f"My positions: {my_positions_dict}")
-        diff = {
-            i: (
-                (my_positions_dict.get(i) or 0.0)
-                - (broker_positions_dict.get(i) or 0.0)
-            )
-            for i in set([*broker_positions_dict.keys(), *my_positions_dict.keys()])
-        }
-        return {k: v for k, v in diff.items() if v != 0}
+    #     broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
+    #     my_positions_dict = self._data.total_positions()
+    #     log.debug(f"Broker positions: {broker_positions_dict}")
+    #     log.debug(f"My positions: {my_positions_dict}")
+    #     diff = {
+    #         i: (
+    #             (my_positions_dict.get(i) or 0.0)
+    #             - (broker_positions_dict.get(i) or 0.0)
+    #         )
+    #         for i in set([*broker_positions_dict.keys(), *my_positions_dict.keys()])
+    #     }
+    #     return {k: v for k, v in diff.items() if v != 0}
 
     # ### TODO: Re-do this
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:

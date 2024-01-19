@@ -31,7 +31,7 @@ class OrderSyncStrategy:
         self.unknown: list[ibi.Trade] = []  # <-We're fucked
         # Our active trades that IB doesn't report as active
         self.inactive: list[ibi.Trade] = []
-        # Question trades that we managed to match to IB
+        # Inactive trades that we managed to match to IB
         self.done: list[ibi.Trade] = []
         # Trades on record that we cannot resolve with IB
         self.errors: list[ibi.Trade] = []  # <- We're fucked
@@ -93,11 +93,11 @@ class OrderSyncStrategy:
 
         done = {
             trade.order.orderId: trade
-            for trade in self.question_trades
+            for trade in self.inactive
             if trade.order.orderId in ib_known_trades
         }
         self.errors = [
-            trade for trade in self.question_trades if trade.order.orderId not in done
+            trade for trade in self.inactive if trade.order.orderId not in done
         ]
         self.done = list(done.values())
         return self
@@ -119,7 +119,24 @@ class PositionSyncStrategy:
         return cls(ib, sm).verify_positions()
 
     def verify_positions(self) -> PositionSyncStrategy:
-        self.errors = self.sm.verify_positions()
+        """
+        Compare positions actually held with broker with position
+        records.  Return differences if any and log an error.
+        """
+
+        broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
+        my_positions_dict = self.sm.strategy.total_positions()
+        # log.debug(f"Broker positions: {broker_positions_dict}")
+        # log.debug(f"My positions: {my_positions_dict}")
+        diff = {
+            i: (
+                (my_positions_dict.get(i) or 0.0)
+                - (broker_positions_dict.get(i) or 0.0)
+            )
+            for i in set([*broker_positions_dict.keys(), *my_positions_dict.keys()])
+        }
+        self.errors = {k: v for k, v in diff.items() if v != 0}
+
         return self
 
 
@@ -185,7 +202,7 @@ class Controller(Atom):
             report = OrderSyncStrategy.run(self.ib, self.sm).report
             log.debug(
                 f"Trades on re-start - unknown: {len(report['unknown'])}, "
-                f"matched: {len(report['done'])}, unmatched: {len(report['errors'])}"
+                f"done: {len(report['done'])}, error: {len(report['errors'])}"
             )
         except Exception as e:
             log.exception(e)
@@ -210,11 +227,13 @@ class Controller(Atom):
             self.handle_inactive_trades(report["errors"])
 
         except Exception as e:
-            log.exception(f"Error handling unmatched trades: {e}")
+            log.exception(f"Error handling inactive trades: {e}")
 
         try:
-            if error_positions := PositionSyncStrategy.run(self.ib, self.sm):
-                log.critical(f"Wrong positions on restart: {error_positions}")
+            if error_position_report := PositionSyncStrategy.run(
+                self.ib, self.sm
+            ).report["errors"]:
+                log.critical(f"Wrong positions on restart: {error_position_report}")
             else:
                 log.info("Positions matched to broker?: --> OK <--")
         except Exception as e:
