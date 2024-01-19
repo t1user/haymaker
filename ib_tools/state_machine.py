@@ -13,6 +13,7 @@ import ib_insync as ibi
 from ib_tools.saver import MongoSaver, SaveManager, async_runner
 
 from .base import Atom
+from .config import CONFIG
 from .misc import Lock, decode_tree, tree
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,9 @@ class OrderInfo:
 
 
 class OrderContainer(UserDict):
-    def __init__(self, dict=None, /, max_size: int = 50) -> None:
+    def __init__(
+        self, dict=None, /, max_size: int = CONFIG["order_container_max_size"]
+    ) -> None:
         self.max_size = max_size
         self.index: dict[int, int] = {}
         self.setitemEvent = ev.Event("setitemEvent")
@@ -311,7 +314,6 @@ class StateMachine(Atom):
             new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
             self._orders[trade.order.orderId] = new_oi
             self.save_order(new_oi.encode())
-            # TODO: What about trades that became inactive while disconnected?
             return None
         else:
             return trade
@@ -320,20 +322,19 @@ class StateMachine(Atom):
         """
         This order is no longer of interest it's inactive in our
         orders and inactive in IB.  Called by startup sync routines.
+
+        Delete trade only from local records (database is unaffected).
         """
         self._orders.pop(orderId)
 
-    def override_inactive_trades(self, *trades: ibi.Trade) -> None:
+    def delete_trade_record(self, trade: ibi.Trade) -> None:
         """
-        Trades that we have as active but IB doesn't know about them.
-        Used for cold restarts.
+        Delete order related record from database.
         """
-        for trade in trades:
-            log.debug(f"Will delete trade: {trade.order.orderId}")
-            oi_dict = self._orders[trade.order.orderId].encode()
-            oi_dict.update({"active": False})
-            self.save_order(oi_dict)
-            del self._orders[trade.order.orderId]
+        oi_dict = self._orders[trade.order.orderId].encode()
+        oi_dict.update({"active": False})
+        self.save_order(oi_dict)
+        del self._orders[trade.order.orderId]
 
     async def read_from_store(self):
         log.debug("Will read data from store...")
@@ -508,8 +509,9 @@ class StateMachine(Atom):
 
     # ### TODO: Re-do this
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
+        # TODO: move to controller
         self._data[strategy].lock = 1 if trade.order.action == "BUY" else -1
-        log.debug(f"Registered lock: {strategy}: {self._data[strategy].lock}")
+        # log.debug(f"Registered lock: {strategy}: {self._data[strategy].lock}")
 
     def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
         # When exactly should the lock be registered to prevent double-dip?

@@ -177,20 +177,6 @@ def test_OrderContainer_default_in_get_works_if_active_only_not_found():
     assert orders.get(2, "Not Found", active_only=True) == "Not Found"
 
 
-def test_OrderContainer_limited_in_size():
-    orders = OrderContainer(
-        {
-            i: OrderInfo(
-                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), {}
-            )
-            for i in range(100)
-        }
-    )
-
-    # done should keep only 10 last items
-    assert len(orders) == 50
-
-
 def test_OrderContainer_limited_in_size_and_max_size_parameter_works():
     orders = OrderContainer(
         {

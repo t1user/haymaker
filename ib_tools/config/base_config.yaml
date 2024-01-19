@@ -15,6 +15,9 @@ use_blotter: True
 coldstart: False
 log_IB_events: False
 
+# StateMachine config:
+order_container_max_size: 0 # zero means no limit
+
 # These are default order params that will be used by every execution model
 # unless different orders are passes to exec model __init__
 open_order:
