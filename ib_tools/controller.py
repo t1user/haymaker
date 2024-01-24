@@ -201,7 +201,7 @@ class Controller(Atom):
         try:
             report = OrderSyncStrategy.run(self.ib, self.sm).report
             log.debug(
-                f"Trades on re-start - unknown: {len(report['unknown'])}, "
+                f"Trades on re-start -> unknown: {len(report['unknown'])}, "
                 f"done: {len(report['done'])}, error: {len(report['errors'])}"
             )
         except Exception as e:
@@ -304,7 +304,7 @@ class Controller(Atom):
             log.debug(
                 f"Position records correct for contract "
                 f"{data.active_contract.symbol}: "
-                f"{self.sm.verify_position_for_contract(data.active_contract)}"
+                f"{self.verify_position_for_contract(data.active_contract)}"
             )
             try:
                 assert sign(data.position) == target_position
@@ -516,6 +516,8 @@ class Controller(Atom):
                 f"{trade.contract.localSymbol} strategy: {strategy}"
             )
 
+    # Combine with register_position
+    # half of work here is linked to registering position
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """
         Register position.
@@ -633,7 +635,7 @@ class Controller(Atom):
     def verify_position_for_contract(
         self, contract: ibi.Contract
     ) -> Union[bool, float]:
-        my_position = self.position.get(contract, 0.0)
+        my_position = self.sm.position.get(contract, 0.0)
         ib_position = self.ib_position_for_contract(contract)
         return (my_position == ib_position) or (my_position - ib_position)
 

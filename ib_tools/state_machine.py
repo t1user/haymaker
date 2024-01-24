@@ -204,32 +204,6 @@ class StrategyContainer(UserDict):
         return f"StrategyContainer({self.data})"
 
 
-@dataclass
-class StrategyWrapper:
-    # DOESN'T SEEM TO BE IN USE AND CAN'T REMEMBER WHAT IT WAS FOR
-    _strategy: Strategy
-    _orders: OrderContainer
-
-    @property
-    def orders(self):
-        return self._orders.strategy(self._strategy)
-
-    def __getitem__(self, item):
-        return self._strategy[item]
-
-    def __setitem__(self, key, value):
-        self._strategy[key] = value
-
-    def __getattr__(self, key):
-        return self._strategy.get(key)
-
-    def __setattr__(self, key, value):
-        self._strategy[key] = value
-
-    def __delattr__(self, key):
-        self._strategy.__delitem__(key)
-
-
 # Consider allowing for use of different savers
 model_saver = MongoSaver("models")
 order_saver = MongoSaver("orders", query_key="orderId")
@@ -347,7 +321,9 @@ class StateMachine:
         )
 
         if action.upper() == "OPEN":
-            trade.filledEvent += partial(self.new_position_callbacks, strategy)
+            trade.filledEvent += partial(self.register_lock, strategy)
+        elif action.upper() == "CLOSE":
+            trade.filledEvent += partial(self.remove_lock, strategy)
 
         self.save_order(order_info.encode())
         self.save_model(self._data.encode())
@@ -421,14 +397,14 @@ class StateMachine:
 
     # ### TODO: Re-do this
     # DOES THIS BELONG IN THIS CLASS?
+    # or maybe position should also be set on this class
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
         # TODO: move to controller
         self._data[strategy].lock = 1 if trade.order.action == "BUY" else -1
         # log.debug(f"Registered lock: {strategy}: {self._data[strategy].lock}")
 
-    def new_position_callbacks(self, strategy: str, trade: ibi.Trade) -> None:
-        # When exactly should the lock be registered to prevent double-dip?
-        self.register_lock(strategy, trade)
+    def remove_lock(self, strategy: str, trade: ibi.Trade) -> None:
+        self._data[strategy].lock = 0
 
     def __repr__(self):
         return self.__class__.__name__ + "()"
