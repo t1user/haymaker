@@ -35,11 +35,11 @@ class OrderSyncStrategy:
         self.done: list[ibi.Trade] = []
         # Trades on record that we cannot resolve with IB
         self.errors: list[ibi.Trade] = []  # <- We're fucked
-        self.report = {
-            "unknown": self.unknown,
-            "done": self.done,
-            "errors": self.errors,
-        }
+        # self.report = {
+        #     "unknown": self.unknown,
+        #     "done": self.done,
+        #     "errors": self.errors,
+        # }
 
     @classmethod
     def run(cls, ib: ibi.IB, sm: StateMachine):
@@ -66,16 +66,20 @@ class OrderSyncStrategy:
         """
         self.inactive = []
         ib_open_trades = {trade.order.orderId: trade for trade in self.ib.openTrades()}
+        log.debug(f"ib open trades: {list(ib_open_trades.keys())}")
         for orderId, oi in self.sm._orders.copy().items():
+            log.debug(f"verifying {orderId}")
             if orderId not in ib_open_trades:
                 # if inactive it's already been dealt with before restart
                 if oi.active:
+                    log.debug(f"reporting inactive: {orderId}")
                     # this is a trade that we have as active in self.orders
                     # but IB doesn't have it in open orders
                     # we have to figure out what happened to this trade
                     # while we were disconnected and report it as appropriate
                     self.inactive.append(oi.trade)
                 else:
+                    log.debug(f"Will prune order: {orderId}")
                     # this order is no longer of interest
                     # it's inactive in our orders and inactive in IB
                     self.sm.prune_order(orderId)  # <- CHANGING RECORDS
@@ -91,15 +95,25 @@ class OrderSyncStrategy:
             for trade in self.ib.trades()
         }
 
-        done = {
-            trade.order.orderId: trade
-            for trade in self.inactive
-            if trade.order.orderId in ib_known_trades
-        }
-        self.errors = [
-            trade for trade in self.inactive if trade.order.orderId not in done
-        ]
-        self.done = list(done.values())
+        log.debug(f"ib known trades: {list(ib_known_trades.keys())}")
+        log.debug(f"inactive trades: {self.inactive}")
+
+        for old_trade in self.inactive:
+            new_trade = ib_known_trades.get(old_trade.order.permId)
+            if new_trade:
+                new_trade.order.orderId = old_trade.order.orderId
+                self.done.append(new_trade)
+            else:
+                self.errors.append(old_trade)
+
+        # done = {
+        #     trade.order.permId: trade
+        #     for trade in self.inactive
+        #     if trade.order.permId in ib_known_trades
+        # }
+
+        log.debug(f"done: {[(t.order.orderId, t.order.permId) for t in self.done]}")
+
         return self
 
 
@@ -112,7 +126,7 @@ class PositionSyncStrategy:
         self.ib = ib
         self.sm = sm
         self.errors: dict[ibi.Contract, float] = {}
-        self.report = {"errors": self.errors}
+        # self.report = {"errors": self.errors}
 
     @classmethod
     def run(cls, ib: ibi.IB, sm: StateMachine):
@@ -125,7 +139,9 @@ class PositionSyncStrategy:
         """
 
         broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
+        log.debug(f"broker_positions: {broker_positions_dict}")
         my_positions_dict = self.sm.strategy.total_positions()
+        log.debug(f"my positions: {my_positions_dict}")
         # log.debug(f"Broker positions: {broker_positions_dict}")
         # log.debug(f"My positions: {my_positions_dict}")
         diff = {
@@ -135,7 +151,9 @@ class PositionSyncStrategy:
             )
             for i in set([*broker_positions_dict.keys(), *my_positions_dict.keys()])
         }
+        log.debug(f"diff: {diff}")
         self.errors = {k: v for k, v in diff.items() if v != 0}
+        log.debug(f"errors: {self.errors}")
 
         return self
 
@@ -199,17 +217,17 @@ class Controller(Atom):
                 log.exception(e)
 
         try:
-            report = OrderSyncStrategy.run(self.ib, self.sm).report
+            report = OrderSyncStrategy.run(self.ib, self.sm)
             log.debug(
-                f"Trades on re-start -> unknown: {len(report['unknown'])}, "
-                f"done: {len(report['done'])}, error: {len(report['errors'])}"
+                f"Trades on re-start -> unknown: {len(report.unknown)}, "
+                f"done: {len(report.done)}, error: {len(report.errors)}"
             )
         except Exception as e:
             log.exception(e)
             raise
 
-        for error_trade in report["unknown"]:
-            log.critical(f"Unknow trade in the system: {error_trade}.")
+        for unknown_trade in report.unknown:
+            log.critical(f"Unknow trade in the system: {unknown_trade}.")
 
         # From here IB events will be handled...
         self.hold = False
@@ -217,14 +235,14 @@ class Controller(Atom):
         # ...so that matched trades can be sent to blotter
 
         try:
-            for trade in report["done"]:
-                self.report_done_trade(trade)
+            for done_trade in report.done:
+                self.report_done_trade(done_trade)
         except Exception as e:
             log.exception(f"Error with done trade: {e}")
 
         try:
             # don't know what to do with that yet:
-            self.handle_inactive_trades(report["errors"])
+            self.clear_error_trades(report.errors)
 
         except Exception as e:
             log.exception(f"Error handling inactive trades: {e}")
@@ -232,8 +250,9 @@ class Controller(Atom):
         try:
             if error_position_report := PositionSyncStrategy.run(
                 self.ib, self.sm
-            ).report["errors"]:
+            ).errors:
                 log.critical(f"Wrong positions on restart: {error_position_report}")
+                self.handle_error_positions(error_position_report)
             else:
                 log.info("Positions matched to broker?: --> OK <--")
         except Exception as e:
@@ -241,10 +260,26 @@ class Controller(Atom):
 
         log.debug("Sync completed.")
 
-    def handle_inactive_trades(self, trades: list[ibi.Trade]) -> None:
+    def handle_error_positions(self, report: dict[ibi.Contract, float]) -> None:
+        log.error("Will attempt to fix position records")
+        for contract, diff in report.items():
+            strategies = self.sm.for_contract.get(contract)
+            if strategies and len(strategies) == 1:
+                self.sm.strategy[strategies[0]].position -= diff
+                log.error(
+                    f"Corrected position records for strategy {strategies[0]} by {diff}"
+                )
+                self.sm.save_model(self.sm._data.encode())
+            else:
+                log.critical(
+                    f"More than 1 stratey for contract {contract.symbol}, "
+                    f"cannot fix position records."
+                )
+
+    def clear_error_trades(self, trades: list[ibi.Trade]) -> None:
         """
+        Should rather beUsed for cold restarts, but currently used at all times.
         Trades that we have as active but IB doesn't know about them.
-        Used for cold restarts.
         """
         for trade in trades:
             log.error(
@@ -257,13 +292,15 @@ class Controller(Atom):
         log.debug(
             f"Back-reporting trade: {trade.contract.symbol} "
             f"{trade.order.action} {trade.order.totalQuantity} "
-            f"order id: {trade.order.orderId}"
+            f"order id: {trade.order.orderId} {trade.order.permId}"
         )
-
+        log.debug(f"Trade object: {trade}")
+        log.debug(f"trade is active?: {trade.isActive()}")
         self.ib.orderStatusEvent.emit(trade)
-        self.ib.commissionReportEvent.emit(
-            trade, trade.fills[-1], trade.fills[-1].commissionReport
-        )
+        if trade.orderStatus.status == "Filled":
+            self.ib.commissionReportEvent.emit(
+                trade, trade.fills[-1], trade.fills[-1].commissionReport
+            )
 
     async def onData(self, data, *args) -> None:
         """
@@ -473,9 +510,10 @@ class Controller(Atom):
         self.sm.report_new_order(trade)
 
     async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
+        log.debug("inside onOrderStatusEvent")
         if self.hold:
             return
-
+        log.debug(f"Reporting order status: {trade.order.orderId} {trade.order.permId}")
         await self.sm.save_order_status(trade)
         if trade.order.orderId < 0:
             log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
@@ -545,10 +583,13 @@ class Controller(Atom):
         execution.  After that trade object is ready for stroring in
         blotter.
         """
-
+        log.debug("Inside onCommissionReport")
         # prevent writing all orders from session on startup
         if self.hold:
             return
+        log.debug(
+            f"Will report commission for {trade.order.orderId} {trade.order.permId}"
+        )
         data = self.sm.order.get(trade.order.orderId)
         if data:
             strategy, action, _, params, _ = data

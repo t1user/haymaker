@@ -330,6 +330,7 @@ class StateMachine:
 
     async def save_order_status(self, trade: ibi.Trade) -> Optional[OrderInfo]:
         log.debug(f"updating trade status: {trade.order.orderId} {trade.order.permId}")
+        # if orderId zero it means trade objects has to be replaced
         order_info = self._orders.get(trade.order.orderId)
         if order_info:
             dict_for_saving = order_info.encode()
