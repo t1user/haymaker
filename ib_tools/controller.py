@@ -103,6 +103,7 @@ class OrderSyncStrategy:
             if new_trade:
                 new_trade.order.orderId = old_trade.order.orderId
                 self.done.append(new_trade)
+                self.sm.update_trade(new_trade)  # <- CHANGING RECORDS
             else:
                 self.errors.append(old_trade)
 
@@ -240,6 +241,7 @@ class Controller(Atom):
         except Exception as e:
             log.exception(f"Error with done trade: {e}")
 
+        await asyncio.sleep(0)
         try:
             # don't know what to do with that yet:
             self.clear_error_trades(report.errors)
@@ -247,6 +249,7 @@ class Controller(Atom):
         except Exception as e:
             log.exception(f"Error handling inactive trades: {e}")
 
+        await asyncio.sleep(0)
         try:
             if error_position_report := PositionSyncStrategy.run(
                 self.ib, self.sm
@@ -270,6 +273,14 @@ class Controller(Atom):
                     f"Corrected position records for strategy {strategies[0]} by {diff}"
                 )
                 self.sm.save_model(self.sm._data.encode())
+            elif strategies and self.ib_position_for_contract(contract) == 0:
+                for strategy in strategies:
+                    self.sm.strategy[strategy].position = 0
+                self.sm.save_model(self.sm._data.encode())
+                log.error(
+                    f"Position records zeroed for {strategies} "
+                    f"to reflect zero position for {contract.symbol}."
+                )
             else:
                 log.critical(
                     f"More than 1 stratey for contract {contract.symbol}, "
@@ -289,14 +300,18 @@ class Controller(Atom):
             self.sm.delete_trade_record(trade)
 
     def report_done_trade(self, trade: ibi.Trade):
+        """
+        Used during sync.
+        """
         log.debug(
             f"Back-reporting trade: {trade.contract.symbol} "
-            f"{trade.order.action} {trade.order.totalQuantity} "
-            f"order id: {trade.order.orderId} {trade.order.permId}"
+            f"{trade.order.action} {misc.trade_fill_price(trade)} "
+            f"order id: {trade.order.orderId} {trade.order.permId} "
+            f"active?: {trade.isActive()}"
         )
-        log.debug(f"Trade object: {trade}")
-        log.debug(f"trade is active?: {trade.isActive()}")
         self.ib.orderStatusEvent.emit(trade)
+        for fill in trade.fills:
+            self.ib.execDetailsEvent.emit(trade, fill)
         if trade.orderStatus.status == "Filled":
             self.ib.commissionReportEvent.emit(
                 trade, trade.fills[-1], trade.fills[-1].commissionReport
@@ -638,15 +653,15 @@ class Controller(Atom):
     def log_trade(self, trade: ibi.Trade, reason: str = "", strategy: str = "") -> None:
         log.info(
             f"{reason} trade filled: {trade.contract.localSymbol} "
-            f"{trade.order.action} {trade.orderStatus.filled}"
-            f"@{trade.orderStatus.avgFillPrice} --> {strategy}"
+            f"{trade.order.action} {trade.filled()}"
+            f"@{misc.trade_fill_price(trade)} --> {strategy}"
             f"orderId: {trade.order.orderId}, permId: {trade.order.permId}"
         )
 
     def log_cancel(self, trade: ibi.Trade) -> None:
         log.info(
             f"{trade.order.orderType} order {trade.order.action} "
-            f"{trade.orderStatus.remaining} (of "
+            f"{trade.remaining()} (of "
             f"{trade.order.totalQuantity}) for "
             f"{trade.contract.localSymbol} cancelled"
         )

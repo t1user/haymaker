@@ -271,3 +271,18 @@ def default_path(*dirnames: str) -> str:
     if not Path.exists(home / default_directory / dirnames_str):
         makedirs(home.joinpath(default_directory, *dirnames))
     return path.join(str(home), default_directory, *dirnames)
+
+
+def trade_fill_price(trade: ibi.Trade) -> float:
+    return weighted_average(
+        *[(fill.execution.price, fill.execution.shares) for fill in trade.fills]
+    )
+
+
+def weighted_average(*values: tuple[float, float]) -> float:
+    running_multiples = 0.0
+    running_total = 0.0
+    for i, k in values:
+        running_multiples += i * k
+        running_total += k
+    return running_multiples / running_total

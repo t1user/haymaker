@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import ib_insync as ibi
 
+from ib_tools import misc
 from ib_tools.config import CONFIG
 from ib_tools.saver import CsvSaver, MongoSaver, SaveManager  # noqa
 
@@ -35,8 +36,7 @@ class Blotter:
     save = SaveManager(BLOTTER_SAVER)
 
     def __init__(self, save_immediately: bool = True, *args, **kwargs) -> None:
-        # this option should be False for backtester, True otherwise
-        self.save_immediately = save_immediately
+        self.save_immediately = save_immediately  # False for backtester, True otherwise
         self.blotter: list[dict] = []
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
@@ -54,8 +54,8 @@ class Blotter:
             "side": trade.order.action,  # buy or sell
             "order_type": trade.order.orderType,  # order type
             "order_price": trade.order.auxPrice,  # order price
-            "amount": trade.orderStatus.filled,  # unsigned amount
-            "price": trade.orderStatus.avgFillPrice,
+            "amount": trade.filled(),  # unsigned amount
+            "price": trade.orderStatus.avgFillPrice or misc.trade_fill_price(trade),
             "order_id": trade.order.orderId,  # non unique
             "perm_id": trade.order.permId,  # unique trade id
             "commission": sum([comm.commission for comm in comms]),
