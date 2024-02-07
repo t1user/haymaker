@@ -181,8 +181,7 @@ class Controller(Atom):
         self.ib.newOrderEvent.connect(self.onNewOrderEvent)
         self.ib.orderStatusEvent.connect(self.onOrderStatusEvent)
 
-        log.debug("hold set")
-        self.hold = True
+        self.set_hold()
 
         if CONFIG.get("use_blotter"):
             self.blotter = Blotter()
@@ -204,11 +203,17 @@ class Controller(Atom):
         self.ib.orderModifyEvent += self.log_modification
         self.ib.errorEvent += self.log_error
 
+    def set_hold(self) -> None:
+        self.hold = True
+        log.debug("hold set")
+
     async def sync(self, *args, **kwargs) -> None:
         log.debug("Sync...")
 
+        self.set_hold()
+
         if self.cold_start:
-            log.debug("Starting cold...")
+            log.debug("Starting cold... (state NOT read from db)")
         else:
             try:
                 log.debug("Reading from store...")

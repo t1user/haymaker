@@ -32,6 +32,7 @@ class FakeIBC(IBC):
         pass
 
     async def terminateAsync(self):
+        CONTROLLER.set_hold()
         log.debug(f"Pausing {self.restart_time} secs before restart...")
         await asyncio.sleep(self.restart_time)
 
@@ -69,6 +70,8 @@ class App:
 
         self.watchdog.startingEvent += self.onStarting
         self.watchdog.startedEvent += self.onStarted
+        self.watchdog.stoppingEvent += self.onStopping
+        self.watchdog.stoppedEvent += self.onStopped
         self.watchdog.softTimeoutEvent += self.onSoftTimeout
         self.watchdog.hardTimeoutEvent += self.onHardTimeout
 
@@ -84,17 +87,23 @@ class App:
             log.debug(f"Error event: {reqId} {errorCode} {errorString} {contract}")
             # Consider handling 2103 - Market data connection is broken
 
-    def onSoftTimeout(self, watchdog: ibi.Watchdog) -> None:
-        log.debug("Soft timeout event.")
-
-    def onHardTimeout(self, watchdog: ibi.Watchdog) -> None:
-        log.debug("Hard timeout event.")
-
     def onStarting(self, watchdog: ibi.Watchdog) -> None:
         log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")
 
     def onStarted(self, *args) -> None:
         log.debug("Watchdog started")
+
+    def onStopping(self, *args) -> None:
+        log.debug("Watchdog stopping")
+
+    def onStopped(self, *args) -> None:
+        log.debug("Watchdog stopped.")
+
+    def onSoftTimeout(self, watchdog: ibi.Watchdog) -> None:
+        log.debug("Soft timeout event.")
+
+    def onHardTimeout(self, watchdog: ibi.Watchdog) -> None:
+        log.debug("Hard timeout event.")
 
     def onConnected(self, *args) -> None:
         log.debug("IB Connected")
