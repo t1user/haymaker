@@ -168,6 +168,9 @@ class StrategyContainer(UserDict):
         return self.data[key]
 
     def total_positions(self) -> defaultdict[ibi.Contract, float]:
+        """
+        Return a dict of positions by contract.
+        """
         d: defaultdict[ibi.Contract, float] = defaultdict(float)
         for data in self.data.values():
             if data.active_contract:

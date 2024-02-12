@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final, cast
@@ -108,16 +109,17 @@ class Jobs:
             f"Open positions on restart: "
             f"{ {p.contract.symbol: p.position for p in IB.positions()} }"
         )
-        order_dict = {
-            t.contract.symbol: (
-                t.order.orderId,
-                t.order.orderType,
-                t.order.action,
-                t.order.totalQuantity,
+        order_dict = defaultdict(list)
+        for t in IB.openTrades():
+            order_dict[t.contract.symbol].append(
+                (
+                    t.order.orderId,
+                    t.order.orderType,
+                    t.order.action,
+                    t.order.totalQuantity,
+                )
             )
-            for t in IB.openTrades()
-        }
-        log.info(f"Orders on restart: {order_dict}")
+        log.info(f"Orders on restart: {dict(order_dict)}")
 
         for streamer in self.streamers:
             task = asyncio.create_task(streamer.run(), name=f"{streamer!s}, ")

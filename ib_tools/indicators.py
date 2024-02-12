@@ -521,7 +521,7 @@ def breakout(
     stop_frac: float = 0.5,
 ) -> pd.Series:
     """
-    Create a Series with signal representing buying upside breakout
+    Create a Series with signal representing buying breakout
     beyond lookback periods maximum and selling breakout below
     lookback periods minimum.  Once generated, signal stays constant
     until canceled or reversed.
@@ -560,6 +560,44 @@ def breakout(
     else:
         df["out"] = min_max_blip(df["price"], int(lookback * stop_frac))
         df["break"] = _in_out_signal_unifier(df[["in", "out"]].to_numpy())
+    return df["break"]
+
+
+def breakout_blip(
+    price: pd.Series,
+    lookback: int,
+    stop_frac: float = 0.5,
+) -> pd.Series:
+    """
+    Same as :func:`.breakout`, but generating a series with blips
+    rather than signals.
+
+    Args:
+    -----
+
+    data: price series on which the breakouts are to be determined,
+    typically close prices
+
+    lookback: number of periods for max/min calculation
+
+    stop_frac: number of periods expresed as fraction of lookback
+    periods
+
+    Returns:
+    --------
+
+    Series with blips representing breakout strategy entry/exit points.
+    """
+
+    if not isinstance(price, pd.Series):
+        raise TypeError("price must be a pandas series")
+    if not (stop_frac > 0 and stop_frac <= 1):
+        raise ValueError("stop_frac must be from (0, 1>")
+
+    df = pd.DataFrame({"price": price})
+    df["in"] = min_max_blip(df["price"], lookback)
+    df["out"] = min_max_blip(df["price"], int(lookback * stop_frac))
+    df["break"] = (df["in"] + df["out"]).clip(-1, 1)
     return df["break"]
 
 
