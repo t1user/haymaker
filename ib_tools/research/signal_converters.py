@@ -54,18 +54,30 @@ throughout the package.
 
 
 def sig_blip(
-    signal: pd.Series, clip=True, side: Optional[Literal["open", "close"]] = None
+    signal: pd.Series,
+    clip: bool = True,
+    side: Optional[Literal["open", "close"]] = None,
 ) -> pd.Series:
     """
     Signal to blip converter.
 
-    if clip == False in case of 'always-in-the-market' systems, ie.
-    signal never is zero will return -2 or 2.
+    Args:
+    -----
+
+    clip: determines behaviour for 'always-in-the-market' systems;
+    False - resulting blips will be -2 or 2 when signal is reversed,
+    True - resulting blips will be -1 or 1, i.e. it will be impossible
+    to determine from the blips that the system is reversing position
+    rather than closing it, user must account for it otherwise;
+
+    side: 'open' or 'close' will filter resulting blips to include
+    only the desired side; any other value ignored, i.e. all blips
+    will be included;
 
     NOT TESTED
     """
     if signal.isna().any():
-        raise ValueError("n/a values in signal")
+        raise ValueError("signal series must not have any n/a values")
 
     o = (signal - signal.shift()).fillna(0)
 
@@ -117,7 +129,7 @@ def blip_sig(blip: Union[pd.Series, pd.DataFrame], always_on=True) -> pd.Series:
         if pd.DataFrame - first column is open signals, second column is close signals
 
     always_on:
-        relevant only if blis is a Series;
+        relevant only if blip is a Series;
         if True - close blip is simultanously an open blip for a reverse position.
     """
 
@@ -136,7 +148,8 @@ def blip_sig(blip: Union[pd.Series, pd.DataFrame], always_on=True) -> pd.Series:
         verify(blip.iloc[:, 0])
         verify(blip.iloc[:, 1])
         return pd.Series(
-            _in_out_signal_unifier(blip.to_numpy()).flatten(), index=blip.index
+            _in_out_signal_unifier(blip.to_numpy(), always_on=always_on).flatten(),
+            index=blip.index,
         )
     else:
         raise TypeError(f"Passed data must be a Series or DataFrame, not {type(blip)}")

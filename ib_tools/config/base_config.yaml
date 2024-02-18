@@ -27,11 +27,11 @@ open_order:
       - adaptivePriority
       - Normal
   tif: Day
-  outsideRth: True
+  # outsideRth: True
     
 close_order:
   tif: GTC
-  outsideRth: True
+  # outsideRth: True
     
 stop_order:
   outsideRth: True

@@ -236,7 +236,7 @@ def _blip_to_signal_converter(data: np.ndarray, always_on=True) -> np.ndarray:
 
 
 @jit(nopython=True)
-def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
+def _in_out_signal_unifier(data: np.ndarray, always_on=False) -> np.ndarray:
     """Given an array with two columns, one with entry and one with close
     signal, return an array with signal resulting from combining those
     two signals.
@@ -268,14 +268,17 @@ def _in_out_signal_unifier(data: np.ndarray) -> np.ndarray:
     for i, row in enumerate(data):
         if i == 0:
             state[i] = row[0]
-        else:
-            if state[i - 1] != 0:
+        elif state[i - 1] != 0:
+            if always_on:
+                state[i] = row[0] or (
+                    np.maximum(np.minimum((state[i - 1] + row[1]), 1), -1)
+                ).astype(np.int8)
+            else:
                 state[i] = (
                     np.maximum(np.minimum((state[i - 1] + row[1]), 1), -1)
                 ).astype(np.int8)
-                # previous version added also row[0] here
-            else:
-                state[i] = row[0]
+        else:
+            state[i] = row[0]
 
     return state
 
