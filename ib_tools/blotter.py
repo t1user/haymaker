@@ -53,7 +53,7 @@ class Blotter:
             "symbol": trade.contract.symbol,
             "side": trade.order.action,  # buy or sell
             "order_type": trade.order.orderType,  # order type
-            "order_price": trade.order.auxPrice,  # order price
+            "order_price": trade.order.auxPrice or trade.order.lmtPrice,  # order price
             "amount": trade.filled(),  # unsigned amount
             "price": trade.orderStatus.avgFillPrice or misc.trade_fill_price(trade),
             "order_id": trade.order.orderId,  # non unique
