@@ -236,7 +236,7 @@ def _blip_to_signal_converter(data: np.ndarray, always_on=True) -> np.ndarray:
 
 
 @jit(nopython=True)
-def _in_out_signal_unifier(data: np.ndarray, *args) -> np.ndarray:
+def _in_out_signal_unifier(data: np.ndarray, always_on=False) -> np.ndarray:
     """Given an array with two columns, one with entry and one with close
     signal, return an array with signal resulting from combining those
     two signals.
@@ -246,6 +246,8 @@ def _in_out_signal_unifier(data: np.ndarray, *args) -> np.ndarray:
     position after close-out, right?
 
     !!!!!!!WORKS ONLY FOR BLIPS!!!!!
+
+    always_on is not in use
 
     Args:
     -----
