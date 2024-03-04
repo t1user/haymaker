@@ -411,39 +411,43 @@ class EventDrivenExecModel(BaseExecModel):
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
         # called once for sl/tp pair! Don't put inside the for loop!
-        dynamic_bracket_kwargs = self._dynamic_bracket_kwargs()
-        for bracket, order_key, label in zip(
-            (self.stop, self.take_profit),
-            ("stop_order", "tp_order"),
-            ("STOP-LOSS", "TAKE-PROFIT"),
-        ):
-            # take profit may be None
-            if bracket:
-                memo: dict[str, Any] = {}
-                bracket_kwargs = bracket(params, trade, memo)
-                bracket_kwargs.update(CONFIG.get(order_key))  # type: ignore
-                bracket_kwargs.update(dynamic_bracket_kwargs)
-                memo.update(
-                    {
-                        "strategy": self.strategy,
-                        "position_id": self.get_position_id(),
-                        "bracket_timestamp": datetime.now(timezone.utc),
-                    }
-                )
-                self.data.params[label.lower()] = memo
-                order = self._order(cast(OrderKey, order_key), bracket_kwargs)
+        log.debug(f"Will attach bracket for {trade.order.orderId}")
+        try:
+            dynamic_bracket_kwargs = self._dynamic_bracket_kwargs()
+            for bracket, order_key, label in zip(
+                (self.stop, self.take_profit),
+                ("stop_order", "tp_order"),
+                ("STOP-LOSS", "TAKE-PROFIT"),
+            ):
+                # take profit may be None
+                if bracket:
+                    memo: dict[str, Any] = {}
+                    bracket_kwargs = bracket(params, trade, memo)
+                    bracket_kwargs.update(CONFIG.get(order_key))  # type: ignore
+                    bracket_kwargs.update(dynamic_bracket_kwargs)
+                    memo.update(
+                        {
+                            "strategy": self.strategy,
+                            "position_id": self.get_position_id(),
+                            "bracket_timestamp": datetime.now(timezone.utc),
+                        }
+                    )
+                    self.data.params[label.lower()] = memo
+                    order = self._order(cast(OrderKey, order_key), bracket_kwargs)
 
-                bracket_trade = self.trade(
-                    trade.contract,
-                    order,
-                    label,
-                )
-                self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
-                    cast(BracketLabel, label),
-                    cast(OrderKey, order_key),
-                    bracket_kwargs,
-                    bracket_trade,
-                )
+                    bracket_trade = self.trade(
+                        trade.contract,
+                        order,
+                        label,
+                    )
+                    self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
+                        cast(BracketLabel, label),
+                        cast(OrderKey, order_key),
+                        bracket_kwargs,
+                        bracket_trade,
+                    )
+        except Exception as e:
+            log.exception(f"Error while attaching bracket: {e}")
 
     def re_attach_brackets(self):
         """

@@ -39,7 +39,8 @@ stop_order:
 
 tp_order:
   # don't use adaptive orders here as not compliant with OCA
-  outsideRth: True
+  tif: GTC
+  # outsideRth: True # seems never accepted
   
 # all linked orders will use this oca_type (as per IB definition)
 oca_type: 1

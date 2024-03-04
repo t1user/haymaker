@@ -533,7 +533,10 @@ class Controller(Atom):
         log.debug("inside onOrderStatusEvent")
         if self.hold:
             return
-        log.debug(f"Reporting order status: {trade.order.orderId} {trade.order.permId}")
+        log.debug(
+            f"Reporting order status: {trade.order.orderId} {trade.order.permId} "
+            f"{trade.orderStatus.status}"
+        )
         await self.sm.save_order_status(trade)
         if trade.order.orderId < 0:
             log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
@@ -564,8 +567,8 @@ class Controller(Atom):
         elif fill.execution.side == "SLD":
             strategy.position -= fill.execution.shares
             log.debug(
-                f"Registered {trade.order.orderId} SELL {trade.order.orderType} "
-                f"{trade.order.permId} BUY {trade.order.orderType} "
+                f"Registered orderId {trade.order.orderId} permId: "
+                f"{trade.order.permId} SELL {trade.order.orderType} "
                 f"for {strategy_str} --> position: {strategy.position}"
             )
         else:
@@ -659,7 +662,7 @@ class Controller(Atom):
         log.info(
             f"{reason} trade filled: {trade.contract.localSymbol} "
             f"{trade.order.action} {trade.filled()}"
-            f"@{misc.trade_fill_price(trade)} --> {strategy}"
+            f"@{misc.trade_fill_price(trade)} --> {strategy} "
             f"orderId: {trade.order.orderId}, permId: {trade.order.permId}"
         )
 
