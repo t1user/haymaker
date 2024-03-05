@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 import pytz
 
-from ib_tools.misc import Counter, is_active, next_open, process_trading_hours, sign
+from ib_tools.misc import Counter, is_active, next_active, process_trading_hours, sign
 
 
 def test_Counter():
@@ -110,11 +110,11 @@ def test_is_active(datetimetuple, result):
         ((2023, 10, 21, 17, 15), (2023, 10, 22, 17, 00)),  # during closed day]
     ],
 )
-def test_next_open(datetimetuple, result):
+def test_next_active(datetimetuple, result):
     hours = process_trading_hours(
         trading_hours_string,
     )
     now = pytz.timezone("US/Central").localize(datetime(*datetimetuple))
-    assert next_open(hours, now=now) == pytz.timezone("US/Central").localize(
+    assert next_active(hours, now=now) == pytz.timezone("US/Central").localize(
         datetime(*result)
     )

@@ -3,7 +3,7 @@ import logging
 import ib_insync as ibi
 import pytest
 
-from ib_tools.base import Atom, Pipe
+from ib_tools.base import Atom, Details, DetailsContainer, Pipe
 
 
 class NewAtom(Atom):
@@ -665,49 +665,43 @@ def test_event_error_logged_with_correct_logger(caplog):
     ]
 
 
-def test_trading_hours():
-    class MockAtom(Atom):
-        def __init__(self, contract):
-            self.contract = contract
-            super().__init__()
+class TestAtomDetails:
+    @pytest.fixture
+    def mock_atom(self, details):
+        class MockAtom(Atom):
+            def __init__(self):
+                self.contract = details.contract
+                super().__init__()
 
-    a = MockAtom("contract_1")
-    Atom.trading_hours = {"contract_1": [(1, 2), (4, 5)]}
-    assert a.hours == [(1, 2), (4, 5)]
+        Atom.contract_details[details.contract] = details
+        return MockAtom()
 
+    def test_details_set_properly(self, mock_atom, details):
+        assert isinstance(mock_atom.details, Details)
 
-def test_trading_hours_no_data_for_contract():
-    class MockAtom(Atom):
-        def __init__(self, contract):
-            self.contract = contract
-            super().__init__()
+    def test_trading_hours_processed(self, mock_atom, details):
+        assert isinstance(mock_atom.details.trading_hours, list)
 
-    a = MockAtom("contract_2")
-    Atom.trading_hours = {"contract_1": [(1, 2), (4, 5)]}
-    assert a.hours == {"contract_1": [(1, 2), (4, 5)]}
+    def test_trading_hours_is_open(self, mock_atom, details):
+        assert isinstance(mock_atom.details.is_open(), bool)
 
+    def test_if_no_contract_set_all_details_returned(self, mock_atom):
+        class NewMockAtom(Atom):
+            pass
 
-def test_trading_hours_no_data_for_contract_must_log(caplog):
-    caplog.set_level(logging.DEBUG)
+        atom = NewMockAtom()
+        assert isinstance(atom.details, DetailsContainer)
+        # mock atom has been created, so there are details for one contract
+        # even though I have no contract set on my `atom`
+        assert len(atom.details.keys()) == 1
 
-    class MockAtom(Atom):
-        def __init__(self, contract):
-            self.contract = contract
-            super().__init__()
+    def test_missing_details_log(self, caplog, mock_atom, details):
+        caplog.set_level(logging.DEBUG)
 
-    a = MockAtom("contract_2")
-    Atom.trading_hours = {"contract_1": [(1, 2), (4, 5)]}
-    a.hours
-    assert "MockAtom no trading hours data for contract_2." in caplog.messages
+        del Atom.contract_details[details.contract]
 
-
-def test_trading_hours_no_contract():
-    class MockAtom(Atom):
-        pass
-
-    a = MockAtom()
-    Atom.trading_hours = {"contract_1": [(1, 2), (4, 5)]}
-    assert a.hours == {"contract_1": [(1, 2), (4, 5)]}
+        mock_atom.details
+        assert f"Missing contract details for: {details.contract}" in caplog.messages
 
 
 class Test_data_property:

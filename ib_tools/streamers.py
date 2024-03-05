@@ -12,8 +12,7 @@ from typing import Awaitable, Callable, ClassVar, Optional, cast
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
-from ib_tools import misc
-from ib_tools.base import Atom
+from ib_tools.base import Atom, Details
 from ib_tools.config import CONFIG
 
 log = logging.getLogger(__name__)
@@ -24,7 +23,7 @@ class Timeout:
     time: float
     event: ev.Event
     ib: ibi.IB
-    trading_hours: Optional[list[tuple[datetime, datetime]]] = None
+    details: Optional[Details] = None
     name: str = ""
     # take following two from config
     debug: bool = CONFIG["timeout"]["debug"]
@@ -34,32 +33,31 @@ class Timeout:
         if self.time:
             self._set_timeout(self.event)
 
-    # these two process trading hours
-    is_active = staticmethod(misc.is_active)
-    next_open = staticmethod(misc.next_open)
-
     def _on_timeout_error(self, *args):
         log.error(f"{self!s} Timeout broken... {args}")
 
     async def _timeout_callback(self, *args) -> None:
-        log.log(
-            5,
-            f"{self!s} - No data for {self.time} secs. Market active?: "
-            f"{self.is_active(self.trading_hours)}",
-        )
-        if self.is_active(self.trading_hours):
-            self.triggered_action()
+        if not self.details:
+            log.error("Cannot set timout, no trading hours details.")
         else:
-            reactivate_time = self.next_open(self.trading_hours)
-
-            sleep_time = (reactivate_time - datetime.now(tz=timezone.utc)).seconds
             log.log(
                 5,
-                f"{self} will sleep till market reopen at: {reactivate_time} i.e. "
-                f"{sleep_time} seconds",
+                f"{self!s} - No data for {self.time} secs. Market open?: "
+                f"{self.details.is_open()}",
             )
-            await asyncio.sleep(sleep_time)
-            self._set_timeout(self.event)
+            if self.details.is_open():
+                self.triggered_action()
+            else:
+                reactivate_time = self.details.next_open()
+
+                sleep_time = (reactivate_time - datetime.now(tz=timezone.utc)).seconds
+                log.log(
+                    5,
+                    f"{self} will sleep till market reopen at: {reactivate_time} i.e. "
+                    f"{sleep_time} seconds",
+                )
+                await asyncio.sleep(sleep_time)
+                self._set_timeout(self.event)
 
     def triggered_action(self):
         if self.debug:
@@ -95,7 +93,7 @@ class TimeoutContainer(UserDict):
                 self.streamer.timeout,
                 obj,
                 self.streamer.ib,
-                self.streamer.hours,
+                self.streamer.details,
                 f"{str(self.streamer)}-<<{key}>>",
             )
         super().__setitem__(key, obj)

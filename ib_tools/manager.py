@@ -3,14 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Final, cast
 
 import ib_insync as ibi
 
-from ib_tools import misc
-from ib_tools.base import Atom
+from ib_tools.base import Atom, DetailsContainer
 from ib_tools.controller import Controller
 from ib_tools.state_machine import StateMachine
 from ib_tools.streamers import Streamer
@@ -22,17 +20,11 @@ log = logging.getLogger(__name__)
 class InitData:
     ib: ibi.IB
     contract_list: list[ibi.Contract]
-    contract_details: dict[ibi.Contract, ibi.ContractDetails] = field(
-        default_factory=dict
-    )
-    trading_hours: dict[ibi.Contract, list[tuple[datetime, datetime]]] = field(
-        default_factory=dict
-    )
+    contract_details: DetailsContainer
 
     async def __call__(self) -> "InitData":
         await self.qualify_contracts()
         await self.acquire_contract_details()
-        self.process_trading_hours()
         return self
 
     async def qualify_contracts(self) -> "InitData":
@@ -70,19 +62,6 @@ class InitData:
             self.contract_details[cast(ibi.Contract, details.contract)] = details
         log.debug(
             f"Details acquired: {set([k.symbol for k in self.contract_details.keys()])}"
-        )
-        return self
-
-    _process_trading_hours = staticmethod(misc.process_trading_hours)
-
-    def process_trading_hours(self) -> "InitData":
-        for contract, details in self.contract_details.items():
-            self.trading_hours[contract] = self._process_trading_hours(
-                details.tradingHours, details.timeZoneId
-            )
-        log.debug(
-            f"Trading hours processed for: "
-            f"{[c.symbol for c in self.trading_hours.keys()]}"
         )
         return self
 
@@ -138,7 +117,8 @@ class Jobs:
 
 
 IB: Final[ibi.IB] = ibi.IB()
-INIT_DATA = InitData(IB, Atom.contracts, Atom.contract_details, Atom.trading_hours)
+# Atom passes empty contrianers so that INIT_DATA can supply them with data
+INIT_DATA = InitData(IB, Atom.contracts, Atom.contract_details)
 JOBS = Jobs(INIT_DATA)
 Atom.set_init_data(INIT_DATA.ib, StateMachine())
 CONTROLLER: Final[Controller] = Controller()

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import collections.abc
-import dataclasses
 import logging
+from collections import UserDict
+from dataclasses import Field, dataclass, fields
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
@@ -14,6 +15,8 @@ from typing import (
     Union,
     cast,
 )
+
+from ib_tools.misc import is_active, next_active, process_trading_hours
 
 if TYPE_CHECKING:
     from ib_tools.state_machine import StateMachine
@@ -53,6 +56,43 @@ class ContractManagingDescriptor:
             obj.contracts.append(value)
 
 
+@dataclass
+class Details:
+    _fields: ClassVar[list] = [f.name for f in fields(ibi.ContractDetails)]
+    details: ibi.ContractDetails
+
+    def __post_init__(self) -> None:
+        self.trading_hours = self._process_trading_hours(
+            self.details.tradingHours, self.details.timeZoneId
+        )
+        self.liquid_hours = self._process_trading_hours(
+            self.details.liquidHours, self.details.timeZoneId
+        )
+
+    def __getattr__(self, name):
+        if name in self._fields:
+            return getattr(self.details, name)
+        super().__getattr__(name)
+
+    def is_open(self) -> bool:
+        return self._is_active(self.trading_hours)
+
+    def is_liquid(self) -> bool:
+        return self._is_active(self.liquid_hours)
+
+    def next_open(self) -> datetime:
+        return self._next_open(self.trading_hours)
+
+    _process_trading_hours = staticmethod(process_trading_hours)
+    _is_active = staticmethod(is_active)
+    _next_open = staticmethod(next_active)
+
+
+class DetailsContainer(UserDict):
+    def __setitem__(self, key: ibi.Contract, value: ibi.ContractDetails) -> None:
+        super().__setitem__(key, Details(value))
+
+
 class Atom:
     """
     Abstract base object from which all other objects inherit.
@@ -61,11 +101,9 @@ class Atom:
 
     ib: ClassVar[ibi.IB]
     sm: StateMachine
-    contract_details: ClassVar[dict[ibi.Contract, ibi.ContractDetails]] = {}
-    trading_hours: ClassVar[dict[ibi.Contract, list[tuple[datetime, datetime]]]] = {}
-    events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
-
+    contract_details: ClassVar[DetailsContainer] = DetailsContainer()
     contracts: list[ibi.Contract] = list()
+    events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
     contract = cast(ibi.Contract, ContractManagingDescriptor())
 
     @classmethod
@@ -78,34 +116,20 @@ class Atom:
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
 
     @property
-    def hours(self):
+    def details(self) -> Union[Details, DetailsContainer]:
         """
-        If :attr:`contract` is set  ``trading_hours`` will be
-        received only for this contract, otherwise
-        :attr:`trading_hours` will return all available trading hours
+        If :attr:`contract` is set :attr:`details` will be received
+        only for this contract, otherwise :attr:`details` will return
+        a dictionary of all available details, ie.  dict[ibi.Contract, Details]
         """
-        try:
-            th = Atom.trading_hours
-        except AttributeError:
-            log.warning("Trading hours not set.")
-            return {}
-        try:
-            th_for_contract_or_none = th.get(self.contract)
-        except AttributeError:  # attribute contract is not set
-            return th
-
-        if th_for_contract_or_none:
-            return th_for_contract_or_none
+        if self.contract:
+            try:
+                return self.contract_details[self.contract]
+            except KeyError:
+                log.error(f"Missing contract details for: {self.contract}")
+                return self.contract_details
         else:
-            log.warning(
-                f"{self.__class__.__name__} no trading hours data for {self.contract}."
-            )
-            return th
-
-    @property
-    def details(self):
-        # TODO: in line with hours
-        pass
+            return self.contract_details
 
     def _createEvents(self):
         self.startEvent = ibi.Event("startEven")
@@ -235,7 +259,7 @@ class Pipe(Atom):
 
 
 class IsDataclass(Protocol):
-    __dataclass_fields__: dict[str, dataclasses.Field]
+    __dataclass_fields__: dict[str, Field]
 
 
 class AtomDataclass(Atom, IsDataclass):

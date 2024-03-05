@@ -6,6 +6,7 @@ import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
 
+from ib_tools.base import Atom
 from ib_tools.streamers import HistoricalDataStreamer, Streamer, Timeout
 
 
@@ -108,12 +109,14 @@ async def test_timer_not_triggered(timeout):
 
 
 @pytest.mark.asyncio
-async def test_timer_triggered(timeout):
+async def test_timer_triggered(timeout, details):
+    Atom.contract_details[details.contract] = details
+
     t = timeout(
         time=0.1,
         event=ev.Event(),
         ib=ibi.IB(),
-        trading_hours=None,
+        details=Atom.contract_details[details.contract],
         name="xxx",
         debug=True,
     )

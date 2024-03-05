@@ -154,7 +154,7 @@ def is_active(
     return False
 
 
-def next_open(
+def next_active(
     time_tuples: Optional[list[tuple[datetime, datetime]]] = None,
     now: Optional[datetime] = None,
 ) -> datetime:
