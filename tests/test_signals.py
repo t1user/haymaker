@@ -56,7 +56,7 @@ def pipe():
     sm = FakeStateMachine()
 
     processor = binary_signal_processor_factory(lockable=False, always_on=False)
-    processor_instance = processor(sm)
+    processor_instance = processor(state_machine=sm)
 
     class OutputAtom(Atom):
         def onData(self, data, *args):
@@ -140,8 +140,8 @@ def test_signal_paths_actions(test_input, expected):
     strategy.position = position
 
     processor = binary_signal_processor_factory(lockable, always_on)
-    processor_instance = processor(sm)
-    action = processor_instance.process_signal("x", signal)
+    processor_instance = processor(state_machine=sm)
+    action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
 
@@ -150,7 +150,7 @@ def test_signal_paths_actions(test_input, expected):
 # Testing positions
 # =================================================
 
-# Some comments are nonsens
+# Some comments are nonsense
 
 
 @pytest.mark.parametrize(
@@ -208,7 +208,7 @@ def test_signal_paths_positions(test_input, expected):
     output = OutputAtom()
 
     processor = binary_signal_processor_factory(lockable, always_on)
-    processor_instance = processor(sm)
+    processor_instance = processor(state_machine=sm)
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
 
@@ -249,8 +249,8 @@ def test_signal_paths_BinarySignalProcessor(test_input, expected):
     strategy = sm.strategy["x"]
     strategy.position = position
 
-    processor_instance = BinarySignalProcessor(sm)
-    action = processor_instance.process_signal("x", signal)
+    processor_instance = BinarySignalProcessor(state_machine=sm)
+    action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
 
@@ -301,8 +301,8 @@ def test_signal_paths_LockableBinarySignalProcessor(test_input, expected):
     strategy = sm.strategy["x"]
     strategy.position = position
 
-    processor_instance = LockableBinarySignalProcessor(sm)
-    action = processor_instance.process_signal("x", signal)
+    processor_instance = LockableBinarySignalProcessor(state_machine=sm)
+    action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
 
@@ -353,8 +353,8 @@ def test_signal_paths_LockableBlipBinarySignalProcessor(test_input, expected):
     strategy = sm.strategy["x"]
     strategy.position = position
 
-    processor_instance = LockableBlipBinarySignalProcessor(sm)
-    action = processor_instance.process_signal("x", signal)
+    processor_instance = LockableBlipBinarySignalProcessor(state_machine=sm)
+    action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
 
@@ -405,8 +405,8 @@ def test_signal_paths_AlwaysOnLockableBinarySignalProcessor(test_input, expected
     strategy = sm.strategy["x"]
     strategy.position = position
 
-    processor_instance = AlwaysOnLockableBinarySignalProcessor(sm)
-    action = processor_instance.process_signal("x", signal)
+    processor_instance = AlwaysOnLockableBinarySignalProcessor(state_machine=sm)
+    action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
 
@@ -435,8 +435,8 @@ def test_signal_paths_AlwaysOnBinarySignalProcessor(test_input, expected):
     strategy = sm.strategy["x"]
     strategy.position = position
 
-    processor_instance = AlwaysOnBinarySignalProcessor(sm)
-    action = processor_instance.process_signal("x", signal)
+    processor_instance = AlwaysOnBinarySignalProcessor(state_machine=sm)
+    action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
 
@@ -480,7 +480,7 @@ def test_signal_paths_positions_BinarySignalProcessor(test_input, expected):
             self.out = data
 
     output = OutputAtom()
-    processor_instance = BinarySignalProcessor(sm)
+    processor_instance = BinarySignalProcessor(state_machine=sm)
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
 
@@ -543,7 +543,7 @@ def test_signal_paths_positions_LockableBinarySignalProcessor(test_input, expect
 
     output = OutputAtom()
 
-    processor_instance = LockableBinarySignalProcessor(sm)
+    processor_instance = LockableBinarySignalProcessor(state_machine=sm)
 
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
@@ -609,7 +609,7 @@ def test_signal_paths_positions_AlwaysOnLockableBinarySignalProcessor(
 
     output = OutputAtom()
 
-    processor_instance = AlwaysOnLockableBinarySignalProcessor(sm)
+    processor_instance = AlwaysOnLockableBinarySignalProcessor(state_machine=sm)
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
 
@@ -650,9 +650,58 @@ def test_signal_paths_positions_AlwaysOnBinarySignalProcessor(test_input, expect
 
     output = OutputAtom()
 
-    processor_instance = AlwaysOnBinarySignalProcessor(sm)
+    processor_instance = AlwaysOnBinarySignalProcessor(state_machine=sm)
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
+
+    target_position = output.out.get("target_position")
+
+    assert target_position == expected
+
+
+@pytest.mark.parametrize(
+    "test_input,expected",
+    [  # pos, sig_in, sig_out
+        ((0, 0, 1), None),
+        ((0, 1, 0), 1),
+        ((0, -1, 0), -1),
+        ((0, 1, -1), 1),
+        ((0, -1, 1), -1),
+        ((1, 0, 1), None),  # out signals should be ignored if in the same direction
+        ((-1, 0, -1), None),  # out signals should be ignored if in the same direction
+        ((1, -1, 0), None),  # in signals should be ignored if position exists
+        ((-1, 1, 0), None),  # in signals should be ignored if position exists
+        ((1, -1, -1), 0),  # out signals should be acted on
+        ((-1, 1, 1), 0),  # out signals should be acted on
+        ((1, 0, -1), 0),  # out signals should be acted on
+        ((-1, 0, 1), 0),  # out signals should be acted on
+    ],
+)
+def test_double_signals_BinarySignalProcessor(test_input, expected):
+    position, signal_in, signal_out = test_input
+
+    class FakeStateMachine:
+        strategy = StrategyContainer()
+
+    sm = FakeStateMachine()
+    strategy = sm.strategy["x"]
+    strategy.position = position
+
+    class OutputAtom(Atom):
+        out = {}
+
+        def onData(self, data, *args):
+            self.out = data
+
+    output = OutputAtom()
+
+    processor_instance = BinarySignalProcessor(
+        signal_fields=("signal_in", "signal_out"), state_machine=sm
+    )
+    processor_instance += output
+    processor_instance.onData(
+        {"strategy": "x", "signal_in": signal_in, "signal_out": signal_out}
+    )
 
     target_position = output.out.get("target_position")
 

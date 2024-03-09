@@ -41,7 +41,7 @@ def pipe(df_brick, data_for_df, portfolio, atom):  # noqa
     # signal is 1, contract is NQ
     brick = df_brick
     # so this should result in action "OPEN"
-    signal = BinarySignalProcessor(sm)
+    signal = BinarySignalProcessor(state_machine=sm)
 
     # on which exec_model should act by issuing Buy order
     exec_model = EventDrivenExecModel(stop=FixedStop(5), controller=controller)
