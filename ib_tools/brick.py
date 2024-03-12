@@ -42,7 +42,7 @@ class AbstractBaseBrick(Atom, ABC):
         """
         Must return a dict with any params required by the strategy.
         May also contain logging information.  Must have key
-        ``signal`` interpretable by subsequent bricks.
+        ``signal`` interpretable by atoms down the chain.
         """
         ...
 

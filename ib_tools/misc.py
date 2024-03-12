@@ -280,9 +280,19 @@ def trade_fill_price(trade: ibi.Trade) -> float:
 
 
 def weighted_average(*values: tuple[float, float]) -> float:
+    """
+    Return weighted average of `values`.
+
+    Args:
+    values - tuple of (value, weight)
+
+    """
     running_multiples = 0.0
     running_total = 0.0
     for i, k in values:
         running_multiples += i * k
         running_total += k
-    return running_multiples / running_total
+    try:
+        return running_multiples / running_total
+    except ZeroDivisionError:
+        return 0

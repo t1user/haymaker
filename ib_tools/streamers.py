@@ -89,6 +89,7 @@ class TimeoutContainer(UserDict):
 
     def __setitem__(self, key: str, obj) -> None:
         if isinstance(obj, ev.Event):
+            assert isinstance(self.streamer.details, Details)
             obj = Timeout(
                 self.streamer.timeout,
                 obj,

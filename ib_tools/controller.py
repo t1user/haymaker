@@ -135,6 +135,7 @@ class Controller(Atom):
         log.debug("Sync completed.")
 
     def handle_error_positions(self, report: dict[ibi.Contract, float]) -> None:
+        # too many externalities... refactor
         log.error("Will attempt to fix position records")
         for contract, diff in report.items():
             strategies = self.sm.for_contract.get(contract)
@@ -144,6 +145,40 @@ class Controller(Atom):
                     f"Corrected position records for strategy {strategies[0]} by {diff}"
                 )
                 self.sm.save_model(self.sm._data.encode())
+                log.debug("Will attempt to identify missing order. UNTESTED.")
+                if (
+                    len(
+                        missing_trade := [
+                            t
+                            for t in self.ib.trades()
+                            if all(
+                                [
+                                    t.contract == contract,
+                                    t.orderStatus.status == "Filled",
+                                    t.order.filledQuantity == abs(diff),
+                                ]
+                            )
+                        ]
+                    )
+                    == 1
+                ):
+                    log.debug(
+                        f"Missing trade found: {missing_trade[0]}, "
+                        f"will try to save and report."
+                    )
+                    self.sm.register_order(
+                        strategies[0],
+                        "UNKNOWN",
+                        missing_trade[0],
+                        self.sm.strategy[strategies[0]],
+                    )
+                    self.report_done_trade(missing_trade[0])
+                elif missing_trade:
+                    # if more than one assume it's the latest one
+                    self.report_done_trade(
+                        sorted(missing_trade, key=lambda x: x.log[-1].time)[-1]
+                    )
+
             elif strategies and self.ib_position_for_contract(contract) == 0:
                 for strategy in strategies:
                     self.sm.strategy[strategy].position = 0
