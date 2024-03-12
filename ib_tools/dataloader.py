@@ -1,5 +1,6 @@
 import asyncio
 import itertools
+import logging
 import os
 import random
 from collections import deque
@@ -10,7 +11,6 @@ from typing import Any, Deque, Dict, List, NamedTuple, Optional, Tuple, Union
 import pandas as pd
 import pytz
 from ib_insync import IB, BarDataList, ContFuture, Contract, Event, Future, util
-from logbook import Logger  # type: ignore
 from typing_extensions import Protocol
 
 from ib_tools.datastore import AbstractBaseStore
@@ -26,7 +26,7 @@ and here:
 https://realpython.com/async-io-python/#using-a-queue
 """
 
-log = Logger(__name__)  # (__file__[:-3])
+log = logging.getLogger(__name__)  # (__file__[:-3])
 
 # TODO: change this to factory
 MAX_NUMBER_OF_WORKERS = 40

@@ -20,6 +20,7 @@ handlers:
     level: 5
     formatter: default
     filename: haymakerLog.log
+    dirname: "/"
     when: midnight
 
   timed_rotating_file_specific:

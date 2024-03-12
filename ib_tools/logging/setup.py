@@ -7,6 +7,8 @@ from typing import Union
 
 import yaml
 
+from ib_tools.config import CONFIG
+
 from . import setup_logging_queue
 
 log = logging.getLogger(__name__)
@@ -27,9 +29,15 @@ class UTCFormatter(logging.Formatter):
 
 
 def timed_rotating_file_setup(**kwargs):
-    filename = kwargs.pop("filename")
-    # TODO: This has to be read from config
-    dirname = Path("/home/tomek/ib_data/test_logs")
+    try:
+        filename = kwargs.pop("filename")
+        dirname = kwargs.pop("dirname")
+    except IndexError:
+        log.exception(
+            "Wrong logging filename or dirname. Logging to file will not be setup."
+        )
+    filename = CONFIG.get("logging_filename") or filename
+    dirname = Path(CONFIG.get("logging_dir") or dirname)
     full_path = dirname / filename
     return logging.handlers.TimedRotatingFileHandler(filename=full_path, **kwargs)
 
