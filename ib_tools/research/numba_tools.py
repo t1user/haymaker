@@ -198,7 +198,7 @@ def swing(
 
 
 @jit(nopython=True)
-def _blip_to_signal_converter(data: np.ndarray, always_on=True) -> np.ndarray:
+def _blip_to_signal_converter(data: np.ndarray, always_on=False) -> np.ndarray:
     """
     Given a column with blips, return a column with signals
     resulting from those blips.
@@ -339,13 +339,7 @@ def _grouper_prepare(
 
     return (
         df.groupby("labels")
-        .agg(
-            {
-                key: field_dict[key]  # type: ignore
-                for key in df.columns
-                if key in field_dict
-            }
-        )
+        .agg({key: field_dict.get(key, "last") for key in df.columns})  # type: ignore
         .set_index("date")
     )
 
