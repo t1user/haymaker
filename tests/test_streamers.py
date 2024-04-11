@@ -1,12 +1,12 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Type
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
 
-from ib_tools.base import Atom
 from ib_tools.streamers import HistoricalDataStreamer, Streamer, Timeout
 
 
@@ -102,23 +102,31 @@ def timeout() -> Type[Timeout]:
 
 
 @pytest.mark.asyncio
-async def test_timer_not_triggered(timeout):
-    t = timeout(2, ev.Event(), None, "xxx")
+async def test_timer_not_triggered(timeout, atom, details):
+    t = timeout(
+        time=0.15,
+        event=ev.Event(),
+        ib=ibi.IB(),
+        details=atom.contract_details[details.contract],
+        name="xxx",
+        debug=True,
+        _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
+    )
+
     await asyncio.sleep(0.1)
     assert not t.triggered
 
 
 @pytest.mark.asyncio
-async def test_timer_triggered(timeout, details):
-    Atom.contract_details[details.contract] = details
-
+async def test_timer_triggered(timeout, atom, details):
     t = timeout(
         time=0.1,
         event=ev.Event(),
         ib=ibi.IB(),
-        details=Atom.contract_details[details.contract],
+        details=atom.contract_details[details.contract],
         name="xxx",
         debug=True,
+        _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
     )
     await asyncio.sleep(0.2)
     assert t.triggered

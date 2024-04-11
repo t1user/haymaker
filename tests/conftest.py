@@ -17,13 +17,6 @@ def state_machine():
 
 
 @pytest.fixture()
-def atom(state_machine):
-    sm = state_machine
-    Atom.set_init_data(ibi.IB(), sm)
-    return Atom
-
-
-@pytest.fixture()
 def details():
     return ibi.ContractDetails(
         contract=ibi.Contract(
@@ -81,3 +74,11 @@ def details():
         nextOptionPartial=False,
         notes="",
     )
+
+
+@pytest.fixture()
+def atom(state_machine, details):
+    sm = state_machine
+    Atom.set_init_data(ibi.IB(), sm)
+    Atom.contract_details[details.contract] = details
+    return Atom

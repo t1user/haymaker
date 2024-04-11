@@ -25,9 +25,9 @@ class Timeout:
     ib: ibi.IB
     details: Optional[Details] = None
     name: str = ""
-    # take following two from config
     debug: bool = CONFIG["timeout"]["debug"]
     _timeout: Optional[ev.Event] = field(repr=False, default=None)
+    _now: Optional[datetime] = None  # for testing only
 
     def __post_init__(self):
         if self.time:
@@ -43,12 +43,12 @@ class Timeout:
             log.log(
                 5,
                 f"{self!s} - No data for {self.time} secs. Market open?: "
-                f"{self.details.is_open()}",
+                f"{self.details.is_open(self._now)}",
             )
-            if self.details.is_open():
+            if self.details.is_open(self._now):
                 self.triggered_action()
             else:
-                reactivate_time = self.details.next_open()
+                reactivate_time = self.details.next_open(self._now)
 
                 sleep_time = (reactivate_time - datetime.now(tz=timezone.utc)).seconds
                 log.log(

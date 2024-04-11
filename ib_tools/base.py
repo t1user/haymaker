@@ -74,14 +74,14 @@ class Details:
             return getattr(self.details, name)
         super().__getattr__(name)
 
-    def is_open(self) -> bool:
-        return self._is_active(self.trading_hours)
+    def is_open(self, _now: Optional[datetime] = None) -> bool:
+        return self._is_active(self.trading_hours, _now)
 
-    def is_liquid(self) -> bool:
-        return self._is_active(self.liquid_hours)
+    def is_liquid(self, _now: Optional[datetime] = None) -> bool:
+        return self._is_active(self.liquid_hours, _now)
 
-    def next_open(self) -> datetime:
-        return self._next_open(self.trading_hours)
+    def next_open(self, _now: Optional[datetime] = None) -> datetime:
+        return self._next_open(self.trading_hours, _now)
 
     _process_trading_hours = staticmethod(process_trading_hours)
     _is_active = staticmethod(is_active)
