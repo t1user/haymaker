@@ -166,18 +166,24 @@ class Controller(Atom):
                         f"Missing trade found: {missing_trade[0]}, "
                         f"will try to save and report."
                     )
-                    self.sm.register_order(
-                        strategies[0],
-                        "UNKNOWN",
-                        missing_trade[0],
-                        self.sm.strategy[strategies[0]],
-                    )
-                    self.report_done_trade(missing_trade[0])
+                    try:
+                        self.sm.register_order(
+                            strategies[0],
+                            "UNKNOWN",
+                            missing_trade[0],
+                            self.sm.strategy[strategies[0]],
+                        )
+                        self.report_done_trade(missing_trade[0])
+                    except Exception as e:
+                        log.exception(e)
                 elif missing_trade:
                     # if more than one assume it's the latest one
-                    self.report_done_trade(
-                        sorted(missing_trade, key=lambda x: x.log[-1].time)[-1]
-                    )
+                    try:
+                        self.report_done_trade(
+                            sorted(missing_trade, key=lambda x: x.log[-1].time)[-1]
+                        )
+                    except Exception as e:
+                        log.exception(e)
 
             elif strategies and self.ib_position_for_contract(contract) == 0:
                 for strategy in strategies:

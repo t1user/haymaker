@@ -291,7 +291,7 @@ class DataWriter:
     @property
     def duration(self):
         duration = barSize_to_duration(self.barSize, self.aggression)
-        # this gets string and datetime error TODO
+        # this gets string and datetime error TODO !!!!!!!!!!!!!!!
         try:
             delta = self.next_date - self._current_object.from_date
         except Exception as e:

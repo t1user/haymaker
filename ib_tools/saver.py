@@ -249,7 +249,7 @@ class MongoSaver(AbstractBaseSaver):
                     {self.query_key: key}, {"$set": data}, upsert=True
                 )
             else:
-                result = self.collection.insert_one(data)
+                result = self.collection.insert_one(data)  # noqa
         except Exception:
             log.exception(Exception)
             log.debug(f"Data that caused error: {data}")
@@ -269,7 +269,7 @@ class MongoSaver(AbstractBaseSaver):
         return self.collection.find_one({"$query": {}, "$orderby": {"$natural": -1}})
 
     def delete(self, query: dict) -> None:
-        log.debug(f"Will delete data: {query}")
+        log.debug(f"Will delete data: {query}. DELETE METHOD NOT IMPLEMENTED")
 
     def __repr__(self) -> str:
         return f"MongoSaver(db={self.db}, collection={self.collection})"
