@@ -1,5 +1,0 @@
-ib_insync
-git+https://github.com/manahl/arctic.git
-logbook
-pyfolio
-motor

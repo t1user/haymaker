@@ -96,7 +96,7 @@ def pos(
 
     # close out final open position (if any)
     if not len(_opens) == len(_closes):
-        _closes = _closes.append(df.iloc[-1])  # type: ignore
+        _closes.loc[df.index[-1]] = df.iloc[-1]
         _closes.c_transaction[-1] = _opens.o_transaction[-1] * -1
 
     # create positions df
@@ -887,7 +887,7 @@ def excursions(
     ) -> List[Tuple[float, float, float]]:
         data = []
         for p in positions[["date_o", "date_c"]].itertuples():
-            h_l = high_low.loc[p.date_o : p.date_c]
+            h_l = high_low.loc[p["date_o"] : p["date_c"]]  # type: ignore
             # last candle shouldn't be covered fully, because might have exited
             # before the extreme value was reached
             # for single bar positions, we assume bar's extremes were

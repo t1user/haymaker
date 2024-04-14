@@ -1,3 +1,4 @@
+import logging
 import pickle
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -12,9 +13,8 @@ from arctic.date import DateRange
 from arctic.exceptions import NoDataFoundException
 from arctic.store.versioned_item import VersionedItem
 from ib_insync import ContFuture, Contract, Future, util
-from logbook import Logger  # type: ignore
 
-log = Logger(__name__)
+log = logging.getLogger(__name__)
 
 
 def symbol_extractor(func):

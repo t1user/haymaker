@@ -532,8 +532,9 @@ def pivot(
     df = data.copy()
 
     df[["mins", "maxes"]] = False
-    df.iloc[maxes, df.columns.get_loc("maxes")] = True
-    df.iloc[mins, df.columns.get_loc("mins")] = True
+    # TODO: this needs to be checked
+    df.iloc[maxes, df.columns.get_loc("maxes")] = True  # type: ignore
+    df.iloc[mins, df.columns.get_loc("mins")] = True  # type: ignore
 
     df["date"] = df.index
     df[["min_index", "max_index"]] = np.nan
