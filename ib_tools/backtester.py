@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import pickle
 from datetime import datetime
 from itertools import count
@@ -9,7 +10,6 @@ from typing import Any, ClassVar, Dict, List, NamedTuple, Optional, Tuple, Type,
 
 import numpy as np
 import pandas as pd
-from datastore import Store
 from ib_insync import IB as master_IB
 from ib_insync import (
     BarData,
@@ -28,10 +28,13 @@ from ib_insync import (
     util,
 )
 from ib_insync.contract import ContFuture, Contract, Future
-from logbook import Logger
-from manager import Manager
 
-log = Logger(__name__)
+from .datastore import Store
+
+# from manager import Manager # all different module now
+
+
+log = logging.getLogger(__name__)
 util.patchAsyncio()
 
 
@@ -691,7 +694,7 @@ class _Market:
             else:
                 price = avgCost
         else:
-            log.error(f"trail order without corresponding position")
+            log.error("trail order without corresponding position")
             price = self.prices[trade.contract.symbol].open
 
         if trade.order.action.upper() == "BUY":

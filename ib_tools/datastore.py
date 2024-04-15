@@ -239,7 +239,7 @@ class AbstractBaseStore(ABC):
         df = self.date_range(symbol=symbol)
         details = defaultdict(list)
         for row in df.itertuples():
-            meta = self.read_metadata(row.Index)
+            meta = self.read_metadata(row.Index)  # type: ignore
             for f in fields:
                 details[f].append("" if meta is None else meta.get(f))
         for k, v in details.items():

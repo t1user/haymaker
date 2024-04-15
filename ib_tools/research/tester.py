@@ -2,7 +2,7 @@ from datetime import timedelta
 from functools import partial
 from typing import Callable, List, Optional, Tuple, Union
 
-import pandas as pd  # type: ignore
+import pandas as pd
 
 from ib_tools.datastore import Store  # type: ignore
 from ib_tools.research.grouper import VolumeGrouper, group_by_volume

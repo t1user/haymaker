@@ -16,3 +16,4 @@ build/
 dist/
 ib_tools.egg-info
 stubs/
+_version.py

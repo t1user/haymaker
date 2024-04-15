@@ -1,3 +1,71 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "ib_tools"
+authors = [
+        {name = "t1user", email = "enterdragon@duck.com"},
+]
+description = 'Framework for trading with Interactive Brokers through ib_insync'
+readme = "README.md"
+requires-python = ">= 3.8"
+keywords = ["ib_insync", "tws", "ibgateway", "asyncio",  "interactive brokers", "algo trading"]
+classifiers = [
+            "Development Status :: 3 - Alpha",
+            "Intended Audience :: Developers",
+            "Topic :: Office/Business :: Financial :: Investment",
+            "Licence :: OSI Approved :: BSD Licence",
+            "Programming Language :: Python :: 3",
+
+]
+dependencies = [
+    "arctic @ git+https://github.com/man-group/arctic.git",
+    "ib_insync",
+    "pandas",
+    "numba",
+    "pyyaml",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+notebook = [
+         "jupyter",
+         "matplotlib",
+         "pyfolio"
+         ]
+dev = [
+    "types-pyyaml",
+    "pandas-stubs",
+    "isort",
+    "mypy",
+    "autopep8",
+    "yapf",
+    "black",
+    "flake8",
+    "pytest",
+    "pytest-asyncio"
+    ]
+all = ["ib_tools[notebook,dev]"]
+
+
+[tool.setuptools]
+packages = ["ib_tools"]
+
+[project.urls]
+Repository = "https://github.com/t1user/ib_tools"
+
+[tool.setuptools_scm]
+version_file = "ib_tools/_version.py"
+
+[tool.isort]
+profile = "black"
+
+[tool.mypy]
+mypy_path = "$MYPY_CONFIG_FILE_DIR/stubs"
+# check_untyped_defs = true
+
+# remove this after fixing backtester
+[[tool.mypy.overrides]]
+module = "backtester"
+ignore_errors = true
