@@ -71,9 +71,7 @@ def df_brick():
             df["price_plus"] = df["price"] + 1
             return df
 
-    return Brick(
-        "eska_NQ", ibi.Future("NQ", "CME"), signal_column="signal", df_columns=None
-    )
+    return Brick("eska_NQ", ibi.Future("NQ", "CME"), df_columns=None)
 
 
 @pytest.fixture
@@ -98,18 +96,11 @@ def test_AbstractDfBrick_is_abstract():
 
 
 def test_signal_correct(df_connected_brick, data_for_df):
+    """Test that df_brick correctly emits the last row of df."""
     brick, atom = df_connected_brick
     brick.onData(data_for_df)
     assert "signal" in atom.memo.keys()
     assert atom.memo["signal"] == 1
-
-
-def test_signal_column_selection_works(df_connected_brick, data_for_df):
-    brick, atom = df_connected_brick
-    brick.signal_column = "raw"
-    brick.onData(data_for_df)
-    assert "signal" in atom.memo.keys()
-    assert atom.memo["signal"] == -1
 
 
 def test_column_selection_works(df_connected_brick, data_for_df):
@@ -132,9 +123,7 @@ def basic_df_brick():
         def df(self, df):
             return df
 
-    return Brick(
-        "eska_NQ", ibi.Future("NQ", "CME"), signal_column="signal", df_columns=None
-    )
+    return Brick("eska_NQ", ibi.Future("NQ", "CME"), df_columns=None)
 
 
 def test_dispatchmethod_df(basic_df_brick, data_for_df):

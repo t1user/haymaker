@@ -38,13 +38,13 @@ class AbstractBaseBrick(Atom, ABC):
             self.dataEvent.emit(d)
 
     @abstractmethod
-    def _signal(self, data) -> dict:
+    def _signal(self, data) -> dict[str, Any]:
         """
         Must return a dict with any params required by the strategy.
-        May also contain logging information.  Must have key
-        ``signal`` interpretable by atoms down the chain.
+        May also contain logging information.  Must have all keys
+        required by atoms down the chain.
         """
-        ...
+        return {}
 
     def _params(self, **kwargs) -> dict[str, Any]:
         params = {
@@ -59,14 +59,12 @@ class AbstractBaseBrick(Atom, ABC):
 class AbstractDfBrick(AbstractBaseBrick):
     strategy: str
     contract: ibi.Contract
-    signal_column: str
     df_columns: Optional[list[str]]
 
     def _signal(self, data) -> dict:
         d = self.df_row(data).to_dict()
         if self.df_columns:
             d = {k: v for k, v in d.items() if k in self.df_columns}
-        d["signal"] = int(d[self.signal_column])
         return d
 
     def df_row(self, data) -> pd.Series:
@@ -94,5 +92,4 @@ class AbstractDfBrick(AbstractBaseBrick):
         return self.df(ibi.util.df(data).set_index("date"))
 
     @abstractmethod
-    def df(self, data: pd.DataFrame) -> pd.DataFrame:
-        ...
+    def df(self, data: pd.DataFrame) -> pd.DataFrame: ...
