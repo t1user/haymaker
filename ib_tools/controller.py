@@ -13,7 +13,7 @@ from .blotter import Blotter
 from .config import CONFIG
 from .misc import Signal, sign
 from .startup_routines import OrderSyncStrategy, PositionSyncStrategy
-from .state_machine import Strategy
+from .state_machine import OrderInfo, Strategy
 
 # from .manager import IB, STATE_MACHINE
 from .trader import FakeTrader, Trader
@@ -35,6 +35,7 @@ class Controller(Atom):
     """
 
     blotter: Optional[Blotter]
+    faulty_trades: list[OrderInfo] = []
 
     def __init__(
         self,
@@ -193,15 +194,27 @@ class Controller(Atom):
                     f"Position records zeroed for {strategies} "
                     f"to reflect zero position for {contract.symbol}."
                 )
+            elif strategies:
+                strategy_faults = [
+                    order_info.strategy for order_info in self.faulty_trades
+                ]
+                for strategy in strategies:
+                    if strategy in strategy_faults:
+                        self.sm.strategy[strategy].position = 0
+                        log.error(
+                            f"Position records zeroed for {strategy} "
+                            f"to reflect faulty trade previously removed."
+                        )
+
             else:
                 log.critical(
-                    f"More than 1 stratey for contract {contract.symbol}, "
+                    f"More than 1 strategy for contract {contract.symbol}, "
                     f"cannot fix position records."
                 )
+            self.faulty_trades.clear()
 
     def clear_error_trades(self, trades: list[ibi.Trade]) -> None:
         """
-        Should rather beUsed for cold restarts, but currently used at all times.
         Trades that we have as active but IB doesn't know about them.
         """
         for trade in trades:
@@ -209,6 +222,7 @@ class Controller(Atom):
                 f"Will delete record for trade that IB doesn't known about: "
                 f"{trade.order.orderId}"
             )
+            self.faulty_trades.append(self.sm._orders[trade.order.orderId])
             self.sm.delete_trade_record(trade)
 
     def report_done_trade(self, trade: ibi.Trade):
@@ -513,7 +527,7 @@ class Controller(Atom):
         """
         Cancel all open orders, close existing positions and prevent
         any further trading.  Response to a critical error or request
-        sent by administrator.
+        sent by administrator. Currently not in use.
         """
         for order in self.ib.openOrders():
             self.ib.cancelOrder(order)
