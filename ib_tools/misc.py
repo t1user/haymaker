@@ -249,7 +249,7 @@ def decode_tree(obj: Any) -> Any:
     def process_dict(d: dict) -> Any:
         output = {}
         for k, v in d.items():
-            value_ = process_value(v)
+            value_ = process_value(v) if k != "lastTradeDateOrContractMonth" else v
             key_ = process_key(k, value_)
             if isinstance(key_, str):
                 output[key_] = value_

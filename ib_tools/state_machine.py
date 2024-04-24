@@ -137,13 +137,17 @@ class OrderContainer(UserDict):
 
 class Strategy(dict):
     def __getattr__(self, key):
-        return self.get(key)
+        return self.get(key, "UNSET")
 
-    def __setattr__(self, key, value):
+    def __setattr__(self, key, value) -> None:
         self[key] = value
 
-    def __delattr__(self, key):
+    def __delattr__(self, key) -> None:
         self.__delitem__(key)
+
+    @property
+    def active(self) -> bool:
+        return self["position"] != 0
 
 
 class StrategyContainer(UserDict):
@@ -152,12 +156,15 @@ class StrategyContainer(UserDict):
             raise ValueError(
                 f"{self.__class__.__qualname__} can be used to store only dicts."
             )
+        elif key is None:
+            key = "unknown"
         self.data[key] = Strategy(item)
 
     def __missing__(self, key):
         log.debug(f"Will reset data for {key}")
         self.data[key] = Strategy(
             {
+                "strategy": str(key),
                 "active_contract": None,
                 "position": 0.0,
                 "params": {},
@@ -349,12 +356,18 @@ class StateMachine:
         try:
             self.save_model(self._data.encode())
             self.save_order(dict_for_saving)
+            log.debug("SAVING MODELS SUCCESSFUL")
         except Exception as e:
             log.exception(e)
         return order_info
 
     def report_new_order(self, trade: ibi.Trade) -> None:
-        log.debug(f"Reporting new order: {trade.order.orderId}, {trade.order.permId}.")
+        # StateMachine shouldn't be reporting anything
+        # Left here for now for debuging
+        log.debug(
+            f"Reporting new order <redundand>: "
+            f"{trade.order.orderId}, {trade.order.permId}."
+        )
         # self.save_model(self._data.encode())
         pass
 
@@ -392,6 +405,9 @@ class StateMachine:
         ``state_machine.for_contract.get(contract)``
         """
         return self._data.strategies_by_contract()
+
+    def orders_for_strategy(self, strategy: str) -> Iterator[OrderInfo]:
+        return self._orders.strategy(strategy)
 
     def delete_order(self, orderId: int) -> None:
         del self._orders[orderId]

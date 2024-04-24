@@ -248,6 +248,8 @@ class MongoSaver(AbstractBaseSaver):
                 result = self.collection.update_one(
                     {self.query_key: key}, {"$set": data}, upsert=True
                 )
+            elif not all(data.keys()):
+                log.error(f"Attempt to save with wrong keys: {list(data.keys())}")
             else:
                 result = self.collection.insert_one(data)  # noqa
         except Exception:

@@ -20,7 +20,6 @@ BLOTTER_SAVER = eval(f"{blotter_class}(**{blotter_kwargs})")
 
 
 class Blotter:
-
     """
     Log trade only after all commission reports arrive. Trader
     will log commission after every commission event. It's up to blotter
@@ -101,6 +100,7 @@ class Blotter:
                 f"Trade will be logged to blotter: {report.get('order_id')} "
                 f"{report.get('perm_id')}"
             )
+            # log.debug(f"{report=}")
             self.save(report)
         else:
             self.blotter.append(report)

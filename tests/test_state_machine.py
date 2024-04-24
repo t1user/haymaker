@@ -329,6 +329,7 @@ def test_StrategyContaner_new_strategy():
             "params": {},
             "lock": 0,
             "position_id": "",
+            "strategy": "c",
         },
     }
 

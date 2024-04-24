@@ -140,12 +140,15 @@ class Controller(Atom):
         log.error("Will attempt to fix position records")
         for contract, diff in report.items():
             strategies = self.sm.for_contract.get(contract)
+            log.debug(f"{strategies=}")
             if strategies and len(strategies) == 1:
                 self.sm.strategy[strategies[0]].position -= diff
                 log.error(
-                    f"Corrected position records for strategy {strategies[0]} by {diff}"
+                    f"Corrected position records for strategy "
+                    f"{strategies[0]} by {-diff}"
                 )
                 self.sm.save_model(self.sm._data.encode())
+                """
                 log.debug("Will attempt to identify missing order. UNTESTED.")
                 if (
                     len(
@@ -185,7 +188,7 @@ class Controller(Atom):
                         )
                     except Exception as e:
                         log.exception(e)
-
+                """
             elif strategies and self.ib_position_for_contract(contract) == 0:
                 for strategy in strategies:
                     self.sm.strategy[strategy].position = 0
@@ -280,7 +283,7 @@ class Controller(Atom):
                 f"->> {strategy}"
             )
             log.debug(
-                f"Position records correct for contract "
+                f"My records in line with IB? (diff if error): "
                 f"{data.active_contract.symbol}: "
                 f"{self.verify_position_for_contract(data.active_contract)}"
             )
@@ -331,11 +334,15 @@ class Controller(Atom):
         # no permId here at all
         # THIS IS A TEST IF IT WORKS
         # await asyncio.sleep(0.1)
-        # log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
-        existing_order_record = self.sm.order.get(trade.order.orderId)
-        if not existing_order_record:
-            log.critical(f"Unknown trade in the system {trade.order}")
-
+        log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
+        try:
+            existing_order_record = self.sm.order.get(trade.order.orderId)
+            if not existing_order_record:
+                log.critical(f"Unknown trade in the system {trade.order}")
+        except Exception as e:
+            log.exception(e)
+        if trade.order.orderId < 0:
+            log.warn(f"manual order: {trade.order}")
         # Give exec_model a chance to save bracket
         # await asyncio.sleep(0.5)
         self.sm.report_new_order(trade)
@@ -350,7 +357,9 @@ class Controller(Atom):
         )
         await self.sm.save_order_status(trade)
         if trade.order.orderId < 0:
-            log.error(f"Manual trade: {trade.order} status update: {trade.orderStatus}")
+            log.warning(
+                f"Manual trade: {trade.order} status update: {trade.orderStatus}"
+            )
         elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
@@ -368,41 +377,82 @@ class Controller(Atom):
     def register_position(
         self, strategy_str: str, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
     ) -> None:
-        if fill.execution.side == "BOT":
-            strategy.position += fill.execution.shares
-            log.debug(
-                f"Registered orderId: {trade.order.orderId} permId: "
-                f"{trade.order.permId} BUY {trade.order.orderType} "
-                f"for {strategy_str} --> position: {strategy.position}"
-            )
-        elif fill.execution.side == "SLD":
-            strategy.position -= fill.execution.shares
-            log.debug(
-                f"Registered orderId {trade.order.orderId} permId: "
-                f"{trade.order.permId} SELL {trade.order.orderType} "
-                f"for {strategy_str} --> position: {strategy.position}"
-            )
-        else:
-            log.critical(
-                f"Abiguous fill: {fill} for order: {trade.order} for "
-                f"{trade.contract.localSymbol} strategy: {strategy}"
-            )
+        try:
+            if fill.execution.side == "BOT":
+                strategy.position += fill.execution.shares
+                log.debug(
+                    f"Registered orderId: {trade.order.orderId} permId: "
+                    f"{trade.order.permId} BUY {trade.order.orderType} "
+                    f"for {strategy_str} --> position: {strategy.position}"
+                )
+            elif fill.execution.side == "SLD":
+                strategy.position -= fill.execution.shares
+                log.debug(
+                    f"Registered orderId {trade.order.orderId} permId: "
+                    f"{trade.order.permId} SELL {trade.order.orderType} "
+                    f"for {strategy_str} --> position: {strategy.position}"
+                )
+            else:
+                log.critical(
+                    f"Abiguous fill: {fill} for order: {trade.order} for "
+                    f"{trade.contract.localSymbol} strategy: {strategy}"
+                )
+        except Exception as e:
+            log.exception(e)
 
-    # Combine with register_position
-    # half of work here is linked to registering position
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """
         Register position.
         """
-        order_info = self.sm.order.get(trade.order.orderId)
-        if order_info:
-            strategy_str = order_info.strategy
-        strategy = self.sm.strategy.get(strategy_str)
+        try:
+            order_info = self.sm.order.get(trade.order.orderId)
+            if order_info:
+                strategy_str = order_info.strategy
+                strategy: Strategy = self.sm.strategy.get(strategy_str)
+        except Exception as e:
+            log.exception(e)
 
         if trade.order.orderId < 0:  # this is MANUAL TRADE
-            strategies_list = self.sm.for_contract[trade.contract]
-            if len(strategies_list) == 1:
-                strategy = strategies_list[0]
+            try:
+                log.debug("Will try to assign manual trade to strategy.")
+                # assumed manual trade is to close a position
+                active_strategies_list = [
+                    s
+                    for s in self.sm.for_contract[trade.contract]
+                    if self.sm.strategy[s].active
+                ]
+                log.debug(f"{active_strategies_list=}")
+                if len(active_strategies_list) == 1:
+                    strategy_str = active_strategies_list[0]
+                    strategy = self.sm.strategy[strategy_str]
+
+                # if more than 1 active, manual trade is for the one without
+                # resting orders (resting orders are most likely stop-losses)
+                elif candidate_strategies := [
+                    s for s in active_strategies_list if self.sm.orders_for_strategy(s)
+                ]:
+                    log.debug(
+                        f"Active strategies without resting orders: "
+                        f"{candidate_strategies}"
+                    )
+                    # if more than one just pick first one
+                    # there's no way to determine which strategy was meant
+                    if candidate_strategies:
+                        strategy_str = candidate_strategies[0]
+                        strategy = self.sm.strategy[strategy_str]
+
+                # if cannot be matched, it's a separate strategy
+                # position must always be recorded for a strategy
+                else:
+                    strategy_str = f"manual_strategy_{trade.contract.symbol}"
+                    log.debug(f"{strategy_str=}")
+                    strategy = self.sm._data[strategy_str]
+                    strategy["active_contract"] = trade.contract
+                    log.debug(f"{strategy=}")
+                log.debug(f"Manual trade matched to strategy: {strategy_str}")
+            except Exception as e:
+                log.exception(e)
+                raise
 
         if strategy:
             self.register_position(strategy_str, strategy, trade, fill)
