@@ -147,7 +147,7 @@ class Controller(Atom):
                     f"Corrected position records for strategy "
                     f"{strategies[0]} by {-diff}"
                 )
-                self.sm.save_model(self.sm._data.encode())
+                self.sm.save_models()
                 """
                 log.debug("Will attempt to identify missing order. UNTESTED.")
                 if (
@@ -192,7 +192,7 @@ class Controller(Atom):
             elif strategies and self.ib_position_for_contract(contract) == 0:
                 for strategy in strategies:
                     self.sm.strategy[strategy].position = 0
-                self.sm.save_model(self.sm._data.encode())
+                self.sm.save_models()
                 log.error(
                     f"Position records zeroed for {strategies} "
                     f"to reflect zero position for {contract.symbol}."

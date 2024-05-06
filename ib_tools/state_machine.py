@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import UserDict, defaultdict
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from functools import partial
 from typing import Any, Iterator, Optional
 
@@ -23,7 +23,7 @@ class OrderInfo:
     strategy: str
     action: str
     trade: ibi.Trade
-    params: dict
+    params: dict = field(default_factory=dict)
 
     @property
     def active(self):
@@ -248,8 +248,8 @@ class StateMachine:
 
     _instance: Optional["StateMachine"] = None
 
-    save_order = SaveManager(order_saver)
-    save_model = SaveManager(model_saver)
+    _save_order = SaveManager(order_saver)
+    _save_model = SaveManager(model_saver)
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -258,11 +258,17 @@ class StateMachine:
         else:
             raise TypeError("Attempt to instantiate StateMachine more than once.")
 
-    def __init__(self) -> None:
-        super().__init__()
-
+    def __init__(self):
+        # don't make these class attributes as it messes up tests
+        # (reference to dictionaries kept in between tests)
         self._data = StrategyContainer()  # dict of ExecModel data
         self._orders = OrderContainer()  # dict of OrderInfo
+
+    def save_models(self):
+        self._save_model(self._data.encode())
+
+    def save_order(self, order: OrderInfo):
+        self._save_order(order.encode())
 
     def update_trade(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         """
@@ -277,7 +283,7 @@ class StateMachine:
             )
             new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
             self._orders[trade.order.orderId] = new_oi
-            self.save_order(new_oi.encode())
+            self.save_order(new_oi)
             return None
         else:
             return trade
@@ -293,11 +299,13 @@ class StateMachine:
 
     def delete_trade_record(self, trade: ibi.Trade) -> None:
         """
-        Delete order related record from database.
+        Delete order related record from database.  Before deleting
+        make sure it's marked as inactive so that it doesn't get
+        reloaded on restart.
         """
         oi_dict = self._orders[trade.order.orderId].encode()
         oi_dict.update({"active": False})
-        self.save_order(oi_dict)
+        self._save_order(oi_dict)
         del self._orders[trade.order.orderId]
 
     async def read_from_store(self):
@@ -335,27 +343,23 @@ class StateMachine:
         elif action.upper() == "CLOSE":
             trade.filledEvent += partial(self.remove_lock, strategy)
 
-        self.save_order(order_info.encode())
-        self.save_model(self._data.encode())
+        self.save_order(order_info)
+        self.save_models()
 
     async def save_order_status(self, trade: ibi.Trade) -> Optional[OrderInfo]:
         log.debug(f"updating trade status: {trade.order.orderId} {trade.order.permId}")
         # if orderId zero it means trade objects has to be replaced
         order_info = self._orders.get(trade.order.orderId)
-        if order_info:
-            dict_for_saving = order_info.encode()
-        else:
-            dict_for_saving = {
-                "orderId": trade.order.orderId,
-                "strategy": "unknown",
-                "action": "MANUAL" if trade.order.orderId < 0 else "UNKNOWN",
-                "trade": tree(trade),
-                "params": {},
-            }
+        if not order_info:
+            order_info = OrderInfo(
+                strategy="unknown",
+                action="MANUAL" if trade.order.orderId < 0 else "UNKNOWN",
+                trade=trade,
+            )
 
         try:
-            self.save_model(self._data.encode())
-            self.save_order(dict_for_saving)
+            self.save_models()
+            self.save_order(order_info)
             log.debug("SAVING MODELS SUCCESSFUL")
         except Exception as e:
             log.exception(e)
@@ -368,7 +372,7 @@ class StateMachine:
             f"Reporting new order <redundand>: "
             f"{trade.order.orderId}, {trade.order.permId}."
         )
-        # self.save_model(self._data.encode())
+        # self.save_models()
         pass
 
     # ### These are data access and modification methods ###

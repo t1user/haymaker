@@ -763,6 +763,7 @@ class Test_data_property:
 
         a.data.position += 1
         b.data.position += 1
+
         assert b.data.position == 2
         assert c.data.position == 0
 
