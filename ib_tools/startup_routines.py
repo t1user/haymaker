@@ -21,15 +21,10 @@ class OrderSyncStrategy:
         # Inactive trades that we managed to match to IB
         self.done: list[ibi.Trade] = []
         # Trades on record that we cannot resolve with IB
-        self.errors: list[ibi.Trade] = []  # <- We're fucked
-        # self.report = {
-        #     "unknown": self.unknown,
-        #     "done": self.done,
-        #     "errors": self.errors,
-        # }
+        self.errors: list[ibi.Trade] = []  # <- We're potentially fucked
 
     @classmethod
-    def run(cls, ib: ibi.IB, sm: StateMachine):
+    def run(cls, ib: ibi.IB, sm: StateMachine) -> OrderSyncStrategy:
         return cls(ib, sm).update_trades().review_trades().handle_inactive_trades()
 
     def update_trades(self):
@@ -83,7 +78,10 @@ class OrderSyncStrategy:
         }
 
         log.debug(f"ib known trades: {list(ib_known_trades.keys())}")
-        log.debug(f"inactive trades: {self.inactive}")
+        log.debug(
+            f"inactive trades: "
+            f"{[(i.order.orderId, i.order.permId) for i in self.inactive]}"
+        )
 
         for old_trade in self.inactive:
             new_trade = ib_known_trades.get(old_trade.order.permId)
@@ -93,12 +91,6 @@ class OrderSyncStrategy:
                 self.sm.update_trade(new_trade)  # <- CHANGING RECORDS
             else:
                 self.errors.append(old_trade)
-
-        # done = {
-        #     trade.order.permId: trade
-        #     for trade in self.inactive
-        #     if trade.order.permId in ib_known_trades
-        # }
 
         log.debug(f"done: {[(t.order.orderId, t.order.permId) for t in self.done]}")
 
@@ -142,7 +134,8 @@ class PositionSyncStrategy:
             for i in set([*broker_positions_dict.keys(), *my_positions_dict.keys()])
         }
         self.errors = {k: v for k, v in diff.items() if v}
-        log.debug(f"errors: { {k.symbol: v for k, v in self.errors.items()} }")
+        if self.errors:
+            log.error(f"errors: { {k.symbol: v for k, v in self.errors.items()} }")
 
         return self
 

@@ -38,14 +38,26 @@ class OrderInfo:
             yield getattr(self, f)
 
     def encode(self) -> dict[str, Any]:
+        """
+        Params are being flattened in order to make searching by their
+        keys easier.  However, `params` keys is kept so that object
+        can be decoded into its original shape.
+        """
         return {
             "orderId": self.trade.order.orderId,
             **{k: tree(v) for k, v in self.__dict__.items()},
             "active": self.active,
+            **self.params,
         }
 
     def decode(self, data: dict[str, Any]) -> None:
+        """
+        Whatever keys are present in `params`, we don't need them
+        duplicated as attributes on `OrderInfo`.
+        """
         data.pop("active")
+        for key in data["params"]:
+            data.pop(key)
         self.__dict__.update(**data)
 
     @classmethod
@@ -364,16 +376,6 @@ class StateMachine:
         except Exception as e:
             log.exception(e)
         return order_info
-
-    def report_new_order(self, trade: ibi.Trade) -> None:
-        # StateMachine shouldn't be reporting anything
-        # Left here for now for debuging
-        log.debug(
-            f"Reporting new order <redundand>: "
-            f"{trade.order.orderId}, {trade.order.permId}."
-        )
-        # self.save_models()
-        pass
 
     # ### These are data access and modification methods ###
 

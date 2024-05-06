@@ -92,8 +92,10 @@ class Controller(Atom):
         try:
             report = OrderSyncStrategy.run(self.ib, self.sm)
             log.debug(
-                f"Trades on re-start -> unknown: {len(report.unknown)}, "
-                f"done: {len(report.done)}, error: {len(report.errors)}"
+                f"Trades on re-start -> "
+                f"IB trades unknown to us: {len(report.unknown)}, "
+                f"Our active trades matched to IB done: {len(report.done)}, "
+                f"Trades on record unmatched to IB: {len(report.errors)}"
             )
         except Exception as e:
             log.exception(e)
@@ -283,7 +285,7 @@ class Controller(Atom):
                 f"->> {strategy}"
             )
             log.debug(
-                f"My records in line with IB? (diff if error): "
+                f"Diff my position vs. IB position: "
                 f"{data.active_contract.symbol}: "
                 f"{self.verify_position_for_contract(data.active_contract)}"
             )
@@ -329,11 +331,7 @@ class Controller(Atom):
         This is an event handler (callback).  Connected (subscribed)
         to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
         """
-        # THIS IS ALL POINTLESS
-        # TODO
-        # no permId here at all
-        # THIS IS A TEST IF IT WORKS
-        # await asyncio.sleep(0.1)
+
         log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
         try:
             existing_order_record = self.sm.order.get(trade.order.orderId)
@@ -343,18 +341,14 @@ class Controller(Atom):
             log.exception(e)
         if trade.order.orderId < 0:
             log.warn(f"manual order: {trade.order}")
-        # Give exec_model a chance to save bracket
-        # await asyncio.sleep(0.5)
-        self.sm.report_new_order(trade)
 
     async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
-        log.debug("inside onOrderStatusEvent")
         if self.hold:
             return
-        log.debug(
-            f"Reporting order status: {trade.order.orderId} {trade.order.permId} "
-            f"{trade.orderStatus.status}"
-        )
+        # log.debug(
+        #     f"Reporting order status: {trade.order.orderId} {trade.order.permId} "
+        #     f"{trade.orderStatus.status}"
+        # )
         await self.sm.save_order_status(trade)
         if trade.order.orderId < 0:
             log.warning(
@@ -467,13 +461,10 @@ class Controller(Atom):
         execution.  After that trade object is ready for stroring in
         blotter.
         """
-        log.debug("Inside onCommissionReport")
+
         # prevent writing all orders from session on startup
         if self.hold:
             return
-        log.debug(
-            f"Will report commission for {trade.order.orderId} {trade.order.permId}"
-        )
         data = self.sm.order.get(trade.order.orderId)
         if data:
             strategy, action, _, params, _ = data
@@ -562,7 +553,7 @@ class Controller(Atom):
     ) -> Union[bool, float]:
         my_position = self.sm.position.get(contract, 0.0)
         ib_position = self.ib_position_for_contract(contract)
-        return (my_position == ib_position) or (my_position - ib_position)
+        return (my_position == ib_position) * 0 or (my_position - ib_position)
 
     def ib_position_for_contract(self, contract: ibi.Contract) -> float:
         # CONSIDER MOVING TO TRADER
