@@ -47,7 +47,7 @@ class OrderInfo:
             "orderId": self.trade.order.orderId,
             **{k: tree(v) for k, v in self.__dict__.items()},
             "active": self.active,
-            **self.params,
+            **tree(self.params),
         }
 
     def decode(self, data: dict[str, Any]) -> None:
