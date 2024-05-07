@@ -47,17 +47,10 @@ class OrderInfo:
             "orderId": self.trade.order.orderId,
             **{k: tree(v) for k, v in self.__dict__.items()},
             "active": self.active,
-            **tree(self.params),
         }
 
     def decode(self, data: dict[str, Any]) -> None:
-        """
-        Whatever keys are present in `params`, we don't need them
-        duplicated as attributes on `OrderInfo`.
-        """
         data.pop("active")
-        for key in data["params"]:
-            data.pop(key)
         self.__dict__.update(**data)
 
     @classmethod
@@ -134,6 +127,9 @@ class OrderContainer(UserDict):
                 existing.decode(item)
             else:
                 self.data[orderId] = OrderInfo.from_dict(item)
+            #     self.data[orderId] = OrderInfo(
+            #         item["strategy"], item["action"], item["trade"], item["params"]
+            #     )
             log.debug(
                 f"Order for : {item['trade'].order.orderId} "
                 f"{item['trade'].contract.symbol} decoded."
