@@ -54,7 +54,9 @@ timeout:
   debug: False # debug: True -> log; debug: False -> restart
   time: 300 # zero means no timeout, can also be set individually on every streamer instance
 
-
+state_machine:
+  save_delay: 1 # don't save strategy data more often than that (in secs)
+  
 blotter_saver:
   class: CsvSaver
   kwds:

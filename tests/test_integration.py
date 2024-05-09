@@ -10,7 +10,7 @@ from ib_tools.controller import Controller
 from ib_tools.execution_models import BaseExecModel, EventDrivenExecModel
 from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
 from ib_tools.signals import BinarySignalProcessor
-from ib_tools.state_machine import StrategyContainer
+from ib_tools.state_machine import Strategy, StrategyContainer
 
 
 @pytest.fixture
@@ -71,7 +71,7 @@ def test_strategy_is_strategy(pipe):
 def test_data_is_dict(pipe):
     strategy, contract, order, action, data = pipe
 
-    assert isinstance(data, dict)
+    assert isinstance(data, Strategy)
 
 
 def test_contract_is_contract(pipe):

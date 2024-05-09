@@ -717,24 +717,31 @@ class Test_data_property:
         assert a.data is None
 
     def test_data_property_with_strategy_first_access(self, atom):
+        """If we're using non-existing strategy, one should be created."""
+
         class A(atom):
             def __init__(self, strategy):
                 self.strategy = strategy
 
         a = A("xxx")
+        print(a.data)
 
-        assert isinstance(a.data, dict)
+        assert a.data.strategy == "xxx"
 
     def test_data_property_with_strategy_access_correct_essential_keys_in_data(
         self, atom
     ):
+        """Newly created strategy must have certain keys by default."""
+
         class A(atom):
             def __init__(self, strategy):
                 self.strategy = strategy
 
         a = A("xxx")
 
-        assert {"position", "lock"}.issubset(set(a.data.keys()))
+        assert {"position", "lock", "strategy", "active_contract"}.issubset(
+            set(a.data.keys())
+        )
 
     def test_data_property_with_strategy_access_correct_position(self, atom):
         class A(atom):

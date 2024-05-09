@@ -38,11 +38,6 @@ class OrderInfo:
             yield getattr(self, f)
 
     def encode(self) -> dict[str, Any]:
-        """
-        Params are being flattened in order to make searching by their
-        keys easier.  However, `params` keys is kept so that object
-        can be decoded into its original shape.
-        """
         return {
             "orderId": self.trade.order.orderId,
             **{k: tree(v) for k, v in self.__dict__.items()},
@@ -127,9 +122,6 @@ class OrderContainer(UserDict):
                 existing.decode(item)
             else:
                 self.data[orderId] = OrderInfo.from_dict(item)
-            #     self.data[orderId] = OrderInfo(
-            #         item["strategy"], item["action"], item["trade"], item["params"]
-            #     )
             log.debug(
                 f"Order for : {item['trade'].order.orderId} "
                 f"{item['trade'].contract.symbol} decoded."
@@ -143,29 +135,62 @@ class OrderContainer(UserDict):
         return f"OrderContainer({self.data}{ms})"
 
 
-class Strategy(dict):
-    def __getattr__(self, key):
-        return self.get(key, "UNSET")
+class Strategy(UserDict):
+    def __init__(
+        self,
+        dict=None,
+        strategyChangeEvent=ev.Event("strategyChangeEvent"),
+        /,
+        **kwargs,
+    ) -> None:
+        self.strategyChangeEvent = strategyChangeEvent
+        super().__init__(dict, **kwargs)
 
-    def __setattr__(self, key, value) -> None:
-        self[key] = value
+    def __getitem__(self, key):
+        return self.data.get(key, "UNSET")
 
-    def __delattr__(self, key) -> None:
-        self.__delitem__(key)
+    def __setitem__(self, key, item):
+        self.data[key] = item
+        self.strategyChangeEvent.emit()
+
+    def __delitem__(self, key):
+        del self.data[key]
+        self.strategyChangeEvent.emit()
 
     @property
     def active(self) -> bool:
         return self["position"] != 0
 
+    def __setattr__(self, key, item):
+        if key in {"data", "strategyChangeEvent"}:
+            super().__setattr__(key, item)
+        else:
+            self.__setitem__(key, item)
+
+    __getattr__ = __getitem__
+    __delattr__ = __delitem__
+
 
 class StrategyContainer(UserDict):
+
+    def __init__(self, dict=None, /, **kwargs) -> None:
+        # set a short `save_delay` in tests so that they don't get held up
+        save_delay = kwargs.get("save_delay", CONFIG["state_machine"]["save_delay"])
+        self._strategyChangeEvent = ev.Event("strategyChangeEvent")
+        self.strategyChangeEvent = self._strategyChangeEvent.debounce(save_delay, False)
+        self._strategyChangeEvent += self.strategyChangeEvent
+        super().__init__(dict)
+
     def __setitem__(self, key: str, item: dict):
-        if not isinstance(item, dict):
+        if not isinstance(item, Strategy):
+            print(f"wrong value: {item}")
             raise ValueError(
-                f"{self.__class__.__qualname__} can be used to store only dicts."
+                f"{self.__class__.__qualname__} can only be used to store `Strategy`s."
             )
-        elif key is None:
-            key = "unknown"
+        # this seems idiotic
+        # commented out for now to make sure I'm not missing anything
+        # elif key is None:
+        #    key = "unknown"
         self.data[key] = Strategy(item)
 
     def __missing__(self, key):
@@ -178,7 +203,8 @@ class StrategyContainer(UserDict):
                 "params": {},
                 "lock": 0,
                 "position_id": "",
-            }
+            },
+            self._strategyChangeEvent,
         )
         return self.data[key]
 
@@ -271,12 +297,16 @@ class StateMachine:
         # (reference to dictionaries kept in between tests)
         self._data = StrategyContainer()  # dict of ExecModel data
         self._orders = OrderContainer()  # dict of OrderInfo
+        # will automatically save models to db on every change
+        # (but not more often than defined in CONFIG['state_machine']['save_delay'])
+        self._data.strategyChangeEvent += self.save_models
 
-    def save_models(self):
+    def save_models(self, *args):
         self._save_model(self._data.encode())
 
-    def save_order(self, order: OrderInfo):
-        self._save_order(order.encode())
+    def save_order(self, oi: OrderInfo) -> None:
+        self._orders[oi.trade.order.orderId] = oi
+        self._save_order(oi.encode())
 
     def update_trade(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         """
@@ -285,12 +315,11 @@ class StateMachine:
         """
         oi = self._orders.get(trade.order.orderId)
         if oi:
-            log.debug(
-                f"Trade will be updated - id: {oi.trade.order.orderId} "
-                f"permId: {oi.trade.order.permId}"
-            )
+            # log.debug(
+            #     f"Trade will be updated - id: {oi.trade.order.orderId} "
+            #     f"permId: {oi.trade.order.permId}"
+            # )
             new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
-            self._orders[trade.order.orderId] = new_oi
             self.save_order(new_oi)
             return None
         else:
@@ -339,7 +368,8 @@ class StateMachine:
         """
         params = data["params"].get(action.lower(), {})
         order_info = OrderInfo(strategy, action, trade, params)
-        self._orders[trade.order.orderId] = order_info
+        self.save_order(order_info)
+
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} "
             f"permId: {trade.order.permId} registered for: "
@@ -350,9 +380,6 @@ class StateMachine:
             trade.filledEvent += partial(self.register_lock, strategy)
         elif action.upper() == "CLOSE":
             trade.filledEvent += partial(self.remove_lock, strategy)
-
-        self.save_order(order_info)
-        self.save_models()
 
     async def save_order_status(self, trade: ibi.Trade) -> Optional[OrderInfo]:
         log.debug(f"updating trade status: {trade.order.orderId} {trade.order.permId}")
@@ -366,9 +393,8 @@ class StateMachine:
             )
 
         try:
-            self.save_models()
             self.save_order(order_info)
-            log.debug("SAVING MODELS SUCCESSFUL")
+            log.debug("SAVING ORDER SUCCESSFUL")
         except Exception as e:
             log.exception(e)
         return order_info

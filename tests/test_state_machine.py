@@ -1,5 +1,7 @@
 import asyncio
+import itertools
 
+import eventkit as ev
 import ib_insync as ibi
 import pytest
 
@@ -299,24 +301,30 @@ def test_Strategy_contains():
 
 
 def test_StrategyContainer_contains_only_Strategies():
-    m = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
-    assert isinstance(m["b"], Strategy)
-    assert m["b"].x == 4
+    """Saving regular dict to StrategyContainer should raise a ValueError"""
+    with pytest.raises(ValueError):
+        StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
 
 
 def test_StrategyContainer_add_key():
-    m = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
-    m["c"] = {"x": 2, "c": 3}
+    m = StrategyContainer(
+        {"a": Strategy({"x": 1, "y": 2}), "b": Strategy({"x": 4, "y": 9})}
+    )
+    m["c"] = Strategy({"x": 2, "c": 3})
     assert isinstance(m["c"], Strategy)
 
 
 def test_StrategyContainer_missing():
-    m = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+    m = StrategyContainer(
+        {"a": Strategy({"x": 1, "y": 2}), "b": Strategy({"x": 4, "y": 9})}
+    )
     assert isinstance(m["not_set"], Strategy)
 
 
 def test_StrategyContaner_new_strategy():
-    m = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+    m = StrategyContainer(
+        {"a": Strategy({"x": 1, "y": 2}), "b": Strategy({"x": 4, "y": 9})}
+    )
     data = m["c"]
     data["x"] = 5
     assert m.data == {
@@ -341,7 +349,7 @@ def test_access_order_with_square_brackets(state_machine):
 
 
 def test_access_strategy_with_square_brackets(state_machine):
-    st = {"a": {"x": 1, "y": 2}}
+    st = Strategy({"a": {"x": 1, "y": 2}})
     state_machine.strategy["xyz"] = st
     assert state_machine.strategy["xyz"] == st
 
@@ -354,8 +362,64 @@ def test_access_order_with_get(state_machine):
 
 
 def test_access_strategy_with_get(state_machine):
-    st = {"a": {"x": 1, "y": 2}}
+    st = Strategy({"a": {"x": 1, "y": 2}})
     state_machine.strategy["xyz"] = st
     assert state_machine.strategy.get("xyz") == st
     # get with unknown key creates new entry,
     # so this is not symetrical to previous test
+
+
+def test_active_property_on_Strategy_false_works():
+    strat_cont = StrategyContainer()
+    st = strat_cont["new_strategy"]
+    assert not st.active
+
+
+def test_active_property_on_Strategy_true_works():
+    strat_cont = StrategyContainer()
+    st = strat_cont["new_strategy"]
+    st.position += 1
+    assert st.active
+
+
+def test_Strategy_change_emits_event():
+    class Counter:
+        def __init__(self):
+            self.count = 0
+
+        def __call__(self):
+            self.count += 1
+
+    c = Counter()
+
+    changeEvent = ev.Event("changeEvent")
+    changeEvent += c
+
+    st = Strategy({"position": 0}, changeEvent)
+
+    st.position += 1
+    # one event emitted when `position` created
+    # one when increased
+    assert c.count == 2
+
+
+@pytest.mark.asyncio
+async def test_StrategyContainer_gets_events_on_Strategy_change():
+    class Counter:
+        def __init__(self):
+            self.count = 0
+
+        def __call__(self):
+            self.count += 1
+
+    c = Counter()
+    cont = StrategyContainer(None, save_delay=0.0011)
+
+    cont.strategyChangeEvent += c
+    print(cont.strategyChangeEvent)
+    strat = cont["new_strategy"]
+    strat.position += 1
+    await asyncio.sleep(0.001)
+    # there were 7 events emitted (6 items added to strategy dict and 1 change)
+    # they were all debounced into one event
+    assert c.count == 1
