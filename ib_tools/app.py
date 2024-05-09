@@ -17,11 +17,9 @@ setup_logging()
 
 
 class IBC(Protocol):
-    async def startAsync(self):
-        ...
+    async def startAsync(self): ...
 
-    async def terminateAsync(self):
-        ...
+    async def terminateAsync(self): ...
 
 
 @dataclass
@@ -51,6 +49,7 @@ class App:
     probeContract: ibi.Contract = CONFIG.get("probeContract") or ibi.Forex("EURUSD")
     probeTimeout: float = CONFIG.get("probeTimeout") or 4
     # blotter: bool = True
+    _tasks: set = field(default_factory=set)
 
     def __post_init__(self):
         self.ib.errorEvent += self.onError
@@ -116,6 +115,31 @@ class App:
         log.debug("watchdog initialized")
         self.ib.run()
 
+    def _handle_error(self, task: asyncio.Task):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            log.debug(f"task {task} has been cancelled.")
+        except Exception as e:
+            log.exception(e)
+
     async def _run(self, *args) -> None:
-        await CONTROLLER.sync()
+        await CONTROLLER.run()
         await self.jobs()
+
+    # async def _run(self, *args) -> None:
+    #     coroutines = (CONTROLLER.run, self.jobs)
+    #     for c in coroutines:
+    #         task = asyncio.create_task(c())  # type: ignore
+    #         log.debug(f"Task created: {task.get_name()}")
+
+    #         # Add task to the set. This creates a strong reference.
+    #         self._tasks.add(task)
+
+    #         # To prevent keeping references to finished tasks forever,
+    #         # make each task remove its own reference from the set after
+    #         # completion:
+    #         task.add_done_callback(self._tasks.discard)
+    #         # ensure errors are logged for debugging
+    #         task.add_done_callback(self._handle_error)
+    #     await asyncio.gather(*self._tasks, return_exceptions=False)

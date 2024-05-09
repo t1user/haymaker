@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import ib_insync as ibi
 
 from ib_tools import misc
-from ib_tools.state_machine import StateMachine
+from ib_tools.state_machine import OrderInfo, StateMachine
+
+if TYPE_CHECKING:
+    from ib_tools.controller import Controller
+
 
 log = logging.getLogger(__name__)
 
@@ -25,20 +31,29 @@ class OrderSyncStrategy:
 
     @classmethod
     def run(cls, ib: ibi.IB, sm: StateMachine) -> OrderSyncStrategy:
-        return cls(ib, sm).update_trades().review_trades().handle_inactive_trades()
+        return (
+            cls(ib, sm)
+            .update_trades()
+            .review_trades()
+            .handle_inactive_trades()
+            .report()
+        )
 
-    def update_trades(self):
+    @property
+    def lists(self) -> tuple[list[ibi.Trade], list[ibi.Trade], list[ibi.Trade]]:
+        return self.unknown, self.done, self.errors
+
+    def update_trades(self) -> OrderSyncStrategy:
         """
         Update order records with current Trade objects.
         `unknown_trades` are IB trades without records in SM.
         """
-        self.unknown = []
         for trade in self.ib.openTrades():
             if ut := self.sm.update_trade(trade):  # <- CHANGING RECORDS
-                self.unknown_trades.append(ut)
+                self.unknown.append(ut)
         return self
 
-    def review_trades(self):
+    def review_trades(self) -> OrderSyncStrategy:
         """
         Review all trades on record and compare their status with IB.
 
@@ -46,13 +61,12 @@ class OrderSyncStrategy:
         them as done.  We have to reconcile those trades' status and
         report them as appropriate.
         """
-        self.inactive = []
         ib_open_trades = {trade.order.orderId: trade for trade in self.ib.openTrades()}
         log.debug(f"ib open trades: {list(ib_open_trades.keys())}")
         for orderId, oi in self.sm._orders.copy().items():
             log.debug(f"verifying {orderId}")
             if orderId not in ib_open_trades:
-                # if inactive it's already been dealt with before restart
+                # if inactive it's already been dealt with before sync
                 if oi.active:
                     log.debug(f"reporting inactive: {orderId}")
                     # this is a trade that we have as active in self.orders
@@ -67,11 +81,12 @@ class OrderSyncStrategy:
                     self.sm.prune_order(orderId)  # <- CHANGING RECORDS
         return self
 
-    def handle_inactive_trades(self):
-        # these are active trades on record that haven't been matched to
-        # open trades in IB
-        # try finding them in closed trades from the session
-
+    def handle_inactive_trades(self) -> OrderSyncStrategy:
+        """
+        Handle trades that are we have as active (in state machine),
+        but they haven't been matched to open trades in IB.  Try
+        finding them in closed trades from the session.
+        """
         ib_known_trades = {
             trade.order.orderId or trade.order.permId: trade
             for trade in self.ib.trades()
@@ -96,6 +111,22 @@ class OrderSyncStrategy:
 
         return self
 
+    def report(self) -> OrderSyncStrategy:
+        if any(self.lists):
+            log.debug(
+                f"Trades on sync -> "
+                f"unknown: {len(self.unknown)}, "
+                f"done: {len(self.done)}, "
+                f"unmatched: {len(self.errors)}"
+            )
+        else:
+            log.debug("Orders sync OK.")
+
+        for unknown_trade in self.unknown:
+            log.critical(f"Unknow trade in the system: {unknown_trade}.")
+
+        return self
+
 
 class PositionSyncStrategy:
     """
@@ -106,26 +137,26 @@ class PositionSyncStrategy:
         self.ib = ib
         self.sm = sm
         self.errors: dict[ibi.Contract, float] = {}
-        # self.report = {"errors": self.errors}
 
     @classmethod
     def run(cls, ib: ibi.IB, sm: StateMachine):
-        return cls(ib, sm).verify_positions()
+        return cls(ib, sm).verify_positions().report()
 
     def verify_positions(self) -> PositionSyncStrategy:
         """
-        Compare positions actually held with broker with position
-        records.  Return differences if any and log an error.
+        Compare positions actually held with position records in state
+        machine.  Return differences if any and log an error.
         """
 
         broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
-        log.debug(f"broker_positions: {broker_positions_dict}")
+        log.debug(
+            f"broker_positions: "
+            f"{ {k.symbol: v for k,v in broker_positions_dict.items()} }"
+        )
         my_positions_dict = self.sm.strategy.total_positions()
         log.debug(
             f"my positions: { {k.symbol: v for k, v in my_positions_dict.items()} }"
         )
-        # log.debug(f"Broker positions: {broker_positions_dict}")
-        # log.debug(f"My positions: {my_positions_dict}")
         diff = {
             i: (
                 (my_positions_dict.get(i) or 0.0)
@@ -138,6 +169,123 @@ class PositionSyncStrategy:
             log.error(f"errors: { {k.symbol: v for k, v in self.errors.items()} }")
 
         return self
+
+    def report(self) -> PositionSyncStrategy:
+        if self.errors:
+            log.critical(f"Failed to match positions to broker: {self.errors}")
+        else:
+            log.debug("Positions matched to broker OK.")
+        return self
+
+
+class ErrorHandlers:
+
+    def __init__(self, ib: ibi.IB, sm: StateMachine, ct: Controller) -> None:
+        self.ib = ib
+        self.sm = sm
+        self.ct = ct
+        self.faulty_trades: list[OrderInfo] = []
+
+    async def handle_orders(self, report: OrderSyncStrategy) -> None:
+
+        try:
+            for done_trade in report.done:
+                self.report_done_trade(done_trade)
+        except Exception as e:
+            log.exception(f"Error with done trade: {e}")
+
+        await asyncio.sleep(0)
+        try:
+            # don't know what to do with that yet:
+            self.clear_error_trades(report.errors)
+
+        except Exception as e:
+            log.exception(f"Error handling inactive trades: {e}")
+
+        await asyncio.sleep(0)
+
+    async def handle_positions(self, report: PositionSyncStrategy) -> None:
+        errors: dict[ibi.Contract, float] = report.errors
+        if not errors:
+            return
+
+        # too many externalities... refactor
+        log.error("Will attempt to fix position records")
+        for contract, diff in errors.items():
+            strategies = self.sm.for_contract.get(contract)
+            log.debug(f"{strategies=}")
+            if strategies and len(strategies) == 1:
+                self.sm.strategy[strategies[0]].position -= diff
+                log.error(
+                    f"Corrected position records for strategy "
+                    f"{strategies[0]} by {-diff}"
+                )
+                self.sm.save_models()
+
+            elif strategies and self.ct.ib_position_for_contract(contract) == 0:
+                for strategy in strategies:
+                    self.sm.strategy[strategy].position = 0
+                self.sm.save_models()
+                log.error(
+                    f"Position records zeroed for {strategies} "
+                    f"to reflect zero position for {contract.symbol}."
+                )
+            elif strategies:
+                strategy_faults = [
+                    order_info.strategy for order_info in self.faulty_trades
+                ]
+                for strategy in strategies:
+                    if strategy in strategy_faults:
+                        self.sm.strategy[strategy].position = 0
+                        log.error(
+                            f"Position records zeroed for {strategy} "
+                            f"to reflect faulty trade previously removed."
+                        )
+
+            else:
+                log.critical(
+                    f"More than 1 strategy for contract {contract.symbol}, "
+                    f"cannot fix position records."
+                )
+            self.faulty_trades.clear()
+
+    def clear_error_trades(self, trades: list[ibi.Trade]) -> None:
+        """
+        Trades that we have as active but IB doesn't know about them.
+        """
+        for trade in trades:
+            log.error(
+                f"Will delete record for trade that IB doesn't known about: "
+                f"{trade.order.orderId}"
+            )
+            self.faulty_trades.append(self.sm._orders[trade.order.orderId])
+            self.sm.delete_trade_record(trade)
+
+    def report_done_trade(self, trade: ibi.Trade) -> None:
+        """
+        IB events artificially emitted here will trigger saving trade
+        to blotter.
+        """
+        log.debug(
+            f"Back-reporting trade: {trade.contract.symbol} "
+            f"{trade.order.action} {misc.trade_fill_price(trade)} "
+            f"order id: {trade.order.orderId} {trade.order.permId} "
+            f"active?: {trade.isActive()}"
+        )
+        self.ib.orderStatusEvent.emit(trade)
+        for fill in trade.fills:
+            self.ib.execDetailsEvent.emit(trade, fill)
+        if trade.orderStatus.status == "Filled":
+            self.ib.commissionReportEvent.emit(
+                trade, trade.fills[-1], trade.fills[-1].commissionReport
+            )
+
+    def __repr__(self):
+        return "ErrorHandlers()"
+
+
+# -------------------------------------------
+# Everything below is not in use at the moment
 
 
 class StoplossesInPlacePlaceholder:

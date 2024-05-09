@@ -12,8 +12,8 @@ from .base import Atom
 from .blotter import Blotter
 from .config import CONFIG
 from .misc import Signal, sign
-from .startup_routines import OrderSyncStrategy, PositionSyncStrategy
-from .state_machine import OrderInfo, Strategy
+from .startup_routines import ErrorHandlers, OrderSyncStrategy, PositionSyncStrategy
+from .state_machine import Strategy
 
 # from .manager import IB, STATE_MACHINE
 from .trader import FakeTrader, Trader
@@ -35,7 +35,6 @@ class Controller(Atom):
     """
 
     blotter: Optional[Blotter]
-    faulty_trades: list[OrderInfo] = []
 
     def __init__(
         self,
@@ -60,7 +59,7 @@ class Controller(Atom):
             self._attach_logging_events()
 
         self.cold_start = CONFIG.get("coldstart")
-
+        self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         log.debug(f"Controller initiated: {self}")
 
     def _attach_logging_events(self):
@@ -74,8 +73,12 @@ class Controller(Atom):
         self.hold = True
         log.debug("hold set")
 
-    async def sync(self, *args, **kwargs) -> None:
-        log.debug("Sync...")
+    def release_hold(self) -> None:
+        if self.hold:
+            self.hold = False
+            log.debug("hold released")
+
+    async def run(self) -> None:
 
         self.set_hold()
 
@@ -89,164 +92,19 @@ class Controller(Atom):
             except Exception as e:
                 log.exception(e)
 
-        try:
-            report = OrderSyncStrategy.run(self.ib, self.sm)
-            log.debug(
-                f"Trades on re-start -> "
-                f"IB trades unknown to us: {len(report.unknown)}, "
-                f"Our active trades matched to IB done: {len(report.done)}, "
-                f"Trades on record unmatched to IB: {len(report.errors)}"
-            )
-        except Exception as e:
-            log.exception(e)
-            raise
+        await self.sync()
 
-        for unknown_trade in report.unknown:
-            log.critical(f"Unknow trade in the system: {unknown_trade}.")
+    async def sync(self) -> None:
 
-        # From here IB events will be handled...
-        self.hold = False
-        log.debug("hold released")
-        # ...so that matched trades can be sent to blotter
+        orders_report = OrderSyncStrategy.run(self.ib, self.sm)
+        # IB events will be handled so that matched trades can be sent to blotter
+        self.release_hold()
+        await self.sync_handlers.handle_orders(orders_report)
 
-        try:
-            for done_trade in report.done:
-                self.report_done_trade(done_trade)
-        except Exception as e:
-            log.exception(f"Error with done trade: {e}")
-
-        await asyncio.sleep(0)
-        try:
-            # don't know what to do with that yet:
-            self.clear_error_trades(report.errors)
-
-        except Exception as e:
-            log.exception(f"Error handling inactive trades: {e}")
-
-        await asyncio.sleep(0)
-        try:
-            if error_position_report := PositionSyncStrategy.run(
-                self.ib, self.sm
-            ).errors:
-                log.critical(f"Wrong positions on restart: {error_position_report}")
-                self.handle_error_positions(error_position_report)
-            else:
-                log.info("Positions matched to broker?: --> OK <--")
-        except Exception as e:
-            log.exception(f"Error handling wrong position on restart: {e}")
+        error_position_report = PositionSyncStrategy.run(self.ib, self.sm)
+        await self.sync_handlers.handle_positions(error_position_report)
 
         log.debug("Sync completed.")
-
-    def handle_error_positions(self, report: dict[ibi.Contract, float]) -> None:
-        # too many externalities... refactor
-        log.error("Will attempt to fix position records")
-        for contract, diff in report.items():
-            strategies = self.sm.for_contract.get(contract)
-            log.debug(f"{strategies=}")
-            if strategies and len(strategies) == 1:
-                self.sm.strategy[strategies[0]].position -= diff
-                log.error(
-                    f"Corrected position records for strategy "
-                    f"{strategies[0]} by {-diff}"
-                )
-                self.sm.save_models()
-                """
-                log.debug("Will attempt to identify missing order. UNTESTED.")
-                if (
-                    len(
-                        missing_trade := [
-                            t
-                            for t in self.ib.trades()
-                            if all(
-                                [
-                                    t.contract == contract,
-                                    t.orderStatus.status == "Filled",
-                                    t.order.filledQuantity == abs(diff),
-                                ]
-                            )
-                        ]
-                    )
-                    == 1
-                ):
-                    log.debug(
-                        f"Missing trade found: {missing_trade[0]}, "
-                        f"will try to save and report."
-                    )
-                    try:
-                        self.sm.register_order(
-                            strategies[0],
-                            "UNKNOWN",
-                            missing_trade[0],
-                            self.sm.strategy[strategies[0]],
-                        )
-                        self.report_done_trade(missing_trade[0])
-                    except Exception as e:
-                        log.exception(e)
-                elif missing_trade:
-                    # if more than one assume it's the latest one
-                    try:
-                        self.report_done_trade(
-                            sorted(missing_trade, key=lambda x: x.log[-1].time)[-1]
-                        )
-                    except Exception as e:
-                        log.exception(e)
-                """
-            elif strategies and self.ib_position_for_contract(contract) == 0:
-                for strategy in strategies:
-                    self.sm.strategy[strategy].position = 0
-                self.sm.save_models()
-                log.error(
-                    f"Position records zeroed for {strategies} "
-                    f"to reflect zero position for {contract.symbol}."
-                )
-            elif strategies:
-                strategy_faults = [
-                    order_info.strategy for order_info in self.faulty_trades
-                ]
-                for strategy in strategies:
-                    if strategy in strategy_faults:
-                        self.sm.strategy[strategy].position = 0
-                        log.error(
-                            f"Position records zeroed for {strategy} "
-                            f"to reflect faulty trade previously removed."
-                        )
-
-            else:
-                log.critical(
-                    f"More than 1 strategy for contract {contract.symbol}, "
-                    f"cannot fix position records."
-                )
-            self.faulty_trades.clear()
-
-    def clear_error_trades(self, trades: list[ibi.Trade]) -> None:
-        """
-        Trades that we have as active but IB doesn't know about them.
-        """
-        for trade in trades:
-            log.error(
-                f"Will delete record for trade that IB doesn't known about: "
-                f"{trade.order.orderId}"
-            )
-            self.faulty_trades.append(self.sm._orders[trade.order.orderId])
-            self.sm.delete_trade_record(trade)
-
-    def report_done_trade(self, trade: ibi.Trade):
-        """
-        Used during sync.
-        """
-        log.debug(
-            f"Back-reporting trade: {trade.contract.symbol} "
-            f"{trade.order.action} {misc.trade_fill_price(trade)} "
-            f"order id: {trade.order.orderId} {trade.order.permId} "
-            f"active?: {trade.isActive()}"
-        )
-        self.ib.orderStatusEvent.emit(trade)
-        for fill in trade.fills:
-            self.ib.execDetailsEvent.emit(trade, fill)
-        if trade.orderStatus.status == "Filled":
-            self.ib.commissionReportEvent.emit(
-                trade, trade.fills[-1], trade.fills[-1].commissionReport
-            )
 
     async def onData(self, data, *args) -> None:
         """
@@ -401,7 +259,7 @@ class Controller(Atom):
         try:
             order_info = self.sm.order.get(trade.order.orderId)
             if order_info:
-                strategy_str = order_info.strategy
+                strategy_str: str = order_info.strategy
                 strategy: Strategy = self.sm.strategy.get(strategy_str)
         except Exception as e:
             log.exception(e)
@@ -561,14 +419,13 @@ class Controller(Atom):
             (v.position for v in self.ib.positions() if v.contract == contract), 0
         )
 
-        # positions = {p.contract: p.position for p in self.ib.positions()}
-        # return positions.get(contract, 0.0)
-
     def nuke(self):
         """
         Cancel all open orders, close existing positions and prevent
         any further trading.  Response to a critical error or request
-        sent by administrator. Currently not in use.
+        sent by administrator.
+
+        ---> Currently not in use. <---
         """
         for order in self.ib.openOrders():
             self.ib.cancelOrder(order)
