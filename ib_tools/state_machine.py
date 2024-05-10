@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import UserDict, defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from functools import partial
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, TypeVar, Union
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -54,12 +55,20 @@ class OrderInfo:
         return cls(**data)
 
 
+T = TypeVar("T")
+
+
 class OrderContainer(UserDict):
+    """
+    Stores `OrderInfo` objects and allows to look them up by `orderId`
+    or `permId`.
+    """
+
     def __init__(
         self, dict=None, /, max_size: int = CONFIG["order_container_max_size"]
     ) -> None:
         self.max_size = max_size
-        self.index: dict[int, int] = {}
+        self.index: dict[int, int] = {}  # translation of permId to orderId
         self.setitemEvent = ev.Event("setitemEvent")
         self.setitemEvent += self.onSetitemEvent
         super().__init__(dict)
@@ -70,7 +79,7 @@ class OrderContainer(UserDict):
         self.setitemEvent.emit(key, item)
         super().__setitem__(key, item)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: int) -> OrderInfo:
         if key in self.data:
             return self.data[key]
         elif key in self.index:
@@ -80,7 +89,7 @@ class OrderContainer(UserDict):
             return self.__class__.__missing__(self, key)
         raise KeyError(key)
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: int) -> None:
         if self.index.get(self.data[key].permId):
             del self.index[self.data[key].permId]
         super().__delitem__(key)
@@ -95,14 +104,14 @@ class OrderContainer(UserDict):
         # returns only active orders
         return (oi for oi in self.values() if (oi.strategy == strategy and oi.active))
 
-    def get(self, key, default=None, active_only=False):
+    def get(
+        self, key: int, default: Optional[T] = None, active_only: bool = False
+    ) -> Union[OrderInfo, T, None]:
         """Get records for an order."""
         try:
             value = self[key]
         except KeyError:
             return default
-        # value = self.data.get(key, None)
-        # if value:
         if (not active_only) or value.active:
             return value
         return default
@@ -132,19 +141,30 @@ class OrderContainer(UserDict):
             ms = f", max_size={self.max_size}"
         else:
             ms = ""
-        return f"OrderContainer({self.data}{ms})"
+        return f"OrderContainer({self.data}, {ms})"
 
 
 class Strategy(UserDict):
+    defaults: dict[str, Any] = {
+        "active_contract": None,
+        "position": 0.0,
+        "params": {},
+        "lock": 0,
+        "position_id": "",
+    }
+
     def __init__(
         self,
         dict=None,
-        strategyChangeEvent=ev.Event("strategyChangeEvent"),
-        /,
-        **kwargs,
+        strategyChangeEvent=None,
     ) -> None:
+        # don't change instruction order
+        if strategyChangeEvent is None:
+            raise ValueError("Strategy must be initiated with `strategyChangeEvent")
         self.strategyChangeEvent = strategyChangeEvent
-        super().__init__(dict, **kwargs)
+        self.data = {**deepcopy(self.defaults)}
+        if dict is not None:
+            self.update(dict)
 
     def __getitem__(self, key):
         return self.data.get(key, "UNSET")
@@ -167,6 +187,11 @@ class Strategy(UserDict):
         else:
             self.__setitem__(key, item)
 
+    def __getattribute__(self, attr):
+        if attr == "data":
+            return self.__dict__.get("data", {})
+        return super().__getattribute__(attr)
+
     __getattr__ = __getitem__
     __delattr__ = __delitem__
 
@@ -182,28 +207,21 @@ class StrategyContainer(UserDict):
         super().__init__(dict)
 
     def __setitem__(self, key: str, item: dict):
-        if not isinstance(item, Strategy):
-            print(f"wrong value: {item}")
+        if not isinstance(item, (Strategy, dict)):
             raise ValueError(
-                f"{self.__class__.__qualname__} can only be used to store `Strategy`s."
+                f"{self.__class__.__qualname__} takes only `Strategy` or `dict`."
             )
-        # this seems idiotic
-        # commented out for now to make sure I'm not missing anything
-        # elif key is None:
-        #    key = "unknown"
-        self.data[key] = Strategy(item)
+        if isinstance(item, dict):
+            self.data[key] = Strategy(item, self._strategyChangeEvent)
+        elif isinstance(item, Strategy):
+            item.strategyChangeEvent = self._strategyChangeEvent
+            self.data[key] = item
+        self.data[key].strategy = key
 
     def __missing__(self, key):
-        log.debug(f"Will reset data for {key}")
+        log.debug(f"Creating strategy: {key}")
         self.data[key] = Strategy(
-            {
-                "strategy": str(key),
-                "active_contract": None,
-                "position": 0.0,
-                "params": {},
-                "lock": 0,
-                "position_id": "",
-            },
+            {"strategy": key},
             self._strategyChangeEvent,
         )
         return self.data[key]

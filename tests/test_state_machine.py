@@ -1,7 +1,7 @@
 import asyncio
-import itertools
+from typing import Any
 
-import eventkit as ev
+import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
 
@@ -12,6 +12,16 @@ from ib_tools.state_machine import (
     Strategy,
     StrategyContainer,
 )
+
+strategy_defaults: dict[str, Any] = {
+    "active_contract": None,
+    "position": 0.0,
+    "params": {},
+    "lock": 0,
+    "position_id": "",
+}
+
+ce = ev.Event("strategyChangeEvent")
 
 
 def test_StateMachine_is_singleton(state_machine):
@@ -265,81 +275,104 @@ async def test_OrderContainer_get_recalls_permId():
     assert orders.get(100) == orders[1]
 
 
+def test_Strategy_default_dict_not_shared_among_instances():
+    cont = StrategyContainer()
+    x, y = cont["x"], cont["y"]
+    x.params.update({"a": 1, "b": 2})
+    assert "a" not in y.params
+
+
 def test_Strategy_dot_getitem():
-    m = Strategy({"x": 1, "y": 2, "z": 3})
+    m = Strategy({"x": 1, "y": 2, "z": 3}, ce)
     assert m.x == 1
 
 
 def test_Strategy_dot_setitem():
-    m = Strategy({"x": 1, "y": 2, "z": 3})
+    m = Strategy({"x": 1, "y": 2, "z": 3}, ce)
     m.a = 5
-    assert m == {"x": 1, "y": 2, "z": 3, "a": 5}
+    assert m["a"] == 5
 
 
 def test_Strategy_dot_get():
-    m = Strategy({"x": 1, "y": 2, "z": 3})
+    m = Strategy({"x": 1, "y": 2, "z": 3}, ce)
     m.a = 5
     assert m.get("a") == 5
 
 
 def test_Strategy_dot_delete():
-    m = Strategy({"x": 1, "y": 2, "z": 3})
+    m = Strategy({"x": 1, "y": 2, "z": 3}, ce)
     del m.y
-    assert m == {"x": 1, "z": 3}
+    assert m.data == {"x": 1, "z": 3, **strategy_defaults}
 
 
 def test_Strategy_update():
-    m = Strategy({"x": 1, "y": 2, "z": 3})
+    m = Strategy({"x": 1, "y": 2, "z": 3}, ce)
     m.update({"a": 5, "b": 9, "c": 0})
-    assert m == {"x": 1, "y": 2, "z": 3, "a": 5, "b": 9, "c": 0}
+    assert m == {"x": 1, "y": 2, "z": 3, "a": 5, "b": 9, "c": 0, **strategy_defaults}
 
 
 def test_Strategy_contains():
-    m = Strategy({"x": 1, "y": 2, "z": 3})
+    m = Strategy({"x": 1, "y": 2, "z": 3}, ce)
     m.a = 8
     assert "a" in m
 
 
 def test_StrategyContainer_contains_only_Strategies():
-    """Saving regular dict to StrategyContainer should raise a ValueError"""
-    with pytest.raises(ValueError):
-        StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+    """Saving regular dict must create a strategy"""
+    cont = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+    assert isinstance(cont["b"], Strategy)
+    assert cont["a"].x == 1
 
 
 def test_StrategyContainer_add_key():
     m = StrategyContainer(
-        {"a": Strategy({"x": 1, "y": 2}), "b": Strategy({"x": 4, "y": 9})}
+        {
+            "a": Strategy({"x": 1, "y": 2}, ce),
+            "b": Strategy({"x": 4, "y": 9}, ce),
+        }
     )
-    m["c"] = Strategy({"x": 2, "c": 3})
+    m["c"] = Strategy({"x": 2, "c": 3}, ce)
     assert isinstance(m["c"], Strategy)
+
+
+def test_StrategyContainer_add_key_with_dict():
+    m = StrategyContainer(
+        {
+            "a": Strategy({"x": 1, "y": 2}, ce),
+            "b": Strategy({"x": 4, "y": 9}, ce),
+        }
+    )
+    m["c"] = {"x": 2, "c": 3}
+    assert isinstance(m["c"], Strategy)
+
+
+def test_StrategyContainer_inserts_strategy_name():
+    cont = StrategyContainer()
+    cont["x"] = Strategy(strategyChangeEvent=ce)
+    assert cont["x"].strategy == "x"
 
 
 def test_StrategyContainer_missing():
     m = StrategyContainer(
-        {"a": Strategy({"x": 1, "y": 2}), "b": Strategy({"x": 4, "y": 9})}
+        {
+            "a": Strategy({"x": 1, "y": 2}, ce),
+            "b": Strategy({"x": 4, "y": 9}, ce),
+        }
     )
     assert isinstance(m["not_set"], Strategy)
 
 
 def test_StrategyContaner_new_strategy():
     m = StrategyContainer(
-        {"a": Strategy({"x": 1, "y": 2}), "b": Strategy({"x": 4, "y": 9})}
+        {
+            "a": Strategy({"x": 1, "y": 2}, ce),
+            "b": Strategy({"x": 4, "y": 9}, ce),
+        }
     )
     data = m["c"]
     data["x"] = 5
-    assert m.data == {
-        "a": {"x": 1, "y": 2},
-        "b": {"x": 4, "y": 9},
-        "c": {
-            "x": 5,
-            "active_contract": None,
-            "position": 0.0,
-            "params": {},
-            "lock": 0,
-            "position_id": "",
-            "strategy": "c",
-        },
-    }
+
+    assert m["c"] == Strategy({"x": 5, "strategy": "c", **strategy_defaults}, ce)
 
 
 def test_access_order_with_square_brackets(state_machine):
@@ -349,7 +382,7 @@ def test_access_order_with_square_brackets(state_machine):
 
 
 def test_access_strategy_with_square_brackets(state_machine):
-    st = Strategy({"a": {"x": 1, "y": 2}})
+    st = Strategy({"a": {"x": 1, "y": 2}}, ce)
     state_machine.strategy["xyz"] = st
     assert state_machine.strategy["xyz"] == st
 
@@ -362,7 +395,7 @@ def test_access_order_with_get(state_machine):
 
 
 def test_access_strategy_with_get(state_machine):
-    st = Strategy({"a": {"x": 1, "y": 2}})
+    st = Strategy({"a": {"x": 1, "y": 2}}, ce)
     state_machine.strategy["xyz"] = st
     assert state_machine.strategy.get("xyz") == st
     # get with unknown key creates new entry,
@@ -413,7 +446,7 @@ async def test_StrategyContainer_gets_events_on_Strategy_change():
             self.count += 1
 
     c = Counter()
-    cont = StrategyContainer(None, save_delay=0.0011)
+    cont = StrategyContainer(None, save_delay=0.001)
 
     cont.strategyChangeEvent += c
     print(cont.strategyChangeEvent)
@@ -423,3 +456,21 @@ async def test_StrategyContainer_gets_events_on_Strategy_change():
     # there were 7 events emitted (6 items added to strategy dict and 1 change)
     # they were all debounced into one event
     assert c.count == 1
+
+
+def test_strategy_has_position_attribute():
+    """Tripple checking because mypy doesn't seem to notice."""
+    cont = StrategyContainer(None, save_delay=0.000001)
+    strat = cont["new_strategy"]  # noqa
+    s = cont["new_strategy"]
+    assert isinstance(s.position, float)
+
+
+def test_empty_strategy_contains_defaults():
+    strat = Strategy({"a": 1, "b": 2}, ce)
+    assert strat.position == 0
+
+
+def test_strategy_cannot_be_created_without_change_event():
+    with pytest.raises(ValueError):
+        Strategy({"a": 1, "b": 2})

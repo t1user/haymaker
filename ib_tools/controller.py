@@ -208,6 +208,8 @@ class Controller(Atom):
         #     f"{trade.orderStatus.status}"
         # )
         await self.sm.save_order_status(trade)
+
+        # Below is logging only
         if trade.order.orderId < 0:
             log.warning(
                 f"Manual trade: {trade.order} status update: {trade.orderStatus}"
