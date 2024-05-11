@@ -5,6 +5,7 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
+import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from . import misc
@@ -55,6 +56,10 @@ class Controller(Atom):
             self.ib.commissionReportEvent += self.onCommissionReport
         else:
             self.blotter = None
+
+        if sync_frequency := CONFIG.get("sync_frequency"):
+            sync_timer = ev.Event.timerange(0, None, sync_frequency)
+            sync_timer += self.sync
 
         if CONFIG.get("log_IB_events"):
             self._attach_logging_events()
