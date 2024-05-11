@@ -389,13 +389,17 @@ class Controller(Atom):
 
         return strategy
 
-    @staticmethod
-    def log_new_order(trade: ibi.Trade) -> None:
-        log.debug(f"New order {trade.order} for {trade.contract.localSymbol}")
+    def handle_rejected_order(self, trade: ibi.Trade) -> None:
+        oi = self.sm.order.get(trade.order.orderId)
+        if oi:
+            log.error(
+                f"Rejected order {trade.order.orderId} {trade.order.action} "
+                f"{oi.action} for {oi.strategy}"
+            )
+        else:
+            log.error(f"No records for rejected order: {trade.order.orderId}")
 
-    @staticmethod
-    def log_order_status(trade):
-        # Below is logging only [maybe store suspected errors?]
+    def log_order_status(self, trade: ibi.Trade) -> None:
         if trade.order.orderId < 0:
             log.warning(
                 f"Manual trade: {trade.order} status update: {trade.orderStatus}"
@@ -403,6 +407,8 @@ class Controller(Atom):
         elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
             messages = ";".join([m.message for m in trade.log])
             log.error(f"Rejected order: {trade.order}, messages: {messages}")
+            self.handle_rejected_order(trade)
+
         elif trade.isDone():
             log.debug(
                 f"{trade.contract.symbol}: order {trade.order.orderId} "
@@ -413,6 +419,10 @@ class Controller(Atom):
                 f"{trade.contract.symbol}: OrderStatus ->{trade.orderStatus.status}<-"
                 f" for order: {trade.order},"
             )
+
+    @staticmethod
+    def log_new_order(trade: ibi.Trade) -> None:
+        log.debug(f"New order {trade.order} for {trade.contract.localSymbol}")
 
     @staticmethod
     def log_trade(trade: ibi.Trade, reason: str = "", strategy: str = "") -> None:
