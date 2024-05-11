@@ -5,7 +5,6 @@ from itertools import count
 import ib_insync as ibi
 import pytest
 
-from ib_tools.controller import Controller
 from ib_tools.manager import IB
 
 
@@ -28,7 +27,7 @@ def trades_and_positions():
 
 
 @pytest.fixture()
-def controller():
+def controller(Controller):
     return Controller()
 
 

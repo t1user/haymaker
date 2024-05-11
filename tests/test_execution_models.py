@@ -6,7 +6,6 @@ import ib_insync as ibi
 import pytest
 
 from ib_tools.bracket_legs import FixedStop, TakeProfitAsStopMultiple, TrailingStop
-from ib_tools.controller import Controller
 from ib_tools.execution_models import (
     AbstractExecModel,
     BaseExecModel,
@@ -95,7 +94,7 @@ def test_oca_group_is_not_position_id():
 
 
 @pytest.fixture
-def objects(atom):
+def objects(atom, Controller):
     class FakeController(Controller):
         contract = None
         order = None
@@ -304,7 +303,7 @@ def test_BaseExecModel_close_signal_generates_order(objects):
 #     assert em.position == -1
 
 
-def test_passed_order_kwargs_update_defaults(atom):
+def test_passed_order_kwargs_update_defaults(atom, Controller):
     class FakeController(Controller):
         contract = None
         order = None
