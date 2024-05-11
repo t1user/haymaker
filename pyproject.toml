@@ -70,6 +70,5 @@ mypy_path = "$MYPY_CONFIG_FILE_DIR/stubs"
 module = "backtester"
 ignore_errors = true
 
-
 [tool.pytest.ini_options]
 addopts = ["-p", "no:warnings"]

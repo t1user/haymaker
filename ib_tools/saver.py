@@ -7,7 +7,7 @@ import pickle
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Collection, Optional
+from typing import Any, Callable, Collection, Optional, Union
 
 import eventkit as ev  # type: ignore
 import pandas as pd
@@ -18,6 +18,23 @@ from ib_tools.config import CONFIG
 from ib_tools.misc import default_path
 
 log = logging.getLogger(__name__)
+
+
+class AbstractBaseSaveManager(ABC):
+    def __init__(self, saver: AbstractBaseSaver, name="", timestamp: bool = True):
+        self.saver = saver
+
+    def __get__(self, obj, objtype=None) -> Callable:
+        return self.save
+
+    @abstractmethod
+    def save(self, data: Any, *args: str): ...
+
+    def __call__(self, data: Any, *args: str):
+        return self.save(data, *args)
+
+    def __repr__(self):
+        return f"{self.__class__.__qualname__}({self.saver})"
 
 
 async def async_runner(func: Callable, *args):
@@ -39,7 +56,7 @@ def error_reporting_function(event, exception: Exception) -> None:
     log.error(f"Event error: {event.name()}: {exception}", exc_info=True)
 
 
-class SaveManager:
+class AsyncSaveManager(AbstractBaseSaveManager):
     """
     Abstract away the process of perfoming save operations.  Use
     :class:`eventkit.Event` to put :func:`.saving_function` into
@@ -70,19 +87,18 @@ class SaveManager:
     saveEvent = ev.Event("saveEvent")
     saveEvent.connect(saving_function, error=error_reporting_function)
 
-    def __init__(self, saver: AbstractBaseSaver, name="", timestamp: bool = True):
-        self.saver = saver
-
-    def __get__(self, obj, objtype=None) -> Callable:
-        return self.save
-
     def save(self, data: Any, *args: str):
         self.saveEvent.emit(data, self.saver, *args)
 
-    __call__ = save
 
-    def __repr__(self):
-        return f"SaveManager({self.saver})"
+class SyncSaveManager(AbstractBaseSaveManager):
+    """
+    Saves immediately in the current thread without intermediation of
+    asyncio loop.
+    """
+
+    def save(self, data: Any, *args: str):
+        self.saver.save(data, *args)
 
 
 class AbstractBaseSaver(ABC):
@@ -275,3 +291,69 @@ class MongoSaver(AbstractBaseSaver):
 
     def __repr__(self) -> str:
         return f"MongoSaver(db={self.db}, collection={self.collection})"
+
+
+class FakeMongoSaver(AbstractBaseSaver):
+    """
+    It's a mock saver for testing that doesn't save to external media.
+
+    :attr:`.store` has all the data that would have been saved.
+    """
+
+    store: dict[str, Union[dict, list[dict]]] = {}
+
+    def __init__(
+        self, collection: str, query_key: Optional[str] = None, timestamp: bool = False
+    ) -> None:
+        host = CONFIG["MongoSaver"]["host"]
+        port = CONFIG["MongoSaver"]["port"]
+        db = CONFIG["MongoSaver"]["db"]
+        self.client = f"MongoClient({host}, {port})"
+        self.db = f"{self.client}[{db}]"
+        self.collection = collection
+        self.query_key = query_key
+
+        if self.query_key:
+            self.store[self.collection] = {}
+        else:
+            self.store[self.collection] = []
+
+        super().__init__("", timestamp)
+
+    def save(self, data: dict[str, Any], *args: str) -> None:
+        try:
+            if self.query_key:
+                key = data.get(self.query_key)
+                self.store[self.collection][key] = data  # type: ignore
+            elif not all(data.keys()):
+                log.error(f"Attempt to save with wrong keys: {list(data.keys())}")
+            else:
+                self.store[self.collection].append(data)  # type: ignore
+        except Exception:
+            log.exception(Exception)
+            log.debug(f"Data that caused error: {data}")
+            raise
+
+    def save_many(self, data: list[dict[str, Any]]):
+        for d in data:
+            if self.query_key:
+                self.store[self.collection][d.get(self.query_key)]  # type: ignore
+            else:
+                self.store[self.collection].append(d)  # type: ignore
+
+    def read(self, query: Optional[dict] = None) -> list:
+        s = self.store[self.collection]
+        if query:
+            try:
+                return [s.get(query)]  # type: ignore
+            except AttributeError:
+                return s  # type: ignore
+        else:
+            return s  # type: ignore
+
+    def read_latest(self):
+        s = self.store[self.collection]
+        try:
+            return s[s.keys()[-1]]
+        except AttributeError:
+            return s[-1]

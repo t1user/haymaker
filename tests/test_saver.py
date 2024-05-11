@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ib_tools.saver import AbstractBaseSaver, SaveManager
+from ib_tools.saver import AbstractBaseSaver, AsyncSaveManager
 
 
 def test_AbstractBaseSaver_is_abstract():
@@ -50,7 +50,7 @@ async def test_saver():
             self.__class__.output.append(data)
 
     class T:
-        save = SaveManager(FakeSaver("irrelevant", False))
+        save = AsyncSaveManager(FakeSaver("irrelevant", False))
 
     t = T()
     t1 = T()
@@ -72,8 +72,8 @@ async def test_class_with_two_savers():
     class T:
         # it's not the same saver object, only the same type
         # potentially saving to two different files or collections
-        save_one = SaveManager(FakeSaver("irrelevant", False))
-        save_two = SaveManager(FakeSaver("other_irrelevant", False))
+        save_one = AsyncSaveManager(FakeSaver("irrelevant", False))
+        save_two = AsyncSaveManager(FakeSaver("other_irrelevant", False))
 
     t = T()
 
@@ -93,7 +93,7 @@ async def test_SaveManager_as_non_descriptor():
 
     class T:
         def __init__(self, saver):
-            self.save = SaveManager(saver)
+            self.save = AsyncSaveManager(saver)
 
     t = T(FakeSaver("irrelevant", False))
 

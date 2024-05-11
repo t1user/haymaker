@@ -8,7 +8,7 @@ import ib_insync as ibi
 
 from ib_tools import misc
 from ib_tools.config import CONFIG
-from ib_tools.saver import CsvSaver, MongoSaver, SaveManager  # noqa
+from ib_tools.saver import AsyncSaveManager, CsvSaver, MongoSaver  # noqa
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class Blotter:
       on i/o)
     """
 
-    save = SaveManager(BLOTTER_SAVER)
+    save = AsyncSaveManager(BLOTTER_SAVER)
 
     def __init__(self, save_immediately: bool = True, *args, **kwargs) -> None:
         self.save_immediately = save_immediately  # False for backtester, True otherwise

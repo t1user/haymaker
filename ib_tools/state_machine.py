@@ -11,7 +11,7 @@ from typing import Any, Iterator, Optional, TypeVar, Union
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
-from ib_tools.saver import MongoSaver, SaveManager, async_runner
+from ib_tools.saver import AsyncSaveManager, MongoSaver, async_runner
 
 from .config import CONFIG
 from .misc import Lock, decode_tree, tree
@@ -53,6 +53,14 @@ class OrderInfo:
     def from_dict(cls, data: dict[str, Any]) -> OrderInfo:
         data.pop("active")
         return cls(**data)
+
+    @classmethod
+    def from_trade(cls, trade: ibi.Trade) -> OrderInfo:
+        return cls(
+            strategy="UNKNOWN",
+            action="MANUAL" if trade.order.orderId < 0 else "UNKNOWN",
+            trade=trade,
+        )
 
 
 T = TypeVar("T")
@@ -300,8 +308,8 @@ class StateMachine:
 
     _instance: Optional["StateMachine"] = None
 
-    _save_order = SaveManager(order_saver)
-    _save_model = SaveManager(model_saver)
+    _save_order = AsyncSaveManager(order_saver)
+    _save_model = AsyncSaveManager(model_saver)
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -319,17 +327,19 @@ class StateMachine:
         # (but not more often than defined in CONFIG['state_machine']['save_delay'])
         self._data.strategyChangeEvent += self.save_models
 
-    def save_models(self, *args):
+    def save_models(self, *args) -> None:
         self._save_model(self._data.encode())
 
-    def save_order(self, oi: OrderInfo) -> None:
+    def save_order(self, oi: OrderInfo) -> OrderInfo:
         self._orders[oi.trade.order.orderId] = oi
         self._save_order(oi.encode())
+        log.debug("SAVING ORDER SUCCESSFUL")
+        return oi
 
     def update_trade(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         """
         Update trade object for a given order.  Used after re-start to
-        bring records up to date with IB
+        bring records up to date with IB.
         """
         oi = self._orders.get(trade.order.orderId)
         if oi:
@@ -372,7 +382,7 @@ class StateMachine:
 
     def register_order(
         self, strategy: str, action: str, trade: ibi.Trade, data: Strategy
-    ) -> None:
+    ) -> OrderInfo:
         """
         Register order, register lock, verify that position has been registered.
 
@@ -386,7 +396,7 @@ class StateMachine:
         """
         params = data["params"].get(action.lower(), {})
         order_info = OrderInfo(strategy, action, trade, params)
-        self.save_order(order_info)
+        oi = self.save_order(order_info)
 
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} "
@@ -398,21 +408,16 @@ class StateMachine:
             trade.filledEvent += partial(self.register_lock, strategy)
         elif action.upper() == "CLOSE":
             trade.filledEvent += partial(self.remove_lock, strategy)
+        return oi
 
-    async def save_order_status(self, trade: ibi.Trade) -> Optional[OrderInfo]:
+    async def save_order_status(self, trade: ibi.Trade) -> OrderInfo:
         log.debug(f"updating trade status: {trade.order.orderId} {trade.order.permId}")
         # if orderId zero it means trade objects has to be replaced
         order_info = self._orders.get(trade.order.orderId)
         if not order_info:
-            order_info = OrderInfo(
-                strategy="unknown",
-                action="MANUAL" if trade.order.orderId < 0 else "UNKNOWN",
-                trade=trade,
-            )
-
+            order_info = OrderInfo.from_trade(trade)
         try:
             self.save_order(order_info)
-            log.debug("SAVING ORDER SUCCESSFUL")
         except Exception as e:
             log.exception(e)
         return order_info
@@ -420,7 +425,7 @@ class StateMachine:
     # ### These are data access and modification methods ###
 
     @property
-    def strategy(self):
+    def strategy(self) -> StrategyContainer:
         """
         Access strategies by ``state_machine.strategy['strategy_name']``
         or ``state_machine.strategy.get('strategy_name')``
@@ -428,7 +433,7 @@ class StateMachine:
         return self._data
 
     @property
-    def order(self):
+    def order(self) -> OrderContainer:
         """
         Access order by ``state_machine.order[orderId]``
         or ``state_machine.order.get(orderId)``
@@ -452,6 +457,14 @@ class StateMachine:
         """
         return self._data.strategies_by_contract()
 
+    def strategy_for_order(self, orderId: int) -> Optional[Strategy]:
+        if oi := self.order.get(orderId):
+            return self.strategy.get(oi.strategy)
+        return None
+
+    def strategy_for_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
+        return self.strategy_for_order(trade.order.orderId)
+
     def orders_for_strategy(self, strategy: str) -> Iterator[OrderInfo]:
         return self._orders.strategy(strategy)
 
@@ -460,6 +473,12 @@ class StateMachine:
 
     def locked(self, strategy: str) -> Lock:
         return self._data[strategy].lock
+
+    def update_strategy_on_order(self, orderId: int, strategy: str) -> OrderInfo:
+        oi = self.order.get(orderId)
+        assert oi
+        oi.strategy = strategy
+        return self.save_order(oi)
 
     # ### TODO: Re-do this
     # DOES THIS BELONG IN THIS CLASS?

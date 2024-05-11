@@ -2,7 +2,11 @@ import ib_insync as ibi
 import pytest
 
 from ib_tools.base import Atom
+from ib_tools.saver import FakeMongoSaver, SyncSaveManager
 from ib_tools.state_machine import StateMachine
+
+model_saver = FakeMongoSaver("models")
+order_saver = FakeMongoSaver("orders", query_key="orderId")
 
 
 @pytest.fixture
@@ -13,7 +17,10 @@ def state_machine():
     # will not work
     if StateMachine._instance:
         StateMachine._instance = None
-    return StateMachine()
+    sm = StateMachine()
+    sm._save_order = SyncSaveManager(order_saver)
+    sm._save_model = SyncSaveManager(model_saver)
+    return sm
 
 
 @pytest.fixture()

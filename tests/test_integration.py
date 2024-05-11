@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 import ib_insync as ibi
@@ -141,7 +142,16 @@ def test_buy_position_registered(new_setup):
         "action": "OPEN",
         "amount": 1,
         "target_position": 1,
-        "contract": ibi.Future("NQ", "CME"),
+        "contract": ibi.Future(
+            conId=551601561,
+            symbol="ES",
+            lastTradeDateOrContractMonth="20240621",
+            multiplier="50",
+            exchange="CME",
+            currency="USD",
+            localSymbol="ESM4",
+            tradingClass="ES",
+        ),
     }
     source.dataEvent.emit(data)
     trade_object = controller.trade_object
@@ -169,7 +179,16 @@ def test_sell_position_registered(new_setup):
         "action": "OPEN",
         "amount": 1,
         "target_position": -1,
-        "contract": ibi.Future("NQ", "CME"),
+        "contract": ibi.Future(
+            conId=551601561,
+            symbol="ES",
+            lastTradeDateOrContractMonth="20240621",
+            multiplier="50",
+            exchange="CME",
+            currency="USD",
+            localSymbol="ESM4",
+            tradingClass="ES",
+        ),
     }
     source.dataEvent.emit(data)
     trade_object = controller.trade_object
@@ -187,3 +206,43 @@ def test_sell_position_registered(new_setup):
     )
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
     assert em.data.position == -1
+
+
+@pytest.mark.asyncio
+async def test_manual_order_created(atom):
+    class A(atom):
+        pass
+
+    a = A()
+    contract = ibi.Future(
+        conId=551601561,
+        symbol="ES",
+        lastTradeDateOrContractMonth="20240621",
+        multiplier="50",
+        exchange="CME",
+        currency="USD",
+        localSymbol="ESM4",
+        tradingClass="ES",
+    )
+    trade_object = ibi.Trade(
+        contract=contract, order=ibi.Order(action="BUY", totalQuantity=1, orderId=-1)
+    )
+    trade_object.fills.append(
+        ibi.Fill(
+            contract=trade_object.contract,
+            execution=ibi.Execution(
+                execId="0000e1a7.656447c6.01.01",
+                shares=trade_object.order.totalQuantity,
+                side="SLD" if trade_object.order.action == "SELL" else "BOT",
+            ),
+            commissionReport=ibi.CommissionReport(commission=1.0, realizedPNL=0.0),
+            time=datetime.now(timezone.utc),
+        )
+    )
+    controller = Controller()
+    controller.release_hold()
+    controller.ib.orderStatusEvent.emit(trade_object)
+    await asyncio.sleep(0)
+    controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
+    assert a.sm._data.total_positions()[trade_object.contract] == 1
+    assert "manual_strategy_ES" in a.sm._data
