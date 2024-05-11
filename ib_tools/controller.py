@@ -34,6 +34,7 @@ class Controller(Atom):
     """
 
     blotter: Optional[Blotter]
+    config = CONFIG.get("controller") or {}
 
     def __init__(
         self,
@@ -51,20 +52,20 @@ class Controller(Atom):
 
         self.set_hold()
 
-        if CONFIG.get("use_blotter"):
+        if self.config.get("use_blotter"):
             self.blotter = Blotter()
             self.ib.commissionReportEvent += self.onCommissionReport
         else:
             self.blotter = None
 
-        if sync_frequency := CONFIG.get("sync_frequency"):
+        if sync_frequency := self.config.get("sync_frequency"):
             sync_timer = ev.Event.timerange(0, None, sync_frequency)
             sync_timer += self.sync
 
-        if CONFIG.get("log_IB_events"):
+        if self.config.get("log_IB_events"):
             self._attach_logging_events()
 
-        self.cold_start = CONFIG.get("coldstart")
+        self.cold_start = self.config.get("coldstart")
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         log.debug(f"Controller initiated: {self}")
 

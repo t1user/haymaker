@@ -2,6 +2,7 @@ import ib_insync as ibi
 import pytest
 
 from ib_tools.base import Atom
+from ib_tools.controller import Controller as C
 from ib_tools.saver import FakeMongoSaver, SyncSaveManager
 from ib_tools.state_machine import StateMachine
 
@@ -89,3 +90,11 @@ def atom(state_machine, details):
     Atom.set_init_data(ibi.IB(), sm)
     Atom.contract_details[details.contract] = details
     return Atom
+
+
+@pytest.fixture()
+def Controller():
+    class TestController(C):
+        config = {}
+
+    return TestController

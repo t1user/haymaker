@@ -13,10 +13,12 @@ import ib_insync as ibi
 
 from ib_tools.saver import AsyncSaveManager, MongoSaver, async_runner
 
-from .config import CONFIG
+from .config import CONFIG as config
 from .misc import Lock, decode_tree, tree
 
 log = logging.getLogger(__name__)
+
+CONFIG = config.get("state_machine") or {}
 
 
 @dataclass
@@ -208,7 +210,7 @@ class StrategyContainer(UserDict):
 
     def __init__(self, dict=None, /, **kwargs) -> None:
         # set a short `save_delay` in tests so that they don't get held up
-        save_delay = kwargs.get("save_delay", CONFIG["state_machine"]["save_delay"])
+        save_delay = kwargs.get("save_delay", CONFIG["save_delay"])
         self._strategyChangeEvent = ev.Event("strategyChangeEvent")
         self.strategyChangeEvent = self._strategyChangeEvent.debounce(save_delay, False)
         self._strategyChangeEvent += self.strategyChangeEvent

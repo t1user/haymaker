@@ -13,7 +13,7 @@ from ib_tools.saver import AsyncSaveManager, CsvSaver, MongoSaver  # noqa
 log = logging.getLogger(__name__)
 
 
-blotter_dict = cast(dict, CONFIG.get("blotter_saver"))
+blotter_dict = cast(dict, CONFIG.get("blotter"))
 blotter_class = blotter_dict["class"]
 blotter_kwargs = blotter_dict["kwds"]
 BLOTTER_SAVER = eval(f"{blotter_class}(**{blotter_kwargs})")

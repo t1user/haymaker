@@ -14,10 +14,13 @@ import pandas as pd
 from arctic import Arctic
 from pymongo import MongoClient  # type: ignore
 
-from ib_tools.config import CONFIG
+from ib_tools.config import CONFIG as config
 from ib_tools.misc import default_path
 
 log = logging.getLogger(__name__)
+
+
+CONFIG = config.get("saver") or {}
 
 
 class AbstractBaseSaveManager(ABC):

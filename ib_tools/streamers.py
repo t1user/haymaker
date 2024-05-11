@@ -13,9 +13,12 @@ import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from ib_tools.base import Atom, Details
-from ib_tools.config import CONFIG
+from ib_tools.config import CONFIG as config
 
 log = logging.getLogger(__name__)
+
+
+CONFIG = config.get("streamer") or {}
 
 
 @dataclass

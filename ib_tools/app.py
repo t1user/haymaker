@@ -5,7 +5,7 @@ from typing import Protocol, cast
 
 import ib_insync as ibi
 
-from ib_tools.config import CONFIG
+from ib_tools.config import CONFIG as config
 from ib_tools.logging import setup_logging
 from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs
 
@@ -14,6 +14,8 @@ log = logging.getLogger(__name__)
 ibi.util.patchAsyncio()
 
 setup_logging()
+
+CONFIG = config.get("app") or {}
 
 
 class IBC(Protocol):

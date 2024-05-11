@@ -1,28 +1,64 @@
-restart_time: 30 # after disconnection, time to wait before reconnection attempt
-host: 127.0.0.1
-port: 4002
-clientId: 0 # do not change
-appStartupTime: 0
-appTimeout: 20
-retryDelay: 2
-probeContract:
-  !!python/object/apply:ib_insync.Forex
-  - EURUSD
-probeTimeout: 4
+app:
+  restart_time: 30 # after disconnection, time to wait before reconnection attempt
+  host: 127.0.0.1
+  port: 4002
+  clientId: 0 # do not change
+  appStartupTime: 0
+  appTimeout: 20
+  retryDelay: 2
+  probeContract:
+    !!python/object/apply:ib_insync.Forex
+    - EURUSD
+  probeTimeout: 4
 
-# Controller config:
-use_blotter: True
-coldstart: False
-log_IB_events: False
+controller:
+  use_blotter: True
+  coldstart: False
+  log_IB_events: False
+  sync_frequency: 900 # 15min
 
+state_machine:
+  save_delay: 1 # don't save strategy data more often than that (in secs)
+  order_container_max_size: 0 # zero means no limit
+  
+streamer:
+  timeout:
+    debug: False # debug: True -> log; debug: False -> restart
+    time: 300 # zero means no timeout, can also be set individually on every streamer instance
 
-# logging file
-logging_filename: haymakerLog.log
-logging_dir: "/home/tomek/ib_data/test_logs"
+blotter:
+  class: CsvSaver
+  kwds:
+    folder: blotter
+    name: blotter
+    timestamp: False
 
-# StateMachine config:
-order_container_max_size: 0 # zero means no limit
+saver:
+  ArcticSaver:
+    host: localhost
+    library: test_log
+  MongoSaver:
+    host: localhost
+    port: 27017
+    db: test_data
 
+dataloader:
+  file: contracts.csv
+  barSize: 30secs
+  wts: TRADES
+  aggression: 2
+  continuous_futures_only: True
+  watchdog: False
+    
+# look into this because it's not in use at the moment
+ologging:
+  logging_filename: haymakerLog.log
+  logging_dir: "/home/tomek/ib_data/test_logs"
+
+# All savers saving to files will create sub-directories here:
+data_folder:
+  ib_data # folder inside home folder, will be created if doesn't exist
+  
 # These are default order params that will be used by every execution model
 # unless different orders are passes to exec model __init__
 open_order:
@@ -50,40 +86,9 @@ tp_order:
 # all linked orders will use this oca_type (as per IB definition)
 oca_type: 1
 
-timeout:
-  debug: False # debug: True -> log; debug: False -> restart
-  time: 300 # zero means no timeout, can also be set individually on every streamer instance
 
-state_machine:
-  save_delay: 1 # don't save strategy data more often than that (in secs)
-  
-blotter_saver:
-  class: CsvSaver
-  kwds:
-    folder: blotter
-    name: blotter
-    timestamp: False
 
-# All savers saving to files will create sub-directories here:
-data_folder:
-  ib_data # folder inside home folder, will be created if doesn't exist
-  
-ArcticSaver:
-  host: localhost
-  library: test_log
-  
-MongoSaver:
-  host: localhost
-  port: 27017
-  db: test_data
 
-dataloader:
-  file: contracts.csv
-  barSize: 30secs
-  wts: TRADES
-  aggression: 2
-  continuous_futures_only: True
-  watchdog: False
 
   
 

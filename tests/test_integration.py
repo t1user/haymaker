@@ -7,7 +7,6 @@ from test_brick import data_for_df, df_brick  # noqa
 
 from ib_tools.base import Pipe
 from ib_tools.bracket_legs import FixedStop
-from ib_tools.controller import Controller
 from ib_tools.execution_models import BaseExecModel, EventDrivenExecModel
 from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
 from ib_tools.signals import BinarySignalProcessor
@@ -109,7 +108,7 @@ def test_order_is_for_one_contract(pipe):
 
 
 @pytest.fixture
-def new_setup(atom):
+def new_setup(atom, Controller):
     class FakeTrader:
         def trade(self, contract: ibi.Contract, order: ibi.Order):
             return ibi.Trade(contract, order)
@@ -209,7 +208,7 @@ def test_sell_position_registered(new_setup):
 
 
 @pytest.mark.asyncio
-async def test_manual_order_created(atom):
+async def test_manual_order_created(atom, Controller):
     class A(atom):
         pass
 
