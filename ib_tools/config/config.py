@@ -29,6 +29,13 @@ class Config(ChainMap):
         parser = argparse.ArgumentParser(description="File with config or coldstart.")
         parser.add_argument("-f", "--file", type=str, nargs="?")
         parser.add_argument(
+            "-r",
+            "--reset",
+            action="store_true",
+            default=False,
+            help="On start, will close all existing positions and cancel orders.",
+        )
+        parser.add_argument(
             "-c",
             "--coldstart",
             action="store_true",

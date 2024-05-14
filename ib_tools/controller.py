@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
@@ -35,6 +36,7 @@ class Controller(Atom):
 
     blotter: Optional[Blotter]
     config = CONFIG.get("controller") or {}
+    log.debug(f"This is config: {config}")
 
     def __init__(
         self,
@@ -59,13 +61,16 @@ class Controller(Atom):
             self.blotter = None
 
         if sync_frequency := self.config.get("sync_frequency"):
-            sync_timer = ev.Event.timerange(0, None, sync_frequency)
+            sync_timer = ev.Timer(sync_frequency)
+            log.debug(f"{sync_timer=}")
             sync_timer += self.sync
 
         if self.config.get("log_IB_events"):
             self._attach_logging_events()
 
-        self.cold_start = self.config.get("coldstart")
+        self.cold_start = CONFIG.get("coldstart")
+        self.reset = self.CONFIG.get("reset")
+
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         log.debug(f"Controller initiated: {self}")
 
@@ -99,9 +104,11 @@ class Controller(Atom):
                 log.exception(e)
 
         await self.sync()
+        if self.reset:
+            await self.execute_stops_and_close_positions()
 
     async def sync(self) -> None:
-
+        log.debug("--- Sync ---")
         orders_report = OrderSyncStrategy.run(self.ib, self.sm)
         # IB events will be handled so that matched trades can be sent to blotter
         self.release_hold()
@@ -110,7 +117,7 @@ class Controller(Atom):
         error_position_report = PositionSyncStrategy.run(self.ib, self.sm)
         await self.sync_handlers.handle_positions(error_position_report)
 
-        log.debug("Sync completed.")
+        log.debug("--- Sync completed ---")
 
     async def onData(self, data, *args) -> None:
         """
@@ -142,6 +149,7 @@ class Controller(Atom):
         data = self.sm.strategy.get(strategy)
         if data:
             # TODO: doesn't work for REVERSE
+            # it's not enought to check sign, need to check actual position
             log.debug(
                 f"Transaction OK? ->{sign(data.position) == target_position}<- "
                 f"target_position: {target_position}, "
@@ -203,13 +211,10 @@ class Controller(Atom):
     async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
         if self.hold:
             return
-        # log.debug(
-        #     f"Reporting order status: {trade.order.orderId} {trade.order.permId} "
-        #     f"{trade.orderStatus.status}"
-        # )
 
         # this will create new order record if it doesn't already exist
         await self.sm.save_order_status(trade)
+
         if trade.orderStatus.status == ibi.OrderStatus.Inactive:
             self.process_rejected_trade(trade)
 
@@ -406,6 +411,9 @@ class Controller(Atom):
             log.error(f"No records for rejected order: {trade.order.orderId}")
 
     def log_order_status(self, trade: ibi.Trade) -> None:
+        if self.hold:
+            return
+
         if trade.order.orderId < 0:
             log.warning(
                 f"Manual trade: {trade.order} status update: {trade.orderStatus}"
@@ -471,6 +479,65 @@ class Controller(Atom):
                 f"{strategy} | {action} | {order}"
             )
 
+    def ib_positions(self) -> defaultdict[ibi.Contract, float]:
+        positions: defaultdict[ibi.Contract, float] = defaultdict(int)
+        for p in self.ib.positions():
+            positions[p.contract] += p.position
+        return positions
+
+    async def execute_stops_and_close_positions(self):
+        log.debug("Will attempt to close positions and cancel orders.")
+        positions = self.ib_positions()
+        log.debug(f"Existing positions: {positions}")
+        trades = []
+        for order in self.ib.openOrders():
+            if order.orderType in ("STP", "TRAIL"):
+                # Make sure no orders executed if there's no corresponding position
+                position_diff = 1 if order.action == "BUY" else -1
+                if (positions[order.contract] - position_diff) >= 0:
+                    order.orderType = "MKT"
+                    trade = self.ib.placeOrder(order)
+                    trades.append(trade)
+                    trade.filledEvent += trades.remove
+                    positions[order.contract] -= position_diff
+                else:
+                    self.trader.cancel(order)
+            else:
+                self.trader.cancel(order)
+
+        for contract, position in positions.items():
+            if position:
+                # Again make sure total orders issued match existing positions
+                trade = self.trader.trade(
+                    contract,
+                    ibi.MarketOrder("BUY" if position < 0 else "SELL", abs(position)),
+                )
+                trades.append(trade)
+                trade.filledEvent += trades.remove
+
+        def _trade(t: ibi.Trade) -> tuple[str, str, float, int]:
+            return (
+                t.contract.symbol,
+                t.order.action,
+                t.order.totalQuantity,
+                t.order.orderId,
+            )
+
+        while trades:
+            log.warning(f"Closing positions in progress: {[_trade(t) for t in trades]}")
+            asyncio.sleep(2)
+
+        log.debug("All positions closed and orders cancelled.")
+
+    def close_positions(self):
+        for position in self.ib.positions:
+            self.trader.trade(
+                position.contract,
+                ibi.MarketOrder(
+                    "BUY" if position.position < 0 else "SELL", abs(position.position)
+                ),
+            )
+
     def nuke(self):
         """
         Cancel all open orders, close existing positions and prevent
@@ -481,14 +548,8 @@ class Controller(Atom):
         """
         for order in self.ib.openOrders():
             self.ib.cancelOrder(order)
-        for position in self.ib.positions:
-            self.trade(
-                position.contract,
-                ibi.MarketOrder(
-                    "BUY" if position.position < 0 else "SELL", abs(position.position)
-                ),
-            )
         self.trader = FakeTrader()
+        self.close_positions()
         log.critical("Self nuked!!!!! No more trades will be executed until restart.")
 
     def __repr__(self):

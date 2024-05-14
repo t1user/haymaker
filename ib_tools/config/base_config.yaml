@@ -1,3 +1,6 @@
+coldstart: False
+reset: False
+
 app:
   restart_time: 30 # after disconnection, time to wait before reconnection attempt
   host: 127.0.0.1
@@ -13,7 +16,6 @@ app:
 
 controller:
   use_blotter: True
-  coldstart: False
   log_IB_events: False
   sync_frequency: 900 # 15min
 
