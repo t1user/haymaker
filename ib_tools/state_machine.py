@@ -174,6 +174,8 @@ class Strategy(UserDict):
         self.strategyChangeEvent = strategyChangeEvent
         self.data = {**deepcopy(self.defaults)}
         if dict is not None:
+            log.debug(f"{self} will be updated by: {dict}")
+            log.debug(f"update type: {type(dict)}")
             self.update(dict)
 
     def __getitem__(self, key):
@@ -201,6 +203,12 @@ class Strategy(UserDict):
         if attr == "data":
             return self.__dict__.get("data", {})
         return super().__getattribute__(attr)
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__qualname__}({repr(self.data)}, "
+            f"{self.strategyChangeEvent})"
+        )
 
     __getattr__ = __getitem__
     __delattr__ = __delitem__
@@ -270,7 +278,10 @@ class StrategyContainer(UserDict):
             log.warning("It's weird, no '_id' in data from mongo.")
 
         log.debug(f"Decoded keys: {list(decoded.keys())}")
-        self.data.update(**{k: Strategy(v) for k, v in decoded.items()})
+        log.debug(f"will update by: {decoded}")
+        self.data.update(
+            **{k: Strategy(v, self._strategyChangeEvent) for k, v in decoded.items()}
+        )
 
     def __repr__(self) -> str:
         return f"StrategyContainer({self.data})"
@@ -331,6 +342,7 @@ class StateMachine:
 
     def save_models(self, *args) -> None:
         self._save_model(self._data.encode())
+        log.debug("MODELS SAVED")
 
     def save_order(self, oi: OrderInfo) -> OrderInfo:
         self._orders[oi.trade.order.orderId] = oi

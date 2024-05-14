@@ -4,6 +4,7 @@ import datetime as dt
 import itertools
 import random
 import string
+from collections import UserDict
 from datetime import datetime, timezone
 from enum import Enum
 from os import makedirs, path
@@ -188,7 +189,7 @@ def tree(obj):
         return obj
     elif isinstance(obj, (dt.date, dt.time)):
         return obj.isoformat()
-    elif isinstance(obj, dict):
+    elif isinstance(obj, (dict, UserDict)):
         return {k: tree(v) for k, v in obj.items()}
     elif ibi.util.isnamedtupleinstance(obj):
         return {
