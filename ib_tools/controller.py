@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
 from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
@@ -36,12 +35,12 @@ class Controller(Atom):
 
     blotter: Optional[Blotter]
     config = CONFIG.get("controller") or {}
-    log.debug(f"This is config: {config}")
 
     def __init__(
         self,
         trader: Optional[Trader] = None,
     ):
+        log.debug("-----> Controller INIT <-----")
         super().__init__()
         self.trader = trader or Trader(self.ib)
         # these are essential (non-optional) events
@@ -61,15 +60,17 @@ class Controller(Atom):
             self.blotter = None
 
         if sync_frequency := self.config.get("sync_frequency"):
-            sync_timer = ev.Timer(sync_frequency)
-            log.debug(f"{sync_timer=}")
-            sync_timer += self.sync
+            log.debug(f"{sync_frequency=}")
+            self.sync_timer = ev.Timer(sync_frequency)
+            self.sync_timer += self.sync
+            log.debug(f"{self.sync_timer=}")
 
         if self.config.get("log_IB_events"):
             self._attach_logging_events()
 
         self.cold_start = CONFIG.get("coldstart")
-        self.reset = self.CONFIG.get("reset")
+        self.reset = CONFIG.get("reset")
+        self.cancel_stray_orders = self.config.get("cancel_stray_orders")
 
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         log.debug(f"Controller initiated: {self}")
@@ -106,8 +107,9 @@ class Controller(Atom):
         await self.sync()
         if self.reset:
             await self.execute_stops_and_close_positions()
+            self.reset = False
 
-    async def sync(self) -> None:
+    async def sync(self, *args) -> None:
         log.debug("--- Sync ---")
         orders_report = OrderSyncStrategy.run(self.ib, self.sm)
         # IB events will be handled so that matched trades can be sent to blotter
@@ -203,7 +205,9 @@ class Controller(Atom):
         This is an event handler (callback).  Connected (subscribed)
         to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
         """
-
+        # Consider whether essential or optional
+        # Maybe some order verification here?
+        log.debug(f"new trade: {trade}")
         log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
         if not (trade.order.orderId < 0 or self.sm.order.get(trade.order.orderId)):
             log.critical(f"Unknown trade in the system {trade.order}")
@@ -214,13 +218,6 @@ class Controller(Atom):
 
         # this will create new order record if it doesn't already exist
         await self.sm.save_order_status(trade)
-
-        if trade.orderStatus.status == ibi.OrderStatus.Inactive:
-            self.process_rejected_trade(trade)
-
-    def process_rejected_trade(self, trade: ibi.Trade) -> None:
-        # TODO: figure out what to do with it
-        log.critical(f"Unprocessed rejected trade: {trade}")
 
     def register_position(
         self, strategy_str: str, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
@@ -248,6 +245,23 @@ class Controller(Atom):
         except Exception as e:
             log.exception(e)
 
+    def _cleanup_obsolete_orders(self, strategy: Strategy) -> None:
+
+        order_infos = list(self.sm.orders_for_strategy(strategy.strategy))
+        for oi in order_infos:
+            if (oi.action != "OPEN") and oi.active:
+                log.debug(f"Resting order cleanup: {oi.action, oi.trade.order.orderId}")
+                self.trader.cancel(oi.trade)
+
+        contract = strategy.get("active_contract")
+        assert contract
+        if trades := self.ib_trades_for_contract(contract):
+            for trade in trades:
+                log.debug(
+                    f"Cleaning up resting order for {contract}: {trade.order.orderId}"
+                )
+                self.trader.cancel(trade)
+
     def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """
         Register position.
@@ -258,6 +272,11 @@ class Controller(Atom):
             or self.assign_unknown_trade(trade)
         )
         self.register_position(strategy.strategy, strategy, trade, fill)
+        try:
+            if (strategy.position == 0) & (self.cancel_stray_orders):
+                self._cleanup_obsolete_orders(strategy)
+        except Exception as e:
+            log.exception(e)
 
     def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
@@ -324,12 +343,6 @@ class Controller(Atom):
         ib_position = self.ib_position_for_contract(contract)
         return (my_position == ib_position) * 0 or (my_position - ib_position)
 
-    def ib_position_for_contract(self, contract: ibi.Contract) -> float:
-        # CONSIDER MOVING TO TRADER
-        return next(
-            (v.position for v in self.ib.positions() if v.contract == contract), 0
-        )
-
     def _assign_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
 
         # assumed unknown trade is to close a position
@@ -339,7 +352,7 @@ class Controller(Atom):
             if self.sm.strategy[s].active
         ]
         log.debug(
-            f"Attemp to assign unknown trade to one of strategies: "
+            f"Attemp to assign unknown trade to a strategy: "
             f"{active_strategies_list}"
         )
 
@@ -400,17 +413,9 @@ class Controller(Atom):
 
         return strategy
 
-    def handle_rejected_order(self, trade: ibi.Trade) -> None:
-        oi = self.sm.order.get(trade.order.orderId)
-        if oi:
-            log.error(
-                f"Rejected order {trade.order.orderId} {trade.order.action} "
-                f"{oi.action} for {oi.strategy}"
-            )
-        else:
-            log.error(f"No records for rejected order: {trade.order.orderId}")
-
     def log_order_status(self, trade: ibi.Trade) -> None:
+        # Connected to onOrderStatusEvent
+
         if self.hold:
             return
 
@@ -418,10 +423,6 @@ class Controller(Atom):
             log.warning(
                 f"Manual trade: {trade.order} status update: {trade.orderStatus}"
             )
-        elif trade.orderStatus.status == ibi.OrderStatus.Inactive:
-            messages = ";".join([m.message for m in trade.log])
-            log.error(f"Rejected order: {trade.order}, messages: {messages}")
-            self.handle_rejected_order(trade)
 
         elif trade.isDone():
             log.debug(
@@ -463,7 +464,8 @@ class Controller(Atom):
     def log_error(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
-        pass
+        # Connected to ib.errorEvent
+
         if errorCode < 400:
             # reqId is most likely orderId
             # order rejected is errorCode = 201
@@ -479,11 +481,29 @@ class Controller(Atom):
                 f"{strategy} | {action} | {order}"
             )
 
-    def ib_positions(self) -> defaultdict[ibi.Contract, float]:
-        positions: defaultdict[ibi.Contract, float] = defaultdict(int)
-        for p in self.ib.positions():
-            positions[p.contract] += p.position
-        return positions
+    def handle_rejected_order(self, trade: ibi.Trade) -> None:
+        # NOT IN USE
+        oi = self.sm.order.get(trade.order.orderId)
+        if oi:
+            log.error(
+                f"Rejected order {trade.order.orderId} {trade.order.action} "
+                f"{oi.action} for {oi.strategy}"
+            )
+        else:
+            log.error(f"No records for rejected order: {trade.order.orderId}")
+
+    def ib_positions(self) -> dict[ibi.Contract, float]:
+        return {p.contract: p.position for p in self.ib.positions()}
+
+    def ib_position_for_contract(self, contract: ibi.Contract) -> float:
+        # CONSIDER MOVING TO TRADER
+        # or merging with self.ib_positions
+        return next(
+            (v.position for v in self.ib.positions() if v.contract == contract), 0
+        )
+
+    def ib_trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
+        return [t for t in self.ib.openTrades() if t.contract == contract]
 
     async def execute_stops_and_close_positions(self):
         log.debug("Will attempt to close positions and cancel orders.")

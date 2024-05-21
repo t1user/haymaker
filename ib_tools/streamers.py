@@ -262,12 +262,15 @@ class HistoricalDataStreamer(Streamer):
         else:
             log.debug(f"{self!s}: No backfill needed.")
 
-        async for bars_, hasNewBar in bars.updateEvent:
-            if hasNewBar and (
-                (not self._last_bar_date) or (bars[-2].date > self._last_bar_date)
-            ):
-                self._last_bar_date = bars_[-2].date
-                self.on_new_bar(bars_[:-1])
+        try:
+            async for bars_, hasNewBar in bars.updateEvent:
+                if hasNewBar and (
+                    (not self._last_bar_date) or (bars[-2].date > self._last_bar_date)
+                ):
+                    self._last_bar_date = bars_[-2].date
+                    self.on_new_bar(bars_[:-1])
+        except ValueError as e:
+            log.debug(f"Empty emit for {self}: {e}")
 
     def on_new_bar(self, bars: ibi.BarDataList) -> None:
         if any(

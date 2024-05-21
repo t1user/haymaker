@@ -106,7 +106,7 @@ class OrderContainer(UserDict):
 
     async def onSetitemEvent(self, key: int, item: OrderInfo) -> None:
         while not item.permId:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
         self.index[item.permId] = key
 
     def strategy(self, strategy: str) -> Iterator[OrderInfo]:
@@ -174,8 +174,6 @@ class Strategy(UserDict):
         self.strategyChangeEvent = strategyChangeEvent
         self.data = {**deepcopy(self.defaults)}
         if dict is not None:
-            log.debug(f"{self} will be updated by: {dict}")
-            log.debug(f"update type: {type(dict)}")
             self.update(dict)
 
     def __getitem__(self, key):
@@ -205,10 +203,7 @@ class Strategy(UserDict):
         return super().__getattribute__(attr)
 
     def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__qualname__}({repr(self.data)}, "
-            f"{self.strategyChangeEvent})"
-        )
+        return f"{self.__class__.__qualname__}({repr(self.data)})"
 
     __getattr__ = __getitem__
     __delattr__ = __delitem__
@@ -278,7 +273,6 @@ class StrategyContainer(UserDict):
             log.warning("It's weird, no '_id' in data from mongo.")
 
         log.debug(f"Decoded keys: {list(decoded.keys())}")
-        log.debug(f"will update by: {decoded}")
         self.data.update(
             **{k: Strategy(v, self._strategyChangeEvent) for k, v in decoded.items()}
         )

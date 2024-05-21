@@ -18,7 +18,8 @@ controller:
   use_blotter: True
   log_IB_events: False
   sync_frequency: 900 # 15min
-
+  cancel_stray_orders: True # For strategy with zero position, cancel existing orders
+  
 state_machine:
   save_delay: 1 # don't save strategy data more often than that (in secs)
   order_container_max_size: 0 # zero means no limit
@@ -53,7 +54,7 @@ dataloader:
   watchdog: False
     
 # look into this because it's not in use at the moment
-ologging:
+logging:
   logging_filename: haymakerLog.log
   logging_dir: "/home/tomek/ib_data/test_logs"
 

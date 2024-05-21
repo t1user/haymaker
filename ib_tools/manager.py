@@ -10,8 +10,12 @@ import ib_insync as ibi
 
 from ib_tools.base import Atom, DetailsContainer
 from ib_tools.controller import Controller
+from ib_tools.logging import setup_logging
 from ib_tools.state_machine import StateMachine
 from ib_tools.streamers import Streamer
+
+setup_logging()
+
 
 log = logging.getLogger(__name__)
 
@@ -115,10 +119,14 @@ class Jobs:
             task.add_done_callback(self._handle_error)
         await asyncio.gather(*self._tasks, return_exceptions=False)
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__qualname__}({self.init_data})"
+
 
 IB: Final[ibi.IB] = ibi.IB()
 # Atom passes empty contrianers so that INIT_DATA can supply them with data
 INIT_DATA = InitData(IB, Atom.contracts, Atom.contract_details)
 JOBS = Jobs(INIT_DATA)
 Atom.set_init_data(INIT_DATA.ib, StateMachine())
+log.debug("Will initialize Controller")
 CONTROLLER: Final[Controller] = Controller()

@@ -6,14 +6,11 @@ from typing import Protocol, cast
 import ib_insync as ibi
 
 from ib_tools.config import CONFIG as config
-from ib_tools.logging import setup_logging
 from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs
-
-log = logging.getLogger(__name__)
 
 ibi.util.patchAsyncio()
 
-setup_logging()
+log = logging.getLogger(__name__)
 
 CONFIG = config.get("app") or {}
 
@@ -75,6 +72,8 @@ class App:
         self.watchdog.stoppedEvent += self.onStopped
         self.watchdog.softTimeoutEvent += self.onSoftTimeout
         self.watchdog.hardTimeoutEvent += self.onHardTimeout
+
+        log.debug(f"App initiated: {self}")
 
     def onError(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
