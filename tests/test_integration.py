@@ -22,7 +22,7 @@ def portfolio():
 
 
 @pytest.fixture
-def pipe(df_brick, data_for_df, portfolio, atom):  # noqa
+def pipe(df_brick, data_for_df, portfolio, Atom):  # noqa
     class FakeStateMachine:
         strategy = StrategyContainer()
 
@@ -31,7 +31,7 @@ def pipe(df_brick, data_for_df, portfolio, atom):  # noqa
 
     sm = FakeStateMachine()
 
-    class FakeController(atom):
+    class FakeController(Atom):
         out = None
 
         def trade(self, strategy, contract, order, action, data):
@@ -46,7 +46,7 @@ def pipe(df_brick, data_for_df, portfolio, atom):  # noqa
     # on which exec_model should act by issuing Buy order
     exec_model = EventDrivenExecModel(stop=FixedStop(5), controller=controller)
 
-    class SourceAtom(atom):
+    class SourceAtom(Atom):
         def run(self):
             # this should ensure setting "strategy" attr on exec_model
             # brick has this attr so it will emit it on start
@@ -108,7 +108,7 @@ def test_order_is_for_one_contract(pipe):
 
 
 @pytest.fixture
-def new_setup(atom, Controller):
+def new_setup(Atom, Controller):
     class FakeTrader:
         def trade(self, contract: ibi.Contract, order: ibi.Order):
             return ibi.Trade(contract, order)
@@ -121,7 +121,7 @@ def new_setup(atom, Controller):
 
     controller = FakeController(trader=FakeTrader())
 
-    class Source(atom):
+    class Source(Atom):
         pass
 
     source = Source()
@@ -208,8 +208,8 @@ def test_sell_position_registered(new_setup):
 
 
 @pytest.mark.asyncio
-async def test_manual_order_created(atom, Controller):
-    class A(atom):
+async def test_manual_order_created(Atom, Controller):
+    class A(Atom):
         pass
 
     a = A()

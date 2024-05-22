@@ -1,13 +1,13 @@
 import ib_insync as ibi
 import pytest
 
-from ib_tools.base import Atom
+from ib_tools.base import Atom as BaseAtom
 from ib_tools.controller import Controller as C
 from ib_tools.saver import FakeMongoSaver, SyncSaveManager
 from ib_tools.state_machine import StateMachine
 
-model_saver = FakeMongoSaver("models")
 order_saver = FakeMongoSaver("orders", query_key="orderId")
+model_saver = FakeMongoSaver("models")
 
 
 @pytest.fixture
@@ -24,8 +24,25 @@ def state_machine():
     return sm
 
 
-@pytest.fixture()
+@pytest.fixture
+def contract():
+    # it's a different contract than in details below
+    return ibi.Contract(
+        secType="FUT",
+        conId=620730920,
+        symbol="NQ",
+        lastTradeDateOrContractMonth="20240621",
+        multiplier="20",
+        exchange="CME",
+        currency="USD",
+        localSymbol="NQM4",
+        tradingClass="NQ",
+    )
+
+
+@pytest.fixture
 def details():
+    # Note: contains also ibi.Contract
     return ibi.ContractDetails(
         contract=ibi.Contract(
             secType="CONTFUT",
@@ -84,15 +101,15 @@ def details():
     )
 
 
-@pytest.fixture()
-def atom(state_machine, details):
+@pytest.fixture
+def Atom(state_machine, details):
     sm = state_machine
-    Atom.set_init_data(ibi.IB(), sm)
-    Atom.contract_details[details.contract] = details
-    return Atom
+    BaseAtom.set_init_data(ibi.IB(), sm)
+    BaseAtom.contract_details[details.contract] = details
+    return BaseAtom
 
 
-@pytest.fixture()
+@pytest.fixture
 def Controller():
     class TestController(C):
         config = {}

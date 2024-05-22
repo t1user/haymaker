@@ -102,12 +102,12 @@ def timeout() -> Type[Timeout]:
 
 
 @pytest.mark.asyncio
-async def test_timer_not_triggered(timeout, atom, details):
+async def test_timer_not_triggered(timeout, Atom, details):
     t = timeout(
         time=0.15,
         event=ev.Event(),
         ib=ibi.IB(),
-        details=atom.contract_details[details.contract],
+        details=Atom.contract_details[details.contract],
         name="xxx",
         debug=True,
         _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
@@ -118,12 +118,12 @@ async def test_timer_not_triggered(timeout, atom, details):
 
 
 @pytest.mark.asyncio
-async def test_timer_triggered(timeout, atom, details):
+async def test_timer_triggered(timeout, Atom, details):
     t = timeout(
         time=0.1,
         event=ev.Event(),
         ib=ibi.IB(),
-        details=atom.contract_details[details.contract],
+        details=Atom.contract_details[details.contract],
         name="xxx",
         debug=True,
         _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),

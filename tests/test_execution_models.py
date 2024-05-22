@@ -94,7 +94,7 @@ def test_oca_group_is_not_position_id():
 
 
 @pytest.fixture
-def objects(atom, Controller):
+def objects(Atom, Controller):
     class FakeController(Controller):
         contract = None
         order = None
@@ -134,7 +134,7 @@ def objects(atom, Controller):
             self.trade_object.fillEvent.emit(self.trade_object, self.fill)
             self.trade_object.filledEvent.emit(self.trade_object)
 
-    class Source(atom):
+    class Source(Atom):
         pass
 
     controller = FakeController()
@@ -235,6 +235,9 @@ def test_BaseExecModel_no_close_order_without_position(objects):
 
 
 def test_BaseExecModel_faulty_close_order_logs(objects, caplog):
+    """
+    Execution model logs an attempt to close a non-existing position.
+    """
     controller, source = objects
     em = BaseExecModel(controller=controller)
     source += em
@@ -248,7 +251,7 @@ def test_BaseExecModel_faulty_close_order_logs(objects, caplog):
         "contract": ibi.ContFuture("NQ", "CME"),
     }
     source.dataEvent.emit(data)
-    assert caplog.record_tuples[0][1] == logging.ERROR
+    assert caplog.record_tuples[-1][1] == logging.ERROR
 
 
 def test_BaseExecModel_close_signal_generates_order(objects):
@@ -303,7 +306,7 @@ def test_BaseExecModel_close_signal_generates_order(objects):
 #     assert em.position == -1
 
 
-def test_passed_order_kwargs_update_defaults(atom, Controller):
+def test_passed_order_kwargs_update_defaults(Atom, Controller):
     class FakeController(Controller):
         contract = None
         order = None
@@ -324,7 +327,7 @@ def test_passed_order_kwargs_update_defaults(atom, Controller):
     controller = FakeController()
     em = BaseExecModel(orders={"open_order": {"algoParams": ""}}, controller=controller)
 
-    class Source(atom):
+    class Source(Atom):
         pass
 
     source = Source()

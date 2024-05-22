@@ -47,8 +47,6 @@ class App:
     retryDelay: float = CONFIG.get("retryDelay") or 2
     probeContract: ibi.Contract = CONFIG.get("probeContract") or ibi.Forex("EURUSD")
     probeTimeout: float = CONFIG.get("probeTimeout") or 4
-    # blotter: bool = True
-    _tasks: set = field(default_factory=set)
 
     def __post_init__(self):
         self.ib.errorEvent += self.onError
@@ -80,7 +78,7 @@ class App:
     ) -> None:
         if errorCode not in (
             2104,  # Market data farm connection is ok
-            2106,  # data farm connection is OK
+            2106,  # Data farm connection is OK
             2108,  # Market data farm [...] is inactive but [...~ok]
             2158,  # Sec-def data farm connection is OK
         ):
@@ -108,39 +106,17 @@ class App:
     def onConnected(self, *args) -> None:
         log.debug("IB Connected")
 
+    def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
+        log.error(f"Event error {event.name()}: {exception}", exc_info=True)
+
     def run(self):
         # this is the main entry point into strategy
-        self.watchdog.startedEvent += self._run
+        self.watchdog.startedEvent(self._run, self._log_event_error)
         log.debug("initializing watchdog...")
         self.watchdog.start()
         log.debug("watchdog initialized")
         self.ib.run()
 
-    def _handle_error(self, task: asyncio.Task):
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            log.debug(f"task {task} has been cancelled.")
-        except Exception as e:
-            log.exception(e)
-
     async def _run(self, *args) -> None:
         await CONTROLLER.run()
         await self.jobs()
-
-    # async def _run(self, *args) -> None:
-    #     coroutines = (CONTROLLER.run, self.jobs)
-    #     for c in coroutines:
-    #         task = asyncio.create_task(c())  # type: ignore
-    #         log.debug(f"Task created: {task.get_name()}")
-
-    #         # Add task to the set. This creates a strong reference.
-    #         self._tasks.add(task)
-
-    #         # To prevent keeping references to finished tasks forever,
-    #         # make each task remove its own reference from the set after
-    #         # completion:
-    #         task.add_done_callback(self._tasks.discard)
-    #         # ensure errors are logged for debugging
-    #         task.add_done_callback(self._handle_error)
-    #     await asyncio.gather(*self._tasks, return_exceptions=False)

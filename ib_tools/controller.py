@@ -44,25 +44,27 @@ class Controller(Atom):
         super().__init__()
         self.trader = trader or Trader(self.ib)
         # these are essential (non-optional) events
-        self.ib.execDetailsEvent += self.onExecDetailsEvent
-        self.ib.newOrderEvent += self.onNewOrderEvent
-        self.ib.orderStatusEvent += self.onOrderStatusEvent
+        self.ib.execDetailsEvent.connect(self.onExecDetailsEvent, self._log_event_error)
+        self.ib.newOrderEvent.connect(self.onNewOrderEvent, self._log_event_error)
+        self.ib.orderStatusEvent.connect(self.onOrderStatusEvent, self._log_event_error)
         # consider whether these are essential
-        self.ib.orderStatusEvent += self.log_order_status
-        self.ib.errorEvent += self.log_error
+        self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
+        self.ib.errorEvent.connect(self.log_error, self._log_event_error)
 
         self.set_hold()
 
         if self.config.get("use_blotter"):
             self.blotter = Blotter()
-            self.ib.commissionReportEvent += self.onCommissionReport
+            self.ib.commissionReportEvent.connect(
+                self.onCommissionReport, self._log_event_error
+            )
         else:
             self.blotter = None
 
         if sync_frequency := self.config.get("sync_frequency"):
             log.debug(f"{sync_frequency=}")
             self.sync_timer = ev.Timer(sync_frequency)
-            self.sync_timer += self.sync
+            self.sync_timer.connect(self.sync, error=self._log_event_error)
             log.debug(f"{self.sync_timer=}")
 
         if self.config.get("log_IB_events"):
@@ -314,24 +316,6 @@ class Controller(Atom):
 
         elif trade.order.totalQuantity == 0:
             return
-
-        # ASSIGNNING MANUAL TRADE TO STRATEGY <---------------------------------
-        # Keeping it in to make sure it's irrelevant
-        # elif trade.order.orderId < 0:  # MANUAL TRADE
-        #     strategies_list = self.sm.for_contract[trade.contract]
-        #     if len(strategies_list) == 1:
-        #         strategy = strategies_list[0]
-        #     else:
-        #         strategy = "UNKNOWN"
-        #     kwargs = {"strategy": strategy, "action": "MANUAL TRADE"}
-        # else:
-        #     kwargs = {"strategy": "unknown", "action": "UNKNOWN"}
-        #     log.debug(
-        #         f"Missing strategy records in `state machine`. "
-        #         f"Incomplete data for blotter."
-        #         f"orderId: {trade.order.orderId} symbol: {trade.contract.symbol} "
-        #         f"orderType: {trade.order.orderType}"
-        #     )
 
         assert self.blotter is not None
         self.blotter.log_commission(trade, fill, report, **kwargs)

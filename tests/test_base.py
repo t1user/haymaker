@@ -709,17 +709,17 @@ class Test_data_property:
     # and StateMachine singleton being destroyed betewen tests
     # for this `atom` fixture should be used
 
-    def test_data_property_without_strategy(self, atom):
-        class A(atom):
+    def test_data_property_without_strategy(self, Atom):
+        class A(Atom):
             pass
 
         a = A()
         assert a.data is None
 
-    def test_data_property_with_strategy_first_access(self, atom):
+    def test_data_property_with_strategy_first_access(self, Atom):
         """If we're using non-existing strategy, one should be created."""
 
-        class A(atom):
+        class A(Atom):
             def __init__(self, strategy):
                 self.strategy = strategy
 
@@ -729,11 +729,11 @@ class Test_data_property:
         assert a.data.strategy == "xxx"
 
     def test_data_property_with_strategy_access_correct_essential_keys_in_data(
-        self, atom
+        self, Atom
     ):
         """Newly created strategy must have certain keys by default."""
 
-        class A(atom):
+        class A(Atom):
             def __init__(self, strategy):
                 self.strategy = strategy
 
@@ -743,8 +743,8 @@ class Test_data_property:
             set(a.data.keys())
         )
 
-    def test_data_property_with_strategy_access_correct_position(self, atom):
-        class A(atom):
+    def test_data_property_with_strategy_access_correct_position(self, Atom):
+        class A(Atom):
             def __init__(self, strategy):
                 self.strategy = strategy
 
@@ -754,8 +754,8 @@ class Test_data_property:
         a.data.position += 1
         assert b.data.position == 1
 
-    def test_data_property_multiple_strategies_access_correct_position(self, atom):
-        class A(atom):
+    def test_data_property_multiple_strategies_access_correct_position(self, Atom):
+        class A(Atom):
             pass
 
         a = A()
@@ -774,8 +774,8 @@ class Test_data_property:
         assert b.data.position == 2
         assert c.data.position == 0
 
-    def test_data_property_multiple_strategies_access_correct_position_1(self, atom):
-        class A(atom):
+    def test_data_property_multiple_strategies_access_correct_position_1(self, Atom):
+        class A(Atom):
             pass
 
         a = A()
