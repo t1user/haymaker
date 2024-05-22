@@ -17,18 +17,29 @@ app:
 controller:
   use_blotter: True
   log_IB_events: False
+  # interval at which sync will be performed
   sync_frequency: 900 # 15min
-  cancel_stray_orders: True # For strategy with zero position, cancel existing orders
-  
+  # for strategy with zero position, cancel existing orders
+  cancel_stray_orders: True
+  # delay in sec after which controller will verify if transaction was executed correctly;
+  # zero or comment-out for no verification
+  execution_verification_delay: 15
+
+# best left untouched
 state_machine:
   save_delay: 1 # don't save strategy data more often than that (in secs)
-  order_container_max_size: 0 # zero means no limit
+  order_container_max_size: 0 # zero means no limit (strongly recommended)
   
 streamer:
+  # timeout triggered after streamer hasn't received data for given amount of seconds
   timeout:
+    # behaviour after timeout triggered
     debug: False # debug: True -> log; debug: False -> restart
+    # number of seconds after which timeout triggered
     time: 300 # zero means no timeout, can also be set individually on every streamer instance
 
+# set-up saver used by Blotter; must have keys: class and kwds
+# saver will be initialized as class(**kwds) and passed to Blotter
 blotter:
   class: CsvSaver
   kwds:

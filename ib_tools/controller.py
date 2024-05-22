@@ -129,50 +129,19 @@ class Controller(Atom):
         verify if the intended effect is the same as achieved effect.
         """
         super().onData(data)
+        if not (delay := self.config.get("execution_verification_delay")):
+            return
+
         try:
             strategy = data["strategy"]
             amount = data["amount"]
             target_position = data["target_position"]
-            await asyncio.sleep(15)
+            await asyncio.sleep(delay)
             self.verify_transaction_integrity(strategy, amount, target_position)
         except KeyError:
             log.exception(
                 "Unable to verify transaction integrity", extra={"data": data}
             )
-
-    def verify_transaction_integrity(
-        self,
-        strategy: str,
-        amount: float,
-        target_position: Signal,
-    ) -> None:
-        """
-        Is the postion resulting from transaction the same as was
-        required?
-        """
-        data = self.sm.strategy.get(strategy)
-        if data:
-            # TODO: doesn't work for REVERSE
-            # it's not enought to check sign, need to check actual position
-            log.debug(
-                f"Transaction OK? ->{sign(data.position) == target_position}<- "
-                f"target_position: {target_position}, "
-                f"position: {sign(data.position)}"
-                f"->> {strategy}"
-            )
-            log.debug(
-                f"Diff my position vs. IB position: "
-                f"{data.active_contract.symbol}: "
-                f"{self.verify_position_for_contract(data.active_contract)}"
-            )
-            try:
-                assert sign(data.position) == target_position
-                # Investigate why this may be necessary:
-                # assert exec_model.position == abs(amount)
-            except AssertionError:
-                log.critical(f"Wrong position for {strategy}", exc_info=True)
-        else:
-            log.critical(f"Attempt to trade for unknow strategy: {strategy}")
 
     def trade(
         self,
@@ -320,12 +289,45 @@ class Controller(Atom):
         assert self.blotter is not None
         self.blotter.log_commission(trade, fill, report, **kwargs)
 
-    def verify_position_for_contract(
-        self, contract: ibi.Contract
-    ) -> Union[bool, float]:
-        my_position = self.sm.position.get(contract, 0.0)
-        ib_position = self.trader.position_for_contract(contract)
-        return (my_position == ib_position) * 0 or (my_position - ib_position)
+    def verify_transaction_integrity(
+        self,
+        strategy: str,
+        amount: float,  # amount in transaction being verified
+        target_position: float,  # total resulting position
+    ) -> None:
+        """
+        Called by :meth:`onData`, which is passing data that was the
+        basis for transaction.  The purpose of this method is to
+        confirm that the resulting transaction achieved required
+        objectives.  Things vefied are: 1.  actual resulting position
+        in broker records 2.  records in state_machine
+
+        Any errors are logged but not corrected (maybe changed in
+        future).
+        """
+        data = self.sm.strategy.get(strategy)
+        if data:
+            records_ok = data.position == target_position
+            if records_ok:
+                log.debug(f"{strategy} position OK? -> {records_ok} <- ")
+            else:
+                log.error(
+                    f"Wrong position for {strategy} - "
+                    f"target: {target_position}, position: {data.position}"
+                )
+
+            contract = data.active_.symbol
+            sm_position = self.sm.position.get(contract, 0.0)
+            ib_position = self.trader.position_for_contract(contract)
+            position_ok = sm_position == ib_position
+            if position_ok:
+                log.debug(f"{contract} position OK? -> {position_ok} <-")
+            else:
+                log.error(
+                    f"Wrong position for {contract} - " f"{ib_position=}, {sm_position}"
+                )
+        else:
+            log.critical(f"Attempt to trade for unknown strategy: {strategy}")
 
     def _assign_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
 
