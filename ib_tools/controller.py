@@ -257,7 +257,7 @@ class Controller(Atom):
 
         contract = strategy.get("active_contract")
         assert contract
-        if trades := self.ib_trades_for_contract(contract):
+        if trades := self.trader.trades_for_contract(contract):
             for trade in trades:
                 log.debug(
                     f"Cleaning up resting order for {contract}: {trade.order.orderId}"
@@ -324,7 +324,7 @@ class Controller(Atom):
         self, contract: ibi.Contract
     ) -> Union[bool, float]:
         my_position = self.sm.position.get(contract, 0.0)
-        ib_position = self.ib_position_for_contract(contract)
+        ib_position = self.trader.position_for_contract(contract)
         return (my_position == ib_position) * 0 or (my_position - ib_position)
 
     def _assign_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
@@ -476,22 +476,9 @@ class Controller(Atom):
         else:
             log.error(f"No records for rejected order: {trade.order.orderId}")
 
-    def ib_positions(self) -> dict[ibi.Contract, float]:
-        return {p.contract: p.position for p in self.ib.positions()}
-
-    def ib_position_for_contract(self, contract: ibi.Contract) -> float:
-        # CONSIDER MOVING TO TRADER
-        # or merging with self.ib_positions
-        return next(
-            (v.position for v in self.ib.positions() if v.contract == contract), 0
-        )
-
-    def ib_trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
-        return [t for t in self.ib.openTrades() if t.contract == contract]
-
     async def execute_stops_and_close_positions(self):
         log.debug("Will attempt to close positions and cancel orders.")
-        positions = self.ib_positions()
+        positions = self.trader.positions()
         log.debug(f"Existing positions: {positions}")
         trades = []
         for order in self.ib.openOrders():

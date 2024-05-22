@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import datetime, timezone
 
 import ib_insync as ibi
@@ -17,24 +16,21 @@ class Trader:
         self.ib = ib
         log.debug(f"Trader initialized: {self}")
 
-    def trades(self) -> list[ibi.Trade]:
-        return self.ib.openTrades()
-
-    def positions(self) -> list[ibi.Position]:
-        return self.ib.positions()
-
     def trade(
         self,
         contract: ibi.Contract,
         order: ibi.Order,
     ) -> ibi.Trade:
+        """Execute trade. Place passed order with the broker."""
         trade = self.ib.placeOrder(contract, order)
         log.info(f"Placed {order.orderType} for {trade.contract.localSymbol}")
         return trade
 
-    def modify(self, contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:
-        trade = self.ib.placeOrder(contract, order)
-        return trade
+    def modify(self, trade: ibi.Trade) -> ibi.Trade:
+        contract = trade.contract
+        order = trade.order
+        modified_trade = self.ib.placeOrder(contract, order)
+        return modified_trade
 
     def cancel(self, trade: ibi.Trade):
         order = trade.order
@@ -47,12 +43,15 @@ class Trader:
 
     def trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
         """Return open trades for a given contract."""
+        return [t for t in self.ib.openTrades() if t.contract == contract]
 
-        open_trades = self.trades()
-        trades = defaultdict(list)
-        for t in open_trades:
-            trades[t.contract.localSymbol].append(t)
-        return trades[contract.localSymbol]
+    def position_for_contract(self, contract: ibi.Contract) -> float:
+        return next(
+            (v.position for v in self.ib.positions() if v.contract == contract), 0.0
+        )
+
+    def positions(self) -> dict[ibi.Contract, float]:
+        return {p.contract: p.position for p in self.ib.positions()}
 
     def __repr__(self):
         items = (f"{k}={v}" for k, v in self.__dict__.items())

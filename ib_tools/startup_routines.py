@@ -222,7 +222,7 @@ class ErrorHandlers:
                 )
                 self.sm.save_models()
 
-            elif strategies and self.ct.ib_position_for_contract(contract) == 0:
+            elif strategies and self.ct.trader.position_for_contract(contract) == 0:
                 for strategy in strategies:
                     self.sm.strategy[strategy].position = 0
                 self.sm.save_models()
