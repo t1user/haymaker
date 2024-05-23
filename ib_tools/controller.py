@@ -39,7 +39,6 @@ class Controller(Atom):
         self,
         trader: Optional[Trader] = None,
     ):
-        log.debug("-----> Controller INIT <-----")
         super().__init__()
         self.trader = trader or Trader(self.ib)
         # these are essential (non-optional) events
@@ -61,10 +60,8 @@ class Controller(Atom):
             self.blotter = None
 
         if sync_frequency := self.config.get("sync_frequency"):
-            log.debug(f"{sync_frequency=}")
             self.sync_timer = ev.Timer(sync_frequency)
             self.sync_timer.connect(self.sync, error=self._log_event_error)
-            log.debug(f"{self.sync_timer=}")
 
         if self.config.get("log_IB_events"):
             self._attach_logging_events()
@@ -155,17 +152,8 @@ class Controller(Atom):
         trade.filledEvent += partial(self.log_trade, reason=action, strategy=strategy)
         return trade
 
-    def cancel(
-        self,
-        trade: ibi.Trade,
-        exec_model: AbstractExecModel,
-        callback: Optional[Callable[[ibi.Trade], None]] = None,
-    ) -> None:
-        trade = self.trader.cancel(trade)
-        if callback is not None:
-            callback(trade)
-        # orders are cancelled by callbacks so this is duplicating
-        # self.sm.register_cancel(trade, exec_model)
+    def cancel(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
+        return self.trader.cancel(trade)
 
     async def onNewOrderEvent(self, trade: ibi.Trade) -> None:
         """
@@ -233,12 +221,12 @@ class Controller(Atom):
         )
         self.register_position(strategy.strategy, strategy, trade, fill)
 
-        await asyncio.sleep(5)
-        try:
-            if (strategy.position == 0) & (self.cancel_stray_orders) & trade.isDone():
-                self._cleanup_obsolete_orders(strategy)
-        except Exception as e:
-            log.exception(e)
+        # await asyncio.sleep(1)
+        # try:
+        #     if (strategy.position == 0) & (self.cancel_stray_orders) & trade.isDone():
+        #         self._cleanup_obsolete_orders(strategy)
+        # except Exception as e:
+        #     log.exception(e)
 
     def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport

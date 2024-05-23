@@ -93,9 +93,9 @@ class AbstractExecModel(Atom, ABC):
             for key, order_kwargs in orders.items():
                 setattr(self, key, order_kwargs)
 
-        self.connect_state_controller()
+        self.connect_controller()
 
-    def connect_state_controller(self):
+    def connect_controller(self):
         self += self.controller
 
     def onStart(self, data, *args) -> None:
@@ -216,8 +216,8 @@ class BaseExecModel(AbstractExecModel):
     ) -> ibi.Trade:
         return self.controller.trade(self.strategy, contract, order, action, self.data)
 
-    def cancel(self, trade: ibi.Trade) -> None:
-        self.controller.cancel(trade, self)
+    def cancel(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
+        return self.controller.cancel(trade)
 
     async def live_ticker(self):
         # NOT IN USE

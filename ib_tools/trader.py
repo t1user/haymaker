@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 import ib_insync as ibi
 
@@ -27,9 +28,11 @@ class Trader:
         return trade
 
     def modify(self, contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:
-        return self.ib.placeOrder(contract, order)
+        modified_trade = self.ib.placeOrder(contract, order)
+        log.info(f"Trade modified: {modified_trade}")
+        return modified_trade
 
-    def cancel(self, trade: ibi.Trade):
+    def cancel(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         order = trade.order
         cancelled_trade = self.ib.cancelOrder(order)
         log.info(

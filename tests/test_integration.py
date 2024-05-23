@@ -133,7 +133,8 @@ def new_setup(Atom, Controller):
     return controller, source, em
 
 
-def test_buy_position_registered(new_setup):
+@pytest.mark.asyncio
+async def test_buy_position_registered(new_setup):
     controller, source, em = new_setup
 
     data = {
@@ -167,10 +168,12 @@ def test_buy_position_registered(new_setup):
         )
     )
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
+    await asyncio.sleep(0)
     assert em.data.position == 1
 
 
-def test_sell_position_registered(new_setup):
+@pytest.mark.asyncio
+async def test_sell_position_registered(new_setup):
     controller, source, em = new_setup
 
     data = {
@@ -204,6 +207,7 @@ def test_sell_position_registered(new_setup):
         )
     )
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
+    await asyncio.sleep(0)
     assert em.data.position == -1
 
 
@@ -241,7 +245,7 @@ async def test_manual_order_created(Atom, Controller):
     controller = Controller()
     controller.release_hold()
     controller.ib.orderStatusEvent.emit(trade_object)
-    await asyncio.sleep(0)
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
+    await asyncio.sleep(0)
     assert a.sm._data.total_positions()[trade_object.contract] == 1
     assert "manual_strategy_ES" in a.sm._data

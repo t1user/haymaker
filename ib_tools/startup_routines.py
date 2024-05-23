@@ -184,7 +184,7 @@ class ErrorHandlers:
     def __init__(self, ib: ibi.IB, sm: StateMachine, ct: Controller) -> None:
         self.ib = ib
         self.sm = sm
-        self.ct = ct
+        self.controller = ct
         self.faulty_trades: list[OrderInfo] = []
 
     async def handle_orders(self, report: OrderSyncStrategy) -> None:
@@ -223,7 +223,10 @@ class ErrorHandlers:
                 )
                 self.sm.save_models()
 
-            elif strategies and self.ct.trader.position_for_contract(contract) == 0:
+            elif (
+                strategies
+                and self.controller.trader.position_for_contract(contract) == 0
+            ):
                 for strategy in strategies:
                     self.sm.strategy[strategy].position = 0
                 self.sm.save_models()
