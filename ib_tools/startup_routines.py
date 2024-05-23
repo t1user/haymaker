@@ -150,12 +150,13 @@ class PositionSyncStrategy:
 
         broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
         log.debug(
-            f"broker_positions: "
+            f"broker positions: "
             f"{ {k.symbol: v for k,v in broker_positions_dict.items()} }"
         )
         my_positions_dict = self.sm.strategy.total_positions()
         log.debug(
-            f"my positions: { {k.symbol: v for k, v in my_positions_dict.items()} }"
+            f"my positions: "
+            f"{ {k.symbol: v for k, v in my_positions_dict.items() if v} }"
         )
         diff = {
             i: (

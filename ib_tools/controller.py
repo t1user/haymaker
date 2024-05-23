@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import partial
-from typing import TYPE_CHECKING, Callable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -12,7 +12,6 @@ from . import misc
 from .base import Atom
 from .blotter import Blotter
 from .config import CONFIG
-from .misc import Signal, sign
 from .startup_routines import ErrorHandlers, OrderSyncStrategy, PositionSyncStrategy
 from .state_machine import Strategy
 from .trader import FakeTrader, Trader
@@ -178,7 +177,6 @@ class Controller(Atom):
         """
         # Consider whether essential or optional
         # Maybe some order verification here?
-        log.debug(f"new trade: {trade}")
         log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
         if not (trade.order.orderId < 0 or self.sm.order.get(trade.order.orderId)):
             log.critical(f"Unknown trade in the system {trade.order}")
@@ -217,23 +215,14 @@ class Controller(Atom):
             log.exception(e)
 
     def _cleanup_obsolete_orders(self, strategy: Strategy) -> None:
-
+        """Delete stop/take-profit/close orders for a strategy that has no position."""
         order_infos = list(self.sm.orders_for_strategy(strategy.strategy))
         for oi in order_infos:
             if (oi.action != "OPEN") and oi.active:
                 log.debug(f"Resting order cleanup: {oi.action, oi.trade.order.orderId}")
                 self.trader.cancel(oi.trade)
 
-        contract = strategy.get("active_contract")
-        assert contract
-        if trades := self.trader.trades_for_contract(contract):
-            for trade in trades:
-                log.debug(
-                    f"Cleaning up resting order for {contract}: {trade.order.orderId}"
-                )
-                self.trader.cancel(trade)
-
-    def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+    async def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """
         Register position.
         """
@@ -243,8 +232,10 @@ class Controller(Atom):
             or self.assign_unknown_trade(trade)
         )
         self.register_position(strategy.strategy, strategy, trade, fill)
+
+        await asyncio.sleep(5)
         try:
-            if (strategy.position == 0) & (self.cancel_stray_orders):
+            if (strategy.position == 0) & (self.cancel_stray_orders) & trade.isDone():
                 self._cleanup_obsolete_orders(strategy)
         except Exception as e:
             log.exception(e)
@@ -457,10 +448,10 @@ class Controller(Atom):
             # order rejected is errorCode = 201
             order_info = self.sm.order.get(reqId)
             if order_info:
-                strategy, action, trade, _ = order_info
+                (strategy, action, trade) = order_info
                 order = trade.order
             else:
-                strategy, action, trade, order = "", "", "", ""  # type: ignore
+                strategy, action, trade, order = "", "", "", ""
 
             log.error(
                 f"Error {errorCode}: {errorString} {contract}, "

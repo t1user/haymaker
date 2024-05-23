@@ -111,12 +111,16 @@ class App:
 
     def run(self):
         # this is the main entry point into strategy
-        self.watchdog.startedEvent(self._run, self._log_event_error)
+        self.watchdog.startedEvent.connect(self._run, error=self._log_event_error)
         log.debug("initializing watchdog...")
         self.watchdog.start()
         log.debug("watchdog initialized")
         self.ib.run()
 
     async def _run(self, *args) -> None:
-        await CONTROLLER.run()
-        await self.jobs()
+        log.debug("Will run controller...")
+        try:
+            await CONTROLLER.run()
+            await self.jobs()
+        except Exception as e:
+            log.exception(e)
