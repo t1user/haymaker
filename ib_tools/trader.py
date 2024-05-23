@@ -26,11 +26,8 @@ class Trader:
         log.info(f"Placed {order.orderType} for {trade.contract.localSymbol}")
         return trade
 
-    def modify(self, trade: ibi.Trade) -> ibi.Trade:
-        contract = trade.contract
-        order = trade.order
-        modified_trade = self.ib.placeOrder(contract, order)
-        return modified_trade
+    def modify(self, contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:
+        return self.ib.placeOrder(contract, order)
 
     def cancel(self, trade: ibi.Trade):
         order = trade.order
