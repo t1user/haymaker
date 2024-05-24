@@ -10,12 +10,8 @@ import ib_insync as ibi
 
 from ib_tools.base import Atom, DetailsContainer
 from ib_tools.controller import Controller
-from ib_tools.logging import setup_logging
 from ib_tools.state_machine import StateMachine
 from ib_tools.streamers import Streamer
-
-setup_logging()
-
 
 log = logging.getLogger(__name__)
 

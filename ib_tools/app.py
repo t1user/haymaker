@@ -6,7 +6,14 @@ from typing import Protocol, cast
 import ib_insync as ibi
 
 from ib_tools.config import CONFIG as config
-from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs
+from ib_tools.logging import setup_logging
+
+# Don't change the order here!
+# You want manager namespace to be logged,
+# but dont' want to setup logging inside manager
+# because tests import manager; module app is not imported by any test
+setup_logging()
+from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs  # noqa: E402
 
 ibi.util.patchAsyncio()
 
