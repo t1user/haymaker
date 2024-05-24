@@ -279,7 +279,7 @@ class Controller(Atom):
         self,
         strategy: str,
         amount: float,  # amount in transaction being verified
-        target_position: float,  # total resulting position
+        target_position: float,  # target direction
     ) -> None:
         """
         Called by :meth:`onData`, which is passing data that was the
@@ -293,7 +293,7 @@ class Controller(Atom):
         """
         data = self.sm.strategy.get(strategy)
         if data:
-            records_ok = data.position == target_position
+            records_ok = data.position == (target_position * amount)
             if records_ok:
                 log.debug(f"{strategy} position OK? -> {records_ok} <- ")
             else:
@@ -302,7 +302,7 @@ class Controller(Atom):
                     f"target: {target_position}, position: {data.position}"
                 )
 
-            contract = data.active_.symbol
+            contract = data.active_symbol
             sm_position = self.sm.position.get(contract, 0.0)
             ib_position = self.trader.position_for_contract(contract)
             position_ok = sm_position == ib_position
