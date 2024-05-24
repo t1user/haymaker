@@ -32,6 +32,11 @@ def action_to_signal(action: str) -> Literal[-1, 1]:
     return 1 if action == "BUY" else -1
 
 
+def reverse_action(action: str) -> Literal["BUY", "SELL"]:
+    assert action.upper() in ("BUY", "SELL"), "Invalid order action"
+    return "BUY" if action == "SELL" else "SELL"
+
+
 class Sigact(str, Enum):
     """
     Signal action.  Indication from a strategy what kind of action is

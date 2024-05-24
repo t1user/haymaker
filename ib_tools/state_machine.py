@@ -344,6 +344,9 @@ class StateMachine:
         log.debug("SAVING ORDER SUCCESSFUL")
         return oi
 
+    def clear_models(self):
+        self._data.clear()
+
     def update_trade(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         """
         Update trade object for a given order.  Used after re-start to

@@ -45,7 +45,7 @@ class Config(ChainMap):
         cmdline = parser.parse_args(argv)
         if cmdline.file:
             self.file = Path.cwd() / cmdline.file
-        return {"coldstart": cmdline.coldstart}
+        return {"coldstart": cmdline.coldstart, "reset": cmdline.reset}
 
     @property
     def config_file(self) -> collections.abc.MutableMapping:

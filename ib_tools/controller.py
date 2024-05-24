@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import partial
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -15,10 +15,6 @@ from .config import CONFIG
 from .startup_routines import ErrorHandlers, OrderSyncStrategy, PositionSyncStrategy
 from .state_machine import Strategy
 from .trader import FakeTrader, Trader
-
-if TYPE_CHECKING:
-    from .execution_models import AbstractExecModel
-
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +85,10 @@ class Controller(Atom):
             log.debug("hold released")
 
     async def run(self) -> None:
+        """
+        Main entry point into the programme.  Ensure records up to
+        date and any remaining initialization complete.
+        """
 
         self.set_hold()
 
@@ -103,9 +103,14 @@ class Controller(Atom):
                 log.exception(e)
 
         await self.sync()
+
         if self.reset:
             await self.execute_stops_and_close_positions()
             self.reset = False
+            # zero-out all records
+            self.sm.clear_models()
+
+        # Only subsequently Streamers will run (I think...)
 
     async def sync(self, *args) -> None:
         log.debug("--- Sync ---")
@@ -167,7 +172,9 @@ class Controller(Atom):
         # Maybe some order verification here?
         log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
         if not (trade.order.orderId < 0 or self.sm.order.get(trade.order.orderId)):
-            log.critical(f"Unknown trade in the system {trade.order}")
+            log.critical(
+                f"Unknown trade in the system {trade.order} {trade.contract.symbol}"
+            )
 
     async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
         if self.hold:
@@ -434,6 +441,7 @@ class Controller(Atom):
         if errorCode < 400:
             # reqId is most likely orderId
             # order rejected is errorCode = 201
+            # 421: Error validating request.-'bN' : cause - Missing order exchange
             order_info = self.sm.order.get(reqId)
             if order_info:
                 (strategy, action, trade) = order_info
@@ -457,60 +465,21 @@ class Controller(Atom):
         else:
             log.error(f"No records for rejected order: {trade.order.orderId}")
 
-    async def execute_stops_and_close_positions(self):
-        log.debug("Will attempt to close positions and cancel orders.")
-        positions = self.trader.positions()
-        log.debug(f"Existing positions: {positions}")
-        trades = []
-        for order in self.ib.openOrders():
-            if order.orderType in ("STP", "TRAIL"):
-                # Make sure no orders executed if there's no corresponding position
-                position_diff = 1 if order.action == "BUY" else -1
-                if (positions[order.contract] - position_diff) >= 0:
-                    order.orderType = "MKT"
-                    trade = self.ib.placeOrder(order)
-                    trades.append(trade)
-                    trade.filledEvent += trades.remove
-                    positions[order.contract] -= position_diff
-                else:
-                    self.trader.cancel(order)
-            else:
-                self.trader.cancel(order)
+    async def execute_stops_and_close_positions(self) -> None:
+        await Terminator(self).run()
 
-        for contract, position in positions.items():
-            if position:
-                # Again make sure total orders issued match existing positions
-                trade = self.trader.trade(
-                    contract,
-                    ibi.MarketOrder("BUY" if position < 0 else "SELL", abs(position)),
-                )
-                trades.append(trade)
-                trade.filledEvent += trades.remove
-
-        def _trade(t: ibi.Trade) -> tuple[str, str, float, int]:
-            return (
-                t.contract.symbol,
-                t.order.action,
-                t.order.totalQuantity,
-                t.order.orderId,
-            )
-
-        while trades:
-            log.warning(f"Closing positions in progress: {[_trade(t) for t in trades]}")
-            asyncio.sleep(2)
-
-        log.debug("All positions closed and orders cancelled.")
-
-    def close_positions(self):
-        for position in self.ib.positions:
-            self.trader.trade(
+    def close_positions(self) -> None:
+        positions: list[ibi.Position] = self.ib.positions()
+        for position in positions:
+            self.ib.qualifyContracts(position.contract)
+            self.ib.placeOrder(
                 position.contract,
                 ibi.MarketOrder(
                     "BUY" if position.position < 0 else "SELL", abs(position.position)
                 ),
             )
 
-    def nuke(self):
+    def nuke(self) -> None:
         """
         Cancel all open orders, close existing positions and prevent
         any further trading.  Response to a critical error or request
@@ -518,11 +487,125 @@ class Controller(Atom):
 
         ---> Currently not in use. <---
         """
-        for order in self.ib.openOrders():
-            self.ib.cancelOrder(order)
-        self.trader = FakeTrader()
+        # this will ignore any further orders coming from the system
+        # don't use self.trader any more
+        self.trader = FakeTrader(self.ib)
+        self.ib.reqGlobalCancel()
         self.close_positions()
+
         log.critical("Self nuked!!!!! No more trades will be executed until restart.")
 
-    def __repr__(self):
-        return f"{__class__.__name__}({self.sm, self.ib, self.blotter})"
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.sm, self.ib, self.blotter})"
+
+
+class Terminator:
+    def __init__(self, controller: Controller):
+        log.warning("TERMINATOR in action.")
+        self.controller = controller
+        self.trades = []
+        self.trades = controller.ib.openTrades()
+        self.positions = controller.trader.positions()
+
+    async def run(self):
+        self.cancel_orders()
+        await self.controller.ib.qualifyContractsAsync(*self.positions.keys())
+        self.close_positions()
+        if positions := await self.report():
+            log.debug(f"Unclosed positions: {positions}")
+            log.debug("Going nuclear...")
+            self.controller.ib.reqGlobalCancel()
+            self.controller.close_positions()
+        log.debug("Closed all positions.")
+
+    def register_trade(self, trade: ibi.Trade) -> None:
+        trade.filledEvent += self.trades.remove
+        trade.cancelledEvent += self.trades.remove
+        trade.cancelledEvent += lambda x: log.error(f"Rejected trade: {x}")
+
+    @staticmethod
+    def describe_trade(t: ibi.Trade) -> tuple[str, str, float, int]:
+        return (
+            t.contract.symbol,
+            t.order.action,
+            t.order.totalQuantity,
+            t.order.orderId,
+        )
+
+    def _strategy_trade(self, strategy, contract, action, amount):
+        new_trade = self.controller.trade(
+            strategy.strategy,
+            contract,
+            ibi.MarketOrder(action, amount),
+            "RESET",
+            strategy,
+        )
+        self.register_trade(new_trade)
+        return new_trade
+
+    def cancel_orders(self):
+        log.debug(
+            f"Will attempt to cancel orders: "
+            f"{[self.describe_trade(t) for t in self.trades]}"
+        )
+
+        for trade in self.trades:
+            log.debug(f"handling order: {trade.order}")
+            if trade.order.orderType in ("STP", "TRAIL"):
+                # Make sure no orders executed if there's no corresponding position
+                stop_amount = trade.remaining() if trade.order.action == "BUY" else -1
+                existing_amount = self.positions.get(trade.contract, 0)
+
+                if existing_amount and (
+                    misc.sign(stop_amount) == misc.sign(existing_amount)
+                ):
+                    trade_amount = existing_amount - stop_amount
+                    strategy = self.controller.sm.strategy_for_trade(trade)
+                    trade.cancelledEvent += partial(
+                        self._strategy_trade,
+                        strategy=strategy,
+                        contract=trade.contract,
+                        action=trade.order.action,
+                        amount=abs(trade_amount),
+                    )
+                    self.controller.cancel(trade)
+
+                    try:
+                        self.positions[trade.contract] -= trade_amount
+                    except KeyError:
+                        pass
+                    continue
+            self.controller.cancel(trade)
+
+    def close_positions(self):
+        log.debug(
+            f"Will attempt to close existing positions: "
+            f"{ {c.symbol: p for c, p in self.positions.items()} }"
+        )
+
+        for contract, position in self.positions.items():
+            if position:
+                # Again make sure total orders issued match existing positions
+                self.register_trade(
+                    self.controller.trader.trade(
+                        contract,
+                        ibi.MarketOrder(
+                            "BUY" if position < 0 else "SELL",
+                            abs(position),
+                            tif="DAY",
+                            outsideRth=True,
+                        ),
+                    )
+                )
+
+    async def report(self):
+        n = 0
+        while not all([t.isDone() for t in self.trades]):
+            log.warning(
+                f"Closing positions in progress: "
+                f"{[self.describe_trade(t) for t in self.trades]}"
+            )
+            await asyncio.sleep(1)
+            if (n := n + 1) > 10:
+                break
+        return self.trades
