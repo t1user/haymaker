@@ -460,18 +460,19 @@ def tsi(price: pd.Series, lookback1, lookback2):
     )
 
 
-def carver(price: pd.Series, lookback: int) -> pd.Series:
+def carver(price: pd.Series, lookback: int, ratio: int = 1) -> pd.Series:
     """
     Return modified version of price placing it on a min-max scale
-    over recent lookback periods expressed on a scale of -100 to 100
-    (modified stochastic oscilator, after Rob Carver:
-    https://qoppac.blogspot.com/2016/05/a-simple-breakout-trading-rule.html).
+    over recent lookback periods expressed on a scale of -ratio to
+    +ratio (-1 to +1 by default).  It's modified stochastic oscilator,
+    after Rob Carver:
+    https://qoppac.blogspot.com/2016/05/a-simple-breakout-trading-rule.html
     """
     df = pd.DataFrame({"price": price})
     df["max"] = df["price"].rolling(lookback).max()
     df["min"] = df["price"].rolling(lookback).min()
     df["mid"] = df[["min", "max"]].mean(axis=1)
-    df["carver"] = 200 * ((df["price"] - df["mid"]) / (df["max"] - df["min"]))
+    df["carver"] = 2 * ratio * ((df["price"] - df["mid"]) / (df["max"] - df["min"]))
     return df["carver"]
 
 
