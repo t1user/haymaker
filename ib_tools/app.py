@@ -88,6 +88,7 @@ class App:
             2106,  # Data farm connection is OK
             2108,  # Market data farm [...] is inactive but [...~ok]
             2158,  # Sec-def data farm connection is OK
+            202,  # Order cancelled
         ):
             log.debug(f"Error event: {reqId} {errorCode} {errorString} {contract}")
             # Consider handling 2103 - Market data connection is broken
