@@ -33,14 +33,14 @@ class Config(ChainMap):
             "--reset",
             action="store_true",
             default=False,
-            help="On start, will close all existing positions and cancel orders.",
+            help="On startup close all existing positions and cancel orders.",
         )
         parser.add_argument(
             "-z",
             "--zero",
             action="store_true",
             default=False,
-            help="On startup will zero all records.",
+            help="On startup zero-out all records.",
         )
 
         parser.add_argument(
@@ -50,6 +50,13 @@ class Config(ChainMap):
             default=False,
             help="Start programme without reading state from database.",
         )
+        parser.add_argument(
+            "-n",
+            "--nuke",
+            action="store_true",
+            default=False,
+            help="Cancel all orders and close positions then stop trading.",
+        )
         cmdline = parser.parse_args(argv)
         if cmdline.file:
             self.file = Path.cwd() / cmdline.file
@@ -57,6 +64,7 @@ class Config(ChainMap):
             "coldstart": cmdline.coldstart,
             "reset": cmdline.reset,
             "zero": cmdline.zero,
+            "nuke": cmdline.nuke,
         }
 
     @property

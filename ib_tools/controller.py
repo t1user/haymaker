@@ -72,6 +72,7 @@ class Controller(Atom):
         self.cold_start = CONFIG.get("coldstart")
         self.reset = CONFIG.get("reset")
         self.zero = CONFIG.get("zero")
+        self.nuke_ = CONFIG.get("nuke")
         self.cancel_stray_orders = self.config.get("cancel_stray_orders")
 
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
@@ -99,6 +100,8 @@ class Controller(Atom):
         """
 
         self.set_hold()
+        if self.nuke_:
+            self.nuke()
 
         if self.cold_start:
             log.debug("Starting cold... (state NOT read from db)")
@@ -313,7 +316,7 @@ class Controller(Atom):
                 log.debug(f"{strategy} position OK? -> {records_ok} <- ")
             else:
                 log.error(
-                    f"Wrong position for {strategy} - "
+                    f"Failed to achieve target position for {strategy} - "
                     f"target: {target_position}, position: {data.position}"
                 )
 
@@ -323,7 +326,9 @@ class Controller(Atom):
             log.debug(f"{sm_position=}, {ib_position=}")
             position_ok = sm_position == ib_position
             if position_ok:
-                log.debug(f"{contract.symbol} position OK? -> {position_ok} <-")
+                log.debug(
+                    f"{contract.symbol} records vs broker OK? -> {position_ok} <-"
+                )
             else:
                 log.error(
                     f"Wrong position for {contract} - " f"{ib_position=}, {sm_position}"
