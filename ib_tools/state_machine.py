@@ -239,6 +239,16 @@ class StrategyContainer(UserDict):
         )
         return self.data[key]
 
+    def get(self, key, default=None):
+        if key in self.data:
+            return self.data[key]
+        elif default is None:
+            return self[key]
+        else:
+            return default
+
+    # TODO: def get(self, key, default)
+
     def total_positions(self) -> defaultdict[ibi.Contract, float]:
         """
         Return a dict of positions by contract.

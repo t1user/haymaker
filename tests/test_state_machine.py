@@ -387,6 +387,33 @@ def test_access_strategy_with_square_brackets(state_machine):
     assert state_machine.strategy["xyz"] == st
 
 
+def test_access_strategy_with_get_existing_key(state_machine):
+    st = Strategy({"a": {"x": 1, "y": 2}}, ce)
+    state_machine.strategy["xyz"] = st
+    assert state_machine.strategy.get("xyz") == st
+
+
+def test_access_strategy_with_get_non_existing_key_with_default(state_machine):
+    st = Strategy({"a": {"x": 1, "y": 2}}, ce)
+    state_machine.strategy["xyz"] = st
+    assert state_machine.strategy.get("abc", "default") == "default"
+
+
+def test_access_strategy_with_get_non_existing_key_with_falsey_default(state_machine):
+    st = Strategy({"a": {"x": 1, "y": 2}}, ce)
+    state_machine.strategy["xyz"] = st
+    assert state_machine.strategy.get("abc", "") == ""
+
+
+def test_access_strategy_with_get_non_existing_key_no_default(state_machine):
+    # should create new strategy with strategy key inserted
+    st = Strategy({"a": {"x": 1, "y": 2}}, ce)
+    state_machine.strategy["xyz"] = st
+    assert state_machine.strategy.get("abc") == Strategy(
+        {"strategy": "abc"}, strategyChangeEvent=ev.Event()
+    )
+
+
 def test_access_order_with_get(state_machine):
     oi = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     state_machine.order[1234] = oi
