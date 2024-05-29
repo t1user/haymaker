@@ -71,6 +71,7 @@ class Controller(Atom):
 
         self.cold_start = CONFIG.get("coldstart")
         self.reset = CONFIG.get("reset")
+        self.zero = CONFIG.get("zero")
         self.cancel_stray_orders = self.config.get("cancel_stray_orders")
 
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
@@ -110,6 +111,11 @@ class Controller(Atom):
                 log.exception(e)
 
         await self.sync()
+
+        if self.zero:
+            log.debug("Zeroing all records...")
+            self.clear_records()
+            self.zero = False
 
         if self.reset:
             await self.execute_stops_and_close_positions()
@@ -477,6 +483,9 @@ class Controller(Atom):
 
     async def execute_stops_and_close_positions(self) -> None:
         await Terminator(self).run()
+
+    def clear_records(self):
+        self.sm.clear_models()
 
     def close_positions(self) -> None:
         positions: list[ibi.Position] = self.ib.positions()

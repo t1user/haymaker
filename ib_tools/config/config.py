@@ -36,6 +36,14 @@ class Config(ChainMap):
             help="On start, will close all existing positions and cancel orders.",
         )
         parser.add_argument(
+            "-z",
+            "--zero",
+            action="store_true",
+            default=False,
+            help="On startup will zero all records.",
+        )
+
+        parser.add_argument(
             "-c",
             "--coldstart",
             action="store_true",
@@ -45,7 +53,11 @@ class Config(ChainMap):
         cmdline = parser.parse_args(argv)
         if cmdline.file:
             self.file = Path.cwd() / cmdline.file
-        return {"coldstart": cmdline.coldstart, "reset": cmdline.reset}
+        return {
+            "coldstart": cmdline.coldstart,
+            "reset": cmdline.reset,
+            "zero": cmdline.zero,
+        }
 
     @property
     def config_file(self) -> collections.abc.MutableMapping:
