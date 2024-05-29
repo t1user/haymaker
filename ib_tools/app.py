@@ -83,15 +83,8 @@ class App:
     def onError(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
-        if errorCode not in (
-            2104,  # Market data farm connection is ok
-            2106,  # Data farm connection is OK
-            2108,  # Market data farm [...] is inactive but [...~ok]
-            2158,  # Sec-def data farm connection is OK
-            202,  # Order cancelled
-        ):
+        if errorCode not in config.get("ignore_errors", []):
             log.debug(f"Error event: {reqId} {errorCode} {errorString} {contract}")
-            # Consider handling 2103 - Market data connection is broken
 
     def onStarting(self, watchdog: ibi.Watchdog) -> None:
         log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")

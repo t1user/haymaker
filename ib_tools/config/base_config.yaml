@@ -1,6 +1,14 @@
 coldstart: False
 reset: False
 
+ignore_errors:
+  - 2104  # Market data farm connection is ok
+  - 2106  # Data farm connection is OK
+  - 2108  # Market data farm [...] is inactive but [...~ok]
+  - 2158  # Sec-def data farm connection is OK
+  - 202  # Order cancelled
+  # Consider handling 2103 - Market data connection is broken
+
 app:
   restart_time: 30 # after disconnection, time to wait before reconnection attempt
   host: 127.0.0.1
