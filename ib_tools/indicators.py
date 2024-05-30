@@ -739,7 +739,7 @@ def _range_entry(s: pd.Series) -> pd.Series:
     s is the output of inout_range
     """
 
-    return -((s.shift() - s) * s).fillna(0)
+    return -((s.shift() - s) * s)
 
 
 def _signed_range_entry(entry: pd.Series, sign: pd.Series) -> pd.Series:
@@ -749,7 +749,7 @@ def _signed_range_entry(entry: pd.Series, sign: pd.Series) -> pd.Series:
     entry will be signed same as price when entering range.
     """
 
-    return (_range_entry(entry) * np.sign(sign)).astype(int)
+    return (_range_entry(entry) * np.sign(sign)).dropna().astype(int)
 
 
 def range_blip(

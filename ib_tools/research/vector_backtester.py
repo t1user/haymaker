@@ -91,13 +91,16 @@ def pos(
     df["o_transaction"] = df["transaction"] - df["c_transaction"]
 
     # DataFrame calculating per transaction stats
-    _opens = df[df.o_transaction != 0]
-    _closes = df[df.c_transaction != 0]
+    _opens = df[df["o_transaction"] != 0]
+    _closes = df[df["c_transaction"] != 0]
 
-    # close out final open position (if any)
+    # # close out final open position (if any)
     if not len(_opens) == len(_closes):
-        _closes.loc[df.index[-1]] = df.iloc[-1]
-        _closes.c_transaction[-1] = _opens.o_transaction[-1] * -1
+        _closes = pd.concat([_closes, df.iloc[-1].to_frame().T])
+        # _closes.loc[df.index[-1], :] = df.iloc[-1]
+        _closes.loc[_closes.index[-1], "c_transaction"] = (
+            _opens.o_transaction.iloc[-1] * -1
+        )
 
     # create positions df
     opens = (_opens["price"] * _opens["o_transaction"]).reset_index()
@@ -217,8 +220,8 @@ def _perf(
         df["g_pnl"] += df["stop_adj"] + df["open_stop"]
 
     # final open positions must account for closing cost
-    if df.position[-1] != 0:
-        df.slippage[-1] += np.abs(df.position[-1]) * cost
+    if df.position.iloc[-1] != 0:
+        df.loc[df.index[-1], "slippage"] += np.abs(df.position.iloc[-1]) * cost
 
     df["pnl"] = df["g_pnl"] - df["slippage"]
 
@@ -242,7 +245,7 @@ class Results(NamedTuple):
 
 
 def efficiency(price: pd.Series, strategy_return: float) -> float:
-    market_return = abs(price[-1] / price[0] - 1)
+    market_return = abs(price.iloc[-1] / price.iloc[0] - 1)
     return strategy_return / market_return
 
 
@@ -252,8 +255,8 @@ def efficiency_1(price: pd.Series, strategy_return: float) -> float:
 
 
 def efficiency_2(price: pd.Series, strategy_return: float) -> float:
-    open = price[0]
-    close = price[-1]
+    open = price.iloc[0]
+    close = price.iloc[-1]
     high = price.max()
     low = price.min()
     distance = (
@@ -277,7 +280,7 @@ def duration_warning(
     indices = pd.DataFrame(
         {"n": np.arange(1, len(full_df.index) + 1, 1)}, index=full_df.index
     )
-    locations = positions[["date_o", "date_c"]]
+    locations = positions[["date_o", "date_c"]].copy()
     locations["i_o"] = indices.loc[locations["date_o"], "n"].reset_index(drop=True)
     locations["i_c"] = indices.loc[locations["date_c"], "n"].reset_index(drop=True)
     locations["duration"] = locations["i_c"] - locations["i_o"]
