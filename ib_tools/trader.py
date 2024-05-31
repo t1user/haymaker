@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import itertools
 import logging
+import random
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -64,11 +66,23 @@ class FakeTrader(Trader):
     subsequent trading.
     """
 
+    _orderId = itertools.count(random.randint(1, 900), 1).__next__
+
+    @property
+    def orderId(self):
+        """
+        Order ids will be 5-digit ints starting with 66, sequential
+        for the session.
+        """
+        return 66000 + self._orderId()
+
     def trade(self, contract, order):
+        order.orderId = self.orderId
         log.debug(f"Not trading: {contract} {order}")
         return ibi.Trade(
             contract=contract,
             order=order,
+            orderStatus=ibi.OrderStatus(orderId=order.orderId, status="Cancelled"),
             log=[
                 ibi.TradeLogEntry(
                     time=datetime.now(tz=timezone.utc),

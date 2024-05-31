@@ -198,7 +198,7 @@ class ErrorHandlers:
 
         await asyncio.sleep(0)
         try:
-            # don't know what to do with that yet:
+            # TODO: don't know what to do with that yet
             self.clear_error_trades(report.errors)
 
         except Exception as e:
