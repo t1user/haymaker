@@ -30,7 +30,7 @@ class OrderInfo:
 
     @property
     def active(self):
-        return not self.trade.isDone()
+        return self.trade.isActive()
 
     @property
     def permId(self):
