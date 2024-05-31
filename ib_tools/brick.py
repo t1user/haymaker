@@ -92,6 +92,10 @@ class AbstractDfBrick(AbstractBaseBrick):
             d = pd.DataFrame(data).set_index("date")
         except KeyError:
             d = pd.DataFrame(data)
+        except ValueError:
+            log.error(
+                f"{self} received data in wrong format: {data}, type: {type(data)}"
+            )
         return self.df(d)
 
     @_create_df.register(pd.DataFrame)

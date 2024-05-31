@@ -6,8 +6,9 @@ ignore_errors:
   - 2106  # Data farm connection is OK
   - 2108  # Market data farm [...] is inactive but [...~ok]
   - 2158  # Sec-def data farm connection is OK
+  - 2110  # Connectivity between Trader Workstation and server is broken. It will be restored automatically.
   - 202  # Order cancelled
-  # Consider handling 2103 - Market data connection is broken
+  # Consider silencing 2103 - Market data connection is broken
 
 app:
   restart_time: 30 # after disconnection, time to wait before reconnection attempt

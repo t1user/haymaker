@@ -29,7 +29,7 @@ handlers:
     
 loggers:
   ib_tools:
-    level: 5
+    level: DEBUG
     handlers: [console, timed_rotating_file]
   strategy:
     level: DEBUG

@@ -84,7 +84,7 @@ class App:
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
         if errorCode not in config.get("ignore_errors", []):
-            log.debug(f"Error event: {reqId} {errorCode} {errorString} {contract}")
+            log.debug(f"IB warning: {reqId=} {errorCode} {errorString} {contract=}")
 
     def onStarting(self, watchdog: ibi.Watchdog) -> None:
         log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")
