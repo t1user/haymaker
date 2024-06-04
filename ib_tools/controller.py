@@ -310,29 +310,29 @@ class Controller(Atom):
         future).
         """
         data = self.sm.strategy.get(strategy)
+        target = target_position * amount
+        log_str = f"target: {target}, position: {data.position}"
         if data:
-            records_ok = data.position == (target_position * amount)
+            records_ok = data.position == (target)
             if records_ok:
-                log.debug(f"{strategy} position OK? -> {records_ok} <- ")
+                log.debug(f"{strategy} position OK? -> {records_ok} <- " f"{log_str}")
             else:
                 log.error(
-                    f"Failed to achieve target position for {strategy} - "
-                    f"target: {target_position}, position: {data.position}"
+                    f"Failed to achieve target position for {strategy} - " f"{log_str}"
                 )
 
             contract = data.active_contract
             sm_position = self.sm.position.get(contract, 0.0)
             ib_position = self.trader.position_for_contract(contract)
-            log.debug(f"{sm_position=}, {ib_position=}")
             position_ok = sm_position == ib_position
+            log_str_position = f"{sm_position=}, {ib_position=}"
             if position_ok:
                 log.debug(
-                    f"{contract.symbol} records vs broker OK? -> {position_ok} <-"
+                    f"{contract.symbol} records vs broker OK? -> {position_ok} <- "
+                    f"{log_str_position}"
                 )
             else:
-                log.error(
-                    f"Wrong position for {contract} - " f"{ib_position=}, {sm_position}"
-                )
+                log.error(f"Wrong position for {contract} - {log_str_position}")
         else:
             log.critical(f"Attempt to trade for unknown strategy: {strategy}")
 
