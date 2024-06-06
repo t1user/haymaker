@@ -360,17 +360,26 @@ class StateMachine:
     def update_trade(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         """
         Update trade object for a given order.  Used after re-start to
-        bring records up to date with IB.
+        bring records up to date with IB.  Non-restart syncs just
+        confirm that the trade is already accounted for without
+        over-writting the trade object (which is the same as the
+        stored one anyway).
         """
         oi = self._orders.get(trade.order.orderId)
-        if oi:
-            # log.debug(
-            #     f"Trade will be updated - id: {oi.trade.order.orderId} "
-            #     f"permId: {oi.trade.order.permId}"
-            # )
+        # this is a new trade object
+        if oi and not (oi.trade is trade):
+            # this runs only on re-start
+            log.debug(
+                f"Trade will be updated - id: {oi.trade.order.orderId} "
+                f"permId: {oi.trade.order.permId}"
+            )
             new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
             self.save_order(new_oi)
             return None
+        # trade object exists and is the same as in the records
+        elif oi:
+            return None
+        # this is an unknown trade
         else:
             return trade
 

@@ -63,9 +63,9 @@ class OrderSyncStrategy:
         report them as appropriate.
         """
         ib_open_trades = {trade.order.orderId: trade for trade in self.ib.openTrades()}
-        log.debug(f"ib open trades: {list(ib_open_trades.keys())}")
+        # log.debug(f"ib open trades: {list(ib_open_trades.keys())}")
         for orderId, oi in self.sm._orders.copy().items():
-            log.debug(f"verifying {orderId}")
+            # log.debug(f"verifying {orderId}")
             if orderId not in ib_open_trades:
                 # if inactive it's already been dealt with before sync
                 if oi.active:
@@ -93,11 +93,12 @@ class OrderSyncStrategy:
             for trade in self.ib.trades()
         }
 
-        log.debug(f"ib known trades: {list(ib_known_trades.keys())}")
-        log.debug(
-            f"inactive trades: "
-            f"{[(i.order.orderId, i.order.permId) for i in self.inactive]}"
-        )
+        # log.debug(f"ib known trades: {list(ib_known_trades.keys())}")
+        if self.inactive:
+            log.debug(
+                f"inactive trades: "
+                f"{[(i.order.orderId, i.order.permId) for i in self.inactive]}"
+            )
 
         for old_trade in self.inactive:
             new_trade = ib_known_trades.get(old_trade.order.permId)
@@ -108,7 +109,8 @@ class OrderSyncStrategy:
             else:
                 self.errors.append(old_trade)
 
-        log.debug(f"done: {[(t.order.orderId, t.order.permId) for t in self.done]}")
+        if self.done:
+            log.debug(f"done: {[(t.order.orderId, t.order.permId) for t in self.done]}")
 
         return self
 
@@ -150,15 +152,15 @@ class PositionSyncStrategy:
         """
 
         broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
-        log.debug(
-            f"broker positions: "
-            f"{ {k.symbol: v for k,v in broker_positions_dict.items()} }"
-        )
+        # log.debug(
+        #     f"broker positions: "
+        #     f"{ {k.symbol: v for k,v in broker_positions_dict.items()} }"
+        # )
         my_positions_dict = self.sm.strategy.total_positions()
-        log.debug(
-            f"my positions: "
-            f"{ {k.symbol: v for k, v in my_positions_dict.items() if v} }"
-        )
+        # log.debug(
+        #     f"my positions: "
+        #     f"{ {k.symbol: v for k, v in my_positions_dict.items() if v} }"
+        # )
         diff = {
             i: (
                 (my_positions_dict.get(i) or 0.0)
