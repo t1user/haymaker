@@ -523,7 +523,7 @@ class Terminator:
             if (
                 trade.order.orderType in ("STP", "TRAIL")
                 and (strategy := self.controller.sm.strategy_for_trade(trade))
-                != "UNKNOWN"
+                and (strategy != "UNKNOWN")
             ):
                 # Make sure no orders executed if there's no corresponding position
                 try:
@@ -589,7 +589,9 @@ class Terminator:
 
     async def report(self):
         n = 0
-        log.debug(f"Reset in progress: {self.in_progress_trades}")
+        log.debug(
+            f"Reset in progress: {[t.order.orderId for t in self.in_progress_trades]}"
+        )
         while not all([t.isDone() for t in self.in_progress_trades]):
             log.warning(
                 f"Trades in progress: "
