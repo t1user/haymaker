@@ -58,6 +58,9 @@ class App:
     def __post_init__(self):
         self.ib.errorEvent += self.onError
         self.ib.connectedEvent += self.onConnected
+        if timeout := CONFIG.get("app_timeout"):
+            self.ib.setTimeout(timeout)
+            self.ib.timeoutEvent += self.onTimeout
 
         self.watchdog = ibi.Watchdog(
             self.ibc,  # type: ignore
@@ -85,6 +88,9 @@ class App:
     ) -> None:
         if errorCode not in config.get("ignore_errors", []):
             log.debug(f"IB warning: {reqId=} {errorCode} {errorString} {contract=}")
+
+    def onTimeout(self, timeout: float) -> None:
+        log.error(f"IB idle for {float}")
 
     def onStarting(self, watchdog: ibi.Watchdog) -> None:
         log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")

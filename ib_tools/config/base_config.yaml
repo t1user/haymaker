@@ -22,7 +22,8 @@ app:
     !!python/object/apply:ib_insync.Forex
     - EURUSD
   probeTimeout: 4
-
+  app_timeout: 300
+  
 controller:
   use_blotter: True
   log_IB_events: False
