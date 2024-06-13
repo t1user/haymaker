@@ -38,7 +38,7 @@ def test_OrderInfo_unpackable():
     strategy, action, trade, exec_model, active = o1
     assert strategy == "coolstrategy"
     assert action == "OPEN"
-    assert active
+    assert not active
 
 
 def test_OrderInfo_iterator():
@@ -50,17 +50,35 @@ def test_OrderInfo_iterator():
 
 def test_OrderInfo_active():
     trade1 = ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Filled"))
-    trade2 = ibi.Trade()
     o1 = OrderInfo("coolstrategy", "STOP", trade1, None)
-    o2 = OrderInfo("coolstrategy", "STOP", trade2, None)
     assert o1.active is False
-    assert o2.active is True
+
+
+def test_OrderInfo_not_active():
+    trade1 = ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"))
+    o1 = OrderInfo("coolstrategy", "STOP", trade1, None)
+    assert o1.active is True
 
 
 def test_OrderContainer_strategy_gets_correct_orders():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+    o1 = OrderInfo(
+        "coolstrategy",
+        "OPEN",
+        ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Submitted")),
+        None,
+    )
+    o2 = OrderInfo(
+        "coolstrategy",
+        "STOP",
+        ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Submitted")),
+        None,
+    )
+    o3 = OrderInfo(
+        "suckystrategy",
+        "STOP",
+        ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Submitted")),
+        None,
+    )
 
     orders = OrderContainer()
     orders[1] = o1
@@ -71,9 +89,24 @@ def test_OrderContainer_strategy_gets_correct_orders():
 
 
 def test_OrderContainer_del_works_correctly():
-    o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
-    o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
-    o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
+    o1 = OrderInfo(
+        "coolstrategy",
+        "OPEN",
+        ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Submitted")),
+        None,
+    )
+    o2 = OrderInfo(
+        "coolstrategy",
+        "STOP",
+        ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Submitted")),
+        None,
+    )
+    o3 = OrderInfo(
+        "suckystrategy",
+        "STOP",
+        ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Submitted")),
+        None,
+    )
 
     orders = OrderContainer()
     orders[1] = o1
