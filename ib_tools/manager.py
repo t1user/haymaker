@@ -23,8 +23,12 @@ class InitData:
     contract_details: DetailsContainer
 
     async def __call__(self) -> "InitData":
-        await self.qualify_contracts()
-        await self.acquire_contract_details()
+        try:
+            await self.qualify_contracts()
+            await self.acquire_contract_details()
+        except Exception as e:
+            log.exception(e)
+
         return self
 
     async def qualify_contracts(self) -> "InitData":
