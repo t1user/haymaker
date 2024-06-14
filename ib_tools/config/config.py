@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import collections.abc
 import logging
 import os
@@ -11,61 +10,36 @@ from typing import Final, Optional
 
 import yaml
 
+from .cli_options import CustomArgParser
+
 log = logging.getLogger(__name__)
 
 module_directory = Path(__file__).parents[0]
 
 
 class Config(ChainMap):
+    """
+    App parameters are determined in the following order:
+
+        - command line
+
+        - system variables
+
+        - yaml file passed from command line
+
+        - default yaml file (located in the same directory as :class:`.Config`)
+    """
+
     def __init__(self) -> None:
         self.file: Optional[str] = None
         super().__init__(self.cmdline, self.config_file, self.environ, self.defaults)
 
     @property
     def cmdline(self) -> collections.abc.MutableMapping:
-        if "test" in sys.argv[0]:
-            return {}
-        argv = sys.argv[1:]
-        parser = argparse.ArgumentParser(description="File with config or coldstart.")
-        parser.add_argument("-f", "--file", type=str, nargs="?")
-        parser.add_argument(
-            "-r",
-            "--reset",
-            action="store_true",
-            default=False,
-            help="On startup close all existing positions and cancel orders.",
-        )
-        parser.add_argument(
-            "-z",
-            "--zero",
-            action="store_true",
-            default=False,
-            help="On startup zero-out all records.",
-        )
-
-        parser.add_argument(
-            "-c",
-            "--coldstart",
-            action="store_true",
-            default=False,
-            help="Start programme without reading state from database.",
-        )
-        parser.add_argument(
-            "-n",
-            "--nuke",
-            action="store_true",
-            default=False,
-            help="Cancel all orders and close positions then stop trading.",
-        )
-        cmdline = parser.parse_args(argv)
-        if cmdline.file:
-            self.file = Path.cwd() / cmdline.file
-        return {
-            "coldstart": cmdline.coldstart,
-            "reset": cmdline.reset,
-            "zero": cmdline.zero,
-            "nuke": cmdline.nuke,
-        }
+        cmdline = CustomArgParser.from_args(sys.argv).output
+        if file := cmdline.get("file"):
+            self.file = Path.cwd() / file
+        return cmdline
 
     @property
     def config_file(self) -> collections.abc.MutableMapping:
@@ -88,9 +62,9 @@ class Config(ChainMap):
             data = yaml.unsafe_load(f)
         return data
 
-    def parse_keys(self, d: dict) -> collections.abc.Mapping:
-        new_dict: dict = {}
-        return new_dict
+    # def parse_keys(self, d: dict) -> collections.abc.Mapping:
+    #     new_dict: dict = {}
+    #     return new_dict
 
 
 CONFIG: Final[Config] = Config()
