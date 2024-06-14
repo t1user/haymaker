@@ -11,6 +11,14 @@ def test_set_option_long():
     assert parser.output.get("key") == "value"
 
 
+def test_set_option_with_multiple_options():
+    parser = CustomArgParser.from_str("-s key value -s key1 value1 -s key2 value2")
+    output = parser.output
+    assert output["key"] == "value"
+    assert output["key1"] == "value1"
+    assert output["key2"] == "value2"
+
+
 def test_module_lookup_works():
     parser = CustomArgParser.from_str("--test_option", "my_module.py")
     assert parser.output.get("test_option")
@@ -19,6 +27,18 @@ def test_module_lookup_works():
 def test_common_options_work_for_non_default_modules():
     parser = CustomArgParser.from_str("--set_option key value", "my_module.py")
     assert parser.output.get("key") == "value"
+
+
+def test_source():
+    parser = CustomArgParser.from_str("myfile.yaml")
+    output = parser.output
+    assert output["source"] == "myfile.yaml"
+
+
+def test_no_source():
+    parser = CustomArgParser.from_str("-r -f filename.yaml -z --nuke")
+    output = parser.output
+    assert output["source"] is None
 
 
 def test_app_options():

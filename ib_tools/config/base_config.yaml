@@ -65,14 +65,7 @@ saver:
     port: 27017
     db: test_data
 
-dataloader:
-  file: contracts.csv
-  barSize: 30secs
-  wts: TRADES
-  aggression: 2
-  continuous_futures_only: True
-  watchdog: False
-    
+
 # look into this because it's not in use at the moment
 logging:
   logging_filename: haymakerLog.log

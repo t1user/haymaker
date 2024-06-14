@@ -54,8 +54,17 @@ class Config(ChainMap):
         return os.environ
 
     @property
+    def base_config_file(self) -> str:
+        root = "base_config.yaml"
+        filename = Path(sys.argv[0]).name.strip(".py")
+        return f"{filename}_{root}"
+
+    @property
     def defaults(self) -> collections.abc.MutableMapping:
-        filename = module_directory / "base_config.yaml"
+        if (module_directory / self.base_config_file).is_file():
+            filename = module_directory / self.base_config_file
+        else:
+            filename = module_directory / "base_config.yaml"
         return self.parse_yaml(filename)
 
     def parse_yaml(self, filename) -> collections.abc.MutableMapping:

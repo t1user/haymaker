@@ -29,6 +29,7 @@ epilog = "Defaults will be used for all unset parameters."
 
 
 common_options = [
+    (("source",), {"nargs": "?", "help": "Optional file with source data."}),
     (
         ("-s", "--set_option"),
         {
