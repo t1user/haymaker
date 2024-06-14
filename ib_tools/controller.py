@@ -129,16 +129,19 @@ class Controller(Atom):
         # Only subsequently Streamers will run (I think...)
 
     async def sync(self, *args) -> None:
-        log.debug("--- Sync ---")
-        orders_report = OrderSyncStrategy.run(self.ib, self.sm)
-        # IB events will be handled so that matched trades can be sent to blotter
-        self.release_hold()
-        await self.sync_handlers.handle_orders(orders_report)
+        if self.ib.isConnected():
+            log.debug("--- Sync ---")
+            orders_report = OrderSyncStrategy.run(self.ib, self.sm)
+            # IB events will be handled so that matched trades can be sent to blotter
+            self.release_hold()
+            await self.sync_handlers.handle_orders(orders_report)
 
-        error_position_report = PositionSyncStrategy.run(self.ib, self.sm)
-        await self.sync_handlers.handle_positions(error_position_report)
+            error_position_report = PositionSyncStrategy.run(self.ib, self.sm)
+            await self.sync_handlers.handle_positions(error_position_report)
 
-        log.debug("--- Sync completed ---")
+            log.debug("--- Sync completed ---")
+        else:
+            log.debug("No connection. Abandoning sync.")
 
     async def onData(self, data, *args) -> None:
         """
@@ -470,10 +473,16 @@ class Controller(Atom):
             else:
                 strategy, action, trade, order = "", "", "", ""
 
-            log.error(
-                f"Error {errorCode}: {errorString} {contract}, "
-                f"{strategy} | {action} | {order}"
-            )
+            if errorCode == 202:
+                log.info(
+                    f"Code {errorCode}: {errorString} {contract}"
+                    f"{strategy} | {action} | {order}"
+                )
+            else:
+                log.error(
+                    f"Error {errorCode}: {errorString} {contract}, "
+                    f"{strategy} | {action} | {order}"
+                )
 
     def handle_rejected_order(self, trade: ibi.Trade) -> None:
         # NOT IN USE

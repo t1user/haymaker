@@ -37,18 +37,21 @@ class InitData:
             if isinstance(c, ibi.ContFuture) and c.conId != 0:
                 c.conId = 0
                 log.debug(f"ContFuture reset: {c}")
+        try:
+            # qualify
+            await self.ib.qualifyContractsAsync(*self.contract_list)
 
-        # qualify
-        await self.ib.qualifyContractsAsync(*self.contract_list)
+            # for every ContFuture add regular Future object, that will be actually
+            # used by Atoms
+            futures_for_cont_futures = [
+                ibi.Future(conId=c.conId)
+                for c in self.contract_list
+                if isinstance(c, ibi.ContFuture)
+            ]
+            await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
+        except Exception as e:
+            log.exception(e)
 
-        # for every ContFuture add regular Future object, that will be actually
-        # used by Atoms
-        futures_for_cont_futures = [
-            ibi.Future(conId=c.conId)
-            for c in self.contract_list
-            if isinstance(c, ibi.ContFuture)
-        ]
-        await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
         self.contract_list.extend(futures_for_cont_futures)
         log.debug(f"contracts qualified {set([c.symbol for c in self.contract_list])}")
         return self
