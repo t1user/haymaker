@@ -23,11 +23,12 @@ class Config(ChainMap):
 
         - command line
 
-        - system variables
-
         - yaml file passed from command line
 
-        - default yaml file (located in the same directory as :class:`.Config`)
+        - environment variables
+
+        - default yaml file (located in the same directory as
+          :class:`.Config`)
     """
 
     def __init__(self) -> None:

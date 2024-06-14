@@ -7,6 +7,11 @@ from typing import Optional
 
 
 class SetValues(argparse.Action):
+    """
+    To be used as `action` on argparser set_option.  Allows to pass
+    key, value pairs from commandline.
+    """
+
     def __init__(self, option_strings, dest, nargs=2, **kwargs):
         if nargs != 2:
             raise ValueError("nargs not allowed")
@@ -16,8 +21,11 @@ class SetValues(argparse.Action):
         setattr(namespace, values[0], values[1])
 
 
-help_string = "Write manual on how to use options."
-epilog = ""
+help_string = (
+    "Parameters can be passed to program directly, through a yaml file, or "
+    "environment variables. "
+)
+epilog = "Defaults will be used for all unset parameters."
 
 
 common_options = [
@@ -25,8 +33,8 @@ common_options = [
         ("-s", "--set_option"),
         {
             "action": SetValues,
-            "metavar": "KEY VALUE",
-            "help": "Set parameter KEY to VALUE.",
+            "metavar": "ARG",
+            "help": "Use provided KEY VALUE pair to set parameter KEY to VALUE.",
         },
     ),
     (
@@ -104,10 +112,10 @@ class CustomArgParser:
     def from_args(cls, args: list[str]) -> CustomArgParser:
         file_name = pathlib.Path(args[0]).name
         if (options := options_by_module.get(file_name.strip(".py"))) is not None:
-            return cls(file_name, args[1:], [*options, *common_options])
+            return cls(file_name, args[1:], [*common_options, *options])
         else:
             return cls(
-                file_name, args[1:], [*options_by_module["app"], *common_options]
+                file_name, args[1:], [*common_options, *options_by_module["app"]]
             )
 
     @classmethod
