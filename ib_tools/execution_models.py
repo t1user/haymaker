@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -14,6 +13,7 @@ import ib_insync as ibi
 from ib_tools.base import Atom
 from ib_tools.bracket_legs import AbstractBracketLeg
 from ib_tools.config import CONFIG
+from ib_tools.validators import Validator, order_field_validator
 
 # from ib_tools.manager import CONTROLLER
 
@@ -38,24 +38,6 @@ class Bracket(NamedTuple):
     trade: ibi.Trade
 
 
-class OrderFieldValidator:
-    allowed_keys: set[str] = set(dataclasses.asdict(ibi.Order()).keys())
-
-    def __set_name__(self, owner, name) -> None:
-        self.private_name = "_" + name
-
-    def __get__(self, obj, objtype=None) -> dict[str, Any]:
-        return getattr(obj, self.private_name)
-
-    def __set__(self, obj, value: dict[str, Any]) -> None:
-        if diff := self.validate(value):
-            raise ValueError(f"Wrong fields for {self.private_name}: {diff}")
-        setattr(obj, self.private_name, value)
-
-    def validate(self, value: dict[str, Any]) -> set:
-        return set(value.keys()) - self.allowed_keys
-
-
 class AbstractExecModel(Atom, ABC):
     """
     Intermediary between Portfolio and Trader.  Allows for fine tuning
@@ -69,8 +51,8 @@ class AbstractExecModel(Atom, ABC):
 
     _open_order: dict[str, Any]
     _close_order: dict[str, Any]
-    open_order = OrderFieldValidator()
-    close_order = OrderFieldValidator()
+    open_order = Validator(order_field_validator)
+    close_order = Validator(order_field_validator)
 
     def __init__(
         self,
@@ -350,8 +332,8 @@ class EventDrivenExecModel(BaseExecModel):
 
     _stop_order: dict[str, Any] = {}
     _tp_order: dict[str, Any] = {}
-    stop_order = OrderFieldValidator()
-    tp_order = OrderFieldValidator()
+    stop_order = Validator(order_field_validator)
+    tp_order = Validator(order_field_validator)
 
     def __init__(
         self,

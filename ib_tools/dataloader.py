@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import Any, Callable, ClassVar, Deque, NamedTuple, Optional, Union
+from typing import Any, ClassVar, Deque, NamedTuple, Optional, Union
 
 import pandas as pd
 import pytz
@@ -21,6 +21,7 @@ from ib_tools.connect import Connection
 from ib_tools.datastore import AbstractBaseStore
 from ib_tools.logging import setup_logging
 from ib_tools.task_logger import create_task
+from ib_tools.validators import Validator, bar_size_validator, wts_validator
 
 """
 Async queue implementation modelled (loosely) on example here:
@@ -96,95 +97,26 @@ class ContractObjectSelector:
         return self.contFutures
 
 
-class Validator:
-
-    def __init__(self, *validators: Callable[[Any], None]):
-        self.validators = validators
-
-    def __set_name__(self, owner, name) -> None:
-        self.private_name = "_" + name
-
-    def __get__(self, obj, objtype=None) -> dict[str, Any]:
-        return getattr(obj, self.private_name)
-
-    def __set__(self, obj, value: Any) -> None:
-        if self.validate(value):
-            setattr(obj, self.private_name, value)
-
-    def validate(self, value) -> bool:
-        for validator in self.validators:
-            validator(value)
-        return True
-
-
-def bar_size_validator(s: str) -> None:
-    """Verify if given string is a valid IB api bar size str"""
-    ok_str = [
-        "1 secs",
-        "5 secs",
-        "10 secs",
-        "15 secs",
-        "30 secs",
-        "1 min",
-        "2 mins",
-        "3 mins",
-        "5 mins",
-        "10 mins",
-        "15 mins",
-        "20 mins",
-        "30 mins",
-        "1 hour",
-        "2 hours",
-        "3 hours",
-        "4 hours",
-        "8 hours",
-        "1 day",
-        "1 week",
-        "1 month",
-    ]
-    if s not in ok_str:
-        raise ValueError(f"bar size : {s} is invalid, must be one of {ok_str}")
-
-
-def wts_validator(s: str) -> None:
-    """Verify if given string is a valide IB api whatToShow str"""
-    ok_str = [
-        "TRADES",
-        "MIDPOINT",
-        "BID",
-        "ASK",
-        "BID_ASK",
-        "ADJUSTED_LAST",
-        "HISTORICAL_VOLATILITY",
-        "OPTION_IMPLIED_VOLATILITY",
-        "REBATE_RATE",
-        "FEE_RATE",
-        "YIELD_BID",
-        "YIELD_ASK",
-        "YIELD_BID_ASK",
-        "YIELD_LAST",
-    ]
-    if s not in ok_str:
-        raise ValueError(f"{s} is a wrong whatToShow value, must be one of {ok_str}")
+class _DataWriter:
+    barSize: ClassVar = Validator(bar_size_validator)
+    wts: ClassVar = Validator(wts_validator)
 
 
 @dataclass
-class DataWriter:
+class DataWriter(_DataWriter):
     """Interface between dataloader and datastore"""
 
     store: AbstractBaseStore
     contract: Contract
     head: datetime
-    barSize: ClassVar = Validator(bar_size_validator)
-    wts: ClassVar = Validator(wts_validator)
+    barSize: str  # type: ignore
+    wts: str  # type: ignore
     aggression: float = 2
     # !!!!! it was pytz.timezone("Europe/Berlin") here, INVESTIGATE!!
     now: datetime = field(default_factory=partial(datetime.now, pytz.utc))
     fill_gaps: bool = CONFIG.get("fill_gaps", True)
 
     def __post_init__(self) -> None:
-        self.barSize = bar_size_validator(self.barSize)
-        self.wts = wts_validator(self.wts)
         # !!!! REVIEW everything below
         self.c = self.contract.localSymbol
         # start, stop, step in seconds, ie. every 15min
@@ -895,7 +827,7 @@ async def main(holder: ContractHolder, ib: IB) -> None:
 
 def start():
 
-    file = CONFIG.get("source")
+    source = CONFIG.get("source")
     barSize = CONFIG.get("barSize")
     wts = CONFIG.get("wts")
     aggression = CONFIG.get("aggression", 2)
@@ -913,7 +845,7 @@ def start():
     # the bool is for cont_only
     holder = ContractHolder(
         ib,
-        file,
+        source,
         store,
         wts,
         barSize,
