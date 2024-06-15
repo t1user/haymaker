@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import itertools
 import logging
@@ -7,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import Any, Deque, Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import Any, Callable, ClassVar, Deque, NamedTuple, Optional, Union
 
 import pandas as pd
 import pytz
@@ -20,9 +22,6 @@ from ib_tools.datastore import AbstractBaseStore
 from ib_tools.logging import setup_logging
 from ib_tools.task_logger import create_task
 
-# from logbook import DEBUG, INFO
-
-
 """
 Async queue implementation modelled (loosely) on example here:
 https://docs.python.org/3/library/asyncio-queue.html#examples
@@ -33,7 +32,6 @@ setup_logging()
 
 log = logging.getLogger(__name__)
 
-# TODO: change this to factory
 MAX_NUMBER_OF_WORKERS = CONFIG.get("max_number_of_workers", 40)
 
 
@@ -48,7 +46,7 @@ class ContractObjectSelector:
     def __init__(self, ib: IB, file: str, directory: Union[str, None] = None) -> None:
         self.symbols = pd.read_csv(file, keep_default_na=False).to_dict("records")
         self.ib = ib
-        self.contracts: List[Contract] = []
+        self.contracts: list[Contract] = []
         log.debug("ContractObjectSelector about to create objects")
         self.create_objects()
         log.debug("Objects created")
@@ -68,7 +66,7 @@ class ContractObjectSelector:
             self.contFutures.append(ContFuture(**params))
         log.debug(f"contfutures: {self.contFutures}")
 
-    def lookup_futures(self, obj: List[Future]) -> List[Future]:
+    def lookup_futures(self, obj: list[Future]) -> list[Future]:
         futures = []
         for o in obj:
             o.update(includeExpired=True)  # type: ignore
@@ -81,21 +79,93 @@ class ContractObjectSelector:
         return list(itertools.chain(*futures))  # type: ignore
 
     @property
-    def list(self) -> List[Contract]:
+    def list_(self) -> list[Contract]:
         if not self.contracts:
             self.update()
         return self.contracts
 
-    def update(self) -> List[Contract]:
+    def update(self) -> list[Contract]:
         qualified = self.contFutures + self.non_futures  # type: ignore
         self.ib.qualifyContracts(*qualified)
         self.contracts = self.lookup_futures(self.futures) + qualified  # type: ignore
         return self.contracts
 
     @property
-    def cont_list(self) -> List[ContFuture]:
+    def cont_list(self) -> list[ContFuture]:
         self.ib.qualifyContracts(*self.contFutures)
         return self.contFutures
+
+
+class Validator:
+
+    def __init__(self, *validators: Callable[[Any], None]):
+        self.validators = validators
+
+    def __set_name__(self, owner, name) -> None:
+        self.private_name = "_" + name
+
+    def __get__(self, obj, objtype=None) -> dict[str, Any]:
+        return getattr(obj, self.private_name)
+
+    def __set__(self, obj, value: Any) -> None:
+        if self.validate(value):
+            setattr(obj, self.private_name, value)
+
+    def validate(self, value) -> bool:
+        for validator in self.validators:
+            validator(value)
+        return True
+
+
+def bar_size_validator(s: str) -> None:
+    """Verify if given string is a valid IB api bar size str"""
+    ok_str = [
+        "1 secs",
+        "5 secs",
+        "10 secs",
+        "15 secs",
+        "30 secs",
+        "1 min",
+        "2 mins",
+        "3 mins",
+        "5 mins",
+        "10 mins",
+        "15 mins",
+        "20 mins",
+        "30 mins",
+        "1 hour",
+        "2 hours",
+        "3 hours",
+        "4 hours",
+        "8 hours",
+        "1 day",
+        "1 week",
+        "1 month",
+    ]
+    if s not in ok_str:
+        raise ValueError(f"bar size : {s} is invalid, must be one of {ok_str}")
+
+
+def wts_validator(s: str) -> None:
+    """Verify if given string is a valide IB api whatToShow str"""
+    ok_str = [
+        "TRADES",
+        "MIDPOINT",
+        "BID",
+        "ASK",
+        "BID_ASK",
+        "ADJUSTED_LAST",
+        "HISTORICAL_VOLATILITY",
+        "OPTION_IMPLIED_VOLATILITY",
+        "REBATE_RATE",
+        "FEE_RATE",
+        "YIELD_BID",
+        "YIELD_ASK",
+        "YIELD_BID_ASK",
+        "YIELD_LAST",
+    ]
+    if s not in ok_str:
+        raise ValueError(f"{s} is a wrong whatToShow value, must be one of {ok_str}")
 
 
 @dataclass
@@ -105,8 +175,8 @@ class DataWriter:
     store: AbstractBaseStore
     contract: Contract
     head: datetime
-    barSize: str
-    wts: str
+    barSize: ClassVar = Validator(bar_size_validator)
+    wts: ClassVar = Validator(wts_validator)
     aggression: float = 2
     # !!!!! it was pytz.timezone("Europe/Berlin") here, INVESTIGATE!!
     now: datetime = field(default_factory=partial(datetime.now, pytz.utc))
@@ -122,8 +192,8 @@ class DataWriter:
         pulse += self.onPulse
 
         self.next_date: Union[datetime, date, str] = ""  # Fucking hate this.TODO
-        self._objects: List[DownloadContainer] = []
-        self._queue: List[DownloadContainer] = []
+        self._objects: list[DownloadContainer] = []
+        self._queue: list[DownloadContainer] = []
         self._current_object: Optional[DownloadContainer] = None
         self.schedule_tasks()
         log.info(f"Object initialized: {self}")
@@ -255,7 +325,7 @@ class DataWriter:
 
         return None
 
-    def gap_filler(self) -> List[NamedTuple]:
+    def gap_filler(self) -> list[NamedTuple]:
         if self.data is None:
             return []
         data = self.data.copy()
@@ -282,7 +352,7 @@ class DataWriter:
     @property
     def params(
         self,
-    ) -> Dict[str, Union[Contract, str, bool, date, datetime]]:  # this is fucked. TODO
+    ) -> dict[str, Union[Contract, str, bool, date, datetime]]:  # this is fucked. TODO
         return {
             "contract": self.contract,
             "endDateTime": self.next_date,
@@ -359,7 +429,7 @@ class DownloadContainer:
     current_date = None
     update: bool = False
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
-    bars: List[BarDataList] = field(default_factory=list)
+    bars: list[BarDataList] = field(default_factory=list)
     retries: int = 0
     nodata_retries: int = 0
 
@@ -452,7 +522,7 @@ class ContractHolder:
         cont_only: bool = False  # retrieve continuous contracts only
         # how big series request at each call (1 = normal, 2 = double, etc.)
         aggression: int = 1
-        items: Optional[List[DataWriter]] = None
+        items: Optional[list[DataWriter]] = None
 
         def get_items(self):
             log.debug("getting items")
@@ -461,7 +531,7 @@ class ContractHolder:
             if self.cont_only:
                 objects = objects.cont_list
             else:
-                objects = objects.list
+                objects = objects.list_
             log.debug(f"objects: {objects}")
 
             self.items = []
@@ -521,61 +591,6 @@ class ContractHolder:
 
     def __call__(self):
         return self.instance()
-
-
-def bar_size_validator(s):
-    """Verify if given string is a valid IB api bar size str"""
-    ok_str = [
-        "1 secs",
-        "5 secs",
-        "10 secs",
-        "15 secs",
-        "30 secs",
-        "1 min",
-        "2 mins",
-        "3 mins",
-        "5 mins",
-        "10 mins",
-        "15 mins",
-        "20 mins",
-        "30 mins",
-        "1 hour",
-        "2 hours",
-        "3 hours",
-        "4 hours",
-        "8 hours",
-        "1 day",
-        "1 week",
-        "1 month",
-    ]
-    if s in ok_str:
-        return s
-    else:
-        raise ValueError(f"bar size : {s} is invalid, must be one of {ok_str}")
-
-
-def wts_validator(s: str):
-    """Verify if given string is a valide IB api whatToShow str"""
-    ok_str = [
-        "TRADES",
-        "MIDPOINT",
-        "BID",
-        "ASK",
-        "BID_ASK",
-        "ADJUSTED_LAST",
-        "HISTORICAL_VOLATILITY",
-        "OPTION_IMPLIED_VOLATILITY",
-        "REBATE_RATE",
-        "FEE_RATE",
-        "YIELD_BID",
-        "YIELD_ASK",
-        "YIELD_BID_ASK",
-        "YIELD_LAST",
-    ]
-    if s in ok_str:
-        return s
-    else:
-        raise ValueError(f"{s} is a wrong whatToShow value, must be one of {ok_str}")
 
 
 def duration_in_secs(barSize: str):
@@ -724,7 +739,7 @@ class Timer:
 
 
 class Pacer:
-    def __init__(self, timers: List[TimerProtocol]) -> None:
+    def __init__(self, timers: list[TimerProtocol]) -> None:
         self.timers = timers
 
     async def __aenter__(self):
@@ -754,10 +769,10 @@ def pacer(
     barSize,
     wts,
     *,
-    restrictions: List[Tuple[int, int]] = [(2, 6), (600, 60)],
+    restrictions: list[tuple[int, int]] = [(2, 6), (600, 60)],
     restriction_threshold: int = 30,
     norestriction: bool = False,
-    timers: Optional[Union[List[TimerProtocol], TimerProtocol]] = None,
+    timers: Optional[Union[list[TimerProtocol], TimerProtocol]] = None,
 ) -> Pacer:
     """
     Factory function returning correct pacer preventing (or rather
@@ -853,7 +868,7 @@ async def main(holder: ContractHolder, ib: IB) -> None:
         restrictions=[(2, 6), (1200, 60 - number_of_workers)],
     )
     log.debug(f"Pacer initialized: {p}")
-    workers: List[asyncio.Task] = [
+    workers: list[asyncio.Task] = [
         create_task(
             worker(f"worker {i}", queue, p, ib),
             logger=log,
