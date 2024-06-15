@@ -21,6 +21,21 @@ class SetValues(argparse.Action):
         setattr(namespace, values[0], values[1])
 
 
+class SetSource(argparse.Action):
+    """
+    To be used as `action` on argparser source.  When no source
+    passed, don't put the default None into the resulting dict to give
+    other methods a chance to define the value.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+
+        if values is None:
+            del namespace[self.dest]
+        else:
+            setattr(namespace, self.dest, values)
+
+
 help_string = (
     "Parameters can be passed to program directly, through a yaml file, or "
     "environment variables. "
@@ -29,7 +44,14 @@ epilog = "Defaults will be used for all unset parameters."
 
 
 common_options = [
-    (("source",), {"nargs": "?", "help": "Optional file with source data."}),
+    (
+        ("source",),
+        {
+            # "action": SetSource,
+            "nargs": "?",
+            "help": "Optional file with source data.",
+        },
+    ),
     (
         ("-s", "--set_option"),
         {
@@ -107,7 +129,11 @@ class CustomArgParser:
 
     def parse(self) -> None:
         if "test" not in self.file_name:
-            self.output = vars(self.parser.parse_args(self.argv))
+            self.output = {
+                k: v
+                for k, v in vars(self.parser.parse_args(self.argv)).items()
+                if v is not None
+            }
 
     @classmethod
     def from_args(cls, args: list[str]) -> CustomArgParser:

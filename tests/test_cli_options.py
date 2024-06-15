@@ -1,3 +1,5 @@
+import pytest
+
 from ib_tools.config.cli_options import CustomArgParser
 
 
@@ -38,7 +40,8 @@ def test_source():
 def test_no_source():
     parser = CustomArgParser.from_str("-r -f filename.yaml -z --nuke")
     output = parser.output
-    assert output["source"] is None
+    with pytest.raises(KeyError):
+        output["source"]
 
 
 def test_app_options():
