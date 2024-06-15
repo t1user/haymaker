@@ -6,6 +6,7 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from functools import partial
 from typing import Any, Deque, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import pandas as pd
@@ -13,7 +14,10 @@ import pytz
 from ib_insync import IB, BarDataList, ContFuture, Contract, Event, Future, util
 from typing_extensions import Protocol
 
+from ib_tools.config import CONFIG
+from ib_tools.connect import Connection
 from ib_tools.datastore import AbstractBaseStore
+from ib_tools.logging import setup_logging
 from ib_tools.task_logger import create_task
 
 # from logbook import DEBUG, INFO
@@ -25,11 +29,12 @@ https://docs.python.org/3/library/asyncio-queue.html#examples
 and here:
 https://realpython.com/async-io-python/#using-a-queue
 """
+setup_logging()
 
-log = logging.getLogger(__name__)  # (__file__[:-3])
+log = logging.getLogger(__name__)
 
 # TODO: change this to factory
-MAX_NUMBER_OF_WORKERS = 40
+MAX_NUMBER_OF_WORKERS = CONFIG.get("max_number_of_workers", 40)
 
 
 class ContractObjectSelector:
@@ -93,28 +98,24 @@ class ContractObjectSelector:
         return self.contFutures
 
 
+@dataclass
 class DataWriter:
     """Interface between dataloader and datastore"""
 
-    def __init__(
-        self,
-        store: AbstractBaseStore,
-        contract: Contract,
-        head: datetime,
-        barSize: str,
-        wts: str,
-        aggression: float = 2,
-        now: Optional[datetime] = None,
-    ) -> None:
-        self.store = store
-        self.contract = contract
-        self.head = head
-        self.barSize = bar_size_validator(barSize)
-        self.wts = wts_validator(wts)
-        if now is None:
-            self.now = datetime.now(pytz.timezone("Europe/Berlin"))
-        self.aggression = aggression
+    store: AbstractBaseStore
+    contract: Contract
+    head: datetime
+    barSize: str
+    wts: str
+    aggression: float = 2
+    # !!!!! it was pytz.timezone("Europe/Berlin") here, INVESTIGATE!!
+    now: datetime = field(default_factory=partial(datetime.now, pytz.utc))
+    fill_gaps: bool = CONFIG.get("fill_gaps", True)
 
+    def __post_init__(self) -> None:
+        self.barSize = bar_size_validator(self.barSize)
+        self.wts = wts_validator(self.wts)
+        # !!!! REVIEW everything below
         self.c = self.contract.localSymbol
         # start, stop, step in seconds, ie. every 15min
         pulse = Event().timerange(900, None, 900)
@@ -145,11 +146,14 @@ class DataWriter:
             log.error(f"Exception for backfill, line 144: {e2} ignored, {self.c}")
             backfill = None
 
-        try:
-            fill_gaps = self.fill_gaps()
-            log.debug(f"fill_gaps for {self.c}: {fill_gaps}")
-        except Exception as e3:
-            log.error(f"Exception for fill_gaps, line 149: {e3} ignored, {self.c}")
+        if self.fill_gaps:
+            try:
+                fill_gaps = self.gap_filler()
+                log.debug(f"fill_gaps for {self.c}: {fill_gaps}")
+            except Exception as e3:
+                log.error(f"Exception for fill_gaps, line 149: {e3} ignored, {self.c}")
+                fill_gaps = None
+        else:
             fill_gaps = None
 
         if backfill:
@@ -251,7 +255,7 @@ class DataWriter:
 
         return None
 
-    def fill_gaps(self) -> List[NamedTuple]:
+    def gap_filler(self) -> List[NamedTuple]:
         if self.data is None:
             return []
         data = self.data.copy()
@@ -647,11 +651,9 @@ def duration_to_timedelta(duration):
 
 
 class TimerProtocol(Protocol):
-    def check(self) -> bool:
-        ...
+    def check(self) -> bool: ...
 
-    def register(self) -> None:
-        ...
+    def register(self) -> None: ...
 
 
 class NoTimer:
@@ -833,7 +835,7 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
 
 
 async def main(holder: ContractHolder, ib: IB) -> None:
-    log.debug("THIS IS MAIN")
+
     contracts = holder()
     log.debug(f"Holder: {contracts}")
     number_of_workers = min(len(contracts), MAX_NUMBER_OF_WORKERS)
@@ -874,3 +876,42 @@ async def main(holder: ContractHolder, ib: IB) -> None:
 
     # wait until all worker tasks are cancelled
     await asyncio.gather(*workers)
+
+
+def start():
+
+    file = CONFIG.get("source")
+    barSize = CONFIG.get("barSize")
+    wts = CONFIG.get("wts")
+    aggression = CONFIG.get("aggression", 2)
+    continuous_futures_only = CONFIG.get("continuous_futures_only", True)
+    watchdog = CONFIG.get("watchdog", True)
+
+    util.patchAsyncio()
+    ib = IB()
+
+    # object where data is stored
+    # store = ArcticStore(f"{wts}_{barSize}")
+
+    store = CONFIG.get("datastore")
+
+    # the bool is for cont_only
+    holder = ContractHolder(
+        ib,
+        file,
+        store,
+        wts,
+        barSize,
+        continuous_futures_only,
+        aggression=aggression,
+    )
+
+    asyncio.get_event_loop().set_debug(True)
+    # util.logToConsole(logging.ERROR)
+    log.debug("Will start...")
+
+    Connection(ib, partial(main, holder, ib), watchdog=watchdog)
+
+    log.debug("script finished, about to disconnect")
+    ib.disconnect()
+    log.debug("disconnected")

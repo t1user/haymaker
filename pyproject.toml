@@ -55,6 +55,9 @@ packages = ["ib_tools"]
 [project.urls]
 Repository = "https://github.com/t1user/ib_tools"
 
+[project.scripts]
+dataloader = "ib_tools.dataloader:start"
+
 [tool.setuptools_scm]
 version_file = "ib_tools/_version.py"
 
@@ -72,3 +75,4 @@ ignore_errors = true
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:warnings"]
+

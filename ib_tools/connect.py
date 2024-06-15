@@ -1,18 +1,12 @@
 # import asyncio
 import sys
+from logging import getLogger
 from typing import Callable
 
 from ib_insync import IB, Contract, util
 from ib_insync.ibcontroller import IBC, Watchdog
-from logbook import Logger  # type: ignore
 
-# import sys
-
-
-# from handlers import WatchdogHandlers
-
-
-log = Logger(__name__)
+log = getLogger(__name__)
 
 
 class IBHandlers:

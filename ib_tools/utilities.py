@@ -103,3 +103,7 @@ def quota_checker(store: Arctic) -> None:
         size = store.get_library(lib).stats()["totals"]["size"] / 1024**3
         usage = size / quota
         print(f"{lib} - quota: {quota:.2f}GB, size: {size:.2f}GB, usage: {usage:.1%}")
+
+
+def strjoin(*args: str):
+    return "".join(args)
