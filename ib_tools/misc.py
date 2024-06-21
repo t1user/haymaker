@@ -5,7 +5,6 @@ import itertools
 import random
 import string
 from collections import UserDict
-from datetime import datetime, timezone
 from enum import Enum
 from os import makedirs, path
 from pathlib import Path
@@ -95,7 +94,7 @@ def sign(x: float) -> Literal[-1, 0, 1]:
 
 def process_trading_hours(
     th: str, input_tz: str = "US/Central", *, output_tz: str = "UTC"
-) -> list[tuple[datetime, datetime]]:
+) -> list[tuple[dt.datetime, dt.datetime]]:
     """
     Given string from :attr:`ibi.ContractDetails.tradingHours` return
     active hours as a list of (from, to) tuples.
@@ -111,13 +110,13 @@ def process_trading_hours(
     input_tz_ = pytz.timezone(input_tz)
     output_tz_ = pytz.timezone(output_tz)
 
-    def datetime_tuples(s: str) -> tuple[Optional[datetime], Optional[datetime]]:
-        def to_datetime(datetime_string: str) -> Optional[datetime]:
+    def datetime_tuples(s: str) -> tuple[Optional[dt.datetime], Optional[dt.datetime]]:
+        def to_datetime(datetime_string: str) -> Optional[dt.datetime]:
             if datetime_string[-6:] == "CLOSED":
                 return None
             else:
                 return input_tz_.localize(
-                    datetime.strptime(datetime_string, "%Y%m%d:%H%M")
+                    dt.datetime.strptime(datetime_string, "%Y%m%d:%H%M")
                 ).astimezone(tz=output_tz_)
 
         try:
@@ -138,8 +137,8 @@ def process_trading_hours(
 
 
 def is_active(
-    time_tuples: Optional[list[tuple[datetime, datetime]]] = None,
-    now: Optional[datetime] = None,
+    time_tuples: Optional[list[tuple[dt.datetime, dt.datetime]]] = None,
+    now: Optional[dt.datetime] = None,
 ) -> bool:
     """
     Given list of trading hours tuples from `.process_trading_hours`
@@ -149,7 +148,7 @@ def is_active(
         return True
 
     if not now:
-        now = datetime.now(tz=timezone.utc)
+        now = dt.datetime.now(tz=dt.timezone.utc)
 
     def test_p(t):
         return t[0] < now < t[1]
@@ -161,9 +160,9 @@ def is_active(
 
 
 def next_active(
-    time_tuples: Optional[list[tuple[datetime, datetime]]] = None,
-    now: Optional[datetime] = None,
-) -> datetime:
+    time_tuples: Optional[list[tuple[dt.datetime, dt.datetime]]] = None,
+    now: Optional[dt.datetime] = None,
+) -> dt.datetime:
     """
     Given list of trading hours tuples from `.process_trading_hours`
     return time of nearest market re-open (regardless if market is
@@ -172,7 +171,7 @@ def next_active(
     """
 
     if not now:
-        now = datetime.now(tz=pytz.timezone("UTC"))
+        now = dt.datetime.now(tz=pytz.timezone("UTC"))
 
     if not time_tuples:
         return now
@@ -221,7 +220,7 @@ def decode_tree(obj: Any) -> Any:
 
     def process_value(
         value: Any,
-    ) -> Union[bool, int, float, bytes, list, datetime, str, None]:
+    ) -> Union[bool, int, float, bytes, list, dt.datetime, str, None]:
         if isinstance(value, dict):
             v = process_dict(value)
             return v
