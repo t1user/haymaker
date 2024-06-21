@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 from collections import UserDict, defaultdict
 from copy import deepcopy
@@ -267,7 +268,9 @@ class StrategyContainer(UserDict):
         return d
 
     def encode(self) -> dict[str, Any]:
-        return tree(self.data)
+        data = tree(self.data)
+        data.update({"timestamp": dt.datetime.now(tz=dt.timezone.utc)})
+        return data
 
     def decode(self, data: dict) -> None:
         try:
@@ -281,6 +284,11 @@ class StrategyContainer(UserDict):
             decoded.pop("_id")
         except KeyError:
             log.warning("It's weird, no '_id' in data from mongo.")
+
+        try:
+            decoded.pop("timestamp")
+        except KeyError:
+            log.warning("No timestamp in data from mongo.")
 
         log.debug(f"Decoded keys: {list(decoded.keys())}")
         self.data.update(
