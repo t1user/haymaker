@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
+import functools
 import logging
-import os
 import random
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import Any, ClassVar, Deque, NamedTuple, Optional, Union
+from typing import ClassVar, Deque, NamedTuple, Optional, Self, Type, Union
 
+import ib_insync as ibi
 import pandas as pd
 import pytz
-from ib_insync import IB, BarDataList, ContFuture, Contract, Event, Future, util
 from typing_extensions import Protocol
 
 from ib_tools.config import CONFIG
@@ -36,68 +35,189 @@ log = logging.getLogger(__name__)
 MAX_NUMBER_OF_WORKERS = CONFIG.get("max_number_of_workers", 40)
 
 
-class ContractObjectSelector:
+class ContractSelector:
     """
-    Given a csv file with parameters return appropriate Contract objects.
-    For futures return all available contracts or current ContFuture only.
+    Based on passes contract attributes and config parameters
+    determine instrument(s) that should be added to data download
+    queue.  The output of any computations is accessible via
+    :meth:`objects`
+
+    :meth:`from_kwargs` will return instance of correct
+    (sub)class based on instrument type and config
+
+    :meth:`objects` contains a list of :class:`ibi.Contract` objects
+    for which historical data will be loaded; those objects are not
+    guaranteed to be qualified.
     """
 
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    ib: ibi.IB
+    sec_types = {
+        "STK",  # Stock
+        "OPT",  # Option
+        "FUT",  # Future
+        "CONTFUT",  # ContFuture
+        "CASH",  # Forex
+        "IND",  # Index
+        "CFD",  # CFD
+        "BOND",  # Bond
+        "CMDTY",  # Commodity
+        "FOP",  # FuturesOption
+        "FUND",  # MutualFund
+        "WAR",  # Warrant
+        "IOPT",  # Warrant
+        "BAG",  # Bag
+        "CRYPTO",  # Crypto
+    }
+    contract_fields = {i.name for i in fields(ibi.Contract)}
 
-    def __init__(self, ib: IB, file: str, directory: Union[str, None] = None) -> None:
-        self.symbols = pd.read_csv(file, keep_default_na=False).to_dict("records")
-        self.ib = ib
-        self.contracts: list[Contract] = []
-        log.debug("ContractObjectSelector about to create objects")
-        self.create_objects()
-        log.debug("Objects created")
+    @classmethod
+    def set_ib(cls, ib: ibi.IB) -> Type[Self]:
+        cls.ib = ib
+        return cls
 
-    def create_objects(self) -> None:
-        self.objects = [Contract.create(**s) for s in self.symbols]  # type: ignore
-        self.non_futures = [obj for obj in self.objects if not isinstance(obj, Future)]
-        log.debug(f"non-futures: {self.non_futures}")
-        self.futures = [obj for obj in self.objects if isinstance(obj, Future)]
-        log.debug(f"futures: {self.futures}")
+    @classmethod
+    def from_kwargs(cls, **kwargs) -> Self:
+        secType = kwargs.get("secType")
+        if secType not in cls.sec_types:
+            raise TypeError(f"secType must be one of {cls.sec_types} not: {secType}")
+        elif secType in {"FUT", "CONTFUT"}:
+            return cls.from_future_kwargs(**kwargs)
+        # TODO: specific cases for other asset classes
+        else:
+            return cls(**kwargs)
 
-        # converting Futures to ContFutures
-        self.contFutures = []
-        for obj in self.futures:
-            params = obj.nonDefaults()  # type: ignore
-            del params["secType"]
-            self.contFutures.append(ContFuture(**params))
-        log.debug(f"contfutures: {self.contFutures}")
+    @classmethod
+    def from_future_kwargs(cls, **kwargs):
+        return FutureContractSelector.create(**kwargs)
 
-    def lookup_futures(self, obj: list[Future]) -> list[Future]:
-        futures = []
-        for o in obj:
-            o.update(includeExpired=True)  # type: ignore
-            futures.append(
-                [
-                    Contract.create(**c.contract.dict())  # type: ignore
-                    for c in self.ib.reqContractDetails(o)
-                ]
+    def __init__(self, **kwargs) -> None:
+        try:
+            self.ib
+        except AttributeError:
+            raise AttributeError(
+                f"ib attribute must be set on {self.__class__.__name__} "
+                f"before class is instantiated."
             )
-        return list(itertools.chain(*futures))  # type: ignore
+        self.kwargs = self.clean_fields(**kwargs)
 
-    @property
-    def list_(self) -> list[Contract]:
-        if not self.contracts:
-            self.update()
-        return self.contracts
+    def clean_fields(self, **kwargs) -> dict:
+        if diff := (set(kwargs.keys()) - self.contract_fields):
+            for k in diff:
+                del kwargs[k]
+            log.warning(
+                f"Removed incorrect contract parameters: {diff}, "
+                f"will attemp to get Contract anyway"
+            )
+        return kwargs
 
-    def update(self) -> list[Contract]:
-        qualified = self.contFutures + self.non_futures  # type: ignore
-        self.ib.qualifyContracts(*qualified)
-        self.contracts = self.lookup_futures(self.futures) + qualified  # type: ignore
-        return self.contracts
+    def objects(self) -> list[ibi.Contract]:
+        try:
+            return ibi.util.run(self._objects())  # type: ignore
+        except AttributeError:
+            return [ibi.Contract.create(**self.kwargs)]
 
-    @property
-    def cont_list(self) -> list[ContFuture]:
-        self.ib.qualifyContracts(*self.contFutures)
-        return self.contFutures
+    def repr(self) -> str:
+        kwargs_str = ", ".join([f"{k}={v}" for k, v in self.kwargs.items()])
+        return f"{self.__class__.__qualname__}({kwargs_str})"
+
+
+class FutureContractSelector(ContractSelector):
+
+    @classmethod
+    def create(cls, **kwargs):
+        # in case of any ambiguities just go for contfuture
+        klass = {
+            "contfuture": ContfutureFutureContractSelector,
+            "fullchain": FullchainFutureContractSelector,
+            "current": CurrentFutureContractSelector,
+            "exact": ExactFutureContractSelector,
+        }.get(
+            CONFIG.get("futures_selector", "contfuture"),
+            ContfutureFutureContractSelector,
+        )
+        return klass(**kwargs)
+
+    @functools.cached_property
+    def _fullchain(self) -> list[ibi.Contract]:
+        kwargs = self.kwargs.copy()
+        kwargs["secType"] = "FUT"
+        kwargs["includeExpired"] = True
+        details = ibi.util.run(self.ib.reqContractDetailsAsync(ibi.Contract(**kwargs)))
+        return sorted(
+            [c.contract for c in details if c.contract is not None],
+            key=lambda x: x.lastTradeDateOrContractMonth,
+        )
+
+    @functools.cached_property
+    def _contfuture_index(self) -> int:
+        return self._fullchain.index(self._contfuture_qualified)
+
+    @functools.cached_property
+    def _contfuture_qualified(self) -> ibi.Contract:
+        contfuture = self._contfuture
+        ibi.util.run(self.ib.qualifyContractsAsync(contfuture))
+        future_kwargs = contfuture.nonDefaults()  # type: ignore
+        del future_kwargs["secType"]
+        return ibi.Contract.create(**future_kwargs)
+
+    @functools.cached_property
+    def _contfuture(self) -> ibi.Contract:
+        kwargs = self.kwargs.copy()
+        kwargs["secType"] = "CONTFUT"
+        return ibi.Contract.create(**kwargs)
+
+
+class ContfutureFutureContractSelector(FutureContractSelector):
+
+    def objects(self) -> list[ibi.Contract]:
+        return [self._contfuture]
+
+
+class FullchainFutureContractSelector(FutureContractSelector):
+
+    async def _objects(self) -> list[ibi.Contract]:  # type: ignore
+        spec = CONFIG.get("futures_fullchain_spec", "full")
+        today = date.today()
+        if spec == "full":
+            return self._fullchain
+        elif spec == "active":
+            return [
+                c
+                for c in self._fullchain
+                if datetime.fromisoformat(c.lastTradeDateOrContractMonth) > today
+            ]
+        elif spec == "expired":
+            return [
+                c
+                for c in self._fullchain
+                if datetime.fromisoformat(c.lastTradeDateOrContractMonth) <= today
+            ]
+        else:
+            raise ValueError(
+                f"futures_fullchain_spec must be one of: `full`, `active`, `expired`, "
+                f"not {spec}"
+            )
+
+
+class CurrentFutureContractSelector(FutureContractSelector):
+    async def _objects(self) -> list[ibi.Contract]:
+        desired_index = CONFIG.get("futures_current_index", 0)
+        if desired_index == 0:
+            return [self._contfuture_qualified]
+        else:
+            return [self._fullchain[self._contfuture_index + int(desired_index)]]
+
+
+class ExactFutureContractSelector(FutureContractSelector):
+    pass
 
 
 class _DataWriter:
+    """
+    Helper class, whose only purpose is running validators, which
+    would be otherwise difficult in a dataclass.
+    """
+
     barSize: ClassVar = Validator(bar_size_validator)
     wts: ClassVar = Validator(wts_validator)
 
@@ -107,7 +227,7 @@ class DataWriter(_DataWriter):
     """Interface between dataloader and datastore"""
 
     store: AbstractBaseStore
-    contract: Contract
+    contract: ibi.Contract
     head: datetime
     barSize: str  # type: ignore
     wts: str  # type: ignore
@@ -120,7 +240,7 @@ class DataWriter(_DataWriter):
         # !!!! REVIEW everything below
         self.c = self.contract.localSymbol
         # start, stop, step in seconds, ie. every 15min
-        pulse = Event().timerange(900, None, 900)
+        pulse = ibi.Event().timerange(900, None, 900)
         pulse += self.onPulse
 
         self.next_date: Union[datetime, date, str] = ""  # Fucking hate this.TODO
@@ -198,7 +318,7 @@ class DataWriter(_DataWriter):
         self.next_date = self._current_object.to_date
         log.debug(f"scheduling {self.c}: {self._current_object}")
 
-    def save_chunk(self, data: BarDataList):
+    def save_chunk(self, data: ibi.BarDataList):
         assert self._current_object is not None
         # TODO
         # next data sometimes becomes None and subsequenty throws error in line 362
@@ -284,7 +404,9 @@ class DataWriter(_DataWriter):
     @property
     def params(
         self,
-    ) -> dict[str, Union[Contract, str, bool, date, datetime]]:  # this is fucked. TODO
+    ) -> dict[
+        str, Union[ibi.Contract, str, bool, date, datetime]
+    ]:  # this is fucked. TODO
         return {
             "contract": self.contract,
             "endDateTime": self.next_date,
@@ -361,11 +483,11 @@ class DownloadContainer:
     current_date = None
     update: bool = False
     df: pd.DataFrame = field(default_factory=pd.DataFrame)
-    bars: list[BarDataList] = field(default_factory=list)
+    bars: list[ibi.BarDataList] = field(default_factory=list)
     retries: int = 0
     nodata_retries: int = 0
 
-    def save(self, bars: BarDataList) -> Optional[Union[datetime, date]]:
+    def save(self, bars: ibi.BarDataList) -> Optional[Union[datetime, date]]:
         """Store downloaded data and if more data needed return
         endpoint for next download"""
 
@@ -420,7 +542,7 @@ class DownloadContainer:
         """Return df ready to be written to datastore or date of end point
         for additional downloads"""
         if self.bars:
-            self.df = util.df([b for bars in reversed(self.bars) for b in bars])
+            self.df = ibi.util.df([b for bars in reversed(self.bars) for b in bars])
             self.df.set_index("date", inplace=True)
             if not self.ok_to_write:
                 log.warning(
@@ -441,88 +563,61 @@ class DownloadContainer:
         return f"{self.from_date} - {self.to_date}, update: {self.update}"
 
 
+@dataclass
 class ContractHolder:
-    """Singleton class ensuring contract list kept after re-connect"""
+    """Container class ensuring contract list kept after re-connect"""
 
-    @dataclass
-    class __ContractHolder:
-        ib: IB
-        source: str  # csv file name with contract list
-        store: AbstractBaseStore
-        wts: str  # whatToShow ib api parameter
-        barSize: str  # ib api parameter
-        cont_only: bool = False  # retrieve continuous contracts only
-        # how big series request at each call (1 = normal, 2 = double, etc.)
-        aggression: int = 1
-        items: Optional[list[DataWriter]] = None
+    ib: ibi.IB
+    source: str  # csv file name with contract list
+    store: AbstractBaseStore
+    wts: str  # whatToShow ib api parameter
+    barSize: str  # ib api parameter
+    # how big series request at each call (1 = normal, 2 = double, etc.)
+    aggression: int = 1
+    objects: list = field(default_factory=list)
+    items: list[DataWriter] = field(default_factory=list)
 
-        def get_items(self):
-            log.debug("getting items")
-            objects = ContractObjectSelector(self.ib, self.source)
-            log.debug("ContractObjectSelector ok")
-            if self.cont_only:
-                objects = objects.cont_list
-            else:
-                objects = objects.list_
-            log.debug(f"objects: {objects}")
+    def get_items(self):
+        for o in self.objects:
+            try:
+                headTimeStamp = self.ib.reqHeadTimeStamp(
+                    o, whatToShow=self.wts, useRTH=False, formatDate=2
+                )
 
-            self.items = []
-            for o in objects:
-                try:
-                    headTimeStamp = self.ib.reqHeadTimeStamp(
-                        o, whatToShow=self.wts, useRTH=False, formatDate=2
-                    )
-
-                    if headTimeStamp == []:
-                        log.warning(
-                            (
-                                f"Unavailable headTimeStamp for {o.localSymbol}. "
-                                f"No data will be downloaded"
-                            )
+                if headTimeStamp == []:
+                    log.warning(
+                        (
+                            f"Unavailable headTimeStamp for {o.localSymbol}. "
+                            f"No data will be downloaded"
                         )
-                        continue
-                except Exception:
-                    log.exception("Exception while getting headTimeStamp")
+                    )
                     continue
+            except Exception:
+                log.exception("Exception while getting headTimeStamp")
+                continue
 
-                try:
-                    self.items.append(
-                        DataWriter(
-                            self.store,
-                            o,
-                            headTimeStamp,
-                            barSize=self.barSize,
-                            wts=self.wts,
-                            aggression=self.aggression,
-                        )
+            try:
+                self.items.append(
+                    DataWriter(
+                        self.store,
+                        o,
+                        headTimeStamp,
+                        barSize=self.barSize,
+                        wts=self.wts,
+                        aggression=self.aggression,
                     )
-                except Exception as e:
-                    log.exception(f"Error ignored for object {o}", e)
-                    # raise
-
-        def __call__(self):
-            log.debug("holder called")
-            log.debug(f"items: {self.items}")
-            if self.items is None:
-                self.get_items()
-                log.debug(f"items obtained: {self.items}")
-            return self.items
-
-    __instance = None
-
-    def __new__(cls, *args, **kwargs):
-        if not ContractHolder.__instance:
-            ContractHolder.__instance = ContractHolder.__ContractHolder(*args, **kwargs)
-        return ContractHolder.__instance
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.instance, name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        return setattr(self.instance, name, value)
+                )
+            except Exception as e:
+                log.exception(f"Error ignored for object {o}", e)
+                # raise
 
     def __call__(self):
-        return self.instance()
+        log.debug("holder called")
+        log.debug(f"items: {self.items}")
+        if not self.items:
+            self.get_items()
+            log.debug(f"items obtained: {self.items}")
+        return self.items
 
 
 def duration_in_secs(barSize: str):
@@ -703,7 +798,7 @@ def pacer(
     *,
     restrictions: list[tuple[int, int]] = [(2, 6), (600, 60)],
     restriction_threshold: int = 30,
-    norestriction: bool = False,
+    norestriction: bool = CONFIG.get("no_restriction", False),
     timers: Optional[Union[list[TimerProtocol], TimerProtocol]] = None,
 ) -> Pacer:
     """
@@ -755,7 +850,7 @@ def validate_age(contract: DataWriter) -> bool:
     return True
 
 
-async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
+async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> None:
     while True:
         contract = await queue.get()
         log.debug(
@@ -781,7 +876,7 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: IB) -> None:
         queue.task_done()
 
 
-async def main(holder: ContractHolder, ib: IB) -> None:
+async def main(holder: ContractHolder, ib: ibi.IB) -> None:
 
     contracts = holder()
     log.debug(f"Holder: {contracts}")
@@ -825,39 +920,42 @@ async def main(holder: ContractHolder, ib: IB) -> None:
     await asyncio.gather(*workers)
 
 
-def start():
-
-    source = CONFIG.get("source")
-    barSize = CONFIG.get("barSize")
-    wts = CONFIG.get("wts")
-    aggression = CONFIG.get("aggression", 2)
-    continuous_futures_only = CONFIG.get("continuous_futures_only", True)
-    watchdog = CONFIG.get("watchdog", True)
-
-    util.patchAsyncio()
-    ib = IB()
+async def sequence(ib: ibi.IB):
+    sources = pd.read_csv(CONFIG["source"], keep_default_na=False).to_dict("records")
+    log.debug(f"{sources=}")
+    ContractSelector.set_ib(ib)
+    objects = []
+    for s in sources:
+        objects.extend(ContractSelector.from_kwargs(**s).objects())  # type: ignore
+    await ib.qualifyContractsAsync(*objects)
+    log.debug(f"objects: {objects}")
 
     # object where data is stored
     # store = ArcticStore(f"{wts}_{barSize}")
 
-    store = CONFIG.get("datastore")
-
-    # the bool is for cont_only
     holder = ContractHolder(
-        ib,
-        source,
-        store,
-        wts,
-        barSize,
-        continuous_futures_only,
-        aggression=aggression,
+        ib=ib,
+        source=CONFIG["source"],
+        store=CONFIG["datastore"],
+        wts=CONFIG["wts"],
+        barSize=CONFIG["barSize"],
+        aggression=CONFIG.get("aggression", 1),
+        objects=objects,
     )
+
+    await main(holder, ib)
+
+
+def start():
+
+    ibi.util.patchAsyncio()
+    ib = ibi.IB()
 
     asyncio.get_event_loop().set_debug(True)
     # util.logToConsole(logging.ERROR)
     log.debug("Will start...")
 
-    Connection(ib, partial(main, holder, ib), watchdog=watchdog)
+    Connection(ib, partial(sequence, ib), watchdog=CONFIG.get("watchdog", True))
 
     log.debug("script finished, about to disconnect")
     ib.disconnect()

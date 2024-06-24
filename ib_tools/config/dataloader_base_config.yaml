@@ -1,12 +1,17 @@
 source: contracts.csv
 barSize: &barSize 30 secs
 wts: &wts TRADES
-aggression: 2
+aggression: 1
 continuous_futures_only: True
 watchdog: False
 max_number_of_workers: 40
 fill_gaps: False
-
+no_restriction: True
+# ---- futures config ----
+futures_selector: "contfuture" # contfuture, fullchain, current, exact 
+futures_fullchain_spec: full #  full, active, expired; which contracts should be included in futures fullchain; relevant only if futureshow==fullchain;
+futures_current_index: 0 #  zero->current contfuture, positive index->future, negative->past; which contract is considered current; relevant only if futures_selector==current;
+# ---- end futures config ----
 datastore:
   !!python/object/apply:ib_tools.datastore.ArcticStore
   # joins previuosly defined aliases to create collection name
