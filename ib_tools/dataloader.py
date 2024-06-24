@@ -3,16 +3,14 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import random
 from collections import deque
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import ClassVar, Deque, NamedTuple, Optional, Self, Type, Union
+from typing import ClassVar, NamedTuple, Optional, Self, Type, Union
 
 import ib_insync as ibi
 import pandas as pd
-from typing_extensions import Protocol
 
 from ib_tools.config import CONFIG
 from ib_tools.connect import Connection
@@ -221,9 +219,8 @@ class DataWriter:
     barSize: str
     wts: str
     aggression: float = 2
-    # !!!!! it was pytz.timezone("Europe/Berlin") here, INVESTIGATE!!
     now: datetime = field(default_factory=partial(datetime.now, timezone.utc))
-    fill_gaps: bool = CONFIG.get("fill_gaps", True)
+    fill_gaps: bool = True
 
     def __post_init__(self) -> None:
         # !!!! REVIEW everything below
@@ -624,133 +621,73 @@ def duration_to_timedelta(duration):
     raise ValueError(f"Unknown duration string: {duration}")
 
 
-class TimerProtocol(Protocol):
-    def check(self) -> bool: ...
-
-    def register(self) -> None: ...
-
-
-class NoTimer:
-    def check(self) -> bool:
-        return False
-
-    def register(self) -> None:
-        pass
-
-    def __repr__(self):
-        return "<NoTimer>"
-
-
-class Timer:
-    holder: Deque[datetime] = deque(maxlen=100)
-
-    def __init__(self, seconds: int, requests: int) -> None:
-        self.seconds = seconds
-        self._seconds = timedelta(seconds=seconds)
-        self.requests = requests
-        self.restriction_until = datetime.now()
-        self.restriction = False
-
-    def start(self) -> datetime:
-        return self.holder[0]
-
-    def elapsed_time(self) -> timedelta:
-        return datetime.now() - self.start()
-
-    def _sleep_time(self) -> timedelta:
-        """Time till lock release as timedelta"""
-        return timedelta(seconds=self.seconds) - self.elapsed_time()
-        # return timedelta(seconds=self.seconds)
-
-    def sleep_time(self) -> float:
-        """Time till lock release in fractional seconds"""
-        return self.td_sec(self._sleep_time())
-        # return self.seconds
-
-    @staticmethod
-    def td_sec(td: timedelta) -> float:
-        """Convert timedelta to fractional seconds."""
-        return td.seconds + td.microseconds / 1e6
+@dataclass
+class Restriction:
+    holder: ClassVar[deque[datetime]] = deque(maxlen=100)
+    seconds: float
+    requests: int
 
     def check(self) -> bool:
         """Return True if pacing restriction neccessary"""
-        if len(self.holder) < self.requests:
+        holder_ = deque(self.holder, maxlen=self.requests)
+        if len(holder_) < self.requests:
             return False
-        elif (datetime.now() - self.start()) <= self._seconds:
+        elif (datetime.now(timezone.utc) - holder_[0]) <= timedelta(
+            seconds=self.seconds
+        ):
             return True
         else:
-            # log.debug(f'Checked against: {self.start()} elapsed: '
-            #          f'{self.elapsed_time().seconds}sec returning False')
             return False
 
-    def __repr__(self):
-        return f"<Timer: {self.requests}req per {self.seconds}sec>"
+
+@dataclass
+class NoRestriction(Restriction):
+    seconds: float = 0
+    requests: int = 0
+
+    def check(self) -> bool:
+        return False
 
 
+@dataclass
 class Pacer:
-    def __init__(self, timers: list[TimerProtocol]) -> None:
-        self.timers = timers
+    restrictions: list[Restriction] = field(
+        default_factory=partial(list, NoRestriction())
+    )
 
     async def __aenter__(self):
-        for timer in self.timers:
-            while _ := timer.check():
-                log.debug(
-                    f"restriction by timer: {timer} "
-                    f"for {timer.sleep_time()}sec "
-                    f"until {datetime.now() + timer._sleep_time()}"
-                )
-                # additional random up to 2 secs sleep to avoid all workers
-                # exiting from sleep at exactly the same time
-                await asyncio.sleep(timer.sleep_time() + 2 * random.random())
-                # await asyncio.sleep(1)
+        while any([timer.check() for timer in self.timers]):
+            await asyncio.sleep(0.1)
         # register request time right before exiting the context
-        Timer.holder.append(datetime.now())
+        Restriction.holder.append(datetime.now(timezone.utc))
 
-    async def __aexit__(self, exc_type, exc_value, exc_tb):
+    async def __aexit__(self, *args):
         pass
-
-    def __repr__(self):
-        return f"Pacer with timers: {self.timers}"
 
 
 def pacer(
     barSize,
     wts,
     *,
-    restrictions: list[tuple[int, int]] = [(2, 6), (600, 60)],
-    restriction_threshold: int = 30,
-    norestriction: bool = CONFIG.get("no_restriction", False),
-    timers: Optional[Union[list[TimerProtocol], TimerProtocol]] = None,
+    restrictions: list[tuple[float, int]] = [],
+    restriction_threshold: int = 30,  # barSize in secs above which restrictions apply
 ) -> Pacer:
     """
     Factory function returning correct pacer preventing (or rather
     limiting -:)) data pacing restrictions by Interactive Brokers.
     """
 
-    log.debug(
-        f"INSIDE PACER"
-        f"duration in secs: {duration_in_secs(barSize)}"
-        f"restriction threshold: {restriction_threshold}"
-    )
+    if (not restrictions) or (duration_in_secs(barSize) > restriction_threshold):
+        return Pacer()
 
-    # 'BID_ASK' requests counted as double by ib
-    if wts == "BID_ASK":
-        restrictions = [
-            (restriction[0], int(restriction[1] / 2)) for restriction in restrictions
-        ]
-
-    if timers:
-        if not isinstance(timers, list):
-            timers = [timers]
-        for timer in timers:
-            assert isinstance(timer, Timer), "timers must be a Timer or list of Timer"
-
-    elif norestriction or (duration_in_secs(barSize) > restriction_threshold):
-        timers = [NoTimer()]
     else:
-        timers = [Timer(*res) for res in restrictions]
-
-    return Pacer(timers)
+        # 'BID_ASK' requests counted as double by ib
+        if wts == "BID_ASK":
+            restrictions = [
+                (restriction[0], int(restriction[1] / 2))
+                for restriction in restrictions
+            ]
+    return Pacer([Restriction(*res) for res in restrictions])
 
 
 def validate_age(contract: DataWriter) -> bool:
@@ -760,40 +697,133 @@ def validate_age(contract: DataWriter) -> bool:
     """
     if duration_in_secs(contract.barSize) < 30 and contract.next_date:
         assert isinstance(contract.next_date, datetime)
-        if (datetime.now() - contract.next_date).days > 180:
+        # TODO: not sure if correct or necessary
+        if (datetime.now(timezone.utc) - contract.next_date).days > 180:
             return False
-        # log.debug(
-        #    f'validating: {contract.contract.localSymbol} {contract.next_date}'
-        #    f' duration: {duration_in_secs(contract.barSize)}sec '
-        #    f'age: {(datetime.now() - contract.next_date).days} '
-        #    f'validation: {(datetime.now() - contract.next_date).days > 180}')
-
     return True
+
+
+class _Manager:
+    """
+    Helper class, whose only purpose is running validators, which
+    would be otherwise difficult in a dataclass.
+    """
+
+    barSize: ClassVar = Validator(bar_size_validator)
+    wts: ClassVar = Validator(wts_validator)
+
+
+@dataclass
+class Manager(_Manager):
+    ib: ibi.IB
+    barSize: str = CONFIG["barSize"]  # type: ignore
+    wts: str = CONFIG["wts"]  # type: ignore
+    aggression: int = CONFIG["aggression"]
+    store: AbstractBaseStore = CONFIG["datastore"]
+    fill_gaps: bool = CONFIG.get("fill_gaps", True)
+
+    @functools.cached_property
+    def sources(self) -> list[dict]:
+        return pd.read_csv(CONFIG["source"], keep_default_na=False).to_dict("records")
+
+    @functools.cached_property
+    def contracts(self) -> list[ibi.Contract]:
+        return ibi.util.run(self._contracts())
+
+    async def _contracts(self) -> list[ibi.Contract]:
+        ContractSelector.set_ib(self.ib)
+        contracts = []
+        for s in self.sources:
+            contracts.extend(ContractSelector.from_kwargs(**s).objects())
+        await self.ib.qualifyContractsAsync(*contracts)
+        log.debug(f"{contracts=}")
+        return contracts
+
+    @functools.cached_property
+    def headstamps(self):
+        return ibi.util.run(self._headstamps())
+
+    async def _headstamps(self) -> dict[ibi.Contract, datetime]:
+        headstamps = {}
+        for c in self.contracts:
+            if c_ := await self.headstamp(c):
+                headstamps[c] = c_
+        return headstamps
+
+    @functools.cached_property
+    def writers(self) -> list[DataWriter]:
+        return [
+            self.init_writer(
+                self.store,
+                contract,
+                headstamp,
+                self.barSize,
+                self.wts,
+                self.aggression,
+                self.fill_gaps,
+            )
+            for contract, headstamp in self.headstamps.items()
+        ]
+
+    @staticmethod
+    def init_writer(
+        store: AbstractBaseStore,
+        contract: ibi.Contract,
+        headTimeStamp: datetime,
+        barSize: str,
+        wts: str,
+        aggression: int,
+        fill_gaps: bool,
+    ):
+        DataWriter(
+            store,
+            contract,
+            headTimeStamp,
+            barSize=barSize,
+            wts=wts,
+            aggression=aggression,
+            fill_gaps=fill_gaps,
+        )
+
+    async def headstamp(self, contract: ibi.Contract):
+        try:
+            headTimeStamp = await self.ib.reqHeadTimeStampAsync(
+                contract, whatToShow=self.wts, useRTH=False, formatDate=2
+            )
+
+            if headTimeStamp == []:
+                log.warning(
+                    (
+                        f"Unavailable headTimeStamp for {contract}. "
+                        f"No data will be downloaded"
+                    )
+                )
+        except Exception:
+            log.exception(f"Exception while getting headTimeStamp for {contract}")
+        return headTimeStamp
 
 
 async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> None:
     while True:
-        contract = await queue.get()
+        writer = await queue.get()
         log.debug(
-            f"{name} loading {contract.contract.localSymbol} "
-            f"ending {contract.next_date} "
-            f'Duration: {contract.params["durationStr"]}, '
-            f'Bar size: {contract.params["barSizeSetting"]} '
+            f"{name} loading {writer.contract.localSymbol} "
+            f"ending {writer.next_date} "
+            f'Duration: {writer.params["durationStr"]}, '
+            f'Bar size: {writer.params["barSizeSetting"]} '
         )
         async with pacer:
             chunk = await ib.reqHistoricalDataAsync(
-                **contract.params, formatDate=2, timeout=0
+                **writer.params, formatDate=2, timeout=0
             )
 
-        contract.save_chunk(chunk)
-        if contract.next_date:
-            if validate_age(contract):
-                await queue.put(contract)
+        writer.save_chunk(chunk)
+        if writer.next_date:
+            if validate_age(writer):
+                await queue.put(writer)
             else:
-                contract.save_chunk(None)
-                log.debug(
-                    f"{contract.contract.localSymbol} " f"dropped on age validation"
-                )
+                writer.save_chunk(None)
+                log.debug(f"{writer.contract.localSymbol} dropped on age validation")
         queue.task_done()
 
 
@@ -803,9 +833,7 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     log.debug(f"{writers=}")
     number_of_workers = min(len(writers), MAX_NUMBER_OF_WORKERS)
 
-    log.debug(
-        f"main function started, " f"retrieving data for {len(writers)} instruments"
-    )
+    log.debug(f"main function started, retrieving data for {len(writers)} instruments")
 
     queue: asyncio.Queue[DataWriter] = asyncio.LifoQueue()
     for writer in writers:
@@ -813,7 +841,11 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     p = pacer(
         writer.barSize,
         writer.wts,
-        restrictions=[(2, 6), (1200, 60 - number_of_workers)],
+        restrictions=(
+            []
+            if CONFIG.get("pacer_no_restriction", False)
+            else CONFIG["pacer_restrictions"]
+        ),
     )
     log.debug(f"Pacer initialized: {p}")
     workers: list[asyncio.Task] = [
@@ -841,108 +873,16 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     await asyncio.gather(*workers)
 
 
-class _Manager:
-    """
-    Helper class, whose only purpose is running validators, which
-    would be otherwise difficult in a dataclass.
-    """
-
-    barSize: ClassVar = Validator(bar_size_validator)
-    wts: ClassVar = Validator(wts_validator)
-
-
-@dataclass
-class Manager(_Manager):
-    ib: ibi.IB
-    barSize: str = CONFIG["barSize"]  # type: ignore
-    wts: str = CONFIG["wts"]  # type: ignore
-    aggression: int = CONFIG["aggression"]
-    store: AbstractBaseStore = CONFIG["datastore"]
-
-    @functools.cached_property
-    def sources(self) -> list[dict]:
-        return pd.read_csv(CONFIG["source"], keep_default_na=False).to_dict("records")
-
-    @functools.cached_property
-    def contracts(self) -> list[ibi.Contract]:
-        return ibi.util.run(self._contracts())
-
-    async def _contracts(self) -> list[ibi.Contract]:
-        ContractSelector.set_ib(self.ib)
-        contracts = []
-        for s in self.sources:
-            contracts.extend(ContractSelector.from_kwargs(**s).objects())
-        await self.ib.qualifyContractsAsync(*contracts)
-        log.debug(f"{contracts=}")
-        return contracts
-
-    @functools.cached_property
-    def headstamps(self):
-        return ibi.uitl.run(self._headstamps())
-
-    async def _headstamps(self) -> dict[ibi.Contract, datetime]:
-        headstamps = {}
-        for c in self.contracts:
-            if c_ := await self.headstamp(c):
-                headstamps[c] = c_
-        return headstamps
-
-    @functools.cached_property
-    def writers(self) -> list[DataWriter]:
-        return [
-            self.init_writer(
-                self.store, contract, headstamp, self.barSize, self.wts, self.aggression
-            )
-            for contract, headstamp in self.headstamps.items()
-        ]
-
-    @staticmethod
-    def init_writer(
-        store: AbstractBaseStore,
-        contract: ibi.Contract,
-        headTimeStamp: datetime,
-        barSize: str,
-        wts: str,
-        aggression: int,
-    ):
-        DataWriter(
-            store,
-            contract,
-            headTimeStamp,
-            barSize=barSize,
-            wts=wts,
-            aggression=aggression,
-        )
-
-    async def headstamp(self, contract: ibi.Contract):
-        try:
-            headTimeStamp = await self.ib.reqHeadTimeStampAsync(
-                contract, whatToShow=self.wts, useRTH=False, formatDate=2
-            )
-
-            if headTimeStamp == []:
-                log.warning(
-                    (
-                        f"Unavailable headTimeStamp for {contract}. "
-                        f"No data will be downloaded"
-                    )
-                )
-        except Exception:
-            log.exception(f"Exception while getting headTimeStamp for {contract}")
-        return headTimeStamp
-
-
 def start():
 
     ibi.util.patchAsyncio()
     ib = ibi.IB()
-
-    manager = Manager()
+    manager = Manager(ib)
     asyncio.get_event_loop().set_debug(True)
     # util.logToConsole(logging.ERROR)
     log.debug("Will start...")
 
-    Connection(ib, partial(main, ib, manager), watchdog=CONFIG.get("watchdog", True))
+    Connection(ib, partial(main, manager, ib), watchdog=CONFIG.get("watchdog", True))
 
     log.debug("script finished, about to disconnect")
     ib.disconnect()

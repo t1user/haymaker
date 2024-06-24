@@ -6,7 +6,10 @@ continuous_futures_only: True
 watchdog: False
 max_number_of_workers: 40
 fill_gaps: False
-no_restriction: True
+pacer_restrictions:
+  - !!python/tuple [2, 6] # [seconds, max requests]
+  - !!python/tuple [600, 60]
+pacer_no_restriction: False # toggle to quickly switch off pacer in spite of previous item
 # ---- futures config ----
 futures_selector: "contfuture" # contfuture, fullchain, current, exact 
 futures_fullchain_spec: full #  full, active, expired; which contracts should be included in futures fullchain; relevant only if futureshow==fullchain;
