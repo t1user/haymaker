@@ -6,6 +6,7 @@ continuous_futures_only: True
 watchdog: False
 max_number_of_workers: 40
 fill_gaps: False
+auto_save_interval: 900 # in secs, zero=off
 pacer_restrictions:
   - !!python/tuple [2, 6] # [seconds, max requests]
   - !!python/tuple [600, 60]

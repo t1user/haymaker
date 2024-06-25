@@ -56,7 +56,7 @@ packages = ["ib_tools"]
 Repository = "https://github.com/t1user/ib_tools"
 
 [project.scripts]
-dataloader = "ib_tools.dataloader:start"
+dataloader = "ib_tools.dataloader.dataloader:start"
 
 [tool.setuptools_scm]
 version_file = "ib_tools/_version.py"

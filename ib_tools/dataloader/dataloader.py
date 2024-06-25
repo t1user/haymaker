@@ -13,11 +13,12 @@ import ib_insync as ibi
 import pandas as pd
 
 from ib_tools.config import CONFIG
-from ib_tools.connect import Connection
 from ib_tools.datastore import AbstractBaseStore
 from ib_tools.logging import setup_logging
-from ib_tools.task_logger import create_task
 from ib_tools.validators import Validator, bar_size_validator, wts_validator
+
+from .connect import Connection
+from .task_logger import create_task
 
 """
 Async queue implementation modelled (loosely) on example here:
@@ -211,7 +212,38 @@ class ExactFutureContractSelector(FutureContractSelector):
 
 @dataclass
 class DataWriter:
-    """Interface between dataloader and datastore"""
+    """
+    Interface between dataloader and datastore.
+
+    It is created for every contract for which data is to be
+    downloaded.  It's responsibilities are (SRP?????):
+
+    * determine dates for which download is necessary (based on data
+    already available in datastore)
+
+    * save data to the store
+
+    * provide exact params for :meth:`ib.reqHistoricalData`
+
+    There are potentially 3 streams of data that writer might
+    schedule:
+
+    * backfill - data older than the oldest data point available in
+    the store
+
+    * update - data newer than the newest data point available
+
+    * fill_gaps - any data missing inside the range available in the
+    store
+
+    public methods:
+
+    * `next_date`
+
+    * `params`
+
+    * `save_chunk`
+    """
 
     store: AbstractBaseStore
     contract: ibi.Contract
@@ -221,79 +253,44 @@ class DataWriter:
     aggression: float = 2
     now: datetime = field(default_factory=partial(datetime.now, timezone.utc))
     fill_gaps: bool = True
+    next_date: Union[datetime, date, str] = ""  # Fucking hate this.TODO
+    _queue: list[DownloadContainer] = field(default_factory=list, init=False)
+    _current_object: Optional[DownloadContainer] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        # !!!! REVIEW everything below
         self.c = self.contract.localSymbol
-        # start, stop, step in seconds, ie. every 15min
-        pulse = ibi.Event().timerange(900, None, 900)
-        pulse += self.onPulse
-
-        self.next_date: Union[datetime, date, str] = ""  # Fucking hate this.TODO
-        self._objects: list[DownloadContainer] = []
-        self._queue: list[DownloadContainer] = []
-        self._current_object: Optional[DownloadContainer] = None
+        if asi := CONFIG.get("auto_save_interval", 0):
+            pulse = ibi.Event().timerange(asi, None, asi)
+            pulse += self.onPulse
         self.schedule_tasks()
         log.info(f"Object initialized: {self}")
+        self.schedule_next()
 
     def onPulse(self, time: datetime):
         self.write_to_store()
 
     def schedule_tasks(self):
-        try:
-            update = self.update()
-            log.debug(f"update for {self.c}: {update}")
-        except Exception as e1:
-            log.error(f"Exception for update, line 139: {e1} ignored, {self.c}")
-            update = None
 
-        try:
-            backfill = self.backfill()
-            log.debug(f"backfill for {self.c}: {backfill}")
-        except Exception as e2:
-            log.error(f"Exception for backfill, line 144: {e2} ignored, {self.c}")
-            backfill = None
-
-        if self.fill_gaps:
-            try:
-                fill_gaps = self.gap_filler()
-                log.debug(f"fill_gaps for {self.c}: {fill_gaps}")
-            except Exception as e3:
-                log.error(f"Exception for fill_gaps, line 149: {e3} ignored, {self.c}")
-                fill_gaps = None
-        else:
-            fill_gaps = None
-
-        if backfill:
+        if backfill := self.backfill():
             log.debug(f"{self.c} queued for backfill")
-            self._objects.append(
-                DownloadContainer(from_date=self.head, to_date=backfill)
-            )
+            self._queue.append(DownloadContainer(from_date=self.head, to_date=backfill))
 
-        if update:
+        if update := self.update():
             log.debug(f"{self.c} queued for update")
-            self._objects.append(
+            self._queue.append(
                 DownloadContainer(from_date=self.to_date, to_date=update, update=True)
             )
 
-        if fill_gaps is not None:
+        if self.fill_gaps and (fill_gaps := self.gap_filler()):
             for gap in fill_gaps:
                 log.debug(f"{self.c} queued gap from {gap.start} to {gap.stop}")
-                self._objects.append(
+                self._queue.append(
                     DownloadContainer(from_date=gap.start, to_date=gap.stop)
                 )
-
-        self._queue = self._objects.copy()
-        self.schedule_next()
 
     def schedule_next(self):
         if self._current_object:
             self.write_to_store()
-            log.debug(
-                f"{self.c} written to store "
-                f"{self._current_object.from_date} - "
-                f"{self._current_object.to_date}"
-            )
         try:
             self._current_object = self._queue.pop()
         except IndexError:
@@ -319,18 +316,20 @@ class DataWriter:
         try:
             _data = self._current_object.data
         except AttributeError:
-            log.warning("Ignoring data, line 210")
+            log.warning("Ignoring data...")
             _data = None
 
         if _data is not None:
             data = self.data
             if data is None:
                 data = pd.DataFrame()
-            # TODO: replace append with concat
             data = pd.concat([data, _data])
-            # data = data.append(_data)
             version = self.store.write(self.contract, data)
-            log.debug(f"data written to datastore as {version}")
+            log.debug(
+                f"{self.c} written to store "
+                f"{self._current_object.from_date} - {self._current_object.to_date}"
+                f"version {version}"
+            )
             if version:
                 self._current_object.clear()
 
@@ -433,7 +432,7 @@ class DataWriter:
             else datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
         )
 
-    @property
+    @functools.cached_property
     def data(self) -> Optional[pd.DataFrame]:
         """Available data in datastore for contract or None"""
         return self.store.read(self.contract)
@@ -448,16 +447,7 @@ class DataWriter:
     def to_date(self) -> Optional[datetime]:
         """Latest point in datastore"""
         date = self.data.index.max() if self.data is not None else None
-        # if data.tzinfo is None or data.tzinfo.utcoffset(data) is None:
         return date
-
-    def __repr__(self):
-        return (
-            f"{self.__class__.__name__}"
-            + "("
-            + ", ".join([f"{k}={v}" for k, v in self.__dict__.items()])
-            + ")"
-        )
 
 
 @dataclass
@@ -690,15 +680,15 @@ def pacer(
     return Pacer([Restriction(*res) for res in restrictions])
 
 
-def validate_age(contract: DataWriter) -> bool:
+def validate_age(writer: DataWriter) -> bool:
     """
     IB doesn't permit to request data for bars < 30secs older than 6
     months.  Trying to push it here with 30secs.
     """
-    if duration_in_secs(contract.barSize) < 30 and contract.next_date:
-        assert isinstance(contract.next_date, datetime)
+    if duration_in_secs(writer.barSize) < 30 and writer.next_date:
+        assert isinstance(writer.next_date, datetime)
         # TODO: not sure if correct or necessary
-        if (datetime.now(timezone.utc) - contract.next_date).days > 180:
+        if (datetime.now(timezone.utc) - writer.next_date).days > 180:
             return False
     return True
 
@@ -805,6 +795,10 @@ class Manager(_Manager):
 
 async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> None:
     while True:
+        # TODO: questionable if this is necessary, as workers are cancelled eventually
+        if queue.empty():
+            break
+
         writer = await queue.get()
         log.debug(
             f"{name} loading {writer.contract.localSymbol} "
