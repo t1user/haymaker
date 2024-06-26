@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import ClassVar, NamedTuple, Optional, Union
+from typing import ClassVar, NamedTuple, Optional, TypedDict, Union
 
 import ib_insync as ibi
 import pandas as pd
@@ -17,8 +16,10 @@ from ib_tools.datastore import AbstractBaseStore
 from ib_tools.logging import setup_logging
 from ib_tools.validators import Validator, bar_size_validator, wts_validator
 
+from . import helpers
 from .connect import Connection
 from .contract_selectors import ContractSelector
+from .pacer import Pacer, pacer
 from .task_logger import create_task
 
 """
@@ -32,6 +33,15 @@ setup_logging()
 log = logging.getLogger(__name__)
 
 MAX_NUMBER_OF_WORKERS = CONFIG.get("max_number_of_workers", 40)
+
+
+class Params(TypedDict):
+    contract: ibi.Contract
+    endDateTime: Union[datetime, date, str, None]
+    durationStr: str
+    barSizeSetting: str
+    whatToShow: str
+    useRTH: bool
 
 
 @dataclass
@@ -60,7 +70,9 @@ class DataWriter:
     * fill_gaps - any data missing inside the range available in the
     store
 
-    public methods:
+    public methods/attributes:
+
+    * `contract`
 
     * `next_date`
 
@@ -75,11 +87,11 @@ class DataWriter:
     barSize: str
     wts: str
     aggression: float = 2
-    now: datetime = field(default_factory=partial(datetime.now, timezone.utc))
+    now: datetime = field(
+        default_factory=partial(datetime.now, timezone.utc), repr=False
+    )
     fill_gaps: bool = True
-    next_date: Union[datetime, date, str] = ""  # Fucking hate this.TODO
-    _queue: list[DownloadContainer] = field(default_factory=list, init=False)
-    _current_object: Optional[DownloadContainer] = field(default=None, init=False)
+    _queue: list[DownloadContainer] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
         self.c = self.contract.localSymbol
@@ -88,7 +100,7 @@ class DataWriter:
             pulse += self.onPulse
         self.schedule_tasks()
         log.info(f"Object initialized: {self}")
-        self.schedule_next()
+        # self.schedule_next()
 
     def onPulse(self, time: datetime):
         self.write_to_store()
@@ -112,36 +124,59 @@ class DataWriter:
                     DownloadContainer(from_date=gap.start, to_date=gap.stop)
                 )
 
-    def schedule_next(self):
-        if self._current_object:
-            self.write_to_store()
-        try:
-            self._current_object = self._queue.pop()
-        except IndexError:
-            self.write_to_store()
-            self.next_date = ""  # this should be None; TODO
-            log.debug(f"{self.c} done!")
-            return
-        self.next_date = self._current_object.to_date
-        log.debug(f"scheduling {self.c}: {self._current_object}")
+    def is_done(self) -> bool:
+        return len(self._queue) == 0
+
+    @property
+    def _current_container(self) -> DownloadContainer:
+        # there must be at least one object in the queue, otherwise it's an error
+        # don't call the method without verifying the queue is not empty
+        # with self.is_done()
+        return self._queue[-1]
+
+    @property
+    def next_date(self) -> Union[date, datetime, None]:
+        if not self.is_done():
+            return self._current_container.next_date
+        else:
+            return None
+
+    # def schedule_next(self):
+    #     if self._current_object:
+    #         self.write_to_store()
+    #     try:
+    #         self._current_object = self._queue.pop()
+    #     except IndexError:
+    #         self.write_to_store()
+    #         self.next_date = ""  # this should be None; TODO
+    #         log.debug(f"{self.c} done!")
+    #         return
+    #     self.next_date = self._current_object.to_date
+    #     log.debug(f"scheduling {self.c}: {self._current_object}")
 
     def save_chunk(self, data: ibi.BarDataList):
-        assert self._current_object is not None
-        # TODO
-        # next data sometimes becomes None and subsequenty throws error in line 362
-        next_date = self._current_object.save(data)
-        log.debug(f"{self.c}: chunk saved, next_date: {next_date}")
-        if next_date:
-            self.next_date = next_date
-        else:
-            self.schedule_next()
+        assert not self.is_done()
+        container = self._current_container
+        if data:
+            log.debug(f"{self} received bars from: {data[0].date} to {data[-1].date}")
+        elif container.next_date:
+            log.warning(f"Cannot download data past {container.next_date}")
+        container.save_chunk(data)
+        next_date = container.next_date
+        log.debug(f"{self}: chunk saved, next_date: {next_date}")
+        if not next_date:
+            self._queue.pop()
 
-    def write_to_store(self):
-        try:
-            _data = self._current_object.data
-        except AttributeError:
-            log.warning("Ignoring data...")
-            _data = None
+    def write_to_store(self) -> None:
+        """
+        This is the only method that actually saves data.  All other
+        'save' methods don't.
+        """
+
+        if self.is_done():
+            return
+
+        _data = self._current_container.flush_data()
 
         if _data is not None:
             data = self.data
@@ -150,12 +185,12 @@ class DataWriter:
             data = pd.concat([data, _data])
             version = self.store.write(self.contract, data)
             log.debug(
-                f"{self.c} written to store "
-                f"{self._current_object.from_date} - {self._current_object.to_date}"
+                f"{self!s} written to store "
+                f"{self._current_container.from_date} - {self._current_container.to_date}"
                 f"version {version}"
             )
             if version:
-                self._current_object.clear()
+                self._current_container.clear()
 
     def backfill(self) -> Optional[datetime]:
         """
@@ -211,11 +246,7 @@ class DataWriter:
         return list(non_standard_gaps[["start", "stop"]].itertuples(index=False))
 
     @property
-    def params(
-        self,
-    ) -> dict[
-        str, Union[ibi.Contract, str, bool, date, datetime]
-    ]:  # this is fucked. TODO
+    def params(self) -> Params:
         return {
             "contract": self.contract,
             "endDateTime": self.next_date,
@@ -226,22 +257,22 @@ class DataWriter:
         }
 
     @property
-    def duration(self):
-        duration = barSize_to_duration(self.barSize, self.aggression)
+    def duration(self) -> str:
+        duration = helpers.barSize_to_duration(self.barSize, self.aggression)
         # this gets string and datetime error TODO !!!!!!!!!!!!!!!
         try:
-            delta = self.next_date - self._current_object.from_date
+            delta = self.next_date - self._current_container.from_date
         except Exception as e:
             log.error(
                 f"next date: {self.next_date}, "
-                f"from_date: {self._current_object.from_date}",
+                f"from_date: {self._current_container.from_date}",
                 e,
             )
             raise
 
-        if delta < duration_to_timedelta(duration):
+        if delta < helpers.duration_to_timedelta(duration):
             # requests for periods shorter than 30s don't work
-            duration = duration_str(
+            duration = helpers.duration_str(
                 max(delta.total_seconds(), 30), self.aggression, False
             )
         return duration
@@ -256,7 +287,7 @@ class DataWriter:
             else datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
         )
 
-    @functools.cached_property
+    @property
     def data(self) -> Optional[pd.DataFrame]:
         """Available data in datastore for contract or None"""
         return self.store.read(self.contract)
@@ -273,248 +304,87 @@ class DataWriter:
         date = self.data.index.max() if self.data is not None else None
         return date
 
+    def str(self) -> str:
+        return (
+            f"{self.contract.localSymbol} {self.duration} {self.barSize} "
+            f"next date: {self.next_date} "
+        )
+
 
 @dataclass
 class DownloadContainer:
-    """Hold downloaded data before it is saved to datastore"""
+    """
+    Hold downloaded data before it is saved to datastore.
 
-    from_date: datetime
-    to_date: datetime
-    current_date = None
-    update: bool = False
-    df: pd.DataFrame = field(default_factory=pd.DataFrame)
-    bars: list[ibi.BarDataList] = field(default_factory=list)
-    retries: int = 0
-    nodata_retries: int = 0
+    Object is initiated with desided from and to dates, for which data
+    is to to be loaded, subsequently it is used to store any data
+    before it's permanently saved.  It also keeps track of which data
+    is still missing.
 
-    def save(self, bars: ibi.BarDataList) -> Optional[Union[datetime, date]]:
-        """Store downloaded data and if more data needed return
-        endpoint for next download"""
+
+    Public interface:
+
+    * next_date
+
+    * save_chunk
+
+    * clear
+
+    * data
+
+    """
+
+    from_date: Union[datetime, date]
+    to_date: Union[datetime, date]
+    _next_date: Union[datetime, date, None] = field(init=False, repr=False)
+    bars: list[ibi.BarDataList] = field(default_factory=list, repr=False)
+
+    def __post_init__(self):
+        self.next_date = self.to_date
+
+    @property
+    def next_date(self):
+        return self._next_date
+
+    @next_date.setter
+    def next_date(self, date: Union[date, datetime, None]) -> None:
+        if date is None:
+            self._next_date = None
+        elif date <= self.from_date:
+            self._next_date = None
+        else:
+            self._next_date = date
+
+    def save_chunk(self, bars: Optional[ibi.BarDataList]) -> None:
+        """
+        Store downloaded data and if more data and update date point
+        for next download.
+        """
 
         if bars:
-            log.debug(f"Received bars from: {bars[0].date} to {bars[-1].date}")
+            self.next_date = bars[0].date
             self.bars.append(bars)
-            self.current_date = bars[0].date
-        elif self.current_date:
-            log.warning(f"Cannot download data past {self.current_date}")
-            # might be a bank holiday (TODO: this needs to be tested)
-            # self.current_date -= timedelta(days=1)
-            return None
         else:
-            if self.ok_to_write:
-                return None
-            else:
-                log.debug(f"Attempt {self.retries + 1} to fill in update gap")
-                self.current_date = (
-                    self.df.index.min() - timedelta(days=1) * self.retries
-                )
-                self.retries += 1
-                if self.retries > 5:
-                    self.retries = 0
-                    return None
-        # this is likely irrelevant. Check. TODO.
-        if self.current_date:
-            if self.from_date < self.current_date < self.to_date:
-                return self.current_date
-        return None
+            self.next_date = None
 
-    @property
-    def ok_to_write(self) -> bool:
-        """Updated data should be written only if complete, otherwise
-        difficult to find gaps would possibly occur in datastore."""
+    def flush_data(self) -> Optional[pd.DataFrame]:
+        """Return df ready to be written to datastore or date of end
+        point for additional downloads.
 
-        if self.update:
-            # TODO: this throws errors occationally
-            try:
-                return self.df.index.min() <= self.from_date
-            except Exception as e:
-                log.error(
-                    f"ERROR index.min: {self.df.index.min()}, "
-                    f"from_date: {self.from_date}",
-                    e,
-                )
-                raise
-        else:
-            return True
-
-    @property
-    def data(self) -> Optional[Union[pd.DataFrame, datetime]]:
-        """Return df ready to be written to datastore or date of end point
-        for additional downloads"""
+        TODO: Not true now, do I want to make it true?
+        Make sure to safe whatever
+        comes out of this method because this data is being deleted.
+        """
         if self.bars:
-            self.df = ibi.util.df([b for bars in reversed(self.bars) for b in bars])
-            self.df.set_index("date", inplace=True)
-            if not self.ok_to_write:
-                log.warning(
-                    f"Writing update with gap between: "
-                    f" {self.from_date} and {self.df.index.min()}"
-                )
-
-            df = self.df
-            self.df = pd.DataFrame()
+            df = ibi.util.df(
+                [b for bars in reversed(self.bars) for b in bars]
+            ).set_index("date")
             return df
         else:
             return None
 
     def clear(self):
-        self.bars = []
-
-    def __repr__(self):
-        return f"{self.from_date} - {self.to_date}, update: {self.update}"
-
-
-def duration_in_secs(barSize: str):
-    """Given duration string return duration in seconds int"""
-    number, time = barSize.split(" ")
-    time = time[:-1] if time.endswith("s") else time
-    multiplier = {
-        "sec": 1,
-        "min": 60,
-        "mins": 60,
-        "hour": 3600,
-        "day": 3600 * 23,
-        "week": 3600 * 23 * 5,
-    }
-    return int(number) * multiplier[time]
-
-
-def duration_str(duration_in_secs: int, aggression: float, from_bar: bool = True):
-    """
-    Given duration in seconds return acceptable duration str.
-
-    :from_bar:
-    if True it's assumed that the duration_in_secs number comes from barSize
-    and appropriate multiplier is used to get to optimal duration. Otherwise
-    duration_in_secs is converted into duration_str directly without
-    any multiplication.
-    """
-    if from_bar:
-        multiplier = 2000 if duration_in_secs < 30 else 15000 * aggression
-    else:
-        multiplier = 1
-    duration = int(duration_in_secs * multiplier)
-    days = int(duration / 60 / 60 / 23)
-    if days:
-        years = int(days / 250)
-        if years:
-            return f"{years} Y"
-        months = int(days / 20)
-        if months:
-            return f"{months} M"
-        return f"{days} D"
-    return f"{duration} S"
-
-
-def barSize_to_duration(s, aggression):
-    """
-    Given bar size str return optimal duration str,
-
-    :aggression: how many data points will be pulled at a time,
-                 should be between 0.5 and 3,
-                 larger numbers might result in more throttling,
-                 requires research what's optimal number for fastest
-                 downloads
-    """
-    return duration_str(duration_in_secs(s), aggression)
-
-
-def duration_to_timedelta(duration):
-    """Convert duration string of reqHistoricalData into datetime.timedelta"""
-    number, time = duration.split(" ")
-    number = int(number)
-    if time == "S":
-        return timedelta(seconds=number)
-    if time == "D":
-        return timedelta(days=number)
-    if time == "W":
-        return timedelta(weeks=number)
-    if time == "M":
-        return timedelta(days=31)
-    if time == "Y":
-        return timedelta(days=365)
-    raise ValueError(f"Unknown duration string: {duration}")
-
-
-@dataclass
-class Restriction:
-    holder: ClassVar[deque[datetime]] = deque(maxlen=100)
-    seconds: float
-    requests: int
-
-    def check(self) -> bool:
-        """Return True if pacing restriction neccessary"""
-        holder_ = deque(self.holder, maxlen=self.requests)
-        if len(holder_) < self.requests:
-            return False
-        elif (datetime.now(timezone.utc) - holder_[0]) <= timedelta(
-            seconds=self.seconds
-        ):
-            return True
-        else:
-            return False
-
-
-@dataclass
-class NoRestriction(Restriction):
-    seconds: float = 0
-    requests: int = 0
-
-    def check(self) -> bool:
-        return False
-
-
-@dataclass
-class Pacer:
-    restrictions: list[Restriction] = field(
-        default_factory=partial(list, NoRestriction())
-    )
-
-    async def __aenter__(self):
-        while any([timer.check() for timer in self.timers]):
-            await asyncio.sleep(0.1)
-        # register request time right before exiting the context
-        Restriction.holder.append(datetime.now(timezone.utc))
-
-    async def __aexit__(self, *args):
-        pass
-
-
-def pacer(
-    barSize,
-    wts,
-    *,
-    restrictions: list[tuple[float, int]] = [],
-    restriction_threshold: int = 30,  # barSize in secs above which restrictions apply
-) -> Pacer:
-    """
-    Factory function returning correct pacer preventing (or rather
-    limiting -:)) data pacing restrictions by Interactive Brokers.
-    """
-
-    if (not restrictions) or (duration_in_secs(barSize) > restriction_threshold):
-        return Pacer()
-
-    else:
-        # 'BID_ASK' requests counted as double by ib
-        if wts == "BID_ASK":
-            restrictions = [
-                (restriction[0], int(restriction[1] / 2))
-                for restriction in restrictions
-            ]
-    return Pacer([Restriction(*res) for res in restrictions])
-
-
-def validate_age(writer: DataWriter) -> bool:
-    """
-    IB doesn't permit to request data for bars < 30secs older than 6
-    months.  Trying to push it here with 30secs.
-    """
-    if duration_in_secs(writer.barSize) < 30 and writer.next_date:
-        assert isinstance(writer.next_date, datetime)
-        # TODO: not sure if correct or necessary
-        if (datetime.now(timezone.utc) - writer.next_date).days > 180:
-            return False
-    return True
+        self.bars.clear()
 
 
 class _Manager:
@@ -617,6 +487,19 @@ class Manager(_Manager):
         return headTimeStamp
 
 
+def validate_age(writer: DataWriter) -> bool:
+    """
+    IB doesn't permit to request data for bars < 30secs older than 6
+    months.  Trying to push it here with 30secs.
+    """
+    if helpers.duration_in_secs(writer.barSize) < 30 and writer.next_date:
+        assert isinstance(writer.next_date, datetime)
+        # TODO: not sure if correct or necessary
+        if (datetime.now(timezone.utc) - writer.next_date).days > 180:
+            return False
+    return True
+
+
 async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> None:
     while True:
         # TODO: questionable if this is necessary, as workers are cancelled eventually
@@ -624,12 +507,7 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
             break
 
         writer = await queue.get()
-        log.debug(
-            f"{name} loading {writer.contract.localSymbol} "
-            f"ending {writer.next_date} "
-            f'Duration: {writer.params["durationStr"]}, '
-            f'Bar size: {writer.params["barSizeSetting"]} '
-        )
+        log.debug(f"{name} loading {writer!s} ")
         async with pacer:
             chunk = await ib.reqHistoricalDataAsync(
                 **writer.params, formatDate=2, timeout=0
@@ -641,7 +519,10 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
                 await queue.put(writer)
             else:
                 writer.save_chunk(None)
-                log.debug(f"{writer.contract.localSymbol} dropped on age validation")
+                log.debug(f"{writer!s} dropped on age validation")
+        else:
+            log.debug(f"{writer!s} done!")
+
         queue.task_done()
 
 
