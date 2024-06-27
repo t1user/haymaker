@@ -71,7 +71,7 @@ def df_brick():
             df["price_plus"] = df["price"] + 1
             return df
 
-    return Brick("eska_NQ", ibi.Future("NQ", "CME"), df_columns=None)
+    return Brick("eska_NQ", ibi.Future("NQ", "CME"))
 
 
 @pytest.fixture
@@ -103,27 +103,13 @@ def test_signal_correct(df_connected_brick, data_for_df):
     assert atom.memo["signal"] == 1
 
 
-def test_column_selection_works(df_connected_brick, data_for_df):
-    brick, atom = df_connected_brick
-    brick.df_columns = ["price", "signal", "price_plus"]
-    brick.onData(data_for_df)
-    assert list(atom.memo.keys()) == [
-        "strategy",
-        "contract",
-        "price",
-        "signal",
-        "price_plus",
-        "Brick_ts",
-    ]
-
-
 @pytest.fixture
 def basic_df_brick():
     class Brick(AbstractDfBrick):
         def df(self, df):
             return df
 
-    return Brick("eska_NQ", ibi.Future("NQ", "CME"), df_columns=None)
+    return Brick("eska_NQ", ibi.Future("NQ", "CME"))
 
 
 def test_dispatchmethod_df(basic_df_brick, data_for_df):
