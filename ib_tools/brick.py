@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import singledispatchmethod
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 import ib_insync as ibi
 import pandas as pd
@@ -75,13 +75,9 @@ class AbstractBaseBrick(Atom, ABC):
 class AbstractDfBrick(AbstractBaseBrick):
     strategy: str
     contract: ibi.Contract
-    df_columns: Optional[list[str]]
 
     def _signal(self, data) -> dict:
-        d = self.df_row(data).to_dict()
-        if self.df_columns:
-            d = {k: v for k, v in d.items() if k in self.df_columns}
-        return d
+        return self.df_row(data).to_dict()
 
     def df_row(self, data) -> pd.Series:
         return self._create_df(data).reset_index().iloc[-1]

@@ -132,7 +132,7 @@ class Atom:
             return self.contract_details
 
     def _createEvents(self):
-        self.startEvent = ibi.Event("startEven")
+        self.startEvent = ibi.Event("startEvent")
         self.dataEvent = ibi.Event("dataEvent")
         self.feedbackEvent = ibi.Event("feedbackEvent")
 
