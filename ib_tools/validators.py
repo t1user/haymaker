@@ -30,7 +30,7 @@ class Validator:
         return True
 
 
-def bar_size_validator(s: str) -> None:
+def bar_size_validator(s: str) -> str:
     """Verify if given string is a valid IB api bar size str"""
     ok_str = [
         "1 secs",
@@ -57,9 +57,11 @@ def bar_size_validator(s: str) -> None:
     ]
     if s not in ok_str:
         raise ValueError(f"bar size : {s} is invalid, must be one of {ok_str}")
+    else:
+        return s
 
 
-def wts_validator(s: str) -> None:
+def wts_validator(s: str) -> str:
     """Verify if given string is a valide IB api whatToShow str"""
     ok_str = [
         "TRADES",
@@ -79,9 +81,13 @@ def wts_validator(s: str) -> None:
     ]
     if s not in ok_str:
         raise ValueError(f"{s} is a wrong whatToShow value, must be one of {ok_str}")
+    else:
+        return s
 
 
-def order_field_validator(value: dict[str, Any]) -> None:
+def order_field_validator(value: dict[str, Any]) -> dict[str, Any]:
     """Validate if :class:`ibi.Order` is instantiated with correct args."""
     if diff := (set(value.keys()) - set(dataclasses.asdict(ibi.Order()).keys())):
         raise ValueError(f"Wrong order attrs: {diff}")
+    else:
+        return value

@@ -4,9 +4,9 @@ import asyncio
 import functools
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from functools import partial
-from typing import ClassVar, NamedTuple, Optional, TypedDict, Union
+from typing import NamedTuple, Optional, TypedDict, Union
 
 import ib_insync as ibi
 import pandas as pd
@@ -14,7 +14,7 @@ import pandas as pd
 from ib_tools.config import CONFIG
 from ib_tools.datastore import AbstractBaseStore
 from ib_tools.logging import setup_logging
-from ib_tools.validators import Validator, bar_size_validator, wts_validator
+from ib_tools.validators import bar_size_validator, wts_validator
 
 from . import helpers
 from .connect import Connection
@@ -32,16 +32,23 @@ setup_logging()
 
 log = logging.getLogger(__name__)
 
-MAX_NUMBER_OF_WORKERS = CONFIG.get("max_number_of_workers", 40)
+
+BARSIZE: str = bar_size_validator(CONFIG["barSize"])
+WTS: str = wts_validator(CONFIG["wts"])
+AGGRESSION: int = CONFIG.get("aggression", 1)
+FILL_GAPS: bool = CONFIG.get("fill_gaps", True)
+MAX_NUMBER_OF_WORKERS: int = CONFIG.get("max_number_of_workers", 40)
+
+DAILY_STRINGS = ["1 day", "1 week", "1 month"]
+NOW: Union[date, datetime] = (
+    date.today() if BARSIZE in DAILY_STRINGS else datetime.now(timezone.utc)
+)
 
 
 class Params(TypedDict):
     contract: ibi.Contract
     endDateTime: Union[datetime, date, str, None]
     durationStr: str
-    barSizeSetting: str
-    whatToShow: str
-    useRTH: bool
 
 
 @dataclass
@@ -84,13 +91,6 @@ class DataWriter:
     store: AbstractBaseStore
     contract: ibi.Contract
     head: datetime
-    barSize: str
-    wts: str
-    aggression: float = 2
-    now: datetime = field(
-        default_factory=partial(datetime.now, timezone.utc), repr=False
-    )
-    fill_gaps: bool = True
     _queue: list[DownloadContainer] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
@@ -117,7 +117,7 @@ class DataWriter:
                 DownloadContainer(from_date=self.to_date, to_date=update, update=True)
             )
 
-        if self.fill_gaps and (fill_gaps := self.gap_filler()):
+        if FILL_GAPS(fill_gaps := self.gap_filler()):
             for gap in fill_gaps:
                 log.debug(f"{self.c} queued gap from {gap.start} to {gap.stop}")
                 self._queue.append(
@@ -128,7 +128,7 @@ class DataWriter:
         return len(self._queue) == 0
 
     @property
-    def _current_container(self) -> DownloadContainer:
+    def _container(self) -> DownloadContainer:
         # there must be at least one object in the queue, otherwise it's an error
         # don't call the method without verifying the queue is not empty
         # with self.is_done()
@@ -137,26 +137,14 @@ class DataWriter:
     @property
     def next_date(self) -> Union[date, datetime, None]:
         if not self.is_done():
-            return self._current_container.next_date
+            return self._container.next_date
         else:
             return None
 
-    # def schedule_next(self):
-    #     if self._current_object:
-    #         self.write_to_store()
-    #     try:
-    #         self._current_object = self._queue.pop()
-    #     except IndexError:
-    #         self.write_to_store()
-    #         self.next_date = ""  # this should be None; TODO
-    #         log.debug(f"{self.c} done!")
-    #         return
-    #     self.next_date = self._current_object.to_date
-    #     log.debug(f"scheduling {self.c}: {self._current_object}")
-
     def save_chunk(self, data: ibi.BarDataList):
+        # TODO: Warning! Not writing to store now, is it ok?
         assert not self.is_done()
-        container = self._current_container
+        container = self._container
         if data:
             log.debug(f"{self} received bars from: {data[0].date} to {data[-1].date}")
         elif container.next_date:
@@ -164,7 +152,7 @@ class DataWriter:
         container.save_chunk(data)
         next_date = container.next_date
         log.debug(f"{self}: chunk saved, next_date: {next_date}")
-        if not next_date:
+        if next_date is None:
             self._queue.pop()
 
     def write_to_store(self) -> None:
@@ -176,7 +164,7 @@ class DataWriter:
         if self.is_done():
             return
 
-        _data = self._current_container.flush_data()
+        _data = self._container.flush_data()
 
         if _data is not None:
             data = self.data
@@ -186,11 +174,11 @@ class DataWriter:
             version = self.store.write(self.contract, data)
             log.debug(
                 f"{self!s} written to store "
-                f"{self._current_container.from_date} - {self._current_container.to_date}"
+                f"{self._container.from_date} - {self._container.to_date}"
                 f"version {version}"
             )
             if version:
-                self._current_container.clear()
+                self._container.clear()
 
     def backfill(self) -> Optional[datetime]:
         """
@@ -204,7 +192,7 @@ class DataWriter:
             return from_date if from_date > self.head else None
         # data not in datastore yet
         else:
-            return min(self.expiry, self.now) if self.expiry else self.now
+            return min(self.expiry, NOW) if self.expiry else NOW
 
     def update(self) -> Optional[datetime]:
         """
@@ -214,7 +202,7 @@ class DataWriter:
         # prevent multiple calls to datastore
         to_date = self.to_date
         if to_date:
-            dt = min(self.expiry, self.now) if self.expiry else self.now
+            dt = min(self.expiry, NOW) if self.expiry else NOW
 
             if dt > to_date:
                 return dt
@@ -251,21 +239,18 @@ class DataWriter:
             "contract": self.contract,
             "endDateTime": self.next_date,
             "durationStr": self.duration,
-            "barSizeSetting": self.barSize,
-            "whatToShow": self.wts,
-            "useRTH": False,
         }
 
     @property
     def duration(self) -> str:
-        duration = helpers.barSize_to_duration(self.barSize, self.aggression)
+        duration = helpers.barSize_to_duration(BARSIZE, AGGRESSION)
         # this gets string and datetime error TODO !!!!!!!!!!!!!!!
         try:
-            delta = self.next_date - self._current_container.from_date
+            delta = self.next_date - self._container.from_date
         except Exception as e:
             log.error(
                 f"next date: {self.next_date}, "
-                f"from_date: {self._current_container.from_date}",
+                f"from_date: {self._container.from_date}",
                 e,
             )
             raise
@@ -273,7 +258,7 @@ class DataWriter:
         if delta < helpers.duration_to_timedelta(duration):
             # requests for periods shorter than 30s don't work
             duration = helpers.duration_str(
-                max(delta.total_seconds(), 30), self.aggression, False
+                max(delta.total_seconds(), 30), AGGRESSION, False
             )
         return duration
 
@@ -306,7 +291,7 @@ class DataWriter:
 
     def str(self) -> str:
         return (
-            f"{self.contract.localSymbol} {self.duration} {self.barSize} "
+            f"{self.contract.localSymbol} {self.duration} "
             f"next date: {self.next_date} "
         )
 
@@ -330,7 +315,7 @@ class DownloadContainer:
 
     * clear
 
-    * data
+    * flush_data
 
     """
 
@@ -349,10 +334,13 @@ class DownloadContainer:
     @next_date.setter
     def next_date(self, date: Union[date, datetime, None]) -> None:
         if date is None:
+            # failed to get data
             self._next_date = None
         elif date <= self.from_date:
+            # got data, that's all we need
             self._next_date = None
         else:
+            # got data, there's more to get
             self._next_date = date
 
     def save_chunk(self, bars: Optional[ibi.BarDataList]) -> None:
@@ -387,24 +375,10 @@ class DownloadContainer:
         self.bars.clear()
 
 
-class _Manager:
-    """
-    Helper class, whose only purpose is running validators, which
-    would be otherwise difficult in a dataclass.
-    """
-
-    barSize: ClassVar = Validator(bar_size_validator)
-    wts: ClassVar = Validator(wts_validator)
-
-
 @dataclass
-class Manager(_Manager):
+class Manager:
     ib: ibi.IB
-    barSize: str = CONFIG["barSize"]  # type: ignore
-    wts: str = CONFIG["wts"]  # type: ignore
-    aggression: int = CONFIG["aggression"]
     store: AbstractBaseStore = CONFIG["datastore"]
-    fill_gaps: bool = CONFIG.get("fill_gaps", True)
 
     @functools.cached_property
     def sources(self) -> list[dict]:
@@ -441,10 +415,6 @@ class Manager(_Manager):
                 self.store,
                 contract,
                 headstamp,
-                self.barSize,
-                self.wts,
-                self.aggression,
-                self.fill_gaps,
             )
             for contract, headstamp in self.headstamps.items()
         ]
@@ -454,19 +424,11 @@ class Manager(_Manager):
         store: AbstractBaseStore,
         contract: ibi.Contract,
         headTimeStamp: datetime,
-        barSize: str,
-        wts: str,
-        aggression: int,
-        fill_gaps: bool,
     ):
         DataWriter(
             store,
             contract,
             headTimeStamp,
-            barSize=barSize,
-            wts=wts,
-            aggression=aggression,
-            fill_gaps=fill_gaps,
         )
 
     async def headstamp(self, contract: ibi.Contract):
@@ -492,10 +454,10 @@ def validate_age(writer: DataWriter) -> bool:
     IB doesn't permit to request data for bars < 30secs older than 6
     months.  Trying to push it here with 30secs.
     """
-    if helpers.duration_in_secs(writer.barSize) < 30 and writer.next_date:
+    if helpers.duration_in_secs(BARSIZE) < 30 and writer.next_date:
         assert isinstance(writer.next_date, datetime)
         # TODO: not sure if correct or necessary
-        if (datetime.now(timezone.utc) - writer.next_date).days > 180:
+        if (NOW - writer.next_date).days > 180:
             return False
     return True
 
@@ -510,7 +472,12 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
         log.debug(f"{name} loading {writer!s} ")
         async with pacer:
             chunk = await ib.reqHistoricalDataAsync(
-                **writer.params, formatDate=2, timeout=0
+                **writer.params,
+                barSizeSetting=BARSIZE,
+                whatToShow=WTS,
+                useRTH=False,
+                formatDate=2,
+                timeout=0,
             )
 
         writer.save_chunk(chunk)
@@ -538,8 +505,6 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     for writer in writers:
         await queue.put(writer)
     p = pacer(
-        writer.barSize,
-        writer.wts,
         restrictions=(
             []
             if CONFIG.get("pacer_no_restriction", False)
