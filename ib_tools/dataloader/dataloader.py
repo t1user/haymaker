@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from functools import partial
-from typing import NamedTuple, Optional, TypedDict, Union
+from typing import Optional, TypedDict, Union
 
 import ib_insync as ibi
 import pandas as pd
@@ -20,6 +20,7 @@ from . import helpers
 from .connect import Connection
 from .contract_selectors import ContractSelector
 from .pacer import Pacer, pacer
+from .scheduling import task_factory, task_factory_with_gaps
 from .task_logger import create_task
 
 """
@@ -33,15 +34,64 @@ setup_logging()
 log = logging.getLogger(__name__)
 
 
+# TODO: Make sure no comparisons between date and datetime
+
 BARSIZE: str = bar_size_validator(CONFIG["barSize"])
 WTS: str = wts_validator(CONFIG["wts"])
 AGGRESSION: int = CONFIG.get("aggression", 1)
 FILL_GAPS: bool = CONFIG.get("fill_gaps", True)
+AUTO_SAVE_INTERVAL: int = CONFIG.get("auto_save_interval", 0)
 MAX_NUMBER_OF_WORKERS: int = CONFIG.get("max_number_of_workers", 40)
-
+STORE: AbstractBaseStore = CONFIG["datastore"]
 norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
 
 NOW: Union[date, datetime] = norm(datetime.now(timezone.utc))
+
+
+@dataclass
+class StoreWrapper:
+    contract: ibi.Contract
+    store: AbstractBaseStore
+
+    @property
+    def data(self) -> Optional[pd.DataFrame]:
+        """Available data in datastore for contract or None"""
+        return self.store.read(self.contract)
+
+    @functools.cached_property
+    def from_date(self) -> Optional[datetime]:
+        """Earliest point in datastore"""
+        # second point in the df to avoid 1 point gap
+        return self.data.index[1] if self.data is not None else None  # type: ignore
+
+    @functools.cached_property
+    def to_date(self) -> Optional[datetime]:
+        """Latest point in datastore"""
+        date = self.data.index.max() if self.data is not None else None
+        return date
+
+    @functools.cached_property
+    def expiry(self) -> Optional[datetime]:  # this maybe an error
+        """Expiry date for expirable contracts or ''"""
+        e = self.contract.lastTradeDateOrContractMonth
+        return (
+            None
+            if not e
+            else datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
+        )
+
+    def expiry_or_now(self):
+        """
+        It's mean to set the latest point to which it's possible to
+        download data, which is either present moment or contract
+        expiry whichever is earlier.  Contract expiry exists only for
+        some types of contracts, if it doesn't exist, it should be
+        disregarded.
+        """
+        return min(self.expiry, NOW) if self.expiry else NOW
+
+    def __getattr__(self, attr):
+        return getattr(self.store, attr)
 
 
 class Params(TypedDict):
@@ -53,17 +103,9 @@ class Params(TypedDict):
 @dataclass
 class DataWriter:
     """
-    Interface between dataloader and datastore.
-
-    It is created for every contract for which data is to be
-    downloaded.  It's responsibilities are (SRP?????):
-
-    * determine dates for which download is necessary (based on data
-    already available in datastore)
-
-    * save data to the store
-
-    * provide exact params for :meth:`ib.reqHistoricalData`
+    Keep track of all download tasks for one contract, provide exact
+    :meth:`ib.reqHistoricalData` params for every download task and
+    save data to store.
 
     There are potentially 3 streams of data that writer might
     schedule:
@@ -88,48 +130,27 @@ class DataWriter:
     """
 
     contract: ibi.Contract
-    head: datetime
-    store: AbstractBaseStore = field(repr=False)
-    _queue: list[DownloadContainer] = field(default_factory=list, repr=False)
+    store: StoreWrapper = field(repr=False)
+    queue: list[DownloadContainer] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
-        if asi := CONFIG.get("auto_save_interval", 0):
+        if asi := AUTO_SAVE_INTERVAL:
             pulse = ibi.Event().timerange(asi, None, asi)
             pulse += self.onPulse
-        self.schedule_tasks()
-        log.info(f"{self!r} initialized")
+        log.info(f"{self!r} initialized with {asi/60} min autosave.")
 
     def onPulse(self, time: datetime):
         self.write_to_store()
 
-    def schedule_tasks(self):
-
-        if backfill := self.backfill():
-            log.debug(f"{self} queued for backfill")
-            self._queue.append(DownloadContainer(from_date=self.head, to_date=backfill))
-
-        if update := self.update():
-            log.debug(f"{self} queued for update")
-            self._queue.append(
-                DownloadContainer(from_date=self.to_date, to_date=update)
-            )
-
-        if FILL_GAPS and (fill_gaps := self.gap_filler()):
-            for gap in fill_gaps:
-                log.debug(f"{self} queued gap from {gap.start} to {gap.stop}")
-                self._queue.append(
-                    DownloadContainer(from_date=gap.start, to_date=gap.stop)
-                )
-
     def is_done(self) -> bool:
-        return len(self._queue) == 0
+        return len(self.queue) == 0
 
     @property
     def _container(self) -> DownloadContainer:
         # there must be at least one object in the queue, otherwise it's an error
         # don't call the method without verifying the queue is not empty
         # with self.is_done()
-        return self._queue[-1]
+        return self.queue[-1]
 
     @property
     def next_date(self) -> Union[date, datetime, None]:
@@ -149,7 +170,7 @@ class DataWriter:
         self._container.save_chunk(data)
         self.write_to_store()
         if self._container.next_date is None:
-            self._queue.pop()
+            self.queue.pop()
 
     def write_to_store(self) -> None:
         """
@@ -163,7 +184,7 @@ class DataWriter:
         _data = self._container.flush_data()
 
         if _data is not None:
-            data = self.data
+            data = self.store.data
             if data is None:
                 data = pd.DataFrame()
             data = pd.concat([data, _data])
@@ -174,59 +195,6 @@ class DataWriter:
             )
             if version:
                 self._container.clear()
-
-    def backfill(self) -> Union[datetime, date, None]:
-        """
-        Check if data earlier than earliest point in datastore available.
-        Return the data at which backfill should start.
-        """
-        # prevent multiple calls to datastore
-        from_date = self.from_date
-        # data present in datastore
-        if from_date:
-            return from_date if from_date > self.head else None
-        # data not in datastore yet
-        else:
-            return min(self.expiry, NOW) if self.expiry else NOW
-
-    def update(self) -> Union[datetime, date, None]:
-        """
-        Check if data newer than endpoint in datastore available for download.
-        Return current date if yes, None if not.
-        """
-        # prevent multiple calls to datastore
-        to_date = self.to_date
-        if to_date:
-            dt = min(self.expiry, NOW) if self.expiry else NOW
-
-            if dt > to_date:
-                return dt
-
-        return None
-
-    def gap_filler(self) -> list[NamedTuple]:
-        if self.data is None:
-            return []
-        data = self.data.copy()
-        data["timestamp"] = data.index
-        data["gap"] = data["timestamp"].diff()
-        inferred_frequency = data["gap"].mode()[0]
-        log.debug(f"inferred frequency: {inferred_frequency}")
-        data["gap_bool"] = data["gap"] > inferred_frequency
-        data["start"] = data.timestamp.shift()
-        data["stop"] = data.timestamp.shift(-1)
-        gaps = data[data["gap_bool"]]
-        out = pd.DataFrame({"start": gaps["start"], "stop": gaps["stop"]}).reset_index(
-            drop=True
-        )
-        out = out[1:]
-        if len(out) == 0:
-            return []
-        out["start_time"] = out["start"].apply(lambda x: x.time())
-        cutoff_time = out["start_time"].mode()[0]
-        log.debug(f"inferred cutoff time: {cutoff_time}")
-        non_standard_gaps = out[out["start_time"] != cutoff_time].reset_index(drop=True)
-        return list(non_standard_gaps[["start", "stop"]].itertuples(index=False))
 
     @property
     def params(self) -> Params:
@@ -250,33 +218,6 @@ class DataWriter:
                 max(delta.total_seconds(), 30), AGGRESSION, False
             )
         return duration
-
-    @property
-    def expiry(self) -> Optional[datetime]:  # this maybe an error
-        """Expiry date for expirable contracts or ''"""
-        e = self.contract.lastTradeDateOrContractMonth
-        return (
-            None
-            if not e
-            else datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
-        )
-
-    @property
-    def data(self) -> Optional[pd.DataFrame]:
-        """Available data in datastore for contract or None"""
-        return self.store.read(self.contract)
-
-    @property
-    def from_date(self) -> Optional[datetime]:
-        """Earliest point in datastore"""
-        # second point in the df to avoid 1 point gap
-        return self.data.index[1] if self.data is not None else None  # type: ignore
-
-    @property
-    def to_date(self) -> Optional[datetime]:
-        """Latest point in datastore"""
-        date = self.data.index.max() if self.data is not None else None
-        return date
 
     def __str__(self) -> str:
         return f"<{self.contract.localSymbol}>"
@@ -367,7 +308,7 @@ class DownloadContainer:
 @dataclass
 class Manager:
     ib: ibi.IB
-    store: AbstractBaseStore = CONFIG["datastore"]
+    store: AbstractBaseStore = STORE
 
     @functools.cached_property
     def sources(self) -> list[dict]:
@@ -398,28 +339,23 @@ class Manager:
         log.debug(f"{headstamps=}")
         return headstamps
 
+    def tasks(
+        self, store: StoreWrapper, headstamp: Union[datetime, date]
+    ) -> list[DownloadContainer]:
+        if FILL_GAPS:
+            tasklist = task_factory_with_gaps(store, headstamp)
+        else:
+            tasklist = task_factory(store, headstamp)
+        return [DownloadContainer(*t) for t in tasklist]
+
     @functools.cached_property
     def writers(self) -> list[DataWriter]:
-        return [
-            self.init_writer(
-                contract,
-                headstamp,
-                self.store,
-            )
-            for contract, headstamp in self.headstamps.items()
-        ]
-
-    @staticmethod
-    def init_writer(
-        contract: ibi.Contract,
-        headTimeStamp: datetime,
-        store: AbstractBaseStore,
-    ):
-        return DataWriter(
-            contract,
-            headTimeStamp,
-            store,
-        )
+        writers = []
+        for contract, headstamp in self.headstamps.items():
+            store = StoreWrapper(contract, STORE)
+            tasks = self.tasks(store, headstamp)
+            writers.append(DataWriter(contract, store, tasks))
+        return writers
 
     async def headstamp(self, contract: ibi.Contract) -> Union[date, datetime]:
         try:
