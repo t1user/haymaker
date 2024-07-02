@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+from typing import Union
 
 
 def duration_in_secs(barSize: str):
@@ -16,7 +17,7 @@ def duration_in_secs(barSize: str):
     return int(number) * multiplier[time]
 
 
-def duration_str(duration_in_secs: int, aggression: float, from_bar: bool = True):
+def duration_str(duration_in_secs: float, aggression: float, from_bar: bool = True):
     """
     Given duration in seconds return acceptable duration str.
 
@@ -71,3 +72,13 @@ def duration_to_timedelta(duration):
     if time == "Y":
         return timedelta(days=365)
     raise ValueError(f"Unknown duration string: {duration}")
+
+
+DAILY_STRINGS = ["1 day", "1 week", "1 month"]
+
+
+def datetime_normalizer(dt: datetime, barsize: str) -> Union[datetime, date]:
+    if barsize in DAILY_STRINGS:
+        return dt
+    else:
+        return dt.date()

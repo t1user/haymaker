@@ -11,8 +11,8 @@ from .helpers import duration_in_secs
 @dataclass
 class Restriction:
     holder: ClassVar[deque[datetime]] = deque(maxlen=100)
-    seconds: float
     requests: int
+    seconds: float
 
     def check(self) -> bool:
         """Return True if pacing restriction neccessary"""
@@ -29,8 +29,8 @@ class Restriction:
 
 @dataclass
 class NoRestriction(Restriction):
-    seconds: float = 0
     requests: int = 0
+    seconds: float = 0
 
     def check(self) -> bool:
         return False
@@ -43,7 +43,7 @@ class Pacer:
     )
 
     async def __aenter__(self):
-        while any([timer.check() for timer in self.timers]):
+        while any([restriction.check() for restriction in self.restrictions]):
             await asyncio.sleep(0.1)
         # register request time right before exiting the context
         Restriction.holder.append(datetime.now(timezone.utc))
@@ -56,7 +56,7 @@ def pacer(
     barSize,
     wts,
     *,
-    restrictions: list[tuple[float, int]] = [],
+    restrictions: list[tuple[int, float]] = [],
     restriction_threshold: int = 30,  # barSize in secs above which restrictions apply
 ) -> Pacer:
     """

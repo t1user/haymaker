@@ -39,15 +39,14 @@ AGGRESSION: int = CONFIG.get("aggression", 1)
 FILL_GAPS: bool = CONFIG.get("fill_gaps", True)
 MAX_NUMBER_OF_WORKERS: int = CONFIG.get("max_number_of_workers", 40)
 
-DAILY_STRINGS = ["1 day", "1 week", "1 month"]
-NOW: Union[date, datetime] = (
-    date.today() if BARSIZE in DAILY_STRINGS else datetime.now(timezone.utc)
-)
+norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
+
+NOW: Union[date, datetime] = norm(datetime.now(timezone.utc))
 
 
 class Params(TypedDict):
     contract: ibi.Contract
-    endDateTime: Union[datetime, date, str, None]
+    endDateTime: Union[datetime, date, str]
     durationStr: str
 
 
@@ -88,19 +87,17 @@ class DataWriter:
     * `save_chunk`
     """
 
-    store: AbstractBaseStore
     contract: ibi.Contract
     head: datetime
+    store: AbstractBaseStore = field(repr=False)
     _queue: list[DownloadContainer] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
-        self.c = self.contract.localSymbol
         if asi := CONFIG.get("auto_save_interval", 0):
             pulse = ibi.Event().timerange(asi, None, asi)
             pulse += self.onPulse
         self.schedule_tasks()
-        log.info(f"Object initialized: {self}")
-        # self.schedule_next()
+        log.info(f"{self!r} initialized")
 
     def onPulse(self, time: datetime):
         self.write_to_store()
@@ -108,18 +105,18 @@ class DataWriter:
     def schedule_tasks(self):
 
         if backfill := self.backfill():
-            log.debug(f"{self.c} queued for backfill")
+            log.debug(f"{self} queued for backfill")
             self._queue.append(DownloadContainer(from_date=self.head, to_date=backfill))
 
         if update := self.update():
-            log.debug(f"{self.c} queued for update")
+            log.debug(f"{self} queued for update")
             self._queue.append(
-                DownloadContainer(from_date=self.to_date, to_date=update, update=True)
+                DownloadContainer(from_date=self.to_date, to_date=update)
             )
 
-        if FILL_GAPS(fill_gaps := self.gap_filler()):
+        if FILL_GAPS and (fill_gaps := self.gap_filler()):
             for gap in fill_gaps:
-                log.debug(f"{self.c} queued gap from {gap.start} to {gap.stop}")
+                log.debug(f"{self} queued gap from {gap.start} to {gap.stop}")
                 self._queue.append(
                     DownloadContainer(from_date=gap.start, to_date=gap.stop)
                 )
@@ -142,17 +139,16 @@ class DataWriter:
             return None
 
     def save_chunk(self, data: ibi.BarDataList):
-        # TODO: Warning! Not writing to store now, is it ok?
         assert not self.is_done()
-        container = self._container
         if data:
-            log.debug(f"{self} received bars from: {data[0].date} to {data[-1].date}")
-        elif container.next_date:
-            log.warning(f"Cannot download data past {container.next_date}")
-        container.save_chunk(data)
-        next_date = container.next_date
-        log.debug(f"{self}: chunk saved, next_date: {next_date}")
-        if next_date is None:
+            log.debug(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
+        elif self._container.next_date:
+            log.warning(
+                f"{self!s} cannot download data past {self._container.next_date}"
+            )
+        self._container.save_chunk(data)
+        self.write_to_store()
+        if self._container.next_date is None:
             self._queue.pop()
 
     def write_to_store(self) -> None:
@@ -173,14 +169,13 @@ class DataWriter:
             data = pd.concat([data, _data])
             version = self.store.write(self.contract, data)
             log.debug(
-                f"{self!s} written to store "
-                f"{self._container.from_date} - {self._container.to_date}"
+                f"{self!s} written to store {_data.index[0]} - {_data.index[-1]}"
                 f"version {version}"
             )
             if version:
                 self._container.clear()
 
-    def backfill(self) -> Optional[datetime]:
+    def backfill(self) -> Union[datetime, date, None]:
         """
         Check if data earlier than earliest point in datastore available.
         Return the data at which backfill should start.
@@ -194,7 +189,7 @@ class DataWriter:
         else:
             return min(self.expiry, NOW) if self.expiry else NOW
 
-    def update(self) -> Optional[datetime]:
+    def update(self) -> Union[datetime, date, None]:
         """
         Check if data newer than endpoint in datastore available for download.
         Return current date if yes, None if not.
@@ -235,6 +230,8 @@ class DataWriter:
 
     @property
     def params(self) -> Params:
+        # should've been checked before scheduling
+        assert self.next_date is not None
         return {
             "contract": self.contract,
             "endDateTime": self.next_date,
@@ -243,18 +240,10 @@ class DataWriter:
 
     @property
     def duration(self) -> str:
+        # worker must check this before scheduling
+        assert self.next_date is not None
         duration = helpers.barSize_to_duration(BARSIZE, AGGRESSION)
-        # this gets string and datetime error TODO !!!!!!!!!!!!!!!
-        try:
-            delta = self.next_date - self._container.from_date
-        except Exception as e:
-            log.error(
-                f"next date: {self.next_date}, "
-                f"from_date: {self._container.from_date}",
-                e,
-            )
-            raise
-
+        delta = self.next_date - self._container.from_date
         if delta < helpers.duration_to_timedelta(duration):
             # requests for periods shorter than 30s don't work
             duration = helpers.duration_str(
@@ -289,11 +278,8 @@ class DataWriter:
         date = self.data.index.max() if self.data is not None else None
         return date
 
-    def str(self) -> str:
-        return (
-            f"{self.contract.localSymbol} {self.duration} "
-            f"next date: {self.next_date} "
-        )
+    def __str__(self) -> str:
+        return f"<{self.contract.localSymbol}>"
 
 
 @dataclass
@@ -325,6 +311,9 @@ class DownloadContainer:
     bars: list[ibi.BarDataList] = field(default_factory=list, repr=False)
 
     def __post_init__(self):
+        assert (
+            self.to_date > self.from_date
+        ), f"{self.from_date=} is later than {self.to_date=}"
         self.next_date = self.to_date
 
     @property
@@ -401,43 +390,44 @@ class Manager:
     def headstamps(self):
         return ibi.util.run(self._headstamps())
 
-    async def _headstamps(self) -> dict[ibi.Contract, datetime]:
+    async def _headstamps(self) -> dict[ibi.Contract, Union[date, datetime]]:
         headstamps = {}
         for c in self.contracts:
             if c_ := await self.headstamp(c):
                 headstamps[c] = c_
+        log.debug(f"{headstamps=}")
         return headstamps
 
     @functools.cached_property
     def writers(self) -> list[DataWriter]:
         return [
             self.init_writer(
-                self.store,
                 contract,
                 headstamp,
+                self.store,
             )
             for contract, headstamp in self.headstamps.items()
         ]
 
     @staticmethod
     def init_writer(
-        store: AbstractBaseStore,
         contract: ibi.Contract,
         headTimeStamp: datetime,
+        store: AbstractBaseStore,
     ):
-        DataWriter(
-            store,
+        return DataWriter(
             contract,
             headTimeStamp,
+            store,
         )
 
-    async def headstamp(self, contract: ibi.Contract):
+    async def headstamp(self, contract: ibi.Contract) -> Union[date, datetime]:
         try:
             headTimeStamp = await self.ib.reqHeadTimeStampAsync(
-                contract, whatToShow=self.wts, useRTH=False, formatDate=2
+                contract, whatToShow=WTS, useRTH=False, formatDate=2
             )
 
-            if headTimeStamp == []:
+            if not headTimeStamp:
                 log.warning(
                     (
                         f"Unavailable headTimeStamp for {contract}. "
@@ -446,7 +436,8 @@ class Manager:
                 )
         except Exception:
             log.exception(f"Exception while getting headTimeStamp for {contract}")
-        return headTimeStamp
+            headTimeStamp = NOW  # type: ignore
+        return norm(headTimeStamp)
 
 
 def validate_age(writer: DataWriter) -> bool:
@@ -469,7 +460,7 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
             break
 
         writer = await queue.get()
-        log.debug(f"{name} loading {writer!s} ")
+        log.debug(f"{name} loading {writer!s} ending: {writer.next_date}")
         async with pacer:
             chunk = await ib.reqHistoricalDataAsync(
                 **writer.params,
@@ -505,6 +496,8 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     for writer in writers:
         await queue.put(writer)
     p = pacer(
+        BARSIZE,
+        WTS,
         restrictions=(
             []
             if CONFIG.get("pacer_no_restriction", False)
