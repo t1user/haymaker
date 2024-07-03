@@ -25,14 +25,17 @@ class Config(ChainMap):
 
         - yaml file passed from command line
 
+        - yaml file identified by full absolute path in environment
+          variable: 'HAYMAKER_CONFIG_OVERRIDES'
+
         - environment variables
 
         - default yaml file (located in the same directory as
-          :class:`.Config`)
+          :class:`.Config`) named 'base_config.yaml'
     """
 
     def __init__(self) -> None:
-        self.file: Optional[str] = None
+        self.file: Optional[str] = os.environ.get("HAYMAKER_CONFIG_OVERRIDES", None)
         super().__init__(self.cmdline, self.config_file, self.environ, self.defaults)
 
     @property
@@ -45,7 +48,19 @@ class Config(ChainMap):
     @property
     def config_file(self) -> collections.abc.MutableMapping:
         if self.file:
-            return self.parse_yaml(self.file)
+            try:
+                return self.parse_yaml(self.file)
+            except FileNotFoundError:
+                print()
+                print(f"Missing config file: {self.file}")
+                if self.file == os.environ.get("HAYMAKER_CONFIG_OVERRIDES"):
+                    print(
+                        "file defined in environ variable: `HAYMAKER_CONFIG_OVERRIDES`"
+                    )
+                else:
+                    print("file defined as CLI argument.")
+                print()
+                raise
         else:
             return {}
 
@@ -70,11 +85,10 @@ class Config(ChainMap):
     def parse_yaml(self, filename) -> collections.abc.MutableMapping:
         with open(filename, "r") as f:
             data = yaml.unsafe_load(f)
-        return data
-
-    # def parse_keys(self, d: dict) -> collections.abc.Mapping:
-    #     new_dict: dict = {}
-    #     return new_dict
+        if data is not None:
+            return data
+        else:
+            return {}
 
 
 CONFIG: Final[Config] = Config()
