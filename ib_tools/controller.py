@@ -478,6 +478,12 @@ class Controller(Atom):
                     f"Code {errorCode}: {errorString} {contract}"
                     f"{strategy} | {action} | {order}"
                 )
+            elif errorCode == 201:
+                log.critical(
+                    f"ORDER REJECTED {errorCode}: {errorString} {contract}, "
+                    f"{strategy} | {action} | {order}"
+                )
+
             else:
                 log.error(
                     f"Error {errorCode}: {errorString} {contract}, "
