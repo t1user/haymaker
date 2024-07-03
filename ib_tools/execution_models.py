@@ -15,8 +15,6 @@ from ib_tools.bracket_legs import AbstractBracketLeg
 from ib_tools.config import CONFIG
 from ib_tools.validators import Validator, order_field_validator
 
-# from ib_tools.manager import CONTROLLER
-
 if TYPE_CHECKING:
     from ib_tools.controller import Controller
 

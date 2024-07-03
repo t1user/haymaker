@@ -1,12 +1,14 @@
 import dataclasses
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 import ib_insync as ibi
+
+T = TypeVar("T")
 
 
 class Validator:
 
-    def __init__(self, *validators: Callable[[Any], None]):
+    def __init__(self, *validators: Callable[[T], T]):
         self.validators = validators
 
     def __set_name__(self, owner, name) -> None:
