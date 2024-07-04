@@ -3,13 +3,13 @@ from abc import ABC, abstractproperty
 from dataclasses import dataclass
 from datetime import date, datetime
 from functools import cached_property
-from typing import TYPE_CHECKING, NamedTuple, Optional, Self, Union
+from typing import NamedTuple, Optional, Self, Union
 
 import pandas as pd
 
+from .store_wrapper import StoreWrapper
+
 log = logging.getLogger(__name__)
-if TYPE_CHECKING:
-    from .dataloader import StoreWrapper
 
 
 class Dates(NamedTuple):

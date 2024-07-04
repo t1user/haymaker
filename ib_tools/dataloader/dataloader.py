@@ -21,6 +21,7 @@ from .connect import Connection
 from .contract_selectors import ContractSelector
 from .pacer import Pacer, pacer
 from .scheduling import task_factory, task_factory_with_gaps
+from .store_wrapper import StoreWrapper
 from .task_logger import create_task
 
 """
@@ -29,7 +30,7 @@ https://docs.python.org/3/library/asyncio-queue.html#examples
 and here:
 https://realpython.com/async-io-python/#using-a-queue
 """
-setup_logging()
+setup_logging(CONFIG.get("logging_config"))
 
 log = logging.getLogger(__name__)
 
@@ -46,52 +47,6 @@ STORE: AbstractBaseStore = CONFIG["datastore"]
 norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
 
 NOW: Union[date, datetime] = norm(datetime.now(timezone.utc))
-
-
-@dataclass
-class StoreWrapper:
-    contract: ibi.Contract
-    store: AbstractBaseStore
-
-    @property
-    def data(self) -> Optional[pd.DataFrame]:
-        """Available data in datastore for contract or None"""
-        return self.store.read(self.contract)
-
-    @functools.cached_property
-    def from_date(self) -> Optional[datetime]:
-        """Earliest point in datastore"""
-        # second point in the df to avoid 1 point gap
-        return self.data.index[1] if self.data is not None else None  # type: ignore
-
-    @functools.cached_property
-    def to_date(self) -> Optional[datetime]:
-        """Latest point in datastore"""
-        date = self.data.index.max() if self.data is not None else None
-        return date
-
-    @functools.cached_property
-    def expiry(self) -> Optional[datetime]:  # this maybe an error
-        """Expiry date for expirable contracts or ''"""
-        e = self.contract.lastTradeDateOrContractMonth
-        return (
-            None
-            if not e
-            else datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
-        )
-
-    def expiry_or_now(self):
-        """
-        It's mean to set the latest point to which it's possible to
-        download data, which is either present moment or contract
-        expiry whichever is earlier.  Contract expiry exists only for
-        some types of contracts, if it doesn't exist, it should be
-        disregarded.
-        """
-        return min(self.expiry, NOW) if self.expiry else NOW
-
-    def __getattr__(self, attr):
-        return getattr(self.store, attr)
 
 
 class Params(TypedDict):
@@ -352,7 +307,7 @@ class Manager:
     def writers(self) -> list[DataWriter]:
         writers = []
         for contract, headstamp in self.headstamps.items():
-            store = StoreWrapper(contract, STORE)
+            store = StoreWrapper(contract, STORE, NOW)
             tasks = self.tasks(store, headstamp)
             writers.append(DataWriter(contract, store, tasks))
         return writers
