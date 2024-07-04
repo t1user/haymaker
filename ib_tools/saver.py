@@ -252,6 +252,14 @@ class MongoSaver(AbstractBaseSaver):
     def __init__(
         self, collection: str, query_key: Optional[str] = None, timestamp: bool = False
     ) -> None:
+        """
+        `query_key` if for type of records that need to be recalled
+        and updated, this key will be used to identify the record (of
+        course it's possible to find any record with standard pymongo
+        methods, this is just a helper for a typical task done by Haymaker).
+
+        `timestamp` not used in MongoSaver
+        """
         host = CONFIG["MongoSaver"]["host"]
         port = CONFIG["MongoSaver"]["port"]
         db = CONFIG["MongoSaver"]["db"]

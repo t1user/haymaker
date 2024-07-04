@@ -6,7 +6,6 @@ import random
 import string
 from collections import UserDict
 from enum import Enum
-from os import makedirs, path
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Union
 
@@ -271,11 +270,10 @@ def default_path(*dirnames: str) -> str:
     If the path doesn't exist create it.
     """
     home = Path.home()
-    default_directory = CONFIG.get("data_folder") or "ib_data"
-    dirnames_str = " / ".join(dirnames)
-    if not Path.exists(home / default_directory / dirnames_str):
-        makedirs(home.joinpath(default_directory, *dirnames))
-    return path.join(str(home), default_directory, *dirnames)
+    default_directory = CONFIG.get("data_folder", "ib_data")
+    path = Path(home, default_directory, *dirnames)
+    path.mkdir(exist_ok=True, parents=True)
+    return str(path)
 
 
 def trade_fill_price(trade: ibi.Trade) -> float:
