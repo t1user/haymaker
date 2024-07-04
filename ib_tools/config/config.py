@@ -26,7 +26,8 @@ class Config(ChainMap):
         - yaml file passed from command line
 
         - yaml file identified by full absolute path in environment
-          variable: 'HAYMAKER_CONFIG_OVERRIDES'
+          variable: 'HAYMAKER_CONFIG_OVERRIDES' for modules other than
+          dataloader, and `DATALOADER_CONFIG_OVERRIDES` for dataloader
 
         - environment variables
 
@@ -35,8 +36,16 @@ class Config(ChainMap):
     """
 
     def __init__(self) -> None:
-        self.file: Optional[str] = os.environ.get("HAYMAKER_CONFIG_OVERRIDES", None)
+        self.file: Optional[str] = self.config_file_name_environ_reader()
         super().__init__(self.cmdline, self.config_file, self.environ, self.defaults)
+
+    @staticmethod
+    def config_file_name_environ_reader():
+        module_name = Path(sys.argv[0]).name.split(".")[0]
+        environ_key = {"dataloader": "DATALOADER_CONFIG_OVERRIDES"}.get(
+            module_name, "HAYMAKER_CONFIG_OVERRIDES"
+        )
+        return os.environ.get(environ_key, None)
 
     @property
     def cmdline(self) -> collections.abc.MutableMapping:

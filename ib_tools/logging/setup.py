@@ -2,15 +2,18 @@ import logging
 import logging.config
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Union
 
 import yaml
 
+from ib_tools.config import CONFIG
+from ib_tools.misc import default_path
+
 from . import setup_logging_queue
 
-# from ib_tools.config import CONFIG
-
+LOGGING_PATH = CONFIG.get("logging_path", "logs")
 
 log = logging.getLogger(__name__)
 
@@ -28,20 +31,29 @@ class UTCFormatter(logging.Formatter):
     converter = time.gmtime
 
 
+def filename_from_kwargs(**kwargs):
+
+    # file not given -> use defaults
+    if "filename" not in kwargs:
+        kwargs["filename"] = "/".join((default_path(LOGGING_PATH), "haymakerLog"))
+
+    # file given witout directory -> assume default directory
+    elif str(Path(kwargs["filename"]).parents[0]) == ".":
+        kwargs["filename"] = "/".join((default_path(LOGGING_PATH), kwargs["filename"]))
+
+    return kwargs
+
+
 def timed_rotating_file_setup(**kwargs):
-    try:
-        filename = kwargs.pop("filename")
-        _ = kwargs.pop("dirname")
-    except IndexError:
-        log.exception(
-            "Wrong logging filename or dirname. Logging to file will not be setup."
-        )
-        raise
-    # filename = CONFIG.get("logging_filename") or filename
-    # dirname = Path(CONFIG.get("logging_dir") or dirname)
-    dirname = Path("/home/tomek/ib_data/test_logs")
-    full_path = dirname / filename
-    return logging.handlers.TimedRotatingFileHandler(filename=full_path, **kwargs)
+    kwargs = filename_from_kwargs(**kwargs)
+    return logging.handlers.TimedRotatingFileHandler(**kwargs)
+
+
+def file_setup(**kwargs):
+    kwargs = filename_from_kwargs(**kwargs)
+    date_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+    kwargs["filename"] = f"{kwargs['filename']}_{date_str}"
+    return logging.FileHandler(**kwargs)
 
 
 def setup_logging(
@@ -49,6 +61,12 @@ def setup_logging(
 ) -> None:
     if not config_file:
         config_file = module_directory / "logging_config.yaml"
+    elif Path(config_file).is_file():
+        pass
+    elif Path(module_directory, config_file).exists():
+        config_file = module_directory / config_file
+    else:
+        raise ValueError(f"Cannot open logging config file: {config_file}")
 
     try:
         with open(config_file) as f:
@@ -68,28 +86,3 @@ def setup_logging(
 
 
 setup_logging_queue()
-
-
-# NOT IN USE FOR NOW
-class LoggingContext:
-    def __init__(self, logger, level=None, handler=None, close=True):
-        self.logger = logger
-        self.level = level
-        self.handler = handler
-        self.close = close
-
-    def __enter__(self):
-        if self.level is not None:
-            self.old_level = self.logger.level
-            self.logger.setLevel(self.level)
-        if self.handler:
-            self.logger.addHandler(self.handler)
-
-    def __exit__(self, et, ev, tb):
-        if self.level is not None:
-            self.logger.setLevel(self.old_level)
-        if self.handler:
-            self.logger.removeHandler(self.handler)
-        if self.handler and self.close:
-            self.handler.close()
-        # implicit return of None => don't swallow exceptions

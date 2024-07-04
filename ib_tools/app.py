@@ -11,8 +11,10 @@ from ib_tools.logging import setup_logging
 # Don't change the order here!
 # You want manager namespace to be logged,
 # but dont' want to setup logging inside manager
-# because tests import manager; module app is not imported by any test
-setup_logging()
+# because tests import manager (and then all tests will get logged);
+# MODULE app MUSTN'T BE IMPORTED BY ANY TESTS
+setup_logging(config.get("logging_config"))
+
 from ib_tools.manager import CONTROLLER, IB, JOBS, Jobs  # noqa: E402
 
 ibi.util.patchAsyncio()

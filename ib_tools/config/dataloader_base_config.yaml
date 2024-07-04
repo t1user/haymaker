@@ -23,4 +23,4 @@ datastore:
     - *wts
     - _
     - *barSize
-
+logging_config: "dataloader_logging_config.yaml"

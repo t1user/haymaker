@@ -1,5 +1,5 @@
-coldstart: False
-reset: False
+coldstart: False # meant to be set from CLI, if necessary
+reset: False # doesn't really make sense to change here
 
 ignore_errors:
   - 2104  # Market data farm connection is ok
@@ -55,7 +55,9 @@ blotter:
     folder: blotter
     name: blotter
     timestamp: False
-
+    
+# this is general definition of savers that are available to be used
+# they will not be instantiated unless used by an object inheriting from Atom
 saver:
   ArcticSaver:
     host: localhost
@@ -65,18 +67,12 @@ saver:
     port: 27017
     db: test_data
 
-
-# look into this because it's not in use at the moment
-logging:
-  logging_filename: haymakerLog.log
-  logging_dir: "/home/tomek/ib_data/test_logs"
-
 # All savers saving to files will create sub-directories here:
 data_folder:
   ib_data # folder inside home folder, will be created if doesn't exist
   
 # These are default order params that will be used by every execution model
-# unless different orders are passes to exec model __init__
+# unless different orders are passes to exec model's __init__
 open_order:
   algoStrategy: Adaptive
   algoParams:
@@ -101,15 +97,3 @@ tp_order:
   
 # all linked orders will use this oca_type (as per IB definition)
 oca_type: 1
-
-
-
-
-
-  
-
-  
-  
-
-
-
