@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from ib_tools.base import Atom, Pipe
-from ib_tools.signals import (
+from haymaker.base import Atom, Pipe
+from haymaker.signals import (
     AlwaysOnBinarySignalProcessor,
     AlwaysOnLockableBinarySignalProcessor,
     BinarySignalProcessor,
@@ -11,7 +11,7 @@ from ib_tools.signals import (
     LockableBlipBinarySignalProcessor,
     binary_signal_processor_factory,
 )
-from ib_tools.state_machine import StrategyContainer
+from haymaker.state_machine import StrategyContainer
 
 
 def test_BinarySignalProcessor_instantiates():

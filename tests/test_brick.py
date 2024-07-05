@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 from config import TEST_ROOT  # type: ignore
 
-from ib_tools.base import Atom
-from ib_tools.brick import AbstractBaseBrick, AbstractDfBrick
+from haymaker.base import Atom
+from haymaker.brick import AbstractBaseBrick, AbstractDfBrick
 
 
 @pytest.fixture

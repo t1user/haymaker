@@ -5,12 +5,12 @@ import ib_insync as ibi
 import pytest
 from test_brick import data_for_df, df_brick  # noqa
 
-from ib_tools.base import Pipe
-from ib_tools.bracket_legs import FixedStop
-from ib_tools.execution_models import BaseExecModel, EventDrivenExecModel
-from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
-from ib_tools.signals import BinarySignalProcessor
-from ib_tools.state_machine import Strategy, StrategyContainer
+from haymaker.base import Pipe
+from haymaker.bracket_legs import FixedStop
+from haymaker.execution_models import BaseExecModel, EventDrivenExecModel
+from haymaker.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
+from haymaker.signals import BinarySignalProcessor
+from haymaker.state_machine import Strategy, StrategyContainer
 
 
 @pytest.fixture

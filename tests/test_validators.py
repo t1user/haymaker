@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from ib_tools.validators import Validator
+from haymaker.validators import Validator
 
 
 def is_int(value):
@@ -11,7 +11,6 @@ def is_int(value):
 
 
 def test_validator_correct_value():
-
     class A:
         a = Validator(is_int)
 
@@ -23,7 +22,6 @@ def test_validator_correct_value():
 
 
 def test_validator_incorrect_value():
-
     class A:
         a = Validator(is_int)
 
@@ -35,7 +33,6 @@ def test_validator_incorrect_value():
 
 
 def test_validator_correct_value_with_dataclass():
-
     @dataclass
     class A:
         a: int
@@ -48,7 +45,6 @@ def test_validator_correct_value_with_dataclass():
 
 
 def test_validator_incorrect_value_with_dataclass():
-
     @dataclass
     class A:
         a: int
@@ -61,7 +57,6 @@ def test_validator_incorrect_value_with_dataclass():
 
 
 def test_validator_correct_value_with_inheriting_dataclass():
-
     class B:
         a = Validator(is_int)
 
@@ -74,7 +69,6 @@ def test_validator_correct_value_with_inheriting_dataclass():
 
 
 def test_validator_incorrect_value_with_inheriting_dataclass():
-
     class B:
         a = Validator(is_int)
 

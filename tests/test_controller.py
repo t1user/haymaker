@@ -5,7 +5,7 @@ from itertools import count
 import ib_insync as ibi
 import pytest
 
-from ib_tools.manager import IB
+from haymaker.manager import IB
 
 
 @pytest.fixture

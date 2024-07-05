@@ -7,7 +7,7 @@ import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
 
-from ib_tools.streamers import HistoricalDataStreamer, Streamer, Timeout
+from haymaker.streamers import HistoricalDataStreamer, Streamer, Timeout
 
 
 def test_Streamer_is_abstract():

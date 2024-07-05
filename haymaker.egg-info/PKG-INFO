@@ -1,0 +1,37 @@
+Metadata-Version: 2.1
+Name: haymaker
+Version: 0.1.dev427+gac14b63.d20240705
+Summary: Framework for trading with Interactive Brokers through ib_insync
+Author-email: t1user <enterdragon@duck.com>
+Project-URL: Repository, https://github.com/t1user/haymaker
+Keywords: ib_insync,tws,ibgateway,asyncio,interactive brokers,algo trading
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Office/Business :: Financial :: Investment
+Classifier: Licence :: OSI Approved :: BSD Licence
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENCE
+Requires-Dist: arctic@ git+https://github.com/man-group/arctic.git
+Requires-Dist: ib_insync
+Requires-Dist: pandas
+Requires-Dist: numba
+Requires-Dist: pyyaml
+Provides-Extra: notebook
+Requires-Dist: jupyter; extra == "notebook"
+Requires-Dist: matplotlib; extra == "notebook"
+Requires-Dist: pyfolio; extra == "notebook"
+Provides-Extra: dev
+Requires-Dist: types-pyyaml; extra == "dev"
+Requires-Dist: pandas-stubs; extra == "dev"
+Requires-Dist: isort; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: autopep8; extra == "dev"
+Requires-Dist: yapf; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: flake8; extra == "dev"
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-asyncio; extra == "dev"
+Provides-Extra: all
+Requires-Dist: haymaker[dev,notebook]; extra == "all"

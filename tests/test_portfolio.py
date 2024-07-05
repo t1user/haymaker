@@ -1,7 +1,7 @@
 import pytest
 
-from ib_tools.base import Atom
-from ib_tools.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
+from haymaker.base import Atom
+from haymaker.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
 
 # it's important to destroy portfolio after every test, because instance is saved
 # on the class

@@ -1,0 +1,27 @@
+version: 1
+disable_existing_loggers: false
+
+
+formatters:
+  default:
+    (): haymaker.logging.setup.UTCFormatter
+    format:  "%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s | %(module)s %(funcName)s %(lineno)d"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: default
+    stream: ext://sys.stdout
+
+  file:
+    (): haymaker.logging.setup.file_setup
+    level: DEBUG
+    formatter: default
+    delay: true
+      
+loggers:
+  haymaker:
+    level: DEBUG
+    handlers: [console, file]
+

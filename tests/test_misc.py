@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 import pytz
 
-from ib_tools.misc import Counter, is_active, next_active, process_trading_hours, sign
+from haymaker.misc import Counter, is_active, next_active, process_trading_hours, sign
 
 
 def test_Counter():

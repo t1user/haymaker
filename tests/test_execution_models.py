@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 import ib_insync as ibi
 import pytest
 
-from ib_tools.bracket_legs import FixedStop, TakeProfitAsStopMultiple, TrailingStop
-from ib_tools.execution_models import (
+from haymaker.bracket_legs import FixedStop, TakeProfitAsStopMultiple, TrailingStop
+from haymaker.execution_models import (
     AbstractExecModel,
     BaseExecModel,
     EventDrivenExecModel,
 )
-from ib_tools.state_machine import Strategy
+from haymaker.state_machine import Strategy
 
 
 def test_AbstraExecModel_is_abstract():

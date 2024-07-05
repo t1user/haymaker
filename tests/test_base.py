@@ -3,7 +3,7 @@ import logging
 import ib_insync as ibi
 import pytest
 
-from ib_tools.base import Atom, Details, DetailsContainer, Pipe
+from haymaker.base import Atom, Details, DetailsContainer, Pipe
 
 
 class NewAtom(Atom):

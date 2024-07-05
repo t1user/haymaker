@@ -5,7 +5,7 @@ import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
 
-from ib_tools.state_machine import (
+from haymaker.state_machine import (
     OrderContainer,
     OrderInfo,
     StateMachine,

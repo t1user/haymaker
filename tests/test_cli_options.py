@@ -1,6 +1,6 @@
 import pytest
 
-from ib_tools.config.cli_options import CustomArgParser
+from haymaker.config.cli_options import CustomArgParser
 
 
 def test_set_option_short():

@@ -1,10 +1,10 @@
 import ib_insync as ibi
 import pytest
 
-from ib_tools.base import Atom as BaseAtom
-from ib_tools.controller import Controller as C
-from ib_tools.saver import FakeMongoSaver, SyncSaveManager
-from ib_tools.state_machine import StateMachine
+from haymaker.base import Atom as BaseAtom
+from haymaker.controller import Controller as C
+from haymaker.saver import FakeMongoSaver, SyncSaveManager
+from haymaker.state_machine import StateMachine
 
 order_saver = FakeMongoSaver("orders", query_key="orderId")
 model_saver = FakeMongoSaver("models")

@@ -1,0 +1,35 @@
+version: 1
+disable_existing_loggers: false
+
+
+formatters:
+  default:
+    (): haymaker.logging.setup.UTCFormatter
+    format:  "%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s | %(module)s %(funcName)s %(lineno)d"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: 5
+    formatter: default
+    stream: ext://sys.stdout
+
+
+  timed_rotating_file: &file
+    (): haymaker.logging.setup.timed_rotating_file_setup
+    level: 5
+    formatter: default
+    when: midnight
+
+  timed_rotating_file_specific:
+    <<: *file
+    filename: strategies.log
+    
+loggers:
+  haymaker:
+    level: INFO
+    handlers: [console, timed_rotating_file]
+  strategy:
+    level: INFO
+    handlers: [timed_rotating_file_specific]
+    

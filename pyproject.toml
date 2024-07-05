@@ -3,7 +3,7 @@ requires = ["setuptools>=64", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ib_tools"
+name = "haymaker"
 authors = [
         {name = "t1user", email = "enterdragon@duck.com"},
 ]
@@ -46,20 +46,20 @@ dev = [
     "pytest",
     "pytest-asyncio"
     ]
-all = ["ib_tools[notebook,dev]"]
+all = ["haymaker[notebook,dev]"]
 
 
 [tool.setuptools]
-packages = ["ib_tools"]
+packages = ["haymaker"]
 
 [project.urls]
-Repository = "https://github.com/t1user/ib_tools"
+Repository = "https://github.com/t1user/haymaker"
 
 [project.scripts]
-dataloader = "ib_tools.dataloader.dataloader:start"
+dataloader = "haymaker.dataloader.dataloader:start"
 
 [tool.setuptools_scm]
-version_file = "ib_tools/_version.py"
+version_file = "haymaker/_version.py"
 
 [tool.isort]
 profile = "black"
