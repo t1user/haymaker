@@ -1,2 +1,0 @@
-[console_scripts]
-dataloader = haymaker.dataloader.dataloader:start
