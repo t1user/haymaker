@@ -19,6 +19,7 @@ handlers:
     level: DEBUG
     formatter: default
     delay: true
+    filename: dataloaderLog
       
 loggers:
   haymaker:
