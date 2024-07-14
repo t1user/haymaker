@@ -701,6 +701,8 @@ def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
 
 
 # ### Range blip and zero crosser ###
+class NoZeroError(Exception):
+    pass
 
 
 def zero_crosser(indicator: pd.Series) -> pd.Series:
@@ -714,15 +716,22 @@ def zero_crosser(indicator: pd.Series) -> pd.Series:
 
 
 def inout_range(
-    s: pd.Series, threshold: float = 0, inout: Literal["inside", "outside"] = "inside"
+    s: pd.Series,
+    threshold: Union[float, pd.Series] = 0,
+    inout: Literal["inside", "outside"] = "inside",
 ) -> pd.Series:
     """Given a threshold, return True/False series indicating whether s prices
     are inside/outside (-threshold, threshold) range.
     """
 
-    if threshold == 0:
-        raise ValueError("theshold cannot be zero, use: <zero_crosser>")
-    threshold = abs(threshold)
+    try:
+        if threshold == 0:
+            raise NoZeroError("theshold cannot be zero, use: <zero_crosser>")
+    except ValueError:
+        if (threshold == 0).any():  # type: ignore
+            raise NoZeroError("there must be no zero values in threshold")
+
+    threshold = abs(threshold)  # type: ignore
     excess = s.abs() - threshold
     if inout == "outside":
         result = excess > 0
