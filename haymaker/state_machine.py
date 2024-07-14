@@ -271,10 +271,13 @@ class StrategyContainer(UserDict):
         return data
 
     def decode(self, data: dict) -> None:
+        if data is None:
+            return
         try:
             log.debug(f"{self} will decode data: {len(data.keys())-1} keys.")
         except Exception:
             log.debug(f"data for decoding: {data}")
+            raise
 
         decoded = decode_tree(data)
 

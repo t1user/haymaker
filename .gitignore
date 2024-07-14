@@ -17,3 +17,4 @@ dist/
 *.egg-info
 stubs/
 _version.py
+build

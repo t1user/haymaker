@@ -156,6 +156,7 @@ class Controller(Atom):
             strategy = data["strategy"]
             amount = data["amount"]
             target_position = data["target_position"]
+            # TODO: Check transaction integrity only after order is done!
             await asyncio.sleep(delay)
             self.verify_transaction_integrity(strategy, amount, target_position)
         except KeyError:
