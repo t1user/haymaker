@@ -427,7 +427,7 @@ def start():
     ib = ibi.IB()
     manager = Manager(ib)
     asyncio.get_event_loop().set_debug(True)
-    # util.logToConsole(logging.ERROR)
+    # ibi.util.logToConsole(logging.ERROR)
     log.debug("Will start...")
 
     Connection(ib, partial(main, manager, ib), watchdog=CONFIG.get("watchdog", True))

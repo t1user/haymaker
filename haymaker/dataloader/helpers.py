@@ -79,6 +79,6 @@ DAILY_STRINGS = ["1 day", "1 week", "1 month"]
 
 def datetime_normalizer(dt: datetime, barsize: str) -> Union[datetime, date]:
     if barsize in DAILY_STRINGS:
-        return dt
-    else:
         return dt.date()
+    else:
+        return dt

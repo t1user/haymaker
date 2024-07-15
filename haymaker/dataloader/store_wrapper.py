@@ -1,7 +1,7 @@
 import functools
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import ib_insync as ibi
 import pandas as pd
@@ -32,7 +32,18 @@ class StoreWrapper:
         date = self.data.index.max() if self.data is not None else None
         return date
 
+    @staticmethod
+    def cast_expiry(func: Callable, *args, **kwargs) -> Callable:
+        def wrapper(self):
+            d = func(self, *args, **kwargs)
+            if isinstance(self.now, datetime):
+                d = datetime(d.year, d.month, d.day).replace(tzinfo=timezone.utc)
+            return d
+
+        return wrapper
+
     @functools.cached_property
+    @cast_expiry
     def expiry(self) -> Optional[datetime]:  # this maybe an error
         """Expiry date for expirable contracts or ''"""
         e = self.contract.lastTradeDateOrContractMonth

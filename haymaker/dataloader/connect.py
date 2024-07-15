@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from logging import getLogger
 from typing import Callable
@@ -17,16 +18,6 @@ class IBHandlers:
         self.ib.client.apiError += self.onApiError
         self.ib.disconnectedEvent += self.onDisconnected
 
-    def onError(
-        self, reqId: int, errorCode: int, errorString: str, contract: Contract
-    ) -> None:
-        log.error(f"IB error {errorCode}: {errorString}")
-        if errorCode == 1100:
-            # log.warning("Event loop will be stopped!")
-            # asyncio.get_event_loop().stop()
-            # self.run()
-            log.critical("Connection error: figure out how to handle it!")
-
     def onApiError(self, *args) -> None:
         log.error(f"API error: {args}")
 
@@ -36,16 +27,19 @@ class IBHandlers:
     def onDisconnected(self, *args) -> None:
         pass
 
-    def run(self) -> None:
-        """Fire-up dataloding function."""
-        log.debug(f"running {self.func}")
+    def onError(
+        self, reqId: int, errorCode: int, errorString: str, contract: Contract
+    ) -> None:
         try:
-            util.run(self.func())
-        except (KeyboardInterrupt, SystemExit):
-            self.ib.disconnect()
-            sys.exit()
-        except Exception as e:
-            log.error(f"ignoring schedule exception: {e}")
+            what = contract.localSymbol
+        except AttributeError:
+            what = str(contract)
+        log.warning(f"Error {errorCode} {errorString} for: {what}")
+        if "pacing violation" in errorString:
+            log.error("PACING VIOLATION. Adjust Pacer Parameters.")
+            # sys.exit()
+        elif errorCode == 1100:
+            log.critical("Connection error: figure out how to handle it!")
 
 
 class StartWatchdog(IBHandlers):
@@ -77,22 +71,6 @@ class StartWatchdog(IBHandlers):
 
     def onDisconnected(self):
         pass
-
-    def onError(
-        self, reqId: int, errorCode: int, errorString: str, contract: Contract
-    ) -> None:
-        try:
-            what = contract.localSymbol
-        except AttributeError:
-            what = str(contract)
-        log.debug(f"Error {errorCode} {errorString} for: {what}")
-        if "pacing violation" in errorString:
-            log.error("PACING VIOLATION. Adjust Pacer Parameters.")
-            # sys.exit()
-        if errorCode == 162:
-            # handle pacing violation (badly :)
-            log.warning("CHECK REASON????")
-            # time.sleep(600)
 
 
 class StartNoWatchdog(IBHandlers):
@@ -150,6 +128,18 @@ class StartNoWatchdog(IBHandlers):
                 log.debug(f"Connection error: {e}")
                 if counter > 10:
                     log.error("Reconnection attempt failed afer 10 retries.")
+
+    def run(self) -> None:
+        """Fire-up dataloding function."""
+        log.debug(f"running {self.func}")
+        try:
+            util.run(self.func())
+        except (KeyboardInterrupt, SystemExit):
+            self.ib.disconnect()
+            sys.exit()
+        except Exception as e:
+            log.exception(f"ignoring schedule exception: {e}")
+            # raise e
 
 
 class Connection:

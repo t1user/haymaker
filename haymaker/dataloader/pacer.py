@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -6,6 +7,8 @@ from functools import partial
 from typing import ClassVar
 
 from .helpers import duration_in_secs
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,7 +23,7 @@ class Restriction:
         if len(holder_) < self.requests:
             return False
         elif (datetime.now(timezone.utc) - holder_[0]) <= timedelta(
-            seconds=self.seconds
+            seconds=self.seconds + 0.1
         ):
             return True
         else:
@@ -47,6 +50,7 @@ class Pacer:
             await asyncio.sleep(0.1)
         # register request time right before exiting the context
         Restriction.holder.append(datetime.now(timezone.utc))
+        log.debug("pacer holding...")
 
     async def __aexit__(self, *args):
         pass
