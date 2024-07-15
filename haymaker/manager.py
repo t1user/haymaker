@@ -37,23 +37,32 @@ class InitData:
             if isinstance(c, ibi.ContFuture) and c.conId != 0:
                 c.conId = 0
                 log.debug(f"ContFuture reset: {c}")
-        try:
-            # qualify
-            await self.ib.qualifyContractsAsync(*self.contract_list)
 
-            # for every ContFuture add regular Future object, that will be actually
-            # used by Atoms
-            futures_for_cont_futures = [
-                ibi.Future(conId=c.conId)
-                for c in self.contract_list
-                if isinstance(c, ibi.ContFuture)
-            ]
-            await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
-        except Exception as e:
-            log.exception(e)
+        while not all([f.conId != 0 for f in self.contract_list]):
+            # if errors thrown out during the process just retry...
+            # because there will be a re-connection soon
+            try:
+                # qualify
+                log.debug("Will attempt to qualify contracts...")
+                await self.ib.qualifyContractsAsync(*self.contract_list)
+                log.debug(f"{len(self.contract_list)} Contract objects qualified")
+                # for every ContFuture add regular Future object, that will be actually
+                # used by Atoms
+                futures_for_cont_futures = [
+                    ibi.Future(conId=c.conId)
+                    for c in self.contract_list
+                    if isinstance(c, ibi.ContFuture)
+                ]
+                await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
+                log.debug(f"{len(futures_for_cont_futures)} Future objects qualified.")
+                self.contract_list.extend(futures_for_cont_futures)
+                log.debug(
+                    f"All qualified contracts: "
+                    f"{set([c.symbol for c in self.contract_list])}"
+                )
+            except Exception as e:
+                log.exception(e)
 
-        self.contract_list.extend(futures_for_cont_futures)
-        log.debug(f"contracts qualified {set([c.symbol for c in self.contract_list])}")
         return self
 
     async def acquire_contract_details(self) -> "InitData":
