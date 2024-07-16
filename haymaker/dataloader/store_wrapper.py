@@ -1,6 +1,7 @@
 import functools
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from functools import wraps
 from typing import Callable, Optional, Union
 
 import ib_insync as ibi
@@ -34,6 +35,7 @@ class StoreWrapper:
 
     @staticmethod
     def cast_expiry(func: Callable, *args, **kwargs) -> Callable:
+        @wraps(func)
         def wrapper(self):
             d = func(self, *args, **kwargs)
             if isinstance(self.now, datetime):
