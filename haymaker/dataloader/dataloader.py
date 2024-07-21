@@ -4,7 +4,7 @@ import asyncio
 import functools
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from typing import Optional, TypedDict, Union
 
@@ -351,18 +351,23 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
             break
 
         writer = await queue.get()
-        log.debug(f"{name} loading {writer!s} ending: {writer.next_date}")
-        async with pacer:
-            chunk = await ib.reqHistoricalDataAsync(
-                **writer.params,
-                barSizeSetting=BARSIZE,
-                whatToShow=WTS,
-                useRTH=False,
-                formatDate=2,
-                timeout=0,
-            )
 
-        writer.save_chunk(chunk)
+        try:
+            async with pacer:
+                log.debug(f"{name} loading {writer!s} ending: {writer.next_date}")
+                chunk = await ib.reqHistoricalDataAsync(
+                    **writer.params,
+                    barSizeSetting=BARSIZE,
+                    whatToShow=WTS,
+                    useRTH=False,
+                    formatDate=2,
+                    timeout=0,
+                )
+            writer.save_chunk(chunk)
+        except Exception as e:
+            log.exception(e)
+            log.error(f"writer: {writer}. CHECK IF RESCHEDULED.")
+
         if writer.next_date:
             if validate_age(writer):
                 await queue.put(writer)

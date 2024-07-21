@@ -34,12 +34,12 @@ class IBHandlers:
             what = contract.localSymbol
         except AttributeError:
             what = str(contract)
-        log.warning(f"Error {errorCode} {errorString} for: {what}")
-        if "pacing violation" in errorString:
+        if errorCode in (2106, 2107):
+            return
+        elif "pacing violation" in errorString:
             log.error("PACING VIOLATION. Adjust Pacer Parameters.")
-            # sys.exit()
-        elif errorCode == 1100:
-            log.critical("Connection error: figure out how to handle it!")
+        else:
+            log.warning(f"IB warning: {errorCode} {errorString} for: {what}")
 
 
 class StartWatchdog(IBHandlers):

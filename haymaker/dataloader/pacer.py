@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -17,17 +18,19 @@ class Restriction:
     requests: int
     seconds: float
 
-    def check(self) -> bool:
-        """Return True if pacing restriction neccessary"""
+    def check(self) -> float:
+        """Return required sleep time in seconds."""
         holder_ = deque(self.holder, maxlen=self.requests)
         if len(holder_) < self.requests:
-            return False
-        elif (datetime.now(timezone.utc) - holder_[0]) <= timedelta(
-            seconds=self.seconds + 0.1
-        ):
-            return True
+            return 0.0
         else:
-            return False
+            return max(
+                (
+                    timedelta(seconds=self.seconds)
+                    - (datetime.now(timezone.utc) - holder_[0])
+                ),
+                timedelta(seconds=0),
+            ) / timedelta(seconds=1)
 
 
 @dataclass
@@ -35,22 +38,46 @@ class NoRestriction(Restriction):
     requests: int = 0
     seconds: float = 0
 
-    def check(self) -> bool:
-        return False
+    def check(self) -> float:
+        return 0.0
+
+
+@dataclass
+class InnerContext:
+    """Created separately for every wait instance."""
+
+    wait_time: float
+
+    async def __aenter__(self):
+        # add up to 1 sec random time to prevent all pacers exiting
+        # from wait simultanously
+        wait_time = self.wait_time + random.randint(0, 100) / 100
+        log.debug(
+            f"Will throtle: {round(wait_time, 1)}s till "
+            f"{datetime.now() + timedelta(seconds=wait_time)}"
+        )
+        await asyncio.sleep(wait_time)
+
+    async def __aexit__(self, *args):
+        pass
 
 
 @dataclass
 class Pacer:
+    """One object for all workers."""
+
     restrictions: list[Restriction] = field(
         default_factory=partial(list, NoRestriction())
     )
 
     async def __aenter__(self):
-        while any([restriction.check() for restriction in self.restrictions]):
-            await asyncio.sleep(0.1)
-        # register request time right before exiting the context
+        # inner context ensures separate wait time for each worker
+        if time := max([restriction.check() for restriction in self.restrictions]):
+            async with InnerContext(time):
+                pass
+        # register request time right before making the request
+        # request should be the next instruction out of this context
         Restriction.holder.append(datetime.now(timezone.utc))
-        log.debug("pacer holding...")
 
     async def __aexit__(self, *args):
         pass
