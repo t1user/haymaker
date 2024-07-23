@@ -3,18 +3,9 @@ from __future__ import annotations
 import collections.abc
 import logging
 from collections import UserDict
-from dataclasses import Field, dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
-from typing import (
-    TYPE_CHECKING,
-    ClassVar,
-    Optional,
-    Protocol,
-    Sequence,
-    Type,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, ClassVar, Optional, Sequence, Union, cast
 
 from .misc import is_active, next_active, process_trading_hours
 
@@ -30,29 +21,51 @@ ContractOrSequence = Union[Sequence[ibi.Contract], ibi.Contract]
 
 
 class ContractManagingDescriptor:
+
     def __set_name__(self, obj: Atom, name: str) -> None:
         self.name = name
 
-    def __set__(self, obj: Atom, value: ibi.Contract) -> None:
+    def __set__(
+        self, obj: Atom, value: Union[ibi.Contract, collections.abc.Sequence]
+    ) -> None:
+        if not isinstance(value, (ibi.Contract, collections.abc.Sequence)):
+            raise TypeError(
+                f"attr contract must be ibi.Contract or sequence of ibi.Contract, "
+                f"not: {type(value)}"
+            )
         obj.__dict__[self.name] = value
         self._register_contract(obj, value)
 
-    def __get__(self, obj: Atom, type=None) -> Optional[ibi.Contract]:
+    def __get__(
+        self, obj: Atom, type=None
+    ) -> Union[list[ibi.Contract], ibi.Contract, None]:
+        # some methods rely on not raising an error here if attr self.name not set
         contract = obj.__dict__.get(self.name)
+        if getattr(contract, "__iter__", None):
+            assert isinstance(contract, collections.abc.Sequence)
+            return [self._swap_contfuture(c, obj) for c in contract]
+        elif isinstance(contract, ibi.Contract):
+            return self._swap_contfuture(contract, obj)
+        else:
+            return contract
+
+    @staticmethod
+    def _swap_contfuture(contract: ibi.Contract, obj: Atom) -> ibi.Contract:
         if isinstance(contract, ibi.ContFuture):
             for i in obj.contracts:
                 if isinstance(i, ibi.Future) and i.conId == contract.conId:
-                    obj.__dict__[f"_{self.name}"] = i
                     return i
-        return contract
+            raise ValueError(f"Cannot find `Future` object for {contract}")
+        else:
+            return contract
 
     def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
+        # can be either a contract or a sequence of contracts
         if getattr(value, "__iter__", None):
             assert isinstance(value, collections.abc.Sequence)
             for v in value:
                 obj.contracts.append(v)
-        else:
-            assert isinstance(value, ibi.Contract)
+        elif isinstance(value, ibi.Contract):
             obj.contracts.append(value)
 
 
@@ -60,6 +73,8 @@ class ContractManagingDescriptor:
 class Details:
     _fields: ClassVar[list] = [f.name for f in fields(ibi.ContractDetails)]
     details: ibi.ContractDetails
+    trading_hours: list[tuple[datetime, datetime]] = field(init=False, repr=False)
+    liquid_hours: list[tuple[datetime, datetime]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.trading_hours = self._process_trading_hours(
@@ -256,37 +271,3 @@ class Pipe(Atom):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}{tuple(i for i in self._members)}"
-
-
-class IsDataclass(Protocol):
-    __dataclass_fields__: dict[str, Field]
-
-
-class AtomDataclass(Atom, IsDataclass):
-    pass
-
-
-class Strategy:
-    # It's not finished
-    # Should kwargs be given as a tree?
-    # if not what if kwargs are the same for multiple classes
-
-    _strings: dict[str, list[str]] = {}
-    _objects: dict[str, Type[AtomDataclass]]
-    _pipe: Pipe
-
-    @classmethod
-    def fromAtoms(cls, *targets: Type[AtomDataclass]):
-        for obj in targets:
-            cls._strings[obj.__name__] = list(obj.__dataclass_fields__.keys())
-            cls._objects[obj.__name__] = obj
-
-    def __init__(self, **kwargs):
-        self._pipe = self.pipe(self.instantiate(**kwargs))
-
-    def instantiate(self, **kwargs):
-        for name, obj in self.objects.items():
-            return obj(**self.strings.get[name])
-
-    def to_yaml(self):
-        pass

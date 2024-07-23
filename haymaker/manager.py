@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Final, cast
 
 import ib_insync as ibi
@@ -16,14 +16,32 @@ from .streamers import Streamer
 log = logging.getLogger(__name__)
 
 
+class NotConnectedError(Exception):
+    pass
+
+
 @dataclass
 class InitData:
     ib: ibi.IB
     contract_list: list[ibi.Contract]
     contract_details: DetailsContainer
+    _master_contfuture_dict: dict[int, dict[str, str]] = field(
+        init=False, repr=False, default_factory=dict
+    )
+
+    def _build_contfuture_list(self) -> None:
+        self._master_contfuture_dict = {
+            id(contract): ibi.util.dataclassNonDefaults(contract)
+            for contract in self.contract_list
+            if isinstance(contract, ibi.ContFuture)
+        }
 
     async def __call__(self) -> "InitData":
+        if not self._master_contfuture_dict:
+            self._build_contfuture_list()
+
         try:
+            self.replace_contfutures()
             await self.qualify_contracts()
             await self.acquire_contract_details()
         except Exception as e:
@@ -31,37 +49,43 @@ class InitData:
 
         return self
 
-    async def qualify_contracts(self) -> "InitData":
-        # "reset" conId to make IB check what the current contract is
+    def replace_contfutures(self) -> "InitData":
+        # "reset" ContFuture to make IB check what the current contract is
+        default_contfuture_kwargs = asdict(ibi.ContFuture())
         for c in self.contract_list:
             if isinstance(c, ibi.ContFuture) and c.conId != 0:
-                c.conId = 0
+                # modify contract 'in place' making sure it stays the same object
+                non_defaults = self._master_contfuture_dict[id(c)]
+                c.__dict__.update(**default_contfuture_kwargs)
+                c.__dict__.update(**non_defaults)
                 log.debug(f"ContFuture reset: {c}")
+        return self
 
+    async def qualify_contracts(self) -> "InitData":
         while not all([f.conId != 0 for f in self.contract_list]):
-            # if errors thrown out during the process just retry...
-            # because there will be a re-connection soon
-            try:
-                # qualify
-                log.debug("Will attempt to qualify contracts...")
-                await self.ib.qualifyContractsAsync(*self.contract_list)
-                log.debug(f"{len(self.contract_list)} Contract objects qualified")
-                # for every ContFuture add regular Future object, that will be actually
-                # used by Atoms
-                futures_for_cont_futures = [
-                    ibi.Future(conId=c.conId)
-                    for c in self.contract_list
-                    if isinstance(c, ibi.ContFuture)
-                ]
-                await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
-                log.debug(f"{len(futures_for_cont_futures)} Future objects qualified.")
-                self.contract_list.extend(futures_for_cont_futures)
-                log.debug(
-                    f"All qualified contracts: "
-                    f"{set([c.symbol for c in self.contract_list])}"
+            if not self.ib.isConnected():
+                log.error(
+                    "Will not qualify contracts, no connection. Waiting for restart..."
                 )
-            except Exception as e:
-                log.exception(e)
+                raise NotConnectedError()
+                break
+            log.debug("Will attempt to qualify contracts...")
+            await self.ib.qualifyContractsAsync(*self.contract_list)
+            log.debug(f"{len(self.contract_list)} Contract objects qualified")
+            # for every ContFuture add regular Future object, that will be actually
+            # used by Atoms
+            futures_for_cont_futures = [
+                ibi.Future(conId=c.conId)
+                for c in self.contract_list
+                if isinstance(c, ibi.ContFuture)
+            ]
+            await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
+            log.debug(f"{len(futures_for_cont_futures)} Future objects qualified.")
+            self.contract_list.extend(futures_for_cont_futures)
+            log.debug(
+                f"All qualified contracts: "
+                f"{set([c.symbol for c in self.contract_list])}"
+            )
 
         return self
 

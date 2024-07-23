@@ -469,7 +469,7 @@ class TestContract:
         c2 = ibi.Contract("MES", "CME")
         list_of_contracts = [c1, c2]
         atom = AtomWithContract(list_of_contracts)
-        assert atom.contract is list_of_contracts
+        assert atom.contract == list_of_contracts
 
 
 class TestContractList:
