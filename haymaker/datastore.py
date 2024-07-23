@@ -385,6 +385,8 @@ class ArcticStore(AbstractBaseStore):
         MIDPOINT_30_secs
         """
         lib = lib.replace(" ", "_")
+        self.lib = lib
+        self.host = host
         self.db = Arctic(host)
         self.db.initialize_library(lib)
         self.store = self.db[lib]
@@ -479,6 +481,9 @@ class ArcticStore(AbstractBaseStore):
         else:
             meta = {}
         return meta
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__qualname__}(lib={self.lib}, host={self.host})"
 
 
 # TODO: change this to factory

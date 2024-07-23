@@ -48,6 +48,11 @@ norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
 
 NOW: Union[date, datetime] = norm(datetime.now(timezone.utc))
 
+log.debug(
+    f"settings: {BARSIZE=}, {WTS=}, {AGGRESSION=}, {FILL_GAPS=}, "
+    f"{AUTO_SAVE_INTERVAL=}, {MAX_NUMBER_OF_WORKERS=}, {STORE=}, {NOW=}"
+)
+
 
 class Params(TypedDict):
     contract: ibi.Contract
