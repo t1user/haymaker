@@ -7,7 +7,7 @@ max_number_of_workers: 40
 fill_gaps: False
 auto_save_interval: 900 # in secs, zero=off
 pacer_restrictions:
-  - !!python/tuple [6, 2] # [max requests, seconds]
+  - !!python/tuple [5, 2] # [max requests, seconds]
   - !!python/tuple [60, 600]
 pacer_no_restriction: False # toggle to quickly switch off pacer (will ignore previous item)
 

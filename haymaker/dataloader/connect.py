@@ -1,4 +1,3 @@
-import asyncio
 import sys
 from logging import getLogger
 from typing import Callable
@@ -37,7 +36,7 @@ class IBHandlers:
         if errorCode in (2106, 2107):
             return
         elif "pacing violation" in errorString:
-            log.error("PACING VIOLATION. Adjust Pacer Parameters.")
+            log.error(f"PACING VIOLATION: {errorString} {errorCode} {contract}")
         else:
             log.warning(f"IB warning: {errorCode} {errorString} for: {what}")
 

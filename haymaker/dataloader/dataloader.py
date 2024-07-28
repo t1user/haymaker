@@ -4,7 +4,7 @@ import asyncio
 import functools
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from functools import partial
 from typing import Optional, TypedDict, Union
 
@@ -19,7 +19,7 @@ from haymaker.validators import bar_size_validator, wts_validator
 from . import helpers
 from .connect import Connection
 from .contract_selectors import ContractSelector
-from .pacer import Pacer, pacer
+from .pacer import Pacer, PacingViolationError, PacingViolationRegistry, pacer
 from .scheduling import task_factory, task_factory_with_gaps
 from .store_wrapper import StoreWrapper
 from .task_logger import create_task
@@ -47,6 +47,10 @@ STORE: AbstractBaseStore = CONFIG["datastore"]
 norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
 
 NOW: Union[date, datetime] = norm(datetime.now(timezone.utc))
+WATCHDOG: bool = CONFIG.get("watchdog", True)
+SOURCE: str = CONFIG["source"]
+PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
+PACER_RESTRICTIONS: bool = CONFIG["pacer_restrictions"]
 
 log.debug(
     f"settings: {BARSIZE=}, {WTS=}, {AGGRESSION=}, {FILL_GAPS=}, "
@@ -150,8 +154,8 @@ class DataWriter:
             data = pd.concat([data, _data])
             version = self.store.write(self.contract, data)
             log.debug(
-                f"{self!s} written to store {_data.index[0]} - {_data.index[-1]}"
-                f"version {version}"
+                f"{self!s} written to store {_data.index[0]} - {_data.index[-1]} "
+                f"{version}"
             )
             if version:
                 self._container.clear()
@@ -250,7 +254,7 @@ class DownloadContainer:
         point for additional downloads.
 
         TODO: Not true now, do I want to make it true?
-        Make sure to safe whatever
+        Make sure to save whatever
         comes out of this method because this data is being deleted.
         """
         if self.bars:
@@ -272,7 +276,7 @@ class Manager:
 
     @functools.cached_property
     def sources(self) -> list[dict]:
-        return pd.read_csv(CONFIG["source"], keep_default_na=False).to_dict("records")
+        return pd.read_csv(SOURCE, keep_default_na=False).to_dict("records")
 
     @functools.cached_property
     def contracts(self) -> list[ibi.Contract]:
@@ -368,6 +372,10 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
                     formatDate=2,
                     timeout=0,
                 )
+            if chunk is None and PCR.verify(writer.contract):
+                # if pacing violation just happened, chunk = None doesn't mean
+                # there is no data, reschedule with same parameters
+                raise PacingViolationError()
             writer.save_chunk(chunk)
         except Exception as e:
             log.exception(e)
@@ -399,11 +407,7 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     p = pacer(
         BARSIZE,
         WTS,
-        restrictions=(
-            []
-            if CONFIG.get("pacer_no_restriction", False)
-            else CONFIG["pacer_restrictions"]
-        ),
+        restrictions=[] if PACER_NO_RESTRICTION else PACER_RESTRICTIONS,  # type: ignore
     )
     log.debug(f"Pacer initialized: {p}")
     workers: list[asyncio.Task] = [
@@ -415,11 +419,10 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
         )
         for i in range(number_of_workers)
     ]
-    """
-    workers = [asyncio.create_task(worker(f'worker {i}', queue, pacer))
-               for i in range(number_of_workers)]
 
-    """
+    # workers = [asyncio.create_task(worker(f'worker {i}', queue, pacer))
+    #            for i in range(number_of_workers)]
+
     await queue.join()
 
     # cancel all workers
@@ -435,13 +438,17 @@ def start():
 
     ibi.util.patchAsyncio()
     ib = ibi.IB()
+    ib.errorEvent += PCR.onError
     manager = Manager(ib)
     asyncio.get_event_loop().set_debug(True)
     # ibi.util.logToConsole(logging.ERROR)
     log.debug("Will start...")
 
-    Connection(ib, partial(main, manager, ib), watchdog=CONFIG.get("watchdog", True))
+    Connection(ib, partial(main, manager, ib), watchdog=WATCHDOG)
 
     log.debug("script finished, about to disconnect")
     ib.disconnect()
     log.debug("disconnected")
+
+
+PCR = PacingViolationRegistry()

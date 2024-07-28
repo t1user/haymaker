@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import ClassVar
 
+import ib_insync as ibi
+
 from .helpers import duration_in_secs
 
 log = logging.getLogger(__name__)
@@ -72,7 +74,7 @@ class Pacer:
 
     async def __aenter__(self):
         # inner context ensures separate wait time for each worker
-        if time := max([restriction.check() for restriction in self.restrictions]):
+        while time := max([restriction.check() for restriction in self.restrictions]):
             async with InnerContext(time):
                 pass
         # register request time right before making the request
@@ -106,3 +108,41 @@ def pacer(
                 for restriction in restrictions
             ]
     return Pacer([Restriction(*res) for res in restrictions])
+
+
+class PacingViolationRegistry(dict):
+    """
+    Keep timestamp of most recent pacing violation for every contract.
+
+    * onError: should be connected to ib.onError event, will filter
+    pacing violation errors and process them
+
+    * verify: return True if given contract has been affected by
+    pacing violation within last second
+    """
+
+    def register(
+        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+    ) -> None:
+        log.debug(f"Pacing violation registered for {contract}")
+        self[contract] = datetime.now(tz=timezone.utc)
+
+    def verify(self, contract: ibi.Contract) -> bool:
+        if timestamp := self.get(contract):
+            if viol := timestamp - datetime.now(tz=timezone.utc) < timedelta(seconds=1):
+                log.debug(
+                    f"Will ignore result for {contract.symbol} because of pacing "
+                    f"violation."
+                )
+                return viol
+        return False
+
+    def onError(
+        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+    ) -> None:
+        if errorCode == 162:
+            self.register(reqId, errorCode, errorString, contract)
+
+
+class PacingViolationError(Exception):
+    pass
