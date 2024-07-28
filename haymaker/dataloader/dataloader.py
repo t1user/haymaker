@@ -126,7 +126,7 @@ class DataWriter:
     def save_chunk(self, data: ibi.BarDataList):
         assert not self.is_done()
         if data:
-            log.debug(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
+            log.info(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
         elif self._container.next_date:
             log.warning(
                 f"{self!s} cannot download data past {self._container.next_date}"
@@ -153,7 +153,7 @@ class DataWriter:
                 data = pd.DataFrame()
             data = pd.concat([data, _data])
             version = self.store.write(self.contract, data)
-            log.debug(
+            log.info(
                 f"{self!s} written to store {_data.index[0]} - {_data.index[-1]} "
                 f"{version}"
             )
@@ -388,7 +388,7 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
                 writer.save_chunk(None)
                 log.debug(f"{writer!s} dropped on age validation")
         else:
-            log.debug(f"{writer!s} done!")
+            log.info(f"{writer!s} done!")
 
         queue.task_done()
 
@@ -399,7 +399,7 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     log.debug(f"{writers=}")
     number_of_workers = min(len(writers), MAX_NUMBER_OF_WORKERS)
 
-    log.debug(f"main function started, retrieving data for {len(writers)} instruments")
+    log.info(f"main function started, retrieving data for {len(writers)} instruments")
 
     queue: asyncio.Queue[DataWriter] = asyncio.LifoQueue()
     for writer in writers:
@@ -446,7 +446,7 @@ def start():
 
     Connection(ib, partial(main, manager, ib), watchdog=WATCHDOG)
 
-    log.debug("script finished, about to disconnect")
+    log.info("script finished, about to disconnect")
     ib.disconnect()
     log.debug("disconnected")
 
