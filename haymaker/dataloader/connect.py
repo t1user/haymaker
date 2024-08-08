@@ -24,7 +24,7 @@ class IBHandlers:
         log.info("Connected!")
 
     def onDisconnected(self, *args) -> None:
-        pass
+        log.debug("Disconnected!")
 
     def onError(
         self, reqId: int, errorCode: int, errorString: str, contract: Contract

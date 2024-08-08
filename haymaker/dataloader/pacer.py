@@ -53,7 +53,7 @@ class InnerContext:
     async def __aenter__(self):
         # add up to 1 sec random time to prevent all pacers exiting
         # from wait simultanously
-        wait_time = self.wait_time + random.randint(0, 100) / 100
+        wait_time = self.wait_time  # + random.randint(0, 100) / 100
         log.debug(
             f"Will throtle: {round(wait_time, 1)}s till "
             f"{datetime.now() + timedelta(seconds=wait_time)}"
