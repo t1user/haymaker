@@ -5,6 +5,7 @@ import logging
 from collections import UserDict
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
+from functools import wraps
 from typing import TYPE_CHECKING, ClassVar, Optional, Sequence, Union, cast
 
 from .misc import is_active, next_active, process_trading_hours
@@ -36,37 +37,52 @@ class ContractManagingDescriptor:
         obj.__dict__[self.name] = value
         self._register_contract(obj, value)
 
-    def __get__(
-        self, obj: Atom, type=None
-    ) -> Union[list[ibi.Contract], ibi.Contract, None]:
+    def __get__(self, obj: Atom, type=None) -> Union[list[ibi.Contract], ibi.Contract]:
         # some methods rely on not raising an error here if attr self.name not set
         contract = obj.__dict__.get(self.name)
-        if getattr(contract, "__iter__", None):
-            assert isinstance(contract, collections.abc.Sequence)
-            return [self._swap_contfuture(c, obj) for c in contract]
-        elif isinstance(contract, ibi.Contract):
-            return self._swap_contfuture(contract, obj)
-        else:
-            return contract
-
-    @staticmethod
-    def _swap_contfuture(contract: ibi.Contract, obj: Atom) -> ibi.Contract:
-        if isinstance(contract, ibi.ContFuture):
-            for i in obj.contracts:
-                if isinstance(i, ibi.Future) and i.conId == contract.conId:
-                    return i
-            raise ValueError(f"Cannot find `Future` object for {contract}")
-        else:
-            return contract
+        return self._swap_contfuture(contract, obj.contracts)
 
     def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
-        # can be either a contract or a sequence of contracts
-        if getattr(value, "__iter__", None):
-            assert isinstance(value, collections.abc.Sequence)
-            for v in value:
-                obj.contracts.append(v)
-        elif isinstance(value, ibi.Contract):
-            obj.contracts.append(value)
+        log.debug(f"Registering contract: {value}")
+        self._append(value, obj.contracts, obj)
+
+    @staticmethod
+    def _apply_to_contract_or_sequence(func):
+        """
+        Decorator that applies the `func` either to contract or to
+        every contract in a sequence or if contract is neither
+        :class:`ibi.Contract` nor a sequence return this contract.
+        """
+
+        @wraps(func)
+        def wrapper(contract, *args, **kwargs):
+            if getattr(contract, "__iter__", None):
+                assert isinstance(contract, collections.abc.Sequence)
+                return [func(c, *args, **kwargs) for c in contract]
+            elif isinstance(contract, ibi.Contract):
+                return func(contract, *args, **kwargs)
+            else:
+                return contract
+
+        return wrapper
+
+    @staticmethod
+    @_apply_to_contract_or_sequence
+    def _swap_contfuture(
+        contract: ibi.Contract, contract_list: list[ibi.Contract]
+    ) -> ibi.Contract:
+        if isinstance(contract, ibi.ContFuture) and contract.conId != 0:
+            for i in contract_list:
+                if isinstance(i, ibi.Future) and i.conId == contract.conId:
+                    return i
+            log.warning(f"Failed to replace ContFuture object: {contract}")
+        return contract
+
+    @staticmethod
+    @_apply_to_contract_or_sequence
+    def _append(contract: ibi.Contract, contract_list: list[ibi.Contract], atom: Atom):
+        if contract not in contract_list:
+            contract_list.append(contract)
 
 
 @dataclass
@@ -156,11 +172,12 @@ class Atom:
 
     def onStart(self, data, *args):
         if isinstance(data, dict):
-            for k, v in data.items():
-                setattr(self, k, v)
+            # for k, v in data.items():
+            #     setattr(self, k, v)
+            self.__dict__.update(**data)
         self.startEvent.emit(data, self)
 
-    def onData(self, data, *args):
+    def onData(self, data: dict, *args):
         data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
 
     def onFeedback(self, data, *args):
