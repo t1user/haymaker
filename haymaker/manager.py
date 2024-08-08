@@ -28,25 +28,29 @@ class InitData:
     _master_contfuture_dict: dict[int, dict[str, str]] = field(
         init=False, repr=False, default_factory=dict
     )
+    _futures: set[ibi.Future] = field(init=False, repr=False, default_factory=set)
 
     def _build_contfuture_list(self) -> None:
+        log.debug("building contfuture list...")
         self._master_contfuture_dict = {
             id(contract): ibi.util.dataclassNonDefaults(contract)
             for contract in self.contract_list
             if isinstance(contract, ibi.ContFuture)
         }
+        log.debug(f"{self._master_contfuture_dict=}")
 
     async def __call__(self) -> "InitData":
+        log.debug(f"Number of contracts: {len(self.contract_list)}")
         if not self._master_contfuture_dict:
             self._build_contfuture_list()
-
         try:
             self.replace_contfutures()
             await self.qualify_contracts()
             await self.acquire_contract_details()
         except Exception as e:
             log.exception(e)
-
+            raise
+        log.debug(f"Number of contracts post __call__: {len(self.contract_list)}")
         return self
 
     def replace_contfutures(self) -> "InitData":
@@ -80,11 +84,20 @@ class InitData:
                 if isinstance(c, ibi.ContFuture)
             ]
             await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
-            log.debug(f"{len(futures_for_cont_futures)} Future objects qualified.")
-            self.contract_list.extend(futures_for_cont_futures)
+
+            dropped_futures = self._futures - set(futures_for_cont_futures)
+            log.debug(f"Dropping futures: {[f.localSymbol for f in dropped_futures]}")
+            new_futures = set(futures_for_cont_futures) - self._futures
+            log.debug(f"{len(new_futures)} new future objects found.")
+
+            self.contract_list.extend(list(new_futures))
+            for f in dropped_futures:
+                self.contract_list.remove(f)
+            self._futures = set(futures_for_cont_futures)
+
             log.debug(
                 f"All qualified contracts: "
-                f"{set([c.symbol for c in self.contract_list])}"
+                f"{set([c.localSymbol for c in self.contract_list])}"
             )
 
         return self
@@ -122,6 +135,7 @@ class Jobs:
             log.exception(e)
 
     async def __call__(self):
+        log.debug("Will initialize...")
         await self.init_data()
 
         log.info(

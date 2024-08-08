@@ -29,6 +29,8 @@ class OrderSyncStrategy:
         self.done: list[ibi.Trade] = []
         # Trades on record that we cannot resolve with IB
         self.errors: list[ibi.Trade] = []  # <- We're potentially fucked
+        self._issues: list[int] = []  # done orders for double checking
+        self.is_ok: bool = True
 
     @classmethod
     def run(cls, ib: ibi.IB, sm: StateMachine) -> OrderSyncStrategy:
@@ -114,6 +116,16 @@ class OrderSyncStrategy:
 
         return self
 
+    def verify(self) -> OrderSyncStrategy:
+        completed_trades = self.ib.reqCompletedOrders(True)
+        completed_trades_list = [trade.order.permId for trade in completed_trades]
+        my_orders = [oi.permId for oi in self.sm._orders.values()]
+        self._issues = [
+            permId for permId in my_orders if permId in completed_trades_list
+        ]
+        log.debug(f"{self._issues=}")
+        return self
+
     def report(self) -> OrderSyncStrategy:
         if any(self.lists):
             log.debug(
@@ -122,6 +134,11 @@ class OrderSyncStrategy:
                 f"done: {len(self.done)}, "
                 f"unmatched: {len(self.errors)}"
             )
+        # elif self._issues and not self.done:
+        #     log.debug(f"{self._issues}")
+        #     log.debug(f"{self.done}")
+        #     log.critical("We are fucked and shouldn't proceed!!!")
+        #     self.is_ok = False
         else:
             log.debug("Orders sync OK.")
 

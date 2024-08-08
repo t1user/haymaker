@@ -98,7 +98,7 @@ class Controller(Atom):
         Main entry point into the programme.  Ensure records up to
         date and any remaining initialization complete.
         """
-
+        log.debug("Running controller...")
         self.set_hold()
         if self.nuke_:
             self.nuke()
@@ -113,7 +113,9 @@ class Controller(Atom):
             except Exception as e:
                 log.exception(e)
 
+        log.debug("Will sync...")
         await self.sync()
+        log.debug("Sync completed.")
 
         if self.zero:
             log.debug("Zeroing all records...")
@@ -127,11 +129,16 @@ class Controller(Atom):
             self.sm.clear_models()
 
         # Only subsequently Streamers will run (I think...)
+        log.debug("Controller run sequence completed successfully.")
 
     async def sync(self, *args) -> None:
         if self.ib.isConnected():
             log.debug("--- Sync ---")
             orders_report = OrderSyncStrategy.run(self.ib, self.sm)
+            if not orders_report.is_ok:
+                log.debug("Order sync error, will attempt to restart.")
+                self.ib.disconnect()
+                return
             # IB events will be handled so that matched trades can be sent to blotter
             self.release_hold()
             await self.sync_handlers.handle_orders(orders_report)
@@ -536,5 +543,5 @@ class Controller(Atom):
 
         log.critical("Self nuked!!!!! No more trades will be executed until restart.")
 
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.sm, self.ib, self.blotter})"
+    # def __repr__(self) -> str:
+    #     return f"{self.__class__.__name__}({self.sm, self.ib, self.blotter})"

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Protocol, cast
 
@@ -25,11 +26,9 @@ CONFIG = config.get("app") or {}
 
 
 class IBC(Protocol):
-    async def startAsync(self):
-        ...
+    async def startAsync(self): ...
 
-    async def terminateAsync(self):
-        ...
+    async def terminateAsync(self): ...
 
 
 @dataclass
@@ -58,10 +57,12 @@ class App:
     retryDelay: float = CONFIG.get("retryDelay") or 2
     probeContract: ibi.Contract = CONFIG.get("probeContract") or ibi.Forex("EURUSD")
     probeTimeout: float = CONFIG.get("probeTimeout") or 4
+    _connections: int = 0
 
     def __post_init__(self):
         self.ib.errorEvent += self.onError
         self.ib.connectedEvent += self.onConnected
+        self.ib.disconnectedEvent += self.onDisconnected
 
         self.watchdog = ibi.Watchdog(
             self.ibc,  # type: ignore
@@ -87,20 +88,31 @@ class App:
     def onError(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
-        if errorCode not in config.get("ignore_errors", []):
+        if errorCode in config.get("ignore_errors", []):
+            return
+        elif "URGENT" in errorString:
+            log.error(f"IB error: {reqId=} {errorCode} {errorString} {contract=}")
+        else:
             log.debug(f"IB warning: {reqId=} {errorCode} {errorString} {contract=}")
 
     def onStarting(self, watchdog: ibi.Watchdog) -> None:
         log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")
 
     def onStarted(self, *args) -> None:
-        log.debug("Watchdog started")
+        self._connections += 1
+        log.debug(f"Watchdog started... connections: {self._connections}")
 
     def onStopping(self, *args) -> None:
         log.debug("Watchdog stopping")
 
     def onStopped(self, *args) -> None:
-        log.debug("Watchdog stopped.")
+        self._connections -= 1
+        log.debug(f"Watchdog stopped... connections: {self._connections}")
+        log.debug(f"tasks: {asyncio.all_tasks()}")
+        # for task in self.jobs._tasks:
+        #     task.cancel("Watchdog stopped cancellation.")
+        # # for task in asyncio.all_tasks():
+        #     task.cancel("Watchdog stopped cancellation.")
 
     def onSoftTimeout(self, watchdog: ibi.Watchdog) -> None:
         log.debug("Soft timeout event.")
@@ -111,8 +123,23 @@ class App:
     def onConnected(self, *args) -> None:
         log.debug("IB Connected")
 
+    def onDisconnected(self, *args) -> None:
+        log.debug(f"IB Disconnected {args}")
+
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         log.error(f"Event error {event.name()}: {exception}", exc_info=True)
+
+    async def connection_probe(self) -> bool:
+        probe = self.ib.reqHistoricalDataAsync(
+            self.probeContract, "", "30 S", "5 secs", "MIDPOINT", False
+        )
+        bars = None
+        with suppress(asyncio.TimeoutError):
+            bars = await asyncio.wait_for(probe, self.probeTimeout)
+        if bars:
+            return True
+        else:
+            return False
 
     def run(self):
         # this is the main entry point into strategy
@@ -123,9 +150,20 @@ class App:
         self.ib.run()
 
     async def _run(self, *args) -> None:
-        log.debug("Will run controller...")
+        # watchdog connects when api has connection with IB gateway
+        # but does IB gateway have connection to IB?
+        # whatever documentation tells us,
+        # no way to know other than actually probe it
+        while not await self.connection_probe():
+            log.debug("Connection probe failed. Holding...")
+            if not self.ib.isConnected():
+                log.debug("IB not connected, breaking out of probe loop.")
+                return
+            await asyncio.sleep(5)
+        log.debug("Probe successful. Will run controller...")
         try:
             await CONTROLLER.run()
             await self.jobs()
         except Exception as e:
             log.exception(e)
+            raise

@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 
 
 CONFIG = config.get("streamer") or {}
+TIMEOUT_DEBUG = CONFIG["timeout"]["debug"]
+TIMEOUT_TIME = CONFIG["timeout"]["time"]
 
 
 @dataclass
@@ -28,7 +30,7 @@ class Timeout:
     ib: ibi.IB
     details: Optional[Details] = None
     name: str = ""
-    debug: bool = CONFIG["timeout"]["debug"]
+    debug: bool = TIMEOUT_DEBUG
     _timeout: Optional[ev.Event] = field(repr=False, default=None)
     _now: Optional[datetime] = None  # for testing only
 
@@ -105,7 +107,7 @@ class TimeoutContainer(UserDict):
 
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
-    timeout: float = CONFIG["timeout"]["time"]
+    timeout: float = TIMEOUT_TIME
     _counter: ClassVar[Callable[[], int]] = itertools.count().__next__
     _name: Optional[str] = None
     _timers: TimeoutContainerDefaultdict = TimeoutContainerDefaultdict(
@@ -139,7 +141,7 @@ class Streamer(Atom, ABC):
         entry point into the streamer.
         """
         self.onStart({})
-        while True:
+        while self.ib.isConnected():
             await asyncio.sleep(0)
 
     def onStart(self, data, *args) -> None:
