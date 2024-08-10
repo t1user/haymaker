@@ -127,5 +127,10 @@ def task_factory(store: StoreWrapper, head: Union[date, datetime]) -> list[Dates
     ]
 
 
-def task_factory_with_gaps(store: StoreWrapper, head: Union[date, datetime]):
-    return [*task_factory(store, head), *GapFillFactory.gap_factory(store)]
+def task_factory_with_gaps(
+    store: StoreWrapper, head: Union[date, datetime]
+) -> list[Dates]:
+    return [
+        *task_factory(store, head),
+        *[g.dates() for g in GapFillFactory.gap_factory(store)],  # type: ignore
+    ]
