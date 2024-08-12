@@ -111,7 +111,6 @@ class OrderContainer(UserDict):
 
     def strategy(self, strategy: str) -> Iterator[OrderInfo]:
         """Get active orders associated with strategy."""
-        # returns only active orders
         return (oi for oi in self.values() if (oi.strategy == strategy and oi.active))
 
     def get(
@@ -507,8 +506,8 @@ class StateMachine:
     def strategy_for_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
         return self.strategy_for_order(trade.order.orderId)
 
-    def orders_for_strategy(self, strategy: str) -> Iterator[OrderInfo]:
-        return self._orders.strategy(strategy)
+    def orders_for_strategy(self, strategy: str) -> list[OrderInfo]:
+        return list(self._orders.strategy(strategy))
 
     def delete_order(self, orderId: int) -> None:
         del self._orders[orderId]

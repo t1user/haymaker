@@ -238,7 +238,7 @@ class Controller(Atom):
 
     def _cleanup_obsolete_orders(self, strategy: Strategy) -> None:
         """Delete stop/take-profit/close orders for a strategy that has no position."""
-        order_infos = list(self.sm.orders_for_strategy(strategy.strategy))
+        order_infos = self.sm.orders_for_strategy(strategy.strategy)
         for oi in order_infos:
             if (oi.action != "OPEN") and oi.active:
                 log.debug(f"Resting order cleanup: {oi.action, oi.trade.order.orderId}")
@@ -365,9 +365,9 @@ class Controller(Atom):
             strategy = self.sm.strategy[strategy_str]
 
         # if more than 1 active, unknown trade is for the one without
-        # resting orders (resting orders are most likely stop-losses)
+        # resting orders (resting orders are most likely stop-losses or take-profit)
         elif candidate_strategies := [
-            s for s in active_strategies_list if self.sm.orders_for_strategy(s)
+            s for s in active_strategies_list if not self.sm.orders_for_strategy(s)
         ]:
             log.debug(
                 f"Active strategies without resting orders: " f"{candidate_strategies}"
@@ -401,7 +401,7 @@ class Controller(Atom):
         strategy = self._assign_trade(trade) or self._make_strategy(
             trade, "manual_strategy"
         )
-        log.debug(f"Manual trade assigned to strategy {strategy}.")
+        log.debug(f"Manual trade assigned to strategy: {strategy.strategy}.")
 
         # this will save strategy on OrderInfo
         self.sm.update_strategy_on_order(trade.order.orderId, strategy.strategy)
