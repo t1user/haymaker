@@ -50,7 +50,6 @@ class InitData:
         except Exception as e:
             log.exception(e)
             raise
-        log.debug(f"Number of contracts post __call__: {len(self.contract_list)}")
         return self
 
     def replace_contfutures(self) -> "InitData":
@@ -86,25 +85,31 @@ class InitData:
             await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
 
             dropped_futures = self._futures - set(futures_for_cont_futures)
-            log.debug(f"Dropping futures: {[f.localSymbol for f in dropped_futures]}")
             new_futures = set(futures_for_cont_futures) - self._futures
-            log.debug(f"{len(new_futures)} new future objects found.")
+            if new_futures or dropped_futures:
+                log.warning(
+                    f"Dropping futures: {[f.localSymbol for f in dropped_futures]} "
+                    f"{len(new_futures)} new future objects found."
+                )
 
             self.contract_list.extend(list(new_futures))
             for f in dropped_futures:
                 self.contract_list.remove(f)
             self._futures = set(futures_for_cont_futures)
 
-            log.debug(
-                f"All qualified contracts: "
-                f"{set([c.localSymbol for c in self.contract_list])}"
+            contract_string = ", ".join(
+                (f"{c.__class__.__name__}({c.localSymbol})" for c in self.contract_list)
             )
+            log.debug(f"All qualified contracts: {contract_string}")
 
         return self
 
     async def acquire_contract_details(self) -> "InitData":
         for contract in set(self.contract_list):
-            log.debug(f"Acquiring details for: {contract.symbol}")
+            log.debug(
+                f"Acquiring details for: {contract.__class__.__name__}"
+                f"(symbol={contract.symbol}, localSymbol={contract.localSymbol})"
+            )
             details_ = await IB.reqContractDetailsAsync(contract)
             try:
                 assert len(details_) == 1

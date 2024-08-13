@@ -99,15 +99,13 @@ class App:
         log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")
 
     def onStarted(self, *args) -> None:
-        self._connections += 1
-        log.debug(f"Watchdog started... connections: {self._connections}")
+        log.debug("Watchdog started...")
 
     def onStopping(self, *args) -> None:
         log.debug("Watchdog stopping")
 
     def onStopped(self, *args) -> None:
-        self._connections -= 1
-        log.debug(f"Watchdog stopped... connections: {self._connections}")
+        log.debug("Watchdog stopped...")
         log.debug(f"tasks: {asyncio.all_tasks()}")
         # for task in self.jobs._tasks:
         #     task.cancel("Watchdog stopped cancellation.")
@@ -121,10 +119,13 @@ class App:
         log.debug("Hard timeout event.")
 
     def onConnected(self, *args) -> None:
-        log.debug("IB Connected")
+        self._connections += 1
+        log.debug(f"IB Connected, connections: {self._connections}")
 
     def onDisconnected(self, *args) -> None:
-        log.debug(f"IB Disconnected {args}")
+        if self._connections:
+            self._connections -= 1
+        log.debug(f"IB Disconnected {args}, connections: {self._connections}")
 
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         log.error(f"Event error {event.name()}: {exception}", exc_info=True)
