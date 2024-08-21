@@ -713,3 +713,21 @@ def pivot_indicator(df: pd.DataFrame, func: Callable) -> pd.DataFrame:
     index = d.iloc[df_start:].index
     indicator = pd.DataFrame(indicator, index=index)
     return indicator
+
+
+@jit(nopython=True)
+def rolling_min_max_index(arr: np.ndarray, lookback: int) -> np.ndarray:
+    """
+    Return a 2-D array with min max index - zero based index counting
+    backwards of the last min and last max over the lookback period.
+    Result given on a scale of -100 to 100 (percent of lookback
+    period).
+    """
+    out = np.zeros((len(arr), 2))
+    for i in range(len(arr)):
+        if i < lookback - 1:
+            continue
+        window = np.flip(arr[i - lookback + 1 : i + 1])
+        out[i] = (np.argmin(window), np.argmax(window))
+    out = np.round(((out / lookback) * 100), 0)
+    return out

@@ -8,6 +8,7 @@ from .research.decorators import ensure_df
 from .research.numba_tools import (
     _blip_to_signal_converter,
     _in_out_signal_unifier,
+    rolling_min_max_index,
     swing,
 )
 
@@ -766,3 +767,36 @@ def range_blip(
 
     r = inout_range(indicator, threshold, inout)
     return _signed_range_entry(_range_entry(r), indicator)
+
+
+def min_max_index(
+    price: pd.Series, lookback: int, cutoff_value: int = 1, binary: bool = True
+) -> pd.Series:
+    """
+    Difference between min and max index.  Negative means downtrend,
+    positive uptrend.
+
+    Args:
+    -----
+
+    lookback: rolling window over which the index will be calculated
+
+    cutoff_value: any value below this, considered to be unchanged
+    from previous value, prevents zig-zaging during periods without
+    any changes
+
+    binary: if True will convert values to binary signal (1: long, -1: short)
+    """
+
+    df = pd.DataFrame(
+        rolling_min_max_index(price.to_numpy(), lookback),
+        columns=["min", "max"],
+        index=price.index,
+    )
+    df["ind"] = df["min"] - df["max"]
+    df.loc[df[df["ind"].abs() < cutoff_value].index, "ind"] = 0
+    df = df.replace(0, np.nan).ffill()
+    if binary:
+        return np.sign(df["ind"])
+    else:
+        return df["ind"]
