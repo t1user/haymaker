@@ -50,7 +50,7 @@ class Controller(Atom):
         # TODO: self.ib.orderCancelEvent
         # consider whether these are essential
         self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
-        self.ib.errorEvent.connect(self.log_error, self._log_event_error)
+        self.ib.errorEvent.connect(self.log_err, self._log_event_error)
 
         self.set_hold()
 
@@ -317,7 +317,7 @@ class Controller(Atom):
         objectives.  Things vefied are: 1.  actual resulting position
         in broker records 2.  records in state_machine
 
-        Any errors are logged but not corrected (maybe changed in
+        Any errors are logged but not corrected (may be changed in
         future).
         """
         data = self.sm.strategy.get(strategy)
@@ -465,7 +465,7 @@ class Controller(Atom):
     def log_modification(trade: ibi.Trade) -> None:
         log.debug(f"Order modified: {trade.order}")
 
-    def log_error(
+    def log_err(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
         # Connected to ib.errorEvent
@@ -483,7 +483,7 @@ class Controller(Atom):
 
             if errorCode == 202:
                 log.info(
-                    f"Code {errorCode}: {errorString} {contract}"
+                    f"Code {errorCode}: {errorString} {contract} "
                     f"{strategy} | {action} | {order}"
                 )
             elif errorCode == 201:
