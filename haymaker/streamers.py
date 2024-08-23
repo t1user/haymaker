@@ -189,6 +189,7 @@ class HistoricalDataStreamer(Streamer):
     incremental_only: bool = True
     startup_seconds: float = 5
     _last_bar_date: Optional[datetime] = None
+    _future_adjust = False  # flag that future needs to be adjusted
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -214,7 +215,8 @@ class HistoricalDataStreamer(Streamer):
         secs = (datetime.now(date.tzinfo) - date).seconds
         bar_size = int(self.barSizeSetting.split(" ")[0])
         bars = secs // bar_size
-        duration = max((bars + 1) * bar_size, 30)
+        # with some margin for delays, duplicated bars will be filtered out
+        duration = max((bars + 3) * bar_size, 30)
         return duration
 
     def onStart(self, data, *args) -> None:
@@ -229,12 +231,21 @@ class HistoricalDataStreamer(Streamer):
             f"Starting backfill {self.name}, pulled {len(bars)} bars, "
             f"last bar: {bars[-1]}"
         )
-        if self._last_bar_date:
+        if self._last_bar_date and self._future_adjust:
+            # emit new price for the last pricepoint as basis for adjustments
+            stream = (
+                ev.Sequence(bars[:-1])
+                .pipe(ev.Filter(lambda x: x.date >= self._last_bar_date))
+                .connect(self.dataEvent)
+            )
+            self._future_adjust = False
+        elif self._last_bar_date:
             stream = (
                 ev.Sequence(bars[:-1])
                 .pipe(ev.Filter(lambda x: x.date > self._last_bar_date))
                 .connect(self.dataEvent)
             )
+
         else:
             stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
         await stream
@@ -256,9 +267,12 @@ class HistoricalDataStreamer(Streamer):
         self.timers["bars"] = bars.updateEvent
         log.debug(f"Historical bars received for {self.contract.localSymbol}")
 
-        backfill_predicate = (not self._last_bar_date) or (
-            self._last_bar_date < bars[-2].date
+        backfill_predicate = (
+            (not self._last_bar_date)
+            or (self._last_bar_date < bars[-2].date)
+            or self._future_adjust
         )
+
         if bars and backfill_predicate:
             await self.backfill(bars)
         else:
@@ -289,6 +303,12 @@ class HistoricalDataStreamer(Streamer):
             self.dataEvent.emit(bars[-1])
         else:
             self.dataEvent.emit(bars)
+
+    def onContractChanged(self, old_contract: ibi.Contract, new_contract: ibi.Contract):
+        if isinstance(old_contract, ibi.Future) and isinstance(
+            new_contract, ibi.Future
+        ):
+            self._future_adjust = True
 
 
 @dataclass(unsafe_hash=True)

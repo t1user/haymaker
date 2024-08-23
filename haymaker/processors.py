@@ -1,5 +1,6 @@
 import logging
-from typing import List, Optional, Union
+import operator as op
+from typing import List, Literal, Optional, Union
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -14,6 +15,7 @@ class BarAggregator(Atom):
         self,
         filter: Union["CountBars", "VolumeBars", "TimeBars", "NoFilter"],
         incremental_only: bool = False,
+        future_adjust_type: Literal["add", "mul", None] = "add",
         debug: bool = False,
     ):
         Atom.__init__(self)
@@ -22,6 +24,8 @@ class BarAggregator(Atom):
         self._filter += self.onDataBar
         self._log_level = log.level
         self._debug = debug
+        self._future_adjust_type = future_adjust_type
+        self._future_adjust = False  # flag that future needs to be adjusted
 
     def onStart(self, data, *args):
         if isinstance(data, dict):
@@ -43,6 +47,11 @@ class BarAggregator(Atom):
             self.dataEvent.emit(bars)
 
     def onData(self, data, *args) -> None:
+        if self._future_adjust:
+            self.future_adjust(data[-1])
+            # first data point is just to determine adjustment basis
+            # shouldn't be emitted further down the chain
+            return
         if isinstance(data, ibi.BarDataList):
             # Streamers with incremental_only=False have not been properly tested!
             log.critical("WE SHOULD NOT BE HERE")
@@ -51,6 +60,45 @@ class BarAggregator(Atom):
             except KeyError:
                 log.debug("Empty input from streamer.")
         self._filter.on_source(data)
+
+    def onContractChanged(
+        self, old_contract: ibi.Contract, new_contract: ibi.Contract
+    ) -> None:
+        if isinstance(old_contract, ibi.Future) and isinstance(
+            new_contract, ibi.Future
+        ):
+            log.debug(f"Will back-adjust data for {old_contract}")
+            self._future_adjust = True
+
+    def future_adjust(self, new_bar: ibi.BarData):
+        """Create continuous future price series on future contract
+        change.  IB mechanism cannot be trusted.  This feature can be
+        turned off by passing `future_adjust_type=None` while
+        initiating the class.
+        """
+        operator = {"add": op.add, "mul": op.mul, None: None}.get(
+            self._future_adjust_type
+        )
+        reverse_operator = {"add": op.sub, "mul": op.truediv, None: None}.get(
+            self._future_adjust_type
+        )
+        if operator is None:
+            log.warning(f"Skipping futures adjustment on {self}")
+            return
+        assert reverse_operator is not None
+
+        bars = self._filter.bars
+        value = reverse_operator(new_bar, bars[-1].close)
+        log.debug(
+            f"FUTURES ADJUSTMENT | old bar: {bars[-1]} | new bar: {new_bar} "
+            f"| adjustment basis: {value} | operator: {operator}"
+        )
+
+        for bar in bars:
+            for field in ("open", "high", "low", "close", "average"):
+                setattr(bar, field, operator(getattr(bar, field), value))
+
+        self._future_adjust = False
 
 
 class BarList(List[ibi.BarData]):

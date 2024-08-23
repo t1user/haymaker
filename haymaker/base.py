@@ -134,8 +134,14 @@ class Atom:
     sm: StateMachine
     contract_details: ClassVar[DetailsContainer] = DetailsContainer()
     contracts: list[ibi.Contract] = list()
-    events: ClassVar[Sequence[str]] = ("startEvent", "dataEvent")
+    events: ClassVar[Sequence[str]] = (
+        "startEvent",
+        "dataEvent",
+        "feedbackEvent",
+        "contractChangedEvent",
+    )
     contract = cast(ibi.Contract, ContractManagingDescriptor())
+    _contract_memo: Optional[ibi.Contract] = None
 
     @classmethod
     def set_init_data(cls, ib: ibi.IB, sm: StateMachine) -> None:
@@ -166,6 +172,7 @@ class Atom:
         self.startEvent = ibi.Event("startEvent")
         self.dataEvent = ibi.Event("dataEvent")
         self.feedbackEvent = ibi.Event("feedbackEvent")
+        self.contractChangedEvent = ibi.Event("contractChangedEvent")
 
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
@@ -175,6 +182,10 @@ class Atom:
             # for k, v in data.items():
             #     setattr(self, k, v)
             self.__dict__.update(**data)
+        if self._contract_memo is None:
+            self._contract_memo = self.contract
+        elif self._contract_memo != self.contract:
+            self.contractChangedEvent.emit(self._contract_memo, self.contract)
         self.startEvent.emit(data, self)
 
     def onData(self, data: dict, *args):
@@ -182,6 +193,13 @@ class Atom:
 
     def onFeedback(self, data, *args):
         pass
+
+    def onContractChanged(self, old_contract: ibi.Contract, new_contract: ibi.Contract):
+        """This is not chained."""
+        log.debug(
+            f"Contract on {self} changed from {old_contract.symbol} "
+            f"to new contract {new_contract.symbol}"
+        )
 
     @property
     def data(self):
