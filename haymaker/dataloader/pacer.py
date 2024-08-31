@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import random
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -110,9 +109,10 @@ def pacer(
     return Pacer([Restriction(*res) for res in restrictions])
 
 
-class PacingViolationRegistry(dict):
+class PacingViolationRegistry:
     """
-    Keep timestamp of most recent pacing violation for every contract.
+    Keep record of contracts that registered pacing violation so that
+    their jobs can be rescheduled.
 
     * onError: should be connected to ib.onError event, will filter
     pacing violation errors and process them
@@ -121,26 +121,25 @@ class PacingViolationRegistry(dict):
     pacing violation within last second
     """
 
+    data: set[ibi.Contract] = set()
+
     def register(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
-        log.debug(f"Pacing violation registered for {contract}")
-        self[contract] = datetime.now(tz=timezone.utc)
+        log.debug(f"Pacing violation registered for {contract.symbol}")
+        self.data.add(contract)
 
     def verify(self, contract: ibi.Contract) -> bool:
-        if timestamp := self.get(contract):
-            if viol := timestamp - datetime.now(tz=timezone.utc) < timedelta(seconds=1):
-                log.debug(
-                    f"Will ignore result for {contract.symbol} because of pacing "
-                    f"violation."
-                )
-                return viol
-        return False
+        try:
+            self.data.remove(contract)
+            return True
+        except KeyError:
+            return False
 
     def onError(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
-        if errorCode == 162:
+        if "pacing violation" in errorString:
             self.register(reqId, errorCode, errorString, contract)
 
 

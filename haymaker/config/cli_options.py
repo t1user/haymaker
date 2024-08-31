@@ -105,7 +105,24 @@ options_by_module: dict[str, list] = {
             },
         ),
     ],
-    "dataloader": [],
+    "dataloader": [
+        (
+            ("-g", "--fill_gaps"),
+            {
+                "action": "store_true",
+                "default": False,
+                "help": "Whether dataloader should attempt to patch any existing gap in data.",
+            },
+        ),
+        (
+            ("-w", "--watchdog"),
+            {
+                "action": "store_true",
+                "default": False,
+                "help": "Whether watchdog should be used to monitor ib_gateway.",
+            },
+        ),
+    ],
     # this is for tests, but don't use 'test' in module name
     "my_module": [
         (("-t", "--test_option"), {"action": "store_true", "default": False})

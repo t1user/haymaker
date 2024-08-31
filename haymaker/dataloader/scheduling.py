@@ -69,12 +69,16 @@ class UpdateFactory(TaskFactory):
 
     @cached_property
     def to_date(self) -> Union[date, datetime, None]:
-        if self.store.to_date and (
-            (eon := self.store.expiry_or_now()) > self.store.to_date
-        ):
-            return eon
-        else:
-            return None
+        try:
+            if self.store.to_date and (
+                (eon := self.store.expiry_or_now()) > self.store.to_date
+            ):
+                return eon
+            else:
+                return None
+        except TypeError:
+            log.exception(f"{self.store.contract=} | {eon=} {self.store.to_date=}")
+            raise
 
 
 @dataclass
@@ -131,6 +135,6 @@ def task_factory_with_gaps(
     store: StoreWrapper, head: Union[date, datetime]
 ) -> list[Dates]:
     return [
-        *task_factory(store, head),
         *[g.dates() for g in GapFillFactory.gap_factory(store)],  # type: ignore
+        *task_factory(store, head),
     ]

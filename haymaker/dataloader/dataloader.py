@@ -372,14 +372,18 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
                     formatDate=2,
                     timeout=0,
                 )
-            if chunk is None and PCR.verify(writer.contract):
-                # if pacing violation just happened, chunk = None doesn't mean
-                # there is no data, reschedule with same parameters
-                raise PacingViolationError()
+
+            if (not chunk) and PCR.verify(writer.contract):
+                # if pacing violation just happened, empty (or None) chunk doesn't mean
+                # there is no data; need to reschedule with same parameters
+                raise PacingViolationError(
+                    "This error is being ignored, job will be rescheduled."
+                )
+            # below will not run if error above, so `writer.next_date` will still hold
+            # the same date, i.e. the same chunk will be rescheduled
             writer.save_chunk(chunk)
         except Exception as e:
             log.exception(e)
-            log.error(f"writer: {writer}. CHECK IF RESCHEDULED.")
 
         if writer.next_date:
             if validate_age(writer):
@@ -420,9 +424,6 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
         for i in range(number_of_workers)
     ]
 
-    # workers = [asyncio.create_task(worker(f'worker {i}', queue, pacer))
-    #            for i in range(number_of_workers)]
-
     await queue.join()
 
     # cancel all workers
@@ -441,7 +442,6 @@ def start():
     ib.errorEvent += PCR.onError
     manager = Manager(ib)
     asyncio.get_event_loop().set_debug(True)
-    # ibi.util.logToConsole(logging.ERROR)
     log.debug("Will start...")
 
     Connection(ib, partial(main, manager, ib), watchdog=WATCHDOG)
