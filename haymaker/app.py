@@ -60,7 +60,7 @@ class App:
     _connections: int = 0
 
     def __post_init__(self):
-        self.ib.errorEvent += self.onError
+        self.ib.errorEvent += self.onErr
         self.ib.connectedEvent += self.onConnected
         self.ib.disconnectedEvent += self.onDisconnected
 
@@ -85,7 +85,7 @@ class App:
 
         log.debug(f"App initiated: {self}")
 
-    def onError(
+    def onErr(  # don't want word 'error' in logs, unless it's a real error
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
         if errorCode in config.get("ignore_errors", []):
