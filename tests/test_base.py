@@ -4,6 +4,7 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.base import Atom, Details, DetailsContainer, Pipe
+from haymaker.state_machine import Strategy
 
 
 class NewAtom(Atom):
@@ -714,7 +715,7 @@ class Test_data_property:
             pass
 
         a = A()
-        assert a.data is None
+        assert isinstance(a.data, Strategy)
 
     def test_data_property_with_strategy_first_access(self, Atom):
         """If we're using non-existing strategy, one should be created."""

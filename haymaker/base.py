@@ -215,7 +215,7 @@ class Atom:
         self, old_contract: ibi.Future, new_contract: ibi.Future
     ) -> Union[Awaitable[None], None]:
         """This is not chained."""
-        log.debug(
+        log.warning(
             f"Contract on {self} changed from {old_contract.symbol} "
             f"to new contract {new_contract.symbol}"
         )
