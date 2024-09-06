@@ -199,20 +199,6 @@ class BaseExecModel(AbstractExecModel):
     def cancel(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
         return self.controller.cancel(trade)
 
-    async def live_ticker(self):
-        # NOT IN USE
-        if self.ticker:
-            n = 1
-            while not self.ticker.hasBidAsk():
-                await asyncio.sleep(0.1)
-                n += 1
-                if n > 50:
-                    break
-            else:
-                return self.ticker
-        else:
-            log.info(f"No subscription for live ticker {self.data.active_contract}")
-
     def get_ticker(self, contract) -> Optional[ibi.Ticker]:
         for t in self.ib.tickers():
             if t.contract == contract:
