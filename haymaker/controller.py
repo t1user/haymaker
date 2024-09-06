@@ -133,6 +133,16 @@ class Controller(Atom):
 
     async def sync(self, *args) -> None:
         if self.ib.isConnected():
+            _positions = self.ib.positions()
+            log.debug(
+                f"positions pre-sync 1: "
+                f"{ {p.contract.symbol: p.position for p in _positions} }"
+            )
+            positions = await self.ib.reqPositionsAsync()
+            log.debug(
+                f"positions pre-sync 2: "
+                f"{ {p.contract.symbol: p.position for p in positions if p.position} }"
+            )
             log.debug("--- Sync ---")
             orders_report = OrderSyncStrategy.run(self.ib, self.sm)
             if not orders_report.is_ok:
@@ -150,12 +160,15 @@ class Controller(Atom):
         else:
             log.debug("No connection. Abandoning sync.")
 
+    def onStart(self, data, *args) -> None:
+        pass
+
     async def onData(self, data, *args) -> None:
         """
         After obtaining transaction details from execution model,
         verify if the intended effect is the same as achieved effect.
         """
-        super().onData(data)
+        # super().onData(data)
         if not (delay := self.config.get("execution_verification_delay")):
             return
 
@@ -165,11 +178,13 @@ class Controller(Atom):
             target_position = data["target_position"]
             # TODO: Check transaction integrity only after order is done!
             await asyncio.sleep(delay)
-            self.verify_transaction_integrity(strategy, amount, target_position)
+            await self.verify_transaction_integrity(strategy, amount, target_position)
         except KeyError:
             log.exception(
                 "Unable to verify transaction integrity", extra={"data": data}
             )
+        contract = data.get("contract")
+        self.verify_position_with_broker(contract)
 
     def trade(
         self,
@@ -304,7 +319,7 @@ class Controller(Atom):
         assert self.blotter is not None
         self.blotter.log_commission(trade, fill, report, **kwargs)
 
-    def verify_transaction_integrity(
+    async def verify_transaction_integrity(
         self,
         strategy: str,
         amount: float,  # amount in transaction being verified
@@ -320,32 +335,48 @@ class Controller(Atom):
         Any errors are logged but not corrected (may be changed in
         future).
         """
+        delay = self.config.get("execution_verification_delay")
+        assert delay
+
         data = self.sm.strategy.get(strategy)
         target = target_position * amount
+
+        order_infos = [
+            info
+            for info in self.sm.orders_for_strategy(strategy)
+            if info.action not in ("STOP-LOSS", "TAKE-PROFIT")
+        ]
+        if order_infos:  # exists an order which is not a sl or tp
+            # if order(s) still in execution don't check if position achieved yet
+            while any([info.active for info in order_infos]):
+                log.warning(f"{strategy} taking long to achive target position...")
+                await asyncio.sleep(delay)
+
         log_str = f"target: {target}, position: {data.position}"
         if data:
             records_ok = data.position == (target)
             if records_ok:
                 log.debug(f"{strategy} position OK? -> {records_ok} <- " f"{log_str}")
             else:
+
                 log.error(
                     f"Failed to achieve target position for {strategy} - " f"{log_str}"
                 )
-
-            contract = data.active_contract
-            sm_position = self.sm.position.get(contract, 0.0)
-            ib_position = self.trader.position_for_contract(contract)
-            position_ok = sm_position == ib_position
-            log_str_position = f"{sm_position=}, {ib_position=}"
-            if position_ok:
-                log.debug(
-                    f"{contract.symbol} records vs broker OK? -> {position_ok} <- "
-                    f"{log_str_position}"
-                )
-            else:
-                log.error(f"Wrong position for {contract} - {log_str_position}")
         else:
             log.critical(f"Attempt to trade for unknown strategy: {strategy}")
+
+    def verify_position_with_broker(self, contract: ibi.Contract) -> None:
+        sm_position = self.sm.position.get(contract, 0.0)
+        ib_position = self.trader.position_for_contract(contract)
+        position_ok = sm_position == ib_position
+        log_str_position = f"{sm_position=}, {ib_position=}"
+        if position_ok:
+            log.debug(
+                f"{contract.symbol} records vs broker OK? -> {position_ok} <- "
+                f"{log_str_position}"
+            )
+        else:
+            log.error(f"Wrong position for {contract} - {log_str_position}")
 
     def _assign_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
 

@@ -6,14 +6,24 @@ from collections import UserDict
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from functools import wraps
-from typing import TYPE_CHECKING, ClassVar, Optional, Sequence, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Awaitable,
+    ClassVar,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
+
+import ib_insync as ibi
 
 from .misc import is_active, next_active, process_trading_hours
 
 if TYPE_CHECKING:
-    from .state_machine import StateMachine
+    from .state_machine import StateMachine, Strategy
 
-import ib_insync as ibi
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +134,11 @@ class DetailsContainer(UserDict):
         super().__setitem__(key, Details(value))
 
 
+class ContractRollData(NamedTuple):
+    old_contract: ibi.Future
+    new_contract: ibi.Future
+
+
 class Atom:
     """
     Abstract base object from which all other objects inherit.
@@ -142,6 +157,7 @@ class Atom:
     )
     contract = cast(ibi.Contract, ContractManagingDescriptor())
     _contract_memo: Optional[ibi.Contract] = None
+    roll_contract_data: Optional[ContractRollData] = None
 
     @classmethod
     def set_init_data(cls, ib: ibi.IB, sm: StateMachine) -> None:
@@ -177,7 +193,7 @@ class Atom:
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
 
-    def onStart(self, data, *args):
+    def onStart(self, data, *args) -> None:
         if isinstance(data, dict):
             # for k, v in data.items():
             #     setattr(self, k, v)
@@ -188,25 +204,30 @@ class Atom:
             self.contractChangedEvent.emit(self._contract_memo, self.contract)
         self.startEvent.emit(data, self)
 
-    def onData(self, data: dict, *args):
+    def onData(self, data: dict, *args) -> Union[Awaitable[None], None]:
         data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
+        return None
 
-    def onFeedback(self, data, *args):
-        pass
+    def onFeedback(self, data, *args) -> Union[Awaitable[None], None]:
+        return None
 
-    def onContractChanged(self, old_contract: ibi.Contract, new_contract: ibi.Contract):
+    def onContractChanged(
+        self, old_contract: ibi.Future, new_contract: ibi.Future
+    ) -> Union[Awaitable[None], None]:
         """This is not chained."""
         log.debug(
             f"Contract on {self} changed from {old_contract.symbol} "
             f"to new contract {new_contract.symbol}"
         )
+        self.roll_contract_data = ContractRollData(old_contract, new_contract)
+        return None
 
     @property
-    def data(self):
-        try:
-            return self.sm.strategy[self.strategy]
-        except AttributeError:
-            pass
+    def data(self) -> Strategy:
+        strategy = getattr(self, "strategy", "")
+        if not strategy:
+            log.warning(f"{self} accessing data for empty strategy.")
+        return self.sm.strategy[strategy]
 
     def connect(self, *targets: Atom) -> "Atom":
         for t in targets:
