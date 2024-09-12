@@ -523,7 +523,7 @@ class StateMachine:
 
     # ### TODO: Re-do this
     # DOES THIS BELONG IN THIS CLASS?
-    # or maybe position should also be set on this class
+    # or maybe position should also be set in this class (in Controller now)
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
         # TODO: move to controller
         self._data[strategy].lock = 1 if trade.order.action == "BUY" else -1

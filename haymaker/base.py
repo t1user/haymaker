@@ -146,9 +146,9 @@ class Atom:
     """
 
     ib: ClassVar[ibi.IB]
-    sm: StateMachine
+    sm: ClassVar[StateMachine]
     contract_details: ClassVar[DetailsContainer] = DetailsContainer()
-    contracts: list[ibi.Contract] = list()
+    contracts: ClassVar[list[ibi.Contract]] = list()
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
@@ -200,6 +200,8 @@ class Atom:
             self.__dict__.update(**data)
         if self._contract_memo is None:
             self._contract_memo = self.contract
+        # it will not fire if the system has been restarted after contract changed
+        # usless, TODO: consider removing
         elif self._contract_memo != self.contract:
             self.contractChangedEvent.emit(self._contract_memo, self.contract)
         self.startEvent.emit(data, self)

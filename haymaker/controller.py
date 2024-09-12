@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
-from functools import partial
+from functools import cached_property, partial
 from typing import Optional
 
 import eventkit as ev  # type: ignore
@@ -12,7 +13,7 @@ from . import misc
 from .base import Atom
 from .blotter import Blotter
 from .config import CONFIG
-from .state_machine import Strategy
+from .state_machine import OrderInfo, Strategy
 from .sync_routines import (
     ErrorHandlers,
     OrderSyncStrategy,
@@ -128,22 +129,34 @@ class Controller(Atom):
             # zero-out all records
             self.sm.clear_models()
 
+        self.roller = FutureRoller(self)
+        scheduler = ev.Event.timerange(
+            start=datetime.time(13, tzinfo=datetime.timezone.utc),
+            step=datetime.timedelta(days=1),
+        )
+        scheduler += self.roll_futures
+
         # Only subsequently Streamers will run (I think...)
         log.debug("Controller run sequence completed successfully.")
 
+    def roll_futures(self, *args):
+        log.warning(f"Running roll: {args}")
+        self.roller.roll()
+
     async def sync(self, *args) -> None:
         if self.ib.isConnected():
-            _positions = self.ib.positions()
-            log.debug(
-                f"positions pre-sync 1: "
-                f"{ {p.contract.symbol: p.position for p in _positions} }"
-            )
-            positions = await self.ib.reqPositionsAsync()
-            log.debug(
-                f"positions pre-sync 2: "
-                f"{ {p.contract.symbol: p.position for p in positions if p.position} }"
-            )
             log.debug("--- Sync ---")
+            positions = {p.contract.symbol: p.position for p in self.ib.positions()}
+            req_positions = {
+                p.contract.symbol: p.position
+                for p in await self.ib.reqPositionsAsync()
+                if p.position
+            }
+            if positions != req_positions:
+                log.warning(f"{positions=} {req_positions=}")
+            else:
+                log.debug(f"{positions=}")
+
             orders_report = OrderSyncStrategy.run(self.ib, self.sm)
             if not orders_report.is_ok:
                 log.debug("Order sync error, will attempt to restart.")
@@ -270,13 +283,6 @@ class Controller(Atom):
         )
         self.register_position(strategy.strategy, strategy, trade, fill)
 
-        # await asyncio.sleep(1)
-        # try:
-        #     if (strategy.position == 0) & (self.cancel_stray_orders) & trade.isDone():
-        #         self._cleanup_obsolete_orders(strategy)
-        # except Exception as e:
-        #     log.exception(e)
-
     def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ) -> None:
@@ -286,7 +292,7 @@ class Controller(Atom):
         in blotter.
         """
 
-        # silence emission of all all orders from session on startup
+        # silence emission of all orders from session on startup
         if self.hold:
             return
 
@@ -576,3 +582,203 @@ class Controller(Atom):
 
     # def __repr__(self) -> str:
     #     return f"{self.__class__.__name__}({self.sm, self.ib, self.blotter})"
+
+
+class FutureRoller:
+
+    def __init__(self, controller: Controller, excluded_strategies: list[str] = []):
+        self.controller = controller
+        self.sm = controller.sm
+        self.excluded_strategies = excluded_strategies
+
+    @cached_property
+    def futures(self) -> set[ibi.Future]:
+        """
+        List of active contracts that are futures.
+        """
+        return set([f for f in self.controller.contracts if isinstance(f, ibi.Future)])
+
+    @cached_property
+    def strategies(self) -> dict[ibi.Future, list[str]]:
+        """
+        Dict of future contaracts with corresponding lists of
+        strategies for those contracts regardless of whether those
+        strategies have open positions.
+        """
+        return {
+            fut: [i for i in strategy_list if i not in self.excluded_strategies]
+            for fut, strategy_list in self.sm.strategy.strategies_by_contract().items()
+            if isinstance(fut, ibi.Future)
+        }
+
+    @cached_property
+    def positions(self) -> dict[ibi.Future, float]:
+        """
+        Dict of positions for every future contract regardless of
+        whether the contract is expiring (and hence should be rolled).
+
+        If positions for strategies that need rolling cancel each
+        other for a given future, this future will not be included
+        (because there's nothing to roll, even though strategies and
+        their orders need to be updated).
+        """
+        positions = {}
+        for fut, strategy_names in self.strategies.items():
+            if position := sum(
+                [self.sm.strategy[name].position for name in strategy_names]
+            ):
+                positions[fut] = position
+        return positions
+
+    @cached_property
+    def contracts_to_roll(self) -> set:
+        """
+        Set of futures that need to rolled, i.e. these are the futures
+        we have positions for, but they're not active contracts any
+        more and they are not for strategies that we explicitly
+        excluded from folling.
+
+        All previous properties are intermediate steps to get this one
+        piece of information.
+        """
+        contracts_to_roll = set(self.positions.keys()) - self.futures
+        log.debug(f"number of positions: {len(self.positions.keys())}")
+        log.debug(f"number of futures: {len(self.futures)}")
+        log.debug(f"{contracts_to_roll=}")
+        return contracts_to_roll
+
+    def match_old_to_new_future(self, old_future: ibi.Future) -> ibi.Future:
+        try:
+            return next(
+                (
+                    new_future
+                    for new_future in self.futures
+                    if (
+                        (old_future.symbol == new_future.symbol)
+                        and (old_future.exchange == new_future.exchange)
+                        and (old_future.multiplier == new_future.multiplier)
+                    )
+                )
+            )
+        except StopIteration:
+            log.error(f"No replacement contract for expring: {old_future}")
+            return old_future
+
+    def roll(self):
+        if contracts := self.contracts_to_roll:
+            log.warning(f"Contracts will be rolled: {[c.symbol for c in contracts]}")
+        for old_contract in contracts:
+            new_contract = self.match_old_to_new_future(old_contract)
+            self.trade(old_contract, new_contract)
+            self.adjust_records_and_orders_for_contract(old_contract, new_contract)
+
+    def trade(self, old_contract: ibi.Future, new_contract: ibi.Future) -> ibi.Trade:
+        combo = self.make_combo(old_contract, new_contract)
+        size = self.positions[old_contract]
+        assert size != 0
+        order = ibi.MarketOrder("BUY" if size > 0 else "SELL", abs(size))
+        # rolling is not linked to any one strategy, as it's for aggregate position
+        return self.controller.trade(
+            "future_roll",
+            combo,
+            order,
+            "FUTURE_ROLL",
+            self.sm.strategy["FUTURE_ROLL"],
+        )
+
+    @staticmethod
+    def make_combo(oc: ibi.Future, nc: ibi.Future) -> ibi.Bag:
+        return ibi.Bag(
+            symbol=nc.symbol,
+            exchange=nc.exchange,
+            currency=nc.currency,
+            multiplier=nc.multiplier,
+            comboLegs=[
+                ibi.ComboLeg(
+                    conId=oc.conId,
+                    ratio=1,
+                    action="SELL",
+                    exchange=oc.exchange,
+                ),
+                ibi.ComboLeg(
+                    conId=nc.conId,
+                    ratio=1,
+                    action="BUY",
+                    exchange=nc.exchange,
+                ),
+            ],
+        )
+
+    def adjust_records_and_orders_for_contract(
+        self, old_contract: ibi.Future, new_contract: ibi.Future
+    ) -> None:
+        for strategy_str in self.strategies[old_contract]:
+            strategy = self.sm.strategy[strategy_str]
+            self.adjust_strategy_records(
+                strategy_str, strategy, old_contract, new_contract
+            )
+            self.adjust_strategy_orders(
+                strategy_str, strategy, old_contract, new_contract
+            )
+
+    def adjust_strategy_records(
+        self,
+        strategy_str: str,
+        strategy: Strategy,
+        old_contract: ibi.Future,
+        new_contract: ibi.Future,
+    ) -> None:
+        strategy.active_contract = new_contract
+
+    def adjust_strategy_orders(
+        self,
+        strategy_str: str,
+        strategy: Strategy,
+        old_contract: ibi.Future,
+        new_contract: ibi.Future,
+    ) -> None:
+        for oi in self.sm.orders_for_strategy(strategy_str):
+            cancelled_trade = self.controller.cancel(oi.trade)
+            if cancelled_trade:
+                cancelled_trade.cancelledEvent += partial(
+                    self.issue_new_order,
+                    oi=oi,
+                    new_contract=new_contract,
+                    strategy_str=strategy_str,
+                    strategy=strategy,
+                )
+        else:
+            log.error(f"Roll attempt - cannot cancel order: {oi.trade}")
+
+    def issue_new_order(
+        self,
+        cancelled_trade: ibi.Trade,
+        oi: OrderInfo,
+        new_contract: ibi.Future,
+        strategy_str: str,
+        strategy: Strategy,
+    ) -> None:
+        order_kwarg_dict = ibi.util.dataclassNonDefaults(cancelled_trade.order)
+
+        del order_kwarg_dict["orderId"]
+        del order_kwarg_dict["permId"]
+        del order_kwarg_dict["clientId"]
+        del order_kwarg_dict["softDollarTier"]
+
+        if order_kwarg_dict["orderType"] == "FIX PEGGED":
+            order_kwarg_dict["orderType"] = "TRAIL"
+            order_kwarg_dict["auxPrice"] = misc.round_tick(
+                (oi.params.get("trail_multiple") or oi.params.get("adjusted_multiple"))
+                * oi.params["sl_points"],
+                oi.params["min_tick"],
+            )
+        new_order = ibi.Order(**order_kwarg_dict)
+        self.controller.trade(
+            strategy_str, new_contract, new_order, oi.action, strategy
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__qualname__}(controller={self.controller}, "
+            f"excluded_strategies={self.excluded_strategies})"
+        )

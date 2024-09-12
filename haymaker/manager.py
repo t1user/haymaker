@@ -86,12 +86,11 @@ class InitData:
 
             dropped_futures = self._futures - set(futures_for_cont_futures)
             new_futures = set(futures_for_cont_futures) - self._futures
-            if new_futures or dropped_futures:
+            if new_futures and dropped_futures:
                 log.warning(
                     f"Dropping futures: {[f.localSymbol for f in dropped_futures]} "
                     f"{len(new_futures)} new future objects found."
                 )
-
             self.contract_list.extend(list(new_futures))
             for f in dropped_futures:
                 self.contract_list.remove(f)
@@ -180,7 +179,12 @@ class Jobs:
 
 IB: Final[ibi.IB] = ibi.IB()
 # Atom passes empty contrianers so that INIT_DATA can supply them with data
-INIT_DATA = InitData(IB, Atom.contracts, Atom.contract_details)
+# InitData knows nothing about Atom, just gets containers to fill-up
+INIT_DATA = InitData(
+    IB,
+    Atom.contracts,
+    Atom.contract_details,
+)
 JOBS = Jobs(INIT_DATA)
 Atom.set_init_data(INIT_DATA.ib, StateMachine())
 log.debug("Will initialize Controller")
