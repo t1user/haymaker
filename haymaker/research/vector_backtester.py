@@ -134,7 +134,7 @@ def get_min_tick(data: pd.Series) -> float:
     ps = ps[ps != 0]
     min_tick = ps.mode().iloc[0]
     # print(f'estimated min-tick: {min_tick}')
-    return min_tick
+    return min_tick  # type: ignore
 
 
 def _skip_last_open(df: pd.DataFrame) -> pd.DataFrame:

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Literal, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Dict, Literal, Optional, Tuple, Type, Union
 
 import numpy as np
 import pandas as pd
@@ -21,7 +21,7 @@ class BaseBracket(ABC):
         # print(f"bracket init: {self}, e: {entry}")
 
     @abstractmethod
-    def evaluate(self, high: float, low: float) -> float:
+    def evaluate(self, high: float, low: float, price: float = 0.0) -> float:
         """
         Bracket has been triggered?
         True: return price to execute transaction
@@ -46,7 +46,7 @@ class BaseBracket(ABC):
 
 
 class TrailStop(BaseBracket):
-    def evaluate(self, high: float, low: float) -> float:
+    def evaluate(self, high: float, low: float, price: float = 0.0) -> float:
         if self.position == -1:
             if self.trigger <= high:
                 return self.trigger
@@ -66,7 +66,7 @@ class TrailStop(BaseBracket):
 
 
 class FixedStop(BaseBracket):
-    def evaluate(self, high: float, low: float) -> float:
+    def evaluate(self, high: float, low: float, price: float = 0.0) -> float:
         if self.position == 1 and self.trigger >= low:
             return self.trigger
         elif self.position == -1 and self.trigger <= high:
@@ -79,11 +79,14 @@ class TakeProfit(BaseBracket):
     multiple: float
 
     @classmethod
-    def set_up(cls, multiple: float) -> Type[BaseBracket]:
-        cls.multiple = multiple
-        return cls
+    def from_args(cls, multiple: float) -> Type["TakeProfit"]:
+        if multiple:
+            cls.multiple = multiple
+            return cls
+        else:
+            return NoTakeProfit
 
-    def evaluate(self, high: float, low: float) -> float:
+    def evaluate(self, high: float, low: float, price: float = 0.0) -> float:
         if self.position == -1 and self.trigger >= low:
             return self.trigger
         elif self.position == 1 and self.trigger <= high:
@@ -95,23 +98,81 @@ class TakeProfit(BaseBracket):
         return self.entry + self.distance * self.position * self.multiple
 
 
-class NoTakeProfit(BaseBracket):
-    def __init__(self, *args):
+class NoTakeProfit(TakeProfit):
+
+    def __init__(self, *args, **kwargs):
         pass
 
-    def evaluate(self, high: float, low: float) -> bool:
-        return False
+    def evaluate(self, high: float, low: float, price: float = 0.0) -> float:
+        return 0
+
+
+class TimeStop:
+    periods: int = 0
+
+    @classmethod
+    def from_args(cls, periods: int):
+        if periods:
+            cls.periods = periods
+            return cls
+        else:
+            return NoTimeStop
+
+    def __init__(self):
+        self.counter = 0
+
+    def evaluate(self, high: float, low: float, price: float = 0.0) -> float:
+        """
+        Interface in line with BaseBracket protocol.
+
+        Bracket has been triggered?
+        True: return price to execute transaction
+        False: return 0
+        """
+        self.counter += 1
+        return (self.counter >= self.periods) * price
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}"
+            + "("
+            + ", ".join([f"{k}={v}" for k, v in self.__dict__.items()])
+            + ")"
+        )
+
+
+class NoTimeStop(TimeStop):
+
+    def evaluate(self, *args, **kwargs) -> float:
+        return 0
 
 
 stop_dict: Dict[StopMode, Type[BaseBracket]] = {"fixed": FixedStop, "trail": TrailStop}
-
-A = TypeVar("A", bound="Adjust")
 
 
 class Adjust:
     adjusted_stop: Type[BaseBracket]
     trigger_multiple: float
     stop_multiple: float
+
+    @classmethod
+    def from_args(
+        cls, adjust_tuple: Optional[Tuple[StopMode, float, float]] = None
+    ) -> Type["Adjust"]:
+
+        if adjust_tuple:
+            adjusted_stop = stop_dict.get(adjust_tuple[0])
+            if not adjusted_stop:
+                raise ValueError(
+                    f"Invalid adjusted stop loss type: {adjust_tuple[0]}. "
+                    f"Must be 'fixed' or 'trail'"
+                )
+            cls.adjusted_stop = adjusted_stop
+            cls.trigger_multiple = adjust_tuple[1]
+            cls.stop_multiple = adjust_tuple[2]
+            return cls
+        else:
+            return NoAdjust
 
     def __init__(
         self, stop_distance: float, transaction: int, entry: float = 0
@@ -124,19 +185,9 @@ class Adjust:
         self.done = False
         # print(f'Adjust init: {self}')
 
-    @classmethod
-    def set_up(
-        cls: Type[A],
-        adjusted_stop: Type[BaseBracket],
-        trigger_multiple: float,
-        stop_multiple: float,
-    ) -> Type[A]:
-        cls.adjusted_stop = adjusted_stop
-        cls.trigger_multiple = trigger_multiple
-        cls.stop_multiple = stop_multiple
-        return cls
-
-    def evaluate(self, order: BaseBracket, high: float, low: float) -> BaseBracket:
+    def evaluate(
+        self, order: BaseBracket, high: float, low: float, price: float = 0.0
+    ) -> BaseBracket:
         """
         Verify whether stop should be adjusted, return correct stop
         (adjusted or not).
@@ -181,10 +232,12 @@ class Context:
         self,
         stop: Type[BaseBracket],
         tp: Type[BaseBracket],
+        ts: Type[TimeStop],
         adjust: Type[Adjust],
     ) -> None:
         self._stop = stop
         self._tp = tp
+        self._ts = ts
         self._adjust = adjust
         self.position = 0
         # print(f'Context init: {self}')
@@ -232,6 +285,7 @@ class Context:
             self.eval_for_open()
         else:
             self.eval_brackets()
+            self.eval_adjust()
 
     def eval_for_open(self) -> None:
         if self.transaction and (self.transaction == self.target_position):
@@ -241,6 +295,7 @@ class Context:
     def open_position(self, transaction: int) -> None:
         self.stop = self._stop(self.distance, transaction, self.price)
         self.tp = self._tp(self.distance, transaction, self.price)
+        self.ts = self._ts()
         self.adjust = self._adjust(self.distance, transaction, self.price)
         # self.position = self.target_position
         self.open_price = self.price * transaction
@@ -254,16 +309,10 @@ class Context:
         # print("---------------------")
 
     def eval_brackets(self) -> None:
-        if p := self.stop.evaluate(self.high, self.low):
-            # print(f"stop hit: {self.stop}, h: {self.high}, l: {self.low}")
-            self.stop_price = p * -self.position
-            self.position = 0
-        elif p := self.tp.evaluate(self.high, self.low):
-            # print(f"tp hit: {self.tp}, h: {self.high}, l: {self.low}")
-            self.stop_price = p * -self.position
-            self.position = 0
-        else:
-            self.eval_adjust()
+        for bracket in (self.stop, self.tp, self.ts):
+            if p := getattr(bracket, "evaluate")(self.high, self.low, self.price):
+                self.stop_price = p * -self.position
+                self.position = 0
 
     def eval_adjust(self) -> None:
         self.stop = self.adjust.evaluate(self.stop, self.high, self.low)
@@ -319,7 +368,7 @@ def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
     [2] high
     [3] low
     [4] distance (required stop distance at given bar)
-    [5] price (at which non-stopped transaction will be executed on this bar)
+    [5] price (for non-stopped/time-stopped transaction executed on this bar)
 
     BlipContext requires:
     [0] blip
@@ -327,7 +376,7 @@ def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
     [2] high
     [3] low
     [4] distance (required stop distance at given bar)
-    [5] price (at which non-stopped transaction will be executed on this bar)
+    [5] price (for non-stopped/time-stopped transaction executed on this bar)
 
     """
 
@@ -344,9 +393,10 @@ def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
 
 def param_factory(
     mode: StopMode,
-    tp_multiple: Optional[float] = None,
+    tp_multiple: float = 0,
+    time_stop: int = 0,
     adjust_tuple: Optional[Tuple[StopMode, float, float]] = None,
-) -> Tuple[Type[BaseBracket], Type[BaseBracket], Type[Adjust]]:
+) -> Tuple[Type[BaseBracket], Type[BaseBracket], Type[TimeStop], Type[Adjust]]:
     """
     Verify validity of parameters and based on them return appropriate
     objects for Context.
@@ -366,23 +416,11 @@ def param_factory(
     if not stop:
         raise ValueError(f"Invalid stop loss type: {mode}. Must be 'fixed' or 'trail'")
 
-    if tp_multiple:
-        tp = TakeProfit.set_up(tp_multiple)
-    else:
-        tp = NoTakeProfit
+    tp = TakeProfit.from_args(tp_multiple)
+    ts = TimeStop.from_args(time_stop)
+    adjust = Adjust.from_args(adjust_tuple)
 
-    if adjust_tuple:
-        adjusted_stop = stop_dict.get(adjust_tuple[0])
-        if not adjusted_stop:
-            raise ValueError(
-                f"Invalid adjusted stop loss type: {adjust_tuple[0]}. "
-                f"Must be 'fixed' or 'trail'"
-            )
-        adjust = Adjust.set_up(adjusted_stop, adjust_tuple[1], adjust_tuple[2])
-    else:
-        adjust = NoAdjust
-
-    return (stop, tp, adjust)
+    return (stop, tp, ts, adjust)
 
 
 def always_on(series: pd.Series) -> bool:
@@ -419,9 +457,9 @@ def stop_loss(
     mode: StopMode = "trail",
     tp_multiple: float = 0,
     adjust: Optional[Tuple[StopMode, float, float]] = None,
+    time_stop: int = 0,
     multiplier: float = 1,
     price_column: str = "open",
-    **kwargs,
 ) -> pd.DataFrame:
     """Apply stop loss and optionally take profit to a strategy.
 
@@ -453,7 +491,7 @@ def stop_loss(
     BLIPS MUST BE SHIFTED to appear at the appropriate point in time,
     i.e. they must appear at the time points where transaction should be executed
     (similarly position changes at the points in time where transaction should be
-    executed). Stop will not shift blilps (or any other indicators).
+    executed). Stop will not shift blips (or any other indicators).
 
     distance - desired distance of stop loss, which may be given as a
     float if distance value is the same at all time points or a
@@ -503,7 +541,7 @@ def stop_loss(
     _df = df.copy()
     _df["distance"] = distance * multiplier  # type: ignore
 
-    params = param_factory(mode, tp_multiple, adjust)
+    params = param_factory(mode, tp_multiple, time_stop, adjust)
 
     if "position" in _df.columns:
         _df["transaction"] = pos_trans(df["position"])
