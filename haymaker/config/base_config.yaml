@@ -22,6 +22,7 @@ app:
     !!python/object/apply:ib_insync.Forex
     - EURUSD
   probeTimeout: 4
+  future_roll_time: 14   # hour at which future rolls will be executed
   
 controller:
   use_blotter: True

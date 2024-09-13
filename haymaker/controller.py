@@ -130,17 +130,15 @@ class Controller(Atom):
             self.sm.clear_models()
 
         self.roller = FutureRoller(self)
-        scheduler = ev.Event.timerange(
-            start=datetime.time(13, tzinfo=datetime.timezone.utc),
-            step=datetime.timedelta(days=1),
-        )
-        scheduler += self.roll_futures
 
         # Only subsequently Streamers will run (I think...)
         log.debug("Controller run sequence completed successfully.")
 
     def roll_futures(self, *args):
-        log.warning(f"Running roll: {args}")
+        """
+        This method is scheduled to run once a day in :class:`.app.App`
+        """
+        log.warning(f"Running roll: {args} on controller object: {id(self)}")
         self.roller.roll()
 
     async def sync(self, *args) -> None:

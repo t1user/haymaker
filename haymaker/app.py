@@ -1,9 +1,11 @@
 import asyncio
+import datetime
 import logging
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Protocol, cast
 
+import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from .config import CONFIG as config
@@ -57,6 +59,7 @@ class App:
     retryDelay: float = CONFIG.get("retryDelay") or 2
     probeContract: ibi.Contract = CONFIG.get("probeContract") or ibi.Forex("EURUSD")
     probeTimeout: float = CONFIG.get("probeTimeout") or 4
+    no_future_roll_strategies: list[str] = field(default_factory=list)
     _connections: int = 0
 
     def __post_init__(self):
@@ -83,7 +86,18 @@ class App:
         self.watchdog.softTimeoutEvent += self.onSoftTimeout
         self.watchdog.hardTimeoutEvent += self.onHardTimeout
 
+        self.schedule_future_roll(self)
+
         log.debug(f"App initiated: {self}")
+
+    def schedule_future_roll(self):
+        roll_time = CONFIG.get("future_roll_time", 14)
+        scheduler = ev.Event.timerange(
+            start=datetime.time(roll_time, tzinfo=datetime.timezone.utc),
+            step=datetime.timedelta(days=1),
+        )
+        scheduler += CONTROLLER.roll_futures
+        log.debug(f"Future roll scheduled for {roll_time} UTC")
 
     def onErr(  # don't want word 'error' in logs, unless it's a real error
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
