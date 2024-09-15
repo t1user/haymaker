@@ -109,6 +109,7 @@ class FutureContractSelector(ContractSelector):
             "fullchain": FullchainFutureContractSelector,
             "current": CurrentFutureContractSelector,
             "exact": ExactFutureContractSelector,
+            "current_and_contfuture": CurrentContfutureFutureContractSelector,
         }.get(
             CONFIG.get("futures_selector", "contfuture"),
             ContfutureFutureContractSelector,
@@ -184,6 +185,17 @@ class CurrentFutureContractSelector(FutureContractSelector):
             return [self._contfuture_qualified]
         else:
             return [self._fullchain[self._contfuture_index + int(desired_index)]]
+
+
+class CurrentContfutureFutureContractSelector(FutureContractSelector):
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.current = CurrentFutureContractSelector(**kwargs)
+        self.contfuture = ContfutureFutureContractSelector(**kwargs)
+
+    def objects(self) -> list[ibi.Contract]:
+        return [*ibi.util.run(self.current._objects()), *self.contfuture.objects()]
 
 
 class ExactFutureContractSelector(FutureContractSelector):

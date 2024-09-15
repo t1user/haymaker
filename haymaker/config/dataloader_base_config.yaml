@@ -12,7 +12,7 @@ pacer_restrictions:
 pacer_no_restriction: False # toggle to quickly switch off pacer (will ignore previous item)
 
 # ---- futures config ----
-futures_selector: "contfuture" # contfuture, fullchain, current, exact
+futures_selector: "contfuture" # contfuture, fullchain, current, exact, current_and_contfuture
 # TODO: needs to be tested
 futures_fullchain_spec: full #  full, active, expired; which contracts should be included in futures fullchain; relevant only if futureshow==fullchain;
 futures_current_index: 0 #  zero->current contfuture, positive index->future, negative->past; which contract is considered current; relevant only if futures_selector==current;
