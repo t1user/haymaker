@@ -383,9 +383,9 @@ def any_signal(data: pd.Series, periods: Tuple[int]) -> pd.Series:
 
 def modified_rsi(rsi: pd.Series) -> pd.Series:
     """
-    Rescale passed rsi to -100 to 100.
+    Rescale passed rsi to -1 to 1.
     """
-    return 2 * (rsi - 50)
+    return (2 * (rsi - 50)) / 100
 
 
 def rsi(
@@ -411,7 +411,7 @@ def rsi(
 
     rescale:
         False - return classic RSI
-        True - rescale classic RSI to (-100, 100)
+        True - rescale classic RSI to (-1, 1)
 
     note:
     ----
