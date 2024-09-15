@@ -4,7 +4,7 @@ import asyncio
 import functools
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from typing import Optional, TypedDict, Union
 
@@ -328,12 +328,14 @@ class Manager:
             )
 
             if not headTimeStamp:
+                five_years_ago = datetime.now(tz=timezone.utc) - timedelta(days=5 * 250)
                 log.warning(
                     (
-                        f"Unavailable headTimeStamp for {contract}. "
-                        f"No data will be downloaded"
+                        f"Unavailable headTimeStamp ({headTimeStamp}) for {contract}. "
+                        f"Will use {five_years_ago}"
                     )
                 )
+                headTimeStamp = five_years_ago
         except Exception:
             log.exception(f"Exception while getting headTimeStamp for {contract}")
             headTimeStamp = NOW  # type: ignore
