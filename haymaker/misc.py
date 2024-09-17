@@ -299,3 +299,34 @@ def weighted_average(*values: tuple[float, float]) -> float:
         return running_multiples / running_total
     except ZeroDivisionError:
         return 0
+
+
+class AsyncCachedProperty:
+    """
+    Implementation of :meth:`functools.cached_property` for
+    asynchronous methods.
+    """
+
+    def __init__(self, getter):
+        self.getter = getter
+
+    def __set_name__(self, owner, name) -> None:
+        self.private_name = "_" + name
+
+    async def __get__(self, obj, objtype=None):
+        return getattr(obj, self.private_name, None) or await self._get_attribute(obj)
+
+    async def _get_attribute(self, obj):
+        value = await self.getter(obj)
+        setattr(obj, self.private_name, value)
+        return value
+
+
+def async_cached_property(func):
+    """
+    Decorator for couroutines only.
+
+    Run couroutine :meth:`func` once, cache return value and on
+    subsequent calls return the cached value
+    """
+    return AsyncCachedProperty(func)
