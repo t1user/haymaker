@@ -14,6 +14,7 @@ import pandas as pd
 from haymaker.config import CONFIG
 from haymaker.datastore import AbstractBaseStore
 from haymaker.logging import setup_logging
+from haymaker.misc import async_cached_property
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
@@ -278,16 +279,15 @@ class Manager:
     def sources(self) -> list[dict]:
         return pd.read_csv(SOURCE, keep_default_na=False).to_dict("records")
 
-    @functools.cached_property
-    def contracts(self) -> list[ibi.Contract]:
-        return ibi.util.run(self._contracts())
-
-    async def _contracts(self) -> list[ibi.Contract]:
+    @async_cached_property
+    async def contracts(self) -> list[ibi.Contract]:
+        # consider making this into async generator, but consider impact on number of
+        # counted requests sent to ib
         ContractSelector.set_ib(self.ib)
         contracts = []
         for s in self.sources:
-            contracts.extend(ContractSelector.from_kwargs(**s).objects())
-        await self.ib.qualifyContractsAsync(*contracts)
+            # contracts must come qualified here
+            contracts.extend(await ContractSelector.from_kwargs(**s).objects())
         log.debug(f"{contracts=}")
         return contracts
 
@@ -297,7 +297,8 @@ class Manager:
 
     async def _headstamps(self) -> dict[ibi.Contract, Union[date, datetime]]:
         headstamps = {}
-        for c in self.contracts:
+        for c in await self.contracts:
+            log.debug(f"Getting headstamp for contract: {c}")
             if c_ := await self.headstamp(c):
                 headstamps[c] = c_
         log.debug(f"{headstamps=}")

@@ -327,6 +327,6 @@ def async_cached_property(func):
     Decorator for couroutines only.
 
     Run couroutine :meth:`func` once, cache return value and on
-    subsequent calls return the cached value
+    subsequent calls return the cached value.
     """
     return AsyncCachedProperty(func)

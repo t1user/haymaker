@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import functools
+import asyncio
 import logging
 from dataclasses import fields
 from datetime import date, datetime
@@ -9,6 +9,7 @@ from typing import Self, Type
 import ib_insync as ibi
 
 from haymaker.config import CONFIG
+from haymaker.misc import async_cached_property
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ class ContractSelector:
     for which historical data will be loaded; those objects are not
     guaranteed to be qualified.
     """
+
+    # Consider turning this into async generator
 
     ib: ibi.IB
     sec_types = {
@@ -88,11 +91,13 @@ class ContractSelector:
             )
         return kwargs
 
-    def objects(self) -> list[ibi.Contract]:
+    async def objects(self) -> list[ibi.Contract]:
         try:
-            return ibi.util.run(self._objects())  # type: ignore
+            return await self._objects()  # type: ignore
         except AttributeError:
-            return [ibi.Contract.create(**self.kwargs)]
+            object_list = [ibi.Contract.create(**self.kwargs)]
+            await self.ib.qualifyContractsAsync(*object_list)
+            return object_list
 
     def repr(self) -> str:
         kwargs_str = ", ".join([f"{k}={v}" for k, v in self.kwargs.items()])
@@ -100,6 +105,9 @@ class ContractSelector:
 
 
 class FutureContractSelector(ContractSelector):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     @classmethod
     def create(cls, **kwargs):
@@ -116,40 +124,43 @@ class FutureContractSelector(ContractSelector):
         )
         return klass(**kwargs)
 
-    @functools.cached_property
-    def _fullchain(self) -> list[ibi.Contract]:
+    @async_cached_property
+    async def _fullchain(self) -> list[ibi.Contract]:
         kwargs = self.kwargs.copy()
-        kwargs["secType"] = "FUT"
+        kwargs["secType"] = "FUT"  # it might have been CONTFUT at this point
         kwargs["includeExpired"] = True
-        details = ibi.util.run(self.ib.reqContractDetailsAsync(ibi.Contract(**kwargs)))
+        details = await self.ib.reqContractDetailsAsync(ibi.Contract.create(**kwargs))
         return sorted(
             [c.contract for c in details if c.contract is not None],
             key=lambda x: x.lastTradeDateOrContractMonth,
         )
 
-    @functools.cached_property
-    def _contfuture_index(self) -> int:
-        return self._fullchain.index(self._contfuture_qualified)
+    @async_cached_property
+    async def _current_contract_index(self) -> int:
+        full_chain = await self._fullchain
+        return full_chain.index(await self._current_contract)
 
-    @functools.cached_property
-    def _contfuture_qualified(self) -> ibi.Contract:
-        contfuture = self._contfuture
-        ibi.util.run(self.ib.qualifyContractsAsync(contfuture))
-        future_kwargs = contfuture.nonDefaults()  # type: ignore
-        del future_kwargs["secType"]
-        return ibi.Contract.create(**future_kwargs)
+    @async_cached_property
+    async def _current_contract(self) -> ibi.Contract:
+        future_kwargs = ibi.util.dataclassNonDefaults(await self._contfuture)
+        future_kwargs["secType"] = "FUT"
+        new_contract = ibi.Contract.create(**future_kwargs)
+        await self.ib.qualifyContractsAsync(new_contract)
+        return new_contract
 
-    @functools.cached_property
-    def _contfuture(self) -> ibi.Contract:
+    @async_cached_property
+    async def _contfuture(self) -> ibi.Contract:
         kwargs = self.kwargs.copy()
         kwargs["secType"] = "CONTFUT"
-        return ibi.Contract.create(**kwargs)
+        contract = ibi.Contract.create(**kwargs)
+        await self.ib.qualifyContractsAsync(contract)
+        return contract
 
 
 class ContfutureFutureContractSelector(FutureContractSelector):
 
-    def objects(self) -> list[ibi.Contract]:
-        return [self._contfuture]
+    async def objects(self) -> list[ibi.Contract]:
+        return [await self._contfuture]
 
 
 class FullchainFutureContractSelector(FutureContractSelector):
@@ -158,17 +169,17 @@ class FullchainFutureContractSelector(FutureContractSelector):
         spec = CONFIG.get("futures_fullchain_spec", "full")
         today = date.today()
         if spec == "full":
-            return self._fullchain
+            return await self._fullchain
         elif spec == "active":
             return [
                 c
-                for c in self._fullchain
+                for c in await self._fullchain
                 if datetime.fromisoformat(c.lastTradeDateOrContractMonth) > today
             ]
         elif spec == "expired":
             return [
                 c
-                for c in self._fullchain
+                for c in await self._fullchain
                 if datetime.fromisoformat(c.lastTradeDateOrContractMonth) <= today
             ]
         else:
@@ -182,21 +193,35 @@ class CurrentFutureContractSelector(FutureContractSelector):
     async def _objects(self) -> list[ibi.Contract]:
         desired_index = CONFIG.get("futures_current_index", 0)
         if desired_index == 0:
-            return [self._contfuture_qualified]
+            return [await self._current_contract]
         else:
-            return [self._fullchain[self._contfuture_index + int(desired_index)]]
+            full_chain = await self._fullchain
+            return [full_chain[await self._current_contract_index + int(desired_index)]]
 
 
 class CurrentContfutureFutureContractSelector(FutureContractSelector):
+    """Current and ContFuture"""
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.current = CurrentFutureContractSelector(**kwargs)
         self.contfuture = ContfutureFutureContractSelector(**kwargs)
 
-    def objects(self) -> list[ibi.Contract]:
-        return [*ibi.util.run(self.current._objects()), *self.contfuture.objects()]
+    async def _current_objects(self) -> None:
+        self.current_objects = await self.current._objects()
+
+    async def _contfuture_objects(self) -> None:
+        self.contfuture_objects = await self.contfuture.objects()
+
+    async def objects(self) -> list[ibi.Contract]:
+        await asyncio.gather(
+            asyncio.create_task(self._current_objects()),
+            asyncio.create_task(self._contfuture_objects()),
+        )
+        return [*self.current_objects, *self.contfuture_objects]
 
 
 class ExactFutureContractSelector(FutureContractSelector):
+    """Just pick the future contract without messing with it."""
+
     pass
