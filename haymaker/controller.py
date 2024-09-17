@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
 import logging
 from functools import cached_property, partial
 from typing import Optional
@@ -77,6 +76,7 @@ class Controller(Atom):
         self.cancel_stray_orders = self.config.get("cancel_stray_orders")
 
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
+        self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
 
     def _attach_logging_events(self):
@@ -93,6 +93,9 @@ class Controller(Atom):
         if self.hold:
             self.hold = False
             log.debug("hold released")
+
+    def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
+        self.no_future_roll_strategies.extend(strategies)
 
     async def run(self) -> None:
         """

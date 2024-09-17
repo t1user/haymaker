@@ -86,12 +86,13 @@ class App:
         self.watchdog.softTimeoutEvent += self.onSoftTimeout
         self.watchdog.hardTimeoutEvent += self.onHardTimeout
 
-        self.schedule_future_roll(self)
+        self.schedule_future_roll()
 
         log.debug(f"App initiated: {self}")
 
     def schedule_future_roll(self):
         roll_time = CONFIG.get("future_roll_time", 14)
+        CONTROLLER.set_no_future_roll_strategies(self.no_future_roll_strategies)
         scheduler = ev.Event.timerange(
             start=datetime.time(roll_time, tzinfo=datetime.timezone.utc),
             step=datetime.timedelta(days=1),
