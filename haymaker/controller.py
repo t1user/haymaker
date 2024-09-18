@@ -147,9 +147,11 @@ class Controller(Atom):
     async def sync(self, *args) -> None:
         if self.ib.isConnected():
             log.debug("--- Sync ---")
-            positions = {p.contract.symbol: p.position for p in self.ib.positions()}
+            positions = {
+                p.contract.localSymbol: p.position for p in self.ib.positions()
+            }
             req_positions = {
-                p.contract.symbol: p.position
+                p.contract.localSymbol: p.position
                 for p in await self.ib.reqPositionsAsync()
                 if p.position
             }
@@ -606,11 +608,13 @@ class FutureRoller:
         strategies for those contracts regardless of whether those
         strategies have open positions.
         """
-        return {
+        strategies = {
             fut: [i for i in strategy_list if i not in self.excluded_strategies]
             for fut, strategy_list in self.sm.strategy.strategies_by_contract().items()
             if isinstance(fut, ibi.Future)
         }
+        log.debug(f"{strategies=}")
+        return strategies
 
     @cached_property
     def positions(self) -> dict[ibi.Future, float]:
@@ -629,6 +633,7 @@ class FutureRoller:
                 [self.sm.strategy[name].position for name in strategy_names]
             ):
                 positions[fut] = position
+        log.debug(f"{positions=}")
         return positions
 
     @cached_property
@@ -667,7 +672,9 @@ class FutureRoller:
 
     def roll(self):
         if contracts := self.contracts_to_roll:
-            log.warning(f"Contracts will be rolled: {[c.symbol for c in contracts]}")
+            log.warning(
+                f"Contracts will be rolled: {[c.localSymbol for c in contracts]}"
+            )
         for old_contract in contracts:
             new_contract = self.match_old_to_new_future(old_contract)
             self.trade(old_contract, new_contract)
@@ -739,17 +746,15 @@ class FutureRoller:
         new_contract: ibi.Future,
     ) -> None:
         for oi in self.sm.orders_for_strategy(strategy_str):
-            cancelled_trade = self.controller.cancel(oi.trade)
-            if cancelled_trade:
-                cancelled_trade.cancelledEvent += partial(
-                    self.issue_new_order,
-                    oi=oi,
-                    new_contract=new_contract,
-                    strategy_str=strategy_str,
-                    strategy=strategy,
-                )
-        else:
-            log.error(f"Roll attempt - cannot cancel order: {oi.trade}")
+            old_trade = oi.trade
+            old_trade.cancelledEvent += partial(
+                self.issue_new_order,
+                oi=oi,
+                new_contract=new_contract,
+                strategy_str=strategy_str,
+                strategy=strategy,
+            )
+            self.controller.cancel(oi.trade)
 
     def issue_new_order(
         self,
@@ -761,10 +766,9 @@ class FutureRoller:
     ) -> None:
         order_kwarg_dict = ibi.util.dataclassNonDefaults(cancelled_trade.order)
 
-        del order_kwarg_dict["orderId"]
-        del order_kwarg_dict["permId"]
-        del order_kwarg_dict["clientId"]
-        del order_kwarg_dict["softDollarTier"]
+        for key in ("orderId", "permId", "softDollarTier", "clientId"):
+            if order_kwarg_dict.get(key):
+                del order_kwarg_dict[key]
 
         if order_kwarg_dict["orderType"] == "FIX PEGGED":
             order_kwarg_dict["orderType"] = "TRAIL"
