@@ -141,7 +141,7 @@ def is_active(
 ) -> bool:
     """
     Given list of trading hours tuples from `.process_trading_hours`
-    check if the market is active at the moment.
+    check if market is active at the moment.
     """
     if not time_tuples:
         return True

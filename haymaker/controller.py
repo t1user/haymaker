@@ -141,7 +141,7 @@ class Controller(Atom):
         """
         This method is scheduled to run once a day in :class:`.app.App`
         """
-        log.warning(f"Running roll: {args} on controller object: {id(self)}")
+        log.info(f"Running roll: {args} on controller object: {id(self)}")
         self.roller.roll()
 
     async def sync(self, *args) -> None:
@@ -663,11 +663,12 @@ class FutureRoller:
                         (old_future.symbol == new_future.symbol)
                         and (old_future.exchange == new_future.exchange)
                         and (old_future.multiplier == new_future.multiplier)
+                        and (old_future.conId != new_future.conId)
                     )
                 )
             )
         except StopIteration:
-            log.error(f"No replacement contract for expring: {old_future}")
+            log.error(f"No replacement contract for expiring: {old_future}")
             return old_future
 
     def roll(self):
@@ -677,8 +678,11 @@ class FutureRoller:
             )
         for old_contract in contracts:
             new_contract = self.match_old_to_new_future(old_contract)
-            self.trade(old_contract, new_contract)
-            self.adjust_records_and_orders_for_contract(old_contract, new_contract)
+            if new_contract.conId != old_contract.conId:
+                self.trade(old_contract, new_contract)
+                self.adjust_records_and_orders_for_contract(old_contract, new_contract)
+            else:
+                log.error(f"Abandoning roll, no replacement found: {old_contract}")
 
     def trade(self, old_contract: ibi.Future, new_contract: ibi.Future) -> ibi.Trade:
         combo = self.make_combo(old_contract, new_contract)
@@ -691,7 +695,7 @@ class FutureRoller:
             combo,
             order,
             "FUTURE_ROLL",
-            self.sm.strategy["FUTURE_ROLL"],
+            self.sm.strategy["future_roll"],
         )
 
     @staticmethod

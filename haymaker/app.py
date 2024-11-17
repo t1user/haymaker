@@ -4,6 +4,7 @@ import logging
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Protocol, cast
+from zoneinfo import ZoneInfo
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -91,14 +92,13 @@ class App:
         log.debug(f"App initiated: {self}")
 
     def schedule_future_roll(self):
-        roll_time = CONFIG.get("future_roll_time", 14)
+        roll_time = CONFIG.get("future_roll_time", (10, 0))
+        roll_timezone = ZoneInfo(CONFIG.get("future_roll_timezone", "America/New_York"))
+        rt = datetime.time(*roll_time, tzinfo=roll_timezone)
         CONTROLLER.set_no_future_roll_strategies(self.no_future_roll_strategies)
-        scheduler = ev.Event.timerange(
-            start=datetime.time(roll_time, tzinfo=datetime.timezone.utc),
-            step=datetime.timedelta(days=1),
-        )
+        scheduler = ev.Event.timerange(start=rt, step=datetime.timedelta(days=1))
         scheduler += CONTROLLER.roll_futures
-        log.debug(f"Future roll scheduled for {roll_time} UTC")
+        log.debug(f"Future roll scheduled for {rt}")
 
     def onErr(  # don't want word 'error' in logs, unless it's a real error
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract

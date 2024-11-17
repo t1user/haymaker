@@ -22,7 +22,8 @@ app:
     !!python/object/apply:ib_insync.Forex
     - EURUSD
   probeTimeout: 4
-  future_roll_time: 14   # hour at which future rolls will be executed
+  future_roll_time: (10, 0)   # time when future rolls are executed, must be a tuple (hour, minute)
+  future_roll_timezone: "America/New_York" # must be a string acceptable by ZoneInfo
   
 controller:
   use_blotter: True
