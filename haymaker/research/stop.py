@@ -349,6 +349,7 @@ class BlipContext(Context):
             self.close_position()
         else:
             self.eval_brackets()
+            self.eval_adjust()
 
     def eval_for_open(self) -> None:
         if self.blip:
