@@ -139,6 +139,7 @@ class PacingViolationRegistry:
     def onError(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
+        log.debug(f"Error: {errorCode}: {errorString} for {contract}")
         if "pacing violation" in errorString:
             self.register(reqId, errorCode, errorString, contract)
 
