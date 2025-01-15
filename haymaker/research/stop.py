@@ -313,6 +313,12 @@ class Context:
             if p := getattr(bracket, "evaluate")(self.high, self.low, self.price):
                 self.stop_price = p * -self.position
                 self.position = 0
+                if (self.position == 0) & (self.stop_price == 0):
+                    raise ValueError(
+                        "Position has been closed by a bracket "
+                        "but no transaction price given"
+                    )
+                return
 
     def eval_adjust(self) -> None:
         self.stop = self.adjust.evaluate(self.stop, self.high, self.low)
