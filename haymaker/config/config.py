@@ -49,6 +49,8 @@ class Config(ChainMap):
 
     @property
     def cmdline(self) -> collections.abc.MutableMapping:
+        if "test" in sys.argv[0]:
+            return {}
         cmdline = CustomArgParser.from_args(sys.argv).output
         if file := cmdline.get("file"):
             self.file = Path.cwd() / file
