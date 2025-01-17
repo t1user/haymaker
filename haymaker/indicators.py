@@ -715,15 +715,17 @@ def zero_crosser(indicator: pd.Series) -> pd.Series:
 
 
 def inout_range(
-    s: pd.Series, threshold: float = 0, inout: Literal["inside", "outside"] = "inside"
+    s: pd.Series,
+    threshold: float | pd.Series = 0,
+    inout: Literal["inside", "outside"] = "inside",
 ) -> pd.Series:
     """Given a threshold, return True/False series indicating whether s prices
     are inside/outside (-threshold, threshold) range.
     """
 
-    if threshold == 0:
+    if isinstance(threshold, (int, float)) and threshold == 0:
         raise ValueError("theshold cannot be zero, use: <zero_crosser>")
-    threshold = abs(threshold)
+    threshold = abs(threshold)  # type: ignore
     excess = s.abs() - threshold
     if inout == "outside":
         result = excess > 0
@@ -755,7 +757,7 @@ def _signed_range_entry(entry: pd.Series, sign: pd.Series) -> pd.Series:
 
 def range_blip(
     indicator: pd.Series,
-    threshold: float = 0,
+    threshold: float | pd.Series = 0,
     inout: Literal["inside", "outside"] = "inside",
 ) -> pd.Series:
     """
