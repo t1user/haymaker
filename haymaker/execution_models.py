@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 from uuid import uuid4
 
 import ib_insync as ibi
@@ -53,9 +53,9 @@ class AbstractExecModel(Atom, ABC):
 
     def __init__(
         self,
-        orders: Optional[dict[OrderKey, dict[str, Any]]] = None,
+        orders: dict[OrderKey, dict[str, Any]] | None = None,
         *,
-        controller: Optional[Controller] = None,
+        controller: Controller | None = None,
     ) -> None:
         super().__init__()
         self.strategy: str = ""  # placeholder, defined in onStart
@@ -195,10 +195,10 @@ class BaseExecModel(AbstractExecModel):
     ) -> ibi.Trade:
         return self.controller.trade(self.strategy, contract, order, action, self.data)
 
-    def cancel(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
+    def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
         return self.controller.cancel(trade)
 
-    def get_ticker(self, contract) -> Optional[ibi.Ticker]:
+    def get_ticker(self, contract) -> ibi.Ticker | None:
         for t in self.ib.tickers():
             if t.contract == contract:
                 return t
@@ -233,7 +233,7 @@ class BaseExecModel(AbstractExecModel):
     def open(
         self,
         data: dict,
-        dynamic_order_kwargs: Optional[dict] = None,
+        dynamic_order_kwargs: dict | None = None,
     ) -> ibi.Trade:
         self.data.params["close"] = {}
         data["position_id"] = self.get_position_id(True)
@@ -258,8 +258,8 @@ class BaseExecModel(AbstractExecModel):
     def close(
         self,
         data: dict,
-        dynamic_order_kwargs: Optional[dict] = None,
-    ) -> Optional[ibi.Trade]:
+        dynamic_order_kwargs: dict | None = None,
+    ) -> ibi.Trade | None:
         self.data.params["close"] = data
         data["position_id"] = self.get_position_id()
         # THIS IS TEMPORARY ----> FIX ---> TODO
@@ -320,11 +320,11 @@ class EventDrivenExecModel(BaseExecModel):
 
     def __init__(
         self,
-        orders: Optional[dict[OrderKey, Any]] = None,
+        orders: dict[OrderKey, Any] | None = None,
         *,
-        stop: Optional[AbstractBracketLeg] = None,
-        take_profit: Optional[AbstractBracketLeg] = None,
-        controller: Optional[Controller] = None,
+        stop: AbstractBracketLeg | None = None,
+        take_profit: AbstractBracketLeg | None = None,
+        controller: Controller | None = None,
     ):
         if not stop:
             raise TypeError(
@@ -342,7 +342,7 @@ class EventDrivenExecModel(BaseExecModel):
     def open(
         self,
         data: dict,
-        dynamic_order_kwargs: Optional[dict] = None,
+        dynamic_order_kwargs: dict | None = None,
     ) -> ibi.Trade:
         """
         Save information required for bracket orders and attach events
@@ -360,8 +360,8 @@ class EventDrivenExecModel(BaseExecModel):
     def close(
         self,
         data: dict,
-        dynamic_order_kwargs: Optional[dict] = None,
-    ) -> Optional[ibi.Trade]:
+        dynamic_order_kwargs: dict | None = None,
+    ) -> ibi.Trade | None:
         """
         Attach oca that will cancel any brackets after order execution.
         """

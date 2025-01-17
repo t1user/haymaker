@@ -7,7 +7,7 @@ import pickle
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Collection, Optional, Union
+from typing import Any, Callable, Collection
 
 import eventkit as ev  # type: ignore
 import pandas as pd
@@ -31,8 +31,7 @@ class AbstractBaseSaveManager(ABC):
         return self.save
 
     @abstractmethod
-    def save(self, data: Any, *args: str):
-        ...
+    def save(self, data: Any, *args: str): ...
 
     def __call__(self, data: Any, *args: str):
         return self.save(data, *args)
@@ -177,7 +176,7 @@ class PickleSaver(AbstractBaseSaver):
 
 
 class CsvSaver(AbstractBaseSaver):
-    _fieldnames: Optional[list[str]]
+    _fieldnames: list[str] | None
 
     def __init__(self, folder: str, name: str = "", timestamp: bool = True) -> None:
         self.path = default_path(folder)
@@ -251,7 +250,7 @@ class ArcticSaver(AbstractBaseSaver):
 
 class MongoSaver(AbstractBaseSaver):
     def __init__(
-        self, collection: str, query_key: Optional[str] = None, timestamp: bool = False
+        self, collection: str, query_key: str | None = None, timestamp: bool = False
     ) -> None:
         """
         `query_key` if for type of records that need to be recalled
@@ -289,7 +288,7 @@ class MongoSaver(AbstractBaseSaver):
     def save_many(self, data: list[dict[str, Any]]) -> None:
         self.collection.insert_many(data)
 
-    def read(self, query: Optional[dict] = None) -> list:
+    def read(self, query: dict | None = None) -> list:
         if query is None:
             query = {}
         return [i for i in self.collection.find(query)]
@@ -312,10 +311,10 @@ class FakeMongoSaver(AbstractBaseSaver):
     :attr:`.store` has all the data that would have been saved.
     """
 
-    store: dict[str, Union[dict, list[dict]]] = {}
+    store: dict[str, dict | list[dict]] = {}
 
     def __init__(
-        self, collection: str, query_key: Optional[str] = None, timestamp: bool = False
+        self, collection: str, query_key: str | None = None, timestamp: bool = False
     ) -> None:
         host = CONFIG["MongoSaver"]["host"]
         port = CONFIG["MongoSaver"]["port"]
@@ -353,7 +352,7 @@ class FakeMongoSaver(AbstractBaseSaver):
             else:
                 self.store[self.collection].append(d)  # type: ignore
 
-    def read(self, query: Optional[dict] = None) -> list:
+    def read(self, query: dict | None = None) -> list:
         s = self.store[self.collection]
         if query:
             try:

@@ -1,8 +1,7 @@
 import logging
-from typing import List, Optional, Union
 
 import numpy as np
-from arctic import Arctic  # type: ignore
+from arctic import Arctic
 from ib_insync import IB, ContFuture, Future, MarketOrder  # noqa
 
 from .datastore import AbstractBaseStore
@@ -11,7 +10,7 @@ log = logging.getLogger(__name__)
 
 
 def update_details(
-    ib: IB, store: AbstractBaseStore, keys: Optional[Union[str, List[str]]] = None
+    ib: IB, store: AbstractBaseStore, keys: str | list[str] | None = None
 ) -> None:
     """
     Pull contract details from ib and update metadata in store.

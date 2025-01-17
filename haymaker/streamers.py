@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections import UserDict, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, ClassVar, Optional, cast
+from typing import Awaitable, Callable, ClassVar, cast
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -28,11 +28,11 @@ class Timeout:
     time: float
     event: ev.Event
     ib: ibi.IB
-    details: Optional[Details] = None
+    details: Details | None = None
     name: str = ""
     debug: bool = TIMEOUT_DEBUG
-    _timeout: Optional[ev.Event] = field(repr=False, default=None)
-    _now: Optional[datetime] = None  # for testing only
+    _timeout: ev.Event | None = field(repr=False, default=None)
+    _now: datetime | None = None  # for testing only
 
     def __post_init__(self):
         if self.time:
@@ -109,7 +109,7 @@ class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
     timeout: float = TIMEOUT_TIME
     _counter: ClassVar[Callable[[], int]] = itertools.count().__next__
-    _name: Optional[str] = None
+    _name: str | None = None
     _timers: TimeoutContainerDefaultdict = TimeoutContainerDefaultdict(
         cast(Callable, TimeoutContainer)
     )
@@ -188,7 +188,7 @@ class HistoricalDataStreamer(Streamer):
     formatDate: int = 2  # don't change
     incremental_only: bool = True
     startup_seconds: float = 5
-    _last_bar_date: Optional[datetime] = None
+    _last_bar_date: datetime | None = None
     _future_adjust = False  # flag that future needs to be adjusted
 
     def __post_init__(self):

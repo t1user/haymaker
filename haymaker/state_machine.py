@@ -7,7 +7,7 @@ from collections import UserDict, defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from functools import partial
-from typing import Any, Iterator, Optional, TypeVar, Union
+from typing import Any, Iterator, TypeVar
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -114,8 +114,8 @@ class OrderContainer(UserDict):
         return (oi for oi in self.values() if (oi.strategy == strategy and oi.active))
 
     def get(
-        self, key: int, default: Optional[T] = None, active_only: bool = False
-    ) -> Union[OrderInfo, T, None]:
+        self, key: int, default: T | None = None, active_only: bool = False
+    ) -> OrderInfo | T | None:
         """Get records for an order."""
         try:
             value = self[key]
@@ -331,7 +331,7 @@ class StateMachine:
     about state required by any object must be found here.
     """
 
-    _instance: Optional["StateMachine"] = None
+    _instance: "StateMachine" | None = None
 
     _save_order = AsyncSaveManager(order_saver)
     _save_model = AsyncSaveManager(model_saver)
@@ -365,7 +365,7 @@ class StateMachine:
     def clear_models(self):
         self._data.clear()
 
-    def update_trade(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
+    def update_trade(self, trade: ibi.Trade) -> ibi.Trade | None:
         """
         Update trade object for a given order.  Used after re-start to
         bring records up to date with IB.  Non-restart syncs just
@@ -498,12 +498,12 @@ class StateMachine:
         """
         return self._data.strategies_by_contract()
 
-    def strategy_for_order(self, orderId: int) -> Optional[Strategy]:
+    def strategy_for_order(self, orderId: int) -> Strategy | None:
         if oi := self.order.get(orderId):
             return self.strategy.get(oi.strategy)
         return None
 
-    def strategy_for_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
+    def strategy_for_trade(self, trade: ibi.Trade) -> Strategy | None:
         return self.strategy_for_order(trade.order.orderId)
 
     def orders_for_strategy(self, strategy: str) -> list[OrderInfo]:

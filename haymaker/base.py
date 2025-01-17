@@ -13,7 +13,6 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
-    Union,
     cast,
 )
 
@@ -28,7 +27,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-ContractOrSequence = Union[Sequence[ibi.Contract], ibi.Contract]
+ContractOrSequence = Sequence[ibi.Contract] | ibi.Contract
 
 
 class ContractManagingDescriptor:
@@ -37,7 +36,7 @@ class ContractManagingDescriptor:
         self.name = name
 
     def __set__(
-        self, obj: Atom, value: Union[ibi.Contract, collections.abc.Sequence]
+        self, obj: Atom, value: ibi.Contract | collections.abc.Sequence
     ) -> None:
         if not isinstance(value, (ibi.Contract, collections.abc.Sequence)):
             raise TypeError(
@@ -47,7 +46,7 @@ class ContractManagingDescriptor:
         obj.__dict__[self.name] = value
         self._register_contract(obj, value)
 
-    def __get__(self, obj: Atom, type=None) -> Union[list[ibi.Contract], ibi.Contract]:
+    def __get__(self, obj: Atom, type=None) -> list[ibi.Contract] | ibi.Contract:
         # some methods rely on not raising an error here if attr self.name not set
         contract = obj.__dict__.get(self.name)
         return self._swap_contfuture(contract, obj.contracts)
@@ -169,7 +168,7 @@ class Atom:
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
 
     @property
-    def details(self) -> Union[Details, DetailsContainer]:
+    def details(self) -> Details | DetailsContainer:
         """
         If :attr:`contract` is set :attr:`details` will be received
         only for this contract, otherwise :attr:`details` will return
@@ -207,16 +206,16 @@ class Atom:
         self._contract_memo = self.contract
         self.startEvent.emit(data, self)
 
-    def onData(self, data: dict, *args) -> Union[Awaitable[None], None]:
+    def onData(self, data: dict, *args) -> Awaitable[None] | None:
         data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
         return None
 
-    def onFeedback(self, data, *args) -> Union[Awaitable[None], None]:
+    def onFeedback(self, data, *args) -> Awaitable[None] | None:
         return None
 
     def onContractChanged(
         self, old_contract: ibi.Future, new_contract: ibi.Future
-    ) -> Union[Awaitable[None], None]:
+    ) -> Awaitable[None] | None:
         """This is not chained."""
         log.warning(
             f"Contract on {self} changed from {old_contract.symbol} "

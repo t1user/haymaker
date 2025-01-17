@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Type, Union
+from typing import Any, Type
 
 from .base import Atom
 from .misc import Action, Signal, sign
@@ -55,12 +55,12 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
 
     def __init__(
         self,
-        signal_fields: Union[str, tuple[str, str], list[str]] = "signal",
-        state_machine: Optional[StateMachine] = None,
+        signal_fields: str | tuple[str, str] | list[str] = "signal",
+        state_machine: StateMachine | None = None,
     ) -> None:
         # passing state machine is only for testing
         if state_machine:
-            self.sm = state_machine
+            self.sm = state_machine  # type: ignore
 
         if isinstance(signal_fields, str):
             self.signal_in_field = self.signal_out_field = signal_fields
@@ -117,7 +117,7 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
 
     def process_signal(
         self, strategy: str, signal_in: Signal, signal_out: Signal
-    ) -> Optional[Action]:
+    ) -> Action | None:
         if not self.position(strategy):
             return self.process_no_position(strategy, signal_in)
         elif not self.same_direction(strategy, signal_out):
@@ -137,13 +137,13 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
         """Is signal and position in the same direction?"""
         return self.position(strategy) == signal
 
-    def process_position(self, strategy: str, signal: Signal) -> Optional[Action]:
+    def process_position(self, strategy: str, signal: Signal) -> Action | None:
         if signal == 0:
             return self.process_zero_signal_position(strategy, signal)
         else:
             return self.process_non_zero_signal_position(strategy, signal)
 
-    def process_no_position(self, strategy: str, signal: Signal) -> Optional[Action]:
+    def process_no_position(self, strategy: str, signal: Signal) -> Action | None:
         if signal == 0:
             return self.process_zero_signal_no_position(strategy, signal)
         else:
@@ -152,31 +152,30 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
     def __repr__(self):
         return self.__class__.__name__ + "()"
 
-    def process_zero_signal_no_position(self, strategy, signal) -> Optional[Action]:
+    def process_zero_signal_no_position(self, strategy, signal) -> Action | None:
         return None
 
     @abstractmethod
-    def process_zero_signal_position(self, strategy, signal) -> Optional[Action]:
-        ...
+    def process_zero_signal_position(self, strategy, signal) -> Action | None: ...
 
     @abstractmethod
-    def process_non_zero_signal_position(self, strategy, signal) -> Optional[Action]:
-        ...
+    def process_non_zero_signal_position(self, strategy, signal) -> Action | None: ...
 
     @abstractmethod
-    def process_non_zero_signal_no_position(self, strategy, signal) -> Optional[Action]:
-        ...
+    def process_non_zero_signal_no_position(
+        self, strategy, signal
+    ) -> Action | None: ...
 
 
 class BinarySignalProcessor(AbstractBaseBinarySignalProcessor):
-    def process_zero_signal_position(self, strategy, signal) -> Optional[Action]:
+    def process_zero_signal_position(self, strategy, signal) -> Action | None:
         return None
 
-    def process_non_zero_signal_position(self, strategy, signal) -> Optional[Action]:
+    def process_non_zero_signal_position(self, strategy, signal) -> Action | None:
         # We've already checked signal is not same direction as position
         return "CLOSE"
 
-    def process_non_zero_signal_no_position(self, strategy, signal) -> Optional[Action]:
+    def process_non_zero_signal_no_position(self, strategy, signal) -> Action | None:
         return "OPEN"
 
 
@@ -193,8 +192,8 @@ class LockableBinarySignalProcessor(AbstractBaseBinarySignalProcessor):
 
     def __init__(
         self,
-        signal_fields: Union[str, tuple[str, str], list[str]] = "signal",
-        state_machine: Optional[StateMachine] = None,
+        signal_fields: str | tuple[str, str] | list[str] = "signal",
+        state_machine: StateMachine | None = None,
     ) -> None:
         self._lock_direction = 0
         self._lock = False
@@ -209,15 +208,15 @@ class LockableBinarySignalProcessor(AbstractBaseBinarySignalProcessor):
         self._lock = self._lock_direction == signal
         return self._lock
 
-    def process_zero_signal_position(self, strategy, signal) -> Optional[Action]:
+    def process_zero_signal_position(self, strategy, signal) -> Action | None:
         return "CLOSE"
 
-    def process_non_zero_signal_position(self, strategy, signal) -> Optional[Action]:
+    def process_non_zero_signal_position(self, strategy, signal) -> Action | None:
         # We've already checked signal is not same direction as position
         # Zero signal means "CLOSE", oppposite signal means "REVERSE"
         return "REVERSE"
 
-    def process_non_zero_signal_no_position(self, strategy, signal) -> Optional[Action]:
+    def process_non_zero_signal_no_position(self, strategy, signal) -> Action | None:
         if self.locked(strategy, signal):
             return None
         else:
@@ -234,10 +233,10 @@ class LockableBlipBinarySignalProcessor(LockableBinarySignalProcessor):
     * Zero signals ignored
     """
 
-    def process_zero_signal_position(self, strategy, signal) -> Optional[Action]:
+    def process_zero_signal_position(self, strategy, signal) -> Action | None:
         return None
 
-    def process_non_zero_signal_position(self, strategy, signal) -> Optional[Action]:
+    def process_non_zero_signal_position(self, strategy, signal) -> Action | None:
         # We've already checked signal is not same direction as position
         # Zero signal means "CLOSE", oppposite signal means "REVERSE"
         return "CLOSE"
@@ -246,8 +245,8 @@ class LockableBlipBinarySignalProcessor(LockableBinarySignalProcessor):
 class AlwaysOnLockableBinarySignalProcessor(LockableBinarySignalProcessor):
     def __init__(
         self,
-        signal_fields: Union[str, tuple[str, str], list[str]] = "signal",
-        state_machine: Optional[StateMachine] = None,
+        signal_fields: str | tuple[str, str] | list[str] = "signal",
+        state_machine: StateMachine | None = None,
     ) -> None:
         super().__init__(signal_fields, state_machine)
         if self.signal_in_field != self.signal_out_field:
@@ -261,15 +260,15 @@ class AlwaysOnLockableBinarySignalProcessor(LockableBinarySignalProcessor):
 class AlwaysOnBinarySignalProcessor(BinarySignalProcessor):
     def __init__(
         self,
-        signal_fields: Union[str, tuple[str, str], list[str]] = "signal",
-        state_machine: Optional[StateMachine] = None,
+        signal_fields: str | tuple[str, str] | list[str] = "signal",
+        state_machine: StateMachine | None = None,
     ) -> None:
         super().__init__(signal_fields, state_machine)
         if self.signal_in_field != self.signal_out_field:
             log.exception(f"{self} requires single signal field, not {signal_fields}")
             raise
 
-    def process_non_zero_signal_position(self, strategy, signal) -> Optional[Action]:
+    def process_non_zero_signal_position(self, strategy, signal) -> Action | None:
         return "REVERSE"
 
 

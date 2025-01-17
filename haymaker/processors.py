@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import logging
 import operator as op
-from typing import List, Literal, Optional, Union
+from typing import Literal
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -13,7 +15,7 @@ log = logging.getLogger(__name__)
 class BarAggregator(Atom):
     def __init__(
         self,
-        filter: Union["CountBars", "VolumeBars", "TimeBars", "NoFilter"],
+        filter: "CountBars" | "VolumeBars" | "TimeBars" | "NoFilter",
         incremental_only: bool = False,
         future_adjust_type: Literal["add", "mul", None] = "add",
         debug: bool = False,
@@ -102,7 +104,7 @@ class BarAggregator(Atom):
         self._future_adjust = False
 
 
-class BarList(List[ibi.BarData]):
+class BarList(list[ibi.BarData]):
     def __init__(self, *args):
         super().__init__(*args)
         self.updateEvent = ibi.Event("updateEvent")
@@ -119,9 +121,7 @@ class CountBars(ev.Op):
 
     bars: BarList
 
-    def __init__(
-        self, count: int, source: Optional[ev.Event] = None, *, label: str = ""
-    ):
+    def __init__(self, count: int, source: ev.Event | None = None, *, label: str = ""):
         ev.Op.__init__(self, source)
         self._count = count
         self.bars = BarList()
@@ -152,7 +152,7 @@ class VolumeBars(ev.Op):
     bars: BarList
 
     def __init__(
-        self, volume: int, source: Optional[ev.Event] = None, *, label: str = ""
+        self, volume: int, source: ev.Event | None = None, *, label: str = ""
     ) -> None:
         ev.Op.__init__(self, source)
         self._volume = volume
@@ -194,7 +194,7 @@ class TickBars(ev.Op):
     bars: BarList
 
     def __init__(
-        self, count: int, source: Optional[ev.Event] = None, *, label: str = ""
+        self, count: int, source: ev.Event | None = None, *, label: str = ""
     ) -> None:
         ev.Op.__init__(self, source)
         self._count = count
@@ -226,7 +226,7 @@ class TimeBars(ev.Op):
     bars: BarList
 
     def __init__(
-        self, timer, source: Optional[ev.Event] = None, *, label: str = ""
+        self, timer, source: ev.Event | None = None, *, label: str = ""
     ) -> None:
         ev.Op.__init__(self, source)
         self._timer = timer
@@ -275,7 +275,7 @@ class NoFilter(ev.Op):
 
     bars: BarList
 
-    def __init__(self, source: Optional[ev.Event] = None, *, label: str = "") -> None:
+    def __init__(self, source: ev.Event | None = None, *, label: str = "") -> None:
         ev.Op.__init__(self, source)
         self.bars = BarList()
         self.label = label

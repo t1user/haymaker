@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Callable, Dict, Literal, Optional, Tuple, Union
+from typing import Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -57,10 +57,7 @@ get_ATR = atr
 
 
 def resample(
-    df: Union[pd.DataFrame, pd.Series],
-    freq: str,
-    how: Optional[Dict[str, str]] = None,
-    **kwargs
+    df: pd.DataFrame | pd.Series, freq: str, how: dict[str, str] | None = None, **kwargs
 ) -> pd.DataFrame:
     """Shortcut function to resample ohlc dataframe or close price series.
     Args:
@@ -137,7 +134,7 @@ def weighted_resample(
 
 
 def downsampled_func(
-    df: Union[pd.DataFrame, pd.Series], freq: str, func: Callable, *args, **kwargs
+    df: pd.DataFrame | pd.Series, freq: str, func: Callable, *args, **kwargs
 ) -> pd.Series:
     """
     Calculate <func> over lower frequency than df and fill forward values.
@@ -349,9 +346,9 @@ def majority_function(data: pd.DataFrame) -> pd.Series:
 
 def get_min_max_df(
     data: pd.Series,
-    periods: Tuple[int],
+    periods: tuple[int],
     func: Callable[[pd.Series, int], pd.DataFrame] = get_min_max,
-) -> Dict[str, pd.DataFrame]:
+) -> dict[str, pd.DataFrame]:
     """
     Given a list of periods, return func on each of those periods.
     This is bullshit.
@@ -366,7 +363,7 @@ def get_min_max_df(
     return {"min": mins, "max": maxs}
 
 
-def get_signals(data: pd.Series, periods: Tuple[int]) -> pd.DataFrame:
+def get_signals(data: pd.Series, periods: tuple[int]) -> pd.DataFrame:
     min_max = get_min_max_df(data, periods)
     return pd.DataFrame(
         {
@@ -376,7 +373,7 @@ def get_signals(data: pd.Series, periods: Tuple[int]) -> pd.DataFrame:
     )
 
 
-def any_signal(data: pd.Series, periods: Tuple[int]) -> pd.Series:
+def any_signal(data: pd.Series, periods: tuple[int]) -> pd.Series:
     min_max = get_min_max_df(data, periods)
     return min_max["max"].any(axis=1) * 1 - min_max["min"].any(axis=1) * 1
 
@@ -636,8 +633,8 @@ def chande_momentum_indicator(
 
 def join_swing(
     df: pd.DataFrame,
-    f: Union[float, np.ndarray, pd.Series],
-    margin: Optional[Union[float, pd.Series]] = None,
+    f: float | np.ndarray | pd.Series,
+    margin: float | pd.Series | None = None,
 ) -> pd.DataFrame:
     """
     Return original df with added columns that result from applying

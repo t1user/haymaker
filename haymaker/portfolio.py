@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from .base import Atom
 
@@ -20,7 +19,7 @@ class AbstractBasePortfolio(ABC):
     instances, which should delegate allocation to this object.
     """
 
-    instance: Optional[AbstractBasePortfolio] = None
+    instance: AbstractBasePortfolio | None = None
 
     def __new__(cls, *args, **kwargs):
         if Atom in cls.__mro__:

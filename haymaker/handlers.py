@@ -1,16 +1,14 @@
 # ### NOT IN USE ###
 # TODO: needs review
 
-import asyncio
 import logging
-from contextlib import suppress
 from functools import partial
 from typing import Dict, Set, Tuple
 
 import ib_insync as ibi
 from ib_insync.ibcontroller import Watchdog
 
-from .blotter import AbstractBaseBlotter
+from .blotter import Blotter
 
 log = logging.getLogger(__name__)
 
@@ -301,7 +299,7 @@ class BaseTradeHandler:
 
 
 class ReportTradeHandler(BaseTradeHandler):
-    def __init__(self, blotter: AbstractBaseBlotter) -> None:
+    def __init__(self, blotter: Blotter) -> None:
         self.blotter = blotter
 
     def attach_events(self, trade: ibi.Trade, reason: str = "") -> None:

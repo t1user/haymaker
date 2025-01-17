@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import cached_property, partial
-from typing import Optional
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -33,12 +32,12 @@ class Controller(Atom):
 
     """
 
-    blotter: Optional[Blotter]
+    blotter: Blotter | None
     config = CONFIG.get("controller") or {}
 
     def __init__(
         self,
-        trader: Optional[Trader] = None,
+        trader: Trader | None = None,
     ):
         super().__init__()
         self.trader = trader or Trader(self.ib)
@@ -215,7 +214,7 @@ class Controller(Atom):
         trade.filledEvent += partial(self.log_trade, reason=action, strategy=strategy)
         return trade
 
-    def cancel(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
+    def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
         return self.trader.cancel(trade)
 
     async def onNewOrderEvent(self, trade: ibi.Trade) -> None:
@@ -387,7 +386,7 @@ class Controller(Atom):
         else:
             log.error(f"Wrong position for {contract} - {log_str_position}")
 
-    def _assign_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
+    def _assign_trade(self, trade: ibi.Trade) -> Strategy | None:
 
         # assumed unknown trade is to close a position
         active_strategies_list = [
@@ -433,7 +432,7 @@ class Controller(Atom):
         strategy["active_contract"] = trade.contract
         return strategy
 
-    def assign_manual_trade(self, trade: ibi.Trade) -> Optional[Strategy]:
+    def assign_manual_trade(self, trade: ibi.Trade) -> Strategy | None:
 
         if trade.order.orderId >= 0:
             return None

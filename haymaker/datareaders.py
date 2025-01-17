@@ -1,6 +1,6 @@
 import pickle
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Type, TypeVar
 
 import pandas as pd
 
@@ -76,7 +76,7 @@ def read_contracts(store: AbstractBaseStore, symbol: str, ending: str = "CONTFUT
     return sorted(contracts)
 
 
-def concat_futures(contracts: List[Contract]) -> pd.DataFrame:
+def concat_futures(contracts: list[Contract]) -> pd.DataFrame:
     dfs = [contract.data for contract in contracts]
     df = pd.concat(dfs)
     return df[~df.index.duplicated(keep="last")].sort_index()
@@ -99,11 +99,11 @@ T = TypeVar("T", bound="SyntheticContFuture")
 class SyntheticContFuture:
     symbol: str
     df: pd.DataFrame = field(repr=False)
-    meta: Dict[Any, Any] = field(repr=False)
-    name: Optional[str] = field(init=False)
+    meta: dict = field(repr=False)
+    name: str | None = field(init=False)
     start_date: pd.Timestamp = field(init=False)
     end_date: pd.Timestamp = field(init=False)
-    contracts: List[int] = field(default_factory=list, repr=False)
+    contracts: list[int] = field(default_factory=list, repr=False)
 
     @classmethod
     def create(cls: Type[T], store: AbstractBaseStore, symbol: str) -> T:
@@ -149,18 +149,18 @@ class SaveData:
 
     """
 
-    symbols: List[str]
-    data: List[SyntheticContFuture] = field(default_factory=list, repr=False)
-    _dict: Optional[Dict[str, int]] = field(init=False, repr=False, default=None)
-    _review: Optional[pd.DataFrame] = field(init=False, repr=False, default=None)
+    symbols: list[str]
+    data: list[SyntheticContFuture] = field(default_factory=list, repr=False)
+    _dict: dict[str, int] | None = field(init=False, repr=False, default=None)
+    _review: pd.DataFrame | None = field(init=False, repr=False, default=None)
 
     @classmethod
-    def create(cls: Type[S], store: AbstractBaseStore, symbols: List[str]) -> S:
+    def create(cls: Type[S], store: AbstractBaseStore, symbols: list[str]) -> S:
         data = [SyntheticContFuture.create(store, s) for s in symbols]
         return cls(symbols, data)
 
     @property
-    def dict(self):
+    def dict(self) -> dict[str, int]:
         self._dict = self._dict or {c.symbol: i for i, c in enumerate(self.data)}
         return self._dict
 
@@ -172,7 +172,7 @@ class SaveData:
                 f"Unknown symbol: {symbol}, available symbols: {self.symbols}"
             )
 
-    def meta(self, symbol: str) -> Dict[Any, Any]:
+    def meta(self, symbol: str) -> dict:  # type: ignore
         return self.get(symbol).meta
 
     def df(self, symbol: str) -> pd.DataFrame:

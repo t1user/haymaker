@@ -4,7 +4,6 @@ import itertools
 import logging
 import random
 from datetime import datetime, timezone
-from typing import Optional
 
 import ib_insync as ibi
 
@@ -34,7 +33,7 @@ class Trader:
         log.info(f"Trade modified: {modified_trade}")
         return modified_trade
 
-    def cancel(self, trade: ibi.Trade) -> Optional[ibi.Trade]:
+    def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
         order = trade.order
         cancelled_trade = self.ib.cancelOrder(order)
         log.info(

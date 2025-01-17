@@ -7,7 +7,7 @@ import string
 from collections import UserDict
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Callable, Literal
 
 import ib_insync as ibi
 import pytz
@@ -109,8 +109,8 @@ def process_trading_hours(
     input_tz_ = pytz.timezone(input_tz)
     output_tz_ = pytz.timezone(output_tz)
 
-    def datetime_tuples(s: str) -> tuple[Optional[dt.datetime], Optional[dt.datetime]]:
-        def to_datetime(datetime_string: str) -> Optional[dt.datetime]:
+    def datetime_tuples(s: str) -> tuple[dt.datetime | None, dt.datetime | None]:
+        def to_datetime(datetime_string: str) -> dt.datetime | None:
             if datetime_string[-6:] == "CLOSED":
                 return None
             else:
@@ -136,8 +136,8 @@ def process_trading_hours(
 
 
 def is_active(
-    time_tuples: Optional[list[tuple[dt.datetime, dt.datetime]]] = None,
-    now: Optional[dt.datetime] = None,
+    time_tuples: list[tuple[dt.datetime, dt.datetime]] | None = None,
+    now: dt.datetime | None = None,
 ) -> bool:
     """
     Given list of trading hours tuples from `.process_trading_hours`
@@ -159,8 +159,8 @@ def is_active(
 
 
 def next_active(
-    time_tuples: Optional[list[tuple[dt.datetime, dt.datetime]]] = None,
-    now: Optional[dt.datetime] = None,
+    time_tuples: list[tuple[dt.datetime, dt.datetime]] | None = None,
+    now: dt.datetime | None = None,
 ) -> dt.datetime:
     """
     Given list of trading hours tuples from `.process_trading_hours`
@@ -219,7 +219,7 @@ def decode_tree(obj: Any) -> Any:
 
     def process_value(
         value: Any,
-    ) -> Union[bool, int, float, bytes, list, dt.datetime, str, None]:
+    ) -> bool | int | float | bytes | list | dt.datetime | str | None:
         if isinstance(value, dict):
             v = process_dict(value)
             return v

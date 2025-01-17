@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import singledispatchmethod
-from typing import Any, Union
+from typing import Any
 
 import ib_insync as ibi
 import pandas as pd
@@ -104,9 +104,8 @@ class AbstractDfBrick(AbstractBaseBrick):
     # this is most likely redundand as dataframe constructor can handle these types
     @_create_df.register(BarList)
     @_create_df.register(ibi.BarDataList)
-    def _(self, data: Union[BarList, ibi.BarDataList]) -> pd.DataFrame:
+    def _(self, data: BarList | ibi.BarDataList) -> pd.DataFrame:
         return self.df(ibi.util.df(data).set_index("date"))
 
     @abstractmethod
-    def df(self, data: pd.DataFrame) -> pd.DataFrame:
-        ...
+    def df(self, data: pd.DataFrame) -> pd.DataFrame: ...

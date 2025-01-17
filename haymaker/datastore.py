@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from datetime import datetime
 from functools import partial
-from typing import Any, DefaultDict, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -40,9 +40,7 @@ class AbstractBaseStore(ABC):
     """
 
     @abstractmethod
-    def write(
-        self, symbol: Union[str, Contract], data: pd.DataFrame, meta: dict = {}
-    ) -> Any:
+    def write(self, symbol: str | Contract, data: pd.DataFrame, meta: dict = {}) -> Any:
         """
         Write data to datastore. Implementation has to recognize whether
         string or Contract was passed, extract metadata and save it in
@@ -56,10 +54,10 @@ class AbstractBaseStore(ABC):
     @abstractmethod
     def read(
         self,
-        symbol: Union[str, Contract],
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-    ) -> Optional[pd.DataFrame]:
+        symbol: str | Contract,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame | None:
         """
         Read data from store for a given symbol. Implementation has to
         recognize whether str or Contract was passed and read metadata
@@ -70,19 +68,19 @@ class AbstractBaseStore(ABC):
         pass
 
     @abstractmethod
-    def delete(self, symbol: Union[str, Contract]):
+    def delete(self, symbol: str | Contract):
         """
         Implementation responsible for distinguishing between str and Contract.
         """
         pass
 
     @abstractmethod
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         """Return a list of symbols available in store."""
         pass
 
     @abstractmethod
-    def read_metadata(self, symbol: Union[Contract, str]) -> Dict:
+    def read_metadata(self, symbol: Contract | str) -> dict:
         """
         Public method for reading metadata for given symbol.
         Implementation must distinguish between str and Contract.
@@ -90,7 +88,7 @@ class AbstractBaseStore(ABC):
         pass
 
     @abstractmethod
-    def write_metadata(self, symbol: Union[Contract, str], meta: Dict) -> Any:
+    def write_metadata(self, symbol: Contract | str, meta: dict) -> Any:
         """
         Public method for writing metadata for given symbol.
         Implementation must distinguish between str and Contract.
@@ -99,13 +97,13 @@ class AbstractBaseStore(ABC):
         pass
 
     @abstractmethod
-    def override_metadata(self, symbol: str, meta: Dict[str, Any]) -> Any:
+    def override_metadata(self, symbol: str, meta: dict[str, Any]) -> Any:
         """
         Delete any existing metadata for symbol and replace it with meta.
         """
         pass
 
-    def _symbol(self, sym: Union[Contract, str]) -> str:
+    def _symbol(self, sym: Contract | str) -> str:
         """
         If Contract passed extract string that is used as key.
         Otherwise return the string passed.
@@ -116,8 +114,8 @@ class AbstractBaseStore(ABC):
             return sym
 
     def _update_metadata(
-        self, symbol: Union[Contract, str], meta: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, symbol: Contract | str, meta: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         To be used in implementations that override metadata. Read existing
         metadata, update by meta and return updated dictionary. Relies on
@@ -130,7 +128,7 @@ class AbstractBaseStore(ABC):
             _meta = meta
         return _meta
 
-    def _metadata(self, obj: Union[Contract, str]) -> Dict[str, Any]:
+    def _metadata(self, obj: Contract | str) -> dict[str, Any]:
         """
         If Contract passed extract metadata into a dict.
         Otherwise return empty dict.
@@ -164,7 +162,7 @@ class AbstractBaseStore(ABC):
         # df.drop(index=df[df.index.duplicated()].index, inplace=True)
         return df
 
-    def check_earliest(self, symbol: str) -> Optional[datetime]:
+    def check_earliest(self, symbol: str) -> datetime | None:
         """Return earliest date of available data for a given symbol."""
 
         try:
@@ -177,7 +175,7 @@ class AbstractBaseStore(ABC):
 
         return data.index.min()
 
-    def check_latest(self, symbol: str) -> Optional[datetime]:
+    def check_latest(self, symbol: str) -> datetime | None:
         """Return earliest date of available data for a given symbol."""
 
         try:
@@ -190,14 +188,14 @@ class AbstractBaseStore(ABC):
 
         return data.index.max()
 
-    def date_range(self, symbol: Optional[str] = None) -> pd.DataFrame:
+    def date_range(self, symbol: str | None = None) -> pd.DataFrame:
         """
         For every key in datastore return start date and end date
         of available data. If symbol is given, only keys related to
         the symbol will be included.
         """
 
-        range: Dict[Any, Any] = {}
+        range: dict = {}
         keys = self.keys()
         if symbol:
             keys = [k for k in keys if k.startswith(symbol)]
@@ -213,7 +211,7 @@ class AbstractBaseStore(ABC):
                     range[key] = (None, None)
         return pd.DataFrame(range).T.rename(columns={0: "from", 1: "to"})
 
-    def review(self, *field: str, symbol: Optional[str] = None) -> pd.DataFrame:
+    def review(self, *field: str, symbol: str | None = None) -> pd.DataFrame:
         """
         Return df with date_range together with some contract
         details. If symbol given, include only contracts related to
@@ -253,13 +251,13 @@ class AbstractBaseStore(ABC):
             pass
         return df
 
-    def _contfutures(self) -> List[str]:
+    def _contfutures(self) -> list[str]:
         """Return keys that correspond to contfutures"""
         return [c for c in self.keys() if c.endswith("CONTFUT")]
 
     def _contfutures_dict(
         self, field: str = "tradingClass"
-    ) -> DefaultDict[str, Dict[datetime, str]]:
+    ) -> defaultdict[str, dict[datetime, str]]:
         """
         Args:
         ----------
@@ -274,14 +272,14 @@ class AbstractBaseStore(ABC):
               values: dict of expiry date: symbol sorted ascending by expiry
                       date
         """
-        contfutures: DefaultDict[str, Dict[datetime, str]] = defaultdict(dict)
+        contfutures: defaultdict[str, dict[datetime, str]] = defaultdict(dict)
         for cf in self._contfutures():
             meta = self.read_metadata(cf)
             date = pd.to_datetime(meta["lastTradeDateOrContractMonth"])
             contfutures[meta[field]].update({date: cf})
 
         # sorting
-        ordered_contfutures: DefaultDict[str, Dict[datetime, str]] = defaultdict(dict)
+        ordered_contfutures: defaultdict[str, dict[datetime, str]] = defaultdict(dict)
         for k, v in contfutures.items():
             for i in sorted(v):
                 ordered_contfutures[k].update({i: v[i]})
@@ -292,7 +290,7 @@ class AbstractBaseStore(ABC):
 
     def latest_contfutures(
         self, index: int = -1, field: str = "tradingClass"
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Return a dictionary of contfutures for every tradingClass
         {tradingClass: symbol}. Relies on self._contfutures_dict.values()
@@ -326,8 +324,8 @@ class AbstractBaseStore(ABC):
         symbol: str,
         index: int = -1,
         field: str = "tradingClass",
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> pd.DataFrame:
         """
         Return data for latest contfuture for symbol
@@ -353,7 +351,7 @@ class AbstractBaseStore(ABC):
 
     def contfuture_contract_object(
         self, symbol: str, index: int = -1, field: str = "tradingClass"
-    ) -> Optional[Contract]:
+    ) -> Contract | None:
         """
         Return ib_insync object for latest contfuture for given exchange symbol
         (tradingClass).
@@ -393,9 +391,9 @@ class ArcticStore(AbstractBaseStore):
 
     def write(
         self,
-        symbol: Union[str, Contract],
+        symbol: str | Contract,
         data: pd.DataFrame,
-        meta: Optional[dict] = None,
+        meta: dict | None = None,
     ) -> str:
         metadata = self._metadata(symbol)
         if meta is not None:
@@ -409,10 +407,10 @@ class ArcticStore(AbstractBaseStore):
 
     def read(
         self,
-        symbol: Union[str, Contract],
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-    ) -> Optional[pd.DataFrame]:
+        symbol: str | Contract,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame | None:
         data = self.read_object(symbol, start_date, end_date)
         if data:
             return data.data
@@ -421,10 +419,10 @@ class ArcticStore(AbstractBaseStore):
 
     def read_object(
         self,
-        symbol: Union[str, Contract],
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-    ) -> Optional[VersionedItem]:
+        symbol: str | Contract,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> VersionedItem | None:
         """
         Return Arctic object, which contains data and full metadata.
 
@@ -447,31 +445,31 @@ class ArcticStore(AbstractBaseStore):
         except NoDataFoundException:
             return None
 
-    def delete(self, symbol: Union[str, Contract]) -> None:
+    def delete(self, symbol: str | Contract) -> None:
         self.store.delete(self._symbol(symbol))
 
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         return self.store.list_symbols()
 
-    def read_metadata(self, symbol: Union[str, Contract]) -> Dict:
+    def read_metadata(self, symbol: str | Contract) -> dict:
         try:
             return self.store.read_metadata(self._symbol(symbol)).metadata
         except (AttributeError, NoDataFoundException):
             return {}
 
     def write_metadata(
-        self, symbol: Union[Contract, str], meta: Dict[str, Any]
-    ) -> Optional[VersionedItem]:
+        self, symbol: Contract | str, meta: dict[str, Any]
+    ) -> VersionedItem | None:
         return self.store.write_metadata(
             self._symbol(symbol), self._update_metadata(symbol, meta)
         )
 
     def override_metadata(
-        self, symbol: str, meta: Dict[str, Any]
-    ) -> Optional[VersionedItem]:
+        self, symbol: str, meta: dict[str, Any]
+    ) -> VersionedItem | None:
         return self.store.write_metadata(symbol, meta)
 
-    def _metadata(self, obj: Union[Contract, str]) -> Dict[str, Dict[str, str]]:
+    def _metadata(self, obj: Contract | str) -> dict[str, dict[str, str]]:
         if isinstance(obj, Contract):
             meta = super()._metadata(obj)
             meta.update({"object": pickle.dumps(obj)})
@@ -502,32 +500,28 @@ class PyTablesStore(AbstractBaseStore):
         self.store = partial(pd.HDFStore, path)
         self.metastore = f"{path}/meta.pickle"
 
-    def write(
-        self, symbol: Union[str, Contract], data: pd.DataFrame, meta: dict = {}
-    ) -> str:
+    def write(self, symbol: str | Contract, data: pd.DataFrame, meta: dict = {}) -> str:
         _symbol = self._symbol(symbol)
         with self.store() as store:
             store.put(_symbol, self._clean(data))
         self._write_meta(_symbol, self._metadata(symbol))
         return f"{_symbol}"
 
-    def read(
-        self, symbol: Union[str, Contract], *args, **kwargs
-    ) -> Optional[pd.DataFrame]:
+    def read(self, symbol: str | Contract, *args, **kwargs) -> pd.DataFrame | None:
         with self.store() as store:
             data = store.get(self._symbol(symbol))
         assert isinstance(data, pd.DataFrame)
         return data
 
-    def delete(self, symbol: Union[str, Contract]) -> None:
+    def delete(self, symbol: str | Contract) -> None:
         self.store.remove(self._symbol(symbol))  # type: ignore
 
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         with self.store() as store:
             keys = store.keys()
         return keys
 
-    def read_metadata(self, symbol: Union[str, Contract]) -> dict:
+    def read_metadata(self, symbol: str | Contract) -> dict:
         """Return metadata for given symbol"""
         return self._read_meta()[self._symbol(symbol)]
 

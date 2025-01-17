@@ -9,7 +9,7 @@ authors = [
 ]
 description = 'Framework for trading with Interactive Brokers through ib_insync'
 readme = "README.md"
-requires-python = ">= 3.8"
+requires-python = ">= 3.10"
 keywords = ["ib_insync", "tws", "ibgateway", "asyncio",  "interactive brokers", "algo trading"]
 classifiers = [
             "Development Status :: 3 - Alpha",
