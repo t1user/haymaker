@@ -64,6 +64,7 @@ class BarAggregator(Atom):
     def onContractChanged(
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> None:
+        """THIS IS NOT IN USE!!!! WTF??????"""
         if isinstance(old_contract, ibi.Future) and isinstance(
             new_contract, ibi.Future
         ):

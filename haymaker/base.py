@@ -135,8 +135,8 @@ class DetailsContainer(UserDict):
 
 
 class ContractRollData(NamedTuple):
-    old_contract: ibi.Future
-    new_contract: ibi.Future
+    old_contract: ibi.Contract
+    new_contract: ibi.Contract
 
 
 class Atom:
@@ -189,6 +189,7 @@ class Atom:
         self.dataEvent = ibi.Event("dataEvent")
         self.feedbackEvent = ibi.Event("feedbackEvent")
         self.contractChangedEvent = ibi.Event("contractChangedEvent")
+        self.contractChangedEvent += self.onContractChanged
 
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
@@ -198,12 +199,12 @@ class Atom:
             # for k, v in data.items():
             #     setattr(self, k, v)
             self.__dict__.update(**data)
-        if self._contract_memo is None:
-            self._contract_memo = self.contract
-        # it will not fire if the system has been restarted after contract changed
-        # usless, TODO: consider removing
-        elif self._contract_memo != self.contract:
+        if (self._contract_memo is not None) and (self._contract_memo != self.contract):
+            # it will not fire if the system has been restarted after contract changed
+            # usless, TODO: consider removing
+            # cannot be relied on for rolls
             self.contractChangedEvent.emit(self._contract_memo, self.contract)
+        self._contract_memo = self.contract
         self.startEvent.emit(data, self)
 
     def onData(self, data: dict, *args) -> Union[Awaitable[None], None]:
