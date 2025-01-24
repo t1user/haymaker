@@ -98,7 +98,7 @@ class App:
         CONTROLLER.set_no_future_roll_strategies(self.no_future_roll_strategies)
         scheduler = ev.Event.timerange(start=rt, step=datetime.timedelta(days=1))
         scheduler += CONTROLLER.roll_futures
-        log.debug(f"Future roll scheduled for {rt}")
+        log.debug(f"Future roll scheduled for {rt} {rt.tzinfo.key}")
 
     def onErr(  # don't want word 'error' in logs, unless it's a real error
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract

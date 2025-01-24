@@ -130,6 +130,8 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
         Which side of the market is position on: (short: -1, long: 1,
         no position: 0)
         """
+        # record position state to assure that the logged value is the same as actually
+        # used for decision, rather than the one at the time of logging
         self._position = sign(self.sm.strategy[strategy].position)
         return self._position
 

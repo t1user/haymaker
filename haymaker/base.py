@@ -154,7 +154,6 @@ class Atom:
         "startEvent",
         "dataEvent",
         "feedbackEvent",
-        "contractChangedEvent",
     )
     contract = cast(ibi.Contract, ContractManagingDescriptor())
     _contract_memo: Optional[ibi.Contract] = None

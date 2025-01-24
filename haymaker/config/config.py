@@ -32,7 +32,9 @@ class Config(ChainMap):
         - environment variables
 
         - default yaml file (located in the same directory as
-          :class:`.Config`) named 'base_config.yaml'
+          :class:`.Config`) named 'base_config.yaml' for execution
+          module and 'dataloader_config.yaml' for dataloader module
+          (and 'base_config.yaml' for any other module)
     """
 
     def __init__(self) -> None:
@@ -49,6 +51,7 @@ class Config(ChainMap):
 
     @property
     def cmdline(self) -> collections.abc.MutableMapping:
+        # crutial exception to allow pytest work as a cli tool
         if "test" in sys.argv[0]:
             return {}
         cmdline = CustomArgParser.from_args(sys.argv).output

@@ -176,6 +176,7 @@ class Controller(Atom):
             log.debug("No connection. Abandoning sync.")
 
     def onStart(self, data, *args) -> None:
+        # prevent superclass from setting attributes here
         pass
 
     async def onData(self, data, *args) -> None:
@@ -357,7 +358,9 @@ class Controller(Atom):
         if order_infos:  # exists an order which is not a sl or tp
             # if order(s) still in execution don't check if position achieved yet
             while any([info.active for info in order_infos]):
-                log.warning(f"{strategy} taking long to achive target position...")
+                log.warning(
+                    f"{strategy} taking long to achive target position of {target}..."
+                )
                 await asyncio.sleep(delay)
 
         log_str = f"target: {target}, position: {data.position}"
