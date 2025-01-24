@@ -147,7 +147,8 @@ class Streamer(Atom, ABC):
     def onStart(self, data, *args) -> None:
         ticker = self.streaming_func()
         ticker.updateEvent += self.dataEvent
-        self.startEvent.emit(data, self)
+        # relies on superclass to emit startEvent
+        super().onStart(data)
 
     @property
     def timers(self) -> dict[str, ev.Event]:
@@ -156,8 +157,7 @@ class Streamer(Atom, ABC):
     @timers.setter
     def timers(self, event: ev.Event) -> None:
         raise ValueError(
-            "Stream event cannot be overridden. "
-            "Try using: `self.stream_event[key] = event`"
+            "timers cannot be overridden, use: `self.timers[key] = event` to add timer"
         )
 
     @property
@@ -223,16 +223,27 @@ class HistoricalDataStreamer(Streamer):
         # this starts subscription so that current price is readily available from ib
         stream = self.ib.reqMktData(self.contract, "221")
         self.timers["ticks"] = stream.updateEvent
-        self.startEvent.emit(data, self)
+        # bypass onStart in class Streamer
+        Atom.onStart(self, data)
 
     async def backfill(self, bars):
-        self.onStart({"startup": True})
+        # this will switch processor into backfill mode
+        self.startEvent.emit({"startup": True, "future_adjust": self._future_adjust})
         log.debug(
             f"Starting backfill {self.name}, pulled {len(bars)} bars, "
             f"last bar: {bars[-1]}"
         )
         if self._last_bar_date and self._future_adjust:
-            # emit new price for the last pricepoint as basis for adjustments
+            # this is a restart and contract has changed, emitting data since
+            # last emitted point, but:
+            # include one additional point in emit
+            # which is for the same time point as the value already emitted
+            # but for new, rolled future
+            # this way processor will be be able to calculate necessary adjustment
+            log.warn(
+                f"{self!s} data requires roll adjustment "
+                f"last bar: {self._last_bar_date}"
+            )
             stream = (
                 ev.Sequence(bars[:-1])
                 .pipe(ev.Filter(lambda x: x.date >= self._last_bar_date))
@@ -240,6 +251,7 @@ class HistoricalDataStreamer(Streamer):
             )
             self._future_adjust = False
         elif self._last_bar_date:
+            # this is a regular restart; backfilling only data since last emitted point
             stream = (
                 ev.Sequence(bars[:-1])
                 .pipe(ev.Filter(lambda x: x.date > self._last_bar_date))
@@ -247,6 +259,7 @@ class HistoricalDataStreamer(Streamer):
             )
 
         else:
+            # this is not a restart, just getting all new data
             stream = ev.Sequence(bars[:-1]).connect(self.dataEvent)
         await stream
         await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
@@ -254,11 +267,12 @@ class HistoricalDataStreamer(Streamer):
             f"{self.name} backfilled from {self._last_bar_date or bars[0].date} to "
             f"{bars[-2].date}"
         )
-        self.onStart({"startup": False})
+        # let processor know backfill is finished
+        self.startEvent.emit({"startup": False})
 
     async def run(self) -> None:
         log.debug(f"Requesting bars for {self.contract.localSymbol}")
-
+        self.onStart({})
         if self._last_bar_date:
             self.durationStr = f"{self.date_to_delta(self._last_bar_date)} S"
             log.debug(f"{self.name} duration str: {self.durationStr}")
@@ -308,6 +322,7 @@ class HistoricalDataStreamer(Streamer):
         if isinstance(old_contract, ibi.Future) and isinstance(
             new_contract, ibi.Future
         ):
+            log.warning(f"{self!s} will adjust for rolled future.")
             self._future_adjust = True
 
 
@@ -342,8 +357,9 @@ class RealTimeBarsStreamer(Streamer):
         )
 
     def onStart(self, data, *args) -> None:
-        self.startEvent.emit(data, self)
+        # self.startEvent.emit(data, self)
         self._run()
+        super().onStart(data)
 
     def _run(self):
         bars = self.streaming_func()

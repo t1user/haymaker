@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import operator as op
+from functools import cached_property
 from typing import Literal
 
 import eventkit as ev  # type: ignore
@@ -27,7 +28,8 @@ class BarAggregator(Atom):
         self._log_level = log.level
         self._debug = debug
         self._future_adjust_type = future_adjust_type
-        self._future_adjust = False  # flag that future needs to be adjusted
+        # initialize flag that future needs to be adjusted to be set by onStart
+        self.future_adjust = False
 
     def onStart(self, data, *args):
         if isinstance(data, dict):
@@ -37,6 +39,8 @@ class BarAggregator(Atom):
                 log.setLevel(logging.ERROR)
             else:
                 log.setLevel(self._log_level)
+        # everything in data will be set as object properties
+        # start event will be emitted
         super().onStart(data, *args)
 
     def onDataBar(self, bars, *args):
@@ -49,59 +53,61 @@ class BarAggregator(Atom):
             self.dataEvent.emit(bars)
 
     def onData(self, data, *args) -> None:
-        if self._future_adjust:
-            self.future_adjust(data[-1])
+        if self.future_adjust:
             # first data point is just to determine adjustment basis
-            # shouldn't be emitted further down the chain
+            # should be passed to adjust_future
+            self.adjust_future(data[0])
+            # adjust mode should be switched off for subsequent emits
+            self.future_adjust = False
+            # and it shouldn't be emitted further down the chain
             return
         if isinstance(data, ibi.BarDataList):
             # Streamers with incremental_only=False have not been properly tested!
-            log.critical("WE SHOULD NOT BE HERE")
+            log.critical(
+                "WE SHOULD NOT BE HERE; DONT USE PROCESSOR WITH `incremental_only`"
+            )
             try:
                 data = data[-1]
             except KeyError:
                 log.debug("Empty input from streamer.")
         self._filter.on_source(data)
 
-    def onContractChanged(
-        self, old_contract: ibi.Contract, new_contract: ibi.Contract
-    ) -> None:
-        """THIS IS NOT IN USE!!!! WTF??????"""
-        if isinstance(old_contract, ibi.Future) and isinstance(
-            new_contract, ibi.Future
-        ):
-            log.debug(f"Will back-adjust data for {old_contract}")
-            self._future_adjust = True
+    @cached_property
+    def operator(self):
+        return {"add": op.add, "mul": op.mul, None: None}.get(self._future_adjust_type)
 
-    def future_adjust(self, new_bar: ibi.BarData):
+    @cached_property
+    def reverse_operator(self):
+        return {"add": op.sub, "mul": op.truediv, None: None}.get(
+            self._future_adjust_type
+        )
+
+    def adjust_future(self, new_bar: ibi.BarData):
         """Create continuous future price series on future contract
         change.  IB mechanism cannot be trusted.  This feature can be
         turned off by passing `future_adjust_type=None` while
         initiating the class.
         """
-        operator = {"add": op.add, "mul": op.mul, None: None}.get(
-            self._future_adjust_type
-        )
-        reverse_operator = {"add": op.sub, "mul": op.truediv, None: None}.get(
-            self._future_adjust_type
-        )
-        if operator is None:
+        if self.operator is None:
             log.warning(f"Skipping futures adjustment on {self}")
             return
-        assert reverse_operator is not None
+        assert self.reverse_operator is not None
 
-        bars = self._filter.bars
-        value = reverse_operator(new_bar, bars[-1].close)
-        log.debug(
-            f"FUTURES ADJUSTMENT | old bar: {bars[-1]} | new bar: {new_bar} "
-            f"| adjustment basis: {value} | operator: {operator}"
+        old_bar = self._filter.bars[-1]
+
+        if old_bar.date != new_bar.date:
+            log.error("Cannot back-adjust a future because dates don't match.")
+            return
+
+        value = self.reverse_operator(new_bar.close, old_bar.close)
+        log.warning(
+            f"FUTURES ADJUSTMENT | old bar: {old_bar} | new bar: {new_bar} "
+            f"| adjustment basis: {value} | operator: {self.operator}"
         )
 
-        for bar in bars:
+        for bar in self._filter.bars:
             for field in ("open", "high", "low", "close", "average"):
-                setattr(bar, field, operator(getattr(bar, field), value))
-
-        self._future_adjust = False
+                setattr(bar, field, self.operator(getattr(bar, field), value))
 
 
 class BarList(list[ibi.BarData]):
