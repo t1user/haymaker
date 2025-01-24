@@ -262,7 +262,7 @@ class BaseExecModel(AbstractExecModel):
     ) -> ibi.Trade | None:
         self.data.params["close"] = data
         data["position_id"] = self.get_position_id()
-        # THIS IS TEMPORARY ----> FIX ---> TODO
+
         if self.data.position == 0:
             log.error(
                 f"Abandoning CLOSE position for {self.data.active_contract} "

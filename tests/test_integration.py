@@ -29,6 +29,9 @@ def pipe(df_brick, data_for_df, portfolio, Atom):  # noqa
         def locked(self, key):
             return 0
 
+        def position_and_order_for_strategy(self, strategy_str: str):
+            return 0
+
     sm = FakeStateMachine()
 
     class FakeController(Atom):

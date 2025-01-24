@@ -48,16 +48,34 @@ def test_OrderInfo_iterator():
         assert i == j
 
 
-def test_OrderInfo_active():
+def test_OrderInfo_not_active():
     trade1 = ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Filled"))
     o1 = OrderInfo("coolstrategy", "STOP", trade1, None)
     assert o1.active is False
 
 
-def test_OrderInfo_not_active():
+def test_OrderInfo_active():
     trade1 = ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"))
     o1 = OrderInfo("coolstrategy", "STOP", trade1, None)
     assert o1.active is True
+
+
+def test_OrderInfo_amount_long():
+    trade1 = ibi.Trade(
+        order=ibi.Order(action="BUY", totalQuantity=1),
+        orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
+    )
+    o1 = OrderInfo("coolstrategy", "OPEN", trade1, None)
+    assert o1.amount == 1
+
+
+def test_OrderInfo_amount_shoft():
+    trade1 = ibi.Trade(
+        order=ibi.Order(action="SELL", totalQuantity=1),
+        orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
+    )
+    o1 = OrderInfo("coolstrategy", "OPEN", trade1, None)
+    assert o1.amount == -1
 
 
 def test_OrderContainer_strategy_gets_correct_orders():
@@ -460,6 +478,63 @@ def test_access_strategy_with_get(state_machine):
     assert state_machine.strategy.get("xyz") == st
     # get with unknown key creates new entry,
     # so this is not symetrical to previous test
+
+
+def test_position_and_order_for_strategy_position_no_pending_order(state_machine):
+    state_machine.strategy["coolstrategy"].position = 1
+    assert state_machine.position_and_order_for_strategy("coolstrategy") == 1
+
+
+def test_position_and_order_for_strategy_no_position_no_pending_order(state_machine):
+    state_machine.strategy["coolstrategy"].position = 0
+    assert state_machine.position_and_order_for_strategy("coolstrategy") == 0
+
+
+def test_position_and_order_for_strategy_no_position_pending_order(state_machine):
+    state_machine.strategy["coolstrategy"].position = 0
+    oi = OrderInfo(
+        "coolstrategy",
+        "OPEN",
+        ibi.Trade(
+            order=ibi.Order(action="BUY", totalQuantity=1),
+            orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
+        ),
+        None,
+    )
+    state_machine.order[1234] = oi
+    assert state_machine.position_and_order_for_strategy("coolstrategy") == 1
+
+
+def test_position_and_order_for_strategy_position_pending_order(state_machine):
+    state_machine.strategy["coolstrategy"].position = 1
+    oi = OrderInfo(
+        "coolstrategy",
+        "CLOSE",
+        ibi.Trade(
+            order=ibi.Order(action="SELL", totalQuantity=1),
+            orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
+        ),
+        None,
+    )
+    state_machine.order[1234] = oi
+    assert state_machine.position_and_order_for_strategy("coolstrategy") == 0
+
+
+def test_position_and_order_for_strategy_position_irrelevant_pending_order(
+    state_machine,
+):
+    state_machine.strategy["coolstrategy"].position = 1
+    oi = OrderInfo(
+        "coolstrategy",
+        "STOP",
+        ibi.Trade(
+            order=ibi.Order(action="SELL", totalQuantity=1),
+            orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
+        ),
+        None,
+    )
+    state_machine.order[1234] = oi
+    assert state_machine.position_and_order_for_strategy("coolstrategy") == 1
 
 
 def test_active_property_on_Strategy_false_works():

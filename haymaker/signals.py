@@ -75,12 +75,11 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
                 self.signal_in_field = signal_fields[0]
                 self.signal_out_field = signal_fields[1]
 
-        # this is just definition of class members
         self.strategy: str = ""
         self._position: float = 0.0
         Atom.__init__(self)
 
-    # onStart should set strategy
+    # onStart must set strategy
     def onData(self, data: dict[str, Any], *args) -> None:
         try:
             signal_in = data[self.signal_in_field]
@@ -130,14 +129,14 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
         Which side of the market is position on: (short: -1, long: 1,
         no position: 0)
         """
-        # record position state to assure that the logged value is the same as actually
-        # used for decision, rather than the one at the time of logging
-        self._position = sign(self.sm.strategy[strategy].position)
+        # record position state to assure that one value consistently used during
+        # processing of the one data point
+        self._position = sign(self.sm.position_and_order_for_strategy(strategy))
         return self._position
 
     def same_direction(self, strategy: str, signal: Signal) -> bool:
         """Is signal and position in the same direction?"""
-        return self.position(strategy) == signal
+        return self._position == signal
 
     def process_position(self, strategy: str, signal: Signal) -> Action | None:
         if signal == 0:

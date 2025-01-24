@@ -13,7 +13,7 @@ import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from .config import CONFIG as config
-from .misc import Lock, decode_tree, tree
+from .misc import Lock, action_to_signal, decode_tree, tree
 from .saver import AsyncSaveManager, MongoSaver, async_runner
 
 log = logging.getLogger(__name__)
@@ -29,12 +29,18 @@ class OrderInfo:
     params: dict = field(default_factory=dict)
 
     @property
-    def active(self):
+    def active(self) -> bool:
         return self.trade.isActive()
 
     @property
     def permId(self):
         return self.trade.order.permId
+
+    @property
+    def amount(self) -> float:
+        return self.trade.order.totalQuantity * action_to_signal(
+            self.trade.order.action
+        )
 
     def __iter__(self) -> Iterator[Any]:
         for f in (*(x.name for x in fields(self)), "active"):
@@ -245,8 +251,6 @@ class StrategyContainer(UserDict):
         else:
             return default
 
-    # TODO: def get(self, key, default)
-
     def total_positions(self) -> defaultdict[ibi.Contract, float]:
         """
         Return a dict of positions by contract.
@@ -436,16 +440,17 @@ class StateMachine:
         order_info = OrderInfo(strategy, action, trade, params)
         oi = self.save_order(order_info)
 
+        if action.upper() == "OPEN":
+            trade.filledEvent += partial(self.register_lock, strategy)
+        elif action.upper() == "CLOSE":
+            trade.filledEvent += partial(self.remove_lock, strategy)
+
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} "
             f"permId: {trade.order.permId} registered for: "
             f"{trade.contract.localSymbol}"
         )
 
-        if action.upper() == "OPEN":
-            trade.filledEvent += partial(self.register_lock, strategy)
-        elif action.upper() == "CLOSE":
-            trade.filledEvent += partial(self.remove_lock, strategy)
         return oi
 
     async def save_order_status(self, trade: ibi.Trade) -> OrderInfo:
@@ -472,6 +477,36 @@ class StateMachine:
         or ``state_machine.strategy.get('strategy_name')``
         """
         return self._data
+
+    def position_and_order_for_strategy(self, strategy_str: str) -> float:
+        """
+        Method prevents race conditions; when an order is already
+        issued but not filled, object querying if there is a position
+        will get information including this pending order; only active
+        orders openning or closing positions are included.
+        """
+        strategy = self.strategy.get(strategy_str)
+        if strategy:
+            position = strategy.position
+        else:
+            position = 0.0
+
+        orders = sum(
+            [
+                order.amount
+                for order in self.orders_for_strategy(strategy_str)
+                if order.active and (order.action in ["OPEN", "CLOSE"])
+            ]
+        )
+
+        total = position + orders
+        if orders:
+            log.warning(
+                f"Processing signals with pending orders, strategy: {strategy_str}, "
+                f"position: {position}, pending orders: {orders}, total: {total}"
+            )
+
+        return total
 
     @property
     def order(self) -> OrderContainer:
