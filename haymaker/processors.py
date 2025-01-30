@@ -53,10 +53,12 @@ class BarAggregator(Atom):
             self.dataEvent.emit(bars)
 
     def onData(self, data, *args) -> None:
+        # data is just single BarData object (if incremental_only=True,
+        # which is default and currently only mode supported)
         if self.future_adjust:
             # first data point is just to determine adjustment basis
             # should be passed to adjust_future
-            self.adjust_future(data[0])
+            self.adjust_future(data)
             # adjust mode should be switched off for subsequent emits
             self.future_adjust = False
             # and it shouldn't be emitted further down the chain
@@ -64,7 +66,7 @@ class BarAggregator(Atom):
         if isinstance(data, ibi.BarDataList):
             # Streamers with incremental_only=False have not been properly tested!
             log.critical(
-                "WE SHOULD NOT BE HERE; DONT USE PROCESSOR WITH `incremental_only`"
+                "WE SHOULD NOT BE HERE; DONT USE PROCESSOR WITH `incremental_only=True`"
             )
             try:
                 data = data[-1]
