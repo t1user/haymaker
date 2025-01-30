@@ -224,8 +224,8 @@ class Atom:
     ) -> Awaitable[None] | None:
         """This is not chained."""
         log.warning(
-            f"Contract on {self} changed from {old_contract.symbol} "
-            f"to new contract {new_contract.symbol}"
+            f"Contract on {self} changed from {old_contract.localSymbol} "
+            f"to new contract {new_contract.localSymbol}"
         )
         self.roll_contract_data = ContractRollData(old_contract, new_contract)
         return None
