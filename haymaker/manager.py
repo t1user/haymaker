@@ -88,12 +88,16 @@ class InitData:
             new_futures = set(futures_for_cont_futures) - self._futures
             if new_futures and dropped_futures:
                 log.warning(
-                    f"Dropping futures: {[f.localSymbol for f in dropped_futures]} "
+                    f"Dropping futures: "
+                    f"{[(f.localSymbol, type(f)) for f in dropped_futures]} "
                     f"{len(new_futures)} new future objects found."
                 )
             self.contract_list.extend(list(new_futures))
             for f in dropped_futures:
-                self.contract_list.remove(f)
+                # TODO: check why f might be more than once in the list
+                while f in self.contract_details:
+                    log.debug(f"removing from contract list: {f}")
+                    self.contract_list.remove(f)
             self._futures = set(futures_for_cont_futures)
 
             contract_string = ", ".join(
