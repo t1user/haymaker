@@ -240,7 +240,7 @@ class HistoricalDataStreamer(Streamer):
             # which is for the same time point as the value already emitted
             # but for new, rolled future
             # this way processor will be be able to calculate necessary adjustment
-            log.warn(
+            log.warning(
                 f"{self!s} data requires roll adjustment "
                 f"last bar: {self._last_bar_date}"
             )

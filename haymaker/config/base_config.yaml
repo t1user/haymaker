@@ -4,6 +4,7 @@ reset: False # doesn't really make sense to change here
 ignore_errors:
   - 2104  # Market data farm connection is ok
   - 2106  # Data farm connection is OK
+  - 2107  # Data farm connection is inactive but should be available upon demand
   - 2108  # Market data farm [...] is inactive but [...~ok]
   - 2158  # Sec-def data farm connection is OK
   - 2110  # Connectivity between Trader Workstation and server is broken. It will be restored automatically.

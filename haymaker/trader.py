@@ -25,7 +25,10 @@ class Trader:
     ) -> ibi.Trade:
         """Execute trade. Place passed order with the broker."""
         trade = self.ib.placeOrder(contract, order)
-        log.info(f"Placed {order.orderType} for {trade.contract.localSymbol}")
+        log.info(
+            f"Placed {order.orderType} for {trade.contract.secType} "
+            f"{trade.contract.localSymbol or trade.contract.symbol}"
+        )
         return trade
 
     def modify(self, contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:

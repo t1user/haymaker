@@ -106,9 +106,9 @@ class App:
         if errorCode in config.get("ignore_errors", []):
             return
         elif "URGENT" in errorString:
-            log.error(f"{errorString} {reqId=} {errorCode=} {contract=}")
+            log.error(f"{errorString} {reqId=} code={errorCode} {contract=}")
         else:
-            log.debug(f"{errorString} {reqId=} {errorCode=} {contract=}")
+            log.debug(f"{errorString} {reqId=} code={errorCode} {contract=}")
 
     def onStarting(self, watchdog: ibi.Watchdog) -> None:
         log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")
