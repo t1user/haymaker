@@ -171,8 +171,7 @@ class TestPipe:
         return pipe
 
     @pytest.fixture
-    def pass_through_pipe(self, atoms, pipe_):
-        x, y, z = atoms
+    def pass_through_pipe(self, pipe_):
         pipe = pipe_
         start = NewAtom("start")
         end = NewAtom("end")
@@ -434,6 +433,274 @@ class TestUnionPipe:
         p1.connect(end)
         end.feedbackEvent.emit("test_string")
         assert start.onFeedback_string == "test_string_z_y_x"
+
+
+def test_pipe_is_not_bypassed_onData():
+    """
+    Want this test to be standalone, independent of all fixtures, to
+    make sure no mistake is being replicated.
+    """
+
+    class atom(Atom):
+        output = "NOTSET"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+        def onData(self, data, *args):
+            data[self.name] = "xxx"
+            self.output = data
+            self.dataEvent.emit(data)
+
+        def __repr__(self):
+            return self.__class__.__name__ + "()"
+
+    x = atom("x")
+    y = atom("y")
+    z = atom("z")
+
+    pipe = Pipe(x, y, z)
+
+    start = atom("start")
+    end = atom("end")
+
+    start.connect(pipe)
+    pipe.connect(end)
+
+    start.onData({})
+    assert "x" in y.output
+
+
+def test_pipe_is_not_bypassed_onStart():
+    """
+    Want this test to be standalone, independent of all fixtures, to
+    make sure no mistake is being replicated.
+    """
+
+    class atom(Atom):
+        output = "NOTSET"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+        def onStart(self, data, *args):
+            data[self.name] = "xxx"
+            self.output = data
+            super().onStart(data)
+
+        def __repr__(self):
+            return self.__class__.__name__ + "()"
+
+    x = atom("x")
+    y = atom("y")
+    z = atom("z")
+
+    pipe = Pipe(x, y, z)
+
+    start = atom("start")
+    end = atom("end")
+
+    start.connect(pipe)
+    pipe.connect(end)
+
+    start.onStart({})
+    assert "x" in y.output
+
+
+def test_pipe_is_not_bypassed_onFeedback():
+    """
+    Want this test to be standalone, independent of all fixtures, to
+    make sure no mistake is being replicated.
+    """
+
+    class atom(Atom):
+        output = "NOTSET"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+        def onFeedback(self, data, *args):
+            data[self.name] = "xxx"
+            self.output = data
+            super().onFeedback(data)
+
+        def __repr__(self):
+            return self.__class__.__name__ + "()"
+
+    x = atom("x")
+    y = atom("y")
+    z = atom("z")
+
+    pipe = Pipe(x, y, z)
+
+    start = atom("start")
+    end = atom("end")
+
+    start.connect(pipe)
+    pipe.connect(end)
+
+    end.onFeedback({})
+    assert "z" in y.output
+
+
+def test_pipe_is_not_bypassed_onFeedback_correct_direction():
+    """
+    Want this test to be standalone, independent of all fixtures, to
+    make sure no mistake is being replicated.
+    """
+
+    class atom(Atom):
+        output = "NOTSET"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+        def onFeedback(self, data, *args):
+            data[self.name] = "xxx"
+            self.output = data
+            super().onFeedback(data)
+
+        def __repr__(self):
+            return self.__class__.__name__ + "()"
+
+    x = atom("x")
+    y = atom("y")
+    z = atom("z")
+
+    pipe = Pipe(x, y, z)
+
+    start = atom("start")
+    end = atom("end")
+
+    start.connect(pipe)
+    pipe.connect(end)
+
+    start.onFeedback({})
+    assert y.output == "NOTSET"
+
+
+def test_pipe_is_connected_to_output_dataEvent():
+    """
+    Want this test to be standalone, independent of all fixtures, to
+    make sure no mistake is being replicated.
+    """
+
+    class atom(Atom):
+        output = "NOTSET"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+        def onData(self, data, *args):
+            data[self.name] = "xxx"
+            self.output = data
+            self.dataEvent.emit(data)
+
+        def __repr__(self):
+            return self.__class__.__name__ + "()"
+
+    x = atom("x")
+    y = atom("y")
+    z = atom("z")
+
+    pipe = Pipe(x, y, z)
+
+    start = atom("start")
+    end = atom("end")
+
+    start += pipe
+    pipe += end
+
+    start.onData({})
+    assert "x" in end.output
+    assert "y" in end.output
+    assert "z" in end.output
+    assert len(end.output) == 5
+
+
+def test_pipe_is_connected_to_output_startEvent():
+    """
+    Want this test to be standalone, independent of all fixtures, to
+    make sure no mistake is being replicated.
+    """
+
+    class atom(Atom):
+        output = "NOTSET"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+        def onStart(self, data, *args):
+            data[self.name] = "xxx"
+            self.output = data
+            super().onStart(data)
+
+        def __repr__(self):
+            return self.__class__.__name__ + "()"
+
+    x = atom("x")
+    y = atom("y")
+    z = atom("z")
+
+    pipe = Pipe(x, y, z)
+
+    start = atom("start")
+    end = atom("end")
+
+    start += pipe
+    pipe += end
+
+    start.onStart({})
+    assert "x" in end.output
+    assert "y" in end.output
+    assert "z" in end.output
+    assert len(end.output) == 5
+
+
+def test_pipe_is_connected_to_input_feedbackEvent():
+    """
+    Want this test to be standalone, independent of all fixtures, to
+    make sure no mistake is being replicated.
+    """
+
+    class atom(Atom):
+        output = "NOTSET"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            super().__init__()
+
+        def onFeedback(self, data, *args):
+            data[self.name] = "xxx"
+            self.output = data
+            super().onFeedback(data)
+
+        def __repr__(self):
+            return self.__class__.__name__ + "()"
+
+    x = atom("x")
+    y = atom("y")
+    z = atom("z")
+
+    pipe = Pipe(x, y, z)
+
+    start = atom("start")
+    end = atom("end")
+
+    start.connect(pipe)
+    pipe.connect(end)
+
+    end.onFeedback({})
+    assert "x" in end.output
+    assert "y" in end.output
+    assert "z" in end.output
+    assert len(end.output) == 5
 
 
 class AtomWithContract(Atom):
@@ -725,7 +992,6 @@ class Test_data_property:
                 self.strategy = strategy
 
         a = A("xxx")
-        print(a.data)
 
         assert a.data.strategy == "xxx"
 
