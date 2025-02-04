@@ -49,7 +49,7 @@ class InitData:
             await self.acquire_contract_details()
         except Exception as e:
             log.exception(e)
-            raise
+            # raise
         return self
 
     def replace_contfutures(self) -> "InitData":
@@ -95,7 +95,7 @@ class InitData:
             self.contract_list.extend(list(new_futures))
             for f in dropped_futures:
                 # TODO: check why f might be more than once in the list
-                while f in self.contract_details:
+                while f in self.contract_list:
                     log.debug(f"removing from contract list: {f}")
                     self.contract_list.remove(f)
             self._futures = set(futures_for_cont_futures)
