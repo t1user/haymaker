@@ -1,3 +1,4 @@
+# type: ignore
 from datetime import timedelta
 from functools import partial
 from typing import Callable, List, Optional, Tuple, Union

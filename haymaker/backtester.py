@@ -1,3 +1,4 @@
+# type: ignore
 # ############ DOESN'T WORK  ##################
 # Will be totally redone
 

@@ -565,10 +565,6 @@ def stop_loss(
     else:
         if "close_blip" not in _df.columns:
             _df["close_blip"] = _df["blip"]
-        # we want to be returning positions rather than signals
-        # blips have to be shifted (before upsampling)
-        _df["blip"] = _df["blip"]
-        _df["close_blip"] = _df["close_blip"]
         data_fields = [
             "blip",
             "close_blip",

@@ -34,7 +34,12 @@ def resampled_series(row: pd.Series, *, series: pd.Series, field: str, f: Callab
     """
 
     return f(
-        pd.concat([series.loc[: row.name], pd.Series(row[field], index=[row.name])])
+        pd.concat(
+            [
+                series.loc[: row.name],  # type: ignore
+                pd.Series(row[field], index=[row.name]),
+            ]
+        )
     )
 
 

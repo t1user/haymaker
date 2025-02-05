@@ -310,7 +310,7 @@ class Optimizer:
             except TypeError:
                 if dtypes[key] == pd.Timedelta:
                     try:
-                        self._table[key] = table / pd.Timedelta("1day")
+                        self._table[key] = table / pd.Timedelta("1day")  # type: ignore
                     except:  # noqa
                         self._table[key] = table
 
@@ -440,7 +440,7 @@ class OptiWrapper:
         d["stop"]
         return d
 
-    def params_formater(self):
+    def params_formater(self) -> None:
         """
         Create a dictionary that will be feed as **params to signal
         and stop functions with placeholders for variable params in
