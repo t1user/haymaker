@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from functools import partial
+from functools import cached_property, partial
 from typing import Generator
 
 import eventkit as ev  # type: ignore
@@ -133,8 +133,6 @@ class Controller(Atom):
             # zero-out all records
             self.sm.clear_models()
 
-        self.roller = FutureRoller(self)
-
         # Only subsequently Streamers will run (I think...)
         log.debug("Controller run sequence completed successfully.")
 
@@ -143,7 +141,8 @@ class Controller(Atom):
         This method is scheduled to run once a day in :class:`.app.App`
         """
         log.info(f"Running roll: {args} on controller object: {id(self)}")
-        self.roller.roll()
+        roller = FutureRoller(self)
+        roller.roll()
 
     async def sync(self, *args) -> None:
         if self.ib.isConnected():
@@ -586,16 +585,17 @@ class FutureRoller:
         self.controller = controller
         self.sm = controller.sm
         self.excluded_strategies = excluded_strategies
-        self.trade_generator: dict[ibi.Contract, Generator] = {}
+        self._trade_generator: dict[ibi.Contract, Generator] = {}
+        log.debug("FutureRoller initiated")
 
-    @property
+    @cached_property
     def futures(self) -> set[ibi.Future]:
         """
         List of active contracts that are futures.
         """
         return set([f for f in self.controller.contracts if isinstance(f, ibi.Future)])
 
-    @property
+    @cached_property
     def strategies(self) -> dict[ibi.Future, list[str]]:
         """
         Dict of future contracts with corresponding lists of
@@ -610,7 +610,7 @@ class FutureRoller:
         log.debug(f"{strategies=}")
         return strategies
 
-    @property
+    @cached_property
     def positions(self) -> dict[ibi.Future, float]:
         """
         Dict of positions for every future contract regardless of
@@ -623,13 +623,11 @@ class FutureRoller:
         dict for such contracts.
         """
         return {
-            fut: sum(
-                [p for name in strategy_names if (p := self.sm.strategy[name].position)]
-            )
+            fut: sum([self.sm.strategy[name].position for name in strategy_names])
             for fut, strategy_names in self.strategies.items()
         }
 
-    @property
+    @cached_property
     def contracts_to_roll(self) -> set:
         """
         Set of futures that need to be rolled, i.e. these are the futures
@@ -640,8 +638,11 @@ class FutureRoller:
         All previous properties are intermediate steps to get this one
         piece of information.
         """
+        log.debug(f"{self.positions=}")
+        # filter out contracts with zero position
+        positions = [future for future, position in self.positions.items() if position]
         # difference between contracts we hold vs active contracts
-        contracts_to_roll = set(self.positions.keys()) - self.futures
+        contracts_to_roll = set(positions) - self.futures
         return contracts_to_roll
 
     def positions_by_strategy_for_contract(
@@ -687,16 +688,23 @@ class FutureRoller:
             log.warning(
                 f"Contracts will be rolled: {[c.localSymbol for c in contracts]}"
             )
+        else:
+            log.debug("No contracts to roll.")
+
         for old_contract in contracts:
             new_contract = self.match_old_to_new_future(old_contract)
+            log.debug(
+                f"new contract found: {new_contract.localSymbol} for: "
+                f"{old_contract.localSymbol}"
+            )
             if new_contract.conId != old_contract.conId:
-                self.trade_generator[new_contract] = self.execute(
+                self._trade_generator[new_contract] = self.execute(
                     old_contract, new_contract
                 )
                 try:
-                    next(self.trade_generator[new_contract])
+                    next(self._trade_generator[new_contract])
                 except StopIteration:
-                    del self.trade_generator[new_contract]
+                    del self._trade_generator[new_contract]
             else:
                 log.error(f"Abandoning roll, no replacement found: {old_contract}")
 
@@ -705,8 +713,11 @@ class FutureRoller:
     ) -> Generator[None, None, None]:
         # THIS IS A GENERATOR
         # positions for expiring contract that are not excluded from rolling
+        log.debug(f"Inside execute for {old_contract}")
         total = self.positions[old_contract]
+        log.debug(f"Total position for: {old_contract}: {total}")
         strategies_to_trade = self.figure_out_strategies_to_trade(old_contract, total)
+        log.debug(f"{strategies_to_trade=}")
         for strategy_str in self.strategies[old_contract]:
             strategy = self.sm.strategy[strategy_str]
             if total and (strategy_str in strategies_to_trade):
@@ -725,9 +736,15 @@ class FutureRoller:
                 )
                 trade.filledEvent += self.trade_callback
                 # don't issue next order until this one is done
+                log.debug(f"{strategy_str} will yield")
                 yield
             else:
                 # no trading here
+                log.debug(
+                    f"No trading for {old_contract.localSymbol} "
+                    f"(because positions are cancelling each other)"
+                    f"but orders will be adjusted."
+                )
                 self.adjust_records_and_orders_for_strategy(
                     strategy_str, strategy, old_contract, new_contract
                 )
@@ -735,11 +752,15 @@ class FutureRoller:
     def trade_callback(self, trade: ibi.Trade):
         log.debug(f"Roll trade filled for: {trade.contract.localSymbol}")
         try:
-            gen = self.trade_generator.get(trade.contract)
+            gen = self._trade_generator.get(trade.contract)
             assert gen
+            log.debug(f"Calling next on {trade.contract.localSymbol}")
             next(gen)
         except StopIteration:
-            del self.trade_generator[trade.contract]
+            del self._trade_generator[trade.contract]
+            log.debug(
+                f"StopIteration on {trade.contract.localSymbol}. No more trading."
+            )
 
     def adjust_records_and_orders_for_strategy(
         self,
@@ -772,6 +793,7 @@ class FutureRoller:
         situation where the order rolling position would be rejected,
         but resting stop-losses would be rolled.
         """
+        log.debug(f"Figuring out strategies to trade for: {contract.localSymbol}")
         # strategies with positions to roll
         positions: dict[str, float] = self.positions_by_strategy_for_contract(contract)
         # some positions have opposing signs, i.e. cancel each other
@@ -799,7 +821,7 @@ class FutureRoller:
         else:
             # if strategies are not cancelling each other, just trade all of them
             strategies = list(positions.keys())
-
+        log.debug(f"Roll strategies to trade on {contract.localSymbol}: {strategies}")
         return strategies
 
     @staticmethod
