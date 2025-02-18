@@ -182,4 +182,4 @@ class App:
             await self.jobs()
         except Exception as e:
             log.exception(e)
-            raise
+            # raise

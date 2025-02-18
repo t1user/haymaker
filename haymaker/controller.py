@@ -360,7 +360,7 @@ class Controller(Atom):
             # if order(s) still in execution don't check if position achieved yet
             while any([info.active for info in order_infos]):
                 log.warning(
-                    f"{strategy} taking long to achive target position of {target}..."
+                    f"{strategy} taking long to achive target position of {target}"
                 )
                 await asyncio.sleep(delay)
 

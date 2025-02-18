@@ -11,7 +11,7 @@ from typing import Any, Callable, Collection
 
 import eventkit as ev  # type: ignore
 import pandas as pd
-from arctic import Arctic
+from arctic import Arctic  # type: ignore
 from pymongo import MongoClient  # type: ignore
 
 from .config import CONFIG as config

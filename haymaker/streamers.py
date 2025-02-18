@@ -177,8 +177,11 @@ class Streamer(Atom, ABC):
     def __str__(self) -> str:
         return self.name
 
+    def __hash__(self):
+        return hash(id(self))
 
-@dataclass(unsafe_hash=True)
+
+@dataclass
 class HistoricalDataStreamer(Streamer):
     contract: ibi.Contract
     durationStr: str
@@ -189,7 +192,10 @@ class HistoricalDataStreamer(Streamer):
     incremental_only: bool = True
     startup_seconds: float = 5
     _last_bar_date: datetime | None = None
-    _future_adjust = False  # flag that future needs to be adjusted
+    _future_adjust: bool = False  # flag that future needs to be adjusted
+    _adjusted: list[ibi.Future] = field(
+        default_factory=list
+    )  # already adjusted futures
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -323,10 +329,20 @@ class HistoricalDataStreamer(Streamer):
             new_contract, ibi.Future
         ):
             log.warning(f"{self!s} will adjust for rolled future.")
-            self._future_adjust = True
+            if old_contract not in self._adjusted:
+                self._future_adjust = True
+                self._adjusted.append(old_contract)
+            else:
+                log.warning(
+                    f"{self!s} abandoning attempt to roll future "
+                    f"{old_contract.localSymbol} for the second time"
+                )
+
+    def __hash__(self):
+        return hash(id(self))
 
 
-@dataclass(unsafe_hash=True)
+@dataclass
 class MktDataStreamer(Streamer):
     contract: ibi.Contract
     tickList: str
@@ -337,8 +353,11 @@ class MktDataStreamer(Streamer):
     def streaming_func(self) -> ibi.Ticker:
         return self.ib.reqMktData(self.contract, self.tickList)
 
+    def __hash__(self):
+        return hash(id(self))
 
-@dataclass(unsafe_hash=True)
+
+@dataclass
 class RealTimeBarsStreamer(Streamer):
     contract: ibi.Contract
     whatToShow: str
@@ -373,8 +392,11 @@ class RealTimeBarsStreamer(Streamer):
             else:
                 self.dataEvent.emit(bars)
 
+    def __hash__(self):
+        return hash(id(self))
 
-@dataclass(unsafe_hash=True)
+
+@dataclass
 class TickByTickStreamer(Streamer):
     contract: ibi.Contract
     tickType: str
@@ -391,3 +413,6 @@ class TickByTickStreamer(Streamer):
             numberOfTicks=self.numberOfTicks,
             ignoreSize=self.ignoreSize,
         )
+
+    def __hash__(self):
+        return hash(id(self))

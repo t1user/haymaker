@@ -148,7 +148,7 @@ class Jobs:
 
         log.info(
             f"Open positions on restart: "
-            f"{ {p.contract.symbol: p.position for p in IB.positions()} }"
+            f"{ {p.contract.symbol: p.position for p in IB.positions()} }"  # noqa
         )
         order_dict = defaultdict(list)
         for t in IB.openTrades():
@@ -175,7 +175,7 @@ class Jobs:
             task.add_done_callback(self._tasks.discard)
             # ensure errors are logged for debugging
             task.add_done_callback(self._handle_error)
-        await asyncio.gather(*self._tasks, return_exceptions=False)
+        await asyncio.gather(*self._tasks, return_exceptions=True)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__qualname__}({self.init_data})"
