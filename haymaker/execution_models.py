@@ -294,7 +294,12 @@ class BaseExecModel(AbstractExecModel):
 
     def reverse(self, data: dict) -> None:
         close_trade = self.close(data)
+        log.debug(f"reverse method returned close trade: {close_trade}")
         if close_trade:
+            log.debug(
+                f"Reverse trade. OPEN will be issued after CLOSE "
+                f"{close_trade.order.orderId} done"
+            )
             close_trade.filledEvent += partial(self.open, data=data)
 
     def __repr__(self):

@@ -1,0 +1,51 @@
+name: Test and Type Check
+
+on:
+  push:
+    branches:
+      - '**'  # Run on push to any branch
+  pull_request:
+    branches:
+      - '**'  # Run on pull requests to any branch
+
+jobs:
+  test-and-type-check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ${{ fromJson(needs.get-python-versions.outputs.versions) }}
+    needs: get-python-versions
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install .[all]  # Install your package and all dependencies
+
+      - name: Run tests with pytest (ignore warnings)
+        run: pytest -p no:warnings  # Suppresses warnings, fails on errors
+
+      - name: Run type checks with mypy
+        run: mypy .
+
+  get-python-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.extract.outputs.versions }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Extract Python versions from pyproject.toml
+        id: extract
+        run: |
+          VERSIONS=$(grep -Po '(?<=python_version = ").+?(?=")' pyproject.toml | jq -R -s -c 'split("\n")[:-1]')
+          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
