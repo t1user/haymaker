@@ -13,9 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ${{ fromJson(needs.get-python-versions.outputs.versions) }}
-    needs: get-python-versions
-
+        python-version: [3.9, 3.10, 3.11, 3.12]  # Test on multiple Python versions
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -35,17 +33,3 @@ jobs:
 
       - name: Run type checks with mypy
         run: mypy .
-
-  get-python-versions:
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.extract.outputs.versions }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Extract Python versions from pyproject.toml
-        id: extract
-        run: |
-          VERSIONS=$(grep -Po '(?<=python_version = ").+?(?=")' pyproject.toml | jq -R -s -c 'split("\n")[:-1]')
-          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
