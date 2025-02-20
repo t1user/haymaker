@@ -57,7 +57,7 @@ async def test_saver():
 
     t.save("xxx")
     t1.save("yyy")
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0.02)
     assert FakeSaver.output == ["xxx", "yyy"]
 
 
