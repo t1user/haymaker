@@ -68,8 +68,8 @@ Assuming your strategy is in 'you_module.py', which imports :class:`App` followi
    :func: get_parser_for_other_module
    :prog: dataloader.py
 
-Examples
-^^^^^^^^
+Examples:
+
 
 .. code-block:: bash
 
@@ -102,8 +102,8 @@ Dataloader options are different than for other modules.
    :func: get_parser_for_dataloader
    :prog: dataloader.py
 
-Examples
-^^^^^^^^
+Examples:
+
 
 .. code-block:: bash
 
