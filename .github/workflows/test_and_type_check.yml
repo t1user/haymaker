@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install .[all]  # Install your package and all dependencies
+          pip install .[dev]  # Install your package and all dependencies
 
       - name: Run tests with pytest (ignore warnings)
         run: pytest -p no:warnings  # Suppresses warnings, fails on errors
