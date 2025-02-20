@@ -8,10 +8,10 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from arctic import Arctic
-from arctic.date import DateRange
-from arctic.exceptions import NoDataFoundException
-from arctic.store.versioned_item import VersionedItem
+from arctic import Arctic  # type: ignore
+from arctic.date import DateRange  # type: ignore
+from arctic.exceptions import NoDataFoundException  # type: ignore
+from arctic.store.versioned_item import VersionedItem  # type: ignore
 from ib_insync import ContFuture, Contract, Future, util
 
 log = logging.getLogger(__name__)

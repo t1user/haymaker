@@ -37,8 +37,9 @@ class SetSource(argparse.Action):
 
 
 help_string = (
-    "Parameters can be passed to program directly, through a yaml file, or "
-    "environment variables. "
+    "Primary way to set up appplication is through a yaml file, or "
+    "environment variables. Command line options listed here override"
+    "those default settings."
 )
 epilog = "Defaults will be used for all unset parameters."
 
@@ -138,14 +139,20 @@ class CustomArgParser:
     output: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        self.parser = argparse.ArgumentParser(description=help_string, epilog=epilog)
-        if self.options:
-            for option in self.options:
-                self.parser.add_argument(*option[0], **option[1])
         self.parse()
 
+    @property
+    def parser(self) -> argparse.ArgumentParser:
+        parser = argparse.ArgumentParser(description=help_string, epilog=epilog)
+        if self.options:
+            for option in self.options:
+                parser.add_argument(*option[0], **option[1])
+        return parser
+
     def parse(self) -> None:
-        if "test" not in self.file_name:
+        if "test" in self.file_name or "sphinx" in self.file_name:
+            return
+        else:
             self.output = {
                 k: v
                 for k, v in vars(self.parser.parse_args(self.argv)).items()
@@ -154,6 +161,12 @@ class CustomArgParser:
 
     @classmethod
     def from_args(cls, args: list[str]) -> CustomArgParser:
+        """
+        Create parser from ``sys.argv``
+
+        Args:
+           args: value of sys.argv
+        """
         file_name = pathlib.Path(args[0]).name
         if (options := options_by_module.get(file_name.strip(".py"))) is not None:
             return cls(file_name, args[1:], [*common_options, *options])
@@ -174,3 +187,18 @@ class CustomArgParser:
         else:
             test_list.insert(0, "")
         return cls.from_args(test_list)
+
+
+# Below is some nonsense to facilitate docs generation
+
+
+def get_parser_for_dataloader():
+    # Simulate running as 'dataloader.py'
+    parser_instance = CustomArgParser.from_args(["dataloader.py"])
+    return parser_instance.parser
+
+
+def get_parser_for_other_module():
+    # Simulate running as 'your_module.py'
+    parser_instance = CustomArgParser.from_args(["your_module.py"])
+    return parser_instance.parser

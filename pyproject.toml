@@ -1,53 +1,54 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
+requires = ["setuptools>=64", "setuptools-scm>=8"]
 
 [project]
-name = "haymaker"
 authors = [
-        {name = "t1user", email = "enterdragon@duck.com"},
+  {name = "t1user", email = "enterdragon@duck.com"},
 ]
-description = 'Framework for trading with Interactive Brokers through ib_insync'
-readme = "README.md"
-requires-python = ">= 3.10"
-keywords = ["ib_insync", "tws", "ibgateway", "asyncio",  "interactive brokers", "algo trading"]
 classifiers = [
-            "Development Status :: 3 - Alpha",
-            "Intended Audience :: Developers",
-            "Topic :: Office/Business :: Financial :: Investment",
-            "Licence :: OSI Approved :: BSD Licence",
-            "Programming Language :: Python :: 3",
-
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Topic :: Office/Business :: Financial :: Investment",
+  "Licence :: OSI Approved :: BSD Licence",
+  "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "arctic @ git+https://github.com/man-group/arctic.git",
-    "ib_insync",
-    "pandas",
-    "numba",
-    "pyyaml",
+  "arctic @ git+https://github.com/man-group/arctic.git",
+  "ib_insync",
+  "pandas",
+  "numba",
+  "pyyaml",
 ]
+description = 'Framework for trading with Interactive Brokers through ib_insync'
 dynamic = ["version"]
+keywords = ["ib_insync", "tws", "ibgateway", "asyncio", "interactive brokers", "algo trading"]
+name = "haymaker"
+readme = "README.md"
+requires-python = ">= 3.10"
 
 [project.optional-dependencies]
-notebook = [
-         "jupyter",
-         "matplotlib",
-         "pyfolio-reloaded"
-         ]
-dev = [
-    "types-pyyaml",
-    "pandas-stubs",
-    "isort",
-    "mypy",
-    "autopep8",
-    "yapf",
-    "black",
-    "flake8",
-    "pytest",
-    "pytest-asyncio"
-    ]
 all = ["haymaker[notebook,dev]"]
-
+dev = [
+  "types-pyyaml",
+  "pandas-stubs",
+  "isort",
+  "mypy",
+  "autopep8",
+  "yapf",
+  "black",
+  "flake8",
+  "pytest",
+  "pytest-asyncio",
+  "sphinx",
+  "sphinx-autodoc-typehints",
+  "furo",
+]
+notebook = [
+  "jupyter",
+  "matplotlib",
+  "pyfolio-reloaded",
+]
 
 [tool.setuptools]
 packages = ["haymaker"]
@@ -70,9 +71,8 @@ mypy_path = "$MYPY_CONFIG_FILE_DIR/stubs"
 
 # remove this after fixing backtester
 [[tool.mypy.overrides]]
-module = "backtester"
 ignore_errors = true
+module = "backtester"
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:warnings"]
-

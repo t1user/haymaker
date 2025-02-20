@@ -1,7 +1,7 @@
 import logging
 
 import numpy as np
-from arctic import Arctic
+from arctic import Arctic  # type: ignore
 from ib_insync import IB, ContFuture, Future, MarketOrder  # noqa
 
 from .datastore import AbstractBaseStore

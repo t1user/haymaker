@@ -303,8 +303,8 @@ class ReportTradeHandler(BaseTradeHandler):
         self.blotter = blotter
 
     def attach_events(self, trade: ibi.Trade, reason: str = "") -> None:
-        report_trade = partial(self.onFilled, reason)
-        report_commission = partial(self.onCommissionReport, reason)
+        report_trade = self.onFilled
+        report_commission = self.onCommissionReport
         trade.statusEvent += self.onStatus
         trade.modifyEvent += self.onModify
         trade.fillEvent += self.onFill

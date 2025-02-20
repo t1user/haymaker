@@ -18,3 +18,4 @@ dist/
 stubs/
 _version.py
 build
+docs/build/

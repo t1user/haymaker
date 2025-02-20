@@ -96,6 +96,18 @@ class ContractManagingDescriptor:
 
 @dataclass
 class Details:
+    """
+    Wrapper object for :class:`ib_insync.contract.ContractDetails` extracting
+    and processing information that's most relevant for Haymaker.
+
+    Attributes:
+        details (ibi.ContractDetails): The original contract details object.
+        trading_hours (list[tuple[datetime, datetime]]): List of tuples with
+            start and end of trading hours for this contract.
+        liquid_hours (list[tuple[datetime, datetime]]): List of tuples with
+            start and end of liquid hours for this contract.
+    """
+
     _fields: ClassVar[list] = [f.name for f in fields(ibi.ContractDetails)]
     details: ibi.ContractDetails
     trading_hours: list[tuple[datetime, datetime]] = field(init=False, repr=False)
@@ -115,12 +127,45 @@ class Details:
         super().__getattr__(name)
 
     def is_open(self, _now: Optional[datetime] = None) -> bool:
+        """
+        Given current time check if the market is open for underlying contract.
+
+        Args:
+            _now (Optional[datetime], optional): Defaults to None.
+            If not provided current time will be used. Only situation when
+            it's useful to provide `_now` is in testing.
+
+        Returns:
+            bool: True if market is open, False otherwise.
+        """
         return self._is_active(self.trading_hours, _now)
 
     def is_liquid(self, _now: Optional[datetime] = None) -> bool:
+        """
+        Given current time check if the market is during liquid hours
+        for underlying contract.
+
+        Args:
+            _now (Optional[datetime], optional): . Defaults to None.
+            If not provided current time will be used. Only situation when
+            it's useful to provide `_now` is in testing.
+
+        Returns:
+            bool: True if market is liquid, False otherwise.
+        """
         return self._is_active(self.liquid_hours, _now)
 
     def next_open(self, _now: Optional[datetime] = None) -> datetime:
+        """
+        Return time of nearest market re-open (regardless if market is
+        open now).  Should be used after it has been tested that
+        :meth:`is_active` is False.
+
+        Args:
+            _now (Optional[datetime], optional): Defaults to None.
+            If not provided current time will be used. Only situation when
+            it's useful to provide `_now` is in testing.
+        """
         return self._next_open(self.trading_hours, _now)
 
     _process_trading_hours = staticmethod(process_trading_hours)
@@ -140,10 +185,53 @@ class ContractRollData(NamedTuple):
 
 class Atom:
     """
-    Abstract base object from which all other objects inherit.
+    Abstract base object from which all other objects inherit. It's a basic building
+    block for creating strategies in Haymaker. Every ``Atom`` represents a processing
+    step typically for one traded instrument, thus allowing for separation of concerns.
+    Connecting ``Atoms`` creates a processing pipeline.
 
-    If overriding `onStart` or `onData` make sure to call superclass.
+    ``Atoms`` in a pipeline communicate with each other in an event-driven manner
+    through three methods: :meth:`onStart``, :meth:`onData`, :meth:`onFeedback`.
+    Those methods are called when appropriate :class:`eventkit.event.Event` objects are
+    emitted (respectively :attr:`startEvent`, :attr:`dataEvent`, :attr:`feedbackEvent`),
+    and emit their own events when they are done processing thus sending a signal to
+    the next ``Atom`` in the pipeline that it can start processing.
 
+    Users are free to put in those methods any processing logic they want, using any
+    libraries and tools required. ``Atoms`` can be connected in any order; unions can be
+    created by connecting more than one ``Atom``; pipelines can be created using
+    auxiliary class :class:`Pipeline`.
+
+    Attributes:
+        contract (ib_insync.contract.Contract): The contract object associated with
+            this Atom. This can be any :class:`ib_insync.contract.Contract`. On startup
+            this contract will be qualified and available
+            :class:`ib_insync.contract.ContractDetails` will be downloaded from broker
+            and made available through :attr:`details` attribute. If contract
+            is a :class:`ib_insync.contract.ContFuture`,
+            it will be replaced with on-the-run :class:`ib_insync.contract.Future`
+            and whenever this contract needs to be rolled, :meth:`onContractChanged`
+            method will be called. This attribute doesn't need to be set. If this Atom
+            object is not related to any one particular contract, just don't assign any
+            value to this attribute.
+
+        ib (ClassVar[ibi.IB]): The instance of the :class:`ib_insync.ib.IB` client used
+           for interacting with the broker. It can be used to communicate with
+           the broker if neccessary.
+
+        sm (ClassVar[StateMachine]): Access to :class:`StateMachine` which is
+            Haymaker's central collection of information about current positions,
+            orders and state of strategies.
+
+        contracts (ClassVar[list[ibi.Contract]]): A collection of all contracts
+            currently in use.
+
+        events (ClassVar[Sequence[str]]): Collection of :class:`eventkit.Event` objects
+            used by ``Haymaker``, i.e. :attr:`startEvent`, :attr:`dataEvent`,
+            :attr:`feedbackEvent`, appropriate methods should use these events to
+            communicate with other objects in the chain, e.g. :meth:`onStart` after
+            processing incoming data should pass the result to the next object
+            by calling `self.dataEvent.emit(data)`.
     """
 
     ib: ClassVar[ibi.IB]
@@ -157,7 +245,7 @@ class Atom:
     )
     contract = cast(ibi.Contract, ContractManagingDescriptor())
     _contract_memo: Optional[ibi.Contract] = None
-    roll_contract_data: Optional[ContractRollData] = None
+    _roll_contract_data: Optional[ContractRollData] = None
 
     @classmethod
     def set_init_data(cls, ib: ibi.IB, sm: StateMachine) -> None:
@@ -171,9 +259,16 @@ class Atom:
     @property
     def details(self) -> Details | DetailsContainer:
         """
-        If :attr:`contract` is set :attr:`details` will be received
+        Contract details received from the broker.
+
+        If :attr:`contract` is set, :attr:`details` will be returned
         only for this contract, otherwise :attr:`details` will return
-        a dictionary of all available details, ie.  dict[ibi.Contract, Details]
+        a dictionary of all available details,
+        ie. :class:`dict`[:class:`ibi.Contract`, :class:`Details`]
+
+        :class:`Details` is a wrapper around
+        :class:`ib_insync.contract.ContractDetails` with some
+        additional methods and attributes.
         """
         if self.contract:
             try:
@@ -197,9 +292,27 @@ class Atom:
 
     def onStart(self, data, *args) -> None:
         """
-        If overriding the class make sure to call superclass; call to
-        `super().onStart(data)` should be the last line in overriden method;
-        don't emit `startEvent` in subclass.
+        Perform any initilization required on system (re)start.  It
+        will be run automatically and it will be linked to
+        :attr:`startEvent` of the preceding object in the chain.
+
+        First `Atom` in a pipeline (typically a data streamer) will
+        be called by system, which is an indication that (re)start is
+        in progress and we have successfully connected to the broker.
+
+        `data` by default is a dict and all keys on this dict are
+        being set as properties on the object.  Any information that
+        needs to be passed to atoms down the chain, should be appended
+        to `data` without removing any existing keys.
+
+        If overriding the class, call superclass; call to
+        :meth:`super().onStart(data)` should be the last line in overriden
+        method; don't manually emit :attr:`startEvent` in subclass.
+
+        This method can be synchronous as well as asynchronous (in the
+        subclass it's ok to override it with `async def onData(self,
+        data, *args)`).  If it's async, it will be put in the asyncio
+        loop.
         """
         if isinstance(data, dict):
             self.__dict__.update(**data)
@@ -213,21 +326,63 @@ class Atom:
         self.startEvent.emit(data, self)
 
     def onData(self, data: dict, *args) -> Awaitable[None] | None:
+        """
+        Connected to :attr:`dataEvent` of the preceding object in the chain.
+        This is the entry point to any processing perfmormed by this
+        object.  Result of this processing should be added to the
+        `data` dict and passed to the subsequent object in the chain
+        using :attr:`dataEvent` (by calling `self.dataEvent.emit(data)`).
+
+        It's up to the user to emit `dataEvent` with appropriate data,
+        this event will NOT be emitted by the system, so if it's not
+        properly implemented, event chain will be broken.  This method
+        must be obligatorily overriden in a subclass.
+
+        Calling superclass on exit will add a timestamp with object's
+        name to `data`, which may be useful for logging.
+
+        This method can be synchronous as well as asynchronous (in the
+        subclass it's ok to override it with `async def onData(self,
+        data, *args)`).  If it's async, it will be put in the asyncio
+        loop.
+        """
         data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
         return None
 
     def onFeedback(self, data, *args) -> Awaitable[None] | None:
+        """
+        Connected to :attr:`feedbackEvent` of the subsequent object in the
+        chain.  Allows for passing of information about trading
+        results.  It's optional to use it, if used, overriden method
+        must emit `feedbackEvent` with appropriate data.  If not
+        overriden, it will just pass received data to the previous
+        object in the chain.
+
+        This method can be synchronous as well as asynchronous (in the
+        subclass it's ok to override it with `async def onData(self,
+        data, *args)`).  If it's async, it will be put in the asyncio
+        loop.
+        """
+        self.feedbackEvent.emit(data)
         return None
 
     def onContractChanged(
         self, old_contract: ibi.Future, new_contract: ibi.Future
     ) -> Awaitable[None] | None:
-        """This is not chained."""
+        """
+        Will be called if contract object on `self.contract` changes.
+        In particular, this happens when future contract is about to
+        expire, and new on-the-run contract replaces old, expiring
+        contract.  This method should be used to initialize any
+        adjustment required on the object in relation to contract
+        rolling.  Actual position rolling is taken care of by
+        `Controller` object.
+        """
         log.warning(
             f"Contract on {self} changed from {old_contract.localSymbol} "
             f"to new contract {new_contract.localSymbol}"
         )
-        self.roll_contract_data = ContractRollData(old_contract, new_contract)
+        self._roll_contract_data = ContractRollData(old_contract, new_contract)
         return None
 
     @property
@@ -238,6 +393,19 @@ class Atom:
         return self.sm.strategy[strategy]
 
     def connect(self, *targets: Atom) -> "Atom":
+        """
+        Connect appropriate events and methods to subsequent :class:`Atom`
+        object(s) in the chain. Shorthand for this method is `+=`
+
+        Args:
+            targets (Atom): One or more :class:`Atom` objects to connect to.
+                If more than one object passed, they will be connected directly
+                in a `one-to-many` fashion. If the intention is to create
+                a chain of objects, use :meth:`pipe` instead.
+
+        Returns:
+            Atom: The updated `Atom` object.
+        """
         for t in targets:
             self.disconnect(t)
             self.startEvent.connect(
@@ -251,6 +419,14 @@ class Atom:
         return self
 
     def disconnect(self, *targets: Atom) -> "Atom":
+        """
+        Disconnect passed :class:`Atom` objects, which are directly
+        connected to this atom. Shorthand for this method is `-=`
+
+
+        Args:
+            targets (Atom): One or more :class:`Atom` objects to disconnect from.
+        """
         for t in targets:
             # the same target cannot be connected more than once
             self.startEvent.disconnect_obj(t)
@@ -266,6 +442,18 @@ class Atom:
             obj.feedbackEvent.clear()
 
     def pipe(self, *targets: Atom) -> Pipe:
+        """
+        Create a :class:`Pipe` or a chain of connected :class:`Atom` objects.
+        Only first `target` will be directly connected to this object, second
+        target will be connected to the first target and so on. It's different
+        from :meth:`connect` method, which connects all targets directly to
+        this object.
+
+        Returns:
+            Pipe: :class:`Pipe` object with all targets connected in a chain,
+            where this object is the first and the last target is the last
+            target in the list of passed targets.
+        """
         return Pipe(self, *targets)
 
     def union(self, *targets: "Atom") -> "Atom":
@@ -288,16 +476,25 @@ class Atom:
 
 
 class Pipe(Atom):
+    """
+    Auxiliary object for conneting several :class:`Atom` objects. Atoms to be connected
+    need to passed in the right order at initialization.  :class:`Pipe` itself is
+    a subclass of :class:`Atom`, so it can be connected
+    to other :class:`Atom` (or :class:`Pipe`) and all :class:`Atom` attributes
+    and methods are available.
+    """
+
     def __init__(self, *targets: Atom):
         self._members = targets
         self.first = self._members[0]
         self.last = self._members[-1]
         super().__init__()
-        self.pipe()
+        self._pipe()
 
     def _createEvents(self):
-        self.startEvent = self.first.startEvent
-        self.dataEvent = self.first.dataEvent
+        # Pipe doesn't create its own events, but redirects events of member Atoms
+        self.startEvent = self.last.startEvent
+        self.dataEvent = self.last.dataEvent
         self.feedbackEvent = self.first.feedbackEvent
 
     def connect(self, *targets: Atom) -> "Pipe":
@@ -321,11 +518,13 @@ class Pipe(Atom):
     def onFeedback(self, data, *args) -> None:
         self.last.onFeedback(data, *args)
 
-    def pipe(self):
+    def _pipe(self):
+        source = None
         for i, member in enumerate(self._members):
             if i > 0:
-                source.connect(member)  # noqa
-            source = member  # noqa
+                assert source is not None
+                source.connect(member)
+            source = member
 
     def __getitem__(self, i: int) -> Atom:
         return self._members[i]
