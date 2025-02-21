@@ -57,7 +57,7 @@ async def test_saver():
 
     t.save("xxx")
     t1.save("yyy")
-    await asyncio.sleep(0.02)
+    await asyncio.sleep(0.04)
     assert FakeSaver.output == ["xxx", "yyy"]
 
 
@@ -79,7 +79,7 @@ async def test_class_with_two_savers():
 
     t.save_one("xxx")
     t.save_two("yyy")
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0.04)
     assert FakeSaver.output == ["xxx", "yyy"]
 
 
@@ -98,5 +98,5 @@ async def test_SaveManager_as_non_descriptor():
     t = T(FakeSaver("irrelevant", False))
 
     t.save("xxx")
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0.04)
     assert FakeSaver.output == ["xxx"]
