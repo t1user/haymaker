@@ -12,6 +12,7 @@ from typing import (
     ClassVar,
     NamedTuple,
     Optional,
+    Self,
     Sequence,
     cast,
 )
@@ -392,7 +393,7 @@ class Atom:
             log.warning(f"{self} accessing data for empty strategy.")
         return self.sm.strategy[strategy]
 
-    def connect(self, *targets: Atom) -> "Atom":
+    def connect(self, *targets: Atom) -> Self:
         """
         Connect appropriate events and methods to subsequent :class:`Atom`
         object(s) in the chain. Shorthand for this method is `+=`
@@ -418,7 +419,7 @@ class Atom:
 
         return self
 
-    def disconnect(self, *targets: Atom) -> "Atom":
+    def disconnect(self, *targets: Atom) -> Self:
         """
         Disconnect passed :class:`Atom` objects, which are directly
         connected to this atom. Shorthand for this method is `-=`
@@ -456,7 +457,7 @@ class Atom:
         """
         return Pipe(self, *targets)
 
-    def union(self, *targets: "Atom") -> "Atom":
+    def union(self, *targets: "Atom") -> Self:
         for t in targets:
             self.connect(t)
         return self
@@ -497,12 +498,12 @@ class Pipe(Atom):
         self.dataEvent = self.last.dataEvent
         self.feedbackEvent = self.first.feedbackEvent
 
-    def connect(self, *targets: Atom) -> "Pipe":
+    def connect(self, *targets: Atom) -> Self:
         for target in targets:
             self.last.connect(target)
         return self
 
-    def disconnect(self, *targets: Atom) -> "Pipe":
+    def disconnect(self, *targets: Atom) -> Self:
         for target in targets:
             self.last.startEvent.disconnect_obj(target)
             self.last.dataEvent.disconnect_obj(target)

@@ -6,6 +6,7 @@ from typing import Type
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
+from helpers import wait_for_condition
 
 from haymaker.streamers import HistoricalDataStreamer, Streamer, Timeout
 
@@ -128,5 +129,4 @@ async def test_timer_triggered(timeout, Atom, details):
         debug=True,
         _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
     )
-    await asyncio.sleep(0.2)
-    assert t.triggered
+    assert await wait_for_condition(lambda: t.triggered)

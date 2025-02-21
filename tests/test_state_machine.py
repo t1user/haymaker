@@ -4,6 +4,7 @@ from typing import Any
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
+from helpers import wait_for_condition
 
 from haymaker.state_machine import (
     OrderContainer,
@@ -587,10 +588,10 @@ async def test_StrategyContainer_gets_events_on_Strategy_change():
     print(cont.strategyChangeEvent)
     strat = cont["new_strategy"]
     strat.position += 1
-    await asyncio.sleep(0.001)
+    await asyncio.sleep(0)
     # there were 7 events emitted (6 items added to strategy dict and 1 change)
     # they were all debounced into one event
-    assert c.count == 1
+    assert await wait_for_condition(lambda: c.count == 1)
 
 
 def test_strategy_has_position_attribute():

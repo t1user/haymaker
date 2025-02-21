@@ -1,9 +1,9 @@
-import asyncio
 import random
 from itertools import count
 
 import ib_insync as ibi
 import pytest
+from helpers import wait_for_condition
 
 from haymaker.manager import IB
 
@@ -26,9 +26,9 @@ def trades_and_positions():
     return trades, positions
 
 
-@pytest.fixture()
-def controller(Controller):
-    return Controller()
+# @pytest.fixture()
+# def controller(Controller):
+#     return Controller()
 
 
 # def test_positions_and_stop_losses_no_diff(trades_and_positions, controller):
@@ -107,8 +107,7 @@ def controller(Controller):
 @pytest.mark.asyncio
 async def test_StateMachine_linked_to_ib_newOrderEvent(caplog):
     IB.newOrderEvent.emit(ibi.Trade(order=ibi.Order(orderId=123)))
-    await asyncio.sleep(0.2)
-    assert "123" in caplog.text
+    assert await wait_for_condition(lambda: "123" in caplog.text)
 
 
 def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):

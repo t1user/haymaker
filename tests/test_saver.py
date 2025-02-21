@@ -1,7 +1,7 @@
-import asyncio
 from datetime import datetime, timezone
 
 import pytest
+from helpers import wait_for_condition
 
 from haymaker.saver import AbstractBaseSaver, AsyncSaveManager
 
@@ -57,8 +57,7 @@ async def test_saver():
 
     t.save("xxx")
     t1.save("yyy")
-    await asyncio.sleep(0.04)
-    assert FakeSaver.output == ["xxx", "yyy"]
+    assert await wait_for_condition(lambda: FakeSaver.output == ["xxx", "yyy"])
 
 
 @pytest.mark.asyncio
@@ -79,8 +78,7 @@ async def test_class_with_two_savers():
 
     t.save_one("xxx")
     t.save_two("yyy")
-    await asyncio.sleep(0.04)
-    assert FakeSaver.output == ["xxx", "yyy"]
+    assert await wait_for_condition(lambda: FakeSaver.output == ["xxx", "yyy"])
 
 
 @pytest.mark.asyncio
@@ -98,5 +96,5 @@ async def test_SaveManager_as_non_descriptor():
     t = T(FakeSaver("irrelevant", False))
 
     t.save("xxx")
-    await asyncio.sleep(0.04)
-    assert FakeSaver.output == ["xxx"]
+
+    assert await wait_for_condition(lambda: FakeSaver.output == ["xxx"])
