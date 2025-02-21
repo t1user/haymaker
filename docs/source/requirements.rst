@@ -2,7 +2,7 @@ Requirements
 ============
 
 * Linux 
-* Python 3.10 or higher
+* Python 3.11 or higher
 * A running TWS or IB Gateway application
 
 Dependencies
