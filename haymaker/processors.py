@@ -41,7 +41,12 @@ class BarAggregator(Atom):
                 log.setLevel(self._log_level)
         # everything in data will be set as object properties
         # start event will be emitted
-        super().onStart(data, *args)
+        try:
+            super().onStart(data, *args)
+        except Exception as e:
+            log.exception(e)
+        if self.future_adjust:
+            log.warning(f"{self} onStart knows future needs adjust")
 
     def onDataBar(self, bars, *args):
         if self._incremental_only:
@@ -56,6 +61,7 @@ class BarAggregator(Atom):
         # data is just single BarData object (if incremental_only=True,
         # which is default and currently only mode supported)
         if self.future_adjust:
+            {f"{self} will adjust futures"}
             # first data point is just to determine adjustment basis
             # should be passed to adjust_future
             self.adjust_future(data)
@@ -90,8 +96,9 @@ class BarAggregator(Atom):
         turned off by passing `future_adjust_type=None` while
         initiating the class.
         """
+        log.warning(f"{self} inside future adjust")
         if self.operator is None:
-            log.warning(f"Skipping futures adjustment on {self}")
+            log.error(f"Skipping futures adjustment on {self}")
             return
         assert self.reverse_operator is not None
 

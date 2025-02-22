@@ -234,7 +234,7 @@ class HistoricalDataStreamer(Streamer):
 
     async def backfill(self, bars):
         # this will switch processor into backfill mode
-        self.startEvent.emit({"startup": True, "future_adjust": self._future_adjust})
+        self.startEvent.emit({"startup": True})
         log.debug(
             f"Starting backfill {self.name}, pulled {len(bars)} bars, "
             f"last bar: {bars[-1]}"
@@ -330,7 +330,9 @@ class HistoricalDataStreamer(Streamer):
         ):
             log.warning(f"{self!s} will adjust for rolled future.")
             if old_contract not in self._adjusted:
+                log.warning(f"{self!s} set to adjust future")
                 self._future_adjust = True
+                self.startEvent.emit({"future_adjust": True})
                 self._adjusted.append(old_contract)
             else:
                 log.warning(
