@@ -731,8 +731,11 @@ class FutureRoller:
         Strategy records are updated after trade is filled (as
         usual), so is updating of resting stop and take-profit orders.
         """
-        # THIS IS A GENERATOR
-        log.debug(f"Inside execute for {old_contract.localSymbol}")
+        # THIS IS A GENERATOR!!!
+        log.debug(
+            f"Inside execute for {old_contract.localSymbol} "
+            f"-> {new_contract.localSymbol}"
+        )
         # positions for expiring contract that are not excluded from rolling
         total = self.positions[old_contract]
         log.debug(f"Total position for: {old_contract.localSymbol}: {total}")
@@ -747,12 +750,15 @@ class FutureRoller:
                 )
                 # if we're changing orders and records connected to a strategy
                 # that we trade, make those changes when and if the order is filled
-                trade.filledEvent += partial(
-                    self.adjust_records_and_orders_for_strategy,
-                    strategy_str,
-                    strategy,
-                    old_contract,
-                    new_contract,
+                # `self.adjust_records_and_orders_for_strategy` doesn't accept `Trade`
+                # so don't just wrap it in `partial`!
+                trade.filledEvent += (
+                    lambda trade: self.adjust_records_and_orders_for_strategy(
+                        strategy_str,
+                        strategy,
+                        old_contract,
+                        new_contract,
+                    )
                 )
                 # this just calls `next` on the generator
                 trade.filledEvent += self.trade_callback
