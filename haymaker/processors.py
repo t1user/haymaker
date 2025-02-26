@@ -45,6 +45,7 @@ class BarAggregator(Atom):
             super().onStart(data, *args)
         except Exception as e:
             log.exception(e)
+
         if self.future_adjust:
             log.warning(f"{self} onStart knows future needs adjust")
 
@@ -160,6 +161,15 @@ class CountBars(ev.Op):
             self.bars.updateEvent.emit(self.bars, True)
             self.emit(self.bars)
 
+    def __str__(self) -> str:
+        return f"CountBars({self.label})"
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(count={self._count}, "
+            f"source={self._source}, label={self.label})"
+        )
+
 
 class VolumeBars(ev.Op):
     __slots__ = ("_volume", "bars", "label")
@@ -202,6 +212,15 @@ class VolumeBars(ev.Op):
             self.bars.updateEvent.emit(self.bars, True)
             self.emit(self.bars)
 
+    def __str__(self) -> str:
+        return f"VolumeBars({self.label})"
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(volume={self._volume}, "
+            f"source={self._source}, label={self.label})"
+        )
+
 
 class TickBars(ev.Op):
     __slots__ = ("_count", "bars", "label")
@@ -233,6 +252,15 @@ class TickBars(ev.Op):
             bar.average = bar.average / bar.volume
             self.bars.updateEvent.emit(self.bars, True)
             self.emit(self.bars)
+
+    def __str__(self) -> str:
+        return f"TickBars({self.label})"
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(count={self._count}, "
+            f"source={self._source}, label={self.label})"
+        )
 
 
 class TimeBars(ev.Op):
@@ -279,6 +307,15 @@ class TimeBars(ev.Op):
         self._timer = None
         self.set_done()
 
+    def __str__(self) -> str:
+        return f"TimeBars({self.label})"
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(timer={self._timer}, "
+            f"source={self._source}, label={self.label})"
+        )
+
 
 class NoFilter(ev.Op):
     """
@@ -300,3 +337,9 @@ class NoFilter(ev.Op):
         log.log(5, f"New candle for {self.label} -> {self.bars[-1]}")
         self.bars.updateEvent.emit(self.bars, True)
         self.emit(self.bars)
+
+    def __str__(self) -> str:
+        return f"NoFilter({self.label})"
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(source={self._source}, label={self.label})"
