@@ -8,9 +8,9 @@ from collections import UserDict
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Literal
+from zoneinfo import ZoneInfo
 
 import ib_insync as ibi
-import pytz
 
 from .config import CONFIG
 
@@ -106,17 +106,19 @@ def process_trading_hours(
     output_tzname: output will be converted to this timezone (best if
     left at UTC); this param is really for testing
     """
-    input_tz_ = pytz.timezone(input_tz)
-    output_tz_ = pytz.timezone(output_tz)
+    input_tz_ = ZoneInfo(input_tz)
+    output_tz_ = ZoneInfo(output_tz)
 
     def datetime_tuples(s: str) -> tuple[dt.datetime | None, dt.datetime | None]:
         def to_datetime(datetime_string: str) -> dt.datetime | None:
             if datetime_string[-6:] == "CLOSED":
                 return None
             else:
-                return input_tz_.localize(
+                return (
                     dt.datetime.strptime(datetime_string, "%Y%m%d:%H%M")
-                ).astimezone(tz=output_tz_)
+                    .replace(tzinfo=input_tz_)
+                    .astimezone(tz=output_tz_)
+                )
 
         try:
             f, t = s.split("-")
@@ -170,7 +172,7 @@ def next_active(
     """
 
     if not now:
-        now = dt.datetime.now(tz=pytz.timezone("UTC"))
+        now = dt.datetime.now(tz=ZoneInfo("UTC"))
 
     if not time_tuples:
         return now

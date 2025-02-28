@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
+from typing import Literal
+from zoneinfo import ZoneInfo
 
 import pytest
-import pytz
 
 from haymaker.misc import Counter, is_active, next_active, process_trading_hours, sign
 
@@ -32,7 +33,7 @@ def test_Counter_doesnt_duplicate_on_reinstantiation():
     "input,expected",
     [(0, 0), (5, 1), (-10, -1), (-3.4, -1), (2.234, 1), (-0, 0), (+0, 0), (-0.0000, 0)],
 )
-def test_sign_function(input, expected):
+def test_sign_function(input: float | Literal[0] | Literal[5] | Literal[-10], expected):
     assert sign(input) == expected
 
 
@@ -88,10 +89,10 @@ def test_process_trading_hours():
         ((2023, 10, 21, 17, 15), False),  # during closed day]
     ],
 )
-def test_is_active(datetimetuple, result):
+def test_is_active(datetimetuple: tuple[int, int, int, int, int], result: bool):
     # hours output in UTC, which compares correctly with now given in US/Central
     hours = process_trading_hours(trading_hours_string, input_tz="US/Central")
-    now = pytz.timezone("US/Central").localize(datetime(*datetimetuple))
+    now = datetime(*datetimetuple, tzinfo=ZoneInfo("US/Central"))
     assert is_active(hours, now=now) == result
 
 
@@ -110,11 +111,14 @@ def test_is_active(datetimetuple, result):
         ((2023, 10, 21, 17, 15), (2023, 10, 22, 17, 00)),  # during closed day]
     ],
 )
-def test_next_active(datetimetuple, result):
+def test_next_active(
+    datetimetuple: tuple[int, int, int, int, int],
+    result: tuple[int, int, int, int, int],
+):
     hours = process_trading_hours(
         trading_hours_string,
     )
-    now = pytz.timezone("US/Central").localize(datetime(*datetimetuple))
-    assert next_active(hours, now=now) == pytz.timezone("US/Central").localize(
-        datetime(*result)
+    now = datetime(*datetimetuple, tzinfo=ZoneInfo("US/Central"))
+    assert next_active(hours, now=now) == datetime(
+        *result, tzinfo=ZoneInfo("US/Central")
     )
