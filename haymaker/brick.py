@@ -92,6 +92,7 @@ class AbstractDfBrick(AbstractBaseBrick):
             log.error(
                 f"{self} received data in wrong format: {data}, type: {type(data)}"
             )
+            d = pd.DataFrame()
         return self.df(d)
 
     @_create_df.register(pd.DataFrame)
@@ -105,7 +106,11 @@ class AbstractDfBrick(AbstractBaseBrick):
     @_create_df.register(BarList)
     @_create_df.register(ibi.BarDataList)
     def _(self, data: BarList | ibi.BarDataList) -> pd.DataFrame:
-        return self.df(ibi.util.df(data).set_index("date"))
+        df_ = ibi.util.df(data)
+        if df_ is not None:
+            return self.df(df_.set_index("date"))
+        else:
+            return pd.DataFrame()
 
     @abstractmethod
     def df(self, data: pd.DataFrame) -> pd.DataFrame: ...

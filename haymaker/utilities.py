@@ -98,7 +98,9 @@ def quota_checker(store: Arctic) -> None:
     Given arctic datastore print quotas for all libraries.
     """
     for lib in store.list_libraries():
-        quota = store.get_quota(lib) / 1024**3
+        quota_ = store.get_quota(lib)
+        assert quota_
+        quota = quota_ / 1024**3
         size = store.get_library(lib).stats()["totals"]["size"] / 1024**3
         usage = size / quota
         print(f"{lib} - quota: {quota:.2f}GB, size: {size:.2f}GB, usage: {usage:.1%}")

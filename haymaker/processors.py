@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 class BarAggregator(Atom):
     def __init__(
         self,
-        filter: "CountBars" | "VolumeBars" | "TimeBars" | "NoFilter",
+        filter: "CountBars | VolumeBars | TimeBars | NoFilter",
         incremental_only: bool = False,
         future_adjust_type: Literal["add", "mul", None] = "add",
         debug: bool = False,
@@ -58,14 +58,19 @@ class BarAggregator(Atom):
         else:
             self.dataEvent.emit(bars)
 
-    def onData(self, data, *args) -> None:
+    def onData(self, data: ibi.BarData | ibi.BarDataList, *args) -> None:
         # data is just single BarData object (if incremental_only=True,
         # which is default and currently only mode supported)
         if self.future_adjust:
-            {f"{self} will adjust futures"}
+            log.warning(f"{self} will adjust futures")
+            log.debug(f"{data=}")
             # first data point is just to determine adjustment basis
             # should be passed to adjust_future
-            self.adjust_future(data)
+            try:
+                assert isinstance(data, ibi.BarData)
+                self.adjust_future(data)
+            except Exception as e:
+                log.exception(e)
             # adjust mode should be switched off for subsequent emits
             self.future_adjust = False
             # and it shouldn't be emitted further down the chain
@@ -79,6 +84,7 @@ class BarAggregator(Atom):
                 data = data[-1]
             except KeyError:
                 log.debug("Empty input from streamer.")
+        assert isinstance(data, ibi.BarData)
         self._filter.on_source(data)
 
     @cached_property
@@ -128,7 +134,7 @@ class BarList(list[ibi.BarData]):
     def __eq__(self, other):
         return self is other
 
-    def __hash__(self):
+    def __hash__(self):  # type: ignore
         return id(self)
 
 

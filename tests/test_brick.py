@@ -11,7 +11,7 @@ from haymaker.brick import AbstractBaseBrick, AbstractDfBrick
 
 
 @pytest.fixture
-def brick():
+def brick() -> AbstractBaseBrick:
     class Brick(AbstractBaseBrick):
         def _signal(self, data):
             return {"signal": 1, "abc": "xyz", "pqz": 5}
@@ -19,17 +19,17 @@ def brick():
     return Brick("eska_NQ", ibi.Future("NQ", "CME"))
 
 
-def test_brick_instantiates(brick):
+def test_brick_instantiates(brick: AbstractBaseBrick):
     b = brick
     assert isinstance(b, AbstractBaseBrick)
 
 
 def test_AbstractBaseBrick_is_abstract():
     with pytest.raises(TypeError):
-        AbstractBaseBrick()
+        AbstractBaseBrick()  # type: ignore
 
 
-def test_data_passed_correct(brick):
+def test_data_passed_correct(brick: AbstractBaseBrick):
     x = {}
 
     def recorder(a):
@@ -67,15 +67,15 @@ def data_for_df():
 @pytest.fixture
 def df_brick():
     class Brick(AbstractDfBrick):
-        def df(self, df):
-            df["price_plus"] = df["price"] + 1
-            return df
+        def df(self, data):
+            data["price_plus"] = data["price"] + 1
+            return data
 
     return Brick("eska_NQ", ibi.Future("NQ", "CME"))
 
 
 @pytest.fixture
-def df_connected_brick(df_brick):
+def df_connected_brick(df_brick: AbstractDfBrick) -> tuple[AbstractDfBrick, Atom]:
     class NewAtom(Atom):
         def onData(self, data, *args):
             self.memo = data
@@ -92,34 +92,36 @@ def test_df_brick_instantiates(df_brick):
 
 def test_AbstractDfBrick_is_abstract():
     with pytest.raises(TypeError):
-        AbstractDfBrick()
+        AbstractDfBrick()  # type: ignore
 
 
-def test_signal_correct(df_connected_brick, data_for_df):
+def test_signal_correct(
+    df_connected_brick: tuple[AbstractDfBrick, Atom], data_for_df: dict
+):
     """Test that df_brick correctly emits the last row of df."""
     brick, atom = df_connected_brick
     brick.onData(data_for_df)
-    assert "signal" in atom.memo.keys()
-    assert atom.memo["signal"] == 1
+    assert "signal" in atom.memo.keys()  # type: ignore
+    assert atom.memo["signal"] == 1  # type: ignore
 
 
 @pytest.fixture
 def basic_df_brick():
     class Brick(AbstractDfBrick):
-        def df(self, df):
-            return df
+        def df(self, data):
+            return data
 
     return Brick("eska_NQ", ibi.Future("NQ", "CME"))
 
 
-def test_dispatchmethod_df(basic_df_brick, data_for_df):
+def test_dispatchmethod_df(basic_df_brick: AbstractDfBrick, data_for_df: dict):
     df = pd.DataFrame(data_for_df)
     row = basic_df_brick.df_row(df)
     # hard to compare two Series, easier with dicts, result the same
     assert row.to_dict() == df.iloc[-1].to_dict()
 
 
-def test_dispatchmethod_barList(basic_df_brick):
+def test_dispatchmethod_barList(basic_df_brick: AbstractDfBrick):
     with open(os.path.join(TEST_ROOT, "data/data_from_streamer.pickle"), "rb") as f:
         data = pickle.loads(f.read())
     row_dict = data[-1].dict()
@@ -127,7 +129,7 @@ def test_dispatchmethod_barList(basic_df_brick):
     assert row_dict == row.to_dict()
 
 
-def test_dispatchmethod_dict(basic_df_brick, data_for_df):
+def test_dispatchmethod_dict(basic_df_brick: AbstractDfBrick, data_for_df: dict):
     out = basic_df_brick.df_row(data_for_df)
 
     should_be = pd.DataFrame(data_for_df).iloc[-1]

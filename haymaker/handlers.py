@@ -2,7 +2,6 @@
 # TODO: needs review
 
 import logging
-from functools import partial
 from typing import Dict, Set, Tuple
 
 import ib_insync as ibi

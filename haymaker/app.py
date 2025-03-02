@@ -29,19 +29,19 @@ CONFIG = config.get("app") or {}
 
 
 class IBC(Protocol):
-    async def startAsync(self): ...
+    async def startAsync(self) -> None: ...
 
-    async def terminateAsync(self): ...
+    async def terminateAsync(self) -> None: ...
 
 
 @dataclass
 class FakeIBC(IBC):
     restart_time: int = cast(int, CONFIG.get("restart_time"))
 
-    async def startAsync(self):
+    async def startAsync(self) -> None:
         pass
 
-    async def terminateAsync(self):
+    async def terminateAsync(self) -> None:
         CONTROLLER.set_hold()
         log.debug(f"Pausing {self.restart_time} secs before restart...")
         await asyncio.sleep(self.restart_time)
@@ -53,8 +53,8 @@ class App:
     jobs: Jobs = JOBS
     ibc: IBC = field(default_factory=FakeIBC)
     host: str = CONFIG.get("host") or "127.0.0.1"
-    port: float = CONFIG.get("port") or 4002
-    clientId: float = CONFIG.get("cliendId") or 0
+    port: int = CONFIG.get("port") or 4002
+    clientId: int = CONFIG.get("cliendId") or 0
     appStartupTime: float = CONFIG.get("appStartupTime") or 0
     appTimeout: float = CONFIG.get("appTimeout") or 20
     retryDelay: float = CONFIG.get("retryDelay") or 2
@@ -63,7 +63,7 @@ class App:
     no_future_roll_strategies: list[str] = field(default_factory=list)
     _connections: int = 0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.ib.errorEvent += self.onErr
         self.ib.connectedEvent += self.onConnected
         self.ib.disconnectedEvent += self.onDisconnected
@@ -91,14 +91,16 @@ class App:
 
         log.debug(f"App initiated: {self}")
 
-    def schedule_future_roll(self):
+    def schedule_future_roll(self) -> None:
         roll_time = CONFIG.get("future_roll_time", (10, 0))
         roll_timezone = ZoneInfo(CONFIG.get("future_roll_timezone", "America/New_York"))
         rt = datetime.time(*roll_time, tzinfo=roll_timezone)
         CONTROLLER.set_no_future_roll_strategies(self.no_future_roll_strategies)
-        scheduler = ev.Event.timerange(start=rt, step=datetime.timedelta(days=1))
+        scheduler = ev.Event.timerange(
+            start=rt, step=datetime.timedelta(days=1)  # type: ignore
+        )
         scheduler += CONTROLLER.roll_futures
-        log.debug(f"Future roll scheduled for {rt} {rt.tzinfo.key}")
+        log.debug(f"Future roll scheduled for {rt} {rt.tzinfo.key}")  # type: ignore
 
     def onErr(  # don't want word 'error' in logs, unless it's a real error
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
@@ -157,7 +159,7 @@ class App:
         else:
             return False
 
-    def run(self):
+    def run(self) -> None:
         # this is the main entry point into strategy
         self.watchdog.startedEvent.connect(self._run, error=self._log_event_error)
         log.debug("initializing watchdog...")

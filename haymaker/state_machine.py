@@ -102,7 +102,7 @@ class OrderContainer(UserDict):
             if self.index[key] in self.data:
                 return self.data[self.index[key]]
         if hasattr(self.__class__, "__missing__"):
-            return self.__class__.__missing__(self, key)
+            return self.__class__.__missing__(self, key)  # type: ignore
         raise KeyError(key)
 
     def __delitem__(self, key: int) -> None:
@@ -270,8 +270,9 @@ class StrategyContainer(UserDict):
 
     def encode(self) -> dict[str, Any]:
         data = tree(self.data)
-        data.update({"timestamp": dt.datetime.now(tz=dt.timezone.utc)})
-        return data
+        # `self` is a `dict` so `data` must always be a `dict`
+        data["timestamp"] = dt.datetime.now(tz=dt.timezone.utc)  # type: ignore
+        return data  # type: ignore
 
     def decode(self, data: dict) -> None:
         if data is None:
@@ -335,7 +336,7 @@ class StateMachine:
     about state required by any object must be found here.
     """
 
-    _instance: "StateMachine" | None = None
+    _instance: "StateMachine | None" = None
 
     _save_order = AsyncSaveManager(order_saver)
     _save_model = AsyncSaveManager(model_saver)
@@ -354,7 +355,7 @@ class StateMachine:
         self._orders = OrderContainer()  # dict of OrderInfo
         # will automatically save models to db on every change
         # (but not more often than defined in CONFIG['state_machine']['save_delay'])
-        self._data.strategyChangeEvent += self.save_models
+        self._data.strategyChangeEvent += self.save_models  # type: ignore
 
     def save_models(self, *args) -> None:
         self._save_model(self._data.encode())

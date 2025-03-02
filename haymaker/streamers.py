@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections import UserDict, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, ClassVar, cast
+from typing import Any, Awaitable, Callable, ClassVar, DefaultDict
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -81,13 +81,34 @@ class Timeout:
         return f"Timeout <{self.time}s> for {self.name}  event id: {id(self._timeout)}"
 
 
-class TimeoutContainerDefaultdict(defaultdict):
-    def __missing__(self, key):
-        self[key] = self.default_factory(key)
-        return self[key]
-
-
 class TimeoutContainer(UserDict):
+    """
+    Class that stores and creates timeouts based on parameters extracted from
+    passed :class:`Streamer` instance.
+
+    Args:
+        streamer: :class:`Streamer` instance, whose streams are being kept alive
+
+
+    Usage:
+    .. code-block:: python
+
+        class MyStreamer(Streamer):
+
+            def some_meth(self):
+                ticker = self.streaming_func()
+                # this ensures streaming event is kept alive
+                # and timer is added to TimeoutContainerDefaultdict
+                self.timers["my_timer"] = ticker.updateEvent
+                ticker.updateEvent += self.dataEvent
+
+            def other_meth(self):
+                # timer is accessible via:
+                timer = self.timers["my_timer"]
+
+        s = MyStreamer()
+    """
+
     def __init__(self, streamer: "Streamer"):
         self.streamer = streamer
         super().__init__()
@@ -105,13 +126,37 @@ class TimeoutContainer(UserDict):
         super().__setitem__(key, obj)
 
 
+class TimeoutContainerDefaultdict(defaultdict):
+    """
+    Container for all timeouts.
+
+    This is one container shared among all instances of :class:`Streamer`.
+    * keys are :class:`Streamer` instances - each instance keeps its own dict of
+      timeouts with unique names; it's essential that each :class:`Streamer` is hashable
+    * values are :class:`TimeoutContainer`, which are modified dictionaries, where each
+        :class:`Streamer` can keep its timeouts with keys unique for that class.
+
+    Args:
+        default_factory: essentially it has to be :type:`TimeoutContainer`
+    """
+
+    def __init__(self, default_factory: Callable = TimeoutContainer):
+        super().__init__(default_factory)
+
+    def __missing__(self, key: Any) -> Any:
+        if self.default_factory:
+            self[key] = self.default_factory(key)  # type: ignore
+            return self[key]
+        raise KeyError(key)
+
+
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
     timeout: float = TIMEOUT_TIME
     _counter: ClassVar[Callable[[], int]] = itertools.count().__next__
     _name: str | None = None
-    _timers: TimeoutContainerDefaultdict = TimeoutContainerDefaultdict(
-        cast(Callable, TimeoutContainer)
+    _timers: DefaultDict["Streamer", dict[str, ev.Event]] = (
+        TimeoutContainerDefaultdict()
     )
 
     def __new__(cls, *args, **kwargs):
@@ -146,6 +191,7 @@ class Streamer(Atom, ABC):
 
     def onStart(self, data, *args) -> None:
         ticker = self.streaming_func()
+        self.timers["ticks"] = ticker.updateEvent
         ticker.updateEvent += self.dataEvent
         # relies on superclass to emit startEvent
         super().onStart(data)
@@ -189,6 +235,7 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # don't change
+    timeout: float = TIMEOUT_TIME
     incremental_only: bool = True
     startup_seconds: float = 5
     _last_bar_date: datetime | None = None
@@ -252,7 +299,7 @@ class HistoricalDataStreamer(Streamer):
             )
             stream = (
                 ev.Sequence(bars[:-1])
-                .pipe(ev.Filter(lambda x: x.date >= self._last_bar_date))
+                .pipe(ev.Filter(lambda x: x.date >= self._last_bar_date))  # type: ignore
                 .connect(self.dataEvent)
             )
             self._future_adjust = False
@@ -260,7 +307,7 @@ class HistoricalDataStreamer(Streamer):
             # this is a regular restart; backfilling only data since last emitted point
             stream = (
                 ev.Sequence(bars[:-1])
-                .pipe(ev.Filter(lambda x: x.date > self._last_bar_date))
+                .pipe(ev.Filter(lambda x: x.date > self._last_bar_date))  # type: ignore
                 .connect(self.dataEvent)
             )
 
@@ -348,6 +395,7 @@ class HistoricalDataStreamer(Streamer):
 class MktDataStreamer(Streamer):
     contract: ibi.Contract
     tickList: str
+    timeout: float = TIMEOUT_TIME
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -365,6 +413,7 @@ class RealTimeBarsStreamer(Streamer):
     whatToShow: str
     useRTH: bool
     incremental_only: bool = True
+    timeout: float = TIMEOUT_TIME
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -380,11 +429,12 @@ class RealTimeBarsStreamer(Streamer):
     def onStart(self, data, *args) -> None:
         # self.startEvent.emit(data, self)
         self._run()
-        super().onStart(data)
+        Atom.onStart(self, data, *args)
 
     def _run(self):
         bars = self.streaming_func()
         bars.updateEvent.clear()
+        self.timers["bars"] = bars.updateEvent
         bars.updateEvent += self.onUpdate
 
     def onUpdate(self, bars, hasNewBar):
@@ -404,6 +454,7 @@ class TickByTickStreamer(Streamer):
     tickType: str
     numberOfTicks: int = 0
     ignoreSize: bool = False
+    timeout: float = TIMEOUT_TIME
 
     def __post_init__(self):
         Atom.__init__(self)

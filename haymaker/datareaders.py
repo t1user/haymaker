@@ -1,6 +1,6 @@
 import pickle
 from dataclasses import dataclass, field
-from typing import Any, Type, TypeVar
+from typing import Type, TypeVar
 
 import pandas as pd
 

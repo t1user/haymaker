@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
+    Any,
     Awaitable,
     ClassVar,
     NamedTuple,
     Optional,
     Self,
     Sequence,
+    TypeVar,
     cast,
 )
 
@@ -30,31 +32,10 @@ log = logging.getLogger(__name__)
 
 ContractOrSequence = Sequence[ibi.Contract] | ibi.Contract
 
+T = TypeVar("T", ibi.Contract, None)
+
 
 class ContractManagingDescriptor:
-
-    def __set_name__(self, obj: Atom, name: str) -> None:
-        self.name = name
-
-    def __set__(
-        self, obj: Atom, value: ibi.Contract | collections.abc.Sequence
-    ) -> None:
-        if not isinstance(value, (ibi.Contract, collections.abc.Sequence)):
-            raise TypeError(
-                f"attr contract must be ibi.Contract or sequence of ibi.Contract, "
-                f"not: {type(value)}"
-            )
-        obj.__dict__[self.name] = value
-        self._register_contract(obj, value)
-
-    def __get__(self, obj: Atom, type=None) -> list[ibi.Contract] | ibi.Contract:
-        # some methods rely on not raising an error here if attr self.name not set
-        contract = obj.__dict__.get(self.name)
-        return self._swap_contfuture(contract, obj.contracts)
-
-    def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
-        log.debug(f"Registering contract: {value}")
-        self._append(value, obj.contracts, obj)
 
     @staticmethod
     def _apply_to_contract_or_sequence(func):
@@ -76,11 +57,35 @@ class ContractManagingDescriptor:
 
         return wrapper
 
+    def __set_name__(self, obj: Atom, name: str) -> None:
+        self.name = name
+
+    def __set__(
+        self, obj: Atom, value: ibi.Contract | collections.abc.Sequence
+    ) -> None:
+        if not isinstance(value, (ibi.Contract, collections.abc.Sequence)):
+            raise TypeError(
+                f"attr contract must be ibi.Contract or sequence of ibi.Contract, "
+                f"not: {type(value)}"
+            )
+        obj.__dict__[self.name] = value
+        self._register_contract(obj, value)
+
+    def __get__(self, obj: Atom, type=None) -> list[ibi.Contract] | ibi.Contract | None:
+        # some methods rely on not raising an error here if attr self.name not set
+        # is Atom has not set `contract` attribute, it shouldn't raise an error
+        contract = obj.__dict__.get(self.name)
+        return self._swap_contfuture(contract, obj.contracts)
+
+    def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
+        log.debug(f"Registering contract: {value}")
+        self._append(value, obj.contracts, obj)  # type: ignore
+
     @staticmethod
     @_apply_to_contract_or_sequence
     def _swap_contfuture(
-        contract: ibi.Contract, contract_list: list[ibi.Contract]
-    ) -> ibi.Contract:
+        contract: ibi.Contract | None, contract_list: list[ibi.Contract]
+    ) -> ibi.Contract | None:
         if isinstance(contract, ibi.ContFuture) and contract.conId != 0:
             for i in contract_list:
                 if isinstance(i, ibi.Future) and i.conId == contract.conId:
@@ -109,7 +114,7 @@ class Details:
             start and end of liquid hours for this contract.
     """
 
-    _fields: ClassVar[list] = [f.name for f in fields(ibi.ContractDetails)]
+    _fields: ClassVar[list[str]] = [f.name for f in fields(ibi.ContractDetails)]
     details: ibi.ContractDetails
     trading_hours: list[tuple[datetime, datetime]] = field(init=False, repr=False)
     liquid_hours: list[tuple[datetime, datetime]] = field(init=False, repr=False)
@@ -122,10 +127,11 @@ class Details:
             self.details.liquidHours, self.details.timeZoneId
         )
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         if name in self._fields:
             return getattr(self.details, name)
-        super().__getattr__(name)
+        else:
+            raise AttributeError(f"{self.__class__.__name__} has no attribute {name}")
 
     def is_open(self, _now: Optional[datetime] = None) -> bool:
         """
@@ -280,7 +286,7 @@ class Atom:
         else:
             return self.contract_details
 
-    def _createEvents(self):
+    def _createEvents(self) -> None:
         self.startEvent = ibi.Event("startEvent")
         self.dataEvent = ibi.Event("dataEvent")
         self.feedbackEvent = ibi.Event("feedbackEvent")
@@ -291,7 +297,7 @@ class Atom:
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
 
-    def onStart(self, data, *args) -> None:
+    def onStart(self, data: Any, *args: Any) -> None:
         """
         Perform any initilization required on system (re)start.  It
         will be run automatically and it will be linked to
@@ -326,7 +332,7 @@ class Atom:
         self._contract_memo = self.contract
         self.startEvent.emit(data, self)
 
-    def onData(self, data: dict, *args) -> Awaitable[None] | None:
+    def onData(self, data: Any, *args: Any) -> Awaitable[None] | None:
         """
         Connected to :attr:`dataEvent` of the preceding object in the chain.
         This is the entry point to any processing perfmormed by this
@@ -350,7 +356,7 @@ class Atom:
         data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
         return None
 
-    def onFeedback(self, data, *args) -> Awaitable[None] | None:
+    def onFeedback(self, data: Any, *args: Any) -> Awaitable[None] | None:
         """
         Connected to :attr:`feedbackEvent` of the subsequent object in the
         chain.  Allows for passing of information about trading
@@ -435,7 +441,7 @@ class Atom:
             t.feedbackEvent.disconnect_obj(self)
         return self
 
-    def clear(self):
+    def clear(self) -> None:
         connected_to = [i[0] for i in self.startEvent._slots]
         self.startEvent.clear()
         self.dataEvent.clear()
@@ -492,7 +498,7 @@ class Pipe(Atom):
         super().__init__()
         self._pipe()
 
-    def _createEvents(self):
+    def _createEvents(self) -> None:
         # Pipe doesn't create its own events, but redirects events of member Atoms
         self.startEvent = self.last.startEvent
         self.dataEvent = self.last.dataEvent
@@ -510,16 +516,16 @@ class Pipe(Atom):
             target.feedbackEvent.disconnect_obj(self.last)
         return self
 
-    def onStart(self, data, *args) -> None:
+    def onStart(self, data: Any, *args: Any) -> None:
         self.first.onStart(data, *args)
 
-    def onData(self, data, *args) -> None:
+    def onData(self, data: Any, *args: Any) -> None:
         self.first.onData(data, *args)
 
-    def onFeedback(self, data, *args) -> None:
+    def onFeedback(self, data: Any, *args: Any) -> None:
         self.last.onFeedback(data, *args)
 
-    def _pipe(self):
+    def _pipe(self) -> None:
         source = None
         for i, member in enumerate(self._members):
             if i > 0:

@@ -550,6 +550,8 @@ class Terminator:
                     existing_amount = self.positions.get(trade.contract, 0)
                 except Exception as e:
                     log.exception(e)
+                    existing_amount = 0
+                    stop_amount = 0
                 if existing_amount and (
                     misc.sign(stop_amount) == -misc.sign(existing_amount)
                 ):

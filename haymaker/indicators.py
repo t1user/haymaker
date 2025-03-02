@@ -392,7 +392,7 @@ def rsi(
     exp: bool = True,
     rescale=False,
     *args,
-    **kwargs
+    **kwargs,
 ) -> pd.Series:
     """
     Rsi indicator on a scale of 0 - 100.
@@ -796,6 +796,6 @@ def min_max_index(
     df.loc[df[df["ind"].abs() < cutoff_value].index, "ind"] = 0
     df = df.replace(0, np.nan).ffill()
     if binary:
-        return np.sign(df["ind"])
+        return np.sign(df["ind"])  # type: ignore
     else:
         return df["ind"]

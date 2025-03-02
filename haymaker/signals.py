@@ -89,7 +89,8 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
                 fields = self.signal_in_field
             else:
                 fields = f"{self.signal_in_field}, {self.signal_out_field}"
-                log.exception(f"Missing `{fields}` expected by {self} in `onData`")
+            log.exception(f"Missing `{fields}` expected by {self} in `onData`")
+            return
         strategy = data.get("strategy") or self.strategy
         if result := self.process_signal(strategy, signal_in, signal_out):
             data.update(

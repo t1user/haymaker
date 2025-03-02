@@ -234,7 +234,7 @@ class BaseExecModel(AbstractExecModel):
         self,
         data: dict,
         dynamic_order_kwargs: dict | None = None,
-    ) -> ibi.Trade:
+    ) -> ibi.Trade | None:
         self.data.params["close"] = {}
         data["position_id"] = self.get_position_id(True)
         self.data.params["open"] = data
@@ -244,6 +244,7 @@ class BaseExecModel(AbstractExecModel):
             amount = int(data["amount"])
         except KeyError:
             log.exception("Insufficient data to execute OPEN transaction")
+            return
         self.data.active_contract = contract
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         if dynamic_order_kwargs:
@@ -358,6 +359,7 @@ class EventDrivenExecModel(BaseExecModel):
         self.data.oca_group = None
 
         trade = super().open(data)
+        assert trade
 
         trade.filledEvent += attach_bracket
         return trade
@@ -419,21 +421,21 @@ class EventDrivenExecModel(BaseExecModel):
         except Exception as e:
             log.exception(f"Error while attaching bracket: {e}")
 
-    def re_attach_brackets(self):
-        """
-        Possibly used by :class:`Controller` if it's determined that a bracket
-        is missing.
-        """
+    # def re_attach_brackets(self):
+    #     """
+    #     Possibly used by :class:`Controller` if it's determined that a bracket
+    #     is missing.
+    #     """
 
-        for orderId, bracket in self.data.brackets.copy().items():
-            log.info(f"attempt to re-attach bracket {bracket}")
-            del self.data.brackets[orderId]
-            self._place_bracket(
-                bracket.trade.contract,
-                bracket.order_key,
-                bracket.label,
-                bracket.bracket_kwargs,
-            )
+    #     for orderId, bracket in self.data.brackets.copy().items():
+    #         log.info(f"attempt to re-attach bracket {bracket}")
+    #         del self.data.brackets[orderId]
+    #         self._place_bracket(
+    #             bracket.trade.contract,
+    #             bracket.order_key,
+    #             bracket.label,
+    #             bracket.bracket_kwargs,
+    #         )
 
     def __repr__(self):
         return (

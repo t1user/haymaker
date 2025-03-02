@@ -8,7 +8,7 @@ from haymaker.saver import AbstractBaseSaver, AsyncSaveManager
 
 def test_AbstractBaseSaver_is_abstract():
     with pytest.raises(TypeError):
-        AbstractBaseSaver()
+        AbstractBaseSaver()  # type: ignore
 
 
 @pytest.fixture
@@ -22,23 +22,23 @@ def saver():
     return Saver
 
 
-def test_saver_names(saver):
+def test_saver_names(saver: type[AbstractBaseSaver]):
     s = saver("price_df", False)
     s.save({}, "all_data", "NQZ3")
-    assert s.memo == "price_df_all_data_NQZ3"
+    assert s.memo == "price_df_all_data_NQZ3"  # type: ignore
 
 
-def test_saver_names_one_args_only(saver):
+def test_saver_names_one_args_only(saver: type[AbstractBaseSaver]):
     s = saver("price_df", False)
     s.save({}, "all_data")
-    assert s.memo == "price_df_all_data"
+    assert s.memo == "price_df_all_data"  # type: ignore
 
 
-def test_saver_names_include_timestamp(saver):
+def test_saver_names_include_timestamp(saver: type[AbstractBaseSaver]):
     s = saver("price_df", True)
     now = datetime.now(timezone.utc).strftime("%Y%m%d_%H_%M")
     s.save({}, "all_data", "NQZ3")
-    assert s.memo == f"price_df_{now}_all_data_NQZ3"
+    assert s.memo == f"price_df_{now}_all_data_NQZ3"  # type: ignore
 
 
 @pytest.mark.asyncio

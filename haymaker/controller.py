@@ -330,6 +330,12 @@ class Controller(Atom):
 
         elif trade.order.totalQuantity == 0:
             return
+        else:
+            log.error(
+                f"Commission report for unknown trade: {trade.order.orderId} "
+                f"{trade.contract.localSymbol}"
+            )
+            return
 
         assert self.blotter is not None
         self.blotter.log_commission(trade, fill, report, **kwargs)
@@ -425,9 +431,11 @@ class Controller(Atom):
             if candidate_strategies:
                 strategy_str = candidate_strategies[0]
                 strategy = self.sm.strategy[strategy_str]
+            else:
+                strategy = None
         else:
             strategy = None
-
+        # TODO: fix this shitty programming
         return strategy
 
     def _make_strategy(self, trade: ibi.Trade, description: str) -> Strategy:

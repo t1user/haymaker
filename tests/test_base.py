@@ -47,51 +47,51 @@ class TestAtom:
     def atom2(self):
         return NewAtom("atom2")
 
-    def test_events_exist(self, atom1):
+    def test_events_exist(self, atom1: NewAtom):
         assert hasattr(atom1, "startEvent")
         assert hasattr(atom1, "dataEvent")
 
-    def test_connect(self, atom1, atom2):
+    def test_connect(self, atom1: NewAtom, atom2: NewAtom):
         atom3 = NewAtom("atom3")
         atom3.connect(atom1, atom2)
         assert len(atom3.startEvent) == 2
         assert len(atom3.dataEvent) == 2
 
-    def test_connect_startEvent(self, atom1, atom2):
+    def test_connect_startEvent(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1.startEvent.emit("start_test_string")
         assert atom2.onStart_string == "start_test_string"
 
-    def test_connect_dataEvent(self, atom1, atom2):
+    def test_connect_dataEvent(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1.dataEvent.emit("data_test_string")
         assert atom2.onData_string == "data_test_string"
 
-    def test_connect_feedbackEvent(self, atom1, atom2):
+    def test_connect_feedbackEvent(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom2.feedbackEvent.emit("data_test_string")
         assert atom1.onFeedback_string == "data_test_string"
 
-    def test_disconnect(self, atom1, atom2):
+    def test_disconnect(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1.disconnect(atom2)
         assert len(atom1.startEvent) == 0
         assert len(atom1.dataEvent) == 0
         assert len(atom2.feedbackEvent) == 0
 
-    def test_disconnect_1(self, atom1, atom2):
+    def test_disconnect_1(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1.disconnect(atom2)
         atom1.startEvent.emit("test_data_string")
         assert "test_data_string" not in atom2.onStart_string
 
-    def test_disconnect_2(self, atom1, atom2):
+    def test_disconnect_2(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1.disconnect(atom2)
         atom2.feedbackEvent.emit("test_data_string")
         assert "test_data_string" not in atom1.onFeedback_string
 
-    def test_clear(self, atom1, atom2):
+    def test_clear(self, atom1: NewAtom, atom2: NewAtom):
         atom3 = NewAtom("atom3")
         atom3.connect(atom1, atom2)
         atom3.clear()
@@ -99,7 +99,7 @@ class TestAtom:
         assert len(atom3.dataEvent) == 0
         assert len(atom1.feedbackEvent) == 0
 
-    def test_iadd(self, atom1, atom2):
+    def test_iadd(self, atom1: NewAtom, atom2: NewAtom):
         atom1 += atom2
         atom1.startEvent.emit("test_string")
         atom1.dataEvent.emit("test_string")
@@ -108,34 +108,34 @@ class TestAtom:
         assert atom2.onData_string == "test_string"
         assert atom1.onFeedback_string == "new_test_string"
 
-    def test_isub(self, atom1, atom2):
+    def test_isub(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1 -= atom2
         assert len(atom1.startEvent) == 0
         assert len(atom1.dataEvent) == 0
         assert len(atom2.feedbackEvent) == 0
 
-    def test_union(self, atom1, atom2):
+    def test_union(self, atom1: NewAtom, atom2: NewAtom):
         atom3 = NewAtom("atom3")
         atom3.union(atom1, atom2)
         atom3.startEvent.emit("test_string")
         assert atom1.onStart_string == "test_string"
         assert atom2.onStart_string == "test_string"
 
-    def test_union_1(self, atom1, atom2):
+    def test_union_1(self, atom1: NewAtom, atom2: NewAtom):
         atom3 = NewAtom("atom3")
         atom3.union(atom1, atom2)
         atom2.feedbackEvent.emit("test_string")
         assert atom3.onFeedback_string == "test_string"
 
-    def test_unequality(self, atom1):
+    def test_unequality(self, atom1: NewAtom):
         ato = NewAtom("atom1")
         assert ato != atom1
 
-    def test_repr(self, atom1):
+    def test_repr(self, atom1: NewAtom):
         assert repr(atom1) == "NewAtom(name=atom1)"
 
-    def test_no_duplicate_connections(self, atom1, atom2):
+    def test_no_duplicate_connections(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1.connect(atom2)
         atom1.connect(atom2)
@@ -146,7 +146,7 @@ class TestAtom:
         assert len(atom1.dataEvent) == 1
         assert len(atom2.feedbackEvent) == 1
 
-    def test_no_duplicate_connections_1(self, atom1, atom2):
+    def test_no_duplicate_connections_1(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1.connect(atom2)
         atom1.connect(atom2)
@@ -165,13 +165,13 @@ class TestPipe:
         return NewAtom("x"), NewAtom("y"), NewAtom("z")
 
     @pytest.fixture
-    def pipe_(self, atoms):
+    def pipe_(self, atoms: tuple[NewAtom, NewAtom, NewAtom]):
         x, y, z = atoms
         pipe = x.pipe(y, z)
         return pipe
 
     @pytest.fixture
-    def pass_through_pipe(self, pipe_):
+    def pass_through_pipe(self, pipe_: Pipe):
         pipe = pipe_
         start = NewAtom("start")
         end = NewAtom("end")
@@ -185,47 +185,61 @@ class TestPipe:
     def test_pipe_type(self, pipe_):
         assert isinstance(pipe_, Pipe)
 
-    def test_pipe_members(self, atoms, pipe_):
+    def test_pipe_members(self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_: Pipe):
         x, y, z = atoms
         pipe = pipe_
         assert pipe[0] == x
         assert pipe[1] == y
         assert pipe[2] == z
 
-    def test_pipe_lenght(self, pipe_):
+    def test_pipe_lenght(self, pipe_: Pipe):
         assert len(pipe_) == 3
 
-    def test_inside_atoms_start_event(self, pass_through_pipe):
+    def test_inside_atoms_start_event(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         _, _, pipe = pass_through_pipe
-        assert pipe[0].onStart_string == "StartEvent"
-        assert pipe[1].onStart_string == "StartEvent_x"
-        assert pipe[2].onStart_string == "StartEvent_x_y"
+        assert pipe[0].onStart_string == "StartEvent"  # type: ignore
+        assert pipe[1].onStart_string == "StartEvent_x"  # type: ignore
+        assert pipe[2].onStart_string == "StartEvent_x_y"  # type: ignore
 
-    def test_inside_atoms_data_event(self, pass_through_pipe):
+    def test_inside_atoms_data_event(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         _, _, pipe = pass_through_pipe
-        assert pipe[0].onData_string == "DataEvent"
-        assert pipe[1].onData_string == "DataEvent_x"
-        assert pipe[2].onData_string == "DataEvent_x_y"
+        assert pipe[0].onData_string == "DataEvent"  # type: ignore
+        assert pipe[1].onData_string == "DataEvent_x"  # type: ignore
+        assert pipe[2].onData_string == "DataEvent_x_y"  # type: ignore
 
-    def test_inside_atoms_feedback_event(self, pass_through_pipe):
+    def test_inside_atoms_feedback_event(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         _, _, pipe = pass_through_pipe
-        assert pipe[2].onFeedback_string == "FeedbackEvent"
-        assert pipe[1].onFeedback_string == "FeedbackEvent_z"
-        assert pipe[0].onFeedback_string == "FeedbackEvent_z_y"
+        assert pipe[2].onFeedback_string == "FeedbackEvent"  # type: ignore
+        assert pipe[1].onFeedback_string == "FeedbackEvent_z"  # type: ignore
+        assert pipe[0].onFeedback_string == "FeedbackEvent_z_y"  # type: ignore
 
-    def test_pass_through_startEvent(self, pass_through_pipe):
+    def test_pass_through_startEvent(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         start, end, pipe = pass_through_pipe
         assert end.onStart_string == "StartEvent_x_y_z"
 
-    def test_pass_through_dataEvent(self, pass_through_pipe):
+    def test_pass_through_dataEvent(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         start, end, pipe = pass_through_pipe
         assert end.onData_string == "DataEvent_x_y_z"
 
-    def test_pass_through_feedbackEvent(self, pass_through_pipe):
+    def test_pass_through_feedbackEvent(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         start, end, pipe = pass_through_pipe
         assert start.onFeedback_string == "FeedbackEvent_z_y_x"
 
-    def test_connect_multiple_objects(self, atoms, pipe_):
+    def test_connect_multiple_objects(
+        self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_: Pipe
+    ):
         start = NewAtom("start")
         end1 = NewAtom("end1")
         end2 = NewAtom("end2")
@@ -235,7 +249,9 @@ class TestPipe:
         assert end1.onData_string == "test_string_x_y_z"
         assert end1.onData_string == "test_string_x_y_z"
 
-    def test_connect_multiple_objects_1(self, atoms, pipe_):
+    def test_connect_multiple_objects_1(
+        self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_
+    ):
         start = NewAtom("start")
         end1 = NewAtom("end1")
         end2 = NewAtom("end2")
@@ -245,7 +261,9 @@ class TestPipe:
         assert end1.onData_checksum == 1
         assert end1.onData_checksum == 1
 
-    def test_connect_multiple_objects_feedback(self, atoms, pipe_):
+    def test_connect_multiple_objects_feedback(
+        self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_: Pipe
+    ):
         start = NewAtom("start")
         end1 = NewAtom("end1")
         end2 = NewAtom("end2")
@@ -254,7 +272,9 @@ class TestPipe:
         end1.feedbackEvent.emit("test_string")
         assert start.onFeedback_string == "test_string_z_y_x"
 
-    def test_connect_multiple_objects_feedback_1(self, atoms, pipe_):
+    def test_connect_multiple_objects_feedback_1(
+        self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_: Pipe
+    ):
         start = NewAtom("start")
         end1 = NewAtom("end1")
         end2 = NewAtom("end2")
@@ -264,7 +284,9 @@ class TestPipe:
         end2.feedbackEvent.emit("bla")
         assert start.onFeedback_string == "test_string_z_y_xbla_z_y_x"
 
-    def test_connect_multiple_objects_feedback_2(self, atoms, pipe_):
+    def test_connect_multiple_objects_feedback_2(
+        self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_: Pipe
+    ):
         start = NewAtom("start")
         end1 = NewAtom("end1")
         end2 = NewAtom("end2")
@@ -274,7 +296,7 @@ class TestPipe:
         end2.feedbackEvent.emit("bla")
         assert start.onFeedback_checksum == 2
 
-    def test_disconnect(self, atoms, pipe_):
+    def test_disconnect(self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_: Pipe):
         start = NewAtom("start")
         end1 = NewAtom("end1")
         end2 = NewAtom("end2")
@@ -289,7 +311,9 @@ class TestPipe:
         assert end1.onData_string == ""
         assert end2.onData_string == ""
 
-    def test_disconnect_feedback(self, atoms, pipe_):
+    def test_disconnect_feedback(
+        self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_: Pipe
+    ):
         start = NewAtom("start")
         end1 = NewAtom("end1")
         end2 = NewAtom("end2")
@@ -304,38 +328,44 @@ class TestPipe:
         # if they were 'bla' would be captured
         assert start.onFeedback_string == "test_string_z_y_x"
 
-    def test_pass_through_startEvent_checksum(self, pass_through_pipe):
+    def test_pass_through_startEvent_checksum(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         """
         Each object in the chain should have been acted upon, except for the first.
         """
         start, end, pipe = pass_through_pipe
         assert start.onStart_checksum == 0
         assert end.onStart_checksum == 1
-        assert pipe[0].onStart_checksum == 1
-        assert pipe[1].onStart_checksum == 1
-        assert pipe[2].onStart_checksum == 1
+        assert pipe[0].onStart_checksum == 1  # type: ignore
+        assert pipe[1].onStart_checksum == 1  # type: ignore
+        assert pipe[2].onStart_checksum == 1  # type: ignore
 
-    def test_pass_through_onDataEvent_checksum(self, pass_through_pipe):
+    def test_pass_through_onDataEvent_checksum(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         """
         Each object in the chain should have been acted upon, except for the first.
         """
         start, end, pipe = pass_through_pipe
         assert start.onData_checksum == 0
         assert end.onData_checksum == 1
-        assert pipe[0].onData_checksum == 1
-        assert pipe[1].onData_checksum == 1
-        assert pipe[2].onData_checksum == 1
+        assert pipe[0].onData_checksum == 1  # type: ignore
+        assert pipe[1].onData_checksum == 1  # type: ignore
+        assert pipe[2].onData_checksum == 1  # type: ignore
 
-    def test_pass_through_onFeedback_checksum(self, pass_through_pipe):
+    def test_pass_through_onFeedback_checksum(
+        self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
+    ):
         """
         Each object in the chain should have been acted upon, except for the first.
         """
         start, end, pipe = pass_through_pipe
         assert end.onFeedback_checksum == 0
         assert start.onFeedback_checksum == 1
-        assert pipe[0].onFeedback_checksum == 1
-        assert pipe[1].onFeedback_checksum == 1
-        assert pipe[2].onFeedback_checksum == 1
+        assert pipe[0].onFeedback_checksum == 1  # type: ignore
+        assert pipe[1].onFeedback_checksum == 1  # type: ignore
+        assert pipe[2].onFeedback_checksum == 1  # type: ignore
 
     def test_one_atom_in_multiple_pipes(self):
         a = NewAtom("a")
@@ -382,25 +412,31 @@ class TestUnionPipe:
         pipe = Pipe(a, b, c)
         return pipe
 
-    def test_union_pipe_onStart(self, pipe1, pipe2, atoms):
+    def test_union_pipe_onStart(
+        self, pipe1: Pipe, pipe2: Pipe, atoms: tuple[NewAtom, NewAtom]
+    ):
         start, end = atoms
         p1 = pipe1
         p2 = pipe2
         start.union(p1, p2)
         start.startEvent.emit("test_string")
-        assert p1[-1].onStart_string == "test_string_x_y"
-        assert p2[-1].onStart_string == "test_string_a_b"
+        assert p1[-1].onStart_string == "test_string_x_y"  # type: ignore
+        assert p2[-1].onStart_string == "test_string_a_b"  # type: ignore
 
-    def test_union_pipe_onData(self, pipe1, pipe2, atoms):
+    def test_union_pipe_onData(
+        self, pipe1: Pipe, pipe2: Pipe, atoms: tuple[NewAtom, NewAtom]
+    ):
         start, end = atoms
         p1 = pipe1
         p2 = pipe2
         start.union(p1, p2)
         start.dataEvent.emit("test_string")
-        assert p1[-1].onData_string == "test_string_x_y"
-        assert p2[-1].onData_string == "test_string_a_b"
+        assert p1[-1].onData_string == "test_string_x_y"  # type: ignore
+        assert p2[-1].onData_string == "test_string_a_b"  # type: ignore
 
-    def test_union_pipe_onFeedback_1(self, pipe1, pipe2, atoms):
+    def test_union_pipe_onFeedback_1(
+        self, pipe1: Pipe, pipe2: Pipe, atoms: tuple[NewAtom, NewAtom]
+    ):
         start, end = atoms
         p1 = pipe1
         p2 = pipe2
@@ -408,7 +444,9 @@ class TestUnionPipe:
         p1.feedbackEvent.emit("test_string")
         assert start.onFeedback_string == "test_string"
 
-    def test_union_pipe_onFeedback_2(self, pipe1, pipe2, atoms):
+    def test_union_pipe_onFeedback_2(
+        self, pipe1: Pipe, pipe2: Pipe, atoms: tuple[NewAtom, NewAtom]
+    ):
         start, end = atoms
         p1 = pipe1
         p2 = pipe2
@@ -416,7 +454,9 @@ class TestUnionPipe:
         p2.feedbackEvent.emit("test_string")
         assert start.onFeedback_string == "test_string"
 
-    def test_union_pipe_output(self, pipe1, pipe2, atoms):
+    def test_union_pipe_output(
+        self, pipe1: Pipe, pipe2: Pipe, atoms: tuple[NewAtom, NewAtom]
+    ):
         start, end = atoms
         p1 = pipe1
         p2 = pipe2
@@ -425,7 +465,9 @@ class TestUnionPipe:
         start.startEvent.emit("test_string")
         assert end.onStart_string == "test_string_x_y_z"
 
-    def test_union_pipe_output_feedback(self, pipe1, pipe2, atoms):
+    def test_union_pipe_output_feedback(
+        self, pipe1: Pipe, pipe2: Pipe, atoms: tuple[NewAtom, NewAtom]
+    ):
         start, end = atoms
         p1 = pipe1
         p2 = pipe2
@@ -711,30 +753,30 @@ class AtomWithContract(Atom):
 class TestContract:
     @pytest.fixture
     def contract(self):
-        return ibi.Contract("ES", "CME")
+        return ibi.Contract("ES", exchange="CME")
 
     @pytest.fixture
     def atom(self):
-        return AtomWithContract(ibi.Future("NQ", "CME"))
+        return AtomWithContract(ibi.Future("NQ", exchange="CME"))
 
-    def test_can_assign_and_get_contract(self, atom):
+    def test_can_assign_and_get_contract(self, atom: AtomWithContract):
         assert isinstance(atom.contract, ibi.Future)
 
-    def test_same_contract_returned_as_assigned(self, contract):
+    def test_same_contract_returned_as_assigned(self, contract: ibi.Contract):
         c = contract
         a = AtomWithContract(c)
         assert a.contract is c
 
     def test_can_assign_and_retrieve_list_of_contracts(self):
-        c1 = ibi.Contract("ES", "CME")
-        c2 = ibi.Contract("MES", "CME")
+        c1 = ibi.Contract("ES", exchange="CME")
+        c2 = ibi.Contract("MES", exchange="CME")
         atom = AtomWithContract([c1, c2])
         assert isinstance(atom.contract, list)
         assert atom.contract == [c1, c2]
 
     def test_can_assign_and_retrieve_same_list_of_contracts(self):
-        c1 = ibi.Contract("ES", "CME")
-        c2 = ibi.Contract("MES", "CME")
+        c1 = ibi.Contract("ES", exchange="CME")
+        c2 = ibi.Contract("MES", exchange="CME")
         list_of_contracts = [c1, c2]
         atom = AtomWithContract(list_of_contracts)
         assert atom.contract == list_of_contracts
@@ -746,11 +788,11 @@ class TestContractList:
         return ibi.Contract("YM")
 
     @pytest.fixture
-    def list_of_contracts(self, contract):
+    def list_of_contracts(self, contract: ibi.Contract):
         return [contract, ibi.Contract("NQ")]
 
     @pytest.fixture
-    def atom_with_contract(self, contract):
+    def atom_with_contract(self, contract: ibi.Contract):
         class NewAtomWithContract(Atom):
             def __init__(self, contract):
                 self.contract = contract
@@ -760,7 +802,7 @@ class TestContractList:
         a.contracts.clear()
 
     @pytest.fixture
-    def atom_with_list_of_contracts(self, list_of_contracts):
+    def atom_with_list_of_contracts(self, list_of_contracts: list[ibi.Contract]):
         class AtomWithListOfContracts(Atom):
             def __init__(self, contract):
                 self.contract = contract
@@ -773,34 +815,36 @@ class TestContractList:
         class NewNewAtom(Atom):
             def __init__(self, x):
                 self.contract = x
+                super().__init__()
 
         NewNewAtom("a")
         assert "a" in Atom.contracts
 
-    def test_newly_added_contract_in_Atom_list(self, atom_with_contract):
-        atom_with_contract.contract = "b"
+    def test_newly_added_contract_in_Atom_list(self, atom_with_contract: Atom):
+        atom_with_contract.contract = "b"  # type: ignore
+        assert "b" in Atom.contracts
         assert "b" in atom_with_contract.contracts
 
     def test_contract_list_on_instance_contains_contracts(
-        self, atom_with_contract, contract
+        self, atom_with_contract: Atom, contract: ibi.Contract
     ):
         a = atom_with_contract
         assert a.contracts == [contract]
 
     def test_contract_list_on_class_contains_contracts(
-        self, atom_with_contract, contract
+        self, atom_with_contract: Atom, contract: ibi.Contract
     ):
         assert Atom.contracts == [contract]
 
     def test_ContractList_new_instance_contains_contracts(
-        self, atom_with_contract, contract
+        self, atom_with_contract: Atom, contract: ibi.Contract
     ):
-        atom_with_contract
+        atom_with_contract  # type: ignore
         alt_list = Atom.contracts
         assert alt_list == [contract]
 
     def test_contract_list_works_with_lists(
-        self, atom_with_list_of_contracts, list_of_contracts
+        self, atom_with_list_of_contracts: Atom, list_of_contracts: list[ibi.Contract]
     ):
         a = atom_with_list_of_contracts
         assert a.contracts == list_of_contracts
@@ -832,7 +876,10 @@ def test_onData_sets_attribute_if_dict_passed():
             self.startEvent.emit({"strategy": "xxx"})
 
     class Output(Atom):
-        pass
+
+        def __init__(self):
+            self.strategy = None
+            super().__init__()
 
     source = Source()
     out = Output()
@@ -851,11 +898,11 @@ def test_onData_emits_self_if_dict_passed():
         pass
 
     class Output(Atom):
-        data = None
+        _data = None
         args = None
 
         def onStart(self, data, *args):
-            self.data = data
+            self._data = data
             self.args = args
 
     source = Source()
@@ -863,7 +910,7 @@ def test_onData_emits_self_if_dict_passed():
     out = Output()
     Pipe(source, inner, out)
     source.run()
-    assert isinstance(out.args[0], NewAtom)
+    assert isinstance(out.args[0], NewAtom)  # type: ignore
 
 
 def test_onData_ignores_attribute_if_no_dict_passed():
@@ -880,7 +927,7 @@ def test_onData_ignores_attribute_if_no_dict_passed():
     source.run()
 
     with pytest.raises(AttributeError):
-        out.strategy
+        out.strategy  # type: ignore
 
 
 def test_onData_sets_attribute_downstream_if_dict_passed():
@@ -898,15 +945,15 @@ def test_onData_sets_attribute_downstream_if_dict_passed():
     Pipe(source, inner1, inner2, out)
     source.run()
 
-    assert out.strategy == inner1.strategy == inner2.strategy == "xxx"
+    assert out.strategy == inner1.strategy == inner2.strategy == "xxx"  # type: ignore
 
 
-def test_event_error_logged(caplog):
+def test_event_error_logged(caplog: pytest.LogCaptureFixture):
     class CustomException(Exception):
         pass
 
     class ErrorRaisingAtom(NewAtom):
-        def onData(*args):
+        def onData(self, data, *args):
             raise CustomException("CustomError")
 
     a = NewAtom("a")
@@ -916,12 +963,12 @@ def test_event_error_logged(caplog):
     assert "Event error dataEvent: CustomError" in caplog.messages
 
 
-def test_event_error_logged_with_correct_logger(caplog):
+def test_event_error_logged_with_correct_logger(caplog: pytest.LogCaptureFixture):
     class CustomException(Exception):
         pass
 
     class ErrorRaisingAtom(NewAtom):
-        def onData(*args):
+        def onData(self, data, *args):
             raise CustomException("CustomError")
 
     a = NewAtom("a")
@@ -935,25 +982,27 @@ def test_event_error_logged_with_correct_logger(caplog):
 
 class TestAtomDetails:
     @pytest.fixture
-    def mock_atom(self, details):
+    def mock_atom(self, details: ibi.ContractDetails):
         class MockAtom(Atom):
             def __init__(self):
                 self.contract = details.contract
                 super().__init__()
 
-        Atom.contract_details[details.contract] = details
+        Atom.contract_details[details.contract] = details  # type: ignore
         return MockAtom()
 
-    def test_details_set_properly(self, mock_atom, details):
+    def test_details_set_properly(self, mock_atom: Atom, details: ibi.ContractDetails):
         assert isinstance(mock_atom.details, Details)
 
-    def test_trading_hours_processed(self, mock_atom, details):
-        assert isinstance(mock_atom.details.trading_hours, list)
+    def test_trading_hours_processed(
+        self, mock_atom: Atom, details: ibi.ContractDetails
+    ):
+        assert isinstance(mock_atom.details.trading_hours, list)  # type: ignore
 
-    def test_trading_hours_is_open(self, mock_atom, details):
-        assert isinstance(mock_atom.details.is_open(), bool)
+    def test_trading_hours_is_open(self, mock_atom: Atom, details: ibi.ContractDetails):
+        assert isinstance(mock_atom.details.is_open(), bool)  # type: ignore
 
-    def test_if_no_contract_set_all_details_returned(self, mock_atom):
+    def test_if_no_contract_set_all_details_returned(self, mock_atom: Atom):
         class NewMockAtom(Atom):
             pass
 
@@ -963,7 +1012,9 @@ class TestAtomDetails:
         # even though I have no contract set on my `atom`
         assert len(atom.details.keys()) == 1
 
-    def test_missing_details_log(self, caplog, mock_atom, details):
+    def test_missing_details_log(
+        self, caplog: pytest.LogCaptureFixture, mock_atom, details: ibi.ContractDetails
+    ):
         caplog.set_level(logging.DEBUG)
 
         del Atom.contract_details[details.contract]
@@ -977,14 +1028,14 @@ class Test_data_property:
     # and StateMachine singleton being destroyed betewen tests
     # for this `atom` fixture should be used
 
-    def test_data_property_without_strategy(self, Atom):
+    def test_data_property_without_strategy(self, Atom: type[Atom]):
         class A(Atom):
             pass
 
         a = A()
         assert isinstance(a.data, Strategy)
 
-    def test_data_property_with_strategy_first_access(self, Atom):
+    def test_data_property_with_strategy_first_access(self, Atom: type[Atom]):
         """If we're using non-existing strategy, one should be created."""
 
         class A(Atom):
@@ -1010,7 +1061,9 @@ class Test_data_property:
             set(a.data.keys())
         )
 
-    def test_data_property_with_strategy_access_correct_position(self, Atom):
+    def test_data_property_with_strategy_access_correct_position(
+        self, Atom: type[Atom]
+    ):
         class A(Atom):
             def __init__(self, strategy):
                 self.strategy = strategy
@@ -1021,7 +1074,9 @@ class Test_data_property:
         a.data.position += 1
         assert b.data.position == 1
 
-    def test_data_property_multiple_strategies_access_correct_position(self, Atom):
+    def test_data_property_multiple_strategies_access_correct_position(
+        self, Atom: type[Atom]
+    ):
         class A(Atom):
             pass
 
@@ -1030,10 +1085,10 @@ class Test_data_property:
         c = A()
         d = A()
 
-        a.strategy = "xxx"
-        b.strategy = "xxx"
-        c.strategy = "yyy"
-        d.strategy = "yyy"
+        a.strategy = "xxx"  # type: ignore
+        b.strategy = "xxx"  # type: ignore
+        c.strategy = "yyy"  # type: ignore
+        d.strategy = "yyy"  # type: ignore
 
         a.data.position += 1
         b.data.position += 1
@@ -1041,7 +1096,9 @@ class Test_data_property:
         assert b.data.position == 2
         assert c.data.position == 0
 
-    def test_data_property_multiple_strategies_access_correct_position_1(self, Atom):
+    def test_data_property_multiple_strategies_access_correct_position_1(
+        self, Atom: type[Atom]
+    ):
         class A(Atom):
             pass
 
@@ -1050,10 +1107,10 @@ class Test_data_property:
         c = A()
         d = A()
 
-        a.strategy = "xxx"
-        b.strategy = "xxx"
-        c.strategy = "yyy"
-        d.strategy = "yyy"
+        a.strategy = "xxx"  # type: ignore
+        b.strategy = "xxx"  # type: ignore
+        c.strategy = "yyy"  # type: ignore
+        d.strategy = "yyy"  # type: ignore
 
         a.data.position += 1
         b.data.position += 1
