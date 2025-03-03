@@ -1028,14 +1028,14 @@ class Test_data_property:
     # and StateMachine singleton being destroyed betewen tests
     # for this `atom` fixture should be used
 
-    def test_data_property_without_strategy(self, Atom: type[Atom]):
+    def test_data_property_without_strategy(self, Atom):
         class A(Atom):
             pass
 
         a = A()
         assert isinstance(a.data, Strategy)
 
-    def test_data_property_with_strategy_first_access(self, Atom: type[Atom]):
+    def test_data_property_with_strategy_first_access(self, Atom):
         """If we're using non-existing strategy, one should be created."""
 
         class A(Atom):
@@ -1061,9 +1061,7 @@ class Test_data_property:
             set(a.data.keys())
         )
 
-    def test_data_property_with_strategy_access_correct_position(
-        self, Atom: type[Atom]
-    ):
+    def test_data_property_with_strategy_access_correct_position(self, Atom):
         class A(Atom):
             def __init__(self, strategy):
                 self.strategy = strategy
@@ -1074,9 +1072,7 @@ class Test_data_property:
         a.data.position += 1
         assert b.data.position == 1
 
-    def test_data_property_multiple_strategies_access_correct_position(
-        self, Atom: type[Atom]
-    ):
+    def test_data_property_multiple_strategies_access_correct_position(self, Atom):
         class A(Atom):
             pass
 
@@ -1096,9 +1092,7 @@ class Test_data_property:
         assert b.data.position == 2
         assert c.data.position == 0
 
-    def test_data_property_multiple_strategies_access_correct_position_1(
-        self, Atom: type[Atom]
-    ):
+    def test_data_property_multiple_strategies_access_correct_position_1(self, Atom):
         class A(Atom):
             pass
 

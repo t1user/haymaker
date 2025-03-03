@@ -92,9 +92,9 @@ class App:
         log.debug(f"App initiated: {self}")
 
     def schedule_future_roll(self) -> None:
-        roll_time = CONFIG.get("future_roll_time", (10, 0))
+        roll_hour, roll_minute = CONFIG.get("future_roll_time", [10, 0])
         roll_timezone = ZoneInfo(CONFIG.get("future_roll_timezone", "America/New_York"))
-        rt = datetime.time(*roll_time, tzinfo=roll_timezone)
+        rt = datetime.time(hour=roll_hour, minute=roll_minute, tzinfo=roll_timezone)
         CONTROLLER.set_no_future_roll_strategies(self.no_future_roll_strategies)
         scheduler = ev.Event.timerange(
             start=rt, step=datetime.timedelta(days=1)  # type: ignore
