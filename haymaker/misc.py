@@ -5,7 +5,6 @@ import itertools
 import random
 import string
 from collections import UserDict
-from dataclasses import is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -203,9 +202,12 @@ def tree(obj):
         }
     elif isinstance(obj, (list, tuple, set)):
         return [tree(i) for i in obj]
-    elif is_dataclass(obj):
-        _cls = obj if isinstance(obj, type) else type(obj)
-        return {_cls: tree(ibi.util.dataclassNonDefaults(obj))}
+    elif ibi.util.is_dataclass(obj):  # type: ignore
+        return {
+            obj.__class__.__qualname__: tree(  # type: ignore
+                ibi.util.dataclassNonDefaults(obj)
+            )
+        }
     else:
         return str(obj)
 

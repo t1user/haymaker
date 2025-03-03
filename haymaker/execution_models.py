@@ -244,7 +244,7 @@ class BaseExecModel(AbstractExecModel):
             amount = int(data["amount"])
         except KeyError:
             log.exception("Insufficient data to execute OPEN transaction")
-            return
+            return None
         self.data.active_contract = contract
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         if dynamic_order_kwargs:
