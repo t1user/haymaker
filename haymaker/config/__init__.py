@@ -1,3 +1,3 @@
-from .config import CONFIG, Config
+from .config import CONFIG
 
 # flake8: noqa

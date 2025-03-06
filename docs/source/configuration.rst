@@ -4,10 +4,11 @@ Configuration
 
 Haymaker is highly configurable. Parameters can be set in order of priority:
 
-#. Default configuration YAML file.
-#. User-provided configuration YAML file.
-#. System environment variables.
 #. Command-line options (highest priority).
+#. System environment variables.
+#. User-provided configuration YAML file.
+#. Default configuration YAML file. (fall-back for all variables that have not been defined otherwise)
+
 
 Default Configuration Files
 ===========================
@@ -20,9 +21,27 @@ https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml
 For Dataloader Module: 
 https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml 
 
+User-provided Configuration File
+================================
 
-Overriding Defaults
-===================
+It's easiest to create an override YAML file by making a copy of the default file and overriding the values as desired. `Haymaker` has to be pointed to the location of overriden config file. It can be done in one of two ways:
+
+* from command line by passing `--file` or `-f` option
+* via environment variable `HAYMAKER_HAYMAKER_CONFIG_OVERRIDES` or `HAYMAKER_DATALOADER_CONFIG_OVERRIDES` for execution and dataloader modules respectively
+
+Environment Variables
+=====================
+
+All `Haymaker`-related environment variables are prefixed with `HAYMAKER_`, this prefix will be chopped off, while reading env variables, it's a way to indicate to the framework, which variables should be read, this will prevent `Haymaker` from loading unrelated variables into its config environement.
+
+Environment variable names are **case insensitive**.
+
+.. note::
+   For nested variables, only top level can be overriden from CLI or environment. These are meant as a quick override, but in priciple the framework is configured via YAML file.
+   
+
+Overriding Defaults - Examples
+==============================
 
 To override defaults, copy a configuration file and modify desired parameters. Pass the location of new file to ``Haymaker`` via:
 
@@ -30,7 +49,7 @@ To override defaults, copy a configuration file and modify desired parameters. P
 
 .. code-block:: bash
 
-    export HAYMAKER_CONFIG_OVERRIDES=config.yaml
+    export HAYMAKER_HAYMAKER_CONFIG_OVERRIDES=config.yaml
 
 * Command-line argument:
 
