@@ -297,8 +297,8 @@ class Controller(Atom):
     ) -> None:
         """
         Writing commission on :class:`ibi.Trade` is the final stage of
-        order execution.  After that trade object is ready for storing
-        in blotter.
+        order execution.  At this point that trade object is ready for
+        storing in blotter.
         """
 
         # silence emission of all orders from session on startup

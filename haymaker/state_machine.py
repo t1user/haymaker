@@ -311,29 +311,12 @@ order_saver = MongoSaver("orders", query_key="orderId")
 
 class StateMachine:
     """
-    This class provides information.  It should be other classes that
-    act on this information.
+    This class provides information, other classes act on this
+    information.
 
-    Answers questions:
-
-        1. Is a strategy in the market?
-
-            - Which portion of the position in a contract is allocated
-              to this strategy
-
-        2. Is strategy locked?
-
-        4. Was execution successful (i.e. record desired position
-           after signal sent to execution model, then record actual
-           live transactions)?
-
-        5. Are holdings linked to strategies?
-
-        6. Are orders linked to strategies?
-
-    Collect all information needed to restore state.  This info is
-    stored to database.  If the app crashes, after restart, all info
-    about state required by any object must be found here.
+    In priciple, stores data about strategies (called 'models' here)
+    and orders.  This data is synched with database and restored on
+    restart.
     """
 
     _instance: "StateMachine | None" = None

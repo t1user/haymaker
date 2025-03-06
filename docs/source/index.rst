@@ -11,6 +11,7 @@ Haymaker Documentation
    requirements
    installation
    configuration
+   logging
    execution
    dataloader
    code

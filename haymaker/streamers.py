@@ -299,7 +299,9 @@ class HistoricalDataStreamer(Streamer):
             )
             stream = (
                 ev.Sequence(bars[:-1])
-                .pipe(ev.Filter(lambda x: x.date >= self._last_bar_date))  # type: ignore
+                .pipe(
+                    ev.Filter(lambda x: x.date >= self._last_bar_date)  # type: ignore
+                )
                 .connect(self.dataEvent)
             )
             self._future_adjust = False
