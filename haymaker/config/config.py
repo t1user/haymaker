@@ -47,10 +47,13 @@ class ConfigMaps:
     defaults: collections.abc.MutableMapping
 
     def __init__(self):
-        self._file = self.config_file_name_environ_reader()
+        _environ = self.get_environ()
+        self._file = self.config_file_name_environ_reader(_environ)
+        print(_environ)
+        # keep the priority order here
         self.cmdline = self.get_cmdline()
         self.config_file = self.get_config_file()
-        self.environ = self.get_environ()
+        self.environ = _environ
         self.defaults = self.get_defaults()
 
     @property
@@ -58,7 +61,7 @@ class ConfigMaps:
         return [self.cmdline, self.config_file, self.environ, self.defaults]
 
     @staticmethod
-    def config_file_name_environ_reader() -> str | None:
+    def config_file_name_environ_reader(environ: dict) -> str | None:
         """
         Retrieve name of config yaml file from environment.  The name
         of the environment variable with config file name depends on
@@ -68,10 +71,10 @@ class ConfigMaps:
             Filename if it's stored in environment variable, None otherwise.
         """
         module_name = Path(sys.argv[0]).name.split(".")[0]
-        environ_key = {"dataloader": "DATALOADER_CONFIG_OVERRIDES"}.get(
-            module_name, "HAYMAKER_CONFIG_OVERRIDES"
+        environ_key = {"dataloader": "dataloader_config_overrides"}.get(
+            module_name, "haymaker_config_overrides"
         )
-        return os.environ.get(environ_key, None)
+        return environ.get(environ_key, None)
 
     def get_cmdline(self, args=None) -> collections.abc.MutableMapping:
         """

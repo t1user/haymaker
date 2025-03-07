@@ -15,6 +15,7 @@ def temp_yaml_file(tmp_path):
     """Creates a temporary YAML file for testing."""
     data = {"key": "value", "nested": {"subkey": "subvalue"}}
     file_path = tmp_path / "test_config.yaml"
+    print(tmp_path)
     with open(file_path, "w") as f:
         yaml.dump(data, f)
     return file_path
@@ -39,6 +40,8 @@ def reset_sys_argv():
 
 
 def test_env_variable_loading(clear_env):
+    # `HAYMAKER_` needs to be chopped off
+    # all keys are small caps
     os.environ["HAYMAKER_TEST_KEY"] = "test_value"
     config = ConfigMaps()
     assert config.environ["test_key"] == "test_value"
@@ -78,10 +81,43 @@ def test_missing_yaml_file():
         config.parse_yaml("non_existent.yaml")
 
 
-def test_config_merging(monkeypatch, temp_yaml_file):
+def test_config_merging(monkeypatch):
     monkeypatch.setenv("HAYMAKER_TEST_KEY", "env_value")
     sys.argv = ["script_name", "--set_option", "option", "cmdline_value"]
     config_maps = ConfigMaps()
     merged = ChainMap(*config_maps.maps)
     assert merged["option"] == "cmdline_value"
     assert merged.get("test_key") == "env_value"
+
+
+def test_priorities_1(monkeypatch):
+    # cmdline overrides env value
+    monkeypatch.setenv("HAYMAKER_TEST_KEY", "env_value")
+    sys.argv = ["script_name", "--set_option", "test_key", "cmdline_value"]
+    config_maps = ConfigMaps()
+    merged = ChainMap(*config_maps.maps)
+    assert merged["test_key"] == "cmdline_value"
+
+
+def test_priorities_2(monkeypatch, temp_yaml_file, reset_sys_argv):
+    # config file has priority before env
+    monkeypatch.setenv("HAYMAKER_KEY", "env_value")
+    # config file name passed as cli argument
+    sys.argv = [
+        "script_name",
+        "--file",
+        str(temp_yaml_file),
+    ]
+    config_maps = ConfigMaps()
+    merged = ChainMap(*config_maps.maps)
+    assert merged.get("key") == "value"
+
+
+def test_config_file_read_from_env(monkeypatch, temp_yaml_file, reset_sys_argv):
+    # config file is read from env
+    monkeypatch.setenv("HAYMAKER_KEY", "env_value")
+    monkeypatch.setenv("HAYMAKER_HAYMAKER_CONFIG_OVERRIDES", str(temp_yaml_file))
+    config_maps = ConfigMaps()
+    merged = ChainMap(*config_maps.maps)
+    # it would be 'env_value' if it wasn't overridden with config file
+    assert merged.get("key") == "value"
