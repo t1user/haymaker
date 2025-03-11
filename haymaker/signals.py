@@ -277,6 +277,19 @@ class AlwaysOnBinarySignalProcessor(BinarySignalProcessor):
 def binary_signal_processor_factory(
     lockable=False, always_on=False
 ) -> Type[AbstractBaseBinarySignalProcessor]:
+    """
+    Heler function to return appropriate class based on parameters.
+
+    Parameters:
+
+        lockable:
+            True - no signals in the direction of last position if the last
+            position was stopped out (allowed, if position was closed through
+            means other than stop-loss)
+
+        always_on:
+            True - 'CLOSE' signal also opens position in reverese direction
+    """
     if lockable and always_on:
         return AlwaysOnLockableBinarySignalProcessor
     elif lockable:

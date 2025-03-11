@@ -14,6 +14,11 @@ log = logging.getLogger(__name__)
 
 
 class BarAggregator(Atom):
+    """
+    Aggregate recieved data bars into new bars based on the
+    criteria specified in :attr:`filter'. Store processed data.
+    """
+
     def __init__(
         self,
         filter: "CountBars | VolumeBars | TimeBars | NoFilter",
