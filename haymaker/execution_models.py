@@ -40,9 +40,6 @@ class AbstractExecModel(Atom, ABC):
     Intermediary between Portfolio and Trader.  Allows for fine tuning
     of order types used, order monitoring, post-order events, etc.
 
-    Object initialized by a :class:`Brick`, :class:`Controller`
-    will call execute method.
-
     All execution models must inherit from this class.
     """
 
@@ -179,7 +176,7 @@ class BaseExecModel(AbstractExecModel):
           was as desired
 
     Enters and closes positions based on params sent to
-    :meth:`.execute`.  Orders composed by :meth:`.open` and
+    :meth:`.onData`.  Orders composed by :meth:`.open` and
     :meth:`.close`, which can be overridden or extended in subclasses
     to get more complex behaviour.
     """
