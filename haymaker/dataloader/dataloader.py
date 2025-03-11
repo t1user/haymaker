@@ -298,9 +298,13 @@ class Manager:
     async def _headstamps(self) -> dict[ibi.Contract, Union[date, datetime]]:
         headstamps = {}
         for c in await self.contracts:
-            log.debug(f"Getting headstamp for contract: {c}")
-            if c_ := await self.headstamp(c):
-                headstamps[c] = c_
+            try:
+                log.debug(f"Getting headstamp for contract: {c}")
+                if c_ := await self.headstamp(c):
+                    headstamps[c] = c_
+            except Exception as e:
+                log.exception(f"Error while getting contract: {c}: {e}")
+
         log.debug(f"{headstamps=}")
         return headstamps
 
