@@ -35,7 +35,7 @@ controller:
   cancel_stray_orders: True
   # delay in sec after which controller will verify if transaction was executed correctly;
   # zero or comment-out for no verification
-  execution_verification_delay: 15
+  execution_verification_delay: 15 # in seconds
 
 # best left untouched
 state_machine:

@@ -49,7 +49,7 @@ class ConfigMaps:
     def __init__(self):
         _environ = self.get_environ()
         self._file = self.config_file_name_environ_reader(_environ)
-        print(_environ)
+
         # keep the priority order here
         self.cmdline = self.get_cmdline()
         self.config_file = self.get_config_file()
@@ -108,13 +108,14 @@ class ConfigMaps:
                 return self.parse_yaml(self._file)
             except FileNotFoundError:
                 msg = f"\nMissing config file: {self._file}\n"
-                if self._file == os.environ.get("HAYMAKER_CONFIG_OVERRIDES"):
+                if self._file == os.environ.get("HAYMAKER_HAYMAKER_CONFIG_OVERRIDES"):
                     msg += (
                         "file defined in environ variable: "
-                        "`HAYMAKER_CONFIG_OVERRIDES`\n"
+                        "`HAYMAKER_HAYMAKER_CONFIG_OVERRIDES`\n"
                     )
                 else:
                     msg += "file defined as CLI argument.\n"
+                print(f"Error: {msg}")
                 sys.stderr.write(msg)
                 log.error(msg.strip())
                 raise
