@@ -5,9 +5,10 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.base import Atom as BaseAtom
-from haymaker.controller import Controller as C
+from haymaker.controller import Controller
 from haymaker.saver import AbstractBaseSaver, SyncSaveManager
 from haymaker.state_machine import StateMachine
+from haymaker.trader import Trader
 
 log = logging.getLogger(__name__)
 
@@ -182,8 +183,5 @@ def Atom(state_machine, details):
 
 
 @pytest.fixture
-def Controller():
-    class TestController(C):
-        config = {}
-
-    return TestController
+def controller(Atom):
+    return Controller(Trader(Atom.ib))

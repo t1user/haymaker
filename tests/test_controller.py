@@ -5,7 +5,10 @@ import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.manager import IB
+from haymaker.controller import Controller
+from haymaker.trader import Trader
+
+# from haymaker.manager import IB
 
 
 @pytest.fixture
@@ -105,11 +108,12 @@ def trades_and_positions():
 
 
 @pytest.mark.asyncio
-async def test_StateMachine_linked_to_ib_newOrderEvent(caplog):
-    IB.newOrderEvent.emit(ibi.Trade(order=ibi.Order(orderId=123)))
+async def test_StateMachine_linked_to_ib_newOrderEvent(caplog, Atom):
+    controller = Controller(Trader(Atom.ib))  # noqa
+    Atom.ib.newOrderEvent.emit(ibi.Trade(order=ibi.Order(orderId=123, permId=45678)))
     assert await wait_for_condition(lambda: "123" in caplog.text)
 
 
-def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):
-    """TODO: This doesnt test anythin yet."""
-    IB.orderStatusEvent.emit(456)
+# def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):
+#     """TODO: This doesnt test anythin yet."""
+#     IB.orderStatusEvent.emit(456)

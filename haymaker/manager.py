@@ -9,9 +9,11 @@ from typing import Final, cast
 import ib_insync as ibi
 
 from .base import Atom, DetailsContainer
+from .config import CONFIG
 from .controller import Controller
 from .state_machine import StateMachine
 from .streamers import Streamer
+from .trader import Trader
 
 log = logging.getLogger(__name__)
 
@@ -192,4 +194,5 @@ INIT_DATA = InitData(
 JOBS = Jobs(INIT_DATA)
 Atom.set_init_data(INIT_DATA.ib, StateMachine())
 log.debug("Will initialize Controller")
-CONTROLLER: Final[Controller] = Controller()
+trader = Trader(IB)
+CONTROLLER: Final[Controller] = Controller.from_config(trader, CONFIG)

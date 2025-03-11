@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import abc
+from dataclasses import dataclass, fields
 from functools import cached_property, partial
-from typing import Generator
+from typing import Generator, Self
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -11,7 +13,6 @@ import ib_insync as ibi
 from . import misc
 from .base import Atom
 from .blotter import Blotter
-from .config import CONFIG
 from .misc import sign
 from .state_machine import OrderInfo, Strategy
 from .sync_routines import (
@@ -25,6 +26,7 @@ from .trader import FakeTrader, Trader
 log = logging.getLogger(__name__)
 
 
+@dataclass
 class Controller(Atom):
     """
     Intermediary between execution models (which are off ramps for
@@ -34,15 +36,57 @@ class Controller(Atom):
 
     """
 
-    blotter: Blotter | None
-    config = CONFIG.get("controller") or {}
+    trader: Trader
+    blotter: Blotter | None = None
+    cold_start: bool = True
+    reset: bool = False
+    zero: bool = False
+    nuke: bool = False
+    cancel_stray_orders: bool = True
+    log_IB_events: bool = False
+    sync_frequency: int = 0
+    execution_verification_delay: int = 0
+    _hold: bool = True
+    _sync_timer: ev.Timer | None = None
 
-    def __init__(
-        self,
-        trader: Trader | None = None,
-    ):
+    @classmethod
+    def from_config(
+        cls, trader: Trader, top_config: abc.MutableMapping | None = None
+    ) -> Self:
+        """
+        Extract proper attributes from configuration file and perform
+        required initializations based on it.
+        """
+        log.debug("Initializing Controller with config.")
+        if top_config is None:
+            top_config = {}
+
+        config = top_config.get("controller") or {}
+        blotter = Blotter() if config.get("use_blotter") else None
+
+        top_kwargs = {
+            i: top_config.get(i, False)
+            for i in [
+                "cold_start",
+                "reset",
+                "zero",
+                "nuke",
+            ]
+        }
+
+        return cls(
+            trader=trader,
+            blotter=blotter,
+            cancel_stray_orders=config.get("cancel_stray_orders", True),
+            log_IB_events=config.get("log_IB_events", False),
+            sync_frequency=config.get("sync_frequency", 900),
+            execution_verification_delay=config.get("execution_verification_delay", 0),
+            **top_kwargs,
+        )
+
+    def __post_init__(self) -> None:
         super().__init__()
-        self.trader = trader or Trader(self.ib)
+
         # these are essential (non-optional) events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent, self._log_event_error)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent, self._log_event_error)
@@ -55,26 +99,17 @@ class Controller(Atom):
 
         self.set_hold()
 
-        if self.config.get("use_blotter"):
-            self.blotter = Blotter()
+        if self.blotter:
             self.ib.commissionReportEvent.connect(
                 self.onCommissionReport, self._log_event_error
             )
-        else:
-            self.blotter = None
 
-        if sync_frequency := self.config.get("sync_frequency"):
-            self.sync_timer = ev.Timer(sync_frequency)
-            self.sync_timer.connect(self.sync, error=self._log_event_error)
+        if self.sync_frequency:
+            self._sync_timer = ev.Timer(self.sync_frequency)
+            self._sync_timer.connect(self.sync, error=self._log_event_error)
 
-        if self.config.get("log_IB_events"):
+        if self.log_IB_events:
             self._attach_logging_events()
-
-        self.cold_start = CONFIG.get("coldstart")
-        self.reset = CONFIG.get("reset")
-        self.zero = CONFIG.get("zero")
-        self.nuke_ = CONFIG.get("nuke")
-        self.cancel_stray_orders = self.config.get("cancel_stray_orders")
 
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         self.no_future_roll_strategies: list[str] = []
@@ -87,12 +122,12 @@ class Controller(Atom):
         self.ib.orderModifyEvent += self.log_modification
 
     def set_hold(self) -> None:
-        self.hold = True
+        self._hold = True
         log.debug("hold set")
 
     def release_hold(self) -> None:
-        if self.hold:
-            self.hold = False
+        if self._hold:
+            self._hold = False
             log.debug("hold released")
 
     def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
@@ -105,8 +140,8 @@ class Controller(Atom):
         """
         log.debug("Running controller...")
         self.set_hold()
-        if self.nuke_:
-            self.nuke()
+        if self.nuke:
+            self.run_nuke()
 
         if self.cold_start:
             log.debug("Starting cold... (state NOT read from db)")
@@ -185,16 +220,12 @@ class Controller(Atom):
         After obtaining transaction details from execution model,
         verify if the intended effect is the same as achieved effect.
         """
-        # super().onData(data)
-        if not (delay := self.config.get("execution_verification_delay")):
-            return
-
         try:
             strategy = data["strategy"]
             amount = data["amount"]
             target_position = data["target_position"]
             # TODO: Check transaction integrity only after order is done!
-            await asyncio.sleep(delay)
+            await asyncio.sleep(self.execution_verification_delay)
             await self.verify_transaction_integrity(strategy, amount, target_position)
         except KeyError:
             log.exception(
@@ -236,7 +267,7 @@ class Controller(Atom):
             )
 
     async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
-        if self.hold:
+        if self._hold:
             return
 
         # this will create new order record if it doesn't already exist
@@ -302,7 +333,7 @@ class Controller(Atom):
         """
 
         # silence emission of all orders from session on startup
-        if self.hold:
+        if self._hold:
             return
 
         data = self.sm.order.get(trade.order.orderId)
@@ -353,11 +384,9 @@ class Controller(Atom):
         objectives.  Things vefied are: 1.  actual resulting position
         in broker records 2.  records in state_machine
 
-        Any errors are logged but not corrected (may be changed in
+        Any errors are logged but not corrected (may change in
         future).
         """
-        delay = self.config.get("execution_verification_delay")
-        assert delay
 
         data = self.sm.strategy.get(strategy)
         target = target_position * amount
@@ -373,7 +402,7 @@ class Controller(Atom):
                 log.warning(
                     f"{strategy} taking long to achive target position of {target}"
                 )
-                await asyncio.sleep(delay)
+                await asyncio.sleep(self.execution_verification_delay)
 
         log_str = f"target: {target}, position: {data.position}"
         if data:
@@ -476,7 +505,7 @@ class Controller(Atom):
     def log_order_status(self, trade: ibi.Trade) -> None:
         # Connected to onOrderStatusEvent
 
-        if self.hold:
+        if self._hold:
             return
 
         if trade.order.orderId < 0:
@@ -572,7 +601,7 @@ class Controller(Atom):
                 ),
             )
 
-    def nuke(self) -> None:
+    def run_nuke(self) -> None:
         """
         Cancel all open orders, close existing positions and prevent
         any further trading.  Response to a critical error or request

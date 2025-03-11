@@ -7,10 +7,12 @@ from test_brick import data_for_df, df_brick  # noqa
 
 from haymaker.base import Pipe
 from haymaker.bracket_legs import FixedStop
+from haymaker.controller import Controller
 from haymaker.execution_models import BaseExecModel, EventDrivenExecModel
 from haymaker.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
 from haymaker.signals import BinarySignalProcessor
 from haymaker.state_machine import Strategy, StrategyContainer
+from haymaker.trader import Trader
 
 
 @pytest.fixture
@@ -111,7 +113,7 @@ def test_order_is_for_one_contract(pipe):
 
 
 @pytest.fixture
-def new_setup(Atom, Controller):
+def new_setup(Atom):
     class FakeTrader:
         def trade(self, contract: ibi.Contract, order: ibi.Order):
             return ibi.Trade(contract, order)
@@ -121,6 +123,7 @@ def new_setup(Atom, Controller):
 
         def trade(self, *args, **kwargs):
             self.trade_object = super().trade(*args, **kwargs)
+            return self.trade_object
 
     controller = FakeController(trader=FakeTrader())
 
@@ -209,13 +212,19 @@ async def test_sell_position_registered(new_setup):
             time=datetime.now(timezone.utc),
         )
     )
+    trade_object.order.permId = 12345
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
     await asyncio.sleep(0)
     assert em.data.position == -1
 
 
+# Call this in your test teardown
+# In pytest_asyncio, use a fixture with yield and this as the cleanup
+
+
 @pytest.mark.asyncio
-async def test_manual_order_created(Atom, Controller):
+async def test_manual_order_created(Atom):
+
     class A(Atom):
         pass
 
@@ -231,7 +240,8 @@ async def test_manual_order_created(Atom, Controller):
         tradingClass="ES",
     )
     trade_object = ibi.Trade(
-        contract=contract, order=ibi.Order(action="BUY", totalQuantity=1, orderId=-1)
+        contract=contract,
+        order=ibi.Order(action="BUY", totalQuantity=1, orderId=-1, permId=12345),
     )
     trade_object.fills.append(
         ibi.Fill(
@@ -245,7 +255,7 @@ async def test_manual_order_created(Atom, Controller):
             time=datetime.now(timezone.utc),
         )
     )
-    controller = Controller()
+    controller = Controller(trader=Trader(Atom.ib))
     controller.release_hold()
     controller.ib.orderStatusEvent.emit(trade_object)
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
