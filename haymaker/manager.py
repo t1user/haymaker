@@ -192,7 +192,8 @@ INIT_DATA = InitData(
     Atom.contract_details,
 )
 JOBS = Jobs(INIT_DATA)
-Atom.set_init_data(INIT_DATA.ib, StateMachine())
+STATE_MACHINE = StateMachine()
+Atom.set_init_data(INIT_DATA.ib, STATE_MACHINE)
 log.debug("Will initialize Controller")
 trader = Trader(IB)
 CONTROLLER: Final[Controller] = Controller.from_config(trader, CONFIG)

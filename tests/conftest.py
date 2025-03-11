@@ -85,16 +85,12 @@ model_saver = FakeMongoSaver("models")
 
 @pytest.fixture
 def state_machine():
-    # ensure any existing singleton is destroyed
-    # mere module imports will create an instance
-    # so using yield and subsequent tear-down
-    # will not work
-    if StateMachine._instance:
-        StateMachine._instance = None
     sm = StateMachine()
     sm._save_order = SyncSaveManager(order_saver)  # type: ignore
     sm._save_model = SyncSaveManager(model_saver)  # type: ignore
-    return sm
+    yield sm
+    # ensure any existing singleton is destroyed
+    StateMachine._instance = None
 
 
 @pytest.fixture

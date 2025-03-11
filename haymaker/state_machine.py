@@ -317,6 +317,9 @@ class StateMachine:
     In priciple, stores data about strategies (called 'models' here)
     and orders.  This data is synched with database and restored on
     restart.
+
+    This class must be a singleton, it will raise an error if there's
+    an attempt to create a second instance.
     """
 
     _instance: "StateMachine | None" = None
@@ -325,6 +328,9 @@ class StateMachine:
     _save_model = AsyncSaveManager(model_saver)
 
     def __new__(cls, *args, **kwargs):
+        """
+        Enforce signleton.
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             return cls._instance

@@ -63,7 +63,7 @@ def test_OrderInfo_active():
 
 def test_OrderInfo_amount_long():
     trade1 = ibi.Trade(
-        order=ibi.Order(action="BUY", totalQuantity=1),
+        order=ibi.Order(action="BUY", totalQuantity=1, permId=1234),
         orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
     )
     o1 = OrderInfo("coolstrategy", "OPEN", trade1, None)
@@ -72,7 +72,7 @@ def test_OrderInfo_amount_long():
 
 def test_OrderInfo_amount_shoft():
     trade1 = ibi.Trade(
-        order=ibi.Order(action="SELL", totalQuantity=1),
+        order=ibi.Order(action="SELL", totalQuantity=1, permId=1234),
         orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
     )
     o1 = OrderInfo("coolstrategy", "OPEN", trade1, None)
@@ -512,7 +512,7 @@ def test_position_and_order_for_strategy_position_pending_order(state_machine):
         "coolstrategy",
         "CLOSE",
         ibi.Trade(
-            order=ibi.Order(action="SELL", totalQuantity=1),
+            order=ibi.Order(action="SELL", totalQuantity=1, permId=1234),
             orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
         ),
         None,
@@ -529,7 +529,7 @@ def test_position_and_order_for_strategy_position_irrelevant_pending_order(
         "coolstrategy",
         "STOP",
         ibi.Trade(
-            order=ibi.Order(action="SELL", totalQuantity=1),
+            order=ibi.Order(action="SELL", totalQuantity=1, permId=1234),
             orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
         ),
         None,
@@ -585,7 +585,6 @@ async def test_StrategyContainer_gets_events_on_Strategy_change():
     cont = StrategyContainer(None, save_delay=0.001)
 
     cont.strategyChangeEvent += c
-    print(cont.strategyChangeEvent)
     strat = cont["new_strategy"]
     strat.position += 1
     await asyncio.sleep(0)
@@ -595,7 +594,7 @@ async def test_StrategyContainer_gets_events_on_Strategy_change():
 
 
 def test_strategy_has_position_attribute():
-    """Tripple checking because mypy doesn't seem to notice."""
+    # Tripple checking because mypy doesn't seem to notice
     cont = StrategyContainer(None, save_delay=0.000001)
     strat = cont["new_strategy"]  # noqa
     s = cont["new_strategy"]
