@@ -6,7 +6,11 @@ formatters:
   default:
     (): haymaker.logging.setup.UTCFormatter
     format:  "%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s | %(module)s %(funcName)s %(lineno)d"
+  broker:
+    (): haymaker.logging.setup.UTCFormatter
+    format:  "%(asctime)s | %(levelname)-8s | %(funcName)s | %(message)s"
 
+    
 handlers:
   console:
     class: logging.StreamHandler
@@ -24,6 +28,11 @@ handlers:
   timed_rotating_file_specific:
     <<: *file
     filename: strategies.log
+
+  timed_rotating_file_specific_2:
+    <<: *file
+    formatter: broker
+    filename: broker.log
     
 loggers:
   haymaker:
@@ -32,4 +41,7 @@ loggers:
   strategy:
     level: INFO
     handlers: [timed_rotating_file_specific]
-    
+  broker:
+    level: INFO
+    handlers: [timed_rotating_file_specific_2]
+  

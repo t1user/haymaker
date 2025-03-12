@@ -10,6 +10,7 @@ import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from .config import CONFIG as config
+from .handlers import IBHandlers
 from .logging import setup_logging
 
 # Don't change the order here!
@@ -26,6 +27,10 @@ ibi.util.patchAsyncio()
 log = logging.getLogger(__name__)
 
 CONFIG = config.get("app") or {}
+
+
+if config.get("log_broker"):
+    broker_logger = IBHandlers(IB)
 
 
 class IBC(Protocol):

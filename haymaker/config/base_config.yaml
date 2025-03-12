@@ -11,6 +11,8 @@ ignore_errors:
   - 202  # Order cancelled
   # Consider silencing 2103 - Market data connection is broken
 
+log_broker: False # if additional logger with all broker messages should be created
+
 app:
   restart_time: 30 # after disconnection, time to wait before reconnection attempt
   host: 127.0.0.1
@@ -28,7 +30,7 @@ app:
   
 controller:
   use_blotter: True
-  log_IB_events: False
+  log_order_events: False
   # interval at which sync will be performed
   sync_frequency: 900 # 15min
   # for strategy with zero position, cancel existing orders

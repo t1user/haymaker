@@ -5,7 +5,7 @@ import logging
 from collections import abc
 from dataclasses import dataclass
 from functools import cached_property, partial
-from typing import Generator, Self, Type
+from typing import Generator, Protocol, Self, Type
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -72,11 +72,12 @@ class Controller(Atom):
     zero: bool = False
     nuke: bool = False
     cancel_stray_orders: bool = True
-    log_IB_events: bool = False
+    log_order_events: bool = False
     sync_frequency: int = 0
     execution_verification_delay: int = 0
     _hold: bool = True
     _sync_timer: ev.Timer | None = None
+    _order_loggers: OrderLoggers | None = None
 
     @classmethod
     def from_config(
@@ -107,7 +108,7 @@ class Controller(Atom):
             trader=trader,
             blotter=blotter,
             cancel_stray_orders=config.get("cancel_stray_orders", True),
-            log_IB_events=config.get("log_IB_events", False),
+            log_order_events=config.get("log_order_events", False),
             sync_frequency=config.get("sync_frequency", 900),
             execution_verification_delay=config.get("execution_verification_delay", 0),
             **top_kwargs,
@@ -120,9 +121,8 @@ class Controller(Atom):
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent, self._log_event_error)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent, self._log_event_error)
         self.ib.orderStatusEvent.connect(self.onOrderStatusEvent, self._log_event_error)
-        # TODO: self.ib.orderModifyEvent
-        # TODO: self.ib.orderCancelEvent
-        # consider whether these are essential
+
+        # this is for logging
         self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
         self.ib.errorEvent.connect(self.log_err, self._log_event_error)
 
@@ -137,18 +137,12 @@ class Controller(Atom):
             self._sync_timer = ev.Timer(self.sync_frequency)
             self._sync_timer.connect(self.sync, error=self._log_event_error)
 
-        if self.log_IB_events:
-            self._attach_logging_events()
+        if self.log_order_events:
+            self._order_loggers = OrderLoggers(self.ib)
 
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
-
-    def _attach_logging_events(self):
-        # these are non-essential events
-        self.ib.newOrderEvent += self.log_new_order
-        self.ib.cancelOrderEvent += self.log_cancel
-        self.ib.orderModifyEvent += self.log_modification
 
     def set_hold(self) -> None:
         self._hold = True
@@ -279,7 +273,7 @@ class Controller(Atom):
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
         return self.trader.cancel(trade)
 
-    async def onNewOrderEvent(self, trade: ibi.Trade) -> None:
+    def onNewOrderEvent(self, trade: ibi.Trade) -> None:
         """
         Check if the system knows about the order that was just posted
         to the broker.
@@ -554,10 +548,6 @@ class Controller(Atom):
             )
 
     @staticmethod
-    def log_new_order(trade: ibi.Trade) -> None:
-        log.debug(f"New order {trade.order} for {trade.contract.localSymbol}")
-
-    @staticmethod
     def log_trade(trade: ibi.Trade, reason: str = "", strategy: str = "") -> None:
         log.info(
             f"{reason} trade filled: {trade.contract.localSymbol} "
@@ -565,19 +555,6 @@ class Controller(Atom):
             f"@{misc.trade_fill_price(trade)} --> {strategy} "
             f"orderId: {trade.order.orderId}, permId: {trade.order.permId}"
         )
-
-    @staticmethod
-    def log_cancel(trade: ibi.Trade) -> None:
-        log.info(
-            f"{trade.order.orderType} order {trade.order.action} "
-            f"{trade.remaining()} (of "
-            f"{trade.order.totalQuantity}) for "
-            f"{trade.contract.localSymbol} cancelled"
-        )
-
-    @staticmethod
-    def log_modification(trade: ibi.Trade) -> None:
-        log.debug(f"Order modified: {trade.order}")
 
     def log_err(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
@@ -648,6 +625,34 @@ class Controller(Atom):
 
     # def __repr__(self) -> str:
     #     return f"{self.__class__.__name__}({self.sm, self.ib, self.blotter})"
+
+
+class OrderLoggers:
+    """
+    These are optional, non-essential loggers that can be switched on
+    by :class:`Controller`
+    """
+
+    def __init__(self, ib: ibi.IB) -> None:
+        self.ib = ib
+        ib.cancelOrderEvent += self.log_cancel
+        ib.orderModifyEvent += self.log_modification
+
+    @staticmethod
+    def log_cancel(trade: ibi.Trade) -> None:
+        log.info(
+            f"{trade.order.orderType} order {trade.order.action} "
+            f"{trade.remaining()} (of "
+            f"{trade.order.totalQuantity}) for "
+            f"{trade.contract.localSymbol} cancelled"
+        )
+
+    @staticmethod
+    def log_modification(trade: ibi.Trade) -> None:
+        log.debug(f"Order modified: {trade.order}")
+
+    def __repr__(self) -> str:
+        return f"OrderLoggers({self.ib})"
 
 
 class FutureRoller:
