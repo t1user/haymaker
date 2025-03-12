@@ -239,7 +239,7 @@ class HistoricalDataStreamer(Streamer):
     incremental_only: bool = True
     startup_seconds: float = 5
     _last_bar_date: datetime | None = None
-    _future_adjust: bool = False  # flag that future needs to be adjusted
+    _future_adjust_flag: bool = False  # flag that future needs to be adjusted
     _adjusted: list[ibi.Future] = field(
         default_factory=list
     )  # already adjusted futures
@@ -286,7 +286,7 @@ class HistoricalDataStreamer(Streamer):
             f"Starting backfill {self.name}, pulled {len(bars)} bars, "
             f"last bar: {bars[-1]}"
         )
-        if self._last_bar_date and self._future_adjust:
+        if self._last_bar_date and self._future_adjust_flag:
             # this is a restart and contract has changed, emitting data since
             # last emitted point, but:
             # include one additional point in emit
@@ -304,7 +304,7 @@ class HistoricalDataStreamer(Streamer):
                 )
                 .connect(self.dataEvent)
             )
-            self._future_adjust = False
+            self._future_adjust_flag = False
         elif self._last_bar_date:
             # this is a regular restart; backfilling only data since last emitted point
             stream = (
@@ -339,7 +339,7 @@ class HistoricalDataStreamer(Streamer):
         backfill_predicate = (
             (not self._last_bar_date)
             or (self._last_bar_date < bars[-2].date)
-            or self._future_adjust
+            or self._future_adjust_flag
         )
 
         if bars and backfill_predicate:
@@ -380,8 +380,8 @@ class HistoricalDataStreamer(Streamer):
             log.warning(f"{self!s} will adjust for rolled future.")
             if old_contract not in self._adjusted:
                 log.warning(f"{self!s} set to adjust future")
-                self._future_adjust = True
-                self.startEvent.emit({"future_adjust": True})
+                self._future_adjust_flag = True
+                self.startEvent.emit({"_future_adjust_flag": True})
                 self._adjusted.append(old_contract)
             else:
                 log.warning(

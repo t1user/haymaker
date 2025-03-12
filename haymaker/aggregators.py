@@ -33,7 +33,7 @@ class BarAggregator(Atom):
         self._log_level = log.level
         self._debug = debug
         self._future_adjust_type = future_adjust_type
-        # initialize flag that future needs to be adjusted to be set by onStart
+        # if future needs to be adjusted; set by onStart
         self._future_adjust_flag = False
 
     def onStart(self, data, *args):
