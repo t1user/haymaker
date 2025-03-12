@@ -67,7 +67,7 @@ Typically, way more logic would be used in :class:`Portfolio` object, here we wi
           
             pipe = base.Pipe(
                 streamers.HistoricalDataStreamer(es_contract, "10 D", "1 hours", "TRADES"),
-                processors.BarAggregator(processors.NoFilter()),
+                aggregators.BarAggregator(processors.NoFilter()),
                 EMACrossStrategy("ema_cross_ES", es_contract, 12, 48, 24),
                 signals.BinarySignalProcessor(),
                 portfolio.PortfolioWrapper(),
@@ -89,9 +89,9 @@ Streamer will pull 10 days of 1 hour "TRADES" data for es_contract from the brok
 
 .. code:: python
 
-          processors.BarAggregator(processors.NoFilter()),
+          aggregators.BarAggregator(processors.NoFilter()),
 
-No processing is being done here (i.e. `NoFilter`), but in at the moment a processor is always required with a historical data streamer to keep record of historical data.
+No aggregating (nor other processing) is being done here (i.e. `NoFilter`), but in at the moment a aggregator is always required with a historical data streamer to keep record of historical data.
 
 
 .. code:: python

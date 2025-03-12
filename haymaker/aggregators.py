@@ -34,7 +34,7 @@ class BarAggregator(Atom):
         self._debug = debug
         self._future_adjust_type = future_adjust_type
         # initialize flag that future needs to be adjusted to be set by onStart
-        self.future_adjust = False
+        self._future_adjust_flag = False
 
     def onStart(self, data, *args):
         if isinstance(data, dict):
@@ -66,7 +66,7 @@ class BarAggregator(Atom):
     def onData(self, data: ibi.BarData | ibi.BarDataList, *args) -> None:
         # data is just single BarData object (if incremental_only=True,
         # which is default and currently only mode supported)
-        if self.future_adjust:
+        if self._future_adjust_flag:
             log.warning(f"{self} will adjust futures")
             log.debug(f"{data=}")
             # first data point is just to determine adjustment basis
@@ -77,7 +77,7 @@ class BarAggregator(Atom):
             except Exception as e:
                 log.exception(e)
             # adjust mode should be switched off for subsequent emits
-            self.future_adjust = False
+            self._future_adjust_flag = False
             # and it shouldn't be emitted further down the chain
             return
         if isinstance(data, ibi.BarDataList):

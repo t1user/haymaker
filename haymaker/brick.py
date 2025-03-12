@@ -9,8 +9,8 @@ from typing import Any
 import ib_insync as ibi
 import pandas as pd
 
+from .aggregators import BarList
 from .base import Atom
-from .processors import BarList
 
 log = logging.getLogger(__name__)
 

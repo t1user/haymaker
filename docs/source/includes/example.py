@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from haymaker import (
+    aggregators,
     app,
     base,
     bracket_legs,
@@ -12,7 +13,6 @@ from haymaker import (
     execution_models,
     indicators,
     portfolio,
-    processors,
     signals,
     streamers,
 )
@@ -40,7 +40,7 @@ portfolio.FixedPortfolio(1)
 
 pipe = base.Pipe(
     streamers.HistoricalDataStreamer(es_contract, "10 D", "1 hours", "TRADES"),
-    processors.BarAggregator(processors.NoFilter()),
+    aggregators.BarAggregator(aggregators.NoFilter()),
     EMACrossStrategy("ema_cross_ES", es_contract, 12, 48, 24),
     signals.BinarySignalProcessor(),
     portfolio.PortfolioWrapper(),
