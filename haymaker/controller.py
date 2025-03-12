@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import abc
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from functools import cached_property, partial
-from typing import Generator, Self
+from typing import Generator, Self, Type
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -24,6 +24,35 @@ from .sync_routines import (
 from .trader import FakeTrader, Trader
 
 log = logging.getLogger(__name__)
+
+
+def blotter_factory(param: Type[Blotter] | bool | None) -> Blotter | None:
+    """
+    Instantiate Blotter based on passed param.
+
+    Args:
+        param: value read from config use_blotter key, which accepts
+            either a bool (wheather standard blotter should be used or not) or
+            a custom Blotter class
+    Returns:
+        An instance of :class:`Blotter` or `None`.
+    """
+
+    match param:
+        case False | None:
+            return None
+        case True:
+            return Blotter()
+    try:
+        blotter_instance = param()
+    except Exception as e:
+        log.exception(e)
+    if isinstance(blotter_instance, Blotter):
+        return blotter_instance
+    else:
+        raise TypeError(
+            f"Custom Blotter object recevied from config is not a Blotter: {param}"
+        )
 
 
 @dataclass
@@ -62,7 +91,7 @@ class Controller(Atom):
             top_config = {}
 
         config = top_config.get("controller") or {}
-        blotter = Blotter() if config.get("use_blotter") else None
+        blotter = blotter_factory(config.get("use_blotter"))
 
         top_kwargs = {
             i: top_config.get(i, False)
@@ -349,7 +378,7 @@ class Controller(Atom):
                 "position_id": position_id,
                 "params": ibi.util.tree(params),
             }
-
+            # optionally set by execution model
             if arrival_price := params.get("arrival_price"):
                 kwargs.update(
                     {
