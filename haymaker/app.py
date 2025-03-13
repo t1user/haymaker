@@ -66,9 +66,9 @@ class App:
     probeContract: ibi.Contract = CONFIG.get("probeContract") or ibi.Forex("EURUSD")
     probeTimeout: float = CONFIG.get("probeTimeout") or 4
     no_future_roll_strategies: list[str] = field(default_factory=list)
-    _connections: int = 0
 
     def __post_init__(self) -> None:
+        # IB events
         self.ib.errorEvent += self.onErr
         self.ib.connectedEvent += self.onConnected
         self.ib.disconnectedEvent += self.onDisconnected
@@ -84,7 +84,7 @@ class App:
             probeContract=self.probeContract,
             probeTimeout=self.probeTimeout,
         )
-
+        # Watchdog events
         self.watchdog.startingEvent += self.onStarting
         self.watchdog.startedEvent += self.onStarted
         self.watchdog.stoppingEvent += self.onStopping
@@ -129,10 +129,6 @@ class App:
     def onStopped(self, *args) -> None:
         log.debug("Watchdog stopped...")
         log.debug(f"tasks: {asyncio.all_tasks()}")
-        # for task in self.jobs._tasks:
-        #     task.cancel("Watchdog stopped cancellation.")
-        # # for task in asyncio.all_tasks():
-        #     task.cancel("Watchdog stopped cancellation.")
 
     def onSoftTimeout(self, watchdog: ibi.Watchdog) -> None:
         log.debug("Soft timeout event.")
@@ -141,13 +137,10 @@ class App:
         log.debug("Hard timeout event.")
 
     def onConnected(self, *args) -> None:
-        self._connections += 1
-        log.debug(f"IB Connected, connections: {self._connections}")
+        log.debug("IB Connected")
 
     def onDisconnected(self, *args) -> None:
-        if self._connections:
-            self._connections -= 1
-        log.debug(f"IB Disconnected {args}, connections: {self._connections}")
+        log.debug(f"IB Disconnected {args}")
 
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         log.error(f"Event error {event.name()}: {exception}", exc_info=True)

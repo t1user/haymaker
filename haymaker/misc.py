@@ -26,7 +26,7 @@ def action(signal: int) -> str:
 
 
 def action_to_signal(action: str) -> Literal[-1, 1]:
-    assert action.upper() in ("BUY", "SELL"), "Invalid trade signal"
+    assert action.upper() in ("BUY", "SELL"), "Invalid trade action"
     return 1 if action == "BUY" else -1
 
 
@@ -39,11 +39,10 @@ class Sigact(str, Enum):
     """
     Signal action.  Indication from a strategy what kind of action is
     required.
+
+    NOT IN USE
     """
 
-    open = "OPEN"
-    close = "CLOSE"
-    reverse = "REVERSE"
     OPEN = "OPEN"
     CLOSE = "CLOSE"
     REVERSE = "REVERSE"

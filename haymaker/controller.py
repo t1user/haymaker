@@ -273,7 +273,8 @@ class Controller(Atom):
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
         return self.trader.cancel(trade)
 
-    def onNewOrderEvent(self, trade: ibi.Trade) -> None:
+    async def onNewOrderEvent(self, trade: ibi.Trade) -> None:
+        # keep this method async; it ensures correct sequence of actions
         """
         Check if the system knows about the order that was just posted
         to the broker.
@@ -308,14 +309,14 @@ class Controller(Atom):
             elif fill.execution.side == "BOT":
                 strategy.position += fill.execution.shares
                 log.debug(
-                    f"Registered orderId: {trade.order.orderId} permId: "
+                    f"Registered position - orderId: {trade.order.orderId} permId: "
                     f"{trade.order.permId} BUY {trade.order.orderType} "
                     f"for {strategy_str} --> position: {strategy.position}"
                 )
             elif fill.execution.side == "SLD":
                 strategy.position -= fill.execution.shares
                 log.debug(
-                    f"Registered orderId {trade.order.orderId} permId: "
+                    f"Registered position - orderId {trade.order.orderId} permId: "
                     f"{trade.order.permId} SELL {trade.order.orderType} "
                     f"for {strategy_str} --> position: {strategy.position}"
                 )

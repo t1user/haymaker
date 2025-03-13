@@ -278,7 +278,7 @@ def binary_signal_processor_factory(
     lockable=False, always_on=False
 ) -> Type[AbstractBaseBinarySignalProcessor]:
     """
-    Heler function to return appropriate class based on parameters.
+    Helper function to return appropriate class based on parameters.
 
     Parameters:
 
