@@ -52,7 +52,7 @@ class FixedPortfolio(AbstractBasePortfolio):
         super().__init__()
 
     def allocate(self, data) -> float:
-        if data["signal"] == "CLOSE":
+        if data.get("action") == "CLOSE":
             return 0
         else:
             return self.amount
