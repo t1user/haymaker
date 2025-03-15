@@ -344,7 +344,7 @@ def _grouper_prepare(
     )
 
 
-# not in use now, make it work
+# not in use now, find a way to make it work!!!
 
 
 @jit(nopython=True)
@@ -405,6 +405,59 @@ def renko_grouper(
 
     df = df.copy().reset_index()
     df["labels"] = _renko_grouper(df["close"].to_numpy(), spread_.to_numpy())
+    return _grouper_prepare(df, label)
+
+
+@jit(nopython=True)
+def _range_grouper(price: np.ndarray, spread: np.ndarray) -> np.ndarray:
+    top = bottom = price[0]
+    label = 0
+    labels = np.zeros(price.shape, dtype=np.int64)
+
+    for i, p in enumerate(price):
+        if i == 0:
+            continue
+        labels[i] = label
+        bottom = min(bottom, p)
+        top = max(top, p)
+        if (top - bottom) > spread[i]:
+            top = bottom = price[i]
+            label += 1
+    return labels
+
+
+def range_grouper(
+    df: pd.DataFrame,
+    spread: Union[float, "str"] = "atr",
+    label: Literal["left", "right"] = "left",
+) -> pd.DataFrame:
+    """
+    Args:
+    df: must have column `close`
+
+    spread: absolute value or name of column with spread series
+
+    """
+
+    if "close" not in df.columns:
+        raise ValueError("df must have column: `close`")
+
+    if isinstance(spread, str):
+        if spread not in df.columns:
+            raise ValueError(f"Column `{spread}` not in df.")
+        else:
+            spread_ = df[spread]
+    elif isinstance(spread, (float, int)):
+        df["spread"] = spread
+        spread_ = df["spread"]
+    else:
+        raise ValueError(
+            f"spread must be a column name or absolute value not {type(spread)}"
+        )
+
+    df = df.copy().reset_index()
+    assert np.nan not in spread_
+    df["labels"] = _range_grouper(df["close"].to_numpy(), spread_.to_numpy())
     return _grouper_prepare(df, label)
 
 
