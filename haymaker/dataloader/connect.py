@@ -13,7 +13,7 @@ class IBHandlers:
         self.ib = ib
         self.func = func
         self.ib.connectedEvent += self.onConnected
-        self.ib.errorEvent += self.onError
+        self.ib.errorEvent += self.onErr
         self.ib.client.apiError += self.onApiError
         self.ib.disconnectedEvent += self.onDisconnected
 
@@ -26,7 +26,7 @@ class IBHandlers:
     def onDisconnected(self, *args) -> None:
         log.debug("Disconnected!")
 
-    def onError(
+    def onErr(
         self, reqId: int, errorCode: int, errorString: str, contract: Contract
     ) -> None:
         try:
@@ -36,7 +36,8 @@ class IBHandlers:
         if errorCode in (2106, 2107):
             return
         elif "pacing violation" in errorString:
-            log.error(f"PACING VIOLATION: {errorString} {errorCode} {contract}")
+            pass
+            # log.error(f"PACING VIOLATION: {errorString} {errorCode} {contract}")
         else:
             log.warning(f"IB warning: {errorCode} {errorString} for: {what}")
 

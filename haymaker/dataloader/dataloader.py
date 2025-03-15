@@ -65,6 +65,12 @@ class Params(TypedDict):
     durationStr: str
 
 
+def pulse_factory(interval: float = AUTO_SAVE_INTERVAL) -> ibi.Event | None:
+    if asi := AUTO_SAVE_INTERVAL:
+        return ibi.Event().timerange(asi, None, asi)
+    return None
+
+
 @dataclass
 class DataWriter:
     """
@@ -97,15 +103,20 @@ class DataWriter:
     contract: ibi.Contract
     store: StoreWrapper = field(repr=False)
     queue: list[DownloadContainer] = field(default_factory=list, repr=False)
+    _pulse: ibi.Event | None = field(
+        default_factory=pulse_factory, repr=False, init=False
+    )
 
     def __post_init__(self) -> None:
-        if asi := AUTO_SAVE_INTERVAL:
-            pulse = ibi.Event().timerange(asi, None, asi)
-            pulse += self.onPulse
-        log.info(f"{self!r} initialized with {asi/60} min autosave.")
+        if self._pulse:
+            self._pulse += self._onPulse
+        log.info(f"{self!r} initialized {'with autosave' if self._pulse else ''}.")
 
-    def onPulse(self, time: datetime):
-        self.write_to_store()
+    def _onPulse(self, time: datetime):
+        if self.is_done():
+            self._pulse -= self.onPulse  # type: ignore
+        else:
+            self.write_to_store()
 
     def is_done(self) -> bool:
         return len(self.queue) == 0
@@ -124,8 +135,10 @@ class DataWriter:
         else:
             return None
 
-    def save_chunk(self, data: ibi.BarDataList):
-        assert not self.is_done()
+    def save_chunk(self, data: ibi.BarDataList) -> None:
+        if self.is_done():
+            log.warning(f"{self!s} is done, data: {data}")
+            return
         if data:
             log.info(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
         elif self._container.next_date:
@@ -144,6 +157,7 @@ class DataWriter:
         """
 
         if self.is_done():
+            log.warning(f"{self}: abandoned attempt to write to store on done writer.")
             return
 
         _data = self._container.flush_data()
@@ -238,7 +252,7 @@ class DownloadContainer:
             # got data, there's more to get
             self._next_date = date
 
-    def save_chunk(self, bars: Optional[ibi.BarDataList]) -> None:
+    def save_chunk(self, bars: Optional[ibi.BarDataList] | None) -> None:
         """
         Store downloaded data and if more data and update date point
         for next download.
@@ -318,13 +332,18 @@ class Manager:
         return [DownloadContainer(*t) for t in tasklist]
 
     @functools.cached_property
-    def writers(self) -> list[DataWriter]:
+    def _writers(self) -> list[DataWriter]:
         writers = []
         for contract, headstamp in self.headstamps.items():
             store = StoreWrapper(contract, STORE, NOW)
             tasks = self.tasks(store, headstamp)
             writers.append(DataWriter(contract, store, tasks))
         return writers
+
+    @property
+    def writers(self) -> list[DataWriter]:
+        # after restart some writers may already be done
+        return [writer for writer in self._writers if not writer.is_done()]
 
     async def headstamp(self, contract: ibi.Contract) -> Union[date, datetime]:
         try:
@@ -367,6 +386,11 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
             break
 
         writer = await queue.get()
+
+        if writer.is_done():
+            log.error(f"{writer!s} we're stil here...")
+            queue.task_done()
+            continue
 
         try:
             async with pacer:
