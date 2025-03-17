@@ -212,9 +212,11 @@ Available :class:`AbastractExecModel` Implementations
 
 .. autoclass:: haymaker.execution_models.BaseExecModel
    :members:
+   :show-inheritance:
 
 .. autoclass:: haymaker.execution_models.EventDrivenExecModel
    :members:
+   :show-inheritance:
 
 This model will automatically place stop-loss orders and potentially
 take-profit orders when the original order is filled.

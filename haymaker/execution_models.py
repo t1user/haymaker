@@ -37,14 +37,16 @@ class Bracket(NamedTuple):
 
 class AbstractExecModel(Atom, ABC):
     """
-    Intermediary between Portfolio and Trader.  Allows for fine tuning
-    of order types used, order monitoring, post-order events, etc.
-
-    All execution models must inherit from this class.
+    Intermediary between Portfolio and Trader.  It translates strategy signals into
+    orders acceptable by Interactive Brokers. May also implement market execution
+    strategy, monitor post-order events or manage any other function related to order
+    execution.
     """
 
+    # these are set by descriptor
     _open_order: dict[str, Any]
     _close_order: dict[str, Any]
+    # these will be validated by descriptor
     open_order = Validator(order_field_validator)
     close_order = Validator(order_field_validator)
 
@@ -163,7 +165,8 @@ class BaseExecModel(AbstractExecModel):
         - ``action``: must be one of: ``OPEN``, ``CLOSE``, ``REVERSE``
 
         - ``signal`` determines transaction direction, must be one of
-          {-1, 1} for sell/buy respectively
+          {-1, 1} for sell/buy respectively; irrelevant for ``CLOSE``,
+          where direction is determined by current position
 
         - ``contract`` - this :class:`ibi.Contract` instance will be
           traded
@@ -172,13 +175,25 @@ class BaseExecModel(AbstractExecModel):
 
         - ``target_position`` - one of {-1, 0, 1} determining
           direction AFTER transaction is executed; will be used by
-          :class:`.StateMachine` to verify if the transaction's effect
+          :class:`Controller` to verify if the transaction's effect
           was as desired
 
     Enters and closes positions based on params sent to
-    :meth:`.onData`.  Orders composed by :meth:`.open` and
-    :meth:`.close`, which can be overridden or extended in subclasses
+    :meth:`onData`.  Orders composed by :meth:`open` and
+    :meth:`close`, which can be overridden or extended in subclasses
     to get more complex behaviour.
+
+    Parameters:
+    _open_order: dict, default: CONFIG["open_order"]
+        Default parameters for open orders, that will be used for every transaction.
+        It is set by config, but can be overridden by passing `open_order` key to
+        `orders` dict in __init__.
+
+    _close_order: dict, default: CONFIG["close_order"]
+        Default parameters for close orders, that will be used for every transaction.
+        It is set by config, but can be overridden by passing `close_order` key to
+        `orders` dict in __init__.
+    _
     """
 
     _open_order = {**cast(dict, CONFIG.get("open_order")), "orderType": "MKT"}
@@ -310,10 +325,6 @@ class EventDrivenExecModel(BaseExecModel):
     execution of open order. After close transaction remove existing
     bracketing orders.
 
-    this has been moved out of this class:
-    On re(start) make sure that all positions have
-    stop-losses and that there are no open orders not attached to any
-    existing position.
     """
 
     _stop_order: dict[str, Any] = {}
@@ -348,7 +359,8 @@ class EventDrivenExecModel(BaseExecModel):
         dynamic_order_kwargs: dict | None = None,
     ) -> ibi.Trade:
         """
-        Save information required for bracket orders and attach events
+        On top of actions perfomed by base class, this method will:
+        save information required for bracket orders and attach events
         that will attach brackets after order completion.
         """
         attach_bracket = partial(self._attach_bracket, params=data)
@@ -367,7 +379,8 @@ class EventDrivenExecModel(BaseExecModel):
         dynamic_order_kwargs: dict | None = None,
     ) -> ibi.Trade | None:
         """
-        Attach oca that will cancel any brackets after order execution.
+        On top of actions perfomed by base class, this method will:
+        attach oca that will cancel any brackets after order execution.
         """
 
         return super().close(data, self._dynamic_bracket_kwargs())

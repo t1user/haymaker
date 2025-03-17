@@ -9,6 +9,13 @@ T = TypeVar("T")
 
 
 class Validator:
+    """
+    Descriptor class to validate attributes of a class.
+
+    Args:
+        *validators: Callables that will be used to validate the attribute.
+
+    """
 
     def __init__(self, *validators: Callable[[T], T]):
         self.validators = validators

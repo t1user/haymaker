@@ -79,8 +79,7 @@ class AbstractBracketLeg(ABC):
         return trade_params
 
     @abstractmethod
-    def _order(self, params: dict[str, Any]) -> dict[str, Any]:
-        ...
+    def _order(self, params: dict[str, Any]) -> dict[str, Any]: ...
 
     def __repr__(self):
         attrs = ", ".join((f"{i}={j}" for i, j in self.__dict__.items()))
@@ -163,7 +162,7 @@ class AdjustableTrailingFixedStop(TrailingStop):
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
         k = super()._order(params)
-        log.debug(f"super order: {k}")
+        # log.debug(f"super order: {k}")
         # k is from super order, params is from Trade object
         # k['auxPrice] is: stop_multiple * vol_field (a.k.a. self.sl_points)
 
