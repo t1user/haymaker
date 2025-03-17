@@ -21,6 +21,14 @@ from . import misc
 
 log = logging.getLogger(__name__)
 
+
+OPEN_ORDER = {**CONFIG.get("open_order", {}), "orderType": "MKT"}
+CLOSE_ORDER = {**CONFIG.get("close_order", {}), "orderType": "MKT"}
+STOP_ORDER = {**CONFIG.get("stop_order", {}), "orderType": "STP"}
+TP_ORDER = {**CONFIG.get("tp_order", {}), "orderType": "LMT"}
+OCA_TYPE = CONFIG.get("oca_type", 1)
+
+
 OrderKey = Literal[
     "open_order", "close_order", "stop_order", "tp_order", "reverse_order"
 ]
@@ -43,17 +51,14 @@ class AbstractExecModel(Atom, ABC):
     execution.
     """
 
-    # these are set by descriptor
-    _open_order: dict[str, Any]
-    _close_order: dict[str, Any]
-    # these will be validated by descriptor
     open_order = Validator(order_field_validator)
     close_order = Validator(order_field_validator)
 
     def __init__(
         self,
-        orders: dict[OrderKey, dict[str, Any]] | None = None,
         *,
+        open_order: dict[str, Any] = {},
+        close_order: dict[str, Any] = {},
         controller: Controller | None = None,
     ) -> None:
         super().__init__()
@@ -66,12 +71,17 @@ class AbstractExecModel(Atom, ABC):
             from .manager import CONTROLLER
 
             self.controller = CONTROLLER
-
-        if orders:
-            for key, order_kwargs in orders.items():
-                setattr(self, key, order_kwargs)
-
+        self.open_order = {**OPEN_ORDER, **open_order}
+        self.close_order = {**CLOSE_ORDER, **close_order}
         self.connect_controller()
+
+    @staticmethod
+    def order_factory(order_type: str, **kwargs) -> dict[str, Any]:
+        order_kwargs = {"open_order": OPEN_ORDER, "close_order": CLOSE_ORDER}.get(
+            order_type, {}
+        )
+        order_kwargs.update(kwargs)
+        return order_kwargs
 
     def connect_controller(self):
         self += self.controller
@@ -182,22 +192,7 @@ class BaseExecModel(AbstractExecModel):
     :meth:`onData`.  Orders composed by :meth:`open` and
     :meth:`close`, which can be overridden or extended in subclasses
     to get more complex behaviour.
-
-    Parameters:
-    _open_order: dict, default: CONFIG["open_order"]
-        Default parameters for open orders, that will be used for every transaction.
-        It is set by config, but can be overridden by passing `open_order` key to
-        `orders` dict in __init__.
-
-    _close_order: dict, default: CONFIG["close_order"]
-        Default parameters for close orders, that will be used for every transaction.
-        It is set by config, but can be overridden by passing `close_order` key to
-        `orders` dict in __init__.
-    _
     """
-
-    _open_order = {**cast(dict, CONFIG.get("open_order")), "orderType": "MKT"}
-    _close_order = {**cast(dict, CONFIG.get("close_order")), "orderType": "MKT"}
 
     def trade(
         self,
@@ -325,19 +320,41 @@ class EventDrivenExecModel(BaseExecModel):
     execution of open order. After close transaction remove existing
     bracketing orders.
 
+    Parameters (keyword only):
+    ===========
+    open_order, close_order, stop_order, tp_order: dict, optional
+            maybe used to define order type used for respective transactions;
+            passed dicts will be used to extend and/or update any defaults
+            from config
+
+    stop: :class:`AbstractBracketLeg` instance, must be provided
+            manages creation of stop-loss order
+
+    take_profit: :class:`AbstractBracketLeg` instance, optional
+            manages creation of take-profit order
+
+    oca_type: int, default 1
+            OCA group type as per Interactive Brokers definition
+
+    controller: :class:`Controller` instance, optional
+            passing :class:`Controller` is meant for testing;
+            otherwise the system should be allowed to use its own
+            mechanisms to create it
     """
 
-    _stop_order: dict[str, Any] = {}
-    _tp_order: dict[str, Any] = {}
     stop_order = Validator(order_field_validator)
     tp_order = Validator(order_field_validator)
 
     def __init__(
         self,
-        orders: dict[OrderKey, Any] | None = None,
         *,
+        open_order: dict[str, Any] = {},
+        close_order: dict[str, Any] = {},
+        stop_order: dict[str, Any] = {},
+        tp_order: dict[str, Any] = {},
         stop: AbstractBracketLeg | None = None,
         take_profit: AbstractBracketLeg | None = None,
+        oca_type: int = OCA_TYPE,
         controller: Controller | None = None,
     ):
         if not stop:
@@ -346,8 +363,13 @@ class EventDrivenExecModel(BaseExecModel):
             )
         self.stop = stop
         self.take_profit = take_profit
+        self.stop_order = {**STOP_ORDER, **stop_order}
+        self.tp_order = {**TP_ORDER, **tp_order}
+        self.oca_type = oca_type
         self.oca_group_generator = lambda: str(uuid4())
-        super().__init__(orders, controller=controller)
+        super().__init__(
+            open_order=open_order, close_order=close_order, controller=controller
+        )
 
     def onStart(self, data, *args):
         super().onStart(data, *args)
@@ -389,7 +411,7 @@ class EventDrivenExecModel(BaseExecModel):
         self.data.oca_group = (
             self.data.get("oca_group", None) or self.oca_group_generator()
         )
-        return {"ocaGroup": self.data.oca_group, "ocaType": CONFIG.get("oca_type") or 1}
+        return {"ocaGroup": self.data.oca_group, "ocaType": self.oca_type}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
         # called once for sl/tp pair! Don't put inside the for loop!
@@ -405,7 +427,9 @@ class EventDrivenExecModel(BaseExecModel):
                 if bracket:
                     memo: dict[str, Any] = {}
                     bracket_kwargs = bracket(params, trade, memo)
-                    bracket_kwargs.update(CONFIG.get(order_key))  # type: ignore
+                    bracket_kwargs.update(
+                        self.stop_order if order_key == "stop_order" else self.tp_order
+                    )
                     bracket_kwargs.update(dynamic_bracket_kwargs)
                     memo.update(
                         {
@@ -415,7 +439,7 @@ class EventDrivenExecModel(BaseExecModel):
                         }
                     )
                     self.data.params[label.lower()] = memo
-                    order = self._order(cast(OrderKey, order_key), bracket_kwargs)
+                    order = self._order(order_key, bracket_kwargs)
 
                     bracket_trade = self.trade(
                         trade.contract,
@@ -424,7 +448,7 @@ class EventDrivenExecModel(BaseExecModel):
                     )
                     self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
                         cast(BracketLabel, label),
-                        cast(OrderKey, order_key),
+                        order_key,
                         bracket_kwargs,
                         bracket_trade,
                     )

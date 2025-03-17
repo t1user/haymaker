@@ -1,10 +1,12 @@
 import logging
 import random
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import ib_insync as ibi
 import pytest
 
+from haymaker.base import Atom
 from haymaker.bracket_legs import FixedStop, TakeProfitAsStopMultiple, TrailingStop
 from haymaker.controller import Controller
 from haymaker.execution_models import (
@@ -15,40 +17,43 @@ from haymaker.execution_models import (
 from haymaker.state_machine import Strategy
 
 
-def test_AbstraExecModel_is_abstract(controller):
+def test_AbstraExecModel_is_abstract(controller: Controller):
     with pytest.raises(TypeError):
-        AbstractExecModel(controller=controller)
+        AbstractExecModel(controller=controller)  # type: ignore
 
 
-def test_BaseExecModel_instantiates(controller):
+def test_BaseExecModel_instantiates(controller: Controller):
     bem = BaseExecModel(controller=controller)
     assert isinstance(bem, BaseExecModel)
 
 
-def test_EventDrivenExecModel_instantiates(controller):
+def test_EventDrivenExecModel_instantiates(controller: Controller):
     edem = EventDrivenExecModel(stop=FixedStop(1), controller=controller)
     assert isinstance(edem, EventDrivenExecModel)
 
 
-def test_EventDrivenExecModel_requires_stop(controller):
+def test_EventDrivenExecModel_requires_stop(controller: Controller):
     with pytest.raises(TypeError):
         EventDrivenExecModel(controller=controller)
 
 
-def test_BaseExecModel_order_validator_works_with_correct_keys(controller):
+def test_BaseExecModel_order_validator_works_with_correct_keys(controller: Controller):
     open_order = {"orderType": "LMT", "lmtPrice": 5}
-    bem = BaseExecModel({"open_order": open_order}, controller=controller)
-    assert bem.open_order == open_order
+    bem = BaseExecModel(open_order=open_order, controller=controller)
+    assert isinstance(bem.open_order, dict)
+    assert bem.open_order["lmtPrice"] == 5
 
 
-def test_BaseExecModel_order_validator_raises_with_incorrect_keys(controller):
+def test_BaseExecModel_order_validator_raises_with_incorrect_keys(
+    controller: Controller,
+):
     open_order = {"orderType": "LMT", "price123": 5}
     with pytest.raises(ValueError) as excinfo:
-        BaseExecModel({"open_order": open_order}, controller=controller)
+        BaseExecModel(open_order=open_order, controller=controller)
     assert "price123" in str(excinfo.value)
 
 
-def test_position_id(controller):
+def test_position_id(controller: Controller):
     em = EventDrivenExecModel(stop=FixedStop(10), controller=controller)
     em.onStart({"strategy": "xxx"})
     id1 = em.get_position_id()
@@ -56,7 +61,7 @@ def test_position_id(controller):
     assert id1 == id2
 
 
-def test_position_id_reset(controller):
+def test_position_id_reset(controller: Controller):
     em = EventDrivenExecModel(stop=FixedStop(10), controller=controller)
     em.onStart({"strategy": "xxx"})
     id1 = em.get_position_id()
@@ -64,7 +69,7 @@ def test_position_id_reset(controller):
     assert id1 != id2
 
 
-def test_oca_group_EventDrivenExecModel(controller):
+def test_oca_group_EventDrivenExecModel(controller: Controller):
     e = EventDrivenExecModel(
         stop=FixedStop(1),
         take_profit=TakeProfitAsStopMultiple(1, 2),
@@ -76,7 +81,7 @@ def test_oca_group_EventDrivenExecModel(controller):
     assert len(oca_group) > 10
 
 
-def test_oca_group_unique_EventDrivenExecModel(controller):
+def test_oca_group_unique_EventDrivenExecModel(controller: Controller):
     e = EventDrivenExecModel(
         stop=FixedStop(1),
         take_profit=TakeProfitAsStopMultiple(1, 2),
@@ -88,7 +93,7 @@ def test_oca_group_unique_EventDrivenExecModel(controller):
     assert oca_group1 != oca_group2
 
 
-def test_oca_group_is_not_position_id(controller):
+def test_oca_group_is_not_position_id(controller: Controller):
     e = EventDrivenExecModel(
         stop=FixedStop(1),
         take_profit=TakeProfitAsStopMultiple(1, 2),
@@ -101,17 +106,19 @@ def test_oca_group_is_not_position_id(controller):
 
 
 @pytest.fixture
-def objects(Atom):
+def objects(Atom: type[Atom]):
 
+    @dataclass
     class Data:
-        contract = None
-        order = None
-        action = None
-        trade_object = None
-        fill = None
-        position = None
+        contract: ibi.Contract | None = None
+        order: ibi.Order | None = None
+        action: str | None = None
+        trade_object: ibi.Trade | None = None
+        fill: ibi.Fill | None = None
+        position: float | None = None
 
         def trade_done(self):
+            assert self.trade_object is not None
             self.trade_object.fillEvent.emit(self.trade_object, self.fill)
             self.trade_object.filledEvent.emit(self.trade_object)
 
@@ -164,7 +171,7 @@ def objects(Atom):
     class Source(Atom):
         pass
 
-    controller = FakeController(FakeTrader())
+    controller = FakeController(FakeTrader())  # type: ignore
     source = Source()
 
     return controller, source, output_data
@@ -215,7 +222,7 @@ def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
     )
     data.trade_done()
     brackets = list(em.data.brackets.values())
-    em.position = 1
+    # em.position = 1
     source.dataEvent.emit(
         {
             "signal": -1,
@@ -311,7 +318,7 @@ def test_passed_order_kwargs_update_defaults(Atom, objects):
     controller, source, data = objects
     # these are non defaults, so assert will check whether defaults
     # have been successfully overridden
-    em = BaseExecModel(orders={"open_order": {"algoParams": ""}}, controller=controller)
+    em = BaseExecModel(open_order={"algoParams": ""}, controller=controller)
 
     class Source(Atom):
         pass
