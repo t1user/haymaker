@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import ib_insync as ibi
 
-from . import misc
-from .state_machine import OrderInfo, StateMachine, Strategy
+from haymaker import misc
+from haymaker.state_machine import OrderInfo, StateMachine, Strategy
 
 if TYPE_CHECKING:
     from .controller import Controller
