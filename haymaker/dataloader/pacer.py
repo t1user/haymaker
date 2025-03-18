@@ -15,12 +15,16 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class Restriction:
+    # hold record of requests that have been let through
+    # shared among all instances
     holder: ClassVar[deque[datetime]] = deque(maxlen=100)
+    # actual restriction defined here as number of requests within seconds
     requests: int
     seconds: float
 
     def check(self) -> float:
         """Return required sleep time in seconds."""
+        # get last six requests that have been let through
         holder_ = deque(self.holder, maxlen=self.requests)
         if len(holder_) < self.requests:
             return 0.0
@@ -44,26 +48,6 @@ class NoRestriction(Restriction):
 
 
 @dataclass
-class InnerContext:
-    """Created separately for every wait instance."""
-
-    wait_time: float
-
-    async def __aenter__(self):
-        # add up to 1 sec random time to prevent all pacers exiting
-        # from wait simultanously
-        wait_time = self.wait_time  # + random.randint(0, 100) / 100
-        log.debug(
-            f"Will throtle: {round(wait_time, 1)}s till "
-            f"{datetime.now() + timedelta(seconds=wait_time)}"
-        )
-        await asyncio.sleep(wait_time)
-
-    async def __aexit__(self, *args):
-        pass
-
-
-@dataclass
 class Pacer:
     """One object for all workers."""
 
@@ -74,8 +58,12 @@ class Pacer:
     async def __aenter__(self):
         # inner context ensures separate wait time for each worker
         while time := max([restriction.check() for restriction in self.restrictions]):
-            async with InnerContext(time):
-                pass
+            log.debug(
+                f"Will throtle: {round(time, 1)}s till "
+                f"{datetime.now() + timedelta(seconds=time)}"
+            )
+            await asyncio.sleep(time)
+
         # register request time right before making the request
         # request should be the next instruction out of this context
         Restriction.holder.append(datetime.now(timezone.utc))

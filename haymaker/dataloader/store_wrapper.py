@@ -9,6 +9,7 @@ import ib_insync as ibi
 import pandas as pd
 
 from haymaker.datastore import AbstractBaseStore
+from haymaker.misc import async_cached_property
 
 
 @dataclass
@@ -23,6 +24,28 @@ class StoreWrapper:
     async def data_async(self) -> pd.DataFrame | None:
         """Available data in datastore for contract or None"""
         return await self._loop.run_in_executor(None, self.store.read, self.contract)
+
+    async def write_async(self, contract: ibi.Contract, data: pd.DataFrame) -> str:
+        # save asynchronously to a synchronous store using executor
+        return await self._loop.run_in_executor(None, self.write, contract, data)
+
+    @async_cached_property
+    async def from_date_async(self) -> datetime | None:
+        # not in use
+        data = await self.data_async()
+        if data is not None:
+            return data.index[1]
+        else:
+            return None
+
+    @async_cached_property
+    async def to_date_async(self) -> datetime | None:
+        # not in use
+        data = await self.data_async()
+        if data is not None:
+            return data.index[1]
+        else:
+            return None
 
     @property
     def data(self) -> pd.DataFrame | None:
@@ -72,10 +95,6 @@ class StoreWrapper:
         disregarded.
         """
         return min(self.expiry, self.now) if self.expiry else self.now
-
-    async def write_async(self, contract: ibi.Contract, data: pd.DataFrame) -> str:
-        # save asynchronously to a synchronous store using executor
-        return await self._loop.run_in_executor(None, self.write, contract, data)
 
     def __getattr__(self, attr):
         # everything not defined delegate to the wrapped object

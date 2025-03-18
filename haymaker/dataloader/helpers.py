@@ -1,6 +1,21 @@
 from datetime import date, datetime, timedelta
 from typing import Union
 
+# source:
+# https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/#hist-bar-size
+valid_bar_sizes = {
+    "secs": (1, 5, 10, 15, 30),
+    "mins": (1, 2, 3, 5, 10, 15, 20, 30),
+    "hours": (1, 2, 3, 4, 8),
+    "day": (1,),
+    "weeks": (1,),
+    "months": (1,),
+}
+
+VALID_BAR_SIZES = [
+    f"{size} {unit}" for unit, sizes in valid_bar_sizes.items() for size in sizes
+]
+
 
 def duration_in_secs(barSize: str):
     """Given duration string return duration in seconds int"""
@@ -9,15 +24,16 @@ def duration_in_secs(barSize: str):
     multiplier = {
         "sec": 1,
         "min": 60,
-        "mins": 60,
         "hour": 3600,
-        "day": 3600 * 23,
-        "week": 3600 * 23 * 5,
+        "day": 3600 * 24,
+        "week": 3600 * 24 * 7,
     }
     return int(number) * multiplier[time]
 
 
-def duration_str(duration_in_secs: float, aggression: float, from_bar: bool = True):
+def duration_str(
+    duration_in_secs: float, aggression: float, from_bar: bool = True
+) -> str:
     """
     Given duration in seconds return acceptable duration str.
 
@@ -28,7 +44,7 @@ def duration_str(duration_in_secs: float, aggression: float, from_bar: bool = Tr
     any multiplication.
     """
     if from_bar:
-        multiplier = 2000 if duration_in_secs < 30 else 15000 * aggression
+        multiplier = 2000 if duration_in_secs == 1 else 15000 * aggression
     else:
         multiplier = 1
     duration = int(duration_in_secs * multiplier)
@@ -44,7 +60,7 @@ def duration_str(duration_in_secs: float, aggression: float, from_bar: bool = Tr
     return f"{duration} S"
 
 
-def barSize_to_duration(s, aggression):
+def barSize_to_duration(s: str, aggression) -> str:
     """
     Given bar size str return optimal duration str,
 
