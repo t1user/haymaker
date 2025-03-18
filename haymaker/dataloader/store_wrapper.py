@@ -1,8 +1,9 @@
+import asyncio
 import functools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from functools import wraps
-from typing import Callable, Optional, Union
+from typing import Callable, Union
 
 import ib_insync as ibi
 import pandas as pd
@@ -15,20 +16,27 @@ class StoreWrapper:
     contract: ibi.Contract
     store: AbstractBaseStore
     now: Union[date, datetime]
+    _loop: asyncio.AbstractEventLoop = field(
+        default_factory=asyncio.get_running_loop, repr=False
+    )
+
+    async def data_async(self) -> pd.DataFrame | None:
+        """Available data in datastore for contract or None"""
+        return await self._loop.run_in_executor(None, self.store.read, self.contract)
 
     @property
-    def data(self) -> Optional[pd.DataFrame]:
+    def data(self) -> pd.DataFrame | None:
         """Available data in datastore for contract or None"""
         return self.store.read(self.contract)
 
     @functools.cached_property
-    def from_date(self) -> Optional[datetime]:
+    def from_date(self) -> datetime | None:
         """Earliest point in datastore"""
         # second point in the df to avoid 1 point gap
         return self.data.index[1] if self.data is not None else None  # type: ignore
 
     @functools.cached_property
-    def to_date(self) -> Optional[datetime]:
+    def to_date(self) -> datetime | None:
         """Latest point in datastore"""
         date = self.data.index.max() if self.data is not None else None
         return date
@@ -46,7 +54,7 @@ class StoreWrapper:
 
     @functools.cached_property
     @cast_expiry
-    def expiry(self) -> Optional[datetime]:  # this maybe an error
+    def expiry(self) -> datetime | None:  # this maybe an error
         """Expiry date for expirable contracts or ''"""
         e = self.contract.lastTradeDateOrContractMonth
         return (
@@ -65,5 +73,10 @@ class StoreWrapper:
         """
         return min(self.expiry, self.now) if self.expiry else self.now
 
+    async def write_async(self, contract: ibi.Contract, data: pd.DataFrame) -> str:
+        # save asynchronously to a synchronous store using executor
+        return await self._loop.run_in_executor(None, self.write, contract, data)
+
     def __getattr__(self, attr):
+        # everything not defined delegate to the wrapped object
         return getattr(self.store, attr)

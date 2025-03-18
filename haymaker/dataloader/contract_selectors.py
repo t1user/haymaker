@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 class ContractSelector:
     """
-    Based on passes contract attributes and config parameters
+    Based on passed contract attributes and config parameters
     determine instrument(s) that should be added to data download
     queue.  The output of any computations is accessible via
     :meth:`objects`
@@ -93,6 +93,8 @@ class ContractSelector:
 
     async def objects(self) -> list[ibi.Contract]:
         try:
+            # this is present only in subclasses
+            # otherwise exception will be caught
             return await self._objects()  # type: ignore
         except AttributeError:
             object_list = [ibi.Contract.create(**self.kwargs)]

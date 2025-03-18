@@ -415,13 +415,16 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
             writer.save_chunk(chunk)
         except Exception as e:
             log.exception(e)
+            # prevent same request sooner than after 15 secs
+            await asyncio.sleep(15)
+            log.debug(f"{writer!s} rescheduled.")
 
         if writer.next_date:
             if validate_age(writer):
                 await queue.put(writer)
             else:
                 writer.save_chunk(None)
-                log.debug(f"{writer!s} dropped on age validation")
+                log.debug(f"{writer!s} dropped on age validation.")
         else:
             log.info(f"{writer!s} done!")
 
