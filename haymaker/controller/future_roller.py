@@ -89,14 +89,15 @@ class FutureRoller:
         """
         Given an expiring contract, return a dict of strategies with
         their rollable holdings.  It's not necessarily number of
-        contracts to be rolled, this is to be determined by other
+        contracts to be rolled, which is to be determined by other
         methods, it's a number of contracts that should be considered
         for rolling given which contracts are expiring and any
         limitations about strategies excluded from rolling.
         """
         return {
-            strategy_str: self.sm.strategy[strategy_str].position
+            strategy_str: position
             for strategy_str in self.strategies[contract]
+            if (position := self.sm.strategy[strategy_str].position)
         }
 
     def match_old_to_new_future(self, old_future: ibi.Future) -> ibi.Future:
@@ -260,9 +261,9 @@ class FutureRoller:
 
         The aim is to trade as little as possible and still be able to
         assign each trade to a particular strategy.  In some cases it
-        may mean that opposing orders made.  Therefore, orders are
-        sent sequentially, each new order is sent only after previous
-        one has been filled.
+        may mean that opposing orders are issued.  Therefore, orders
+        are sent sequentially, each new order is sent only after
+        previous one has been filled.
 
         If we're trading and changing resting orders (i.e. stop-losses
         or take profits) for the same strategy, order adjustments are
