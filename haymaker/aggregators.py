@@ -51,7 +51,7 @@ class BarAggregator(Atom):
         except Exception as e:
             log.exception(e)
 
-        if self.future_adjust:
+        if self._future_adjust_flag:
             log.warning(f"{self} onStart knows future needs adjust")
 
     def onDataBar(self, bars, *args):
