@@ -112,11 +112,11 @@ class DataWriter:
             self._pulse += self._onPulse
         log.info(f"{self!r} initialized {'with autosave' if self._pulse else ''}.")
 
-    def _onPulse(self, time: datetime):
+    async def _onPulse(self, time: datetime):
         if self.is_done():
             self._pulse -= self.onPulse  # type: ignore
         else:
-            self.write_to_store()
+            await self.write_to_store()
 
     def is_done(self) -> bool:
         return len(self.queue) == 0
@@ -135,7 +135,7 @@ class DataWriter:
         else:
             return None
 
-    def save_chunk(self, data: ibi.BarDataList) -> None:
+    async def save_chunk(self, data: ibi.BarDataList) -> None:
         if self.is_done():
             log.warning(f"{self!s} is done, data: {data}")
             return
@@ -146,11 +146,11 @@ class DataWriter:
                 f"{self!s} cannot download data past {self._container.next_date}"
             )
         self._container.save_chunk(data)
-        self.write_to_store()
+        await self.write_to_store()
         if self._container.next_date is None:
             self.queue.pop()
 
-    def write_to_store(self) -> None:
+    async def write_to_store(self) -> None:
         """
         This is the only method that actually saves data.  All other
         'save' methods don't.
@@ -163,11 +163,11 @@ class DataWriter:
         _data = self._container.flush_data()
 
         if _data is not None:
-            data = self.store.data
+            data = await self.store.data_async()
             if data is None:
                 data = pd.DataFrame()
             data = pd.concat([data, _data])
-            version = self.store.write(self.contract, data)
+            version = await self.store.write_async(self.contract, data)
             log.info(
                 f"{self!s} written to store {_data.index[0]} - {_data.index[-1]} "
                 f"{version}"
@@ -383,12 +383,15 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
     while True:
         # TODO: questionable if this is necessary, as workers are cancelled eventually
         if queue.empty():
+            log.debug("Breaking out of empty queue...")
             break
 
         writer = await queue.get()
 
         if writer.is_done():
-            log.error(f"{writer!s} we're stil here...")
+            log.error(
+                f"{writer!s} shouldn't be here. Outstanding issue to investigate..."
+            )
             queue.task_done()
             continue
 
@@ -412,7 +415,7 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
                 )
             # below will not run if error above, so `writer.next_date` will still hold
             # the same date, i.e. the same chunk will be rescheduled
-            writer.save_chunk(chunk)
+            await writer.save_chunk(chunk)
         except Exception as e:
             log.exception(e)
             # prevent same request sooner than after 15 secs
@@ -423,7 +426,7 @@ async def worker(name: str, queue: asyncio.Queue, pacer: Pacer, ib: ibi.IB) -> N
             if validate_age(writer):
                 await queue.put(writer)
             else:
-                writer.save_chunk(None)
+                await writer.save_chunk(None)
                 log.debug(f"{writer!s} dropped on age validation.")
         else:
             log.info(f"{writer!s} done!")
