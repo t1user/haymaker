@@ -6,13 +6,13 @@ from datetime import datetime, timezone
 import ib_insync as ibi
 import pytest
 
-from haymaker.base import Atom
 from haymaker.bracket_legs import FixedStop, TakeProfitAsStopMultiple, TrailingStop
 from haymaker.controller import Controller
 from haymaker.execution_models import (
     AbstractExecModel,
     BaseExecModel,
     EventDrivenExecModel,
+    OrderKey,
 )
 from haymaker.state_machine import Strategy
 
@@ -106,7 +106,7 @@ def test_oca_group_is_not_position_id(controller: Controller):
 
 
 @pytest.fixture
-def objects(Atom: type[Atom]):
+def objects(Atom):
 
     @dataclass
     class Data:
@@ -336,3 +336,84 @@ def test_passed_order_kwargs_update_defaults(Atom, objects):
         }
     )
     assert data.order.algoParams == ""
+
+
+def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade):
+    """
+    Create a setup where `FakeTrader` will record received order that
+    we can compare with expectations.
+
+    `stop` parameter passed to `EventDrivenExecModel` is `TrailingStop` so
+    resulting bracket order must be `TRAIL` even though default is `STP`.
+    """
+
+    class FakeTrader:
+        order = None
+
+        def trade(self, contract, order):
+            self.order = order
+            return ibi.Trade(order=ibi.Order(orderId=1))
+
+    fake_trader = FakeTrader()
+
+    em = EventDrivenExecModel(
+        stop=TrailingStop(2, vol_field="my_vol_field"),
+        controller=Controller(fake_trader),
+    )
+    em._attach_bracket(trade, {"my_vol_field": 10})
+
+    assert fake_trader.order.orderType == "TRAIL"
+    # basis for stop distance calculation is defined as `my_vol_field`
+    # its value is given as 10 and stop multiple is 2
+    assert fake_trader.order.auxPrice == 20
+
+
+def test_OrderKey_picks_correct_order_low_level(controller):
+    em = BaseExecModel(open_order={"orderType": "STP"}, controller=controller)
+    my_order = em._order(OrderKey.open_order, {})
+    assert my_order.orderType == "STP"
+
+
+def test_OrderKey_picks_correct_order_higher_level(Atom):
+
+    class FakeTrader:
+        order = None
+
+        def trade(self, contract, order):
+            self.order = order
+            return ibi.Trade(order=ibi.Order(orderId=1))
+
+    fake_trader = FakeTrader()
+
+    em = BaseExecModel(
+        open_order={"orderType": "STPLMT"},
+        close_order={"orderType": "TRAIL"},
+        controller=Controller(fake_trader),
+    )
+    em.open({"contract": ibi.Future("NQ", "CME"), "signal": 1, "amount": 1})
+    assert fake_trader.order.orderType == "STPLMT"
+
+
+def test_OrderKey_picks_correct_order_higher_level_2(Atom):
+
+    class FakeTrader:
+        order = None
+
+        def trade(self, contract, order):
+            self.order = order
+            return ibi.Trade(order=ibi.Order(orderId=1))
+
+    fake_trader = FakeTrader()
+
+    em = BaseExecModel(
+        open_order={"orderType": "STPLMT"},
+        close_order={"orderType": "TRAIL"},
+        controller=Controller(fake_trader),
+    )
+    em.strategy = "xxx"
+    em.open({"contract": ibi.Future("NQ", "CME"), "signal": 1, "amount": 1})
+    # brute forcing position here because we're not properly updating StateMachine
+    # and execution models abandon close positions for non-existing positions
+    em.data.position = 1
+    em.close({"contract": ibi.Future("NQ", "CME"), "signal": -1, "amount": 1})
+    assert fake_trader.order.orderType == "TRAIL"

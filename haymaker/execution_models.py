@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from enum import Enum
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 from uuid import uuid4
@@ -29,9 +30,15 @@ TP_ORDER = {**CONFIG.get("tp_order", {}), "orderType": "LMT"}
 OCA_TYPE = CONFIG.get("oca_type", 1)
 
 
-OrderKey = Literal[
-    "open_order", "close_order", "stop_order", "tp_order", "reverse_order"
-]
+class OrderKey(str, Enum):
+    open_order = "open_order"
+    close_order = "close_order"
+    stop_order = "stop_order"
+    tp_order = "tp_order"
+
+    def __str__(self):
+        return self.value.lower()
+
 
 BracketLabel = Literal["STOP_LOSS", "TAKE_PROFIT"]
 
@@ -75,14 +82,6 @@ class AbstractExecModel(Atom, ABC):
         self.close_order = {**CLOSE_ORDER, **close_order}
         self.connect_controller()
 
-    @staticmethod
-    def order_factory(order_type: str, **kwargs) -> dict[str, Any]:
-        order_kwargs = {"open_order": OPEN_ORDER, "close_order": CLOSE_ORDER}.get(
-            order_type, {}
-        )
-        order_kwargs.update(kwargs)
-        return order_kwargs
-
     def connect_controller(self):
         self += self.controller
 
@@ -110,17 +109,10 @@ class AbstractExecModel(Atom, ABC):
         Args:
         =====
 
-        key: what kind of transaction it is.  Must be:
-
-        * either one of pre-defined names: `open_order`,
-        `close_order`
-
-        * or one of keys in `orders` dict passed to
-        :meth:`self.__init__`, examples of good orders potentially
-        defined this way: `stop_order`, `tp_order`
+        key: what kind of transaction it is, must be a member of :class:`OrderKey`
 
         params: must be a :py:`dict` of keywords and values accepted by
-        ibi.Order
+                ibi.Order
 
         Returns:
         ========
@@ -128,9 +120,10 @@ class AbstractExecModel(Atom, ABC):
         :class:`ibi.Order` object, which can be directly passed to
         the broker via :meth:`ibi.IB.send_order`.
         """
-        order_kwargs = getattr(self, key)
-        params.update(order_kwargs)
-        return ibi.Order(**params)
+        defaults = getattr(self, str(key))
+        # passed kwargs must override defaults, not the other way round
+        order_kwargs = {**defaults, **params}
+        return ibi.Order(**order_kwargs)
 
     @abstractmethod
     def onData(self, data: dict, *args):
@@ -256,7 +249,7 @@ class BaseExecModel(AbstractExecModel):
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         if dynamic_order_kwargs:
             order_kwargs.update(dynamic_order_kwargs)
-        order = self._order("open_order", order_kwargs)
+        order = self._order(OrderKey.open_order, order_kwargs)
         log.debug(
             f"{self.strategy} {contract.localSymbol} processing OPEN signal {signal}",
             extra={"data": data},
@@ -286,7 +279,7 @@ class BaseExecModel(AbstractExecModel):
         }
         if dynamic_order_kwargs:
             order_kwargs.update(dynamic_order_kwargs)
-        order = self._order("close_order", order_kwargs)
+        order = self._order(OrderKey.close_order, order_kwargs)
         assert self.data.active_contract is not None
         log.debug(
             f"{self.strategy} {self.data.active_contract.localSymbol} "
@@ -420,17 +413,17 @@ class EventDrivenExecModel(BaseExecModel):
             dynamic_bracket_kwargs = self._dynamic_bracket_kwargs()
             for bracket, order_key, label in zip(
                 (self.stop, self.take_profit),
-                ("stop_order", "tp_order"),
+                (OrderKey.stop_order, OrderKey.tp_order),
                 ("STOP-LOSS", "TAKE-PROFIT"),
             ):
                 # take profit may be None
                 if bracket:
                     memo: dict[str, Any] = {}
                     bracket_kwargs = bracket(params, trade, memo)
-                    bracket_kwargs.update(
-                        self.stop_order if order_key == "stop_order" else self.tp_order
-                    )
-                    bracket_kwargs.update(dynamic_bracket_kwargs)
+                    order_kwargs = {
+                        **bracket_kwargs,
+                        **dynamic_bracket_kwargs,
+                    }
                     memo.update(
                         {
                             "strategy": self.strategy,
@@ -439,7 +432,8 @@ class EventDrivenExecModel(BaseExecModel):
                         }
                     )
                     self.data.params[label.lower()] = memo
-                    order = self._order(order_key, bracket_kwargs)
+
+                    order = self._order(order_key, order_kwargs)
 
                     bracket_trade = self.trade(
                         trade.contract,

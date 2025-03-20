@@ -1,3 +1,4 @@
+import datetime
 import logging
 from typing import Any
 
@@ -181,3 +182,130 @@ def Atom(state_machine, details):
 @pytest.fixture
 def controller(Atom):
     return Controller(Trader(Atom.ib))
+
+
+@pytest.fixture
+def trade():
+    """
+    This is an example trade as actually produced by ib_insync, it can
+    be passed to objects that require a trade.
+    """
+    return ibi.Trade(
+        contract=ibi.Future(
+            conId=620731015,
+            symbol="ES",
+            lastTradeDateOrContractMonth="20250620",
+            multiplier="50",
+            exchange="CME",
+            currency="USD",
+            localSymbol="ESM5",
+            tradingClass="ES",
+        ),
+        order=ibi.Order(
+            orderId=55308,
+            permId=1761343997,
+            action="BUY",
+            totalQuantity=1.0,
+            orderType="MKT",
+            lmtPrice=5740.75,
+            auxPrice=0.0,
+            tif="Day",
+            algoStrategy="Adaptive",
+            algoParams=[ibi.TagValue(tag="adaptivePriority", value="Normal")],
+        ),
+        orderStatus=ibi.OrderStatus(
+            orderId=55308,
+            status="Filled",
+            filled=1.0,
+            remaining=0.0,
+            avgFillPrice=5740.5,
+            permId=1761343997,
+            parentId=0,
+            lastFillPrice=5740.5,
+            clientId=0,
+            whyHeld="",
+            mktCapPrice=0.0,
+        ),
+        fills=[
+            ibi.Fill(
+                contract=ibi.Future(
+                    conId=620731015,
+                    symbol="ES",
+                    lastTradeDateOrContractMonth="20250620",
+                    multiplier="50",
+                    exchange="CME",
+                    currency="USD",
+                    localSymbol="ESM5",
+                    tradingClass="ES",
+                ),
+                execution=ibi.Execution(
+                    execId="0000e1a7.67dbf24e.01.01",
+                    time=datetime.datetime(
+                        2025, 3, 20, 16, 6, 5, tzinfo=datetime.timezone.utc
+                    ),
+                    acctNumber="DU3598515",
+                    exchange="CME",
+                    side="BOT",
+                    shares=1.0,
+                    price=5740.5,
+                    permId=1761343997,
+                    clientId=0,
+                    orderId=55308,
+                    liquidation=0,
+                    cumQty=1.0,
+                    avgPrice=5740.5,
+                    orderRef="",
+                    evRule="",
+                    evMultiplier=0.0,
+                    modelCode="",
+                    lastLiquidity=1,
+                ),
+                commissionReport=ibi.CommissionReport(
+                    execId="0000e1a7.67dbf24e.01.01",
+                    commission=2.25,
+                    currency="USD",
+                    realizedPNL=0.0,
+                    yield_=0.0,
+                    yieldRedemptionDate=0,
+                ),
+                time=datetime.datetime(
+                    2025, 3, 20, 16, 6, 6, 104085, tzinfo=datetime.timezone.utc
+                ),
+            )
+        ],
+        log=[
+            ibi.TradeLogEntry(
+                time=datetime.datetime(
+                    2025, 3, 20, 16, 6, 5, 387455, tzinfo=datetime.timezone.utc
+                ),
+                status="PendingSubmit",
+                message="",
+                errorCode=0,
+            ),
+            ibi.TradeLogEntry(
+                time=datetime.datetime(
+                    2025, 3, 20, 16, 6, 6, 104085, tzinfo=datetime.timezone.utc
+                ),
+                status="Submitted",
+                message="",
+                errorCode=0,
+            ),
+            ibi.TradeLogEntry(
+                time=datetime.datetime(
+                    2025, 3, 20, 16, 6, 6, 104085, tzinfo=datetime.timezone.utc
+                ),
+                status="Submitted",
+                message="Fill 1.0@5740.5",
+                errorCode=0,
+            ),
+            ibi.TradeLogEntry(
+                time=datetime.datetime(
+                    2025, 3, 20, 16, 6, 6, 104085, tzinfo=datetime.timezone.utc
+                ),
+                status="Filled",
+                message="",
+                errorCode=0,
+            ),
+        ],
+        advancedError="",
+    )
