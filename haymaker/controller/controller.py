@@ -488,20 +488,43 @@ class Controller(Atom):
             )
             # if more than one just pick first one
             # there's no way to determine which strategy was meant
-            if candidate_strategies:
-                strategy_str = candidate_strategies[0]
-                strategy = self.sm.strategy[strategy_str]
-            else:
-                strategy = None
+            strategy_str = candidate_strategies[0]
+        elif active_strategies_list:
+            # failing everything else, pick one on which there was most recent operation
+            # (probably we're trying to correct a recent error)
+            strategy_str = sorted(
+                active_strategies_list,
+                key=lambda x: self.sm.strategy[x].get("timestamp"),
+            )[-1]
+        else:
+            strategy_str = None
+
+        if strategy_str:
+            strategy = self.sm.strategy[strategy_str]
+            self.cancel_orders_for_strategy(strategy_str)
         else:
             strategy = None
+
         return strategy
+
+    def cancel_orders_for_strategy(self, strategy: str) -> None:
+        order_infos = self.sm.orders_for_strategy(strategy)
+        for oi in order_infos:
+            cancelled_trade = self.cancel(oi.trade)
+            if cancelled_trade:
+                log.debug(
+                    f"Cancelled trade: {cancelled_trade.order.orderId} for "
+                    f"{cancelled_trade.contract.localSymbol}"
+                )
 
     def _make_strategy(self, trade: ibi.Trade, description: str) -> Strategy:
         """
         Last resort when strategy cannot be matched.  Creating new
         made up strategy to make sure that position change resulting
-        from trade will be somehow accounted for.
+        from trade will be somehow accounted for.  It should only be
+        used if there are no position for the contract, otherwise
+        unknown transactions should close existing strategies, rather
+        than invent new ones.
         """
         strategy_str = f"{description}_{trade.contract.symbol}"
         strategy = self.sm.strategy[strategy_str]  # this creates new Strategy

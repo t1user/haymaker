@@ -186,6 +186,7 @@ class Strategy(UserDict):
 
     def __setitem__(self, key, item):
         self.data[key] = item
+        self.data["timestamp"] = dt.datetime.now(tz=dt.timezone.utc)
         self.strategyChangeEvent.emit()
 
     def __delitem__(self, key):
@@ -438,7 +439,7 @@ class StateMachine:
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} "
             f"permId: {trade.order.permId} registered for: "
-            f"{trade.contract.localSymbol}"
+            f"{trade.contract.localSymbol or trade.contract.symbol}"
         )
 
         return oi
