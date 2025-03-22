@@ -368,28 +368,32 @@ class Controller(Atom):
 
         data = self.sm.order.get(trade.order.orderId)
         if data:
-            strategy, action, _, params, _ = data
-            position_id = params.get("position_id") or self.sm.strategy[strategy].get(
-                "position_id"
-            )
+            try:
+                strategy, action, _, params, _ = data
+                position_id = params.get("position_id") or self.sm.strategy[
+                    strategy
+                ].get("position_id")
 
-            kwargs = {
-                "strategy": strategy,
-                "action": action,
-                "position_id": position_id,
-                "params": ibi.util.tree(params),
-            }
-            # optionally set by execution model
-            if arrival_price := params.get("arrival_price"):
-                kwargs.update(
-                    {
-                        "price_time": arrival_price["time"],
-                        "bid": arrival_price["bid"],
-                        "ask": arrival_price["ask"],
-                    }
-                )
+                kwargs = {
+                    "strategy": strategy,
+                    "action": action,
+                    "position_id": position_id,
+                    "params": ibi.util.tree(params),
+                }
+                # optionally set by execution model
+                if arrival_price := params.get("arrival_price"):
+                    kwargs.update(
+                        {
+                            "price_time": arrival_price["time"],
+                            "bid": arrival_price["bid"],
+                            "ask": arrival_price["ask"],
+                        }
+                    )
+            except Exception as e:
+                log.error(f"Error while trying to create blotter entry: {e}")
 
         elif trade.order.totalQuantity == 0:
+            log.debug(f"empty CommissionReportEvent emit for trade: {trade}")
             return
         else:
             log.error(
@@ -399,7 +403,10 @@ class Controller(Atom):
             return
 
         assert self.blotter is not None
-        self.blotter.log_commission(trade, fill, report, **kwargs)
+        try:
+            self.blotter.log_commission(trade, fill, report, **kwargs)
+        except Exception as e:
+            log.error(f"Error while writing to blotter: {e}")
 
     async def verify_transaction_integrity(
         self,

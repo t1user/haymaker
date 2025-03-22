@@ -91,14 +91,20 @@ class FutureRoller:
         their rollable holdings.  It's not necessarily number of
         contracts to be rolled, which is to be determined by other
         methods, it's a number of contracts that should be considered
-        for rolling given which contracts are expiring and any
-        limitations about strategies excluded from rolling.
+        for rolling.
         """
         return {
             strategy_str: position
             for strategy_str in self.strategies[contract]
             if (position := self.sm.strategy[strategy_str].position)
         }
+
+    def active_strategies(self, contract: ibi.Future) -> list[str]:
+        return [
+            strategy_str
+            for strategy_str in self.strategies[contract]
+            if self.sm.strategy[strategy_str].position
+        ]
 
     def match_old_to_new_future(self, old_future: ibi.Future) -> ibi.Future:
         try:
@@ -137,26 +143,11 @@ class FutureRoller:
                 f"{old_contract.localSymbol}"
             )
             if new_contract.conId != old_contract.conId:
-                # contract traded will be a `bag`
-                # don't use `new_contract` as key
-                # because it will not be accessible in callback
-                self._trade_generator[new_contract.conId] = self.execute(
-                    old_contract, new_contract
-                )
-                try:
-                    next(self._trade_generator[new_contract.conId])
-                except StopIteration:
-                    log.error(
-                        f"Newly created generator for {new_contract} "
-                        f"does not exist, WTF?"
-                    )
-                    del self._trade_generator[new_contract.conId]
+                self.execute(old_contract, new_contract)
             else:
                 log.error(f"Abandoning roll, no replacement found: {old_contract}")
 
-    def execute(
-        self, old_contract: ibi.Future, new_contract: ibi.Future
-    ) -> Generator[None, None, None]:
+    def execute(self, old_contract: ibi.Future, new_contract: ibi.Future) -> None:
         """
         Execution is done strategy by strategy to allow for updating
         of strategy records.  Some strategies may cancel each other,
@@ -165,50 +156,73 @@ class FutureRoller:
         Strategy records are updated after trade is filled (as
         usual), so is updating of resting stop and take-profit orders.
         """
-        # THIS IS A GENERATOR!!!
-        log.debug(
-            f"Inside execute for {old_contract.localSymbol} "
-            f"-> {new_contract.localSymbol}"
-        )
+
         # positions for expiring contract that are not excluded from rolling
         total = self.positions[old_contract]
-        log.debug(f"Total position for: {old_contract.localSymbol}: {total}")
         strategies_to_trade = self.figure_out_strategies_to_trade(old_contract, total)
-        log.debug(f"{strategies_to_trade=}")
-        for strategy_str in self.strategies[old_contract]:
+        strategies_not_to_trade = list(
+            set(self.active_strategies(old_contract)) - set(strategies_to_trade)
+        )
+        log.debug(
+            f"Roll {old_contract.localSymbol} -> {new_contract.localSymbol}; total "
+            f"position for: {old_contract.localSymbol}: {total}, "
+            f"{strategies_to_trade=} {strategies_not_to_trade=}"
+        )
+
+        # contract traded will be a `bag` don't use `new_contract` as key
+        # because it will not be accessible in callback
+        self._trade_generator[new_contract.conId] = self.handle_strategies_to_trade(
+            strategies_to_trade, old_contract, new_contract
+        )
+
+        try:
+            # only initializing the generator, subsequent `next`s in callback
+            next(self._trade_generator[new_contract.conId])
+        except StopIteration:
+            log.error(
+                f"Newly created generator for {new_contract} " f"does not exist, WTF?"
+            )
+            del self._trade_generator[new_contract.conId]
+
+        self.handle_strategies_not_to_trade(
+            strategies_not_to_trade, old_contract, new_contract
+        )
+
+    def handle_strategies_to_trade(
+        self, strategies: list[str], old_contract, new_contract
+    ) -> Generator[None, None, None]:
+        # THIS IS A GENERATOR!!!
+        for strategy_str in strategies:
             strategy = self.sm.strategy[strategy_str]
-            if total and (strategy_str in strategies_to_trade):
-                size = strategy.position
-                trade = self.trade(
-                    strategy_str, strategy, old_contract, new_contract, size
+            size = strategy.position
+            trade = self.trade(strategy_str, strategy, old_contract, new_contract, size)
+            # if we're changing orders and records connected to a strategy
+            # that we trade, make those changes when and if the order is filled
+            # `self.adjust_records_and_orders_for_strategy` doesn't accept `Trade`
+            # so don't just wrap it in `partial`!
+            trade.filledEvent += (
+                lambda trade: self.adjust_records_and_orders_for_strategy(
+                    strategy_str,
+                    strategy,
+                    old_contract,
+                    new_contract,
                 )
-                # if we're changing orders and records connected to a strategy
-                # that we trade, make those changes when and if the order is filled
-                # `self.adjust_records_and_orders_for_strategy` doesn't accept `Trade`
-                # so don't just wrap it in `partial`!
-                trade.filledEvent += (
-                    lambda trade: self.adjust_records_and_orders_for_strategy(
-                        strategy_str,
-                        strategy,
-                        old_contract,
-                        new_contract,
-                    )
-                )
-                # this just calls `next` on the generator
-                trade.filledEvent += self.trade_callback
-                # don't issue next order until this one is done
-                log.debug(f"{strategy_str} will yield")
-                yield
-            else:
-                # no trading here
-                log.debug(
-                    f"No trading for {old_contract.localSymbol} "
-                    f"(because positions are cancelling each other)"
-                    f"but orders will be adjusted."
-                )
-                self.adjust_records_and_orders_for_strategy(
-                    strategy_str, strategy, old_contract, new_contract
-                )
+            )
+            # this just calls `next` on the generator
+            trade.filledEvent += self.trade_callback
+            # don't issue next order until this one is done
+            log.debug(f"{strategy_str} will yield")
+            yield
+
+    def handle_strategies_not_to_trade(
+        self, strategies: list[str], old_contract, new_contract
+    ) -> None:
+        for strategy_str in strategies:
+            strategy = self.sm.strategy[strategy_str]
+            log.debug(f"No roll trade for {strategy_str}")
+            self.adjust_records_and_orders_for_strategy(
+                strategy_str, strategy, old_contract, new_contract
+            )
 
     def trade_callback(self, trade: ibi.Trade):
         """
@@ -440,7 +454,7 @@ class FutureRoller:
             strategy_str, new_contract, new_order, oi.action, strategy
         )
         log.debug(
-            f"New rolled order {(new_trade.order.orderId, new_trade.order.permId)}"
+            f"New roll order: {(new_trade.order.orderId, new_trade.order.permId)} "
             f"{new_trade.contract.localSymbol} {strategy_str} {oi.action}"
         )
 

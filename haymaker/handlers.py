@@ -70,7 +70,7 @@ class IBHandlers:
         self.log.info(f"Order canceled: {trade.contract.localSymbol} {trade.order}")
 
     def onOpenOrder(self, trade: ibi.Trade):
-        self.log.info(f"Open order: {trade}")
+        self.log.debug(f"Open order: {trade}")
 
     def onOrderStatus(self, trade: ibi.Trade):
         self.log.info(
@@ -84,12 +84,12 @@ class IBHandlers:
         )
 
     def onExecDetails(self, trade: ibi.Trade, fill: ibi.Fill):
-        self.log.debug(f"execution details: {fill}")
+        self.log.info(f"execution details: {fill}")
 
     def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ):
-        self.log.debug(f"Commission report: {report}")
+        self.log.info(f"Commission report: {report}")
 
     def onUpdatePortfolio(self, item: ibi.PortfolioItem):
         realized = round(item.realizedPNL, 2)
