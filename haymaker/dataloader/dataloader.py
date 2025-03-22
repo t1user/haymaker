@@ -265,12 +265,9 @@ class DownloadContainer:
             self.next_date = None
 
     def flush_data(self) -> Optional[pd.DataFrame]:
-        """Return df ready to be written to datastore or date of end
+        """
+        Return df ready to be written to datastore or date of end
         point for additional downloads.
-
-        TODO: Not true now, do I want to make it true?
-        Make sure to save whatever
-        comes out of this method because this data is being deleted.
         """
         if self.bars:
             df = ibi.util.df(
@@ -281,6 +278,10 @@ class DownloadContainer:
             return None
 
     def clear(self):
+        """
+        Delete data stored in this object.  Should be called after
+        data is persisted to db.
+        """
         self.bars.clear()
 
 
@@ -315,6 +316,7 @@ class Manager:
             try:
                 log.debug(f"Getting headstamp for contract: {c}")
                 if c_ := await self.headstamp(c):
+                    log.debug(f"headstamp for {c}: {c_}")
                     headstamps[c] = c_
             except Exception as e:
                 log.exception(f"Error while getting contract: {c}: {e}")

@@ -14,6 +14,11 @@ from haymaker.misc import async_cached_property
 log = logging.getLogger(__name__)
 
 
+FUTURES_SELECTOR = CONFIG.get("futures_selector", "current")
+FUTURES_FULLCHAIN_SPEC = CONFIG.get("futures_fullchain_spec", "full")
+DESIRED_INDEX = CONFIG.get("futures_current_index", 0)
+
+
 class ContractSelector:
     """
     Based on passed contract attributes and config parameters
@@ -109,6 +114,7 @@ class ContractSelector:
 class FutureContractSelector(ContractSelector):
 
     def __init__(self, **kwargs):
+        kwargs.update(includeExpired=True)
         super().__init__(**kwargs)
 
     @classmethod
@@ -120,17 +126,13 @@ class FutureContractSelector(ContractSelector):
             "current": CurrentFutureContractSelector,
             "exact": ExactFutureContractSelector,
             "current_and_contfuture": CurrentContfutureFutureContractSelector,
-        }.get(
-            CONFIG.get("futures_selector", "contfuture"),
-            ContfutureFutureContractSelector,
-        )
+        }.get(FUTURES_SELECTOR, ContfutureFutureContractSelector)
         return klass(**kwargs)
 
     @async_cached_property
     async def _fullchain(self) -> list[ibi.Contract]:
         kwargs = self.kwargs.copy()
         kwargs["secType"] = "FUT"  # it might have been CONTFUT at this point
-        kwargs["includeExpired"] = True
         details = await self.ib.reqContractDetailsAsync(ibi.Contract.create(**kwargs))
         return sorted(
             [c.contract for c in details if c.contract is not None],
@@ -166,19 +168,25 @@ class ContfutureFutureContractSelector(FutureContractSelector):
 
 
 class FullchainFutureContractSelector(FutureContractSelector):
+    spec = FUTURES_FULLCHAIN_SPEC
 
-    async def _objects(self) -> list[ibi.Contract]:  # type: ignore
-        spec = CONFIG.get("futures_fullchain_spec", "full")
+    @classmethod
+    def with_spec(cls, spec: str, **kwargs) -> Self:
+        cls.spec = spec
+        return cls(**kwargs)
+
+    async def _objects(self) -> list[ibi.Contract]:
+
         today = date.today()
-        if spec == "full":
+        if self.spec == "full":
             return await self._fullchain
-        elif spec == "active":
+        elif self.spec == "active":
             return [
                 c
                 for c in await self._fullchain
                 if datetime.fromisoformat(c.lastTradeDateOrContractMonth) > today
             ]
-        elif spec == "expired":
+        elif self.spec == "expired":
             return [
                 c
                 for c in await self._fullchain
@@ -187,13 +195,13 @@ class FullchainFutureContractSelector(FutureContractSelector):
         else:
             raise ValueError(
                 f"futures_fullchain_spec must be one of: `full`, `active`, `expired`, "
-                f"not {spec}"
+                f"not {self.spec}"
             )
 
 
 class CurrentFutureContractSelector(FutureContractSelector):
     async def _objects(self) -> list[ibi.Contract]:
-        desired_index = CONFIG.get("futures_current_index", 0)
+        desired_index = DESIRED_INDEX
         if desired_index == 0:
             return [await self._current_contract]
         else:
@@ -221,6 +229,28 @@ class CurrentContfutureFutureContractSelector(FutureContractSelector):
             asyncio.create_task(self._contfuture_objects()),
         )
         return [*self.current_objects, *self.contfuture_objects]
+
+
+class CurrentExpiredFutureContractSelector(FutureContractSelector):
+    """Current and Expired"""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.current = CurrentFutureContractSelector(**kwargs)
+        self.expired = FullchainFutureContractSelector.with_spec("expired", **kwargs)
+
+    async def _current_objects(self) -> None:
+        self.current_objects = await self.current._objects()
+
+    async def _contfuture_objects(self) -> None:
+        self.expired_objects = await self.expired.objects()
+
+    async def objects(self) -> list[ibi.Contract]:
+        await asyncio.gather(
+            asyncio.create_task(self._current_objects()),
+            asyncio.create_task(self._contfuture_objects()),
+        )
+        return [*self.expired_objects, *self.current_objects]
 
 
 class ExactFutureContractSelector(FutureContractSelector):
