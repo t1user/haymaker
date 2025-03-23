@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import itertools
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -296,33 +297,36 @@ class Manager:
 
     @async_cached_property
     async def contracts(self) -> list[ibi.Contract]:
-        # consider making this into async generator, but consider impact on number of
-        # counted requests sent to ib
         ContractSelector.set_ib(self.ib)
-        contracts = []
-        for s in self.sources:
-            # contracts must come qualified here
-            contracts.extend(await ContractSelector.from_kwargs(**s).objects())
-        log.debug(f"{contracts=}")
-        return contracts
+        return list(
+            itertools.chain(
+                *await asyncio.gather(
+                    *[ContractSelector.from_kwargs(**s).objects() for s in self.sources]
+                )
+            )
+        )
 
     @functools.cached_property
     def headstamps(self):
         return ibi.util.run(self._headstamps())
 
-    async def _headstamps(self) -> dict[ibi.Contract, Union[date, datetime]]:
-        headstamps = {}
-        for c in await self.contracts:
-            try:
-                log.debug(f"Getting headstamp for contract: {c}")
-                if c_ := await self.headstamp(c):
-                    log.debug(f"headstamp for {c}: {c_}")
-                    headstamps[c] = c_
-            except Exception as e:
-                log.exception(f"Error while getting contract: {c}: {e}")
-
-        log.debug(f"{headstamps=}")
-        return headstamps
+    async def _headstamps(self) -> dict[ibi.Contract, date | datetime]:
+        contracts = await self.contracts
+        headstamps = await asyncio.gather(
+            *[self.headstamp(contract) for contract in contracts],
+            return_exceptions=True,
+        )
+        headstamp_dict = {
+            c: hs
+            for c, hs in zip(contracts, headstamps)
+            if isinstance(hs, (date, datetime))
+        }
+        debug_string = {
+            contract.localSymbol: headstamp
+            for contract, headstamp in headstamp_dict.items()
+        }
+        log.debug(f"headstamps: {debug_string}")
+        return headstamp_dict
 
     def tasks(
         self, store: StoreWrapper, headstamp: Union[datetime, date]
