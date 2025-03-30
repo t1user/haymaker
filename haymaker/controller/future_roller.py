@@ -45,7 +45,6 @@ class FutureRoller:
             for fut, strategy_list in self.sm.strategy.strategies_by_contract().items()
             if isinstance(fut, ibi.Future)
         }
-        log.debug(f"{strategies=}")
         return strategies
 
     @cached_property
@@ -76,7 +75,6 @@ class FutureRoller:
         All previous properties are intermediate steps to get this one
         piece of information.
         """
-        log.debug(f"{self.positions=}")
         # filter out contracts with zero position
         positions = [future for future, position in self.positions.items() if position]
         # difference between contracts we hold vs active contracts
@@ -208,7 +206,11 @@ class FutureRoller:
                     new_contract,
                 )
             )
-            # this just calls `next` on the generator
+            # generate commission report so that blotter record is created
+            # trade.filledEvent += lambda trade: self.controller.onCommissionReport(
+            #     trade, trade.fills[-1], trade.fills[-1].commissionReport
+            # )
+            # # this just calls `next` on the generator
             trade.filledEvent += self.trade_callback
             # don't issue next order until this one is done
             log.debug(f"{strategy_str} will yield")

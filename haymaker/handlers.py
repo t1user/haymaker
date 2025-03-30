@@ -84,12 +84,12 @@ class IBHandlers:
         )
 
     def onExecDetails(self, trade: ibi.Trade, fill: ibi.Fill):
-        self.log.info(f"execution details: {fill}")
+        self.log.info(f"execution details: {fill} for trade: {trade}")
 
     def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ):
-        self.log.info(f"Commission report: {report}")
+        self.log.info(f"Commission report: {report} for trade: {trade}")
 
     def onUpdatePortfolio(self, item: ibi.PortfolioItem):
         realized = round(item.realizedPNL, 2)

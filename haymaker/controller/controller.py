@@ -367,6 +367,7 @@ class Controller(Atom):
             return
 
         data = self.sm.order.get(trade.order.orderId)
+        log.debug(f"Commission report from {trade=} for {data=}")
         if data:
             try:
                 strategy, action, _, params, _ = data
