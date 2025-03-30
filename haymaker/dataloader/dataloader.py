@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import Optional, TypedDict, Union
+from typing import Optional, TypedDict
 
 import ib_insync as ibi
 import pandas as pd
@@ -37,32 +37,35 @@ setup_logging(CONFIG.get("logging_config"))
 log = logging.getLogger(__name__)
 
 
-# TODO: Make sure no comparisons between date and datetime
-
 BARSIZE: str = bar_size_validator(CONFIG["barSize"])
 WTS: str = wts_validator(CONFIG["wts"])
-AGGRESSION: int = CONFIG.get("aggression", 1)
+MAX_BARS: int = CONFIG.get("max_bars", 50000)
 FILL_GAPS: bool = CONFIG.get("fill_gaps", True)
 AUTO_SAVE_INTERVAL: int = CONFIG.get("auto_save_interval", 0)
 MAX_NUMBER_OF_WORKERS: int = CONFIG.get("max_number_of_workers", 40)
 STORE: AbstractBaseStore = CONFIG["datastore"]
 norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
 
-NOW: Union[date, datetime] = norm(datetime.now(timezone.utc))
+NOW: date | datetime = norm(datetime.now(timezone.utc))
 WATCHDOG: bool = CONFIG.get("watchdog", True)
 SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
 PACER_RESTRICTIONS: bool = CONFIG["pacer_restrictions"]
 
+
+CUTOFF_DATE: date | datetime = NOW - timedelta(days=CONFIG.get("max_period", 30))
+
+
 log.debug(
-    f"settings: {BARSIZE=}, {WTS=}, {AGGRESSION=}, {FILL_GAPS=}, "
+    f"settings: {BARSIZE=}, {WTS=}, {MAX_BARS=}, {FILL_GAPS=}, "
     f"{AUTO_SAVE_INTERVAL=}, {MAX_NUMBER_OF_WORKERS=}, {STORE=}, {NOW=}"
+    f"{CUTOFF_DATE=}"
 )
 
 
 class Params(TypedDict):
     contract: ibi.Contract
-    endDateTime: Union[datetime, date, str]
+    endDateTime: datetime | date | str
     durationStr: str
 
 
@@ -130,7 +133,7 @@ class DataWriter:
         return self.queue[-1]
 
     @property
-    def next_date(self) -> Union[date, datetime, None]:
+    def next_date(self) -> date | datetime | None:
         if not self.is_done():
             return self._container.next_date
         else:
@@ -188,16 +191,8 @@ class DataWriter:
 
     @property
     def duration(self) -> str:
-        # worker must check this before scheduling
-        assert self.next_date is not None
-        duration = helpers.barSize_to_duration(BARSIZE, AGGRESSION)
         delta = self.next_date - self._container.from_date
-        if delta < helpers.duration_to_timedelta(duration):
-            # requests for periods shorter than 30s don't work
-            duration = helpers.duration_str(
-                max(delta.total_seconds(), 30), AGGRESSION, False
-            )
-        return duration
+        return helpers.timedelta_and_barSize_to_duration_str(delta, BARSIZE, MAX_BARS)
 
     def __str__(self) -> str:
         return f"<{self.contract.localSymbol}>"
@@ -226,9 +221,9 @@ class DownloadContainer:
 
     """
 
-    from_date: Union[datetime, date]
-    to_date: Union[datetime, date]
-    _next_date: Union[datetime, date, None] = field(init=False, repr=False)
+    from_date: datetime | date
+    to_date: datetime | date
+    _next_date: datetime | date | None = field(init=False, repr=False)
     bars: list[ibi.BarDataList] = field(default_factory=list, repr=False)
 
     def __post_init__(self):
@@ -242,7 +237,7 @@ class DownloadContainer:
         return self._next_date
 
     @next_date.setter
-    def next_date(self, date: Union[date, datetime, None]) -> None:
+    def next_date(self, date: date | datetime | None) -> None:
         if date is None:
             # failed to get data
             self._next_date = None
@@ -329,7 +324,7 @@ class Manager:
         return headstamp_dict
 
     def tasks(
-        self, store: StoreWrapper, headstamp: Union[datetime, date]
+        self, store: StoreWrapper, headstamp: datetime | date
     ) -> list[DownloadContainer]:
         if FILL_GAPS:
             tasklist = task_factory_with_gaps(store, headstamp)
@@ -342,7 +337,7 @@ class Manager:
         writers = []
         for contract, headstamp in self.headstamps.items():
             store = StoreWrapper(contract, STORE, NOW)
-            tasks = self.tasks(store, headstamp)
+            tasks = self.tasks(store, max(headstamp, CUTOFF_DATE))
             writers.append(DataWriter(contract, store, tasks))
         return writers
 
@@ -351,7 +346,7 @@ class Manager:
         # after restart some writers may already be done
         return [writer for writer in self._writers if not writer.is_done()]
 
-    async def headstamp(self, contract: ibi.Contract) -> Union[date, datetime]:
+    async def headstamp(self, contract: ibi.Contract) -> date | datetime:
         try:
             headTimeStamp = await self.ib.reqHeadTimeStampAsync(
                 contract, whatToShow=WTS, useRTH=False, formatDate=2
@@ -376,6 +371,8 @@ def validate_age(writer: DataWriter) -> bool:
     """
     IB doesn't permit to request data for bars < 30secs older than 6
     months.  Trying to push it here with 30secs.
+
+    THIS IS NOT NECCESSARY, MERGE IT WITH EARLIES POINT DETERMINATION.
     """
     if helpers.duration_in_secs(BARSIZE) < 30 and writer.next_date:
         assert isinstance(writer.next_date, datetime)

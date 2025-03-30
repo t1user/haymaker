@@ -186,11 +186,7 @@ class Jobs:
 IB: Final[ibi.IB] = ibi.IB()
 # Atom passes empty contrianers so that INIT_DATA can supply them with data
 # InitData knows nothing about Atom, just gets containers to fill-up
-INIT_DATA = InitData(
-    IB,
-    Atom.contracts,
-    Atom.contract_details,
-)
+INIT_DATA = InitData(IB, Atom.contracts, Atom.contract_details)
 JOBS = Jobs(INIT_DATA)
 STATE_MACHINE = StateMachine()
 Atom.set_init_data(INIT_DATA.ib, STATE_MACHINE)

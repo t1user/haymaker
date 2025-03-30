@@ -1,7 +1,8 @@
 source: contracts.csv
 barSize: &barSize 30 secs
 wts: &wts TRADES
-aggression: 1
+max_bars: 150_000 # max number of bars pulled in one request
+max_period: 120 # max duration of downloaded data in days
 watchdog: False
 max_number_of_workers: 40
 fill_gaps: False
