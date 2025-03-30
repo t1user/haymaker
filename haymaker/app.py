@@ -128,7 +128,17 @@ class App:
 
     def onStopped(self, *args) -> None:
         log.debug("Watchdog stopped...")
-        log.debug(f"tasks: {asyncio.all_tasks()}")
+        debug_string = " | ".join(
+            [
+                (
+                    task.get_name()
+                    if not task.get_name().startswith("Task-")
+                    else str(task.get_coro())
+                )
+                for task in asyncio.all_tasks()
+            ]
+        )
+        log.debug(f"tasks: {debug_string}")
 
     def onSoftTimeout(self, watchdog: ibi.Watchdog) -> None:
         log.debug("Soft timeout event.")
