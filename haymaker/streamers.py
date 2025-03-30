@@ -282,6 +282,8 @@ class HistoricalDataStreamer(Streamer):
     async def backfill(self, bars):
         # this will switch processor into backfill mode
         self.startEvent.emit({"startup": True})
+        # release control to allow for adjustments down the chain
+        await asyncio.sleep(0)
         log.debug(
             f"Starting backfill {self.name}, pulled {len(bars)} bars, "
             f"last bar: {bars[-1]}"

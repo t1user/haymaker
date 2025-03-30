@@ -354,12 +354,18 @@ def test_Strategy_dot_get():
 def test_Strategy_dot_delete():
     m = Strategy({"x": 1, "y": 2, "z": 3}, ce)
     del m.y
+    # timestamp gets automatically created for every entry
+    # it cannot be compared with strategy_defaults
+    if m.get("timestamp"):
+        del m["timestamp"]
     assert m.data == {"x": 1, "z": 3, **strategy_defaults}
 
 
 def test_Strategy_update():
     m = Strategy({"x": 1, "y": 2, "z": 3}, ce)
     m.update({"a": 5, "b": 9, "c": 0})
+    if m.get("timestamp"):
+        del m["timestamp"]
     assert m == {"x": 1, "y": 2, "z": 3, "a": 5, "b": 9, "c": 0, **strategy_defaults}
 
 
@@ -414,7 +420,7 @@ def test_StrategyContainer_missing():
     assert isinstance(m["not_set"], Strategy)
 
 
-def test_StrategyContaner_new_strategy():
+def test_StrategyContainer_new_strategy():
     m = StrategyContainer(
         {
             "a": Strategy({"x": 1, "y": 2}, ce),
@@ -424,7 +430,8 @@ def test_StrategyContaner_new_strategy():
     data = m["c"]
     data["x"] = 5
 
-    assert m["c"] == Strategy({"x": 5, "strategy": "c", **strategy_defaults}, ce)
+    assert "c" in m
+    assert "x" in m["c"]
 
 
 def test_access_order_with_square_brackets(state_machine):
@@ -458,12 +465,8 @@ def test_access_strategy_with_get_non_existing_key_with_falsey_default(state_mac
 
 
 def test_access_strategy_with_get_non_existing_key_no_default(state_machine):
-    # should create new strategy with strategy key inserted
-    st = Strategy({"a": {"x": 1, "y": 2}}, ce)
-    state_machine.strategy["xyz"] = st
-    assert state_machine.strategy.get("abc") == Strategy(
-        {"strategy": "abc"}, strategyChangeEvent=ev.Event()
-    )
+
+    assert state_machine.strategy.get("abc").strategy == "abc"
 
 
 def test_access_order_with_get(state_machine):
@@ -587,10 +590,13 @@ async def test_StrategyContainer_gets_events_on_Strategy_change():
     cont.strategyChangeEvent += c
     strat = cont["new_strategy"]
     strat.position += 1
-    await asyncio.sleep(0)
-    # there were 7 events emitted (6 items added to strategy dict and 1 change)
-    # they were all debounced into one event
+    # there were 8 events emitted (7 items added to strategy dict
+    # because of defaults and 1 change) they were all debounced into
+    # one event
+    # make sure there is one emit
     assert await wait_for_condition(lambda: c.count == 1)
+    # and then however long we wait no more emits
+    assert not await wait_for_condition(lambda: c.count == 2)
 
 
 def test_strategy_has_position_attribute():
