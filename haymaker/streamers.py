@@ -160,10 +160,8 @@ class Streamer(Atom, ABC):
     )
 
     def __new__(cls, *args, **kwargs):
-        """
-        Keep track of all :class:`.Streamer` instances created so that they
-        can be re-started on reboot.
-        """
+        # Keep track of all :class:`.Streamer` instances created so that they
+        # can be re-started on reboot.
         obj = super().__new__(cls)
         cls.instances.append(obj)
         return obj
