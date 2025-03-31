@@ -27,6 +27,7 @@ extensions = [
     "sphinx.ext.intersphinx",  # Refer to other projects docs
     "sphinxarg.ext",  # Support for argparse
     "sphinx.ext.autosectionlabel",  # Refer to sections using their title
+    "sphinx_argparse",  # Support for argparse
 ]
 
 templates_path = ["_templates"]
@@ -37,12 +38,13 @@ exclude_patterns: list[str] = []
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = "furo"
-html_static_path = ["_static"]
+# html_static_path = ["_static"]
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
+    "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
     "eventkit": ("https://eventkit.readthedocs.io/en/latest", None),
-    "ibi": ("https://ib-insync.readthedocs.io/", None),
+    "ib_insync": ("https://ib-insync.readthedocs.io/", None),
 }
 
 github_url = "https://github.com/t1user/haymaker"
