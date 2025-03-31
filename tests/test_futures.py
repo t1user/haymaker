@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import pytest
-from data.contract_details_data import es_details_chain, gold_details_chain
+from contract_details_data import es_details_chain, gold_details_chain  # type: ignore
 from ib_insync import Contract, ContractDetails  # noqa
 
 from haymaker import misc

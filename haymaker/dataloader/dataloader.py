@@ -191,6 +191,7 @@ class DataWriter:
 
     @property
     def duration(self) -> str:
+        assert self.next_date is not None
         delta = self.next_date - self._container.from_date
         return helpers.timedelta_and_barSize_to_duration_str(delta, BARSIZE, MAX_BARS)
 

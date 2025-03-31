@@ -1,3 +1,6 @@
+# type: ignore
+# flake8: noqa
+
 gold_details_chain = [
     {
         "ContractDetails": {
