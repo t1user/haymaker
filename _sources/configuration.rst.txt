@@ -14,8 +14,12 @@ Default Configuration Files
 
 Sensible starting configurations are defined in default configuration files located here:
 
-- For the Execution Module: :source:`haymaker/config/base_config.yaml <t1user/haymaker/blob/master/haymaker/config/base_config.yaml>`
-- For the Dataloader Module: :source:`haymaker/config/dataloader_base_config.yaml <t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml>`
+- For the Execution Module: 
+https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml 
+
+- For the Dataloader Module: 
+https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml 
+
 
 User-Provided Configuration File
 ================================
