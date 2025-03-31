@@ -75,8 +75,7 @@ All streamers extend :class:`Streamer`
    :members:
 
        
-Available Implementations
-^^^^^^^^^^^^^^^^^^^^^^^^^
+Implementations
 
 Every implementation accepts the same arguments as respective `ib_insync` method, which it wraps plus standard :class:`Streamer` parameters.
 
@@ -126,8 +125,7 @@ Brick
 .. autoclass:: haymaker.brick::AbstractBaseBrick
    :members:
 
-Available Implementations
-^^^^^^^^^^^^^^^^^^^^^^^^^
+Implementations
 
 .. autoclass:: haymaker.brick::AbstractDfBrick
    :members:
@@ -146,8 +144,7 @@ It's easies to create a binary signal processor by implementing :class:`Abstract
 .. autoclass:: haymaker.signals::AbstractBaseBinarySignalProcessor
    :members:
 
-Available Implementations
-^^^^^^^^^^^^^^^^^^^^^^^^^
+Implementations
 
 .. autoclass:: haymaker.signals::BinarySignalProcessor
    :members:
@@ -181,8 +178,7 @@ Portfolio
 .. autoclass:: haymaker.portfolio::AbstractBasePortfolio
    :members:
 
-Available Implementations
-^^^^^^^^^^^^^^^^^^^^^^^^^
+Implementations
 
 .. autoclass:: haymaker.portfolio::FixedPortfolio
    :members:
@@ -202,8 +198,8 @@ It's easiest to create an execution model by extending :class:`AbstractExecModel
 .. autoclass:: haymaker.execution_models.AbstractExecModel
    :members:
 
-Available :class:`AbastractExecModel` Implementations
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+:class:`AbastractExecModel` Implementations
+
 
 .. autoclass:: haymaker.execution_models.BaseExecModel
    :members:

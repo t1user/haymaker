@@ -53,7 +53,7 @@ Typically market data are: Open, High, Low, Close, Volume, AveragePrice, but it 
 
 
 
-:ib_insync.contracts:`ContFuture` contract is not tradeable, however it can be used in defining strategies, as the framework will replace it current on-the-run future contract, when this contract is close to expiration, it will be rolled into next contract. How and when it exactly happens can be customized, refer to other parts of documentation.
+:class:ib_insync.contract:`ContFuture` contract is not tradeable, however it can be used in defining strategies, as the framework will replace it current on-the-run future contract, when this contract is close to expiration, it will be rolled into next contract. How and when it exactly happens can be customized, refer to other parts of documentation.
 
 
 .. code:: python

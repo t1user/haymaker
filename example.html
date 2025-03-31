@@ -1,11 +1,11 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="">
+<html class="no-js" lang="en" data-content_root="./">
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="index" title="Index" href="genindex.html" /><link rel="search" title="Search" href="search.html" />
 
-    <!-- Generated with Sphinx 7.1.2 and Furo 2024.08.06 -->
+    <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
         <title>Example Usage - Haymaker documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=354aac6f" />
@@ -255,7 +255,7 @@
         </div>
         <article role="main" id="furo-main-content">
           <section id="example-usage">
-<h1>Example Usage<a class="headerlink" href="#example-usage" title="Permalink to this heading">¶</a></h1>
+<h1>Example Usage<a class="headerlink" href="#example-usage" title="Link to this heading">¶</a></h1>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
@@ -317,7 +317,7 @@
 <p>This example is only meant to illustrate how to use <cite>Haymaker</cite> framework. It is unlikely to produce a favourable investment outcomes.</p>
 </div>
 <section id="example-walk-through">
-<h2>Example walk-through<a class="headerlink" href="#example-walk-through" title="Permalink to this heading">¶</a></h2>
+<h2>Example walk-through<a class="headerlink" href="#example-walk-through" title="Link to this heading">¶</a></h2>
 <p>This is a simple example implementing <a class="reference external" href="https://en.wikipedia.org/wiki/Moving_average_crossover">moving average crossover</a> strategy with stop-loss.</p>
 <p>The strategy:
 * buys 1 <a class="reference external" href="https://www.cmegroup.com/markets/equities/sp/e-mini-sandp500.html">e-mini S&amp;P futures contract (‘ES’)</a> whenever faster exponential moving average crosses above slower one,
@@ -347,7 +347,7 @@
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">&quot;ES&quot;</span><span class="p">,</span> <span class="s2">&quot;CME&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><a href="#id7"><span class="problematic" id="id8">:ib_insync.contracts:`ContFuture`</span></a> contract is not tradeable, however it can be used in defining strategies, as the framework will replace it current on-the-run future contract, when this contract is close to expiration, it will be rolled into next contract. How and when it exactly happens can be customized, refer to other parts of documentation.</p>
+<p><a href="#id7"><span class="problematic" id="id8">:class:ib_insync.contract:`ContFuture`</span></a> contract is not tradeable, however it can be used in defining strategies, as the framework will replace it current on-the-run future contract, when this contract is close to expiration, it will be rolled into next contract. How and when it exactly happens can be customized, refer to other parts of documentation.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">portfolio</span><span class="o">.</span><span class="n">FixedPortfolio</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -410,7 +410,7 @@
 <p>But long-running scripts should be run as processes as explained &lt;here: link to come&gt;</p>
 </section>
 <section id="conclusion">
-<h2>Conclusion<a class="headerlink" href="#conclusion" title="Permalink to this heading">¶</a></h2>
+<h2>Conclusion<a class="headerlink" href="#conclusion" title="Link to this heading">¶</a></h2>
 <p>In real-life strategies, we would not trade just one instrument or one set of parameters, but using patterns illustrated above and typical python data structures, we can create pipelines for as many instruments and parameter sets as required.</p>
 </section>
 </section>
@@ -466,9 +466,9 @@
       
     </aside>
   </div>
-</div><script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=b3ba4146"></script>
-    <script src="_static/doctools.js?v=888ff710"></script>
-    <script src="_static/sphinx_highlight.js?v=4825356b"></script>
+</div><script src="_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="_static/doctools.js?v=9bcbadda"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="_static/scripts/furo.js?v=5fa4622c"></script>
     </body>
 </html>

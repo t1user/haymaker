@@ -1,0 +1,885 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../../">
+  <head><meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html" /><link rel="search" title="Search" href="../../search.html" />
+
+    <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
+        <title>haymaker.base - Haymaker documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=354aac6f" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=302659d7" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f8f8f8;
+  --color-code-foreground: black;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
+<label class="overlay sidebar-overlay" for="__navigation">
+  <div class="visually-hidden">Hide navigation sidebar</div>
+</label>
+<label class="overlay toc-overlay" for="__toc">
+  <div class="visually-hidden">Hide table of contents sidebar</div>
+</label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <div class="visually-hidden">Toggle site navigation sidebar</div>
+        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../../index.html"><div class="brand">Haymaker  documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle">
+          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+        <div class="visually-hidden">Toggle table of contents sidebar</div>
+        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
+  
+  
+  <span class="sidebar-brand-text">Haymaker  documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../requirements.html">Requirements</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../requirements.html#dependencies">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../configuration.html">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../logging.html">Logging</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../execution.html">Execution Module</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of Execution Module</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul class="simple">
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataloader.html">Dataloader Module</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../code.html">Source code</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Source code</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference external" href="https://github.com/t1user/haymaker">Download</a></li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle">
+              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+            <div class="visually-hidden">Toggle table of contents sidebar</div>
+            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <h1>Source code for haymaker.base</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">collections.abc</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">UserDict</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span><span class="p">,</span> <span class="n">fields</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">wraps</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">TYPE_CHECKING</span><span class="p">,</span>
+    <span class="n">Any</span><span class="p">,</span>
+    <span class="n">Awaitable</span><span class="p">,</span>
+    <span class="n">ClassVar</span><span class="p">,</span>
+    <span class="n">NamedTuple</span><span class="p">,</span>
+    <span class="n">Optional</span><span class="p">,</span>
+    <span class="n">Self</span><span class="p">,</span>
+    <span class="n">Sequence</span><span class="p">,</span>
+    <span class="n">TypeVar</span><span class="p">,</span>
+    <span class="n">cast</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.misc</span><span class="w"> </span><span class="kn">import</span> <span class="n">is_active</span><span class="p">,</span> <span class="n">next_active</span><span class="p">,</span> <span class="n">process_trading_hours</span>
+
+<span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">.state_machine</span><span class="w"> </span><span class="kn">import</span> <span class="n">StateMachine</span><span class="p">,</span> <span class="n">Strategy</span>
+
+
+<span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+
+<span class="n">ContractOrSequence</span> <span class="o">=</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]</span> <span class="o">|</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
+
+<span class="n">T</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;T&quot;</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">ContractManagingDescriptor</span><span class="p">:</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_apply_to_contract_or_sequence</span><span class="p">(</span><span class="n">func</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decorator that applies the `func` either to contract or to</span>
+<span class="sd">        every contract in a sequence or if contract is neither</span>
+<span class="sd">        :class:`ibi.Contract` nor a sequence return this contract.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="nd">@wraps</span><span class="p">(</span><span class="n">func</span><span class="p">)</span>
+        <span class="k">def</span><span class="w"> </span><span class="nf">wrapper</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+            <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="s2">&quot;__iter__&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
+                <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">collections</span><span class="o">.</span><span class="n">abc</span><span class="o">.</span><span class="n">Sequence</span><span class="p">)</span>
+                <span class="k">return</span> <span class="p">[</span><span class="n">func</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">contract</span><span class="p">]</span>
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">):</span>
+                <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">contract</span>
+
+        <span class="k">return</span> <span class="n">wrapper</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__set_name__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">name</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__set__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="n">collections</span><span class="o">.</span><span class="n">abc</span><span class="o">.</span><span class="n">Sequence</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="p">(</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">collections</span><span class="o">.</span><span class="n">abc</span><span class="o">.</span><span class="n">Sequence</span><span class="p">)):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;attr contract must be ibi.Contract or sequence of ibi.Contract, &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;not: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="n">obj</span><span class="o">.</span><span class="vm">__dict__</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_register_contract</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]</span> <span class="o">|</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># some methods rely on not raising an error here if attr self.name not set</span>
+        <span class="c1"># is Atom has not set `contract` attribute, it shouldn&#39;t raise an error</span>
+        <span class="n">contract</span> <span class="o">=</span> <span class="n">obj</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_swap_contfuture</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">obj</span><span class="o">.</span><span class="n">contracts</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_register_contract</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">ContractOrSequence</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Registering contract: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_append</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">obj</span><span class="o">.</span><span class="n">contracts</span><span class="p">,</span> <span class="n">obj</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="nd">@_apply_to_contract_or_sequence</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_swap_contfuture</span><span class="p">(</span>
+        <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n">contract_list</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">)</span> <span class="ow">and</span> <span class="n">contract</span><span class="o">.</span><span class="n">conId</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">contract_list</span><span class="p">:</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Future</span><span class="p">)</span> <span class="ow">and</span> <span class="n">i</span><span class="o">.</span><span class="n">conId</span> <span class="o">==</span> <span class="n">contract</span><span class="o">.</span><span class="n">conId</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="n">i</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Failed to replace ContFuture object: </span><span class="si">{</span><span class="n">contract</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">contract</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="nd">@_apply_to_contract_or_sequence</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_append</span><span class="p">(</span><span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">contract_list</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">],</span> <span class="n">atom</span><span class="p">:</span> <span class="n">Atom</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">contract</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">contract_list</span><span class="p">:</span>
+            <span class="n">contract_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">contract</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="Details">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Details">[docs]</a>
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Details</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Wrapper object for :class:`ib_insync.contract.ContractDetails` extracting</span>
+<span class="sd">    and processing information that&#39;s most relevant for Haymaker.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        details (ibi.ContractDetails): The original contract details object.</span>
+<span class="sd">        trading_hours (list[tuple[datetime, datetime]]): List of tuples with</span>
+<span class="sd">            start and end of trading hours for this contract.</span>
+<span class="sd">        liquid_hours (list[tuple[datetime, datetime]]): List of tuples with</span>
+<span class="sd">            start and end of liquid hours for this contract.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_fields</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">fields</span><span class="p">(</span><span class="n">ibi</span><span class="o">.</span><span class="n">ContractDetails</span><span class="p">)]</span>
+    <span class="n">details</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContractDetails</span>
+    <span class="n">trading_hours</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">datetime</span><span class="p">,</span> <span class="n">datetime</span><span class="p">]]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">init</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">repr</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">liquid_hours</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">datetime</span><span class="p">,</span> <span class="n">datetime</span><span class="p">]]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">init</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">repr</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">trading_hours</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_process_trading_hours</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">tradingHours</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">timeZoneId</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">liquid_hours</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_process_trading_hours</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">liquidHours</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">timeZoneId</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__getattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fields</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> has no attribute </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="Details.is_open">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Details.is_open">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_open</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_now</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">datetime</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given current time check if the market is open for underlying contract.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            _now (Optional[datetime], optional): Defaults to None.</span>
+<span class="sd">            If not provided current time will be used. Only situation when</span>
+<span class="sd">            it&#39;s useful to provide `_now` is in testing.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: True if market is open, False otherwise.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_active</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trading_hours</span><span class="p">,</span> <span class="n">_now</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Details.is_liquid">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Details.is_liquid">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">is_liquid</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_now</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">datetime</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given current time check if the market is during liquid hours</span>
+<span class="sd">        for underlying contract.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            _now (Optional[datetime], optional): . Defaults to None.</span>
+<span class="sd">            If not provided current time will be used. Only situation when</span>
+<span class="sd">            it&#39;s useful to provide `_now` is in testing.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            bool: True if market is liquid, False otherwise.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_active</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">liquid_hours</span><span class="p">,</span> <span class="n">_now</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Details.next_open">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Details.next_open">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">next_open</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_now</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">datetime</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">datetime</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return time of nearest market re-open (regardless if market is</span>
+<span class="sd">        open now).  Should be used after it has been tested that</span>
+<span class="sd">        :meth:`is_active` is False.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            _now (Optional[datetime], optional): Defaults to None.</span>
+<span class="sd">            If not provided current time will be used. Only situation when</span>
+<span class="sd">            it&#39;s useful to provide `_now` is in testing.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_next_open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trading_hours</span><span class="p">,</span> <span class="n">_now</span><span class="p">)</span></div>
+
+
+    <span class="n">_process_trading_hours</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="n">process_trading_hours</span><span class="p">)</span>
+    <span class="n">_is_active</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="n">is_active</span><span class="p">)</span>
+    <span class="n">_next_open</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="n">next_active</span><span class="p">)</span></div>
+
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">DetailsContainer</span><span class="p">(</span><span class="n">UserDict</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__setitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContractDetails</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__setitem__</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">Details</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">ContractRollData</span><span class="p">(</span><span class="n">NamedTuple</span><span class="p">):</span>
+    <span class="n">old_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
+    <span class="n">new_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
+
+
+<div class="viewcode-block" id="Atom">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Atom">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">Atom</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Abstract base object from which all other objects inherit. It&#39;s a basic building</span>
+<span class="sd">    block for creating strategies in Haymaker. Every ``Atom`` represents a processing</span>
+<span class="sd">    step typically for one traded instrument, thus allowing for separation of concerns.</span>
+<span class="sd">    Connecting ``Atoms`` creates a processing pipeline.</span>
+
+<span class="sd">    ``Atoms`` in a pipeline communicate with each other in an event-driven manner</span>
+<span class="sd">    through three methods: :meth:`onStart``, :meth:`onData`, :meth:`onFeedback`.</span>
+<span class="sd">    Those methods are called when appropriate :class:`eventkit.event.Event` objects are</span>
+<span class="sd">    emitted (respectively :attr:`startEvent`, :attr:`dataEvent`, :attr:`feedbackEvent`),</span>
+<span class="sd">    and emit their own events when they are done processing thus sending a signal to</span>
+<span class="sd">    the next ``Atom`` in the pipeline that it can start processing.</span>
+
+<span class="sd">    Users are free to put in those methods any processing logic they want, using any</span>
+<span class="sd">    libraries and tools required. ``Atoms`` can be connected in any order; unions can be</span>
+<span class="sd">    created by connecting more than one ``Atom``; pipelines can be created using</span>
+<span class="sd">    auxiliary class :class:`Pipeline`.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        contract (ib_insync.contract.Contract): The contract object associated with</span>
+<span class="sd">            this Atom. This can be any :class:`ib_insync.contract.Contract`. On startup</span>
+<span class="sd">            this contract will be qualified and available</span>
+<span class="sd">            :class:`ib_insync.contract.ContractDetails` will be downloaded from broker</span>
+<span class="sd">            and made available through :attr:`details` attribute. If contract</span>
+<span class="sd">            is a :class:`ib_insync.contract.ContFuture`,</span>
+<span class="sd">            it will be replaced with on-the-run :class:`ib_insync.contract.Future`</span>
+<span class="sd">            and whenever this contract needs to be rolled, :meth:`onContractChanged`</span>
+<span class="sd">            method will be called. This attribute doesn&#39;t need to be set. If this Atom</span>
+<span class="sd">            object is not related to any one particular contract, just don&#39;t assign any</span>
+<span class="sd">            value to this attribute.</span>
+
+<span class="sd">        ib (ClassVar[ibi.IB]): The instance of the :class:`ib_insync.ib.IB` client used</span>
+<span class="sd">           for interacting with the broker. It can be used to communicate with</span>
+<span class="sd">           the broker if neccessary.</span>
+
+<span class="sd">        sm (ClassVar[StateMachine]): Access to :class:`StateMachine` which is</span>
+<span class="sd">            Haymaker&#39;s central collection of information about current positions,</span>
+<span class="sd">            orders and state of strategies.</span>
+
+<span class="sd">        contracts (ClassVar[list[ibi.Contract]]): A collection of all contracts</span>
+<span class="sd">            currently in use.</span>
+
+<span class="sd">        events (ClassVar[Sequence[str]]): Collection of :class:`eventkit.Event` objects</span>
+<span class="sd">            used by ``Haymaker``, i.e. :attr:`startEvent`, :attr:`dataEvent`,</span>
+<span class="sd">            :attr:`feedbackEvent`, appropriate methods should use these events to</span>
+<span class="sd">            communicate with other objects in the chain, e.g. :meth:`onStart` after</span>
+<span class="sd">            processing incoming data should pass the result to the next object</span>
+<span class="sd">            by calling `self.dataEvent.emit(data)`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">ib</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">IB</span><span class="p">]</span>
+    <span class="n">sm</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">StateMachine</span><span class="p">]</span>
+    <span class="n">contract_details</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">DetailsContainer</span><span class="p">]</span> <span class="o">=</span> <span class="n">DetailsContainer</span><span class="p">()</span>
+    <span class="n">contracts</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]]</span> <span class="o">=</span> <span class="nb">list</span><span class="p">()</span>
+    <span class="n">events</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">&quot;startEvent&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;dataEvent&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;feedbackEvent&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">contract</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">ContractManagingDescriptor</span><span class="p">())</span>
+    <span class="n">_contract_memo</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">_roll_contract_data</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ContractRollData</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_init_data</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ib</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">IB</span><span class="p">,</span> <span class="n">sm</span><span class="p">:</span> <span class="n">StateMachine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">cls</span><span class="o">.</span><span class="n">ib</span> <span class="o">=</span> <span class="n">ib</span>
+        <span class="bp">cls</span><span class="o">.</span><span class="n">sm</span> <span class="o">=</span> <span class="n">sm</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_createEvents</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;strategy.</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">details</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Details</span> <span class="o">|</span> <span class="n">DetailsContainer</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Contract details received from the broker.</span>
+
+<span class="sd">        If :attr:`contract` is set, :attr:`details` will be returned</span>
+<span class="sd">        only for this contract, otherwise :attr:`details` will return</span>
+<span class="sd">        a dictionary of all available details,</span>
+<span class="sd">        ie. :class:`dict`[:class:`ibi.Contract`, :class:`Details`]</span>
+
+<span class="sd">        :class:`Details` is a wrapper around</span>
+<span class="sd">        :class:`ib_insync.contract.ContractDetails` with some</span>
+<span class="sd">        additional methods and attributes.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">]</span>
+            <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+                <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing contract details for: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_createEvents</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Event</span><span class="p">(</span><span class="s2">&quot;startEvent&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Event</span><span class="p">(</span><span class="s2">&quot;dataEvent&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">feedbackEvent</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Event</span><span class="p">(</span><span class="s2">&quot;feedbackEvent&quot;</span><span class="p">)</span>
+        <span class="c1"># not chained, for internal use only</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_contractChangedEvent</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Event</span><span class="p">(</span><span class="s2">&quot;contractChangedEvent&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_contractChangedEvent</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">onContractChanged</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_log_event_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Event</span><span class="p">,</span> <span class="n">exception</span><span class="p">:</span> <span class="ne">Exception</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Event error </span><span class="si">{</span><span class="n">event</span><span class="o">.</span><span class="n">name</span><span class="p">()</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">exception</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<div class="viewcode-block" id="Atom.onStart">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.onStart">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Perform any initilization required on system (re)start.  It</span>
+<span class="sd">        will be run automatically and it will be linked to</span>
+<span class="sd">        :attr:`startEvent` of the preceding object in the chain.</span>
+
+<span class="sd">        First `Atom` in a pipeline (typically a data streamer) will</span>
+<span class="sd">        be called by system, which is an indication that (re)start is</span>
+<span class="sd">        in progress and we have successfully connected to the broker.</span>
+
+<span class="sd">        `data` by default is a dict and all keys on this dict are</span>
+<span class="sd">        being set as properties on the object.  Any information that</span>
+<span class="sd">        needs to be passed to atoms down the chain, should be appended</span>
+<span class="sd">        to `data` without removing any existing keys.</span>
+
+<span class="sd">        If overriding the class, call superclass; call to</span>
+<span class="sd">        :meth:`super().onStart(data)` should be the last line in overriden</span>
+<span class="sd">        method; don&#39;t manually emit :attr:`startEvent` in subclass.</span>
+
+<span class="sd">        This method can be synchronous as well as asynchronous (in the</span>
+<span class="sd">        subclass it&#39;s ok to override it with `async def onData(self,</span>
+<span class="sd">        data, *args)`).  If it&#39;s async, it will be put in the asyncio</span>
+<span class="sd">        loop.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="o">**</span><span class="n">data</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">):</span>
+            <span class="c1"># it will not fire if the system has been restarted after contract changed</span>
+            <span class="c1"># cannot be relied on for rolls</span>
+            <span class="c1"># MUST be used to ensure streamers and processors don&#39;t mix-up data</span>
+            <span class="c1"># from old and new contracts</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_contractChangedEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Atom.onData">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.onData">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onData</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Connected to :attr:`dataEvent` of the preceding object in the chain.</span>
+<span class="sd">        This is the entry point to any processing perfmormed by this</span>
+<span class="sd">        object.  Result of this processing should be added to the</span>
+<span class="sd">        `data` dict and passed to the subsequent object in the chain</span>
+<span class="sd">        using :attr:`dataEvent` (by calling `self.dataEvent.emit(data)`).</span>
+
+<span class="sd">        It&#39;s up to the user to emit `dataEvent` with appropriate data,</span>
+<span class="sd">        this event will NOT be emitted by the system, so if it&#39;s not</span>
+<span class="sd">        properly implemented, event chain will be broken.  This method</span>
+<span class="sd">        must be obligatorily overriden in a subclass.</span>
+
+<span class="sd">        Calling superclass on exit will add a timestamp with object&#39;s</span>
+<span class="sd">        name to `data`, which may be useful for logging.</span>
+
+<span class="sd">        This method can be synchronous as well as asynchronous (in the</span>
+<span class="sd">        subclass it&#39;s ok to override it with `async def onData(self,</span>
+<span class="sd">        data, *args)`).  If it&#39;s async, it will be put in the asyncio</span>
+<span class="sd">        loop.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">data</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">_ts&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">tz</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="Atom.onFeedback">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.onFeedback">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onFeedback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Connected to :attr:`feedbackEvent` of the subsequent object in the</span>
+<span class="sd">        chain.  Allows for passing of information about trading</span>
+<span class="sd">        results.  It&#39;s optional to use it, if used, overriden method</span>
+<span class="sd">        must emit `feedbackEvent` with appropriate data.  If not</span>
+<span class="sd">        overriden, it will just pass received data to the previous</span>
+<span class="sd">        object in the chain.</span>
+
+<span class="sd">        This method can be synchronous as well as asynchronous (in the</span>
+<span class="sd">        subclass it&#39;s ok to override it with `async def onData(self,</span>
+<span class="sd">        data, *args)`).  If it&#39;s async, it will be put in the asyncio</span>
+<span class="sd">        loop.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">feedbackEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="Atom.onContractChanged">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.onContractChanged">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onContractChanged</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">old_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Future</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Future</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Will be called if contract object on `self.contract` changes.</span>
+<span class="sd">        In particular, this happens when future contract is about to</span>
+<span class="sd">        expire, and new on-the-run contract replaces old, expiring</span>
+<span class="sd">        contract.  This method should be used to initialize any</span>
+<span class="sd">        adjustment required on the object in relation to contract</span>
+<span class="sd">        rolling.  Actual position rolling is taken care of by</span>
+<span class="sd">        `Controller` object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Contract on </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> changed from </span><span class="si">{</span><span class="n">old_contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2"> &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;to new contract </span><span class="si">{</span><span class="n">new_contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_roll_contract_data</span> <span class="o">=</span> <span class="n">ContractRollData</span><span class="p">(</span><span class="n">old_contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">data</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Strategy</span><span class="p">:</span>
+        <span class="n">strategy</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;strategy&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">strategy</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> accessing data for empty strategy.&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">sm</span><span class="o">.</span><span class="n">strategy</span><span class="p">[</span><span class="n">strategy</span><span class="p">]</span>
+
+<div class="viewcode-block" id="Atom.connect">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.connect">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">connect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">targets</span><span class="p">:</span> <span class="n">Atom</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Connect appropriate events and methods to subsequent :class:`Atom`</span>
+<span class="sd">        object(s) in the chain. Shorthand for this method is `+=`</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            targets (Atom): One or more :class:`Atom` objects to connect to.</span>
+<span class="sd">                If more than one object passed, they will be connected directly</span>
+<span class="sd">                in a `one-to-many` fashion. If the intention is to create</span>
+<span class="sd">                a chain of objects, use :meth:`pipe` instead.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Atom: The updated `Atom` object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">targets</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span>
+                <span class="n">t</span><span class="o">.</span><span class="n">onStart</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_event_error</span><span class="p">,</span> <span class="n">keep_ref</span><span class="o">=</span><span class="kc">True</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">onData</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_event_error</span><span class="p">,</span> <span class="n">keep_ref</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="n">t</span><span class="o">.</span><span class="n">feedbackEvent</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">onFeedback</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="n">t</span><span class="o">.</span><span class="n">_log_event_error</span><span class="p">,</span> <span class="n">keep_ref</span><span class="o">=</span><span class="kc">True</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span></div>
+
+
+<div class="viewcode-block" id="Atom.disconnect">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.disconnect">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">targets</span><span class="p">:</span> <span class="n">Atom</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disconnect passed :class:`Atom` objects, which are directly</span>
+<span class="sd">        connected to this atom. Shorthand for this method is `-=`</span>
+
+
+<span class="sd">        Args:</span>
+<span class="sd">            targets (Atom): One or more :class:`Atom` objects to disconnect from.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">targets</span><span class="p">:</span>
+            <span class="c1"># the same target cannot be connected more than once</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">disconnect_obj</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">disconnect_obj</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
+            <span class="n">t</span><span class="o">.</span><span class="n">feedbackEvent</span><span class="o">.</span><span class="n">disconnect_obj</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">clear</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">connected_to</span> <span class="o">=</span> <span class="p">[</span><span class="n">i</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">_slots</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">obj</span> <span class="ow">in</span> <span class="n">connected_to</span><span class="p">:</span>
+            <span class="n">obj</span><span class="o">.</span><span class="n">feedbackEvent</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+
+<div class="viewcode-block" id="Atom.pipe">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.pipe">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">pipe</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">targets</span><span class="p">:</span> <span class="n">Atom</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Pipe</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create a :class:`Pipe` or a chain of connected :class:`Atom` objects.</span>
+<span class="sd">        Only first `target` will be directly connected to this object, second</span>
+<span class="sd">        target will be connected to the first target and so on. It&#39;s different</span>
+<span class="sd">        from :meth:`connect` method, which connects all targets directly to</span>
+<span class="sd">        this object.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Pipe: :class:`Pipe` object with all targets connected in a chain,</span>
+<span class="sd">            where this object is the first and the last target is the last</span>
+<span class="sd">            target in the list of passed targets.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">Pipe</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">targets</span><span class="p">)</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">union</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">targets</span><span class="p">:</span> <span class="s2">&quot;Atom&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">targets</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="fm">__iadd__</span> <span class="o">=</span> <span class="n">connect</span>
+    <span class="fm">__isub__</span> <span class="o">=</span> <span class="n">disconnect</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="n">attrs</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">=</span><span class="si">{</span><span class="n">j</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">j</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="k">if</span> <span class="s2">&quot;Event&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">)</span> <span class="ow">and</span> <span class="n">i</span> <span class="o">!=</span> <span class="s2">&quot;_log&quot;</span> <span class="ow">and</span> <span class="n">j</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">(</span><span class="si">{</span><span class="n">attrs</span><span class="si">}</span><span class="s2">)&quot;</span></div>
+
+
+
+<div class="viewcode-block" id="Pipe">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Pipe">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">Pipe</span><span class="p">(</span><span class="n">Atom</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Auxiliary object for conneting several :class:`Atom` objects. Atoms to be connected</span>
+<span class="sd">    need to passed in the right order at initialization.  :class:`Pipe` itself is</span>
+<span class="sd">    a subclass of :class:`Atom`, so it can be connected</span>
+<span class="sd">    to other :class:`Atom` (or :class:`Pipe`) and all :class:`Atom` attributes</span>
+<span class="sd">    and methods are available.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">targets</span><span class="p">:</span> <span class="n">Atom</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_members</span> <span class="o">=</span> <span class="n">targets</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">first</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_members</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">last</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_members</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_pipe</span><span class="p">()</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_createEvents</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># Pipe doesn&#39;t create its own events, but redirects events of member Atoms</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">last</span><span class="o">.</span><span class="n">startEvent</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">last</span><span class="o">.</span><span class="n">dataEvent</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">feedbackEvent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first</span><span class="o">.</span><span class="n">feedbackEvent</span>
+
+<div class="viewcode-block" id="Pipe.connect">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Pipe.connect">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">connect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">targets</span><span class="p">:</span> <span class="n">Atom</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">targets</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">last</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">target</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span></div>
+
+
+<div class="viewcode-block" id="Pipe.disconnect">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Pipe.disconnect">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">targets</span><span class="p">:</span> <span class="n">Atom</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">targets</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">last</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">disconnect_obj</span><span class="p">(</span><span class="n">target</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">last</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">disconnect_obj</span><span class="p">(</span><span class="n">target</span><span class="p">)</span>
+            <span class="n">target</span><span class="o">.</span><span class="n">feedbackEvent</span><span class="o">.</span><span class="n">disconnect_obj</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">last</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span></div>
+
+
+<div class="viewcode-block" id="Pipe.onStart">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Pipe.onStart">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">first</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Pipe.onData">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Pipe.onData">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onData</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">first</span><span class="o">.</span><span class="n">onData</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Pipe.onFeedback">
+<a class="viewcode-back" href="../../execution.html#haymaker.base.Pipe.onFeedback">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onFeedback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">last</span><span class="o">.</span><span class="n">onFeedback</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_pipe</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">source</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">member</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_members</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">i</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="n">source</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="n">source</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">member</span><span class="p">)</span>
+            <span class="n">source</span> <span class="o">=</span> <span class="n">member</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atom</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_members</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_members</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="bp">self</span><span class="o">.</span><span class="n">_members</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span></div>
+
+</pre></div>
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          
+          
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2025, t1user
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer no-toc">
+      
+      
+      
+    </aside>
+  </div>
+</div><script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/scripts/furo.js?v=5fa4622c"></script>
+    </body>
+</html>
