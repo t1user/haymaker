@@ -21,23 +21,23 @@ Common trading steps include:
 
 * Execution management.
 
-Each processing component (which is called: Atom) inherits from :class:`Atom` .
+Each processing component (which is called: Atom) inherits from :class:`haymaker.base.Atom` .
 
 Atom Object 
 ===========
 
-.. autoclass:: haymaker.base.Atom
+.. autoclass:: haymaker.base::Atom
     :members:
 
 
 Auxiliary Objects
 -----------------
 
-.. autoclass:: haymaker.base.Pipe
+.. autoclass:: haymaker.base::Pipe
     :members:
 
 
-.. autoclass:: haymaker.base.Details
+.. autoclass:: haymaker.base::Details
     :members:
 
 
@@ -59,25 +59,20 @@ Streamer
 --------
 There are objects corresponding to all `ib_insync` market data subsriptions, i.e.
 
-..list-table:: `ib_insync` methods and corresponding streamers
-   :widths: 25 25
-   :header-rows: 1
 
-   * - ib_insync method
-     - streamer
-   * - reqHistoricalDataAsync
-     - HistoricalDataStreamer
-   * - reqMktData
-     - MktDataStreamer
-   * - reqRealTimeBars
-     - RealTimeBarsStreamer
-   * - reqTickByTickData
-     - TickByTickStreamer
-
+   ======================   ===============
+   ib_insync                streamer
+   ======================   ===============
+   reqHistoricalDataAsync   HistoricalDataStreamer
+   reqMktData               MktDataStreamer
+   reqRealTimeBars          RealTimeBarsStreamer
+   reqTickByTickData        TickByTickStreamer
+   ======================   ===============
 
 All streamers extend :class:`Streamer`
 
 .. autoclass:: haymaker.streamers::Streamer
+   :members:
 
        
 Available Implementations
@@ -91,7 +86,7 @@ Every implementation accepts the same arguments as respective `ib_insync` method
 .. autoclass:: haymaker.streamers::MktDataStreamer
    :members:
 
-.. autoclass:: haymaker.streamers::RealBarsStreamer
+.. autoclass:: haymaker.streamers::RealTimeBarsStreamer
    :members:
 
 .. autoclass:: haymaker.streamers::TickByTickStreamer
