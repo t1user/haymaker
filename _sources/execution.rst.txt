@@ -60,14 +60,14 @@ Streamer
 There are objects corresponding to all `ib_insync` market data subsriptions, i.e.
 
 
-   ======================   ===============
-   ib_insync                streamer
-   ======================   ===============
-   reqHistoricalDataAsync   HistoricalDataStreamer
-   reqMktData               MktDataStreamer
-   reqRealTimeBars          RealTimeBarsStreamer
-   reqTickByTickData        TickByTickStreamer
-   ======================   ===============
+   =========================     =========================
+   ib_insync                     streamer
+   =========================     =========================
+   reqHistoricalDataAsync        HistoricalDataStreamer
+   reqMktData                    MktDataStreamer
+   reqRealTimeBars               RealTimeBarsStreamer
+   reqTickByTickData             TickByTickStreamer
+   =========================     =========================
 
 All streamers extend :class:`Streamer`
 
