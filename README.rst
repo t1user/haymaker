@@ -1,9 +1,9 @@
 
 
-``Haymaker`` is a Python framework designed for algorithmic trading via `Interactive Brokers' TWS API <https://ibkrcampus.com/ibkr-api-page/twsapi-doc/ "Interactive Brokers API">`_. Built on top of the robust `ib_insync`_ library, it provides essential scafolling typically required for building live trading strategy components. 
+`Haymaker` is a Python framework designed for algorithmic trading via `Interactive Brokers <https://ibkrcampus.com/ibkr-api-page/twsapi-doc/>`_. Built on top of `ib_insync <https://ib-insync.readthedocs.io/readme.html>`_ library, it provides essential scafolling typically required for building live trading strategy components. 
 
 .. note::
-    ``Haymaker`` works as an extension to `ib_insync`, throughout this documentation it is assumed that users are familiar with this library.
+    `Haymaker` works as an extension to `ib_insync`, throughout this documentation it is assumed that users are familiar with this library.
 
 Functionality
 =============
