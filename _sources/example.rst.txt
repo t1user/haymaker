@@ -45,18 +45,18 @@ This is a definition of trading signals. We use :class:`brick.AbstractDfBrick`, 
 
 Typically market data are: Open, High, Low, Close, Volume, AveragePrice, but it depends on which Streamers and Processor we're using. Any data received via by `onData`, the class will wrap into  :pandas:`DataFrame` with collumn names corresponding to keys in `data` dictionary received by `onData` method. It's up to the user to connect this object to objects that will supply it with all data required to generate signals`
 
-:meth:`df` must return a :pandas:`DataFrame` with a column `signal` containing values: 1 for long position, 0 for no position and -1 for short position. It should also contain any other collumns as may be needed by other strategy components.
+:meth:`df` must return a :pandas:`DataFrame` with a column `signal` containing values: 1 for long position, 0 for no position and -1 for short position. It should also contain any other columns as may be needed by other strategy components.
 
 .. code:: python
 
           es_contract = ibi.ContFuture("ES", "CME")
 
 
- :ib_insync.contracts:`ContFuture` contract is not tradeable, however it can be used in defining strategies, as the framework will replace it current on-the-run future contract, when this contract is close to expiration, it will be rolled into next contract. How and when it exactly happens can be customized, refer to other parts of documentation.
+
+:ib_insync.contracts:`ContFuture` contract is not tradeable, however it can be used in defining strategies, as the framework will replace it current on-the-run future contract, when this contract is close to expiration, it will be rolled into next contract. How and when it exactly happens can be customized, refer to other parts of documentation.
 
 
- .. code:: python
-
+.. code:: python
            
            portfolio.FixedPortfolio(1)
 

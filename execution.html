@@ -268,7 +268,7 @@
 <li><p>Risk control.</p></li>
 <li><p>Execution management.</p></li>
 </ul>
-<p>Each processing component (which is called: Atom) inherits from <code class="xref py py-class docutils literal notranslate"><span class="pre">Atom</span></code> .</p>
+<p>Each processing component (which is called: Atom) inherits from <code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.base.Atom</span></code> .</p>
 <section id="atom-object">
 <h2>Atom Object<a class="headerlink" href="#atom-object" title="Permalink to this heading">¶</a></h2>
 <section id="auxiliary-objects">
@@ -290,44 +290,31 @@
 <section id="streamer">
 <h3>Streamer<a class="headerlink" href="#streamer" title="Permalink to this heading">¶</a></h3>
 <p>There are objects corresponding to all <cite>ib_insync</cite> market data subsriptions, i.e.</p>
-<dl>
-<dt>..list-table:: <cite>ib_insync</cite> methods and corresponding streamers</dt><dd><dl class="field-list simple">
-<dt class="field-odd">widths<span class="colon">:</span></dt>
-<dd class="field-odd"><p>25 25</p>
-</dd>
-<dt class="field-even">header-rows<span class="colon">:</span></dt>
-<dd class="field-even"><p>1</p>
-</dd>
-</dl>
-<ul class="simple">
-<li><ul>
-<li><p>ib_insync method</p></li>
-<li><p>streamer</p></li>
-</ul>
-</li>
-<li><ul>
-<li><p>reqHistoricalDataAsync</p></li>
-<li><p>HistoricalDataStreamer</p></li>
-</ul>
-</li>
-<li><ul>
-<li><p>reqMktData</p></li>
-<li><p>MktDataStreamer</p></li>
-</ul>
-</li>
-<li><ul>
-<li><p>reqRealTimeBars</p></li>
-<li><p>RealTimeBarsStreamer</p></li>
-</ul>
-</li>
-<li><ul>
-<li><p>reqTickByTickData</p></li>
-<li><p>TickByTickStreamer</p></li>
-</ul>
-</li>
-</ul>
-</dd>
-</dl>
+<blockquote>
+<div><div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>ib_insync</p></th>
+<th class="head"><p>streamer</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>reqHistoricalDataAsync</p></td>
+<td><p>HistoricalDataStreamer</p></td>
+</tr>
+<tr class="row-odd"><td><p>reqMktData</p></td>
+<td><p>MktDataStreamer</p></td>
+</tr>
+<tr class="row-even"><td><p>reqRealTimeBars</p></td>
+<td><p>RealTimeBarsStreamer</p></td>
+</tr>
+<tr class="row-odd"><td><p>reqTickByTickData</p></td>
+<td><p>TickByTickStreamer</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div></blockquote>
 <p>All streamers extend <code class="xref py py-class docutils literal notranslate"><span class="pre">Streamer</span></code></p>
 <section id="available-implementations">
 <h4>Available Implementations<a class="headerlink" href="#available-implementations" title="Permalink to this heading">¶</a></h4>
@@ -468,17 +455,12 @@ take-profit orders when the original order is filled.</p>
 </div>
 <p>This is a definition of trading signals. We use <code class="xref py py-class docutils literal notranslate"><span class="pre">brick.AbstractDfBrick</span></code>, which requires that we define a <a href="#id4"><span class="problematic" id="id5">:py:`dataclasses.dataclass`</span></a> with all strategy name, contract and all parameters that maybe required by the strategy. We need to override <code class="xref py py-meth docutils literal notranslate"><span class="pre">df()</span></code> method so that it accepts a dataframe with market data.</p>
 <p>Typically market data are: Open, High, Low, Close, Volume, AveragePrice, but it depends on which Streamers and Processor we’re using. Any data received via by <cite>onData</cite>, the class will wrap into  <a href="#id6"><span class="problematic" id="id7">:pandas:`DataFrame`</span></a> with collumn names corresponding to keys in <cite>data</cite> dictionary received by <cite>onData</cite> method. It’s up to the user to connect this object to objects that will supply it with all data required to generate signals`</p>
-<p><code class="xref py py-meth docutils literal notranslate"><span class="pre">df()</span></code> must return a <a href="#id8"><span class="problematic" id="id9">:pandas:`DataFrame`</span></a> with a column <cite>signal</cite> containing values: 1 for long position, 0 for no position and -1 for short position. It should also contain any other collumns as may be needed by other strategy components.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>         es_contract = ibi.ContFuture(&quot;ES&quot;, &quot;CME&quot;)
-
-
-:ib_insync.contracts:`ContFuture` contract is not tradeable, however it can be used in defining strategies, as the framework will replace it current on-the-run future contract, when this contract is close to expiration, it will be rolled into next contract. How and when it exactly happens can be customized, refer to other parts of documentation.
-
-
-.. code:: python
-
-
-          portfolio.FixedPortfolio(1)
+<p><code class="xref py py-meth docutils literal notranslate"><span class="pre">df()</span></code> must return a <a href="#id8"><span class="problematic" id="id9">:pandas:`DataFrame`</span></a> with a column <cite>signal</cite> containing values: 1 for long position, 0 for no position and -1 for short position. It should also contain any other columns as may be needed by other strategy components.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">&quot;ES&quot;</span><span class="p">,</span> <span class="s2">&quot;CME&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><a href="#id10"><span class="problematic" id="id11">:ib_insync.contracts:`ContFuture`</span></a> contract is not tradeable, however it can be used in defining strategies, as the framework will replace it current on-the-run future contract, when this contract is close to expiration, it will be rolled into next contract. How and when it exactly happens can be customized, refer to other parts of documentation.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">portfolio</span><span class="o">.</span><span class="n">FixedPortfolio</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Typically, way more logic would be used in <code class="xref py py-class docutils literal notranslate"><span class="pre">Portfolio</span></code> object, here we will just trade one contract whatever the circumstances. Don’t do that at home.</p>
@@ -527,7 +509,7 @@ take-profit orders when the original order is filled.</p>
     <span class="n">stop</span><span class="o">=</span><span class="n">bracket_legs</span><span class="o">.</span><span class="n">TrailingStop</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">vol_field</span><span class="o">=</span><span class="s2">&quot;atr&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>This particular implementation of <code class="xref py py-class docutils literal notranslate"><span class="pre">BaseExecModel</span></code> will send a <a href="#id10"><span class="problematic" id="id11">:ib_insync.order:`MarketOrder`</span></a> to the broker and when this order is filled will send a trailing stop order with a distance to openning price of 3xATR (‘atr’ column has to be present in the data passed from <code class="xref py py-class docutils literal notranslate"><span class="pre">Brick</span></code>).</p>
+<p>This particular implementation of <code class="xref py py-class docutils literal notranslate"><span class="pre">BaseExecModel</span></code> will send a <a href="#id12"><span class="problematic" id="id13">:ib_insync.order:`MarketOrder`</span></a> to the broker and when this order is filled will send a trailing stop order with a distance to openning price of 3xATR (‘atr’ column has to be present in the data passed from <code class="xref py py-class docutils literal notranslate"><span class="pre">Brick</span></code>).</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="n">app</span><span class="o">.</span><span class="n">App</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
 </pre></div>
