@@ -256,71 +256,86 @@
         <article role="main" id="furo-main-content">
           <section id="configuration">
 <h1>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">¶</a></h1>
-<p>Haymaker is highly configurable. Parameters can be set in order of priority:</p>
+<p>Haymaker is highly configurable. Parameters can be set in the following order of priority:</p>
 <ol class="arabic simple">
 <li><p>Command-line options (highest priority).</p></li>
 <li><p>System environment variables.</p></li>
 <li><p>User-provided configuration YAML file.</p></li>
-<li><p>Default configuration YAML file. (fall-back for all variables that have not been defined otherwise)</p></li>
+<li><p>Default configuration YAML file (fallback for undefined variables).</p></li>
 </ol>
 <section id="default-configuration-files">
 <h2>Default Configuration Files<a class="headerlink" href="#default-configuration-files" title="Link to this heading">¶</a></h2>
-<p>Sensible starting configuration, is defined in default configuration files located here:</p>
-<p>For Execution Module:
-<a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml</a></p>
-<p>For Dataloader Module:
-<a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml</a></p>
+<p>Sensible starting configurations are defined in default configuration files located here:</p>
+<ul class="simple">
+<li><p>For the Execution Module: <a href="#id1"><span class="problematic" id="id2">:source:`haymaker/config/base_config.yaml &lt;t1user/haymaker/blob/master/haymaker/config/base_config.yaml&gt;`</span></a></p></li>
+<li><p>For the Dataloader Module: <a href="#id3"><span class="problematic" id="id4">:source:`haymaker/config/dataloader_base_config.yaml &lt;t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml&gt;`</span></a></p></li>
+</ul>
 </section>
 <section id="user-provided-configuration-file">
-<h2>User-provided Configuration File<a class="headerlink" href="#user-provided-configuration-file" title="Link to this heading">¶</a></h2>
-<p>It’s easiest to create an override YAML file by making a copy of the default file and overriding the values as desired. <cite>Haymaker</cite> has to be pointed to the location of overriden config file. It can be done in one of two ways:</p>
+<h2>User-Provided Configuration File<a class="headerlink" href="#user-provided-configuration-file" title="Link to this heading">¶</a></h2>
+<p>The easiest way to create an override YAML file is to copy the default file and modify the desired values. Haymaker must be directed to the location of the overridden config file in one of two ways:</p>
 <ul class="simple">
-<li><p>from command line by passing <cite>–file</cite> or <cite>-f</cite> option</p></li>
-<li><p>via environment variable <cite>HAYMAKER_HAYMAKER_CONFIG_OVERRIDES</cite> or <cite>HAYMAKER_DATALOADER_CONFIG_OVERRIDES</cite> for execution and dataloader modules respectively</p></li>
+<li><p>From the command line using the <code class="docutils literal notranslate"><span class="pre">--file</span></code> or <code class="docutils literal notranslate"><span class="pre">-f</span></code> option.</p></li>
+<li><p>Via environment variables: <code class="docutils literal notranslate"><span class="pre">HAYMAKER_HAYMAKER_CONFIG_OVERRIDES</span></code> for the execution module or <code class="docutils literal notranslate"><span class="pre">HAYMAKER_DATALOADER_CONFIG_OVERRIDES</span></code> for the dataloader module.</p></li>
 </ul>
 </section>
 <section id="environment-variables">
 <h2>Environment Variables<a class="headerlink" href="#environment-variables" title="Link to this heading">¶</a></h2>
-<p>All <cite>Haymaker</cite>-related environment variables are prefixed with <cite>HAYMAKER_</cite>, this prefix will be chopped off, while reading env variables, it’s a way to indicate to the framework, which variables should be read, this will prevent <cite>Haymaker</cite> from loading unrelated variables into its config environement.</p>
-<p>Environment variable names are <strong>case insensitive</strong>.</p>
+<p>All Haymaker-related environment variables are prefixed with <code class="docutils literal notranslate"><span class="pre">HAYMAKER_</span></code>. This prefix is removed when reading the variables, signaling to the framework which variables to load into its configuration environment. This prevents Haymaker from importing unrelated variables.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>For nested variables, only top level can be overriden from CLI or environment. These are meant as a quick override, but in priciple the framework is configured via YAML file.</p>
+<p>Environment variable names are <strong>case-insensitive</strong>.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>For nested variables, only top-level settings can be overridden via CLI or environment variables. These are intended for quick overrides; the framework is primarily configured via YAML files.</p>
 </div>
 </section>
 <section id="overriding-defaults-examples">
 <h2>Overriding Defaults - Examples<a class="headerlink" href="#overriding-defaults-examples" title="Link to this heading">¶</a></h2>
-<p>To override defaults, copy a configuration file and modify desired parameters. Pass the location of new file to <code class="docutils literal notranslate"><span class="pre">Haymaker</span></code> via:</p>
-<ul class="simple">
-<li><p>Environment variable:</p></li>
-</ul>
+<p>To override defaults, copy a configuration file, modify the desired parameters, and pass the new file’s location to Haymaker via:</p>
+<ul>
+<li><p>Environment variable:</p>
+<div class="literal-block-wrapper docutils container" id="id8">
+<div class="code-block-caption"><span class="caption-text">Setting the config override via environment variable</span><a class="headerlink" href="#id8" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">HAYMAKER_HAYMAKER_CONFIG_OVERRIDES</span><span class="o">=</span>config.yaml
 </pre></div>
 </div>
-<ul class="simple">
-<li><p>Command-line argument:</p></li>
-</ul>
+</div>
+</li>
+<li><p>Command-line argument:</p>
+<div class="literal-block-wrapper docutils container" id="id9">
+<div class="code-block-caption"><span class="caption-text">Passing the config file via CLI</span><a class="headerlink" href="#id9" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>--file<span class="w"> </span>config.yaml
 </pre></div>
 </div>
+</div>
+</li>
+</ul>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Command-line arguments take priority over environment variables.</p>
+<p>Command-line arguments take precedence over environment variables.</p>
 </div>
 </section>
 <section id="passing-key-value-pairs-from-command-line">
 <h2>Passing Key-Value Pairs from Command Line<a class="headerlink" href="#passing-key-value-pairs-from-command-line" title="Link to this heading">¶</a></h2>
-<p>Use -s or –set-option to override parameters temporarily.For example, to specify a data source:</p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">-s</span></code> or <code class="docutils literal notranslate"><span class="pre">--set-option</span></code> to temporarily override parameters. For example, to specify a data source:</p>
+<div class="literal-block-wrapper docutils container" id="id10">
+<div class="code-block-caption"><span class="caption-text">Overriding a parameter via CLI</span><a class="headerlink" href="#id10" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>-s<span class="w"> </span><span class="nb">source</span><span class="w"> </span>my_list.csv
 </pre></div>
 </div>
-<p>Options availble through command line can be listed with:</p>
+</div>
+<p>Available command-line options can be listed with:</p>
+<div class="literal-block-wrapper docutils container" id="id11">
+<div class="code-block-caption"><span class="caption-text">Displaying help for CLI options</span><a class="headerlink" href="#id11" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>module_name<span class="w"> </span>--help
 </pre></div>
 </div>
+</div>
 <section id="cli-options">
-<h3>Cli Options<a class="headerlink" href="#cli-options" title="Link to this heading">¶</a></h3>
-<p>Assuming your strategy is in ‘you_module.py’, which imports <code class="xref py py-class docutils literal notranslate"><span class="pre">App</span></code> following options are availbel from command line.</p>
+<h3>CLI Options<a class="headerlink" href="#cli-options" title="Link to this heading">¶</a></h3>
+<p>Assuming your strategy is in <code class="docutils literal notranslate"><span class="pre">your_module.py</span></code> and imports <code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.app.App</span></code>, the following options are available from the command line:</p>
 <p><p>Primary way to set up appplication is through a yaml file, or environment variables. Command line options listed here overridethose default settings.</p>
 </p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">dataloader</span><span class="o">.</span><span class="n">py</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">ARG</span> <span class="n">ARG</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">r</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">z</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">c</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">n</span><span class="p">]</span> <span class="p">[</span><span class="n">source</span><span class="p">]</span>
@@ -363,23 +378,34 @@
 </section>
 <p><p>Defaults will be used for all unset parameters.</p>
 </p>
-<p>Examples:</p>
+<section id="examples">
+<h4>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h4>
+<div class="literal-block-wrapper docutils container" id="id12">
+<div class="code-block-caption"><span class="caption-text">Running a strategy with a config override</span><a class="headerlink" href="#id12" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>my_strategy.py<span class="w"> </span>-f<span class="w"> </span>config_overrides.yaml
 </pre></div>
 </div>
-<p>will run strategy defined in <code class="docutils literal notranslate"><span class="pre">my_strategy.py</span></code> with configuration overrides defined in file <code class="docutils literal notranslate"><span class="pre">config_overrides.yaml</span></code> in the current directory.</p>
+</div>
+<p>This runs the strategy defined in <code class="docutils literal notranslate"><span class="pre">my_strategy.py</span></code> with configuration overrides from <code class="docutils literal notranslate"><span class="pre">config_overrides.yaml</span></code> in the current directory.</p>
+<div class="literal-block-wrapper docutils container" id="id13">
+<div class="code-block-caption"><span class="caption-text">Triggering the emergency circuit breaker</span><a class="headerlink" href="#id13" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>my_strategy.py<span class="w"> </span>--nuke
 </pre></div>
 </div>
-<p>will run emergency circut breaker, which will close all open positions, cancel all resting orders and not open any new positions.</p>
+</div>
+<p>This activates the emergency circuit breaker, closing all open positions, canceling resting orders, and preventing new positions.</p>
+<div class="literal-block-wrapper docutils container" id="id14">
+<div class="code-block-caption"><span class="caption-text">Changing the log location</span><a class="headerlink" href="#id14" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>my_strategy.py<span class="w"> </span>-s<span class="w"> </span>logging_path<span class="w"> </span>/path/to/log
 </pre></div>
 </div>
-<p>will change location of logs to <code class="docutils literal notranslate"><span class="pre">/path/to/log</span></code>.</p>
+</div>
+<p>This changes the log location to <code class="docutils literal notranslate"><span class="pre">/path/to/log</span></code>.</p>
+</section>
 </section>
 <section id="dataloader-cli-options">
-<h3>Dataloader Cli Options<a class="headerlink" href="#dataloader-cli-options" title="Link to this heading">¶</a></h3>
-<p>Dataloader options are different than for other modules.</p>
+<h3>Dataloader CLI Options<a class="headerlink" href="#dataloader-cli-options" title="Link to this heading">¶</a></h3>
+<p>Dataloader options differ from those of other modules:</p>
 <p><p>Primary way to set up appplication is through a yaml file, or environment variables. Command line options listed here overridethose default settings.</p>
 </p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">dataloader</span><span class="o">.</span><span class="n">py</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">ARG</span> <span class="n">ARG</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">g</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">w</span><span class="p">]</span> <span class="p">[</span><span class="n">source</span><span class="p">]</span>
@@ -414,15 +440,23 @@
 </section>
 <p><p>Defaults will be used for all unset parameters.</p>
 </p>
-<p>Examples:</p>
+<section id="id5">
+<h4>Examples<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
+<div class="literal-block-wrapper docutils container" id="id15">
+<div class="code-block-caption"><span class="caption-text">Collecting historical data from a CSV</span><a class="headerlink" href="#id15" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>my_list.csv
 </pre></div>
 </div>
-<p>will run dataloader to collect historical data for contracts defined in <code class="docutils literal notranslate"><span class="pre">my_list.csv</span></code>.</p>
+</div>
+<p>This runs the dataloader to collect historical data for contracts defined in <code class="docutils literal notranslate"><span class="pre">my_list.csv</span></code>.</p>
+<div class="literal-block-wrapper docutils container" id="id16">
+<div class="code-block-caption"><span class="caption-text">Running dataloader with a custom settings file</span><a class="headerlink" href="#id16" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>-f<span class="w"> </span>settings.yaml
 </pre></div>
 </div>
-<p>will run dataloader with settings defined in <code class="docutils literal notranslate"><span class="pre">settings.yaml</span></code> file in the current directory, this file should be a copy of <a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml">this</a> with desired changes indicating source file with defined contracts, type of data, frequency, etc.</p>
+</div>
+<p>This runs the dataloader with settings from <code class="docutils literal notranslate"><span class="pre">settings.yaml</span></code> in the current directory. This file should be a modified copy of <a href="#id6"><span class="problematic" id="id7">:source:`haymaker/config/dataloader_base_config.yaml &lt;t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml&gt;`</span></a>, specifying the source file with defined contracts, data type, frequency, etc.</p>
+</section>
 </section>
 </section>
 </section>
@@ -484,18 +518,20 @@
             <ul>
 <li><a class="reference internal" href="#">Configuration</a><ul>
 <li><a class="reference internal" href="#default-configuration-files">Default Configuration Files</a></li>
-<li><a class="reference internal" href="#user-provided-configuration-file">User-provided Configuration File</a></li>
+<li><a class="reference internal" href="#user-provided-configuration-file">User-Provided Configuration File</a></li>
 <li><a class="reference internal" href="#environment-variables">Environment Variables</a></li>
 <li><a class="reference internal" href="#overriding-defaults-examples">Overriding Defaults - Examples</a></li>
 <li><a class="reference internal" href="#passing-key-value-pairs-from-command-line">Passing Key-Value Pairs from Command Line</a><ul>
-<li><a class="reference internal" href="#cli-options">Cli Options</a><ul>
+<li><a class="reference internal" href="#cli-options">CLI Options</a><ul>
 <li><a class="reference internal" href="#haymaker.config.cli_options-get_parser_for_other_module-positional-arguments">Positional Arguments</a></li>
 <li><a class="reference internal" href="#haymaker.config.cli_options-get_parser_for_other_module-named-arguments">Named Arguments</a></li>
+<li><a class="reference internal" href="#examples">Examples</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#dataloader-cli-options">Dataloader Cli Options</a><ul>
+<li><a class="reference internal" href="#dataloader-cli-options">Dataloader CLI Options</a><ul>
 <li><a class="reference internal" href="#haymaker.config.cli_options-get_parser_for_dataloader-positional-arguments">Positional Arguments</a></li>
 <li><a class="reference internal" href="#haymaker.config.cli_options-get_parser_for_dataloader-named-arguments">Named Arguments</a></li>
+<li><a class="reference internal" href="#id5">Examples</a></li>
 </ul>
 </li>
 </ul>

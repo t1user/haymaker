@@ -256,27 +256,50 @@
         <article role="main" id="furo-main-content">
           <section id="logging">
 <h1>Logging<a class="headerlink" href="#logging" title="Link to this heading">¶</a></h1>
-<p>All logging is done asyncronously in a separate thread, you don’t have to worry about logging operations blocking for too long and itnerfering with other actions.</p>
-<p>On top of standard python logging levels, <cite>Haymaker</cite> defines two new levels:
-* <cite>DATA</cite> with value 5 - very detailed information, below <cite>DEBUG</cite> level, typically passing actual market data for low level debugging
-* <cite>NOTIFY</cite> with value 60 - above <cite>CRITICAL</cite> - tipically used for sending live notifications to the administrator, who is concerned only with strategy performance and not techical aspects of running the framework</p>
-<p>Those new levels are not use by the framework itself. They can be used by strategy creators to send information about non-technical aspects of their strategy performance.</p>
-<p>Logging configuration can be changed by defining <a class="reference external" href="https://docs.python.org/3/library/logging.config.html#configuration-file-format">logging configuration</a> in YAML format and pointing the framework to the location of this file by setting <cite>logging_config</cite> config variable (absolute path should be given).</p>
-<p>Location of actual logs (if logging to file), can be set by changing value of <cite>logging_path</cite> config variable (this is the folder inside the folder defined by <cite>data_folder</cite> config variable, if the folder doesn’t exist, it will be created).</p>
+<p>All logging in Haymaker is performed asynchronously in a separate thread, ensuring that logging operations do not block or interfere with other actions.</p>
+<section id="custom-logging-levels">
+<h2>Custom Logging Levels<a class="headerlink" href="#custom-logging-levels" title="Link to this heading">¶</a></h2>
+<p>In addition to standard Python logging levels, Haymaker defines two custom levels:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">DATA</span></code> (value 5): Very detailed information below the <code class="docutils literal notranslate"><span class="pre">DEBUG</span></code> level, typically used to log actual market data for low-level debugging.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">NOTIFY</span></code> (value 60): Above the <code class="docutils literal notranslate"><span class="pre">CRITICAL</span></code> level, typically used to send live notifications to administrators focused on strategy performance rather than technical details.</p></li>
+</ul>
+<p>These levels are not used by the framework itself but are available for strategy creators to log non-technical performance information.</p>
+</section>
+<section id="logging-configuration">
+<h2>Logging Configuration<a class="headerlink" href="#logging-configuration" title="Link to this heading">¶</a></h2>
+<p>You can customize logging by defining a <a class="reference external" href="https://docs.python.org/3/library/logging.config.html#configuration-file-format">logging configuration</a> in YAML format. Point Haymaker to this file by setting the <code class="docutils literal notranslate"><span class="pre">logging_config</span></code> configuration variable to its absolute path. This can be done via:</p>
+<ul class="simple">
+<li><p>A YAML configuration file (e.g., under <code class="docutils literal notranslate"><span class="pre">logging_config</span></code>).</p></li>
+<li><p>Command-line option (e.g., <code class="docutils literal notranslate"><span class="pre">-s</span> <span class="pre">logging_config</span> <span class="pre">/path/to/config.yaml</span></code>).</p></li>
+<li><p>Environment variable (e.g., <code class="docutils literal notranslate"><span class="pre">HAYMAKER_LOGGING_CONFIG=/path/to/config.yaml</span></code>).</p></li>
+</ul>
+<p>The log file location (when logging to a file) is set with the <code class="docutils literal notranslate"><span class="pre">logging_path</span></code> configuration variable. This specifies a subdirectory within the folder defined by the <code class="docutils literal notranslate"><span class="pre">data_folder</span></code> variable. If the subdirectory doesn’t exist, Haymaker creates it.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Both <code class="docutils literal notranslate"><span class="pre">logging_config</span></code> and <code class="docutils literal notranslate"><span class="pre">logging_path</span></code> can be set in your configuration YAML file, via CLI with <code class="docutils literal notranslate"><span class="pre">-s</span></code>, or as environment variables prefixed with <code class="docutils literal notranslate"><span class="pre">HAYMAKER_</span></code>.</p>
+</div>
+</section>
 <section id="execution-module">
 <h2>Execution Module<a class="headerlink" href="#execution-module" title="Link to this heading">¶</a></h2>
-<p>By default <cite>Haymaker</cite> creates three loggers:
-* haymaker - general messages related to the framework
-* strategy - logger tracking signals generated by strategies, in default implementation <code class="xref py py-class docutils literal notranslate"><span class="pre">Brick</span></code> logs out all data sent via <cite>dataEvent</cite>
-* broker - capture of all <a href="#id1"><span class="problematic" id="id2">:ib_insync.ib:`IB`</span></a> events with broker messages</p>
-<p>Logging config can be changed by coping default config file and overriding it as required. The file is located here:</p>
-<p><a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml</a></p>
+<p>By default, the Execution Module creates three loggers:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">haymaker</span></code>: General messages related to the framework.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">strategy</span></code>: Tracks signals generated by strategies. The default <a class="reference internal" href="execution.html#haymaker.brick.AbstractBaseBrick" title="haymaker.brick.AbstractBaseBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractBaseBrick</span></code></a> implementation logs all data sent via <code class="docutils literal notranslate"><span class="pre">dataEvent</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">broker</span></code>: Captures all <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.ib.IB" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.ib.IB</span></code></a> events with broker messages.</p></li>
+</ul>
+<p>To customize logging, copy the default configuration file and override it as needed. The default file is located at:</p>
+<ul class="simple">
+<li><p><a href="#id2"><span class="problematic" id="id3">:source:`haymaker/logging/logging_config.yaml &lt;t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml&gt;`</span></a></p></li>
+</ul>
 </section>
 <section id="dataloader-module">
 <h2>Dataloader Module<a class="headerlink" href="#dataloader-module" title="Link to this heading">¶</a></h2>
-<p>Just one logger is created, that logs to stream and file.</p>
-<p>Logging config can be changed by coping default config file and overriding it as required. The file is located here:</p>
-<p><a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/logging/dataloader_logging_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/logging/dataloader_logging_config.yaml</a></p>
+<p>The Dataloader Module creates a single logger that outputs to both stream and file.</p>
+<p>To customize logging, copy the default configuration file and override it as needed. The default file is located at:</p>
+<ul class="simple">
+<li><p><a href="#id4"><span class="problematic" id="id5">:source:`haymaker/logging/dataloader_logging_config.yaml &lt;t1user/haymaker/blob/master/haymaker/logging/dataloader_logging_config.yaml&gt;`</span></a></p></li>
+</ul>
 </section>
 </section>
 
@@ -336,6 +359,8 @@
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Logging</a><ul>
+<li><a class="reference internal" href="#custom-logging-levels">Custom Logging Levels</a></li>
+<li><a class="reference internal" href="#logging-configuration">Logging Configuration</a></li>
 <li><a class="reference internal" href="#execution-module">Execution Module</a></li>
 <li><a class="reference internal" href="#dataloader-module">Dataloader Module</a></li>
 </ul>
