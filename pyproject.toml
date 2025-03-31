@@ -17,6 +17,7 @@ dependencies = [
   "arctic @ git+https://github.com/man-group/arctic.git",
   "ib_insync",
   "pandas",
+  "pandas-market-calendars"
   "numba",
   "pyyaml",
 ]
