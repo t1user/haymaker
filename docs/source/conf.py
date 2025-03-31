@@ -27,7 +27,7 @@ extensions = [
     "sphinx.ext.intersphinx",  # Refer to other projects docs
     "sphinxarg.ext",  # Support for argparse
     "sphinx.ext.autosectionlabel",  # Refer to sections using their title
-    "sphinx_argparse",  # Support for argparse
+    "sphinxarg.ext",  # Support for argparse
 ]
 
 templates_path = ["_templates"]
