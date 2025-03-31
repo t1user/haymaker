@@ -1,6 +1,6 @@
-****************
+***************
 Execution Module
-****************
+***************
 
 .. toctree::
     :maxdepth: 3
@@ -10,196 +10,188 @@ Haymaker trading algorithms consist of a series of Atom components, each impleme
 Common trading steps include:
 
 * Receiving price data.
-
-* Processing/aggregating/filtering data.
-
+* Processing, aggregating, or filtering data.
 * Generating trading signals.
+* Managing the portfolio.
+* Controlling risk.
+* Managing execution.
 
-* Portfolio management.
+Each processing component (called an "Atom") inherits from :class:`haymaker.base.Atom`.
 
-* Risk control.
-
-* Execution management.
-
-Each processing component (which is called: Atom) inherits from :class:`haymaker.base.Atom` .
-
-Atom Object 
+Atom Object
 ===========
 
-.. autoclass:: haymaker.base::Atom
+.. autoclass:: haymaker.base.Atom
     :members:
-
 
 Auxiliary Objects
 -----------------
 
-.. autoclass:: haymaker.base::Pipe
+.. autoclass:: haymaker.base.Pipe
     :members:
 
-
-.. autoclass:: haymaker.base::Details
+.. autoclass:: haymaker.base.Details
     :members:
-
 
 Strategy Building Components
 ============================
 
-Building on :class:`Atom` `Haymaker` offers skeletons of several components addressing typical requirements in building trading strategies:
+Building on :class:`haymaker.base.Atom`, Haymaker offers skeletons of several components addressing typical requirements in building trading strategies:
 
-* Streamer - it's a connection to the broker that pipes market data
-* Aggregator - component for custom aggregation or processing of market data required before they are used to generate signals
-* Brick - trading signal generating component; this is what strategies are built with (like houses are built with bricks; if you have an idea for a better name let me know by email :)
-* Signal Processor - not all signals must be used to generate orders; sometimes signals need filtering or further processing, this is what `Signal Processor` is for; it has access to information about state of strategies and potentially to any other auxiliary data required to determine whether signals should be acted on 
-* Portfolio - whereaus all other comonents are meant to be created separately for every strategy/instrument, portfolio is a global object that receives all processed signals and translates them into allocations, i.e. actual amounts of instruments to be trades; `Portfolio` typically uses data such as current account value, current holdings, instrument volatility, risk targets, concentration limits, predetermined instrument weights and possibly many others
-* Execution Model - given target instrument amount, issue actual order (or orders) that can be passed to broker
+* **Streamer**: Connects to the broker and pipes market data.
+* **Aggregator**: Custom aggregation or processing of market data before signal generation.
+* **Brick**: Generates trading signals; this is the core building block of strategies (like bricks in a house).
 
-Below is a review how to use pre-built component modules:
+  .. note:: If you have an idea for a better name, email me! :)
+
+* **Signal Processor**: Filters or processes signals based on strategy state or auxiliary data, determining whether signals should trigger orders.
+* **Portfolio**: A global object that receives processed signals and translates them into allocations (e.g., amounts of instruments to trade). It uses data like account value, holdings, volatility, risk targets, and concentration limits.
+* **Execution Model**: Issues actual broker orders based on target instrument amounts.
+
+Below is a review of how to use pre-built component modules:
 
 Streamer
 --------
-There are objects corresponding to all `ib_insync` market data subsriptions, i.e.
 
+Haymaker provides streamers corresponding to all `ib_insync` market data subscriptions:
 
-   =========================     =========================
-   ib_insync                     streamer
-   =========================     =========================
-   reqHistoricalDataAsync        HistoricalDataStreamer
-   reqMktData                    MktDataStreamer
-   reqRealTimeBars               RealTimeBarsStreamer
-   reqTickByTickData             TickByTickStreamer
-   =========================     =========================
+   +---------------------------+--------------------------+
+   | ib_insync Method          | Streamer                 |
+   +===========================+==========================+
+   | reqHistoricalDataAsync    | HistoricalDataStreamer   |
+   +---------------------------+--------------------------+
+   | reqMktData                | MktDataStreamer          |
+   +---------------------------+--------------------------+
+   | reqRealTimeBars           | RealTimeBarsStreamer     |
+   +---------------------------+--------------------------+
+   | reqTickByTickData         | TickByTickStreamer       |
+   +---------------------------+--------------------------+
 
-All streamers extend :class:`Streamer`
+All streamers extend :class:`haymaker.streamers.Streamer`.
 
-.. autoclass:: haymaker.streamers::Streamer
+.. autoclass:: haymaker.streamers.Streamer
    :members:
 
-       
 Implementations
+^^^^^^^^^^^^^^^
 
-Every implementation accepts the same arguments as respective `ib_insync` method, which it wraps plus standard :class:`Streamer` parameters.
+Every implementation accepts the same arguments as the respective `ib_insync` method it wraps, plus standard :class:`haymaker.streamers.Streamer` parameters.
 
-.. autoclass:: haymaker.streamers::HistoricalDataStreamer
+.. autoclass:: haymaker.streamers.HistoricalDataStreamer
    :members:
 
-.. autoclass:: haymaker.streamers::MktDataStreamer
+.. autoclass:: haymaker.streamers.MktDataStreamer
    :members:
 
-.. autoclass:: haymaker.streamers::RealTimeBarsStreamer
+.. autoclass:: haymaker.streamers.RealTimeBarsStreamer
    :members:
 
-.. autoclass:: haymaker.streamers::TickByTickStreamer
+.. autoclass:: haymaker.streamers.TickByTickStreamer
    :members:
 
-      
-
-       
 Aggregator
 ----------
 
-.. autoclass:: haymaker.aggregators::BarAggregator
+.. autoclass:: haymaker.aggregators.BarAggregator
    :members:
 
 Available Filters
 ^^^^^^^^^^^^^^^^^
-.. autoclass:: haymaker.aggregators::CountBars
-   :members:
-      
-.. autoclass:: haymaker.aggregators::VolumeBars
-   :members:
-      
-.. autoclass:: haymaker.aggregators::TickBars
-   :members:
-      
-.. autoclass:: haymaker.aggregators::TimeBars
+
+.. autoclass:: haymaker.aggregators.CountBars
    :members:
 
-.. autoclass:: haymaker.aggregators::NoFilter
+.. autoclass:: haymaker.aggregators.VolumeBars
    :members:
 
+.. autoclass:: haymaker.aggregators.TickBars
+   :members:
 
+.. autoclass:: haymaker.aggregators.TimeBars
+   :members:
+
+.. autoclass:: haymaker.aggregators.NoFilter
+   :members:
 
 Brick
 -----
 
-.. autoclass:: haymaker.brick::AbstractBaseBrick
+.. autoclass:: haymaker.brick.AbstractBaseBrick
    :members:
 
 Implementations
+^^^^^^^^^^^^^^^
 
-.. autoclass:: haymaker.brick::AbstractDfBrick
+.. autoclass:: haymaker.brick.AbstractDfBrick
    :members:
 
-Override :meth:`df` while creating a concrete `DfBrick`
-      
+Override :meth:`haymaker.brick.AbstractDfBrick.df` when creating a concrete `AbstractDfBrick`.
 
 Signal Processor
 ----------------
-In order to better separate concerns, it might be useful to filter signals recevied from :class:`Brick` based on the state of the strategy, e.g. don't use repeated signals in the same direction or don't re-enter the same signal if the last one was stopped out. Of course it could be done directly in :class:`Brick`, but that may require frequently adding the same code to many Bricks. It's more modular to use :class:`SignalProcessor`.
 
-Available processors are meant for binary signals - those that act on/off switches, if you have a discrete signal, where a number say in the range 0...10, signifies how strong the signal is, available implementations are not appropriate, but you're of course free to develop your own.
+To better separate concerns, filter signals received from :class:`haymaker.brick.AbstractBaseBrick` based on strategy state (e.g., avoid repeated signals or re-entering after a stop-out). While this could be done in :class:`haymaker.brick.AbstractBaseBrick`, using a :class:`haymaker.signals.BinarySignalProcessor` is more modular.
 
-It's easies to create a binary signal processor by implementing :class:`AbstractBaseBinarySignalProcessor`
+Available processors are designed for binary signals (on/off switches). For discrete signals (e.g., 0–10 strength), these implementations aren’t suitable, but you can develop custom ones.
 
-.. autoclass:: haymaker.signals::AbstractBaseBinarySignalProcessor
+It’s easiest to create a binary signal processor by implementing :class:`haymaker.signals.AbstractBaseBinarySignalProcessor`.
+
+.. autoclass:: haymaker.signals.AbstractBaseBinarySignalProcessor
    :members:
 
 Implementations
+^^^^^^^^^^^^^^^
 
-.. autoclass:: haymaker.signals::BinarySignalProcessor
+.. autoclass:: haymaker.signals.BinarySignalProcessor
    :members:
 
-
-.. autoclass:: haymaker.signals::LockableBinarySignalProcessor
+.. autoclass:: haymaker.signals.LockableBinarySignalProcessor
    :members:
 
-      
-.. autoclass:: haymaker.signals::LockableBlipBinarySignalProcessor
+.. autoclass:: haymaker.signals.LockableBlipBinarySignalProcessor
    :members:
 
-
-.. autoclass:: haymaker.signals::AlwaysOnLockableBinarySignalProcessor
+.. autoclass:: haymaker.signals.AlwaysOnLockableBinarySignalProcessor
    :members:
 
-
-.. autoclass:: haymaker.signals::AlwaysOnBinarySignalProcessor
+.. autoclass:: haymaker.signals.AlwaysOnBinarySignalProcessor
    :members:
-
 
 Factory Function
 ^^^^^^^^^^^^^^^^
-.. autofunction:: haymaker.signals.binary_signal_processor_factory
 
-          
+.. autofunction:: haymaker.signals.binary_signal_processor_factory
 
 Portfolio
 ---------
 
-.. autoclass:: haymaker.portfolio::AbstractBasePortfolio
+.. autoclass:: haymaker.portfolio.AbstractBasePortfolio
    :members:
 
 Implementations
+^^^^^^^^^^^^^^^
 
-.. autoclass:: haymaker.portfolio::FixedPortfolio
+.. autoclass:: haymaker.portfolio.FixedPortfolio
    :members:
 
 Wrapper
 ^^^^^^^
 
-.. autoclass:: haymaker.portfolio::PortfolioWrapper
+.. autoclass:: haymaker.portfolio.PortfolioWrapper
    :members:
 
-An instance of `Portoflio` should never be directly included in a processing pipeline, because by it's nature, there should be only one portfolio for all strategies. Instead, you should include and instace of :class:`PortfolioWrapper` in a pipeline, and as long as there exists an instance of `Portfolio` in your package, :class:`PortfolioWrapper` will ensure that it's connected.
+An instance of :class:`haymaker.portfolio.AbstractBasePortfolio` should never be directly included in a processing pipeline, as there should be only one portfolio for all strategies. Instead, include an instance of :class:`haymaker.portfolio.PortfolioWrapper` in a pipeline. As long as an instance of :class:`haymaker.portfolio.AbstractBasePortfolio` exists in your package, :class:`haymaker.portfolio.PortfolioWrapper` ensures it’s connected.
 
 Execution Model
 ---------------
-It's easiest to create an execution model by extending :class:`AbstractExecModel`
+
+It’s easiest to create an execution model by extending :class:`haymaker.execution_models.AbstractExecModel`.
 
 .. autoclass:: haymaker.execution_models.AbstractExecModel
    :members:
 
-:class:`AbastractExecModel` Implementations
-
+Implementations
+^^^^^^^^^^^^^^^
 
 .. autoclass:: haymaker.execution_models.BaseExecModel
    :members:
@@ -209,10 +201,6 @@ It's easiest to create an execution model by extending :class:`AbstractExecModel
    :members:
    :show-inheritance:
 
-This model will automatically place stop-loss orders and potentially
-take-profit orders when the original order is filled.
+This model automatically places stop-loss orders (and potentially take-profit orders) when the original order is filled.
 
-      
 .. include:: example.rst
-
-

@@ -1,33 +1,51 @@
-************
 Installation
-************
+============
 
-Create and activate a virtual environment, then install Haymaker:
+To install Haymaker, it’s recommended to use a virtual environment to isolate dependencies. Ensure you have Python (version 3.11 or later recommended) and ``git`` installed on your system.
 
-.. code-block:: bash
-
-    git clone https://github.com/t1user/haymaker.git
-    cd haymaker
-    pip install .
-
-Optional installations:
-
-Include Jupyter environment for research:
+Follow these steps to clone and install Haymaker:
 
 .. code-block:: bash
+   :caption: Cloning and installing Haymaker
 
-    pip install .[notebooks]
+   git clone https://github.com/t1user/haymaker.git
+   cd haymaker
+   python -m venv venv  # Create a virtual environment
+   source venv/bin/activate  # Activate on Unix/macOS
+   # venv\Scripts\activate  # Activate on Windows
+   pip install .
 
-Include development tools (linter, type checker, tests):
+Optional Dependencies
+---------------------
 
-.. code-block:: bash
+Haymaker supports additional features through optional dependency groups. Install them as needed:
 
-    pip install .[dev]
+- **Jupyter Environment for Research**:
 
-Install everything:
+  .. code-block:: bash
+     :caption: Installing with Jupyter support
 
-.. code-block:: bash
+     pip install .[notebooks]
 
-    pip install .[all]
+  This includes tools like Jupyter notebooks for strategy research and analysis.
 
+- **Development Tools**:
 
+  .. code-block:: bash
+     :caption: Installing with development tools
+
+     pip install .[dev]
+
+  This includes linters, type checkers, and testing frameworks for development.
+
+- **All Features**:
+
+  .. code-block:: bash
+     :caption: Installing all optional dependencies
+
+     pip install .[all]
+
+  This installs all optional dependencies (notebooks and development tools).
+
+.. note::
+   Activate the virtual environment before running Haymaker commands or scripts. Deactivate it with ``deactivate`` when done.
