@@ -15,7 +15,6 @@ from typing import (
     Optional,
     Self,
     Sequence,
-    TypeVar,
     cast,
 )
 
@@ -31,8 +30,6 @@ log = logging.getLogger(__name__)
 
 
 ContractOrSequence = Sequence[ibi.Contract] | ibi.Contract
-
-T = TypeVar("T", ibi.Contract, None)
 
 
 class ContractManagingDescriptor:
@@ -198,7 +195,7 @@ class Atom:
     Connecting ``Atoms`` creates a processing pipeline.
 
     ``Atoms`` in a pipeline communicate with each other in an event-driven manner
-    through three methods: :meth:`onStart``, :meth:`onData`, :meth:`onFeedback`.
+    through three methods: :meth:`onStart`, :meth:`onData`, :meth:`onFeedback`.
     Those methods are called when appropriate :class:`eventkit.event.Event` objects are
     emitted (respectively :attr:`startEvent`, :attr:`dataEvent`, :attr:`feedbackEvent`),
     and emit their own events when they are done processing thus sending a signal to
