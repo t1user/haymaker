@@ -41,6 +41,7 @@ class BarAggregator(Atom):
             startup = data.get("startup")
             # prevent logging messages during startup phase
             if startup and not self._debug:
+                log.debug(f"Startup: {self}")
                 log.setLevel(logging.ERROR)
             else:
                 log.setLevel(self._log_level)

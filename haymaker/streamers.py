@@ -281,7 +281,7 @@ class HistoricalDataStreamer(Streamer):
         # this will switch processor into backfill mode
         self.startEvent.emit({"startup": True})
         # release control to allow for adjustments down the chain
-        await asyncio.sleep(0)
+        # await asyncio.sleep(0)
         log.debug(
             f"Starting backfill {self.name}, pulled {len(bars)} bars, "
             f"last bar: {bars[-1]}"
@@ -297,6 +297,7 @@ class HistoricalDataStreamer(Streamer):
                 f"{self!s} data requires roll adjustment "
                 f"last bar: {self._last_bar_date}"
             )
+            self.startEvent.emit({"_future_adjust_flag": True})
             stream = (
                 ev.Sequence(bars[:-1])
                 .pipe(
@@ -381,7 +382,6 @@ class HistoricalDataStreamer(Streamer):
             if old_contract not in self._adjusted:
                 log.warning(f"{self!s} set to adjust future")
                 self._future_adjust_flag = True
-                self.startEvent.emit({"_future_adjust_flag": True})
                 self._adjusted.append(old_contract)
             else:
                 log.warning(
