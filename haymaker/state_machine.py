@@ -492,7 +492,7 @@ class StateMachine:
 
         total = position + orders
         if orders:
-            log.warning(
+            log.debug(
                 f"Processing signals with pending orders, strategy: {strategy_str}, "
                 f"position: {position}, pending orders: {orders}, total: {total}"
             )
