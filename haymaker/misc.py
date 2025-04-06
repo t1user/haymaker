@@ -5,6 +5,7 @@ import itertools
 import random
 import string
 from collections import UserDict
+from dataclasses import asdict, fields
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -335,3 +336,18 @@ def async_cached_property(func):
     subsequent calls return the cached value.
     """
     return AsyncCachedProperty(func)
+
+
+def contractAsTuple(contract: ibi.Contract) -> tuple:
+
+    if not isinstance(contract, ibi.Contract):
+        raise TypeError(f"Object {contract} is not a `Contract`")
+    return tuple(
+        (field.name, getattr(contract, field.name))
+        for field in fields(contract)
+        if field.name != "comboLegs"
+    )
+
+
+def hash_contract(contract: ibi.Contract) -> int:
+    return hash(contractAsTuple(contract))

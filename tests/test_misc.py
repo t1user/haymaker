@@ -2,9 +2,18 @@ from datetime import datetime, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+import ib_insync as ibi
 import pytest
 
-from haymaker.misc import Counter, is_active, next_active, process_trading_hours, sign
+from haymaker.misc import (
+    Counter,
+    contractAsTuple,
+    hash_contract,
+    is_active,
+    next_active,
+    process_trading_hours,
+    sign,
+)
 
 
 def test_Counter():
@@ -122,3 +131,30 @@ def test_next_active(
     assert next_active(hours, now=now) == datetime(
         *result, tzinfo=ZoneInfo("US/Central")
     )
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [
+        ibi.Stock,
+        ibi.Option,
+        ibi.Future,
+        ibi.ContFuture,
+        ibi.Index,
+        ibi.CFD,
+        ibi.Bond,
+        ibi.Commodity,
+        ibi.FuturesOption,
+        ibi.MutualFund,
+        ibi.Warrant,
+        ibi.Crypto,
+    ],
+)
+def test_contractAsTuple_works_for_every_contract_type_except_for_bag(contract):
+    tuples = contractAsTuple(contract())
+    assert isinstance(tuples, tuple)
+    assert isinstance(tuples[0], tuple)
+
+
+def test_hash_contract():
+    assert isinstance(hash_contract(ibi.ContFuture("NQ", "CME")), int)

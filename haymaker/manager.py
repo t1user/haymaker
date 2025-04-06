@@ -3,14 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field
-from typing import Final, cast
+from dataclasses import dataclass, field
+from typing import Final, Self
 
 import ib_insync as ibi
 
 from .base import Atom, DetailsContainer
 from .config import CONFIG
 from .controller import Controller
+from .futures import selector_factory
 from .state_machine import StateMachine
 from .streamers import Streamer
 from .trader import Trader
@@ -25,108 +26,45 @@ class NotConnectedError(Exception):
 @dataclass
 class InitData:
     ib: ibi.IB
-    contract_list: list[ibi.Contract]
+    contract_dict: dict[int, ibi.Contract]
     contract_details: DetailsContainer
-    _master_contfuture_dict: dict[int, dict[str, str]] = field(
-        init=False, repr=False, default_factory=dict
-    )
-    _futures: set[ibi.Future] = field(init=False, repr=False, default_factory=set)
+    _contracts: dict[int, ibi.Contract] = field(init=False, repr=False)
 
-    def _build_contfuture_list(self) -> None:
-        log.debug("building contfuture list...")
-        self._master_contfuture_dict = {
-            id(contract): ibi.util.dataclassNonDefaults(contract)
-            for contract in self.contract_list
-            if isinstance(contract, ibi.ContFuture)
-        }
-        log.debug(f"{self._master_contfuture_dict=}")
+    def __post_init__(self):
+        self._contracts = self.contract_dict.copy()
 
-    async def __call__(self) -> "InitData":
-        log.debug(f"Number of contracts: {len(self.contract_list)}")
-        if not self._master_contfuture_dict:
-            self._build_contfuture_list()
-        try:
-            self.replace_contfutures()
-            await self.qualify_contracts()
-            await self.acquire_contract_details()
-        except Exception as e:
-            log.exception(e)
-            # raise
+    async def __call__(self) -> Self:
+        log.debug(f"Number of contracts: {len(self._contracts)}")
+        details = await self.acquire_contract_details(list(self._contracts.values()))
+        selectors = (selector_factory(details_list) for details_list in details)
+
+        for contract_hash, selector in zip(self.contract_dict, selectors):
+            self.contract_details[selector.active_contract] = selector.active_details
+            self.contract_details[selector.next_contract] = selector.next_details
+            self.contract_dict[contract_hash] = selector.next_contract
         return self
 
-    def replace_contfutures(self) -> "InitData":
-        # "reset" ContFuture to make IB check what the current contract is
-        default_contfuture_kwargs = asdict(ibi.ContFuture())
-        for c in self.contract_list:
-            if isinstance(c, ibi.ContFuture) and c.conId != 0:
-                # modify contract 'in place' making sure it stays the same object
-                non_defaults = self._master_contfuture_dict[id(c)]
-                c.__dict__.update(**default_contfuture_kwargs)
-                c.__dict__.update(**non_defaults)
-                log.debug(f"ContFuture reset: {c}")
-        return self
+    async def acquire_contract_details(
+        self, contracts: list[ibi.Contract]
+    ) -> list[list[ibi.ContractDetails]]:
 
-    async def qualify_contracts(self) -> "InitData":
-        while not all([f.conId != 0 for f in self.contract_list]):
+        details: list[list[ibi.ContractDetails]] = []
+
+        while not (len(details) == len(contracts)):
             if not self.ib.isConnected():
-                log.error(
-                    "Will not qualify contracts, no connection. Waiting for restart..."
-                )
+                log.error("No connection, no contract details. Waiting for restart...")
                 raise NotConnectedError()
-                break
-            log.debug("Will attempt to qualify contracts...")
-            await self.ib.qualifyContractsAsync(*self.contract_list)
-            log.debug(f"{len(self.contract_list)} Contract objects qualified")
-            # for every ContFuture add regular Future object, that will be actually
-            # used by Atoms
-            futures_for_cont_futures = [
-                ibi.Future(conId=c.conId)
-                for c in self.contract_list
-                if isinstance(c, ibi.ContFuture)
-            ]
-            await self.ib.qualifyContractsAsync(*futures_for_cont_futures)
 
-            dropped_futures = self._futures - set(futures_for_cont_futures)
-            new_futures = set(futures_for_cont_futures) - self._futures
-            if new_futures and dropped_futures:
-                log.warning(
-                    f"Dropping futures: "
-                    f"{[(f.localSymbol, type(f)) for f in dropped_futures]} "
-                    f"{len(new_futures)} new future objects found."
-                )
-            self.contract_list.extend(list(new_futures))
-            for f in dropped_futures:
-                # TODO: check why f might be more than once in the list
-                while f in self.contract_list:
-                    log.debug(f"removing from contract list: {f}")
-                    self.contract_list.remove(f)
-            self._futures = set(futures_for_cont_futures)
-
-            contract_string = ", ".join(
-                (f"{c.__class__.__name__}({c.localSymbol})" for c in self.contract_list)
-            )
-            log.debug(f"All qualified contracts: {contract_string}")
-
-        return self
-
-    async def acquire_contract_details(self) -> "InitData":
-        for contract in set(self.contract_list):
-            log.debug(
-                f"Acquiring details for: {contract.__class__.__name__}"
-                f"(symbol={contract.symbol}, localSymbol={contract.localSymbol})"
-            )
-            details_ = await IB.reqContractDetailsAsync(contract)
             try:
-                assert len(details_) == 1
-            except AssertionError:
-                log.exception(f"Ambiguous contract: {contract}. Critical error.")
+                details = await asyncio.gather(
+                    *(IB.reqContractDetailsAsync(contract) for contract in contracts),
+                    return_exceptions=False,
+                )
+            except Exception as e:
+                log.debug(f"Failed to get contract details {e}")
+                raise
 
-            details = details_[0]
-            self.contract_details[cast(ibi.Contract, details.contract)] = details
-        log.debug(
-            f"Details acquired: {set([k.symbol for k in self.contract_details.keys()])}"
-        )
-        return self
+        return details
 
 
 class Jobs:
@@ -186,10 +124,10 @@ class Jobs:
 IB: Final[ibi.IB] = ibi.IB()
 # Atom passes empty contrianers so that INIT_DATA can supply them with data
 # InitData knows nothing about Atom, just gets containers to fill-up
-INIT_DATA = InitData(IB, Atom.contracts, Atom.contract_details)
+INIT_DATA = InitData(IB, Atom.contract_dict, Atom.contract_details)
 JOBS = Jobs(INIT_DATA)
 STATE_MACHINE = StateMachine()
-Atom.set_init_data(INIT_DATA.ib, STATE_MACHINE)
+Atom.set_init_data(IB, STATE_MACHINE)
 log.debug("Will initialize Controller")
 trader = Trader(IB)
 CONTROLLER: Final[Controller] = Controller.from_config(trader, CONFIG)

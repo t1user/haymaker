@@ -753,11 +753,11 @@ class AtomWithContract(Atom):
 class TestContract:
     @pytest.fixture
     def contract(self):
-        return ibi.Contract("ES", exchange="CME")
+        return ibi.Contract(symbol="ES", exchange="CME")
 
     @pytest.fixture
     def atom(self):
-        return AtomWithContract(ibi.Future("NQ", exchange="CME"))
+        return AtomWithContract(ibi.Future(symbol="NQ", exchange="CME"))
 
     def test_can_assign_and_get_contract(self, atom: AtomWithContract):
         assert isinstance(atom.contract, ibi.Future)
@@ -768,8 +768,8 @@ class TestContract:
         assert a.contract is c
 
     def test_can_assign_and_retrieve_list_of_contracts(self):
-        c1 = ibi.Contract("ES", exchange="CME")
-        c2 = ibi.Contract("MES", exchange="CME")
+        c1 = ibi.Contract(symbol="ES", exchange="CME")
+        c2 = ibi.Contract(symbol="MES", exchange="CME")
         atom = AtomWithContract([c1, c2])
         assert isinstance(atom.contract, list)
         assert atom.contract == [c1, c2]
@@ -785,11 +785,15 @@ class TestContract:
 class TestContractList:
     @pytest.fixture
     def contract(self):
-        return ibi.Contract("YM")
+        return ibi.Future(symbol="YM", exchange="NYMEX")
 
     @pytest.fixture
     def list_of_contracts(self, contract: ibi.Contract):
-        return [contract, ibi.Contract("NQ")]
+        return [
+            contract,
+            ibi.ContFuture(symbol="NQ", exchange="CME"),
+            ibi.Stock(symbol="AAPL", exchange="NASDAQ"),
+        ]
 
     @pytest.fixture
     def atom_with_contract(self, contract: ibi.Contract):
@@ -799,7 +803,7 @@ class TestContractList:
 
         a = NewAtomWithContract(contract)
         yield a
-        a.contracts.clear()
+        a.contract_dict.clear()
 
     @pytest.fixture
     def atom_with_list_of_contracts(self, list_of_contracts: list[ibi.Contract]):
@@ -809,7 +813,7 @@ class TestContractList:
 
         a = AtomWithListOfContracts(list_of_contracts)
         yield a
-        a.contracts.clear()
+        a.contract_dict.clear()
 
     def test_newly_added_contract_in_the_list(self):
         class NewNewAtom(Atom):
@@ -817,37 +821,40 @@ class TestContractList:
                 self.contract = x
                 super().__init__()
 
-        NewNewAtom("a")
-        assert "a" in Atom.contracts
+        cont = ibi.Future(symbol="GC", exchange="COMEX")
+        a = NewNewAtom(cont)
+        assert cont in a.contracts
 
     def test_newly_added_contract_in_Atom_list(self, atom_with_contract: Atom):
-        atom_with_contract.contract = "b"  # type: ignore
-        assert "b" in Atom.contracts
-        assert "b" in atom_with_contract.contracts
+        cont = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
+        atom_with_contract.contract = cont
+        assert cont in atom_with_contract.contracts
 
     def test_contract_list_on_instance_contains_contracts(
         self, atom_with_contract: Atom, contract: ibi.Contract
     ):
         a = atom_with_contract
-        assert a.contracts == [contract]
+        cont = a.contract
+        assert len(a.contracts) > 0
+        assert cont in a.contracts
 
     def test_contract_list_on_class_contains_contracts(
         self, atom_with_contract: Atom, contract: ibi.Contract
     ):
-        assert Atom.contracts == [contract]
+        assert list(atom_with_contract.contracts) == [contract]
 
     def test_ContractList_new_instance_contains_contracts(
         self, atom_with_contract: Atom, contract: ibi.Contract
     ):
-        atom_with_contract  # type: ignore
-        alt_list = Atom.contracts
+        a = atom_with_contract
+        alt_list = list(a.contracts)
         assert alt_list == [contract]
 
     def test_contract_list_works_with_lists(
         self, atom_with_list_of_contracts: Atom, list_of_contracts: list[ibi.Contract]
     ):
         a = atom_with_list_of_contracts
-        assert a.contracts == list_of_contracts
+        assert list(a.contracts) == list_of_contracts
 
 
 class Test_keep_adding_contracts:
@@ -859,15 +866,18 @@ class Test_keep_adding_contracts:
         return A(contract)
 
     def test_single(self):
-        self.atom("a")
-        assert "a" in Atom.contracts
+        cont = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
+        a = self.atom(cont)
+        assert cont in a.contracts
 
     def test_list(self):
-        self.atom(["x", "y", "z"])
-        assert "x" in Atom.contracts
-        assert "y" in Atom.contracts
-        assert "z" in Atom.contracts
-        assert "z" in Atom.contracts
+        apple = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
+        nasdaq = ibi.ContFuture(symbol="NQ", exchange="CME")
+        gold = ibi.Future(symbol="GC", exchange="COMEX")
+        a = self.atom([apple, nasdaq, gold])
+        assert apple in a.contracts
+        assert nasdaq in a.contracts
+        assert gold in a.contracts
 
 
 def test_onData_sets_attribute_if_dict_passed():

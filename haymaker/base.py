@@ -20,7 +20,7 @@ from typing import (
 
 import ib_insync as ibi
 
-from .misc import is_active, next_active, process_trading_hours
+from .misc import hash_contract, is_active, next_active, process_trading_hours
 
 if TYPE_CHECKING:
     from .state_machine import StateMachine, Strategy
@@ -70,31 +70,39 @@ class ContractManagingDescriptor:
 
     def __get__(self, obj: Atom, type=None) -> list[ibi.Contract] | ibi.Contract | None:
         # some methods rely on not raising an error here if attr self.name not set
-        # is Atom has not set `contract` attribute, it shouldn't raise an error
+        # if Atom has not set `contract` attribute, it shouldn't raise an error
         contract = obj.__dict__.get(self.name)
-        return self._swap_contfuture(contract, obj.contracts)
+        return self._get_contract(contract, obj.contract_dict)
 
     def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
         log.debug(f"Registering contract: {value}")
-        self._append(value, obj.contracts, obj)  # type: ignore
+        # self._append(value, obj.contracts, obj)
+        self._append_to_dict(value, obj.contract_dict, obj)
 
     @staticmethod
     @_apply_to_contract_or_sequence
-    def _swap_contfuture(
-        contract: ibi.Contract | None, contract_list: list[ibi.Contract]
-    ) -> ibi.Contract | None:
-        if isinstance(contract, ibi.ContFuture) and contract.conId != 0:
-            for i in contract_list:
-                if isinstance(i, ibi.Future) and i.conId == contract.conId:
-                    return i
-            log.warning(f"Failed to replace ContFuture object: {contract}")
-        return contract
+    def _get_contract(
+        contract: ibi.Contract | None, contract_dict: dict[int, ibi.Contract]
+    ) -> list[ibi.Contract] | ibi.Contract | None:
+        if contract is None:
+            return None
+        else:
+            return contract_dict.get(hash_contract(contract))
 
     @staticmethod
     @_apply_to_contract_or_sequence
-    def _append(contract: ibi.Contract, contract_list: list[ibi.Contract], atom: Atom):
+    def _append(
+        contract: ibi.Contract, contract_list: list[ibi.Contract], atom: Atom
+    ) -> None:
         if contract not in contract_list:
             contract_list.append(contract)
+
+    @staticmethod
+    @_apply_to_contract_or_sequence
+    def _append_to_dict(
+        contract: ibi.Contract, contract_dict: dict[int, ibi.Contract], atom: Atom
+    ) -> None:
+        contract_dict[hash_contract(contract)] = contract
 
 
 @dataclass
@@ -241,7 +249,7 @@ class Atom:
     ib: ClassVar[ibi.IB]
     sm: ClassVar[StateMachine]
     contract_details: ClassVar[DetailsContainer] = DetailsContainer()
-    contracts: ClassVar[list[ibi.Contract]] = list()
+    contract_dict: dict[int, ibi.Contract] = {}
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
@@ -261,7 +269,15 @@ class Atom:
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
 
     @property
-    def details(self) -> Details | DetailsContainer:
+    def contracts(self):
+        return self.contract_dict.values()
+
+    @contracts.setter
+    def contracts(self) -> None:
+        raise ValueError("Forbidden to set values on Atom.contracts.")
+
+    @property
+    def details(self) -> Details | list[Details] | DetailsContainer:
         """
         Contract details received from the broker.
 
@@ -275,11 +291,15 @@ class Atom:
         additional methods and attributes.
         """
         if self.contract:
-            try:
-                return self.contract_details[self.contract]
-            except KeyError:
-                log.error(f"Missing contract details for: {self.contract}")
-                return self.contract_details
+            if getattr(self.contract, "__iter__", None):
+                assert isinstance(self.contract, collections.abc.Sequence)
+                return [self.contract_details[c] for c in self.contract]
+            else:
+                try:
+                    return self.contract_details[self.contract]
+                except KeyError:
+                    log.error(f"Missing contract details for: {self.contract}")
+                    return self.contract_details
         else:
             return self.contract_details
 
