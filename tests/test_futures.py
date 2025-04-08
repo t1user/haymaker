@@ -43,13 +43,13 @@ def test_last_trading_day_for_GoldComex(symbol, expected_last_trading_day):
 
 
 def test_FutureSelector_active_contract():
-    selector = FutureSelector(gold_chain, GoldComex, _today=datetime(2025, 3, 20))
+    selector = FutureSelector(gold_chain, GoldComex, today=datetime(2025, 3, 20))
     assert selector.active_contract.localSymbol == "GCJ5"
 
 
 def test_FutureSelector_next_contract():
     selector = FutureSelector(
-        gold_chain, GoldComex, roll_margin_bdays=5, _today=datetime(2025, 3, 20)
+        gold_chain, GoldComex, roll_margin_bdays=5, today=datetime(2025, 3, 20)
     )
     # k contract is skipped because it's not liquid
     # days till roll is 3, which is smaller than roll_margin_bdays
@@ -66,7 +66,7 @@ def test_appropriate_contracts_selected():
         gold_chain,
         NoOffsetSelectorWithSchedule,
         roll_margin_bdays=5,
-        _today=datetime(2025, 3, 20),
+        today=datetime(2025, 3, 20),
     )
     # selecting only June (M) contracts
     assert selector.active_contract.localSymbol == "GCM5"
@@ -111,12 +111,12 @@ def test_last_trading_day_for_NoOffset(symbol, expected_last_trading_day):
 
 
 def test_FutureSelector_active_contract_ES():
-    selector = FutureSelector(es_chain, NoOffset, _today=datetime(2025, 9, 10))
+    selector = FutureSelector(es_chain, NoOffset, today=datetime(2025, 9, 10))
     assert selector.active_contract.localSymbol == "ESU5"
 
 
 def test_FutureSelector_next_contract_ES():
     selector = FutureSelector(
-        es_chain, NoOffset, roll_margin_bdays=5, _today=datetime(2025, 9, 10)
+        es_chain, NoOffset, roll_margin_bdays=5, today=datetime(2025, 9, 10)
     )
     assert selector.next_contract.localSymbol == "ESZ5"

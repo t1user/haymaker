@@ -238,12 +238,7 @@ class FutureSelector(AbstractBaseContractSelector):
     detailsChain: list[ibi.ContractDetails]
     selector: Type[AbstractBaseSingleFuture]
     roll_margin_bdays: int = 5
-    # this is for testing only
-    _today: datetime | None = field(default=None, repr=False)
-
-    @cached_property
-    def today(self) -> datetime:
-        return self._today or datetime.now()
+    today: datetime = field(default_factory=datetime.now, repr=False)
 
     @cached_property
     def contracts(self) -> list[AbstractBaseSingleFuture]:
