@@ -21,6 +21,12 @@ log = logging.getLogger(__name__)
 CONFIG = config.get("state_machine") or {}
 
 
+ORDER_CONTAINER_MAX_SIZE = CONFIG.get("order_container_max_size", 0)
+SAVE_DELAY = CONFIG.get("save_delay", 1)
+STRATEGY_COLLECTION_NAME = CONFIG.get("strategy_collection_name", "strategies")
+ORDER_COLLECTION_NAME = CONFIG.get("order_collection_name", "orders")
+
+
 @dataclass
 class OrderInfo:
     strategy: str
@@ -80,9 +86,7 @@ class OrderContainer(UserDict):
     or `permId`.
     """
 
-    def __init__(
-        self, dict=None, /, max_size: int = CONFIG["order_container_max_size"]
-    ) -> None:
+    def __init__(self, dict=None, /, max_size: int = ORDER_CONTAINER_MAX_SIZE) -> None:
         self.max_size = max_size
         self.index: dict[int, int] = {}  # translation of permId to orderId
         self.setitemEvent = ev.Event("setitemEvent")
@@ -218,7 +222,7 @@ class Strategy(UserDict):
 class StrategyContainer(UserDict):
     def __init__(self, dict=None, /, **kwargs) -> None:
         # set a short `save_delay` in tests so that they don't get held up
-        save_delay = kwargs.get("save_delay", CONFIG["save_delay"])
+        save_delay = kwargs.get("save_delay", SAVE_DELAY)
         self._strategyChangeEvent = ev.Event("strategyChangeEvent")
         self.strategyChangeEvent = self._strategyChangeEvent.debounce(save_delay, False)
         self._strategyChangeEvent += self.strategyChangeEvent
@@ -305,9 +309,8 @@ class StrategyContainer(UserDict):
         return f"StrategyContainer({self.data})"
 
 
-# Consider allowing for use of different savers
-model_saver = MongoSaver("models")
-order_saver = MongoSaver("orders", query_key="orderId")
+strategy_saver = MongoSaver(STRATEGY_COLLECTION_NAME)
+order_saver = MongoSaver(ORDER_COLLECTION_NAME, query_key="orderId")
 
 
 class StateMachine:
@@ -315,9 +318,8 @@ class StateMachine:
     This class provides information, other classes act on this
     information.
 
-    In priciple, stores data about strategies (called 'models' here)
-    and orders.  This data is synched with database and restored on
-    restart.
+    In priciple, stores data about strategies and orders.  This data
+    is synched with database and restored on restart.
 
     This class must be a singleton, it will raise an error if there's
     an attempt to create a second instance.
@@ -326,7 +328,7 @@ class StateMachine:
     _instance: "StateMachine | None" = None
 
     _save_order = AsyncSaveManager(order_saver)
-    _save_model = AsyncSaveManager(model_saver)
+    _save_strategies = AsyncSaveManager(strategy_saver)
 
     def __new__(cls, *args, **kwargs):
         """
@@ -341,15 +343,15 @@ class StateMachine:
     def __init__(self):
         # don't make these class attributes as it messes up tests
         # (reference to dictionaries kept in between tests)
-        self._data = StrategyContainer()  # dict of ExecModel data
+        self._strategies = StrategyContainer()  # dict of ExecModel data
         self._orders = OrderContainer()  # dict of OrderInfo
-        # will automatically save models to db on every change
+        # will automatically save strategies to db on every change
         # (but not more often than defined in CONFIG['state_machine']['save_delay'])
-        self._data.strategyChangeEvent += self.save_models  # type: ignore
+        self._strategies.strategyChangeEvent += self.save_strategies  # type: ignore
 
-    def save_models(self, *args) -> None:
-        self._save_model(self._data.encode())
-        log.debug("MODELS SAVED")
+    def save_strategies(self, *args) -> None:
+        self._save_strategies(self._strategies.encode())
+        log.debug("STRATEGIES SAVED")
 
     def save_order(self, oi: OrderInfo) -> OrderInfo:
         self._orders[oi.trade.order.orderId] = oi
@@ -357,8 +359,8 @@ class StateMachine:
         log.debug("SAVING ORDER SUCCESSFUL")
         return oi
 
-    def clear_models(self):
-        self._data.clear()
+    def clear_strategies(self):
+        self._strategies.clear()
 
     def update_trade(self, trade: ibi.Trade) -> ibi.Trade | None:
         """
@@ -408,9 +410,9 @@ class StateMachine:
 
     async def read_from_store(self):
         log.debug("Will read data from store...")
-        strategy_data = await async_runner(model_saver.read_latest)
+        strategy_data = await async_runner(strategy_saver.read_latest)
         order_data = await async_runner(order_saver.read, {"active": True})
-        self._data.decode(strategy_data)
+        self._strategies.decode(strategy_data)
         self._orders.decode(order_data)
 
     def register_order(
@@ -467,7 +469,7 @@ class StateMachine:
         Access strategies by ``state_machine.strategy['strategy_name']``
         or ``state_machine.strategy.get('strategy_name')``
         """
-        return self._data
+        return self._strategies
 
     def position_and_order_for_strategy(self, strategy_str: str) -> float:
         """
@@ -513,7 +515,7 @@ class StateMachine:
         Access positions for given contract: ``state_machine.position[contract]``
         or ``state_machine.position.get(contract)``
         """
-        return self._data.total_positions()
+        return self._strategies.total_positions()
 
     @property
     def for_contract(self) -> defaultdict[ibi.Contract, list[str]]:
@@ -522,7 +524,7 @@ class StateMachine:
         ``state_machine.for_contract[contract]`` or
         ``state_machine.for_contract.get(contract)``
         """
-        return self._data.strategies_by_contract()
+        return self._strategies.strategies_by_contract()
 
     def strategy_for_order(self, orderId: int) -> Strategy | None:
         if oi := self.order.get(orderId):
@@ -539,7 +541,7 @@ class StateMachine:
         del self._orders[orderId]
 
     def locked(self, strategy: str) -> Lock:
-        return self._data[strategy].lock
+        return self._strategies[strategy].lock
 
     def update_strategy_on_order(self, orderId: int, strategy: str) -> OrderInfo:
         oi = self.order.get(orderId)
@@ -552,11 +554,11 @@ class StateMachine:
     # or maybe position should also be set in this class (in Controller now)
     def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
         # TODO: move to controller
-        self._data[strategy].lock = 1 if trade.order.action == "BUY" else -1
-        # log.debug(f"Registered lock: {strategy}: {self._data[strategy].lock}")
+        self._strategies[strategy].lock = 1 if trade.order.action == "BUY" else -1
+        # log.debug(f"Registered lock: {strategy}: {self._strategies[strategy].lock}")
 
     def remove_lock(self, strategy: str, trade: ibi.Trade) -> None:
-        self._data[strategy].lock = 0
+        self._strategies[strategy].lock = 0
 
     def __repr__(self):
         return self.__class__.__name__ + "()"

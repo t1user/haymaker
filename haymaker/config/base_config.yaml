@@ -43,6 +43,8 @@ controller:
 state_machine:
   save_delay: 1 # don't save strategy data more often than that (in secs)
   order_container_max_size: 0 # zero means no limit (strongly recommended)
+  strategy_collection_name: "strategies"
+  order_collection_name: "orders"
   
 streamer:
   # timeout triggered after streamer hasn't received data for given amount of seconds

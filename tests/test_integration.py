@@ -260,5 +260,5 @@ async def test_manual_order_created(Atom):
     controller.ib.orderStatusEvent.emit(trade_object)
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
     await asyncio.sleep(0)
-    assert a.sm._data.total_positions()[trade_object.contract] == 1
-    assert "manual_strategy_ES" in a.sm._data
+    assert a.sm._strategies.total_positions()[trade_object.contract] == 1
+    assert "manual_strategy_ES" in a.sm._strategies
