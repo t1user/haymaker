@@ -226,7 +226,8 @@ class ContFutureSelector(DefaultSelector):
     def __post_init__(self):
         """Replace ContFuture with Future."""
         super().__post_init__()
-        contfuture_contract = self.detailsChain[0].contract
+        contract = self.detailsChain[0].contract
+        contfuture_contract = ibi.Contract.create(**ibi.util.dataclassAsDict(contract))
         assert isinstance(contfuture_contract, ibi.ContFuture)
         contract_kwargs = ibi.util.dataclassNonDefaults(contfuture_contract)
         del contract_kwargs["secType"]
@@ -304,11 +305,11 @@ def single_future_factory(contract: ibi.Contract) -> Type[AbstractBaseSingleFutu
 def selector_factory(
     details_list: list[ibi.ContractDetails],
 ) -> AbstractBaseContractSelector:
-    details = details_list[0]
-    contract = details.contract
+    first_details_instance = details_list[0]
+    contract = first_details_instance.contract
     assert contract
     selector_class, args = {
         "CONTFUT": (ContFutureSelector, ()),
         "FUT": (FutureSelector, (single_future_factory(contract),)),
     }.get(contract.secType, (DefaultSelector, ()))
-    return selector_class(details, *args)
+    return selector_class(details_list, *args)

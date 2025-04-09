@@ -75,8 +75,6 @@ class ContractManagingDescriptor:
         return self._get_contract(contract, obj.contract_dict)
 
     def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
-        log.debug(f"Registering contract: {value}")
-        # self._append(value, obj.contracts, obj)
         self._append_to_dict(value, obj.contract_dict, obj)
 
     @staticmethod
@@ -91,18 +89,11 @@ class ContractManagingDescriptor:
 
     @staticmethod
     @_apply_to_contract_or_sequence
-    def _append(
-        contract: ibi.Contract, contract_list: list[ibi.Contract], atom: Atom
-    ) -> None:
-        if contract not in contract_list:
-            contract_list.append(contract)
-
-    @staticmethod
-    @_apply_to_contract_or_sequence
     def _append_to_dict(
         contract: ibi.Contract, contract_dict: dict[int, ibi.Contract], atom: Atom
     ) -> None:
         contract_dict[hash_contract(contract)] = contract
+        log.debug(f"Contract registered: {contract}")
 
 
 @dataclass

@@ -6,7 +6,7 @@ from contract_details_data import es_details_chain, gold_details_chain  # type: 
 from ib_insync import Contract, ContractDetails  # noqa
 
 from haymaker import misc
-from haymaker.futures import FutureSelector, GoldComex, NoOffset
+from haymaker.contract_selector import FutureSelector, GoldComex, NoOffset
 
 # this comes from CME website:
 # https://www.cmegroup.com/markets/metals/precious/gold.calendar.html

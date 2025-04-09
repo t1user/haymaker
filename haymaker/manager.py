@@ -10,8 +10,8 @@ import ib_insync as ibi
 
 from .base import Atom, DetailsContainer
 from .config import CONFIG
+from .contract_selector import selector_factory
 from .controller import Controller
-from .futures import selector_factory
 from .state_machine import StateMachine
 from .streamers import Streamer
 from .trader import Trader
@@ -28,20 +28,24 @@ class InitData:
     ib: ibi.IB
     contract_dict: dict[int, ibi.Contract]
     contract_details: DetailsContainer
-    _contracts: dict[int, ibi.Contract] = field(init=False, repr=False)
-
-    def __post_init__(self):
-        self._contracts = self.contract_dict.copy()
+    _contracts: dict[int, ibi.Contract] = field(default_factory=dict, repr=False)
 
     async def __call__(self) -> Self:
-        log.debug(f"Number of contracts: {len(self._contracts)}")
+        log.debug(f"---------- INIT START -----> {len(self._contracts)} contracts.")
+        if not self._contracts:
+            log.debug(
+                f"contracts blueprint saved: {[c for c in self._contracts.values()]}"
+            )
+            self._contracts = self.contract_dict.copy()
         details = await self.acquire_contract_details(list(self._contracts.values()))
+        log.debug(f"Acquired details for {len(details)} contracts.")
         selectors = (selector_factory(details_list) for details_list in details)
 
         for contract_hash, selector in zip(self.contract_dict, selectors):
             self.contract_details[selector.active_contract] = selector.active_details
             self.contract_details[selector.next_contract] = selector.next_details
             self.contract_dict[contract_hash] = selector.next_contract
+        log.debug("InitData done...")
         return self
 
     async def acquire_contract_details(
@@ -63,7 +67,6 @@ class InitData:
             except Exception as e:
                 log.debug(f"Failed to get contract details {e}")
                 raise
-
         return details
 
 
@@ -83,7 +86,7 @@ class Jobs:
             log.exception(e)
 
     async def __call__(self):
-        log.debug("Will initialize...")
+
         await self.init_data()
 
         log.info(
@@ -101,7 +104,7 @@ class Jobs:
                 )
             )
         log.info(f"Orders on restart: {dict(order_dict)}")
-
+        log.debug("Run streamers --->")
         for streamer in self.streamers:
             task = asyncio.create_task(streamer.run(), name=f"{streamer!s}, ")
             log.debug(f"Task created: {task.get_name()}")
@@ -118,9 +121,13 @@ class Jobs:
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__qualname__}({self.init_data})"
+        return (
+            f"{self.__class__.__qualname__}"
+            f"({'| '.join([str(s) for s in self.streamers])})"
+        )
 
 
+log.debug("--- INITIALIZATION ---")
 IB: Final[ibi.IB] = ibi.IB()
 # Atom passes empty contrianers so that INIT_DATA can supply them with data
 # InitData knows nothing about Atom, just gets containers to fill-up
