@@ -24,9 +24,9 @@ def portfolio():
 
 
 @pytest.fixture
-def pipe(df_brick, data_for_df, portfolio, Atom):  # noqa
+def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
     class FakeStateMachine:
-        strategy = StrategyContainer()
+        strategy = StrategyContainer(strategy_saver)
 
         def locked(self, key):
             return 0
@@ -216,10 +216,6 @@ async def test_sell_position_registered(new_setup):
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
     await asyncio.sleep(0)
     assert em.data.position == -1
-
-
-# Call this in your test teardown
-# In pytest_asyncio, use a fixture with yield and this as the cleanup
 
 
 @pytest.mark.asyncio

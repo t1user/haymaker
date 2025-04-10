@@ -40,18 +40,18 @@ def test_repr_AlwaysOn():
 
 
 @pytest.fixture
-def StateMachine():
+def StateMachine(strategy_saver):
     class FakeStateMachine:
         """
         Simulate state machine always returning desired values for
-        position and locked.
+        position and lock.
         """
 
         def __init__(self, position=0.0, lock=0):
             self.position = position
             self.lock = lock
 
-        strategy = StrategyContainer()
+        strategy = StrategyContainer(strategy_saver)
 
         def position_and_order_for_strategy(self, strategy_str: str) -> float:
             return self.position

@@ -6,7 +6,6 @@ import logging
 from collections import UserDict, defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
-from functools import partial
 from typing import Any, Iterator, TypeVar
 
 import eventkit as ev  # type: ignore
@@ -14,7 +13,13 @@ import ib_insync as ibi
 
 from .config import CONFIG as config
 from .misc import Lock, action_to_signal, decode_tree, tree
-from .saver import AsyncSaveManager, MongoSaver, async_runner
+from .saver import (
+    AbstractBaseSaver,
+    AsyncSaveManager,
+    MongoSaver,
+    SyncSaveManager,
+    async_runner,
+)
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +30,10 @@ ORDER_CONTAINER_MAX_SIZE = CONFIG.get("order_container_max_size", 0)
 SAVE_DELAY = CONFIG.get("save_delay", 1)
 STRATEGY_COLLECTION_NAME = CONFIG.get("strategy_collection_name", "strategies")
 ORDER_COLLECTION_NAME = CONFIG.get("order_collection_name", "orders")
+
+
+STRATEGY_SAVER = MongoSaver(STRATEGY_COLLECTION_NAME)
+ORDER_SAVER = MongoSaver(ORDER_COLLECTION_NAME, query_key="orderId")
 
 
 @dataclass
@@ -86,12 +95,21 @@ class OrderContainer(UserDict):
     or `permId`.
     """
 
-    def __init__(self, dict=None, /, max_size: int = ORDER_CONTAINER_MAX_SIZE) -> None:
+    def __init__(
+        self,
+        saver: AbstractBaseSaver,
+        max_size: int = ORDER_CONTAINER_MAX_SIZE,
+        save_async: bool = True,
+    ) -> None:
         self.max_size = max_size
         self.index: dict[int, int] = {}  # translation of permId to orderId
         self.setitemEvent = ev.Event("setitemEvent")
         self.setitemEvent += self.onSetitemEvent
-        super().__init__(dict)
+        self.saver = saver
+        self._save = (
+            AsyncSaveManager(self.saver) if save_async else SyncSaveManager(self.saver)
+        )
+        super().__init__()
 
     def __setitem__(self, key: int, item: OrderInfo) -> None:
         if self.max_size and (len(self.data) >= self.max_size):
@@ -154,6 +172,31 @@ class OrderContainer(UserDict):
                 f"Order for : {item['trade'].order.orderId} "
                 f"{item['trade'].contract.symbol} decoded."
             )
+
+    def save(self, oi: OrderInfo) -> None:
+        """Save data to database."""
+        self[oi.trade.order.orderId] = oi
+        self._save(oi.encode())
+
+    def delete(self, orderId: int) -> None:
+        """
+        Delete order from dict.  In db order will be marked as
+        inactive so that it's not loaded again on startup.  It stays
+        in db as historical order, it will no longer be in memory for.
+        """
+        try:
+            oi_dict = self[orderId].encode()
+        except KeyError:
+            log.error(f"Cannot delete {orderId}, no record.")
+            return
+        oi_dict.update({"active": False})
+        self._save(oi_dict)
+        del self[orderId]
+
+    async def read(self) -> None:
+        """Read data from database and update itself."""
+        order_data = await async_runner(self.saver.read, {"active": True})
+        self.decode(order_data)
 
     def __repr__(self) -> str:
         if self.max_size:
@@ -220,13 +263,21 @@ class Strategy(UserDict):
 
 
 class StrategyContainer(UserDict):
-    def __init__(self, dict=None, /, **kwargs) -> None:
-        # set a short `save_delay` in tests so that they don't get held up
-        save_delay = kwargs.get("save_delay", SAVE_DELAY)
+
+    def __init__(
+        self, saver: AbstractBaseSaver, save_delay=SAVE_DELAY, save_async: bool = True
+    ) -> None:
         self._strategyChangeEvent = ev.Event("strategyChangeEvent")
         self.strategyChangeEvent = self._strategyChangeEvent.debounce(save_delay, False)
         self._strategyChangeEvent += self.strategyChangeEvent
-        super().__init__(dict)
+        # will automatically save strategies to db on every change
+        # (but not more often than defined in CONFIG['state_machine']['save_delay'])
+        self.strategyChangeEvent += self.save
+        self.saver = saver
+        self._save = (
+            AsyncSaveManager(self.saver) if save_async else SyncSaveManager(self.saver)
+        )
+        super().__init__()
 
     def __setitem__(self, key: str, item: dict):
         if not isinstance(item, (Strategy, dict)):
@@ -305,12 +356,19 @@ class StrategyContainer(UserDict):
             **{k: Strategy(v, self._strategyChangeEvent) for k, v in decoded.items()}
         )
 
+    def save(self) -> None:
+        """Save data to database."""
+        self._save(self.encode())
+
+    async def read(self) -> None:
+        """
+        Read data from database and update itself.
+        """
+        strategy_data = await async_runner(self.saver.read_latest)
+        self.decode(strategy_data)
+
     def __repr__(self) -> str:
         return f"StrategyContainer({self.data})"
-
-
-strategy_saver = MongoSaver(STRATEGY_COLLECTION_NAME)
-order_saver = MongoSaver(ORDER_COLLECTION_NAME, query_key="orderId")
 
 
 class StateMachine:
@@ -319,7 +377,8 @@ class StateMachine:
     information.
 
     In priciple, stores data about strategies and orders.  This data
-    is synched with database and restored on restart.
+    is synched with database and restored on restart.  It is a wrapper
+    over dicts storing orders and strategies with some helper methods.
 
     This class must be a singleton, it will raise an error if there's
     an attempt to create a second instance.
@@ -327,12 +386,9 @@ class StateMachine:
 
     _instance: "StateMachine | None" = None
 
-    _save_order = AsyncSaveManager(order_saver)
-    _save_strategies = AsyncSaveManager(strategy_saver)
-
     def __new__(cls, *args, **kwargs):
         """
-        Enforce signleton.
+        Enforce singleton.
         """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -340,23 +396,28 @@ class StateMachine:
         else:
             raise TypeError("Attempt to instantiate StateMachine more than once.")
 
-    def __init__(self):
+    def __init__(
+        self,
+        order_saver: AbstractBaseSaver | None = None,
+        strategy_saver: AbstractBaseSaver | None = None,
+        save_async: bool = True,
+    ) -> None:
         # don't make these class attributes as it messes up tests
         # (reference to dictionaries kept in between tests)
-        self._strategies = StrategyContainer()  # dict of ExecModel data
-        self._orders = OrderContainer()  # dict of OrderInfo
-        # will automatically save strategies to db on every change
-        # (but not more often than defined in CONFIG['state_machine']['save_delay'])
-        self._strategies.strategyChangeEvent += self.save_strategies  # type: ignore
+        order_saver = order_saver or ORDER_SAVER
+        strategy_saver = strategy_saver or STRATEGY_SAVER
+        # dict of OrderInfo
+        self._orders = OrderContainer(order_saver, save_async=save_async)
+        # dict of Strategy data (same as ExecModel data)
+        self._strategies = StrategyContainer(strategy_saver, save_async=save_async)
 
     def save_strategies(self, *args) -> None:
-        self._save_strategies(self._strategies.encode())
+        self._strategies.save()
         log.debug("STRATEGIES SAVED")
 
     def save_order(self, oi: OrderInfo) -> OrderInfo:
-        self._orders[oi.trade.order.orderId] = oi
-        self._save_order(oi.encode())
-        log.debug("SAVING ORDER SUCCESSFUL")
+        self._orders.save(oi)
+        log.debug(f"ORDER {oi.trade.order.orderId} SAVED")
         return oi
 
     def clear_strategies(self):
@@ -388,63 +449,20 @@ class StateMachine:
         else:
             return trade
 
-    def prune_order(self, orderId) -> None:
+    def prune_order(self, orderId: int) -> None:
         """
         This order is no longer of interest it's inactive in our
         orders and inactive in IB.  Called by startup sync routines.
 
-        Delete trade only from local records (database is unaffected).
+        Delete trade only from local records, not the db.  However, if
+        will be market as `inactive` in db regardless of its current
+        status.
         """
-        self._orders.pop(orderId)
-
-    def delete_trade_record(self, trade: ibi.Trade) -> None:
-        """
-        Delete order related record from database.  Before deleting
-        make sure it's marked as inactive so that it doesn't get
-        reloaded on restart.
-        """
-        oi_dict = self._orders[trade.order.orderId].encode()
-        oi_dict.update({"active": False})
-        self._save_order(oi_dict)
-        del self._orders[trade.order.orderId]
+        self._orders.delete(orderId)
 
     async def read_from_store(self):
         log.debug("Will read data from store...")
-        strategy_data = await async_runner(strategy_saver.read_latest)
-        order_data = await async_runner(order_saver.read, {"active": True})
-        self._strategies.decode(strategy_data)
-        self._orders.decode(order_data)
-
-    def register_order(
-        self, strategy: str, action: str, trade: ibi.Trade, data: Strategy
-    ) -> OrderInfo:
-        """
-        Register order, register lock, verify that position has been registered.
-
-        Register order that has just been posted to the broker.  If
-        it's an order openning a new position register a lock on this
-        strategy (the lock may or may not be used by strategy itself,
-        it doesn't matter here, locks are registered for all
-        positions).  Verify that position has been registered.
-
-        This method is called by :class:`Controller`.
-        """
-        params = data["params"].get(action.lower(), {})
-        order_info = OrderInfo(strategy, action, trade, params)
-        oi = self.save_order(order_info)
-
-        if action.upper() == "OPEN":
-            trade.filledEvent += partial(self.register_lock, strategy)
-        elif action.upper() == "CLOSE":
-            trade.filledEvent += partial(self.remove_lock, strategy)
-
-        log.debug(
-            f"{trade.order.orderType} orderId: {trade.order.orderId} "
-            f"permId: {trade.order.permId} registered for: "
-            f"{trade.contract.localSymbol or trade.contract.symbol}"
-        )
-
-        return oi
+        await asyncio.gather(self._strategies.read(), self._orders.read())
 
     async def save_order_status(self, trade: ibi.Trade) -> OrderInfo:
         log.debug(
@@ -548,17 +566,6 @@ class StateMachine:
         assert oi
         oi.strategy = strategy
         return self.save_order(oi)
-
-    # ### TODO: Re-do this
-    # DOES THIS BELONG IN THIS CLASS?
-    # or maybe position should also be set in this class (in Controller now)
-    def register_lock(self, strategy: str, trade: ibi.Trade) -> None:
-        # TODO: move to controller
-        self._strategies[strategy].lock = 1 if trade.order.action == "BUY" else -1
-        # log.debug(f"Registered lock: {strategy}: {self._strategies[strategy].lock}")
-
-    def remove_lock(self, strategy: str, trade: ibi.Trade) -> None:
-        self._strategies[strategy].lock = 0
 
     def __repr__(self):
         return self.__class__.__name__ + "()"

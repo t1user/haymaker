@@ -13,7 +13,7 @@ import ib_insync as ibi
 from haymaker import misc
 from haymaker.base import Atom
 from haymaker.blotter import Blotter
-from haymaker.state_machine import Strategy
+from haymaker.state_machine import OrderInfo, Strategy
 from haymaker.trader import FakeTrader, Trader
 
 from .future_roller import FutureRoller
@@ -191,7 +191,7 @@ class Controller(Atom):
             await self.execute_stops_and_close_positions()
             self.reset = False
             # zero-out all records
-            self.sm.clear_models()
+            self.sm.clear_strategies()
 
         log.debug("Controller run sequence completed successfully.")
         # now Streamers will run
@@ -261,16 +261,55 @@ class Controller(Atom):
 
     def trade(
         self,
-        strategy: str,
+        strategy_str: str,
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
-        data: Strategy,
+        strategy: Strategy,
     ) -> ibi.Trade:
         trade = self.trader.trade(contract, order)
-        self.sm.register_order(strategy, action, trade, data)
-        trade.filledEvent += partial(self.log_trade, reason=action, strategy=strategy)
+        self.register_order(strategy_str, action, trade, strategy)
+        trade.filledEvent += partial(
+            self.log_trade, reason=action, strategy=strategy_str
+        )
         return trade
+
+    def register_order(
+        self, strategy_str: str, action: str, trade: ibi.Trade, strategy: Strategy
+    ) -> OrderInfo:
+        """
+        Register order, register lock, verify that position has been registered.
+
+        Register order that has just been posted to the broker.  If
+        it's an order openning a new position register a lock on this
+        strategy (the lock may or may not be used by strategy itself,
+        it doesn't matter here, locks are registered for all
+        positions).  Verify that position has been registered.
+
+        This method is called by :class:`Controller`.
+        """
+        params = strategy["params"].get(action.lower(), {})
+        order_info = OrderInfo(strategy_str, action, trade, params)
+        oi = self.sm.save_order(order_info)
+
+        if action.upper() == "OPEN":
+            trade.filledEvent += partial(self.register_lock, strategy)
+        elif action.upper() == "CLOSE":
+            trade.filledEvent += partial(self.remove_lock, strategy)
+
+        log.debug(
+            f"{trade.order.orderType} orderId: {trade.order.orderId} "
+            f"permId: {trade.order.permId} registered for: "
+            f"{trade.contract.localSymbol or trade.contract.symbol}"
+        )
+
+        return oi
+
+    def register_lock(self, strategy: Strategy, trade: ibi.Trade) -> None:
+        strategy.lock = 1 if trade.order.action == "BUY" else -1
+
+    def remove_lock(self, strategy: Strategy, trade: ibi.Trade) -> None:
+        strategy.lock = 0
 
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
         return self.trader.cancel(trade)
@@ -366,11 +405,11 @@ class Controller(Atom):
         if self._hold:
             return
 
-        data = self.sm.order.get(trade.order.orderId)
-        log.debug(f"Commission report from {trade=} for {data=}")
-        if data:
+        order_info = self.sm.order.get(trade.order.orderId)
+
+        if order_info:
             try:
-                strategy, action, _, params, _ = data
+                strategy, action, _, params, _ = order_info
                 position_id = params.get("position_id") or self.sm.strategy[
                     strategy
                 ].get("position_id")
@@ -631,7 +670,7 @@ class Controller(Atom):
         await Terminator(self).run()
 
     def clear_records(self):
-        self.sm.clear_models()
+        self.sm.clear_strategies()
 
     def close_positions(self) -> None:
         positions: list[ibi.Position] = self.ib.positions()

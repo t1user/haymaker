@@ -70,7 +70,7 @@ def test_OrderInfo_amount_long():
     assert o1.amount == 1
 
 
-def test_OrderInfo_amount_shoft():
+def test_OrderInfo_amount_short():
     trade1 = ibi.Trade(
         order=ibi.Order(action="SELL", totalQuantity=1, permId=1234),
         orderStatus=ibi.OrderStatus(orderId=2, status="Submitted"),
@@ -79,7 +79,7 @@ def test_OrderInfo_amount_shoft():
     assert o1.amount == -1
 
 
-def test_OrderContainer_strategy_gets_correct_orders():
+def test_OrderContainer_strategy_gets_correct_orders(order_saver):
     o1 = OrderInfo(
         "coolstrategy",
         "OPEN",
@@ -99,7 +99,7 @@ def test_OrderContainer_strategy_gets_correct_orders():
         None,
     )
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
@@ -107,7 +107,7 @@ def test_OrderContainer_strategy_gets_correct_orders():
     assert list(orders.strategy("coolstrategy")) == [o1, o2]
 
 
-def test_OrderContainer_del_works_correctly():
+def test_OrderContainer_del_works_correctly(order_saver):
     o1 = OrderInfo(
         "coolstrategy",
         "OPEN",
@@ -127,7 +127,7 @@ def test_OrderContainer_del_works_correctly():
         None,
     )
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
@@ -136,48 +136,48 @@ def test_OrderContainer_del_works_correctly():
     assert list(orders.strategy("coolstrategy")) == [o2]
 
 
-def test_OrderContainer_get_order():
+def test_OrderContainer_get_order(order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
     o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
     assert orders.get(1) == o1
 
 
-def test_OrderContainer_get_order_default():
+def test_OrderContainer_get_order_default(order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
     o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
     assert orders.get(10, "xyz") == "xyz"
 
 
-def test_OrderContainer_get_item():
+def test_OrderContainer_get_item(order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
     o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
     assert orders[1] == o1
 
 
-def test_state_machine_get_order(state_machine):
+def test_state_machine_get_order(state_machine, order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
     o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
@@ -185,12 +185,12 @@ def test_state_machine_get_order(state_machine):
     assert state_machine.order.get(1) == o1
 
 
-def test_state_machine_delete_order(state_machine):
+def test_state_machine_delete_order(state_machine, order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
     o3 = OrderInfo("suckystrategy", "STOP", ibi.Trade(), None)
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     orders[3] = o3
@@ -199,7 +199,7 @@ def test_state_machine_delete_order(state_machine):
     assert list(state_machine._orders.values()) == [o2, o3]
 
 
-def test_OrderContainer_active_only_flag_in_get():
+def test_OrderContainer_active_only_flag_in_get(order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo(
         "coolstrategy",
@@ -208,17 +208,17 @@ def test_OrderContainer_active_only_flag_in_get():
         None,
     )
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     assert orders.get(2, active_only=True) is None
 
 
-def test_OrderContainer_default_in_get_works():
+def test_OrderContainer_default_in_get_works(order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), {})
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade, {})
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
 
@@ -226,7 +226,7 @@ def test_OrderContainer_default_in_get_works():
     assert orders.get(3, "Not Found", active_only=True) == "Not Found"
 
 
-def test_OrderContainer_default_in_get_works_if_active_only_not_found():
+def test_OrderContainer_default_in_get_works_if_active_only_not_found(order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), {})
     o2 = OrderInfo(
         "coolstrategy",
@@ -235,39 +235,44 @@ def test_OrderContainer_default_in_get_works_if_active_only_not_found():
         {},
     )
 
-    orders = OrderContainer()
+    orders = OrderContainer(order_saver)
     orders[1] = o1
     orders[2] = o2
     assert orders.get(2, "Not Found", active_only=True) == "Not Found"
 
 
-def test_OrderContainer_limited_in_size_and_max_size_parameter_works():
+def test_OrderContainer_limited_in_size_and_max_size_parameter_works(order_saver):
     orders = OrderContainer(
+        order_saver,
+        max_size=5,
+    )
+    orders.update(
         {
             i: OrderInfo(
                 "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
             )
             for i in range(20)
-        },
-        max_size=5,
+        }
     )
 
     # done should keep only 10 last items
     assert len(orders) == 5
 
 
-def test_OrderContainer_drops_oldest():
+def test_OrderContainer_drops_oldest(order_saver):
     # create dict with keys: 0...19, but keep only last 10 elements
     orders = OrderContainer(
+        order_saver,
+        max_size=10,
+    )
+    orders.update(
         {
             i: OrderInfo(
                 "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
             )
             for i in range(20)
         },
-        max_size=10,
     )
-
     # only last 10 keys kept: 10...19, so first item in dict should be 10
     first_key = list(orders.keys())[0]
     assert first_key == 10
@@ -277,23 +282,29 @@ def test_OrderContainer_drops_oldest():
     assert last_key == 19
 
 
-def test_OrderContainer_max_size_ignored_if_zero():
+def test_OrderContainer_max_size_ignored_if_zero(order_saver):
     orders = OrderContainer(
+        order_saver,
+        max_size=0,
+    )
+    orders.update(
         {
             i: OrderInfo(
                 "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
             )
             for i in range(20)
         },
-        max_size=0,
     )
-
     assert len(orders) == 20
 
 
 @pytest.mark.asyncio
-async def test_OrderContainer_recalls_permId():
+async def test_OrderContainer_recalls_permId(order_saver):
     orders = OrderContainer(
+        order_saver,
+        max_size=0,
+    )
+    orders.update(
         {
             i: OrderInfo(
                 "coolstrategy",
@@ -303,15 +314,19 @@ async def test_OrderContainer_recalls_permId():
             )
             for i in range(1, 3)
         },
-        max_size=0,
     )
     await asyncio.sleep(0)
     assert orders[100] == orders[1]
 
 
 @pytest.mark.asyncio
-async def test_OrderContainer_get_recalls_permId():
+async def test_OrderContainer_get_recalls_permId(order_saver):
     orders = OrderContainer(
+        order_saver,
+        max_size=0,
+    )
+
+    orders.update(
         {
             i: OrderInfo(
                 "coolstrategy",
@@ -321,14 +336,13 @@ async def test_OrderContainer_get_recalls_permId():
             )
             for i in range(1, 3)
         },
-        max_size=0,
     )
     await asyncio.sleep(0)
     assert orders.get(100) == orders[1]
 
 
-def test_Strategy_default_dict_not_shared_among_instances():
-    cont = StrategyContainer()
+def test_Strategy_default_dict_not_shared_among_instances(strategy_saver):
+    cont = StrategyContainer(strategy_saver)
     x, y = cont["x"], cont["y"]
     x.params.update({"a": 1, "b": 2})
     assert "a" not in y.params
@@ -375,15 +389,17 @@ def test_Strategy_contains():
     assert "a" in m
 
 
-def test_StrategyContainer_contains_only_Strategies():
+def test_StrategyContainer_contains_only_Strategies(strategy_saver):
     """Saving regular dict must create a strategy"""
-    cont = StrategyContainer({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
+    cont = StrategyContainer(strategy_saver)
+    cont.update({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
     assert isinstance(cont["b"], Strategy)
     assert cont["a"].x == 1
 
 
-def test_StrategyContainer_add_key():
-    m = StrategyContainer(
+def test_StrategyContainer_add_key(strategy_saver):
+    m = StrategyContainer(strategy_saver)
+    m.update(
         {
             "a": Strategy({"x": 1, "y": 2}, ce),
             "b": Strategy({"x": 4, "y": 9}, ce),
@@ -393,8 +409,9 @@ def test_StrategyContainer_add_key():
     assert isinstance(m["c"], Strategy)
 
 
-def test_StrategyContainer_add_key_with_dict():
-    m = StrategyContainer(
+def test_StrategyContainer_add_key_with_dict(strategy_saver):
+    m = StrategyContainer(strategy_saver)
+    m.update(
         {
             "a": Strategy({"x": 1, "y": 2}, ce),
             "b": Strategy({"x": 4, "y": 9}, ce),
@@ -404,14 +421,15 @@ def test_StrategyContainer_add_key_with_dict():
     assert isinstance(m["c"], Strategy)
 
 
-def test_StrategyContainer_inserts_strategy_name():
-    cont = StrategyContainer()
+def test_StrategyContainer_inserts_strategy_name(strategy_saver):
+    cont = StrategyContainer(strategy_saver)
     cont["x"] = Strategy(strategyChangeEvent=ce)
     assert cont["x"].strategy == "x"
 
 
-def test_StrategyContainer_missing():
-    m = StrategyContainer(
+def test_StrategyContainer_missing(strategy_saver):
+    m = StrategyContainer(strategy_saver)
+    m.update(
         {
             "a": Strategy({"x": 1, "y": 2}, ce),
             "b": Strategy({"x": 4, "y": 9}, ce),
@@ -420,8 +438,9 @@ def test_StrategyContainer_missing():
     assert isinstance(m["not_set"], Strategy)
 
 
-def test_StrategyContainer_new_strategy():
-    m = StrategyContainer(
+def test_StrategyContainer_new_strategy(strategy_saver):
+    m = StrategyContainer(strategy_saver)
+    m.update(
         {
             "a": Strategy({"x": 1, "y": 2}, ce),
             "b": Strategy({"x": 4, "y": 9}, ce),
@@ -541,14 +560,14 @@ def test_position_and_order_for_strategy_position_irrelevant_pending_order(
     assert state_machine.position_and_order_for_strategy("coolstrategy") == 1
 
 
-def test_active_property_on_Strategy_false_works():
-    strat_cont = StrategyContainer()
+def test_active_property_on_Strategy_false_works(strategy_saver):
+    strat_cont = StrategyContainer(strategy_saver)
     st = strat_cont["new_strategy"]
     assert not st.active
 
 
-def test_active_property_on_Strategy_true_works():
-    strat_cont = StrategyContainer()
+def test_active_property_on_Strategy_true_works(strategy_saver):
+    strat_cont = StrategyContainer(strategy_saver)
     st = strat_cont["new_strategy"]
     st.position += 1
     assert st.active

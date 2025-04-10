@@ -282,7 +282,7 @@ class ErrorHandlers:
                 f"{trade.order.orderId}"
             )
             self.faulty_trades.append(self.sm._orders[trade.order.orderId])
-            self.sm.delete_trade_record(trade)
+            self.sm.prune_order(trade.order.orderId)
 
     def report_done_trade(self, trade: ibi.Trade) -> None:
         """

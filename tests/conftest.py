@@ -80,15 +80,21 @@ class FakeMongoSaver(AbstractBaseSaver):
             return s[-1]
 
 
-order_saver = FakeMongoSaver("orders", query_key="orderId")
-model_saver = FakeMongoSaver("models")
+@pytest.fixture
+def order_saver():
+    return FakeMongoSaver("orders", query_key="orderId")
 
 
 @pytest.fixture
-def state_machine():
-    sm = StateMachine()
-    sm._save_order = SyncSaveManager(order_saver)  # type: ignore
-    sm._save_model = SyncSaveManager(model_saver)  # type: ignore
+def strategy_saver():
+    return FakeMongoSaver("models")
+
+
+@pytest.fixture
+def state_machine(order_saver, strategy_saver):
+    sm = StateMachine(
+        order_saver=order_saver, strategy_saver=strategy_saver, save_async=False
+    )
     yield sm
     # ensure any existing singleton is destroyed
     StateMachine._instance = None
