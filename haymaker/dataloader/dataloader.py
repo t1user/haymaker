@@ -51,15 +51,12 @@ WATCHDOG: bool = CONFIG.get("watchdog", True)
 SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
 PACER_RESTRICTIONS: bool = CONFIG["pacer_restrictions"]
-
-
-CUTOFF_DATE: date | datetime = NOW - timedelta(days=CONFIG.get("max_period", 30))
-
+MAX_PERIOD = CONFIG.get("max_period", 30)
 
 log.debug(
     f"settings: {BARSIZE=}, {WTS=}, {MAX_BARS=}, {FILL_GAPS=}, "
     f"{AUTO_SAVE_INTERVAL=}, {MAX_NUMBER_OF_WORKERS=}, {STORE=}, {NOW=}"
-    f"{CUTOFF_DATE=}"
+    f"{MAX_PERIOD=}"
 )
 
 
@@ -317,20 +314,15 @@ class Manager:
             for c, hs in zip(contracts, headstamps)
             if isinstance(hs, (date, datetime))
         }
-        debug_string = {
-            contract.localSymbol: headstamp
-            for contract, headstamp in headstamp_dict.items()
-        }
-        log.debug(f"headstamps: {debug_string}")
         return headstamp_dict
 
     def tasks(
-        self, store: StoreWrapper, headstamp: datetime | date
+        self, store: StoreWrapper, start: datetime | date
     ) -> list[DownloadContainer]:
         if FILL_GAPS:
-            tasklist = task_factory_with_gaps(store, headstamp)
+            tasklist = task_factory_with_gaps(store, start)
         else:
-            tasklist = task_factory(store, headstamp)
+            tasklist = task_factory(store, start)
         return [DownloadContainer(*t) for t in tasklist]
 
     @functools.cached_property
@@ -338,8 +330,20 @@ class Manager:
         writers = []
         for contract, headstamp in self.headstamps.items():
             store = StoreWrapper(contract, STORE, NOW)
-            tasks = self.tasks(store, max(headstamp, CUTOFF_DATE))
-            writers.append(DataWriter(contract, store, tasks))
+            try:
+                last_bar_date = min(
+                    datetime.fromisoformat(
+                        contract.lastTradeDateOrContractMonth
+                    ).replace(tzinfo=timezone.utc),
+                    NOW,
+                )
+                start = max(headstamp, last_bar_date - timedelta(days=MAX_PERIOD))
+                tasks = self.tasks(store, start)
+                writers.append(DataWriter(contract, store, tasks))
+            except Exception as e:
+                log.error(
+                    f"{contract=} {contract.lastTradeDateOrContractMonth=} {NOW=} {e}"
+                )
         return writers
 
     @property

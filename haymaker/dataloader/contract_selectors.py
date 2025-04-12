@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import fields
-from datetime import date, datetime
+from datetime import date
 from typing import Self, Type
 
 import ib_insync as ibi
@@ -33,8 +33,6 @@ class ContractSelector:
     for which historical data will be loaded; those objects are not
     guaranteed to be qualified.
     """
-
-    # Consider turning this into async generator
 
     ib: ibi.IB
     sec_types = {
@@ -126,7 +124,8 @@ class FutureContractSelector(ContractSelector):
             "current": CurrentFutureContractSelector,
             "exact": ExactFutureContractSelector,
             "current_and_contfuture": CurrentContfutureFutureContractSelector,
-        }.get(FUTURES_SELECTOR, ContfutureFutureContractSelector)
+            "current_and_expired": CurrentExpiredFutureContractSelector,
+        }.get(FUTURES_SELECTOR, CurrentExpiredFutureContractSelector)
         return klass(**kwargs)
 
     @async_cached_property
@@ -184,13 +183,13 @@ class FullchainFutureContractSelector(FutureContractSelector):
             return [
                 c
                 for c in await self._fullchain
-                if datetime.fromisoformat(c.lastTradeDateOrContractMonth) > today
+                if date.fromisoformat(c.lastTradeDateOrContractMonth) > today
             ]
         elif self.spec == "expired":
             return [
                 c
                 for c in await self._fullchain
-                if datetime.fromisoformat(c.lastTradeDateOrContractMonth) <= today
+                if date.fromisoformat(c.lastTradeDateOrContractMonth) <= today
             ]
         else:
             raise ValueError(
