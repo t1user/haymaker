@@ -1,6 +1,6 @@
 import sys
 from logging import getLogger
-from typing import Callable
+from typing import Callable, Literal, TypeAlias
 
 from ib_insync import IB, Contract, util
 from ib_insync.ibcontroller import IBC, Watchdog
@@ -9,9 +9,10 @@ log = getLogger(__name__)
 
 
 class IBHandlers:
-    def __init__(self, ib: IB, func: Callable) -> None:
+    def __init__(self, ib: IB, func: Callable, cleanup: Callable | None = None) -> None:
         self.ib = ib
         self.func = func
+        self.cleanup = cleanup
         self.ib.connectedEvent += self.onConnected
         self.ib.errorEvent += self.onErr
         self.ib.client.apiError += self.onApiError
@@ -43,7 +44,7 @@ class IBHandlers:
 
 
 class StartWatchdog(IBHandlers):
-    def __init__(self, ib: IB, func: Callable) -> None:
+    def __init__(self, ib: IB, func: Callable, cleanup: Callable | None) -> None:
         log.debug("Initializing watchdog")
         ibc = IBC(
             twsVersion=1023,
@@ -73,8 +74,8 @@ class StartWatchdog(IBHandlers):
         pass
 
 
-class StartNoWatchdog(IBHandlers):
-    def __init__(self, ib: IB, func: Callable) -> None:
+class StartReconnect(IBHandlers):
+    def __init__(self, ib: IB, func: Callable, cleanup: Callable) -> None:
         IBHandlers.__init__(self, ib, func)
         self.host = "localhost"
         self.port = 4002  # this is for paper account
@@ -107,6 +108,8 @@ class StartNoWatchdog(IBHandlers):
         """Initiate re-start when external watchdog manages api connection."""
         log.debug("Disconnected!")
         try:
+            if self.cleanup:
+                self.cleanup()
             util.sleep(60)
         except Exception as e:
             log.debug(f"exception caught: {e}")
@@ -142,15 +145,38 @@ class StartNoWatchdog(IBHandlers):
             # raise e
 
 
-class Connection:
-    def __init__(self, ib: IB, func: Callable, watchdog: bool = False) -> None:
-        if watchdog:
-            self.watchdog(ib, func)
-        else:
-            self.no_watchdog(ib, func)
+class StartWait(StartReconnect):
 
-    def watchdog(self, ib, func):
+    def onDisconnected(self, *args):
+        log.debug("Disconnected. Waiting for reconnection...")
+
+
+Mode: TypeAlias = Literal["watchdog", "reconnect", "wait"]
+
+
+class Connection:
+    def __init__(
+        self,
+        ib: IB,
+        func: Callable,
+        cleanup: Callable | None = None,
+        run_mode: Mode = "reconnect",
+    ) -> None:
+        log.debug(f"Running in {run_mode}")
+        if run_mode == "watchdog":
+            self.watchdog(ib, func, cleanup)
+        elif run_mode == "reconnect":
+            self.reconnect(ib, func, cleanup)
+        elif run_mode == "wait":
+            self.wait(ib, func, cleanup)
+        else:
+            raise ValueError(f"Unknown mode: {run_mode}")
+
+    def watchdog(self, ib, func, cleanup):
         return StartWatchdog(ib, func)
 
-    def no_watchdog(self, ib, func):
-        return StartNoWatchdog(ib, func)
+    def reconnect(self, ib, func, cleanup):
+        return StartReconnect(ib, func)
+
+    def wait(self, ib, func, cleanup):
+        return StartWait(ib, func)

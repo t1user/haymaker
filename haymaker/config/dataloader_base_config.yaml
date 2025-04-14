@@ -3,7 +3,7 @@ barSize: &barSize 30 secs
 wts: &wts TRADES
 max_bars: 150_000 # max number of bars pulled in one request
 max_period: 120 # max duration of downloaded data in days
-watchdog: False
+run_mode: "reconnect"
 max_number_of_workers: 40
 fill_gaps: False
 auto_save_interval: 900 # in secs, zero=off

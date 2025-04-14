@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import fields
 from datetime import date
-from typing import Self, Type
+from typing import AsyncGenerator, Self, Type
 
 import ib_insync as ibi
 
@@ -94,15 +93,15 @@ class ContractSelector:
             )
         return kwargs
 
-    async def objects(self) -> list[ibi.Contract]:
-        try:
+    async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
+        if hasattr(self, "_objects"):
             # this is present only in subclasses
-            # otherwise exception will be caught
-            return await self._objects()  # type: ignore
-        except AttributeError:
-            object_list = [ibi.Contract.create(**self.kwargs)]
-            await self.ib.qualifyContractsAsync(*object_list)
-            return object_list
+            async for ob in self._objects():
+                yield ob
+        else:
+            contract = ibi.Contract.create(**self.kwargs)
+            await self.ib.qualifyContractsAsync(contract)
+            yield contract
 
     def repr(self) -> str:
         kwargs_str = ", ".join([f"{k}={v}" for k, v in self.kwargs.items()])
@@ -162,8 +161,8 @@ class FutureContractSelector(ContractSelector):
 
 class ContfutureFutureContractSelector(FutureContractSelector):
 
-    async def objects(self) -> list[ibi.Contract]:
-        return [await self._contfuture]
+    async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
+        yield await self._contfuture
 
 
 class FullchainFutureContractSelector(FutureContractSelector):
@@ -174,23 +173,26 @@ class FullchainFutureContractSelector(FutureContractSelector):
         cls.spec = spec
         return cls(**kwargs)
 
-    async def _objects(self) -> list[ibi.Contract]:
+    async def _objects(self) -> AsyncGenerator[ibi.Contract, None]:
 
         today = date.today()
+        contracts = await self._fullchain
+
+        if not contracts:
+            log.warning(f"No contracts found for {self.kwargs}")
+            return
+
         if self.spec == "full":
-            return await self._fullchain
+            for contract in contracts:
+                yield contract
         elif self.spec == "active":
-            return [
-                c
-                for c in await self._fullchain
-                if date.fromisoformat(c.lastTradeDateOrContractMonth) > today
-            ]
+            for contract in contracts:
+                if date.fromisoformat(contract.lastTradeDateOrContractMonth) > today:
+                    yield contract
         elif self.spec == "expired":
-            return [
-                c
-                for c in await self._fullchain
-                if date.fromisoformat(c.lastTradeDateOrContractMonth) <= today
-            ]
+            for contract in contracts:
+                if date.fromisoformat(contract.lastTradeDateOrContractMonth) <= today:
+                    yield contract
         else:
             raise ValueError(
                 f"futures_fullchain_spec must be one of: `full`, `active`, `expired`, "
@@ -199,13 +201,13 @@ class FullchainFutureContractSelector(FutureContractSelector):
 
 
 class CurrentFutureContractSelector(FutureContractSelector):
-    async def _objects(self) -> list[ibi.Contract]:
+    async def _objects(self) -> AsyncGenerator[ibi.Contract, None]:
         desired_index = DESIRED_INDEX
         if desired_index == 0:
-            return [await self._current_contract]
+            yield await self._current_contract
         else:
             full_chain = await self._fullchain
-            return [full_chain[await self._current_contract_index + int(desired_index)]]
+            yield full_chain[await self._current_contract_index + int(desired_index)]
 
 
 class CurrentContfutureFutureContractSelector(FutureContractSelector):
@@ -216,18 +218,10 @@ class CurrentContfutureFutureContractSelector(FutureContractSelector):
         self.current = CurrentFutureContractSelector(**kwargs)
         self.contfuture = ContfutureFutureContractSelector(**kwargs)
 
-    async def _current_objects(self) -> None:
-        self.current_objects = await self.current._objects()
-
-    async def _contfuture_objects(self) -> None:
-        self.contfuture_objects = await self.contfuture.objects()
-
-    async def objects(self) -> list[ibi.Contract]:
-        await asyncio.gather(
-            asyncio.create_task(self._current_objects()),
-            asyncio.create_task(self._contfuture_objects()),
-        )
-        return [*self.current_objects, *self.contfuture_objects]
+    async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
+        for gen in (self.current, self.contfuture):
+            async for contract in gen.objects():
+                yield contract
 
 
 class CurrentExpiredFutureContractSelector(FutureContractSelector):
@@ -238,18 +232,10 @@ class CurrentExpiredFutureContractSelector(FutureContractSelector):
         self.current = CurrentFutureContractSelector(**kwargs)
         self.expired = FullchainFutureContractSelector.with_spec("expired", **kwargs)
 
-    async def _current_objects(self) -> None:
-        self.current_objects = await self.current._objects()
-
-    async def _contfuture_objects(self) -> None:
-        self.expired_objects = await self.expired.objects()
-
-    async def objects(self) -> list[ibi.Contract]:
-        await asyncio.gather(
-            asyncio.create_task(self._current_objects()),
-            asyncio.create_task(self._contfuture_objects()),
-        )
-        return [*self.expired_objects, *self.current_objects]
+    async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
+        for gen in (self.current, self.expired):
+            async for contract in gen.objects():
+                yield contract
 
 
 class ExactFutureContractSelector(FutureContractSelector):
