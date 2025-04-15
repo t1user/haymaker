@@ -239,7 +239,7 @@ class ErrorHandlers:
                     f"Corrected position records for strategy "
                     f"{strategies[0]} by {-diff}"
                 )
-                self.sm.save_models()
+                self.sm.save_strategies()
 
             elif (
                 strategies
@@ -247,7 +247,7 @@ class ErrorHandlers:
             ):
                 for strategy in strategies:
                     self.sm.strategy[strategy].position = 0
-                self.sm.save_models()
+                self.sm.save_strategies()
                 log.error(
                     f"Position records zeroed for {strategies} "
                     f"to reflect zero position for {contract.symbol}."
