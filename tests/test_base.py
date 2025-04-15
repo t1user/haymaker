@@ -936,8 +936,7 @@ def test_onData_ignores_attribute_if_no_dict_passed():
     source += out
     source.run()
 
-    with pytest.raises(AttributeError):
-        out.strategy  # type: ignore
+    assert out.strategy != "xxx"
 
 
 def test_onData_sets_attribute_downstream_if_dict_passed():
@@ -1121,3 +1120,60 @@ class Test_data_property:
         c.data.position += 1
         assert a.data.position == 2
         assert d.data.position == 1
+
+
+def test_provided_strategy_name_not_overriden():
+    class A(Atom):
+        def __init__(self, strategy: str):
+            self.strategy = strategy
+            super().__init__()
+
+    a = A("xxx")
+
+    assert a.strategy == "xxx"
+
+
+def test_provided_strategy_name_not_overriden_onStart():
+    class A(Atom):
+        def __init__(self, strategy: str):
+            self.strategy = strategy
+            super().__init__()
+
+    a = A("xxx")
+    b = A("yyy")
+
+    a += b
+
+    a.startEvent.emit({"x": "y"})
+
+    assert b.strategy == "yyy"
+
+
+def test_strategy_updated_if_not_present():
+    class A(Atom):
+        def __init__(self, strategy: str):
+            self.strategy = strategy
+            super().__init__()
+
+    a = A("xxx")
+    b = A("")
+
+    a += b
+
+    a.startEvent.emit({"x": "y", "strategy": a.strategy})
+    assert b.strategy == "xxx"
+
+
+def test_startup_set():
+    class A(Atom):
+        def __init__(self, strategy: str):
+            self.strategy = strategy
+            super().__init__()
+
+    a = A("xxx")
+    b = A("yyy")
+
+    a += b
+
+    a.startEvent.emit({"startup": True})
+    assert b.startup

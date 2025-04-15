@@ -297,7 +297,7 @@ class HistoricalDataStreamer(Streamer):
                 f"{self!s} data requires roll adjustment "
                 f"last bar: {self._last_bar_date}"
             )
-            self.startEvent.emit({"_future_adjust_flag": True})
+            self.startEvent.emit({"future_adjust_flag": True})
             stream = (
                 ev.Sequence(bars[:-1])
                 .pipe(
@@ -429,7 +429,6 @@ class RealTimeBarsStreamer(Streamer):
         )
 
     def onStart(self, data, *args) -> None:
-        # self.startEvent.emit(data, self)
         self._run()
         Atom.onStart(self, data, *args)
 

@@ -258,6 +258,9 @@ class Atom:
     def __init__(self) -> None:
         self._createEvents()
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
+        if not getattr(self, "strategy", None):
+            self.strategy = ""
+        self.startup = False
 
     @property
     def contracts(self):
@@ -329,8 +332,17 @@ class Atom:
         data, *args)`).  If it's async, it will be put in the asyncio
         loop.
         """
-        if isinstance(data, dict):
-            self.__dict__.update(**data)
+        # set strategy if not already set and present in `data` dict
+        if (
+            (self.strategy == "")
+            and isinstance(data, dict)
+            and (strategy := data.get("strategy"))
+        ):
+            self.strategy = strategy
+
+        # set startup to whatever in dict
+        if isinstance(data, dict) and (startup := data.get("startup")):
+            self.startup = startup
         if (self._contract_memo is not None) and (self._contract_memo != self.contract):
             # it will not fire if the system has been restarted after contract changed
             # cannot be relied on for rolls

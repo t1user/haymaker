@@ -45,12 +45,8 @@ class BarAggregator(Atom):
                 log.setLevel(logging.ERROR)
             else:
                 log.setLevel(self._log_level)
-        # everything in data will be set as object properties
-        # start event will be emitted
-        try:
-            super().onStart(data, *args)
-        except Exception as e:
-            log.exception(e)
+            self._future_adjust_flag = data.get("future_adjust_flag", False)
+        super().onStart(data, *args)
 
         if self._future_adjust_flag:
             log.warning(f"{self} onStart knows future needs adjust")
