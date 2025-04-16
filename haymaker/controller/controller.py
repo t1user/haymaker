@@ -392,7 +392,7 @@ class Controller(Atom):
         )
         self.register_position(strategy.strategy, strategy, trade, fill)
 
-    def onCommissionReport(
+    async def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ) -> None:
         """
@@ -405,7 +405,7 @@ class Controller(Atom):
         if self._hold:
             return
 
-        order_info = self.sm.order.get(trade.order.orderId)
+        order_info = await self.sm.save_order_status(trade)
 
         if order_info:
             try:

@@ -469,7 +469,7 @@ class StateMachine:
             f"updating trade status: {trade.order.orderId} {trade.order.permId} "
             f"{trade.orderStatus.status}"
         )
-        # if orderId zero it means trade objects has to be replaced
+        # if orderId is zero, trade object has to be replaced
         order_info = self._orders.get(trade.order.orderId)
         if not order_info:
             order_info = OrderInfo.from_trade(trade)
