@@ -249,7 +249,6 @@ class Controller(Atom):
             strategy = data["strategy"]
             amount = data["amount"]
             target_position = data["target_position"]
-            # TODO: Check transaction integrity only after order is done!
             await asyncio.sleep(self.execution_verification_delay)
             await self.verify_transaction_integrity(strategy, amount, target_position)
         except KeyError:
@@ -371,7 +370,7 @@ class Controller(Atom):
 
     def _cleanup_obsolete_orders(self, strategy: Strategy) -> None:
         """Delete stop/take-profit/close orders for a strategy that has no position.
-        TODO: NOT IN USE"""
+        NOT IN USE"""
         order_infos = self.sm.orders_for_strategy(strategy.strategy)
         for oi in order_infos:
             if (oi.action != "OPEN") and oi.active:
@@ -476,7 +475,7 @@ class Controller(Atom):
         if order_infos:  # exists an order which is not a sl or tp
             # if order(s) still in execution don't check if position achieved yet
             while any([info.active for info in order_infos]):
-                log.warning(
+                log.debug(
                     f"{strategy} taking long to achive target position of {target}"
                 )
                 await asyncio.sleep(self.execution_verification_delay)

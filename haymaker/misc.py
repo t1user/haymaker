@@ -5,7 +5,7 @@ import itertools
 import random
 import string
 from collections import UserDict
-from dataclasses import asdict, fields
+from dataclasses import fields
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Literal

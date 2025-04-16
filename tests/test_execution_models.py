@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import random
 from dataclasses import dataclass
@@ -106,7 +108,7 @@ def test_oca_group_is_not_position_id(controller: Controller):
 
 
 @pytest.fixture
-def objects(Atom):
+def objects(Atom) -> tuple:
 
     @dataclass
     class Data:

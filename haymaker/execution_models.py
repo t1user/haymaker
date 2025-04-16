@@ -155,7 +155,6 @@ class AbstractExecModel(Atom, ABC):
         note: info string for loggers and blotters about the character
         of the transaction (open, close, stop, etc.)
         """
-        # TODO: what if more than one order issued????
         super().onData(data)
         self.dataEvent.emit(data)
 

@@ -17,22 +17,6 @@ from ib_insync import ContFuture, Contract, Future, util
 log = logging.getLogger(__name__)
 
 
-def symbol_extractor(func):
-    """
-    Not in use. TODO.
-
-    Decorator that handles checking if method received Contract object or
-    string. If Contract received convert it to approriate string.
-    """
-
-    def wrapper(symbol, *args, **kwargs):
-        if isinstance(symbol, Contract):
-            symbol = f'{"_".join(symbol.localSymbol.split())}_{symbol.secType}'
-        return func(symbol, *args, **kwargs)
-
-    return wrapper
-
-
 class AbstractBaseStore(ABC):
     """
     Interface for accessing datastores. To be inherited by particular store

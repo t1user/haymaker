@@ -86,7 +86,7 @@ class OrderSyncStrategy:
 
     def handle_inactive_trades(self) -> OrderSyncStrategy:
         """
-        Handle trades that are we have as active (in state machine),
+        Handle trades that we have as active (in state machine),
         but they haven't been matched to open trades in IB.  Try
         finding them in closed trades from the session.
         """
@@ -95,7 +95,6 @@ class OrderSyncStrategy:
             for trade in self.ib.trades()
         }
 
-        # log.debug(f"ib known trades: {list(ib_known_trades.keys())}")
         if self.inactive:
             log.debug(
                 f"inactive trades: "
@@ -134,11 +133,6 @@ class OrderSyncStrategy:
                 f"done: {len(self.done)}, "
                 f"unmatched: {len(self.errors)}"
             )
-        # elif self._issues and not self.done:
-        #     log.debug(f"{self._issues}")
-        #     log.debug(f"{self.done}")
-        #     log.critical("We are fucked and shouldn't proceed!!!")
-        #     self.is_ok = False
         else:
             log.debug("Orders sync OK.")
 
@@ -169,15 +163,7 @@ class PositionSyncStrategy:
         """
 
         broker_positions_dict = {i.contract: i.position for i in self.ib.positions()}
-        # log.debug(
-        #     f"broker positions: "
-        #     f"{ {k.symbol: v for k,v in broker_positions_dict.items()} }"
-        # )
         my_positions_dict = self.sm.strategy.total_positions()
-        # log.debug(
-        #     f"my positions: "
-        #     f"{ {k.symbol: v for k, v in my_positions_dict.items() if v} }"
-        # )
         diff = {
             i: (
                 (my_positions_dict.get(i) or 0.0)
@@ -215,7 +201,6 @@ class ErrorHandlers:
 
         await asyncio.sleep(0)
         try:
-            # TODO: don't know what to do with that yet
             self.clear_error_trades(report.errors)
 
         except Exception as e:
@@ -228,7 +213,6 @@ class ErrorHandlers:
         if not errors:
             return
 
-        # too many externalities... refactor
         log.error("Will attempt to fix position records")
         for contract, diff in errors.items():
             strategies = self.sm.for_contract.get(contract)
@@ -265,7 +249,7 @@ class ErrorHandlers:
                         )
 
             else:
-                # TODO: ASSIGN POSITION TO UNKNOWN or random or close position
+                # too risky to make assumptions about strategy (what about sl?)
                 log.critical(
                     f"More than 1 strategy for contract {contract.symbol}, "
                     f"cannot fix position records."

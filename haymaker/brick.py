@@ -15,25 +15,6 @@ from .base import Atom
 log = logging.getLogger(__name__)
 
 
-def register_key(key: str):
-    """
-    Decorator to be used on :meth:`onData` to wrap the data in a
-    dictionary with given `key`.  Used to signal to the next atom down
-    the chain that this data needs specific interpreation.
-
-
-    NOT IN USE.
-    """
-
-    def add_key(func):
-        def wrapper(func, data, *args):
-            return {key: func(data, *args)}
-
-        return wrapper
-
-    return add_key
-
-
 @dataclass
 class AbstractBaseBrick(Atom, ABC):
     strategy: str

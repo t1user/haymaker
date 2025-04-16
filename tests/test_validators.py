@@ -35,7 +35,7 @@ def test_validator_incorrect_value():
 def test_validator_correct_value_with_dataclass():
     @dataclass
     class A:
-        a: int
+        a: int  # type: ignore
 
     class B(A):
         a = Validator(is_int)
@@ -47,7 +47,7 @@ def test_validator_correct_value_with_dataclass():
 def test_validator_incorrect_value_with_dataclass():
     @dataclass
     class A:
-        a: int
+        a: int  # type: ignore
 
     class B(A):
         a = Validator(is_int)
@@ -62,7 +62,7 @@ def test_validator_correct_value_with_inheriting_dataclass():
 
     @dataclass
     class A(B):
-        a: int
+        a: int  # type: ignore
 
     aaa = A(5)
     assert aaa.a == 5
@@ -74,7 +74,7 @@ def test_validator_incorrect_value_with_inheriting_dataclass():
 
     @dataclass
     class A(B):
-        a: int
+        a: int  # type: ignore
 
     with pytest.raises(ValueError):
         A("xxx")
