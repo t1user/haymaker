@@ -157,16 +157,16 @@ def objects(Atom):
 
         def trade(
             self,
-            strategy: str,
+            strategy_str: str,
             contract: ibi.Contract,
             order: ibi.Order,
             action: str,
-            data: Strategy,
-        ):
+            strategy: Strategy,
+        ) -> ibi.Trade:
             output_data.contract = contract
             output_data.order = order
             output_data.action = action
-            return super().trade(strategy, contract, order, action, data)
+            return super().trade(strategy_str, contract, order, action, strategy)
 
     class Source(Atom):
         pass
