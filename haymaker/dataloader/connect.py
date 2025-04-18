@@ -79,7 +79,6 @@ class StartReconnect(IBHandlers):
         IBHandlers.__init__(self, ib, func)
         self.host = "localhost"
         self.port = 4002  # this is for paper account
-        # self.id = randint(2, 1000)
         self.get_clientId()
 
     def get_clientId(self) -> None:
@@ -87,9 +86,8 @@ class StartReconnect(IBHandlers):
         for i in range(1, 20):
             self.id = i
             try:
+                log.info(f"Will connect with clientId: {i}")
                 self.connect()
-                log.info(f"connected with clientId: {i}")
-                return
             except ConnectionRefusedError:
                 log.error("TWS or IB Gateway is not running.")
                 break
@@ -105,31 +103,38 @@ class StartReconnect(IBHandlers):
         self.run()
 
     def onDisconnected(self, *args) -> None:
-        """Initiate re-start when external watchdog manages api connection."""
         log.debug("Disconnected!")
         try:
             if self.cleanup:
+                log.debug("Will cleanup.")
                 self.cleanup()
-            util.sleep(60)
+            # util.sleep(60)
         except Exception as e:
             log.debug(f"exception caught: {e}")
-        log.debug("will attempt reconnection")
-        self.connect()
+        # log.debug("will attempt reconnection")
+        # self.connect()
 
     def connect(self) -> None:
         """Establish conection while not using watchdog."""
-        log.debug("Connecting....")
-        counter = 0
+        log.debug("About to establish connection.")
+        failed_attempts = 0
         while not self.ib.isConnected():
             try:
+                log.debug("Connecting....")
+                # this is a blocking method so will get out of it
+                # only after disconnection
                 self.ib.connect(self.host, self.port, self.id)
+                log.debug("Pausing 60 secs before reconnection attempt.")
+                util.sleep(60)
             except ConnectionRefusedError as e:
                 log.debug(f"While attepting reconnection: {e}")
+                failed_attempts += 1
                 util.sleep(30)
                 log.debug("post sleep...")
             except Exception as e:
                 log.debug(f"Connection error: {e}")
-                if counter > 10:
+                failed_attempts += 1
+                if failed_attempts > 10:
                     log.error("Reconnection attempt failed afer 10 retries.")
 
     def run(self) -> None:
@@ -146,9 +151,53 @@ class StartReconnect(IBHandlers):
 
 
 class StartWait(StartReconnect):
+    """
+    After disconnection wait for IB to resolve the issue by itself.
+    """
+
+    def __init__(self, ib, func, cleanup):
+        self._started = False
+        super().__init__(ib, func, cleanup)
 
     def onDisconnected(self, *args):
         log.debug("Disconnected. Waiting for reconnection...")
+
+    def connect(self) -> None:
+        failed_attempts = 0
+        while not self.ib.isConnected():
+            try:
+                log.debug("Connecting....")
+                # this is a blocking method so will get out of it
+                # only after disconnection
+                self.ib.connect(self.host, self.port, self.id)
+                log.debug("Pausing 60 secs before reconnection attempt.")
+                util.sleep(60)
+            except ConnectionRefusedError as e:
+                log.debug(f"While attepting reconnection: {e}")
+                failed_attempts += 1
+                util.sleep(30)
+                log.debug("post sleep...")
+            except Exception as e:
+                log.debug(f"Connection error: {e}")
+                failed_attempts += 1
+                if failed_attempts > 10:
+                    log.error("Reconnection attempt failed afer 10 retries.")
+
+    #     try:
+    #         self.ib.connect(self.host, self.port, self.id)
+    #     except ConnectionRefusedError as e:
+    #         log.debug(f"While attepting reconnection: {e}")
+    #         util.sleep(30)
+    #         log.debug("post sleep...")
+    #     except Exception as e:
+    #         log.debug(f"Connection error: {e}")
+
+    # def run(self) -> None:
+    #     if not self._started:
+    #         super().run()
+    #         self._started = True
+    #     else:
+    #         log.debug("waiting for ib to resume sending data...")
 
 
 Mode: TypeAlias = Literal["watchdog", "reconnect", "wait"]
@@ -173,10 +222,10 @@ class Connection:
             raise ValueError(f"Unknown mode: {run_mode}")
 
     def watchdog(self, ib, func, cleanup):
-        return StartWatchdog(ib, func)
+        return StartWatchdog(ib, func, cleanup)
 
     def reconnect(self, ib, func, cleanup):
-        return StartReconnect(ib, func)
+        return StartReconnect(ib, func, cleanup)
 
     def wait(self, ib, func, cleanup):
-        return StartWait(ib, func)
+        return StartWait(ib, func, cleanup)

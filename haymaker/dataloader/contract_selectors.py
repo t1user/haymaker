@@ -100,7 +100,8 @@ class ContractSelector:
                 yield ob
         else:
             contract = ibi.Contract.create(**self.kwargs)
-            await self.ib.qualifyContractsAsync(contract)
+            if contract.conId == 0:
+                await self.ib.qualifyContractsAsync(contract)
             yield contract
 
     def repr(self) -> str:
@@ -147,7 +148,7 @@ class FutureContractSelector(ContractSelector):
         future_kwargs = ibi.util.dataclassNonDefaults(await self._contfuture)
         future_kwargs["secType"] = "FUT"
         new_contract = ibi.Contract.create(**future_kwargs)
-        await self.ib.qualifyContractsAsync(new_contract)
+        # await self.ib.qualifyContractsAsync(new_contract)
         return new_contract
 
     @async_cached_property
