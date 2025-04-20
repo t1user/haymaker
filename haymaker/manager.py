@@ -31,12 +31,12 @@ class InitData:
     _contracts: dict[int, ibi.Contract] = field(default_factory=dict, repr=False)
 
     async def __call__(self) -> Self:
-        log.debug(f"---------- INIT START -----> {len(self._contracts)} contracts.")
+        log.debug(f"---------- INIT START -----> {len(self.contract_dict)} contracts.")
         if not self._contracts:
+            self._contracts = self.contract_dict.copy()
             log.debug(
                 f"contracts blueprint saved: {[c for c in self._contracts.values()]}"
             )
-            self._contracts = self.contract_dict.copy()
         details = await self.acquire_contract_details(list(self._contracts.values()))
         log.debug(f"Acquired details for {len(details)} contracts.")
         selectors = (selector_factory(details_list) for details_list in details)

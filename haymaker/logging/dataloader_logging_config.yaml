@@ -9,7 +9,7 @@ formatters:
 
 handlers:
   console:
-    class: logging.StreamHandler
+    class: haymaker.logging.setup.TqdmLoggingHandler
     level: DEBUG
     formatter: default
     stream: ext://sys.stdout

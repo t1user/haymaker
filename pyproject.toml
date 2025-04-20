@@ -20,6 +20,8 @@ dependencies = [
   "pandas-market-calendars",
   "numba",
   "pyyaml",
+  "tqdm",
+  "types-tqdm",
 ]
 description = 'Framework for trading with Interactive Brokers through ib_insync'
 dynamic = ["version"]

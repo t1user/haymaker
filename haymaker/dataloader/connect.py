@@ -160,7 +160,7 @@ class StartWait(StartReconnect):
         super().__init__(ib, func, cleanup)
 
     def onDisconnected(self, *args):
-        log.debug("Disconnected. Waiting for reconnection...")
+        log.debug("Disconnected!")
 
     def connect(self) -> None:
         failed_attempts = 0

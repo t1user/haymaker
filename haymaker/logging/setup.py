@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Union
 
 import yaml
+from tqdm import tqdm
 
 from haymaker.config import CONFIG
 from haymaker.misc import default_path
@@ -25,6 +26,15 @@ logging.addLevelName(60, "NOTIFY")
 
 logger = logging.getLogger("haymaker")
 logger.setLevel(level)
+
+
+class TqdmLoggingHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+        except Exception:
+            self.handleError(record)
 
 
 class UTCFormatter(logging.Formatter):

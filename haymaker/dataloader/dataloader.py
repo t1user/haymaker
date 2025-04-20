@@ -10,6 +10,7 @@ from typing import AsyncGenerator, Optional, TypedDict
 
 import ib_insync as ibi
 import pandas as pd
+from tqdm import tqdm
 
 from haymaker.config import CONFIG
 from haymaker.datastore import AbstractBaseStore
@@ -111,7 +112,7 @@ class DataWriter:
     def __post_init__(self) -> None:
         if self._pulse:
             self._pulse += self._onPulse
-        log.info(f"{self!r} initialized.")
+        log.debug(f"{self!r} initialized.")
 
     async def _onPulse(self, time: datetime):
         if self.is_done():
@@ -169,7 +170,7 @@ class DataWriter:
                 data = pd.DataFrame()
             data = pd.concat([data, _data])
             version = await self.store.write_async(self.contract, data)
-            log.info(
+            log.debug(
                 f"{self!s} written to store {_data.index[0]} - {_data.index[-1]} "
                 f"{version}"
             )
@@ -298,11 +299,16 @@ class Manager:
 
     async def contracts(self) -> AsyncGenerator[ibi.Contract, None]:
         ContractSelector.set_ib(self.ib)
-        for s in self.sources:
-            async for contract in ContractSelector.from_kwargs(**s).objects():
-                # we've been calling api so to prevent pacing violation
-                await asyncio.sleep(1)
-                yield contract
+        with tqdm(self.sources, desc="Sources") as source_pbar:
+            for s in source_pbar:
+                contract_selector = ContractSelector.from_kwargs(**s)
+                with tqdm(desc="Contracts", leave=False, total=None) as contract_pbar:
+                    async for contract in contract_selector.objects():
+                        # ContractSelector has been calling the api,
+                        # so to prevent pacing violation
+                        await asyncio.sleep(1)
+                        yield contract
+                        contract_pbar.update(1)
 
     async def headstamps(
         self,
