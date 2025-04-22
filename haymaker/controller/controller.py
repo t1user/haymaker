@@ -142,9 +142,19 @@ class Controller(Atom):
         if self.log_order_events:
             self._order_loggers = OrderLoggers(self.ib)
 
+        if missing_contracts := self.verify_have_contracts_for_positions():
+            log.critical(
+                f"No qualified contracts for open position: {missing_contracts}"
+            )
+
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
+
+    def verify_have_contracts_for_positions(self) -> list[ibi.Contract]:
+        return [
+            p.contract for p in self.ib.positions() if p.contract not in self.contracts
+        ]
 
     def set_hold(self) -> None:
         self._hold = True
