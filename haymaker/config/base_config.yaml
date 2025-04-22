@@ -102,5 +102,5 @@ tp_order:
   tif: GTC
   # outsideRth: True # seems never accepted
   
-# all linked orders will use this oca_type (as per IB definition)
-oca_type: 1
+# all linked orders will use this oca_type (as per IB definition:  https://www.interactivebrokers.com/campus/ibkr-api-page/order-types/#one-cancels-all-orders)
+oca_type: 2

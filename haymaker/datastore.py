@@ -118,10 +118,7 @@ class AbstractBaseStore(ABC):
         Otherwise return empty dict.
         """
         if isinstance(obj, Contract):
-            return {
-                **util.dataclassNonDefaults(obj),
-                **{"repr": repr(obj), "secType": obj.secType, "object": obj},
-            }
+            return {**util.dataclassNonDefaults(obj), "repr": repr(obj)}
         else:
             return {}
 
@@ -457,9 +454,6 @@ class ArcticStore(AbstractBaseStore):
         if isinstance(obj, Contract):
             meta = super()._metadata(obj)
             meta.update({"object": pickle.dumps(obj)})
-            # Unconmment following line if pickled object is not to be saved
-            # Will make data unusable for backtester
-            # meta.update({'object': None})
         else:
             meta = {}
         return meta
