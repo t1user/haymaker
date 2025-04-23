@@ -407,7 +407,7 @@ class EventDrivenExecModel(BaseExecModel):
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
         # called once for sl/tp pair! Don't put inside the for loop!
-        log.debug(f"Will attach bracket for {trade.order.orderId}")
+        log.debug(f"Will attach brackets for {trade.order.orderId}")
         try:
             dynamic_bracket_kwargs = self._dynamic_bracket_kwargs()
             for bracket, order_key, label in zip(
@@ -439,6 +439,9 @@ class EventDrivenExecModel(BaseExecModel):
                         order,
                         label,
                     )
+                    # this doesn't make it into database now, because it's updating
+                    # a nested dict and only top one triggers a save
+                    # so potentially it's obsolete
                     self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
                         cast(BracketLabel, label),
                         order_key,

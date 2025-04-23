@@ -19,6 +19,7 @@ from haymaker.trader import FakeTrader, Trader
 from .future_roller import FutureRoller
 from .sync_routines import (
     ErrorHandlers,
+    OrderReconciliationSync,
     OrderSyncStrategy,
     PositionSyncStrategy,
     Terminator,
@@ -241,6 +242,7 @@ class Controller(Atom):
 
             error_position_report = PositionSyncStrategy.run(self.ib, self.sm)
             await self.sync_handlers.handle_positions(error_position_report)
+            OrderReconciliationSync.run(self)
 
             log.debug("--- Sync completed ---")
         else:
@@ -377,15 +379,6 @@ class Controller(Atom):
                 )
         except Exception as e:
             log.exception(e)
-
-    def _cleanup_obsolete_orders(self, strategy: Strategy) -> None:
-        """Delete stop/take-profit/close orders for a strategy that has no position.
-        NOT IN USE"""
-        order_infos = self.sm.orders_for_strategy(strategy.strategy)
-        for oi in order_infos:
-            if (oi.action != "OPEN") and oi.active:
-                log.debug(f"Resting order cleanup: {oi.action, oi.trade.order.orderId}")
-                self.trader.cancel(oi.trade)
 
     async def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """
