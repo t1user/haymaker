@@ -20,20 +20,7 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
     Actual position size or even whether the position should be taken
     at all is not determined here, it's the job of `Portfolio`.
 
-    * Zero signal means close position if position exists, ignored
-    otherwise <<<<--- THIS IS WRONG
-
-    * Non-zero signal means:
-
-    ** open new position if there is no position for the strategy
-
-    ** ignore signal if it's in the same direction as existing
-    position
-
-    ** reverse position if the signal is in the direction opposite to
-    existing position
-
-    This behaviour can be modified in sub-classes, by overriding
+    Actual meaning of signals is defined in sub-classes, by overriding
     methods: :meth:`process_position` and :meth:`process_no_position`.
 
     Whatever the meaning of the signal coming in, signal coming out
@@ -41,6 +28,9 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
     `signal`, as indicated by keys `action` and `signal` in the
     emitted dict.  Incoming signals that don't require any action will
     be stopped here and not propagated down the chain.
+
+    In sub-class names `blip` means zero signal should be ignored,
+    othewise absence of signal means there should be no position.
 
     Args:
     -----
@@ -79,7 +69,6 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
         self._position: float = 0.0
         Atom.__init__(self)
 
-    # onStart must set strategy
     def onData(self, data: dict[str, Any], *args) -> None:
         try:
             signal_in = data[self.signal_in_field]
@@ -91,6 +80,7 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
                 fields = f"{self.signal_in_field}, {self.signal_out_field}"
             log.exception(f"Missing `{fields}` expected by {self} in `onData`")
             return
+        # 'strategy' must exist, likely set by onStart
         strategy = data.get("strategy") or self.strategy
         if result := self.process_signal(strategy, signal_in, signal_out):
             data.update(
@@ -170,8 +160,23 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
 
 
 class BinarySignalProcessor(AbstractBaseBinarySignalProcessor):
+    """
+    * Zero signal means close position if position exists
+
+    * Non-zero signal means:
+
+    ** open new position if there is no position for the strategy
+
+    ** ignore signal if it's in the same direction as existing
+    position
+
+    ** close position if the signal is in the direction opposite to
+    existing position
+
+    """
+
     def process_zero_signal_position(self, strategy, signal) -> Action | None:
-        return None
+        return "CLOSE"
 
     def process_non_zero_signal_position(self, strategy, signal) -> Action | None:
         # We've already checked signal is not same direction as position
@@ -181,6 +186,26 @@ class BinarySignalProcessor(AbstractBaseBinarySignalProcessor):
         return "OPEN"
 
 
+class BlipBinarySignalProcessor(BinarySignalProcessor):
+    """
+    * Zero signal means do nothing
+
+    * Non-zero signal means:
+
+    ** open new position if there is no position for the strategy
+
+    ** ignore signal if it's in the same direction as existing
+    position
+
+    ** close position if the signal is in the direction opposite to
+    existing position
+
+    """
+
+    def process_zero_signal_position(self, strategy, signal) -> Action | None:
+        return None
+
+
 class LockableBinarySignalProcessor(AbstractBaseBinarySignalProcessor):
     """
     * Signals in the direction of last position are ignored (one side
@@ -188,8 +213,18 @@ class LockableBinarySignalProcessor(AbstractBaseBinarySignalProcessor):
     determine which side is 'locked' based on position actually taken
     in the market (not just previously generated signals).
 
-    * Zero signal means close position if position exists, ignored
-    otherwise
+    * Zero signal means close position if position exists
+
+    * Non-zero signal means:
+
+    ** open new position if there is no position for the strategy
+
+    ** ignore signal if it's in the same direction as existing
+    position
+
+    ** close position if the signal is in the direction opposite to
+    existing position
+
     """
 
     def __init__(
@@ -216,7 +251,7 @@ class LockableBinarySignalProcessor(AbstractBaseBinarySignalProcessor):
     def process_non_zero_signal_position(self, strategy, signal) -> Action | None:
         # We've already checked signal is not same direction as position
         # Zero signal means "CLOSE", oppposite signal means "REVERSE"
-        return "REVERSE"
+        return "CLOSE"
 
     def process_non_zero_signal_no_position(self, strategy, signal) -> Action | None:
         if self.locked(strategy, signal):
@@ -232,19 +267,44 @@ class LockableBlipBinarySignalProcessor(LockableBinarySignalProcessor):
     determine which side is 'locked' based on position actually taken
     in the market (not just previously generated signals).
 
-    * Zero signals ignored
+    * Zero signal means do nothing
+
+    * Non-zero signal means:
+
+    ** open new position if there is no position for the strategy
+
+    ** ignore signal if it's in the same direction as existing
+    position
+
+    ** close position if the signal is in the direction opposite to
+    existing position
+
     """
 
     def process_zero_signal_position(self, strategy, signal) -> Action | None:
         return None
 
-    def process_non_zero_signal_position(self, strategy, signal) -> Action | None:
-        # We've already checked signal is not same direction as position
-        # Zero signal means "CLOSE", oppposite signal means "REVERSE"
-        return "CLOSE"
-
 
 class AlwaysOnLockableBinarySignalProcessor(LockableBinarySignalProcessor):
+    """
+    * Signals in the direction of last position are ignored (one side
+    of the market is 'locked').  It's up to :class:`StateMachine` to
+    determine which side is 'locked' based on position actually taken
+    in the market (not just previously generated signals).
+
+    * Zero signal means close position if position exists
+
+    * Non-zero signal means:
+
+    ** open new position if there is no position for the strategy
+
+    ** ignore signal if it's in the same direction as existing
+    position
+
+    ** reverse position if the signal is in the direction opposite to
+    existing position
+    """
+
     def __init__(
         self,
         signal_fields: str | tuple[str, str] | list[str] = "signal",
@@ -260,6 +320,21 @@ class AlwaysOnLockableBinarySignalProcessor(LockableBinarySignalProcessor):
 
 
 class AlwaysOnBinarySignalProcessor(BinarySignalProcessor):
+    """
+    * Zero signal means close position if position exists
+
+    * Non-zero signal means:
+
+    ** open new position if there is no position for the strategy
+
+    ** ignore signal if it's in the same direction as existing
+    position
+
+    ** close position if the signal is in the direction opposite to
+    existing position
+
+    """
+
     def __init__(
         self,
         signal_fields: str | tuple[str, str] | list[str] = "signal",

@@ -145,6 +145,9 @@ Implementations
 .. autoclass:: haymaker.signals.BinarySignalProcessor
    :members:
 
+.. autoclass:: haymaker.signals.BlipBinarySignalProcessor
+   :members:
+      
 .. autoclass:: haymaker.signals.LockableBinarySignalProcessor
    :members:
 

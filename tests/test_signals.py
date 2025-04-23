@@ -7,6 +7,7 @@ from haymaker.signals import (
     AlwaysOnBinarySignalProcessor,
     AlwaysOnLockableBinarySignalProcessor,
     BinarySignalProcessor,
+    BlipBinarySignalProcessor,
     LockableBinarySignalProcessor,
     LockableBlipBinarySignalProcessor,
     binary_signal_processor_factory,
@@ -114,8 +115,8 @@ def test_target_position_included_in_output(pipe):
         # pos, lock, signal, lockable, always_on
         ((0, 0, 0, False, False), None),  # No signal must generate no signal
         ((0, 1, 0, True, False), None),  # No signal must generate no signal
-        ((1, 0, 0, False, False), None),  # No signal no change (blip based)
-        ((-1, 0, 0, False, False), None),  # No signal no change (blip based)
+        ((1, 0, 0, False, False), "CLOSE"),  # Zero signal, zero position (lockable)
+        ((-1, 0, 0, False, False), "CLOSE"),  # Zero signal, zero position (lockable)
         ((1, 0, 0, True, False), "CLOSE"),  # Zero signal, zero position (lockable)
         ((-1, 0, 0, True, False), "CLOSE"),  # Zero signal, zero position (lockable)
         # ---
@@ -168,8 +169,8 @@ def test_signal_paths_actions(test_input, expected, StateMachine):
         # pos, lock, signal, lockable, always_on
         ((0, 0, 0, False, False), None),  # No signal must generate no signal
         ((0, 1, 0, True, False), None),  # No signal must generate no signal
-        ((1, 0, 0, False, False), None),  # No signal no change (blip based)
-        ((-1, 0, 0, False, False), None),  # No signal no change (blip based)
+        ((1, 0, 0, False, False), 0),  # Zero signal means no position
+        ((-1, 0, 0, False, False), 0),  # Zero signal means no position
         ((1, 0, 0, True, False), 0),  # Zero signal, (lockable)
         ((-1, 0, 0, True, False), 0),  # Zero signal (lockable)
         # ---
@@ -209,6 +210,7 @@ def test_signal_paths_positions(test_input, expected, StateMachine):
     output = OutputAtom()
 
     processor = binary_signal_processor_factory(lockable, always_on)
+    print(processor)
     processor_instance = processor(state_machine=sm)
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
@@ -229,8 +231,8 @@ def test_signal_paths_positions(test_input, expected, StateMachine):
         ((0, 0), None),
         ((0, 1), "OPEN"),
         ((0, -1), "OPEN"),
-        ((1, 0), None),
-        ((-1, 0), None),
+        ((1, 0), "CLOSE"),
+        ((-1, 0), "CLOSE"),
         ((1, 1), None),
         ((1, -1), "CLOSE"),
         ((-1, 1), "CLOSE"),
@@ -250,6 +252,31 @@ def test_signal_paths_BinarySignalProcessor(test_input, expected, StateMachine):
 
 @pytest.mark.parametrize(
     "test_input,expected",
+    [  # pos, sig
+        ((0, 0), None),
+        ((0, 1), "OPEN"),
+        ((0, -1), "OPEN"),
+        ((1, 0), None),
+        ((-1, 0), None),
+        ((1, 1), None),
+        ((1, -1), "CLOSE"),
+        ((-1, 1), "CLOSE"),
+        ((-1, -1), None),
+    ],
+)
+def test_signal_paths_BlipBinarySignalProcessor(test_input, expected, StateMachine):
+    position, signal = test_input
+
+    sm = StateMachine(position=position)
+
+    processor_instance = BlipBinarySignalProcessor(state_machine=sm)
+    action = processor_instance.process_signal("x", signal, signal)
+
+    assert action == expected
+
+
+@pytest.mark.parametrize(
+    "test_input,expected",
     [
         # pos, signal, lock
         ((0, 0, 0), None),
@@ -258,8 +285,8 @@ def test_signal_paths_BinarySignalProcessor(test_input, expected, StateMachine):
         ((1, 0, 0), "CLOSE"),
         ((-1, 0, 0), "CLOSE"),
         ((1, 1, 0), None),
-        ((1, -1, 0), "REVERSE"),
-        ((-1, 1, 0), "REVERSE"),
+        ((1, -1, 0), "CLOSE"),
+        ((-1, 1, 0), "CLOSE"),
         ((-1, -1, 0), None),
         ((0, 0, 1), None),
         ((0, 1, 1), None),
@@ -267,7 +294,7 @@ def test_signal_paths_BinarySignalProcessor(test_input, expected, StateMachine):
         ((1, 0, 1), "CLOSE"),
         ((-1, 0, 1), "CLOSE"),
         ((1, 1, 1), None),
-        ((1, -1, 1), "REVERSE"),
+        ((1, -1, 1), "CLOSE"),
         # ((-1, 1, 1), "CLOSE"), IMPOSSIBLE
         ((-1, -1, 1), None),
         ((0, 0, -1), None),
@@ -277,7 +304,7 @@ def test_signal_paths_BinarySignalProcessor(test_input, expected, StateMachine):
         ((-1, 0, -1), "CLOSE"),
         ((1, 1, -1), None),
         # ((1, -1, -1), "CLOSE"), IMPOSSIBLE
-        ((-1, 1, -1), "REVERSE"),
+        ((-1, 1, -1), "CLOSE"),
         ((-1, -1, -1), None),
     ],
 )
@@ -392,8 +419,8 @@ def test_signal_paths_AlwaysOnLockableBinarySignalProcessor(
         ((0, 0), None),
         ((0, 1), "OPEN"),
         ((0, -1), "OPEN"),
-        ((1, 0), None),
-        ((-1, 0), None),
+        ((1, 0), "CLOSE"),
+        ((-1, 0), "CLOSE"),
         ((1, 1), None),
         ((1, -1), "REVERSE"),
         ((-1, 1), "REVERSE"),
@@ -422,8 +449,8 @@ def test_signal_paths_AlwaysOnBinarySignalProcessor(test_input, expected, StateM
         ((0, 0), None),
         ((0, 1), 1),
         ((0, -1), -1),
-        ((1, 0), None),
-        ((-1, 0), None),
+        ((1, 0), 0),
+        ((-1, 0), 0),
         ((1, 1), None),
         ((1, -1), 0),
         ((-1, 1), 0),
@@ -462,6 +489,50 @@ def test_signal_paths_positions_BinarySignalProcessor(
 
 @pytest.mark.parametrize(
     "test_input,expected",
+    [  # pos, sig
+        ((0, 0), None),
+        ((0, 1), 1),
+        ((0, -1), -1),
+        ((1, 0), None),
+        ((-1, 0), None),
+        ((1, 1), None),
+        ((1, -1), 0),
+        ((-1, 1), 0),
+        ((-1, -1), None),
+    ],
+)
+def test_signal_paths_positions_BlipBinarySignalProcessor(
+    test_input, expected, StateMachine
+):
+    position, signal = test_input
+
+    class FakeStateMachine(StateMachine):
+
+        def locked(self, key):
+            raise TypeError("Shouldn't be here")
+
+    sm = FakeStateMachine(position)
+    strategy = sm.strategy["x"]
+    strategy.position = position
+
+    class OutputAtom(Atom):
+        out = {}
+
+        def onData(self, data, *args):
+            self.out = data
+
+    output = OutputAtom()
+    processor_instance = BlipBinarySignalProcessor(state_machine=sm)
+    processor_instance += output
+    processor_instance.onData({"strategy": "x", "signal": signal})
+
+    target_position = output.out.get("target_position")
+
+    assert target_position == expected
+
+
+@pytest.mark.parametrize(
+    "test_input,expected",
     [
         # pos, signal, lock
         ((0, 0, 0), None),
@@ -470,8 +541,8 @@ def test_signal_paths_positions_BinarySignalProcessor(
         ((1, 0, 0), 0),
         ((-1, 0, 0), 0),
         ((1, 1, 0), None),
-        ((1, -1, 0), -1),
-        ((-1, 1, 0), 1),
+        ((1, -1, 0), 0),
+        ((-1, 1, 0), 0),
         ((-1, -1, 0), None),
         ((0, 0, 1), None),
         ((0, 1, 1), None),
@@ -479,7 +550,7 @@ def test_signal_paths_positions_BinarySignalProcessor(
         ((1, 0, 1), 0),
         ((-1, 0, 1), 0),
         ((1, 1, 1), None),
-        ((1, -1, 1), -1),
+        ((1, -1, 1), 0),
         # ((-1, 1, 1), "CLOSE"), IMPOSSIBLE
         ((-1, -1, 1), None),
         ((0, 0, -1), None),
@@ -489,7 +560,7 @@ def test_signal_paths_positions_BinarySignalProcessor(
         ((-1, 0, -1), 0),
         ((1, 1, -1), None),
         # ((1, -1, -1), "CLOSE"), IMPOSSIBLE
-        ((-1, 1, -1), 1),
+        ((-1, 1, -1), 0),
         ((-1, -1, -1), None),
     ],
 )
@@ -581,8 +652,8 @@ def test_signal_paths_positions_AlwaysOnLockableBinarySignalProcessor(
         ((0, 0), None),
         ((0, 1), 1),
         ((0, -1), -1),
-        ((1, 0), None),
-        ((-1, 0), None),
+        ((1, 0), 0),
+        ((-1, 0), 0),
         ((1, 1), None),
         ((1, -1), -1),
         ((-1, 1), 1),
@@ -623,8 +694,8 @@ def test_signal_paths_positions_AlwaysOnBinarySignalProcessor(
         ((0, -1, 1), -1),
         ((1, 0, 1), None),  # out signals should be ignored if in the same direction
         ((-1, 0, -1), None),  # out signals should be ignored if in the same direction
-        ((1, -1, 0), None),  # in signals should be ignored if position exists
-        ((-1, 1, 0), None),  # in signals should be ignored if position exists
+        ((1, -1, 0), 0),  # in signals should be ignored if position exists
+        ((-1, 1, 0), 0),  # in signals should be ignored if position exists
         ((1, -1, -1), 0),  # out signals should be acted on
         ((-1, 1, 1), 0),  # out signals should be acted on
         ((1, 0, -1), 0),  # out signals should be acted on
@@ -645,6 +716,50 @@ def test_double_signals_BinarySignalProcessor(test_input, expected, StateMachine
     output = OutputAtom()
 
     processor_instance = BinarySignalProcessor(
+        signal_fields=("signal_in", "signal_out"), state_machine=sm
+    )
+    processor_instance += output
+    processor_instance.onData(
+        {"strategy": "x", "signal_in": signal_in, "signal_out": signal_out}
+    )
+
+    target_position = output.out.get("target_position")
+
+    assert target_position == expected
+
+
+@pytest.mark.parametrize(
+    "test_input,expected",
+    [  # pos, sig_in, sig_out
+        ((0, 0, 1), None),
+        ((0, 1, 0), 1),
+        ((0, -1, 0), -1),
+        ((0, 1, -1), 1),
+        ((0, -1, 1), -1),
+        ((1, 0, 1), None),  # out signals should be ignored if in the same direction
+        ((-1, 0, -1), None),  # out signals should be ignored if in the same direction
+        ((1, -1, 0), None),  # in signals should be ignored if position exists
+        ((-1, 1, 0), None),  # in signals should be ignored if position exists
+        ((1, -1, -1), 0),  # out signals should be acted on
+        ((-1, 1, 1), 0),  # out signals should be acted on
+        ((1, 0, -1), 0),  # out signals should be acted on
+        ((-1, 0, 1), 0),  # out signals should be acted on
+    ],
+)
+def test_double_signals_BlipBinarySignalProcessor(test_input, expected, StateMachine):
+    position, signal_in, signal_out = test_input
+
+    sm = StateMachine(position)
+
+    class OutputAtom(Atom):
+        out = {}
+
+        def onData(self, data, *args):
+            self.out = data
+
+    output = OutputAtom()
+
+    processor_instance = BlipBinarySignalProcessor(
         signal_fields=("signal_in", "signal_out"), state_machine=sm
     )
     processor_instance += output
