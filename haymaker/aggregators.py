@@ -105,7 +105,7 @@ class BarAggregator(Atom):
         turned off by passing `future_adjust_type=None` while
         initiating the class.
         """
-        log.warning(f"{self} inside future adjust")
+        log.warning(f"{self} adjusting future.")
         if self.operator is None:
             log.error(f"Skipping futures adjustment on {self}")
             return
