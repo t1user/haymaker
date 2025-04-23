@@ -412,7 +412,6 @@
 <span class="sd">        note: info string for loggers and blotters about the character</span>
 <span class="sd">        of the transaction (open, close, stop, etc.)</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="c1"># TODO: what if more than one order issued????</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onData</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">data</span><span class="p">)</span></div>
 </div>
@@ -684,7 +683,7 @@
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_attach_bracket</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trade</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Trade</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="c1"># called once for sl/tp pair! Don&#39;t put inside the for loop!</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Will attach bracket for </span><span class="si">{</span><span class="n">trade</span><span class="o">.</span><span class="n">order</span><span class="o">.</span><span class="n">orderId</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Will attach brackets for </span><span class="si">{</span><span class="n">trade</span><span class="o">.</span><span class="n">order</span><span class="o">.</span><span class="n">orderId</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="k">try</span><span class="p">:</span>
             <span class="n">dynamic_bracket_kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dynamic_bracket_kwargs</span><span class="p">()</span>
             <span class="k">for</span> <span class="n">bracket</span><span class="p">,</span> <span class="n">order_key</span><span class="p">,</span> <span class="n">label</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
@@ -716,6 +715,9 @@
                         <span class="n">order</span><span class="p">,</span>
                         <span class="n">label</span><span class="p">,</span>
                     <span class="p">)</span>
+                    <span class="c1"># this doesn&#39;t make it into database now, because it&#39;s updating</span>
+                    <span class="c1"># a nested dict and only top one triggers a save</span>
+                    <span class="c1"># so potentially it&#39;s obsolete</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">brackets</span><span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">bracket_trade</span><span class="o">.</span><span class="n">order</span><span class="o">.</span><span class="n">orderId</span><span class="p">)]</span> <span class="o">=</span> <span class="n">Bracket</span><span class="p">(</span>
                         <span class="n">cast</span><span class="p">(</span><span class="n">BracketLabel</span><span class="p">,</span> <span class="n">label</span><span class="p">),</span>
                         <span class="n">order_key</span><span class="p">,</span>

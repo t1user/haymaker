@@ -272,20 +272,7 @@
 <span class="sd">    Actual position size or even whether the position should be taken</span>
 <span class="sd">    at all is not determined here, it&#39;s the job of `Portfolio`.</span>
 
-<span class="sd">    * Zero signal means close position if position exists, ignored</span>
-<span class="sd">    otherwise &lt;&lt;&lt;&lt;--- THIS IS WRONG</span>
-
-<span class="sd">    * Non-zero signal means:</span>
-
-<span class="sd">    ** open new position if there is no position for the strategy</span>
-
-<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
-<span class="sd">    position</span>
-
-<span class="sd">    ** reverse position if the signal is in the direction opposite to</span>
-<span class="sd">    existing position</span>
-
-<span class="sd">    This behaviour can be modified in sub-classes, by overriding</span>
+<span class="sd">    Actual meaning of signals is defined in sub-classes, by overriding</span>
 <span class="sd">    methods: :meth:`process_position` and :meth:`process_no_position`.</span>
 
 <span class="sd">    Whatever the meaning of the signal coming in, signal coming out</span>
@@ -293,6 +280,9 @@
 <span class="sd">    `signal`, as indicated by keys `action` and `signal` in the</span>
 <span class="sd">    emitted dict.  Incoming signals that don&#39;t require any action will</span>
 <span class="sd">    be stopped here and not propagated down the chain.</span>
+
+<span class="sd">    In sub-class names `blip` means zero signal should be ignored,</span>
+<span class="sd">    othewise absence of signal means there should be no position.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">    -----</span>
@@ -331,7 +321,6 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">_position</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
-    <span class="c1"># onStart must set strategy</span>
 <div class="viewcode-block" id="AbstractBaseBinarySignalProcessor.onData">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.AbstractBaseBinarySignalProcessor.onData">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">onData</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -345,6 +334,7 @@
                 <span class="n">fields</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">signal_out_field</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing `</span><span class="si">{</span><span class="n">fields</span><span class="si">}</span><span class="s2">` expected by </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> in `onData`&quot;</span><span class="p">)</span>
             <span class="k">return</span>
+        <span class="c1"># &#39;strategy&#39; must exist, likely set by onStart</span>
         <span class="n">strategy</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;strategy&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span>
         <span class="k">if</span> <span class="n">result</span> <span class="o">:=</span> <span class="bp">self</span><span class="o">.</span><span class="n">process_signal</span><span class="p">(</span><span class="n">strategy</span><span class="p">,</span> <span class="n">signal_in</span><span class="p">,</span> <span class="n">signal_out</span><span class="p">):</span>
             <span class="n">data</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
@@ -434,8 +424,23 @@
 <div class="viewcode-block" id="BinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.BinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">BinarySignalProcessor</span><span class="p">(</span><span class="n">AbstractBaseBinarySignalProcessor</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    * Zero signal means close position if position exists</span>
+
+<span class="sd">    * Non-zero signal means:</span>
+
+<span class="sd">    ** open new position if there is no position for the strategy</span>
+
+<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    position</span>
+
+<span class="sd">    ** close position if the signal is in the direction opposite to</span>
+<span class="sd">    existing position</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="k">def</span><span class="w"> </span><span class="nf">process_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="s2">&quot;CLOSE&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="c1"># We&#39;ve already checked signal is not same direction as position</span>
@@ -443,6 +448,29 @@
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_no_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="s2">&quot;OPEN&quot;</span></div>
+
+
+
+<div class="viewcode-block" id="BlipBinarySignalProcessor">
+<a class="viewcode-back" href="../../execution.html#haymaker.signals.BlipBinarySignalProcessor">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">BlipBinarySignalProcessor</span><span class="p">(</span><span class="n">BinarySignalProcessor</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    * Zero signal means do nothing</span>
+
+<span class="sd">    * Non-zero signal means:</span>
+
+<span class="sd">    ** open new position if there is no position for the strategy</span>
+
+<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    position</span>
+
+<span class="sd">    ** close position if the signal is in the direction opposite to</span>
+<span class="sd">    existing position</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">process_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
 
 
 
@@ -455,8 +483,18 @@
 <span class="sd">    determine which side is &#39;locked&#39; based on position actually taken</span>
 <span class="sd">    in the market (not just previously generated signals).</span>
 
-<span class="sd">    * Zero signal means close position if position exists, ignored</span>
-<span class="sd">    otherwise</span>
+<span class="sd">    * Zero signal means close position if position exists</span>
+
+<span class="sd">    * Non-zero signal means:</span>
+
+<span class="sd">    ** open new position if there is no position for the strategy</span>
+
+<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    position</span>
+
+<span class="sd">    ** close position if the signal is in the direction opposite to</span>
+<span class="sd">    existing position</span>
+
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
@@ -486,7 +524,7 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="c1"># We&#39;ve already checked signal is not same direction as position</span>
         <span class="c1"># Zero signal means &quot;CLOSE&quot;, oppposite signal means &quot;REVERSE&quot;</span>
-        <span class="k">return</span> <span class="s2">&quot;REVERSE&quot;</span>
+        <span class="k">return</span> <span class="s2">&quot;CLOSE&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_no_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">locked</span><span class="p">(</span><span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">):</span>
@@ -505,22 +543,47 @@
 <span class="sd">    determine which side is &#39;locked&#39; based on position actually taken</span>
 <span class="sd">    in the market (not just previously generated signals).</span>
 
-<span class="sd">    * Zero signals ignored</span>
+<span class="sd">    * Zero signal means do nothing</span>
+
+<span class="sd">    * Non-zero signal means:</span>
+
+<span class="sd">    ** open new position if there is no position for the strategy</span>
+
+<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    position</span>
+
+<span class="sd">    ** close position if the signal is in the direction opposite to</span>
+<span class="sd">    existing position</span>
+
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="kc">None</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># We&#39;ve already checked signal is not same direction as position</span>
-        <span class="c1"># Zero signal means &quot;CLOSE&quot;, oppposite signal means &quot;REVERSE&quot;</span>
-        <span class="k">return</span> <span class="s2">&quot;CLOSE&quot;</span></div>
+        <span class="k">return</span> <span class="kc">None</span></div>
 
 
 
 <div class="viewcode-block" id="AlwaysOnLockableBinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.AlwaysOnLockableBinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">AlwaysOnLockableBinarySignalProcessor</span><span class="p">(</span><span class="n">LockableBinarySignalProcessor</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    * Signals in the direction of last position are ignored (one side</span>
+<span class="sd">    of the market is &#39;locked&#39;).  It&#39;s up to :class:`StateMachine` to</span>
+<span class="sd">    determine which side is &#39;locked&#39; based on position actually taken</span>
+<span class="sd">    in the market (not just previously generated signals).</span>
+
+<span class="sd">    * Zero signal means close position if position exists</span>
+
+<span class="sd">    * Non-zero signal means:</span>
+
+<span class="sd">    ** open new position if there is no position for the strategy</span>
+
+<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    position</span>
+
+<span class="sd">    ** reverse position if the signal is in the direction opposite to</span>
+<span class="sd">    existing position</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;signal&quot;</span><span class="p">,</span>
@@ -539,6 +602,21 @@
 <div class="viewcode-block" id="AlwaysOnBinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.AlwaysOnBinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">AlwaysOnBinarySignalProcessor</span><span class="p">(</span><span class="n">BinarySignalProcessor</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    * Zero signal means close position if position exists</span>
+
+<span class="sd">    * Non-zero signal means:</span>
+
+<span class="sd">    ** open new position if there is no position for the strategy</span>
+
+<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    position</span>
+
+<span class="sd">    ** close position if the signal is in the direction opposite to</span>
+<span class="sd">    existing position</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;signal&quot;</span><span class="p">,</span>

@@ -551,7 +551,7 @@
         <span class="c1"># this will switch processor into backfill mode</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">({</span><span class="s2">&quot;startup&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
         <span class="c1"># release control to allow for adjustments down the chain</span>
-        <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="c1"># await asyncio.sleep(0)</span>
         <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;Starting backfill </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">, pulled </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span><span class="si">}</span><span class="s2"> bars, &quot;</span>
             <span class="sa">f</span><span class="s2">&quot;last bar: </span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
@@ -567,6 +567,7 @@
                 <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> data requires roll adjustment &quot;</span>
                 <span class="sa">f</span><span class="s2">&quot;last bar: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">({</span><span class="s2">&quot;future_adjust_flag&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
             <span class="n">stream</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="n">ev</span><span class="o">.</span><span class="n">Sequence</span><span class="p">(</span><span class="n">bars</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
                 <span class="o">.</span><span class="n">pipe</span><span class="p">(</span>
@@ -656,7 +657,6 @@
             <span class="k">if</span> <span class="n">old_contract</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_adjusted</span><span class="p">:</span>
                 <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> set to adjust future&quot;</span><span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">True</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">({</span><span class="s2">&quot;_future_adjust_flag&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_adjusted</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">old_contract</span><span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
@@ -713,7 +713,6 @@
 <div class="viewcode-block" id="RealTimeBarsStreamer.onStart">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.RealTimeBarsStreamer.onStart">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># self.startEvent.emit(data, self)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_run</span><span class="p">()</span>
         <span class="n">Atom</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
 

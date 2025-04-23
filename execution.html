@@ -279,7 +279,7 @@ block for creating strategies in Haymaker. Every <code class="docutils literal n
 step typically for one traded instrument, thus allowing for separation of concerns.
 Connecting <code class="docutils literal notranslate"><span class="pre">Atoms</span></code> creates a processing pipeline.</p>
 <p><code class="docutils literal notranslate"><span class="pre">Atoms</span></code> in a pipeline communicate with each other in an event-driven manner
-through three methods: <code class="xref py py-meth docutils literal notranslate"><span class="pre">onStart`()</span></code>, <a class="reference internal" href="#haymaker.base.Atom.onData" title="haymaker.base.Atom.onData"><code class="xref py py-meth docutils literal notranslate"><span class="pre">onData()</span></code></a>, <a class="reference internal" href="#haymaker.base.Atom.onFeedback" title="haymaker.base.Atom.onFeedback"><code class="xref py py-meth docutils literal notranslate"><span class="pre">onFeedback()</span></code></a>.
+through three methods: <a class="reference internal" href="#haymaker.base.Atom.onStart" title="haymaker.base.Atom.onStart"><code class="xref py py-meth docutils literal notranslate"><span class="pre">onStart()</span></code></a>, <a class="reference internal" href="#haymaker.base.Atom.onData" title="haymaker.base.Atom.onData"><code class="xref py py-meth docutils literal notranslate"><span class="pre">onData()</span></code></a>, <a class="reference internal" href="#haymaker.base.Atom.onFeedback" title="haymaker.base.Atom.onFeedback"><code class="xref py py-meth docutils literal notranslate"><span class="pre">onFeedback()</span></code></a>.
 Those methods are called when appropriate <a class="reference external" href="https://eventkit.readthedocs.io/en/latest/api.html#eventkit.event.Event" title="(in eventkit v1.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">eventkit.event.Event</span></code></a> objects are
 emitted (respectively <code class="xref py py-attr docutils literal notranslate"><span class="pre">startEvent</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">dataEvent</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">feedbackEvent</span></code>),
 and emit their own events when they are done processing thus sending a signal to
@@ -386,7 +386,7 @@ a chain of objects, use <a class="reference internal" href="#haymaker.base.Atom.
 
 <dl class="py property">
 <dt class="sig sig-object py" id="haymaker.base.Atom.details">
-<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">details</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#haymaker.base.Details" title="haymaker.base.Details"><span class="pre">Details</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">DetailsContainer</span></em><a class="headerlink" href="#haymaker.base.Atom.details" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">details</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#haymaker.base.Details" title="haymaker.base.Details"><span class="pre">Details</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.13)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#haymaker.base.Details" title="haymaker.base.Details"><span class="pre">Details</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">DetailsContainer</span></em><a class="headerlink" href="#haymaker.base.Atom.details" title="Link to this definition">¶</a></dt>
 <dd><p>Contract details received from the broker.</p>
 <p>If <a class="reference internal" href="#haymaker.base.Atom.contract" title="haymaker.base.Atom.contract"><code class="xref py py-attr docutils literal notranslate"><span class="pre">contract</span></code></a> is set, <a class="reference internal" href="#haymaker.base.Atom.details" title="haymaker.base.Atom.details"><code class="xref py py-attr docutils literal notranslate"><span class="pre">details</span></code></a> will be returned
 only for this contract, otherwise <a class="reference internal" href="#haymaker.base.Atom.details" title="haymaker.base.Atom.details"><code class="xref py py-attr docutils literal notranslate"><span class="pre">details</span></code></a> will return
@@ -1205,25 +1205,15 @@ descrete signals, where signal strength is meaningful (e.g. signal
 assuming values -10…10 based on strength of conviction).</p>
 <p>Actual position size or even whether the position should be taken
 at all is not determined here, it’s the job of <cite>Portfolio</cite>.</p>
-<ul class="simple">
-<li><p>Zero signal means close position if position exists, ignored</p></li>
-</ul>
-<p>otherwise &lt;&lt;&lt;&lt;— THIS IS WRONG</p>
-<ul class="simple">
-<li><p>Non-zero signal means:</p></li>
-</ul>
-<p>** open new position if there is no position for the strategy</p>
-<p>** ignore signal if it’s in the same direction as existing
-position</p>
-<p>** reverse position if the signal is in the direction opposite to
-existing position</p>
-<p>This behaviour can be modified in sub-classes, by overriding
+<p>Actual meaning of signals is defined in sub-classes, by overriding
 methods: <code class="xref py py-meth docutils literal notranslate"><span class="pre">process_position()</span></code> and <code class="xref py py-meth docutils literal notranslate"><span class="pre">process_no_position()</span></code>.</p>
 <p>Whatever the meaning of the signal coming in, signal coming out
 means strategy wants to take <cite>action</cite> in the direction of
 <cite>signal</cite>, as indicated by keys <cite>action</cite> and <cite>signal</cite> in the
 emitted dict.  Incoming signals that don’t require any action will
 be stopped here and not propagated down the chain.</p>
+<p>In sub-class names <cite>blip</cite> means zero signal should be ignored,
+othewise absence of signal means there should be no position.</p>
 <section id="args">
 <h4>Args:<a class="headerlink" href="#args" title="Link to this heading">¶</a></h4>
 <p>signal_fields - if <cite>str</cite>, single field of this name is used as
@@ -1287,7 +1277,30 @@ no position: 0)</p>
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.signals.BinarySignalProcessor">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.signals.</span></span><span class="sig-name descname"><span class="pre">BinarySignalProcessor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">signal_fields</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'signal'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">state_machine</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/signals.html#BinarySignalProcessor"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.signals.BinarySignalProcessor" title="Link to this definition">¶</a></dt>
-<dd></dd></dl>
+<dd><ul class="simple">
+<li><p>Zero signal means close position if position exists</p></li>
+<li><p>Non-zero signal means:</p></li>
+</ul>
+<p>** open new position if there is no position for the strategy</p>
+<p>** ignore signal if it’s in the same direction as existing
+position</p>
+<p>** close position if the signal is in the direction opposite to
+existing position</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="haymaker.signals.BlipBinarySignalProcessor">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.signals.</span></span><span class="sig-name descname"><span class="pre">BlipBinarySignalProcessor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">signal_fields</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'signal'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">state_machine</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/signals.html#BlipBinarySignalProcessor"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.signals.BlipBinarySignalProcessor" title="Link to this definition">¶</a></dt>
+<dd><ul class="simple">
+<li><p>Zero signal means do nothing</p></li>
+<li><p>Non-zero signal means:</p></li>
+</ul>
+<p>** open new position if there is no position for the strategy</p>
+<p>** ignore signal if it’s in the same direction as existing
+position</p>
+<p>** close position if the signal is in the direction opposite to
+existing position</p>
+</dd></dl>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.signals.LockableBinarySignalProcessor">
@@ -1299,9 +1312,14 @@ no position: 0)</p>
 determine which side is ‘locked’ based on position actually taken
 in the market (not just previously generated signals).</p>
 <ul class="simple">
-<li><p>Zero signal means close position if position exists, ignored</p></li>
+<li><p>Zero signal means close position if position exists</p></li>
+<li><p>Non-zero signal means:</p></li>
 </ul>
-<p>otherwise</p>
+<p>** open new position if there is no position for the strategy</p>
+<p>** ignore signal if it’s in the same direction as existing
+position</p>
+<p>** close position if the signal is in the direction opposite to
+existing position</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="haymaker.signals.LockableBinarySignalProcessor.onData">
 <span class="sig-name descname"><span class="pre">onData</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/signals.html#LockableBinarySignalProcessor.onData"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.signals.LockableBinarySignalProcessor.onData" title="Link to this definition">¶</a></dt>
@@ -1339,19 +1357,49 @@ loop.</p>
 determine which side is ‘locked’ based on position actually taken
 in the market (not just previously generated signals).</p>
 <ul class="simple">
-<li><p>Zero signals ignored</p></li>
+<li><p>Zero signal means do nothing</p></li>
+<li><p>Non-zero signal means:</p></li>
 </ul>
+<p>** open new position if there is no position for the strategy</p>
+<p>** ignore signal if it’s in the same direction as existing
+position</p>
+<p>** close position if the signal is in the direction opposite to
+existing position</p>
 </dd></dl>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.signals.AlwaysOnLockableBinarySignalProcessor">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.signals.</span></span><span class="sig-name descname"><span class="pre">AlwaysOnLockableBinarySignalProcessor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">signal_fields</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'signal'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">state_machine</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/signals.html#AlwaysOnLockableBinarySignalProcessor"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.signals.AlwaysOnLockableBinarySignalProcessor" title="Link to this definition">¶</a></dt>
-<dd></dd></dl>
+<dd><ul class="simple">
+<li><p>Signals in the direction of last position are ignored (one side</p></li>
+</ul>
+<p>of the market is ‘locked’).  It’s up to <code class="xref py py-class docutils literal notranslate"><span class="pre">StateMachine</span></code> to
+determine which side is ‘locked’ based on position actually taken
+in the market (not just previously generated signals).</p>
+<ul class="simple">
+<li><p>Zero signal means close position if position exists</p></li>
+<li><p>Non-zero signal means:</p></li>
+</ul>
+<p>** open new position if there is no position for the strategy</p>
+<p>** ignore signal if it’s in the same direction as existing
+position</p>
+<p>** reverse position if the signal is in the direction opposite to
+existing position</p>
+</dd></dl>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.signals.AlwaysOnBinarySignalProcessor">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.signals.</span></span><span class="sig-name descname"><span class="pre">AlwaysOnBinarySignalProcessor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">signal_fields</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'signal'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">state_machine</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/signals.html#AlwaysOnBinarySignalProcessor"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.signals.AlwaysOnBinarySignalProcessor" title="Link to this definition">¶</a></dt>
-<dd></dd></dl>
+<dd><ul class="simple">
+<li><p>Zero signal means close position if position exists</p></li>
+<li><p>Non-zero signal means:</p></li>
+</ul>
+<p>** open new position if there is no position for the strategy</p>
+<p>** ignore signal if it’s in the same direction as existing
+position</p>
+<p>** close position if the signal is in the direction opposite to
+existing position</p>
+</dd></dl>
 
 </section>
 <section id="factory-function">
@@ -1585,7 +1633,7 @@ of the transaction (open, close, stop, etc.)</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.execution_models.EventDrivenExecModel">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.execution_models.</span></span><span class="sig-name descname"><span class="pre">EventDrivenExecModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">open_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">close_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tp_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">take_profit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">oca_type</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">controller</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/execution_models.html#EventDrivenExecModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.execution_models.EventDrivenExecModel" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.execution_models.</span></span><span class="sig-name descname"><span class="pre">EventDrivenExecModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">open_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">close_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tp_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">take_profit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">oca_type</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">controller</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/execution_models.html#EventDrivenExecModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.execution_models.EventDrivenExecModel" title="Link to this definition">¶</a></dt>
 <dd><p>Bases: <a class="reference internal" href="#haymaker.execution_models.BaseExecModel" title="haymaker.execution_models.BaseExecModel"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseExecModel</span></code></a></p>
 <p>Use events to attach stop-loss and optional take-profit orders after
 execution of open order. After close transaction remove existing
@@ -1733,7 +1781,7 @@ that will attach brackets after order completion.</p>
 <li><p>Sells 1 contract when the faster EMA crosses below the slower EMA.</p></li>
 <li><p>The moment a position-opening order is filled, places a <a class="reference external" href="https://www.investopedia.com/terms/t/trailingstop.asp">trailing stop-loss order</a> with a distance based on the current instrument’s <a class="reference external" href="https://www.investopedia.com/terms/a/atr.asp">Average True Range</a>.</p></li>
 <li><p>Whenever the stop-loss is hit, prevents reopening a position in the same direction until an opposite position is opened and closed. This protects against repeated transactions in a volatile, non-trending market.</p></li>
-<li><p>Reverses the position when a signal indicates a direction opposite to the current position held.</p></li>
+<li><p>Reverses the position when a signal indicates a direction opposite to the position currently held.</p></li>
 </ul>
 <div class="literal-block-wrapper docutils container" id="id14">
 <div class="code-block-caption"><span class="caption-text">Defining the EMA crossover strategy</span><a class="headerlink" href="#id14" title="Link to this code">¶</a></div>
@@ -2055,6 +2103,7 @@ that will attach brackets after order completion.</p>
 </li>
 <li><a class="reference internal" href="#id6">Implementations</a><ul>
 <li><a class="reference internal" href="#haymaker.signals.BinarySignalProcessor"><code class="docutils literal notranslate"><span class="pre">BinarySignalProcessor</span></code></a></li>
+<li><a class="reference internal" href="#haymaker.signals.BlipBinarySignalProcessor"><code class="docutils literal notranslate"><span class="pre">BlipBinarySignalProcessor</span></code></a></li>
 <li><a class="reference internal" href="#haymaker.signals.LockableBinarySignalProcessor"><code class="docutils literal notranslate"><span class="pre">LockableBinarySignalProcessor</span></code></a><ul>
 <li><a class="reference internal" href="#haymaker.signals.LockableBinarySignalProcessor.onData"><code class="docutils literal notranslate"><span class="pre">LockableBinarySignalProcessor.onData()</span></code></a></li>
 </ul>

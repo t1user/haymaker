@@ -325,7 +325,7 @@
 <li><p>Sells 1 contract when the faster EMA crosses below the slower EMA.</p></li>
 <li><p>The moment a position-opening order is filled, places a <a class="reference external" href="https://www.investopedia.com/terms/t/trailingstop.asp">trailing stop-loss order</a> with a distance based on the current instrument’s <a class="reference external" href="https://www.investopedia.com/terms/a/atr.asp">Average True Range</a>.</p></li>
 <li><p>Whenever the stop-loss is hit, prevents reopening a position in the same direction until an opposite position is opened and closed. This protects against repeated transactions in a volatile, non-trending market.</p></li>
-<li><p>Reverses the position when a signal indicates a direction opposite to the current position held.</p></li>
+<li><p>Reverses the position when a signal indicates a direction opposite to the position currently held.</p></li>
 </ul>
 <div class="literal-block-wrapper docutils container" id="id1">
 <div class="code-block-caption"><span class="caption-text">Defining the EMA crossover strategy</span><a class="headerlink" href="#id1" title="Link to this code">¶</a></div>
