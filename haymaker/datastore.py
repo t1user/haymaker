@@ -2,6 +2,7 @@ import logging
 import pickle
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from dataclasses import fields
 from datetime import datetime
 from functools import partial
 from typing import Any
@@ -334,22 +335,15 @@ class AbstractBaseStore(ABC):
         self, symbol: str, index: int = -1, field: str = "tradingClass"
     ) -> Contract | None:
         """
-        Return ib_insync object for latest contfuture for given exchange symbol
-        (tradingClass).
-
-        Usage:
-        contfuture_contract_object('NQ')
-        Returns:
-        ContFuture(conId=371749745, symbol='NQ',
-        lastTradeDateOrContractMonth='20200918', multiplier='20',
-        exchange='GLOBEX', currency='USD', localSymbol='NQU0',
-        tradingClass='NQ')
+        Return ib_insync object for latest contfuture for given symbol.
         """
         meta = self.read_metadata(self.latest_contfutures(index, field)[symbol])
         if meta:
             try:
-                return pickle.loads(meta["object"])
-            except TypeError:
+                return ContFuture(
+                    **{k: v for k, v in meta.items() if k in fields(ContFuture)}
+                )
+            except Exception:
                 return None
         else:
             return None
@@ -413,7 +407,7 @@ class ArcticStore(AbstractBaseStore):
         Metadata is a dict with its properties mostly copied from ib.
         It's keys are: secType, conId, symbol,
         lastTradeDateOrContractMonth, multiplier, exchange, currency,
-        localSymbol, tradingClass, repr, object.
+        localSymbol, tradingClass.
         It can also be updated by utils function to contain additional
         details.
 
@@ -453,7 +447,6 @@ class ArcticStore(AbstractBaseStore):
     def _metadata(self, obj: Contract | str) -> dict[str, dict[str, str]]:
         if isinstance(obj, Contract):
             meta = super()._metadata(obj)
-            meta.update({"object": pickle.dumps(obj)})
         else:
             meta = {}
         return meta
