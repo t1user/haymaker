@@ -769,7 +769,7 @@ def pivot_indicator(df: pd.DataFrame, func: Callable) -> pd.DataFrame:
 
 
 @jit(nopython=True)
-def rolling_min_max_index(arr: np.ndarray, lookback: int) -> np.ndarray:
+def rolling_min_max_index(arr: np.ndarray, lookback: int) -> np.ndarray:  # type: ignore
     """
     Return a 2-D array with min max index - zero based index counting
     backwards of the last min and last max over the lookback period.
