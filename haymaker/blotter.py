@@ -48,7 +48,11 @@ class Blotter:
             "local_time": datetime.now(),
             "sys_time": datetime.now(timezone.utc),  # system time
             "last_fill_time": trade.log[-1].time,
-            "contract": trade.contract.localSymbol,  # 4 letter symbol string
+            "contract": (
+                trade.contract.localSymbol
+                if not isinstance(trade.contract, ibi.Bag)
+                else trade.contract.symbol
+            ),
             "symbol": trade.contract.symbol,
             "side": trade.order.action,  # buy or sell
             "order_type": trade.order.orderType,  # order type
@@ -76,17 +80,20 @@ class Blotter:
         """
         Get trades that have all CommissionReport filled and log them.
         """
-        # bug in ib_insync sometimes causes trade to have fills for
-        # unrelated transactions, permId uniquely identifies order
-        comms = [
-            fill.commissionReport
+
+        fills = [
+            fill
             for fill in trade.fills
+            # empty objects sometimes added here by ib
             if fill.commissionReport.execId != ""
+            # rarely, there's a bug in ib data, where unrelated
+            # fill appears in the list (probably only in paper acc)
+            # it's a precaution
             and fill.execution.permId == trade.order.permId
         ]
-        fills = [
-            fill for fill in trade.fills if fill.execution.permId == trade.order.permId
-        ]
+
+        comms = [fill.commissionReport for fill in fills]
+
         if trade.isDone() and (len(comms) == len(fills)):
             self.log_trade(trade, comms, **kwargs)
 

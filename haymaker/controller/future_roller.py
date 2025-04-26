@@ -364,10 +364,26 @@ class FutureRoller:
         size: float,
     ) -> ibi.Trade:
         combo = self.make_combo(old_contract, new_contract)
-        strategy["params"]["rolled"] = True
+        try:
+            log.debug(f"position_id from strategy: {strategy.position_id}")
+        except Exception:
+            log.error("Didn't get position id from strategy.")
+        try:
+            position_id = strategy["params"]["open"]["position_id"]
+        except KeyError as e:
+            log.error(e)
+            position_id = None
+        params = {
+            "from_to_roll": f"{old_contract.localSymbol} -> {new_contract.localSymbol}",
+            "old": old_contract,
+            "new": new_contract,
+            "contract": combo,
+            "position_id": position_id,
+        }
+        strategy["params"]["future-roll"] = params
         order = ibi.MarketOrder("BUY" if size > 0 else "SELL", abs(size))
         return self.controller.trade(
-            strategy_str, combo, order, "FUTURE_ROLL", strategy
+            strategy_str, combo, order, "FUTURE-ROLL", strategy
         )
 
     @staticmethod
