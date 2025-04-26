@@ -12,7 +12,6 @@ handlers:
     class: haymaker.logging.setup.TqdmLoggingHandler
     level: DEBUG
     formatter: default
-    stream: ext://sys.stdout
 
   file:
     (): haymaker.logging.setup.file_setup
