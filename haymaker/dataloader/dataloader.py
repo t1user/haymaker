@@ -51,8 +51,6 @@ SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
 PACER_RESTRICTIONS: bool = CONFIG["pacer_restrictions"]
 MAX_PERIOD = CONFIG.get("max_period", 30)
-WORKER_TIMEOUT = CONFIG.get("worker_timeout", 60)
-WRITERS_DONE: dict[str, bool] = {}
 
 log.debug(
     f"settings: {BARSIZE=}, {WTS=}, {MAX_BARS=}, {FILL_GAPS=}, "
@@ -302,7 +300,9 @@ class Manager:
         with tqdm(self.sources, desc="Sources") as source_pbar:
             for s in source_pbar:
                 contract_selector = ContractSelector.from_kwargs(**s)
-                with tqdm(desc="Contracts", leave=False, total=None) as contract_pbar:
+                with tqdm(
+                    desc=f"Contracts_{s.get('symbol')}", leave=False, total=None
+                ) as contract_pbar:
                     async for contract in contract_selector.objects():
                         # ContractSelector has been calling the api,
                         # so to prevent pacing violation
@@ -402,24 +402,14 @@ def validate_age(writer: DataWriter) -> bool:
 async def producer(manager: Manager, queue: asyncio.Queue) -> None:
     async for writer in manager.writer_generator():
         await queue.put(writer)
-    WRITERS_DONE["done"] = True
+    log.debug("Producer done!")
 
 
-async def worker(name: str, queue: asyncio.Queue, ib: ibi.IB, timeout: int) -> None:
+async def worker(name: str, queue: asyncio.Queue, ib: ibi.IB) -> None:
     while True:
         log.debug(f"{name} will get a new contract.")
 
-        # try:
-        #     # producer needs to initialize after all workers are up and running
-        #     writer = await asyncio.wait_for(queue.get(), timeout=timeout)
-        # except TimeoutError:
-        #     log.debug(f"{name} done, no more tasks in the queue.")
-        #     break
-
-        if not WRITERS_DONE:
-            writer = await queue.get()
-        else:
-            break
+        writer = await queue.get()
 
         while True:
             try:
@@ -480,7 +470,7 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     WORKERS.extend(
         [
             create_task(
-                worker(f"worker {i}", queue, ib, WORKER_TIMEOUT),
+                worker(f"worker {i}", queue, ib),
                 logger=log,
                 message="asyncio error",
                 message_args=(f"worker {i}",),
@@ -505,7 +495,12 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     # wait for queue to empty
     await queue.join()
 
-    # wait for workers to finish
+    # cancel workers because they run in infinite loop
+    for task in WORKERS:
+        task.cancel()
+        log.debug(f"{task} cancelled.")
+
+    # wait for workers to cancel
     await asyncio.gather(*WORKERS)
 
     log.debug("Main done!")
