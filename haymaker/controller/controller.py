@@ -407,6 +407,7 @@ class Controller(Atom):
         if self._hold:
             return
 
+        log.debug(f"Commission report for {trade.order.orderId} {trade.order.permId}")
         order_info = await self.sm.save_order_status(trade)
 
         if order_info:
