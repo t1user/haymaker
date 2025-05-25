@@ -18,7 +18,7 @@ from haymaker.logging import setup_logging
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
-from .connect import Connection, Mode
+from .connect import Mode, connection
 from .contract_selectors import ContractSelector
 from .pacer import PacingViolationError, PacingViolationRegistry, pacer
 from .scheduling import task_factory, task_factory_with_gaps
@@ -43,14 +43,14 @@ FILL_GAPS: bool = CONFIG.get("fill_gaps", True)
 AUTO_SAVE_INTERVAL: int = CONFIG.get("auto_save_interval", 0)
 NUMBER_OF_WORKERS: int = CONFIG.get("number_of_workers", 20)
 STORE: AbstractBaseStore = CONFIG["datastore"]
-norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
-
-NOW: date | datetime = norm(datetime.now(timezone.utc))
 RUN_MODE: Mode = CONFIG.get("run_mode", "reconnect")
 SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
 PACER_RESTRICTIONS: bool = CONFIG["pacer_restrictions"]
 MAX_PERIOD = CONFIG.get("max_period", 30)
+
+norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
+NOW: date | datetime = norm(datetime.now(timezone.utc))
 
 log.debug(
     f"settings: {BARSIZE=}, {WTS=}, {MAX_BARS=}, {FILL_GAPS=}, "
@@ -290,6 +290,10 @@ class Manager:
     store: AbstractBaseStore = STORE
     active_writers: list[DataWriter] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
+    new_writer_generator: AsyncGenerator[DataWriter, None] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.new_writer_generator = self._writer_generator()
 
     @functools.cached_property
     def sources(self) -> list[dict]:
@@ -306,7 +310,7 @@ class Manager:
                     async for contract in contract_selector.objects():
                         # ContractSelector has been calling the api,
                         # so to prevent pacing violation
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(0.5)
                         yield contract
                         contract_pbar.update(1)
 
@@ -341,14 +345,11 @@ class Manager:
             start = max(headstamp, last_bar_date - timedelta(days=MAX_PERIOD))
             tasks = self.tasks(store, start)
             new_writer = DataWriter(contract, store, tasks)
-            self.active_writers.append(new_writer)
             yield new_writer
 
-    async def writer_generator(self) -> AsyncGenerator[DataWriter, None]:
-        for writer in self.active_writers:
-            if not writer.is_done():
-                yield writer
+    async def _writer_generator(self) -> AsyncGenerator[DataWriter, None]:
         async for new_writer in self.writers():
+            self.active_writers.append(new_writer)
             yield new_writer
 
     async def headstamp(self, contract: ibi.Contract) -> date | datetime:
@@ -400,14 +401,30 @@ def validate_age(writer: DataWriter) -> bool:
 
 
 async def producer(manager: Manager, queue: asyncio.Queue) -> None:
-    async for writer in manager.writer_generator():
-        await queue.put(writer)
+    log.debug("Initializing PRODUCER")
+    if manager.active_writers:
+        log.debug("Will start queuing writers, which are already initialized.")
+    for writer in manager.active_writers:
+        if not writer.is_done():
+            await queue.put(writer)
+            log.debug(f"Active writer {writer} added to queue.")
+
+    log.debug("Will start queing new writers.")
+    while True:
+        try:
+            new_writer = await anext(manager.new_writer_generator)
+            await queue.put(new_writer)
+            log.debug(f"New writer {new_writer} added to queue.")
+        except StopAsyncIteration:
+            log.debug("No more writers!")
+            break
+
     log.debug("Producer done!")
 
 
 async def worker(name: str, queue: asyncio.Queue, ib: ibi.IB) -> None:
+    log.debug(f"Initializing {name.upper()}")
     while True:
-        log.debug(f"{name} will get a new contract.")
 
         writer = await queue.get()
 
@@ -437,10 +454,13 @@ async def worker(name: str, queue: asyncio.Queue, ib: ibi.IB) -> None:
                 # `writer.next_date` will still hold the same date,
                 # i.e. the same chunk will be rescheduled
                 await writer.save_chunk(chunk)
+            except ConnectionError:
+                while not ib.isConnected():
+                    await asyncio.sleep(5)
             except Exception as e:
                 log.exception(e)
-                # prevent same request sooner than after 15 secs
-                await asyncio.sleep(15)
+                # prevent same request sooner than after 60 secs
+                await asyncio.sleep(60)
                 log.debug(f"{writer!s} rescheduled.")
 
             if writer.next_date:
@@ -455,29 +475,41 @@ async def worker(name: str, queue: asyncio.Queue, ib: ibi.IB) -> None:
         queue.task_done()
 
 
-WORKERS: list[asyncio.Task] = []
-PRODUCER: list[asyncio.Task] = []
+@dataclass
+class QueueMemo:
+    workers: list[asyncio.Task] = field(default_factory=list)
+    producer: asyncio.Task | None = None
+    queue: asyncio.Queue | None = None
+
+    def update(
+        self, workers: list[asyncio.Task], producer: asyncio.Task, queue: asyncio.Queue
+    ) -> None:
+        log.debug("Updating workers, producer and queue.")
+        self.workers = workers
+        self.producer = producer
+        self.queue = queue
+
+
+OBJECTS = QueueMemo()
 
 
 async def main(manager: Manager, ib: ibi.IB) -> None:
+
+    log.debug("Initializing main.")
 
     queue: asyncio.Queue[DataWriter] = asyncio.LifoQueue(
         maxsize=int(NUMBER_OF_WORKERS / 4)
     )
 
-    # just a precaution
-    WORKERS.clear()
-    WORKERS.extend(
-        [
-            create_task(
-                worker(f"worker {i}", queue, ib),
-                logger=log,
-                message="asyncio error",
-                message_args=(f"worker {i}",),
-            )
-            for i in range(NUMBER_OF_WORKERS)
-        ]
-    )
+    workers: list[asyncio.Task] = [
+        create_task(
+            worker(f"worker_{i}", queue, ib),
+            logger=log,
+            message="asyncio error",
+            message_args=(f"worker {i}",),
+        )
+        for i in range(NUMBER_OF_WORKERS)
+    ]
 
     producer_task: asyncio.Task[None] = create_task(
         producer(manager, queue),
@@ -485,9 +517,8 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
         message="asyncio error",
         message_args=("producer",),
     )
-    # just a precaution
-    PRODUCER.clear()
-    PRODUCER.append(producer_task)
+
+    OBJECTS.update(workers, producer_task, queue)
 
     # wait for producer to finish
     await producer_task
@@ -495,25 +526,35 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
     # wait for queue to empty
     await queue.join()
 
-    # cancel workers because they run in infinite loop
-    for task in WORKERS:
+    # cancel workers because they run an infinite loop
+    for task in workers:
         task.cancel()
-        log.debug(f"{task} cancelled.")
 
     # wait for workers to cancel
-    await asyncio.gather(*WORKERS)
+    await asyncio.gather(*workers)
 
     log.debug("Main done!")
 
 
+def shutdown_queue(queue: asyncio.Queue) -> None:
+    while True:
+        try:
+            queue.get_nowait()
+            queue.task_done()
+        except (asyncio.QueueEmpty, ValueError):
+            break
+    log.debug("Queue has been shutdown.")
+
+
 def cancel_tasks():
     log.debug("Will cancel tasks.")
-    assert (i := len(PRODUCER) == 1), f"Number of producers: {i}"
-    PRODUCER[0].cancel()
-    PRODUCER.clear()
-    for task in WORKERS:
-        task.cancel()
-    WORKERS.clear()
+    # after producer is cancelled and queue shutdown
+    # main should release queue.join()
+    # and proceed to cancelling workers
+    # so no need to cancel workers explicitly here
+    OBJECTS.producer.cancel()
+    shutdown_queue(OBJECTS.queue)
+    log.debug("Tasks cancelled.")
 
 
 def start():
@@ -524,7 +565,7 @@ def start():
     asyncio.get_event_loop().set_debug(True)
     log.debug("Will start...")
 
-    Connection(ib, partial(main, manager, ib), cancel_tasks, RUN_MODE)
+    connection(ib, partial(main, manager, ib), cancel_tasks, RUN_MODE)
 
     log.info("script finished, about to disconnect")
     ib.disconnect()

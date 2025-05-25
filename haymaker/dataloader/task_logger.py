@@ -17,9 +17,7 @@ def create_task(
     message: str,
     message_args: Tuple[Any, ...] = (),
     loop: Optional[asyncio.AbstractEventLoop] = None,
-) -> "asyncio.Task[T]":
-    # This type annotation has to be quoted for Python < 3.9,
-    # see https://www.python.org/dev/peps/pep-0585/
+) -> asyncio.Task[T]:
     """
     This helper function wraps a ``loop.create_task(coroutine())``
     call and ensures there is an exception handler added to the
@@ -29,7 +27,7 @@ def create_task(
     """
     if loop is None:
         loop = asyncio.get_running_loop()
-    task: asyncio.Task = loop.create_task(coroutine)
+    task: asyncio.Task = loop.create_task(coroutine, name=message_args[0])
     task.add_done_callback(
         functools.partial(
             _handle_task_result,
@@ -52,7 +50,5 @@ def _handle_task_result(
         task.result()
     except (asyncio.CancelledError, ConnectionError):
         pass  # Task cancellation should not be logged as an error.
-    # Ad the pylint ignore: we want to handle all exceptions here so that the result of the task
-    # is properly logged. There is no point re-raising the exception in this callback.
     except Exception:  # pylint: disable=broad-except
         logger.exception(message, *message_args)
