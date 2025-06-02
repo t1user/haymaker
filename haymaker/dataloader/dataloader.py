@@ -119,7 +119,14 @@ class DataWriter:
             await self.write_to_store()
 
     def is_done(self) -> bool:
-        return len(self.queue) == 0
+        while True:
+            if len(self.queue) != 0:
+                if self._container.next_date:
+                    return False
+                else:
+                    self.queue.pop()
+            else:
+                return True
 
     @property
     def _container(self) -> DownloadContainer:
@@ -136,18 +143,15 @@ class DataWriter:
             return None
 
     async def save_chunk(self, data: ibi.BarDataList) -> None:
-        if self.is_done():
-            log.warning(f"{self!s} is done, data: {data}")
-            return
         if data:
             log.info(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
-        elif self._container.next_date:
-            log.warning(
-                f"{self!s} cannot download data past {self._container.next_date}"
-            )
-        self._container.save_chunk(data)
-        await self.write_to_store()
-        if self._container.next_date is None:
+            self._container.save_chunk(data)
+            await self.write_to_store()
+        else:
+            if self._container.next_date:
+                log.warning(
+                    f"{self!s} cannot download data past {self._container.next_date}"
+                )
             self.queue.pop()
 
     async def write_to_store(self) -> None:
@@ -155,10 +159,6 @@ class DataWriter:
         This is the only method that actually saves data.  All other
         'save' methods don't.
         """
-
-        if self.is_done():
-            log.warning(f"{self}: abandoned attempt to write to store on done writer.")
-            return
 
         _data = self._container.flush_data()
 
@@ -345,6 +345,9 @@ class Manager:
             start = max(headstamp, last_bar_date - timedelta(days=MAX_PERIOD))
             tasks = self.tasks(store, start)
             new_writer = DataWriter(contract, store, tasks)
+            if new_writer.is_done():
+                log.debug(f"Skipping {new_writer!s} - no need to download data.")
+                continue
             yield new_writer
 
     async def _writer_generator(self) -> AsyncGenerator[DataWriter, None]:
@@ -372,8 +375,8 @@ class Manager:
                     )
                     log.warning(
                         (
-                            f"Unavailable headTimeStamp ({headTimeStamp}) for {contract}. "
-                            f"Will use {five_years_ago}"
+                            f"Unavailable headTimeStamp ({headTimeStamp}) for "
+                            f"{contract}. Will use {five_years_ago}"
                         )
                     )
                     headTimeStamp = five_years_ago
