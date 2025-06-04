@@ -39,6 +39,7 @@ class Blotter:
         self.blotter: list[dict] = []
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
+        self.done_trades: list[int] = []
         log.debug(f"Blotter initiated: {self}")
 
     def log_trade(
@@ -68,7 +69,11 @@ class Blotter:
         row["trade"] = ibi.util.tree(trade)
         if kwargs:
             row.update(kwargs)
-        self.save_report(row)
+        if trade.order.orderId not in self.done_trades:
+            self.save_report(row)
+            self.done_trades.append(trade.order.orderId)
+        else:
+            log.debug(f"Skipping duplicate blotter entry for {trade.order.orderId}")
 
     def log_commission(
         self,
