@@ -28,7 +28,7 @@ class NoContractFound(Exception):
 
 def customize_month_end(month_end: datetime) -> datetime:
     """
-    Take :class:`pd.offsets.BusinessMonthEnd` and shift if back if it's a NYSE holiday
+    Take :class:`pd.offsets.BusinessMonthEnd` and shift it back if it's a NYSE holiday
     """
 
     if month_end in nyse_holidays:
@@ -299,6 +299,7 @@ class FutureSelector(AbstractBaseContractSelector):
 def single_future_factory(contract: ibi.Contract) -> Type[AbstractBaseSingleFuture]:
     return {
         "GC": GoldComex,
+        "MGC": GoldComex,
     }.get(contract.symbol, NoOffset)
 
 
