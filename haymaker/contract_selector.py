@@ -12,6 +12,10 @@ from pandas.tseries.offsets import CustomBusinessDay
 
 log = getLogger(__name__)
 
+# number of business days before last trading day that contract will be rolled
+FUTURES_ROLL_BDAYS = 3
+# number of business days before roll day when new positions will use next contract
+FUTURES_ROLL_MARGIN_BDAYS = 3
 
 nyse_calendar = mcal.get_calendar("NYSE")
 nyse_holidays = nyse_calendar.holidays().holidays  # type: ignore
@@ -38,15 +42,15 @@ def customize_month_end(month_end: datetime) -> datetime:
 
 
 # ################################################################################
-# These are used with FutureContractSelector to allow flexibility in which
-# future contract will be used
+# These are used with FutureContractSelector to allow flexibility in selecting
+# future contract
 # ################################################################################
 
 
 @dataclass
 class AbstractBaseSingleFuture(ABC):
     # number of business days before last trading day that contract will be rolled
-    bdays_roll: ClassVar[int] = 4
+    bdays_roll: ClassVar[int] = FUTURES_ROLL_BDAYS
     # if empty ignored; otherwise only months listed will be included in chain
     active_months: ClassVar[list[int]] = []
 
@@ -238,7 +242,7 @@ class ContFutureSelector(DefaultSelector):
 class FutureSelector(AbstractBaseContractSelector):
     detailsChain: list[ibi.ContractDetails]
     selector: Type[AbstractBaseSingleFuture]
-    roll_margin_bdays: int = 5
+    roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS
     today: datetime = field(default_factory=datetime.now, repr=False)
 
     @cached_property
@@ -256,7 +260,7 @@ class FutureSelector(AbstractBaseContractSelector):
 
     @property
     def bdays_till_roll(self) -> int:
-        return len(pd.bdate_range(self.today, self._active_contract().roll_day))
+        return len(pd.bdate_range(self.today, self._active_contract().roll_day)) - 1
 
     def nth_contract(self, index: int) -> AbstractBaseSingleFuture:
         index = index if index < len(self.contracts) - 1 else len(self.contracts) - 1
@@ -268,7 +272,7 @@ class FutureSelector(AbstractBaseContractSelector):
     def _next_contract(self) -> AbstractBaseSingleFuture:
         return (
             self._active_contract()
-            if self.bdays_till_roll > self.roll_margin_bdays
+            if self.bdays_till_roll >= self.roll_margin_bdays
             else self.nth_contract(1)
         )
 
