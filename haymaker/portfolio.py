@@ -68,11 +68,14 @@ class PortfolioWrapper(Atom):
             raise TypeError("Portfolio must be instantiated before PortfolioWrapper.")
 
     def onData(self, data: dict, *args) -> None:
-        amount = self.allocate(data)
-        data.update({"amount": amount})
-        log.debug(f"Portfolio processed data: {data}")
-        super().onData(data)  # timestamp on departure
-        self.dataEvent.emit(data)
+        if data.get("signal") not in (-1, 0, 1):
+            log.error(f"Ignoring invalid signal: {data.get('signal')} in {data}")
+        else:
+            amount = self.allocate(data)
+            data.update({"amount": amount})
+            log.debug(f"Portfolio processed data: {data}")
+            super().onData(data)  # timestamp on departure
+            self.dataEvent.emit(data)
 
     def allocate(self, data: dict) -> float:
         return self._portfolio.allocate(data)
