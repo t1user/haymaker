@@ -3,7 +3,8 @@ import logging
 import ib_insync as ibi
 import pytest
 
-from haymaker.base import Atom, Details, DetailsContainer, Pipe
+from haymaker.base import ActiveNext, Atom, Details, DetailsContainer, Pipe
+from haymaker.misc import hash_contract
 from haymaker.state_machine import Strategy
 
 
@@ -134,6 +135,14 @@ class TestAtom:
 
     def test_repr(self, atom1: NewAtom):
         assert repr(atom1) == "NewAtom(name=atom1)"
+
+    def test_repr_next_contract(self, Atom):
+        """
+        Repr should only show non-default attributes, `which_contract`
+        has default value of `ActiveNext.ACTIVE`.
+        """
+        atom = Atom(which_contract=ActiveNext.NEXT)
+        assert repr(atom) == "Atom(which_contract=ActiveNext.NEXT)"
 
     def test_no_duplicate_connections(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
@@ -748,6 +757,7 @@ def test_pipe_is_connected_to_input_feedbackEvent():
 class AtomWithContract(Atom):
     def __init__(self, contract):
         self.contract = contract
+        super().__init__()
 
 
 class TestContract:
@@ -800,6 +810,7 @@ class TestContractList:
         class NewAtomWithContract(Atom):
             def __init__(self, contract):
                 self.contract = contract
+                super().__init__()
 
         a = NewAtomWithContract(contract)
         yield a
@@ -1177,3 +1188,43 @@ def test_startup_set():
 
     a.startEvent.emit({"startup": True})
     assert b.startup
+
+
+class Test_ActiveNext:
+
+    es = ibi.Future(symbol="ES", exchange="CME")
+    es0 = ibi.Future(
+        conId=637533641,
+        symbol="ES",
+        lastTradeDateOrContractMonth="20250919",
+        multiplier="50",
+        exchange="CME",
+        currency="USD",
+        localSymbol="ESU5",
+        tradingClass="ES",
+    )
+    es1 = ibi.Future(
+        conId=495512563,
+        symbol="ES",
+        lastTradeDateOrContractMonth="20251219",
+        multiplier="50",
+        exchange="CME",
+        currency="USD",
+        localSymbol="ESZ5",
+        tradingClass="ES",
+    )
+
+    def test_active_correct(self):
+        # active contract by default
+        my_atom = Atom()
+        my_atom.contract = self.es
+        Atom.contract_dict[(hash_contract(self.es), ActiveNext.ACTIVE)] = self.es0
+        Atom.contract_dict[(hash_contract(self.es), ActiveNext.NEXT)] = self.es1
+        assert my_atom.contract == self.es0
+
+    def test_next_correct(self):
+        my_atom = Atom(which_contract=ActiveNext.NEXT)
+        my_atom.contract = self.es
+        Atom.contract_dict[(hash_contract(self.es), ActiveNext.ACTIVE)] = self.es0
+        Atom.contract_dict[(hash_contract(self.es), ActiveNext.NEXT)] = self.es1
+        assert my_atom.contract == self.es1

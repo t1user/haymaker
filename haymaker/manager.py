@@ -8,7 +8,7 @@ from typing import Final, Self
 
 import ib_insync as ibi
 
-from .base import Atom, DetailsContainer
+from .base import ActiveNext, Atom, DetailsContainer
 from .config import CONFIG
 from .contract_selector import selector_factory
 from .controller import Controller
@@ -26,9 +26,12 @@ class NotConnectedError(Exception):
 @dataclass
 class InitData:
     ib: ibi.IB
-    contract_dict: dict[int, ibi.Contract]
+    # contract_dict and contract details are saved on Atom class
+    contract_dict: dict[tuple[int, ActiveNext], ibi.Contract]
     contract_details: DetailsContainer
-    _contracts: dict[int, ibi.Contract] = field(default_factory=dict, repr=False)
+    _contracts: dict[tuple[int, ActiveNext], ibi.Contract] = field(
+        default_factory=dict, repr=False
+    )
 
     async def __call__(self) -> Self:
         log.debug(f"---------- INIT START -----> {len(self.contract_dict)} contracts.")
@@ -37,14 +40,20 @@ class InitData:
             log.debug(
                 f"contracts blueprint saved: {[c for c in self._contracts.values()]}"
             )
+        # details always from blueprint
         details = await self.acquire_contract_details(list(self._contracts.values()))
         log.debug(f"Acquired details for {len(details)} contracts.")
         selectors = (selector_factory(details_list) for details_list in details)
 
-        for contract_hash, selector in zip(self.contract_dict, selectors):
+        for (contract_hash, _), selector in zip(self.contract_dict, selectors):
             self.contract_details[selector.active_contract] = selector.active_details
             self.contract_details[selector.next_contract] = selector.next_details
-            self.contract_dict[contract_hash] = selector.next_contract
+            self.contract_dict[(contract_hash, ActiveNext.ACTIVE)] = (
+                selector.active_contract
+            )
+            self.contract_dict[(contract_hash, ActiveNext.NEXT)] = (
+                selector.next_contract
+            )
         log.debug("InitData done...")
         return self
 

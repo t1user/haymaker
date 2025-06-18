@@ -5,6 +5,7 @@ import logging
 from collections import UserDict
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
+from enum import Enum, auto
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -29,10 +30,27 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+class ActiveNext(Enum):
+    ACTIVE = auto()
+    NEXT = auto()
+
+
 ContractOrSequence = Sequence[ibi.Contract] | ibi.Contract
 
 
 class ContractManagingDescriptor:
+    """
+    Manage accessing `contract` property on :class:`Atom`.
+
+    Contract needs to be qualified before use (by calling
+    :meth:`ib_insync.IB.qualifyContracts` on
+    :class:`ib_insync.Contract` object).  This is being managed by
+    :module:`Manager`, which ensures on every restart that
+    :attr:`contract_dict` on :class:`Atom` contains only qualified
+    contracts.  ContractManagingDescriptor in turn returns correct
+    contract from this dict, taking into account
+    :property:`which_contract` on this Atom.
+    """
 
     @staticmethod
     def _apply_to_contract_or_sequence(func):
@@ -72,7 +90,7 @@ class ContractManagingDescriptor:
         # some methods rely on not raising an error here if attr self.name not set
         # if Atom has not set `contract` attribute, it shouldn't raise an error
         contract = obj.__dict__.get(self.name)
-        return self._get_contract(contract, obj.contract_dict)
+        return self._get_contract(contract, obj.contract_dict, obj.which_contract)
 
     def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
         self._append_to_dict(value, obj.contract_dict, obj)
@@ -80,19 +98,23 @@ class ContractManagingDescriptor:
     @staticmethod
     @_apply_to_contract_or_sequence
     def _get_contract(
-        contract: ibi.Contract | None, contract_dict: dict[int, ibi.Contract]
+        contract: ibi.Contract | None,
+        contract_dict: dict[tuple[int, ActiveNext], ibi.Contract],
+        active_next: ActiveNext,
     ) -> list[ibi.Contract] | ibi.Contract | None:
         if contract is None:
             return None
         else:
-            return contract_dict.get(hash_contract(contract))
+            return contract_dict.get((hash_contract(contract), active_next))
 
     @staticmethod
     @_apply_to_contract_or_sequence
     def _append_to_dict(
-        contract: ibi.Contract, contract_dict: dict[int, ibi.Contract], atom: Atom
+        contract: ibi.Contract,
+        contract_dict: dict[tuple[int, ActiveNext], ibi.Contract],
+        atom: Atom,
     ) -> None:
-        contract_dict[hash_contract(contract)] = contract
+        contract_dict[(hash_contract(contract), ActiveNext.ACTIVE)] = contract
         log.debug(f"Contract registered: {contract}")
 
 
@@ -211,12 +233,22 @@ class Atom:
             this contract will be qualified and available
             :class:`ib_insync.contract.ContractDetails` will be downloaded from broker
             and made available through :attr:`details` attribute. If contract
-            is a :class:`ib_insync.contract.ContFuture`,
-            it will be replaced with on-the-run :class:`ib_insync.contract.Future`
-            and whenever this contract needs to be rolled, :meth:`onContractChanged`
-            method will be called. This attribute doesn't need to be set. If this Atom
+            is a :class:`ib_insync.contract.ContFuture` or
+            :class:`ib_insync.contract.Future`, it will be replaced with on-the-run
+            :class:`ib_insync.contract.Future`. `ContFuture` will pick contract that
+            IB considers to be be current, `Future` allows for customization by tweaking
+            :class:`FutureSelector`. Whichever method is chose, when contract
+            to be rolled, :meth:`onContractChanged` method will be called.
+
+            This attribute doesn't need to be set. If this Atom
             object is not related to any one particular contract, just don't assign any
             value to this attribute.
+
+        which_contract (ActiveNext): default: ACTIVE; if NEXT chosen :attr:`contract`
+            will return next contract in chain (relative only for
+            class:`ib_insync.Contract.Future`futures) allowing for using upcoming
+            contracts for new positions a short period before they become active
+            (length of this period can be in defined in config.)
 
         ib (ClassVar[ibi.IB]): The instance of the :class:`ib_insync.ib.IB` client used
            for interacting with the broker. It can be used to communicate with
@@ -240,7 +272,7 @@ class Atom:
     ib: ClassVar[ibi.IB]
     sm: ClassVar[StateMachine]
     contract_details: ClassVar[DetailsContainer] = DetailsContainer()
-    contract_dict: dict[int, ibi.Contract] = {}
+    contract_dict: dict[tuple[int, ActiveNext], ibi.Contract] = {}
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
@@ -255,7 +287,8 @@ class Atom:
         cls.ib = ib
         cls.sm = sm
 
-    def __init__(self) -> None:
+    def __init__(self, which_contract: ActiveNext = ActiveNext.ACTIVE) -> None:
+        self.which_contract = which_contract
         self._createEvents()
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
         if not getattr(self, "strategy", None):
@@ -348,8 +381,10 @@ class Atom:
             # cannot be relied on for rolls
             # MUST be used to ensure streamers and processors don't mix-up data
             # from old and new contracts
+            log.debug(f"Future will reset: {self._contract_memo} --> {self.contract}")
             self._contractChangedEvent.emit(self._contract_memo, self.contract)
         self._contract_memo = self.contract
+        log.debug(f"_contract_memo set to: {self._contract_memo}")
         self.startEvent.emit(data, self)
 
     def onData(self, data: Any, *args: Any) -> Awaitable[None] | None:
@@ -496,7 +531,10 @@ class Atom:
             (
                 f"{i}={j}"
                 for i, j in self.__dict__.items()
-                if "Event" not in str(i) and i != "_log" and j
+                if ("Event" not in str(i))
+                and (i != "_log")
+                and j
+                and j != ActiveNext.ACTIVE
             )
         )
         return f"{self.__class__.__name__}({attrs})"
