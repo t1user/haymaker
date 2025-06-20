@@ -23,6 +23,10 @@ class NotConnectedError(Exception):
     pass
 
 
+FUTURES_ROLL_BDAYS = CONFIG["futures_roll_bdays"]
+FUTURES_ROLL_MARGIN_BDAYS = CONFIG["futures_roll_margin_bdays"]
+
+
 @dataclass
 class InitData:
     ib: ibi.IB
@@ -43,7 +47,12 @@ class InitData:
         # details always from blueprint
         details = await self.acquire_contract_details(list(self._contracts.values()))
         log.debug(f"Acquired details for {len(details)} contracts.")
-        selectors = (selector_factory(details_list) for details_list in details)
+        selectors = (
+            selector_factory(
+                details_list, FUTURES_ROLL_BDAYS, FUTURES_ROLL_MARGIN_BDAYS
+            )
+            for details_list in details
+        )
 
         for (contract_hash, _), selector in zip(self.contract_dict, selectors):
             self.contract_details[selector.active_contract] = selector.active_details

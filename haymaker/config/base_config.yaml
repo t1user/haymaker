@@ -105,7 +105,6 @@ tp_order:
 # all linked orders will use this oca_type (as per IB definition:  https://www.interactivebrokers.com/campus/ibkr-api-page/order-types/#one-cancels-all-orders)
 oca_type: 2
 
-# ---- NOT IN USE NOW ------
 # number of business days before last trading day that contract will be rolled
 futures_roll_bdays: 3
 # number of business days before roll day when new positions will use next contract

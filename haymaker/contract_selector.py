@@ -12,6 +12,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 
 log = getLogger(__name__)
 
+# THESE ARE DEFAULTS THAT CAN BE OVERRIDEN IN CLASS INITIALIZATION
 # number of business days before last trading day that contract will be rolled
 FUTURES_ROLL_BDAYS = 3
 # number of business days before roll day when new positions will use next contract
@@ -49,20 +50,22 @@ def customize_month_end(month_end: datetime) -> datetime:
 
 @dataclass
 class AbstractBaseSingleFuture(ABC):
-    # number of business days before last trading day that contract will be rolled
-    bdays_roll: ClassVar[int] = FUTURES_ROLL_BDAYS
     # if empty ignored; otherwise only months listed will be included in chain
     active_months: ClassVar[list[int]] = []
 
     contract: ibi.Future
     details: ibi.ContractDetails
+    # number of business days before last trading day that contract will be rolled
+    roll_bdays: int = FUTURES_ROLL_BDAYS
 
     @property
     @abstractmethod
     def last_trading_day(self) -> datetime: ...
 
     @classmethod
-    def from_details(cls, details: ibi.ContractDetails) -> Self:
+    def from_details(
+        cls, details: ibi.ContractDetails, roll_bdays: int = FUTURES_ROLL_BDAYS
+    ) -> Self:
         try:
             contract = details.contract
         except AttributeError as e:
@@ -76,7 +79,7 @@ class AbstractBaseSingleFuture(ABC):
             log.error(f"Expected future, got {type(contract)}: {contract=}")
             raise
         details.contract = contract
-        return cls(future_contract, details)
+        return cls(future_contract, details, roll_bdays)
 
     @property
     def lastTradeDateOrContractMonth(self) -> datetime:
@@ -97,7 +100,7 @@ class AbstractBaseSingleFuture(ABC):
 
     @property
     def roll_day(self) -> datetime:
-        return self.last_trading_day - self.bdays_roll * custom_bday
+        return self.last_trading_day - self.roll_bdays * custom_bday
 
     def __str__(self) -> str:
         return (
@@ -242,6 +245,7 @@ class ContFutureSelector(DefaultSelector):
 class FutureSelector(AbstractBaseContractSelector):
     detailsChain: list[ibi.ContractDetails]
     selector: Type[AbstractBaseSingleFuture]
+    roll_bdays: int = FUTURES_ROLL_BDAYS
     roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS
     today: datetime = field(default_factory=datetime.now, repr=False)
 
@@ -249,7 +253,7 @@ class FutureSelector(AbstractBaseContractSelector):
     def contracts(self) -> list[AbstractBaseSingleFuture]:
         """Contracts eligible for trading sorted by roll_date."""
         _contracts = (
-            self.selector.from_details(details)
+            self.selector.from_details(details, self.roll_bdays)
             for details in self.detailsChain
             if details.contract.exchange != "QBALGO"  # type: ignore
         )
@@ -272,7 +276,7 @@ class FutureSelector(AbstractBaseContractSelector):
     def _next_contract(self) -> AbstractBaseSingleFuture:
         return (
             self._active_contract()
-            if self.bdays_till_roll >= self.roll_margin_bdays
+            if self.bdays_till_roll > self.roll_margin_bdays
             else self.nth_contract(1)
         )
 
@@ -309,12 +313,21 @@ def single_future_factory(contract: ibi.Contract) -> Type[AbstractBaseSingleFutu
 
 def selector_factory(
     details_list: list[ibi.ContractDetails],
+    futures_roll_bdays: int = FUTURES_ROLL_BDAYS,
+    futures_roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS,
 ) -> AbstractBaseContractSelector:
     first_details_instance = details_list[0]
     contract = first_details_instance.contract
     assert contract
     selector_class, args = {
         "CONTFUT": (ContFutureSelector, ()),
-        "FUT": (FutureSelector, (single_future_factory(contract),)),
+        "FUT": (
+            FutureSelector,
+            (
+                single_future_factory(contract),
+                futures_roll_bdays,
+                futures_roll_margin_bdays,
+            ),
+        ),
     }.get(contract.secType, (DefaultSelector, ()))
     return selector_class(details_list, *args)
