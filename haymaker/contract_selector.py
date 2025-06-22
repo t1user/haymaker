@@ -244,7 +244,7 @@ class ContFutureSelector(DefaultSelector):
 @dataclass
 class FutureSelector(AbstractBaseContractSelector):
     detailsChain: list[ibi.ContractDetails]
-    selector: Type[AbstractBaseSingleFuture]
+    single_future: Type[AbstractBaseSingleFuture]
     roll_bdays: int = FUTURES_ROLL_BDAYS
     roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS
     today: datetime = field(default_factory=datetime.now, repr=False)
@@ -253,18 +253,26 @@ class FutureSelector(AbstractBaseContractSelector):
     def contracts(self) -> list[AbstractBaseSingleFuture]:
         """Contracts eligible for trading sorted by roll_date."""
         _contracts = (
-            self.selector.from_details(details, self.roll_bdays)
+            self.single_future.from_details(details, self.roll_bdays)
             for details in self.detailsChain
             if details.contract.exchange != "QBALGO"  # type: ignore
         )
         return sorted(
-            [c for c in _contracts if (c.isActiveMonth and c.roll_day > self.today)],
+            [
+                c
+                for c in _contracts
+                if (c.isActiveMonth and self._bdays(self.today, c.roll_day)) > 0
+            ],
             key=lambda x: x.roll_day,
         )
 
+    @staticmethod
+    def _bdays(from_: datetime, to_: datetime) -> int:
+        return len(pd.bdate_range(from_, to_)) - 1
+
     @property
     def bdays_till_roll(self) -> int:
-        return len(pd.bdate_range(self.today, self._active_contract().roll_day)) - 1
+        return self._bdays(self.today, self._active_contract().roll_day)
 
     def nth_contract(self, index: int) -> AbstractBaseSingleFuture:
         index = index if index < len(self.contracts) - 1 else len(self.contracts) - 1

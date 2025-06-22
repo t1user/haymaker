@@ -54,7 +54,7 @@ class InitData:
             for details_list in details
         )
 
-        for (contract_hash, _), selector in zip(self.contract_dict, selectors):
+        for (contract_hash, _), selector in zip(self.contract_dict.copy(), selectors):
             self.contract_details[selector.active_contract] = selector.active_details
             self.contract_details[selector.next_contract] = selector.next_details
             self.contract_dict[(contract_hash, ActiveNext.ACTIVE)] = (

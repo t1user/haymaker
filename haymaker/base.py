@@ -384,7 +384,6 @@ class Atom:
             log.debug(f"Future will reset: {self._contract_memo} --> {self.contract}")
             self._contractChangedEvent.emit(self._contract_memo, self.contract)
         self._contract_memo = self.contract
-        log.debug(f"_contract_memo set to: {self._contract_memo}")
         self.startEvent.emit(data, self)
 
     def onData(self, data: Any, *args: Any) -> Awaitable[None] | None:
