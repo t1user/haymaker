@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .controller import Controller
 
 from haymaker import misc
+from haymaker.base import Atom
 from haymaker.state_machine import OrderInfo, Strategy
 
 log = logging.getLogger(__name__)
@@ -140,10 +141,12 @@ class FutureRoller:
                 f"new contract found: {new_contract.localSymbol} for: "
                 f"{old_contract.localSymbol}"
             )
-            if new_contract.conId != old_contract.conId:
-                self.execute(old_contract, new_contract)
-            else:
+            if new_contract.conId == old_contract.conId:
                 log.error(f"Abandoning roll, no replacement found: {old_contract}")
+            elif Atom.contract_details[new_contract].is_open():
+                log.error(f"Abandoning roll, {new_contract} is not trading now.")
+            else:
+                self.execute(old_contract, new_contract)
 
     def execute(self, old_contract: ibi.Future, new_contract: ibi.Future) -> None:
         """
