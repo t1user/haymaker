@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from config import TEST_ROOT  # type: ignore
 
-from haymaker.base import Atom
+from haymaker.base import ActiveNext, Atom
 from haymaker.brick import AbstractBaseBrick, AbstractDfBrick
 
 
@@ -16,7 +16,7 @@ def brick() -> AbstractBaseBrick:
         def _signal(self, data):
             return {"signal": 1, "abc": "xyz", "pqz": 5}
 
-    return Brick("eska_NQ", ibi.Future("NQ", "CME"))
+    return Brick("eska_NQ", ibi.Future("NQ", "CME"), which_contract=ActiveNext.ACTIVE)
 
 
 def test_brick_instantiates(brick: AbstractBaseBrick):
@@ -71,7 +71,7 @@ def df_brick():
             data["price_plus"] = data["price"] + 1
             return data
 
-    return Brick("eska_NQ", ibi.Future("NQ", "CME"))
+    return Brick("eska_NQ", ibi.Future("NQ", "CME"), which_contract=ActiveNext.ACTIVE)
 
 
 @pytest.fixture
