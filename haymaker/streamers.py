@@ -297,7 +297,7 @@ class HistoricalDataStreamer(Streamer):
                 f"{self!s} data requires roll adjustment "
                 f"last bar: {self._last_bar_date}"
             )
-            self.startEvent.emit({"future_adjust_flag": True})
+
             stream = (
                 ev.Sequence(bars[:-1])
                 .pipe(
@@ -383,11 +383,16 @@ class HistoricalDataStreamer(Streamer):
                 log.warning(f"{self!s} set to adjust future")
                 self._future_adjust_flag = True
                 self._adjusted.append(old_contract)
+                # don't move to backfill, because then aggregator doesn't get control
+                # until backfill is finished
+                self.startEvent.emit({"future_adjust_flag": True})
             else:
                 log.warning(
                     f"{self!s} abandoning attempt to roll future "
                     f"{old_contract.localSymbol} for the second time"
                 )
+        else:
+            log.warning("I have no clue why I'm here.")
 
     def __hash__(self):
         return hash(id(self))
