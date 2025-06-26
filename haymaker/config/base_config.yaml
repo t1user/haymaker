@@ -45,6 +45,8 @@ state_machine:
   order_container_max_size: 0 # zero means no limit (strongly recommended)
   strategy_collection_name: "strategies"
   order_collection_name: "orders"
+  # number of attempts after which failed type of order for a contract will be suppressed
+  max_rejected_orders: 3 
   
 streamer:
   # timeout triggered after streamer hasn't received data for given amount of seconds

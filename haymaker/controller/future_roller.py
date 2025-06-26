@@ -201,6 +201,7 @@ class FutureRoller:
             # that we trade, make those changes when and if the order is filled
             # `self.adjust_records_and_orders_for_strategy` doesn't accept `Trade`
             # so don't just wrap it in `partial`!
+            assert trade
             trade.filledEvent += (
                 lambda trade: self.adjust_records_and_orders_for_strategy(
                     strategy_str,
@@ -365,7 +366,7 @@ class FutureRoller:
         old_contract: ibi.Future,
         new_contract: ibi.Future,
         size: float,
-    ) -> ibi.Trade:
+    ) -> ibi.Trade | None:
         combo = self.make_combo(old_contract, new_contract)
         try:
             log.debug(f"position_id from strategy: {strategy.position_id}")
@@ -474,6 +475,7 @@ class FutureRoller:
         new_trade = self.controller.trade(
             strategy_str, new_contract, new_order, oi.action, strategy
         )
+        assert new_trade
         log.debug(
             f"New roll order: {(new_trade.order.orderId, new_trade.order.permId)} "
             f"{new_trade.contract.localSymbol} {strategy_str} {oi.action}"

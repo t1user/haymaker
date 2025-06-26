@@ -191,7 +191,7 @@ class BaseExecModel(AbstractExecModel):
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
-    ) -> ibi.Trade:
+    ) -> ibi.Trade | None:
         return self.controller.trade(self.strategy, contract, order, action, self.data)
 
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
@@ -373,7 +373,7 @@ class EventDrivenExecModel(BaseExecModel):
         self,
         data: dict,
         dynamic_order_kwargs: dict | None = None,
-    ) -> ibi.Trade:
+    ) -> ibi.Trade | None:
         """
         On top of actions perfomed by base class, this method will:
         save information required for bracket orders and attach events
@@ -384,10 +384,11 @@ class EventDrivenExecModel(BaseExecModel):
         self.data.oca_group = None
 
         trade = super().open(data)
-        assert trade
-
-        trade.filledEvent += attach_bracket
-        return trade
+        if trade:
+            trade.filledEvent += attach_bracket
+            return trade
+        else:
+            return None
 
     def close(
         self,
@@ -441,15 +442,16 @@ class EventDrivenExecModel(BaseExecModel):
                         order,
                         label,
                     )
-                    # this doesn't make it into database now, because it's updating
-                    # a nested dict and only top one triggers a save
-                    # so potentially it's obsolete
-                    self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
-                        cast(BracketLabel, label),
-                        order_key,
-                        bracket_kwargs,
-                        bracket_trade,
-                    )
+                    if bracket_trade:
+                        # this doesn't make it into database now, because it's updating
+                        # a nested dict and only top one triggers a save
+                        # so potentially it's obsolete
+                        self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
+                            cast(BracketLabel, label),
+                            order_key,
+                            bracket_kwargs,
+                            bracket_trade,
+                        )
         except Exception as e:
             log.exception(f"Error while attaching bracket: {e}")
 

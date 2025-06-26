@@ -277,13 +277,16 @@ class Controller(Atom):
         order: ibi.Order,
         action: str,
         strategy: Strategy,
-    ) -> ibi.Trade:
-        trade = self.trader.trade(contract, order)
-        self.register_order(strategy_str, action, trade, strategy)
-        trade.filledEvent += partial(
-            self.log_trade, reason=action, strategy=strategy_str
-        )
-        return trade
+    ) -> ibi.Trade | None:
+        if self.sm.verify_for_rejections(contract, order):
+            trade = self.trader.trade(contract, order)
+            self.register_order(strategy_str, action, trade, strategy)
+            trade.filledEvent += partial(
+                self.log_trade, reason=action, strategy=strategy_str
+            )
+            return trade
+        else:
+            return None
 
     def register_order(
         self, strategy_str: str, action: str, trade: ibi.Trade, strategy: Strategy
@@ -662,6 +665,7 @@ class Controller(Atom):
                     f"ORDER REJECTED: {errorString} {errorCode=} {contract=}, "
                     f"{strategy} | {action} | {order}"
                 )
+                self.sm.register_rejected_order(errorCode, errorString, contract, order)
 
             else:
                 log.error(

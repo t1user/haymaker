@@ -30,7 +30,7 @@ ORDER_CONTAINER_MAX_SIZE = CONFIG.get("order_container_max_size", 0)
 SAVE_DELAY = CONFIG.get("save_delay", 1)
 STRATEGY_COLLECTION_NAME = CONFIG.get("strategy_collection_name", "strategies")
 ORDER_COLLECTION_NAME = CONFIG.get("order_collection_name", "orders")
-
+MAX_REJECTED_ORDERS = CONFIG.get("max_rejected_orders", 3)
 
 STRATEGY_SAVER = MongoSaver(STRATEGY_COLLECTION_NAME)
 ORDER_SAVER = MongoSaver(ORDER_COLLECTION_NAME, query_key="orderId")
@@ -410,6 +410,26 @@ class StateMachine:
         self._orders = OrderContainer(order_saver, save_async=save_async)
         # dict of Strategy data (same as ExecModel data)
         self._strategies = StrategyContainer(strategy_saver, save_async=save_async)
+        self.rejected_orders: dict[tuple[str, str, str], int] = defaultdict(int)
+
+    def register_rejected_order(
+        self, errorCode: int, errorString: str, contract: ibi.Contract, order: ibi.Order
+    ):
+        self.rejected_orders[(contract.localSymbol, order.orderType, order.action)] += 1
+
+    def verify_for_rejections(self, contract: ibi.Contract, order: ibi.Order) -> bool:
+        """Return True if order approved, False otherwise."""
+        if (
+            count := self.rejected_orders.get(
+                (contract.localSymbol, order.orderType, order.action)
+            )
+        ) and (count >= MAX_REJECTED_ORDERS):
+            log.info(
+                f"Supressing order because of multiple rejections: {order} {contract}"
+            )
+            return False
+        else:
+            return True
 
     def save_strategies(self, *args) -> None:
         self._strategies.save()

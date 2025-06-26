@@ -164,7 +164,7 @@ def objects(Atom) -> tuple:
             order: ibi.Order,
             action: str,
             strategy: Strategy,
-        ) -> ibi.Trade:
+        ) -> ibi.Trade | None:
             output_data.contract = contract
             output_data.order = order
             output_data.action = action

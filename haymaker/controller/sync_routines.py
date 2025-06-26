@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 from typing import TYPE_CHECKING, Self
 
 import ib_insync as ibi
@@ -459,6 +460,7 @@ class Terminator:
             "RESET",
             strategy,
         )
+        assert new_trade
         self.register_trade(new_trade)
         return new_trade
 
@@ -494,6 +496,7 @@ class Terminator:
                     ) * misc.sign(stop_amount)
 
                     log.debug(f"Will cancel {trade_amount} for {strategy.strategy}")
+                    assert trade
                     trade.cancelledEvent.connect(
                         partial(
                             self._strategy_trade,
