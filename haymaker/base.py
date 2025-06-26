@@ -279,6 +279,7 @@ class Atom:
         "feedbackEvent",
     )
     contract = cast(ibi.Contract, ContractManagingDescriptor())
+    which_contract: ActiveNext = ActiveNext.ACTIVE
     _contract_memo: Optional[ibi.Contract] = None
     _roll_contract_data: Optional[ContractRollData] = None
 
@@ -287,8 +288,7 @@ class Atom:
         cls.ib = ib
         cls.sm = sm
 
-    def __init__(self, which_contract: ActiveNext = ActiveNext.ACTIVE) -> None:
-        self.which_contract = which_contract
+    def __init__(self) -> None:
         self._createEvents()
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
         if not getattr(self, "strategy", None):

@@ -141,7 +141,9 @@ class TestAtom:
         Repr should only show non-default attributes, `which_contract`
         has default value of `ActiveNext.ACTIVE`.
         """
-        atom = Atom(which_contract=ActiveNext.NEXT)
+
+        atom = Atom()
+        atom.which_contract = ActiveNext.NEXT
         assert repr(atom) == "Atom(which_contract=ActiveNext.NEXT)"
 
     def test_no_duplicate_connections(self, atom1: NewAtom, atom2: NewAtom):
@@ -1223,7 +1225,8 @@ class Test_ActiveNext:
         assert my_atom.contract == self.es0
 
     def test_next_correct(self):
-        my_atom = Atom(which_contract=ActiveNext.NEXT)
+        my_atom = Atom()
+        my_atom.which_contract = ActiveNext.NEXT
         my_atom.contract = self.es
         Atom.contract_dict[(hash_contract(self.es), ActiveNext.ACTIVE)] = self.es0
         Atom.contract_dict[(hash_contract(self.es), ActiveNext.NEXT)] = self.es1

@@ -10,7 +10,7 @@ import ib_insync as ibi
 import pandas as pd
 
 from .aggregators import BarList
-from .base import ActiveNext, Atom
+from .base import Atom
 
 log = logging.getLogger(__name__)
 
@@ -19,10 +19,9 @@ log = logging.getLogger(__name__)
 class AbstractBaseBrick(Atom, ABC):
     strategy: str
     contract: ibi.Contract
-    which_contract: ActiveNext = ActiveNext.NEXT
 
     def __post_init__(self):
-        Atom.__init__(self, which_contract=self.which_contract)
+        Atom.__init__(self)
 
     def onStart(self, data, *args):
         if isinstance(data, dict):
@@ -60,7 +59,6 @@ class AbstractBaseBrick(Atom, ABC):
 class AbstractDfBrick(AbstractBaseBrick):
     strategy: str
     contract: ibi.Contract
-    which_contract: ActiveNext = ActiveNext.NEXT
 
     def _signal(self, data) -> dict:
         return self.df_row(data).to_dict()
