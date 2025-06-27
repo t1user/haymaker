@@ -13,7 +13,6 @@ from typing import (
     Awaitable,
     ClassVar,
     NamedTuple,
-    Optional,
     Self,
     Sequence,
     cast,
@@ -151,7 +150,7 @@ class Details:
         else:
             raise AttributeError(f"{self.__class__.__name__} has no attribute {name}")
 
-    def is_open(self, _now: Optional[datetime] = None) -> bool:
+    def is_open(self, _now: datetime | None = None) -> bool:
         """
         Given current time check if the market is open for underlying contract.
 
@@ -165,7 +164,7 @@ class Details:
         """
         return self._is_active(self.trading_hours, _now)
 
-    def is_liquid(self, _now: Optional[datetime] = None) -> bool:
+    def is_liquid(self, _now: datetime | None = None) -> bool:
         """
         Given current time check if the market is during liquid hours
         for underlying contract.
@@ -180,7 +179,7 @@ class Details:
         """
         return self._is_active(self.liquid_hours, _now)
 
-    def next_open(self, _now: Optional[datetime] = None) -> datetime:
+    def next_open(self, _now: datetime | None = None) -> datetime:
         """
         Return time of nearest market re-open (regardless if market is
         open now).  Should be used after it has been tested that
@@ -272,16 +271,15 @@ class Atom:
     ib: ClassVar[ibi.IB]
     sm: ClassVar[StateMachine]
     contract_details: ClassVar[DetailsContainer] = DetailsContainer()
-    contract_dict: dict[tuple[int, ActiveNext], ibi.Contract] = {}
+    contract_dict: ClassVar[dict[tuple[int, ActiveNext], ibi.Contract]] = {}
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
         "feedbackEvent",
     )
     contract = cast(ibi.Contract, ContractManagingDescriptor())
+    # this should be overriden by instances if neccessary to change
     which_contract: ActiveNext = ActiveNext.ACTIVE
-    _contract_memo: Optional[ibi.Contract] = None
-    _roll_contract_data: Optional[ContractRollData] = None
 
     @classmethod
     def set_init_data(cls, ib: ibi.IB, sm: StateMachine) -> None:
@@ -294,13 +292,15 @@ class Atom:
         if not getattr(self, "strategy", None):
             self.strategy = ""
         self.startup = False
+        self._contract_memo: ibi.Contract | None = None
+        self._roll_contract_data: ContractRollData | None = None
 
     @property
     def contracts(self):
         return self.contract_dict.values()
 
     @contracts.setter
-    def contracts(self) -> None:
+    def contracts(self):
         raise ValueError("Forbidden to set values on Atom.contracts.")
 
     @property

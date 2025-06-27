@@ -211,7 +211,7 @@ class Controller(Atom):
         """
         This method is scheduled to run once a day in :class:`.app.App`
         """
-        log.info(f"Running roll: {args} on controller object: {id(self)}")
+        log.info(f"Running roll on controller object: {id(self)}")
         roller = FutureRoller(self)
         roller.roll()
 
