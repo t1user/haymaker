@@ -381,7 +381,7 @@ class StateMachine:
     over dicts storing orders and strategies with some helper methods.
 
     This class must be a singleton, it will raise an error if there's
-    an attempt to create a second instance.
+    an attempt to create a second instance. It shouldn't be sub-classed.
     """
 
     _instance: "StateMachine | None" = None
@@ -398,14 +398,10 @@ class StateMachine:
 
     def __init__(
         self,
-        order_saver: AbstractBaseSaver | None = None,
-        strategy_saver: AbstractBaseSaver | None = None,
+        order_saver: AbstractBaseSaver = ORDER_SAVER,
+        strategy_saver: AbstractBaseSaver = STRATEGY_SAVER,
         save_async: bool = True,
     ) -> None:
-        # don't make these class attributes as it messes up tests
-        # (reference to dictionaries kept in between tests)
-        order_saver = order_saver or ORDER_SAVER
-        strategy_saver = strategy_saver or STRATEGY_SAVER
         # dict of OrderInfo
         self._orders = OrderContainer(order_saver, save_async=save_async)
         # dict of Strategy data (same as ExecModel data)

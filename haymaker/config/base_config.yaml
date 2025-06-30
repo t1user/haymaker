@@ -63,7 +63,7 @@ blotter:
   kwds:
     folder: blotter
     name: blotter
-    timestamp: False
+    use_timestamp: False
     
 # this is general definition of savers that are available to be used
 # they will not be instantiated unless used by an object inheriting from Atom

@@ -24,7 +24,7 @@ CONFIG = config.get("saver") or {}
 
 
 class AbstractBaseSaveManager(ABC):
-    def __init__(self, saver: AbstractBaseSaver, name="", timestamp: bool = True):
+    def __init__(self, saver: AbstractBaseSaver, name="", use_timestamp: bool = True):
         self.saver = saver
 
     def __get__(self, obj, objtype=None) -> Callable:
@@ -109,10 +109,10 @@ class AbstractBaseSaver(ABC):
     Api for saving data during trading/simulation.
     """
 
-    def __init__(self, name: str = "", timestamp: bool = True) -> None:
-        if timestamp:
-            timestamp_ = datetime.now(timezone.utc).strftime("%Y%m%d_%H_%M")
-            self.name = f"{name}_{timestamp_}"
+    def __init__(self, name: str = "", use_timestamp: bool = True) -> None:
+        if use_timestamp:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H_%M")
+            self.name = f"{name}_{timestamp}"
         else:
             self.name = name
 
@@ -125,8 +125,11 @@ class AbstractBaseSaver(ABC):
         This name can be used by :meth:`.save`to build filename,
         database collection name, key-value store key, etc.
         """
-        args_str = "_".join(args)
-        return f"{self.name}_{args_str}"
+        if args:
+            args_str = "_".join(args)
+            return f"{self.name}_{args_str}"
+        else:
+            return self.name
 
     @abstractmethod
     def save(self, data: Any, *args: str) -> None:
@@ -157,9 +160,9 @@ class AbstractBaseSaver(ABC):
 
 
 class PickleSaver(AbstractBaseSaver):
-    def __init__(self, folder: str, name: str = "", timestamp: bool = True) -> None:
+    def __init__(self, folder: str, name: str = "", use_timestamp: bool = True) -> None:
         self.path = default_path(folder)
-        super().__init__(name, timestamp)
+        super().__init__(name, use_timestamp)
 
     def _file(self, *args):
         return f"{self.path}/{self.name_str(*args)}.pickle"
@@ -178,9 +181,9 @@ class PickleSaver(AbstractBaseSaver):
 class CsvSaver(AbstractBaseSaver):
     _fieldnames: list[str] | None
 
-    def __init__(self, folder: str, name: str = "", timestamp: bool = True) -> None:
+    def __init__(self, folder: str, name: str = "", use_timestamp: bool = True) -> None:
         self.path = default_path(folder)
-        super().__init__(name, timestamp)
+        super().__init__(name, use_timestamp)
 
     @property
     def _file(self):
@@ -213,14 +216,14 @@ class ArcticSaver(AbstractBaseSaver):
     """
     Saver for Arctic VersionStore.
 
-    WORKS ONLY ON DATAFRAMES (or does it?)
+    WORKS ONLY ON DATAFRAMES
     """
 
     def __init__(
         self,
         library: str = "",
         name: str = "",
-        timestamp=False,
+        use_timestamp=False,
     ) -> None:
         """
         Library given at init, collection determined by self.name_str.
@@ -230,7 +233,7 @@ class ArcticSaver(AbstractBaseSaver):
         self.db = Arctic(self.host)
         self.db.initialize_library(self.library)
         self.store = self.db[self.library]
-        super().__init__(name, timestamp)
+        super().__init__(name, use_timestamp)
 
     def save(self, data: pd.DataFrame, *args: str):
         self.store.write(self.name_str(*args), data)
@@ -250,7 +253,7 @@ class ArcticSaver(AbstractBaseSaver):
 
 class MongoSaver(AbstractBaseSaver):
     def __init__(
-        self, collection: str, query_key: str | None = None, timestamp: bool = False
+        self, collection: str, query_key: str | None = None, use_timestamp: bool = False
     ) -> None:
         """
         `query_key` if for type of records that need to be recalled
@@ -258,7 +261,7 @@ class MongoSaver(AbstractBaseSaver):
         course it's possible to find any record with standard pymongo
         methods, this is just a helper for a typical task done by Haymaker).
 
-        `timestamp` not used in MongoSaver
+        `use_timestamp` not used in MongoSaver
         """
         host = CONFIG["MongoSaver"]["host"]
         port = CONFIG["MongoSaver"]["port"]
@@ -267,7 +270,7 @@ class MongoSaver(AbstractBaseSaver):
         self.db = self.client[db]
         self.collection = self.db[collection]
         self.query_key = query_key
-        super().__init__("", timestamp)
+        super().__init__("", use_timestamp)
 
     def save(self, data: dict[str, Any], *args) -> None:
         try:
