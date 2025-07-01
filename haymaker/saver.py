@@ -22,8 +22,32 @@ log = logging.getLogger(__name__)
 
 CONFIG = config.get("saver") or {}
 
+ARCTIC_SAVER_HOST = CONFIG["ArcticSaver"]["host"]
+ARCTIC_SAVER_LIBRARY = CONFIG["ArcticSaver"]["library"]
+
 
 class AbstractBaseSaveManager(ABC):
+    """
+    Run savers, be an interface between :class:`Atom` and :class:`AbstractBaseSaver`.
+    In particular, the purpose of this class is to allow for running savers
+    asynchronously as a background task in a separate thread or process.
+
+    Classes implementing this abstract class can be used both: as
+    a descriptor and a regular instance attribute, i.e.
+
+    * as a descriptor:
+        ```
+        class Example:
+            save = SaveManager(saver_instance)
+        ```
+    * as an instance attribute:
+        ```
+        class Example:
+            def __init__(self, saver_instance):
+                self.save = SaveManager(saver_instance)
+        ```
+    """
+
     def __init__(self, saver: AbstractBaseSaver, name="", use_timestamp: bool = True):
         self.saver = saver
 
@@ -45,47 +69,26 @@ async def async_runner(func: Callable, *args):
     return await loop.run_in_executor(None, func, *args)
 
 
-async def saving_function(data: Any, saver: AbstractBaseSaver, *args: str):
-    """
-    Funcion that actually peforms all saving.
-    :class:`AbstractBaseSaver` objects wishing to save should connect
-    events to it or await it directly.
-    """
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, saver.save, data, *args)
-
-
-def error_reporting_function(event, exception: Exception) -> None:
-    log.error(f"Event error: {event.name()}: {exception}", exc_info=True)
-
-
 class AsyncSaveManager(AbstractBaseSaveManager):
     """
     Abstract away the process of perfoming save operations.  Use
     :class:`eventkit.Event` to put :func:`.saving_function` into
     asyncio loop.
-
-    This class can be used both: as a descriptor and a regular class:
-
-    ```
-    class Example:
-
-        save = SaveManager(saver_instance)
-
-        ...
-    ```
-
-    or:
-
-    ```
-    class Example:
-
-        def __init__(self):
-            self.save = SaveManager(saver_instance)
-
-        ...
-    ```
     """
+
+    @staticmethod
+    async def saving_function(data: Any, saver: AbstractBaseSaver, *args: str):
+        """
+        Function that actually peforms all saving.
+        :class:`AbstractBaseSaver` objects wishing to save should connect
+        events to it or await it directly.
+        """
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, saver.save, data, *args)
+
+    @staticmethod
+    def error_reporting_function(event, exception: Exception) -> None:
+        log.error(f"Event error: {event.name()}: {exception}", exc_info=True)
 
     saveEvent = ev.Event("saveEvent")
     saveEvent.connect(saving_function, error=error_reporting_function)
@@ -109,27 +112,14 @@ class AbstractBaseSaver(ABC):
     Api for saving data during trading/simulation.
     """
 
-    def __init__(self, name: str = "", use_timestamp: bool = True) -> None:
+    def __init__(
+        self, name: str = "", use_timestamp: bool = True, *args, **kwargs
+    ) -> None:
         if use_timestamp:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H_%M")
             self.name = f"{name}_{timestamp}"
         else:
             self.name = name
-
-    def name_str(self, *args: str) -> str:
-        """
-        Return string under which the data is to be saved.  Timestamp
-        and/or 'name' may be included in the name depending on how the
-        object was initialized.
-
-        This name can be used by :meth:`.save`to build filename,
-        database collection name, key-value store key, etc.
-        """
-        if args:
-            args_str = "_".join(args)
-            return f"{self.name}_{args_str}"
-        else:
-            return self.name
 
     @abstractmethod
     def save(self, data: Any, *args: str) -> None:
@@ -158,14 +148,56 @@ class AbstractBaseSaver(ABC):
     def delete(self, query: dict) -> None:
         raise NotImplementedError
 
+    @staticmethod
+    def name_str(
+        name: str, *args: str, timestamp: datetime | None = None, join_str: str = "_"
+    ) -> str:
+        """
+        Helper method to generate file/collection names if necessary.
 
-class PickleSaver(AbstractBaseSaver):
-    def __init__(self, folder: str, name: str = "", use_timestamp: bool = True) -> None:
+        Args:
+        -----
+
+        name - file/collection name
+
+        *args - additional strings to be concatinated with `name`
+
+        use_timestamp - if True timestamp (of when the object was instantiated rather
+        than the time of every save) will be added after the name
+
+        join_str - symbol used to join strings
+
+        This `name_str` can be used by :meth:`.save`to build filename,
+        database collection name, key-value store key, etc.
+        """
+        if timestamp:
+            args_str = join_str.join((name, *args, timestamp.strftime("%Y%m%d_%H_%M")))
+        else:
+            args_str = join_str.join((name, *args))
+        return args_str
+
+
+class AbstractBaseFileSaver(AbstractBaseSaver):
+    _suffix = ""
+
+    def __init__(self, name: str, folder: str = "", use_timestamp: bool = True) -> None:
         self.path = default_path(folder)
-        super().__init__(name, use_timestamp)
+        self.name = name
+        self.timestamp = datetime.now(timezone.utc) if use_timestamp else None
 
-    def _file(self, *args):
-        return f"{self.path}/{self.name_str(*args)}.pickle"
+    def _file(self, *args) -> str:
+        return (
+            f"{self.path}/"
+            f"{self.name_str(self.name, *args, timestamp=self.timestamp)}"
+            f".{self._suffix}"
+        )
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__qualname__}({self.path}, {self.name})"
+
+
+class PickleSaver(AbstractBaseFileSaver):
+    _suffix = "pickle"
 
     def save(self, data: pd.DataFrame, *args: str) -> None:
         if isinstance(data, pd.DataFrame):
@@ -174,42 +206,34 @@ class PickleSaver(AbstractBaseSaver):
             with open(self._file(*args), "wb") as f:
                 f.write(pickle.dumps(data))
 
-    def __repr__(self):
-        return f"PickleSaver({self.path}, {self.name})"
 
-
-class CsvSaver(AbstractBaseSaver):
+class CsvSaver(AbstractBaseFileSaver):
+    _suffix = "csv"
     _fieldnames: list[str] | None
 
     def __init__(self, folder: str, name: str = "", use_timestamp: bool = True) -> None:
         self.path = default_path(folder)
-        super().__init__(name, use_timestamp)
+        self.name = name
+        self.use_timestamp = use_timestamp
 
-    @property
-    def _file(self):
-        return f"{self.path}/{self.name_str()}.csv"
-
-    def _create_header(self, keys: Collection) -> None:
-        with open(self._file, "a") as f:
+    def _create_header(self, keys: Collection, *args: str) -> None:
+        with open(self._file(*args), "a") as f:
             writer = csv.DictWriter(f, fieldnames=keys)
             writer.writeheader()
 
     def save(self, data: dict[str, Any], *args: str) -> None:
-        if not Path(self._file).exists():
-            self._create_header(data.keys())
-        with open(self._file, "a") as f:
+        if not Path(self._file()).exists():
+            self._create_header(data.keys(), *args)
+        with open(self._file(*args), "a") as f:
             writer = csv.DictWriter(f, fieldnames=data.keys())
             writer.writerow(data)
 
-    def save_many(self, data: list[dict[str, Any]]) -> None:
+    def save_many(self, data: list[dict[str, Any]], *args: str) -> None:
         self._create_header(data[0].keys())
-        with open(self._file, "a") as f:
+        with open(self._file(*args), "a") as f:
             writer = csv.DictWriter(f, fieldnames=data[0].keys())
             for item in data:
                 writer.writerow(item)
-
-    def __repr__(self):
-        return f"CsvSaver({self.path}, {self.name})"
 
 
 class ArcticSaver(AbstractBaseSaver):
@@ -221,22 +245,27 @@ class ArcticSaver(AbstractBaseSaver):
 
     def __init__(
         self,
-        library: str = "",
         name: str = "",
+        host: str = ARCTIC_SAVER_HOST,
+        library: str = ARCTIC_SAVER_LIBRARY,
         use_timestamp=False,
     ) -> None:
         """
         Library given at init, collection determined by self.name_str.
         """
-        self.host = CONFIG["ArcticSaver"]["host"]
-        self.library = library or CONFIG["ArcticSaver"]["library"]
+        self.host = host
+        self.library = library
         self.db = Arctic(self.host)
         self.db.initialize_library(self.library)
         self.store = self.db[self.library]
-        super().__init__(name, use_timestamp)
+        self.name = name
+        self.timestamp = datetime.now(timezone.utc) if use_timestamp else None
+
+    def _make_key(self, *args: str) -> str:
+        return self.name_str(self.name, *args, timestamp=self.timestamp)
 
     def save(self, data: pd.DataFrame, *args: str):
-        self.store.write(self.name_str(*args), data)
+        self.store.write(self._make_key(*args), data)
 
     def keys(self) -> list[str]:
         return self.store.list_symbols()
@@ -261,7 +290,6 @@ class MongoSaver(AbstractBaseSaver):
         course it's possible to find any record with standard pymongo
         methods, this is just a helper for a typical task done by Haymaker).
 
-        `use_timestamp` not used in MongoSaver
         """
         host = CONFIG["MongoSaver"]["host"]
         port = CONFIG["MongoSaver"]["port"]
@@ -270,7 +298,6 @@ class MongoSaver(AbstractBaseSaver):
         self.db = self.client[db]
         self.collection = self.db[collection]
         self.query_key = query_key
-        super().__init__("", use_timestamp)
 
     def save(self, data: dict[str, Any], *args) -> None:
         try:
