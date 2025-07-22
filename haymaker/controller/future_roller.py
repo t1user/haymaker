@@ -143,7 +143,7 @@ class FutureRoller:
             )
             if new_contract.conId == old_contract.conId:
                 log.error(f"Abandoning roll, no replacement found: {old_contract}")
-            elif Atom.contract_details[new_contract].is_open():
+            elif not Atom.contract_details[new_contract].is_open():
                 log.error(f"Abandoning roll, {new_contract} is not trading now.")
             else:
                 self.execute(old_contract, new_contract)
