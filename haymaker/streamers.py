@@ -279,7 +279,9 @@ class HistoricalDataStreamer(Streamer):
 
     async def backfill(self, bars):
         # this will switch processor into backfill mode
-        self.startEvent.emit({"startup": True})
+        self.startEvent.emit(
+            {"startup": True, "future_adjust_flag": self._future_adjust_flag}
+        )
         # release control to allow for adjustments down the chain
         # await asyncio.sleep(0)
         log.debug(
@@ -385,14 +387,14 @@ class HistoricalDataStreamer(Streamer):
                 self._adjusted.append(old_contract)
                 # don't move to backfill, because then aggregator doesn't get control
                 # until backfill is finished
-                self.startEvent.emit({"future_adjust_flag": True})
+                # self.startEvent.emit({"future_adjust_flag": True})
             else:
                 log.warning(
                     f"{self!s} abandoning attempt to roll future "
                     f"{old_contract.localSymbol} for the second time"
                 )
         else:
-            log.warning("I have no clue why I'm here.")
+            log.warning("onContractChanged triggered on non-future Contract")
 
     def __hash__(self):
         return hash(id(self))

@@ -300,7 +300,7 @@ class Atom:
         return self.contract_dict.values()
 
     @contracts.setter
-    def contracts(self):
+    def contracts(self, arg: Any) -> None:
         raise ValueError("Forbidden to set values on Atom.contracts.")
 
     @property

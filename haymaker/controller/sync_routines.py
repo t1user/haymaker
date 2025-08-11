@@ -216,7 +216,7 @@ class ErrorHandlers:
         log.error("Will attempt to fix position records")
         for contract, diff in errors.items():
             strategies = self.sm.for_contract.get(contract)
-            log.debug(f"{strategies=}")
+            log.debug(f"Strategies for contract {contract.localSymbol}: {strategies}")
             if strategies and len(strategies) == 1:
                 self.sm.strategy[strategies[0]].position -= diff
                 log.error(
@@ -251,8 +251,8 @@ class ErrorHandlers:
             else:
                 # too risky to make assumptions about strategy (what about sl?)
                 log.critical(
-                    f"More than 1 strategy for contract {contract.symbol}, "
-                    f"cannot fix position records."
+                    f"Cannot fix position records for {contract.localSymbol}, "
+                    f"{strategies=}."
                 )
             self.faulty_trades.clear()
 
@@ -310,11 +310,11 @@ class OrderReconciliationSync:
         return cls(ct.ib, ct.sm, ct, ct.cancel_stray_orders).run_strategies()
 
     def run_strategies(self) -> Self:
-        for strategy in self.sm.strategy.values():
+        for strategy_str, strategy in self.sm.strategy.items():
             order_infos = self.sm.orders_for_strategy(strategy.strategy)
             if strategy.position == 0:
                 for oi in self._find_obsolete_orders(order_infos):
-                    self._handle_obsolete_order(strategy, oi)
+                    self._handle_obsolete_order(strategy_str, oi)
             else:
                 self._check_brackets(strategy, order_infos)
         log.debug("Orders synced to positions.")

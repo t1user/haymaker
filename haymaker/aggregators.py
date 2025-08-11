@@ -52,6 +52,10 @@ class BarAggregator(Atom):
             log.warning(f"{self} onStart knows future needs adjust")
 
     def onDataBar(self, bars, *args):
+        """
+        This is connected to `self._filter`, will emit whatever comes
+        from filter.
+        """
         if self._incremental_only:
             try:
                 self.dataEvent.emit(bars[-1])
@@ -61,6 +65,9 @@ class BarAggregator(Atom):
             self.dataEvent.emit(bars)
 
     def onData(self, data: ibi.BarData | ibi.BarDataList, *args) -> None:
+        """
+        This passes correct data to `self._filter`.
+        """
         # data is just single BarData object (if incremental_only=True,
         # which is default and currently only mode supported)
         if self._future_adjust_flag:
