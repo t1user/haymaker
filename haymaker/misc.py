@@ -12,6 +12,7 @@ from typing import Any, Callable, Literal
 from zoneinfo import ZoneInfo
 
 import ib_insync as ibi
+import pandas as pd
 
 from .config import CONFIG
 
@@ -363,3 +364,45 @@ def general_to_specific_contract_class(contract: ibi.Contract) -> ibi.Contract:
         return contract
     else:
         return ibi.Contract.create(**ibi.util.dataclassAsDict(contract))
+
+
+def make_df_timezone_aware(
+    df: pd.DataFrame,
+    existing_timezone: str = "Europe/Warsaw",
+    target_timezone: str = "UTC",
+) -> pd.DataFrame:
+    """
+    Convert DataFrame with naive datetime index from existing
+    (default: Europe/Warsaw) to target (default: UTC) timezone.
+
+    Args:
+    ----
+
+    df: DataFrame with naive datetime index in `existing_timezone`
+    timezone existing_timezone: timezone in which
+
+    timezone-naive: `df` is
+
+    target_timezone: timezone in which `df` should be
+
+
+    Returns:
+    -------
+
+    DataFrame with timezone-aware index.
+    """
+    # Create a copy to avoid modifying original
+    target_df = df.copy()
+
+    # Localize the naive index to Europe/Warsaw, then convert to UTC
+    target_df.index = target_df.index.tz_localize(  # type: ignore
+        existing_timezone
+    ).tz_convert(target_timezone)
+
+    return target_df
+
+
+def is_timezone_aware(df: pd.DataFrame) -> bool:
+    """Check if dataframe is timezone aware."""
+    dt_obj = df.index[-1]
+    return dt_obj.tzinfo is not None and dt_obj.tzinfo.utcoffset(dt_obj) is not None
