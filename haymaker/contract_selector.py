@@ -10,6 +10,8 @@ import pandas as pd
 import pandas_market_calendars as mcal  # type: ignore
 from pandas.tseries.offsets import CustomBusinessDay
 
+from . import misc
+
 log = getLogger(__name__)
 
 # THESE ARE DEFAULTS THAT CAN BE OVERRIDEN IN CLASS INITIALIZATION
@@ -49,12 +51,11 @@ def customize_month_end(month_end: datetime) -> datetime:
 
 
 @dataclass
-class AbstractBaseSingleFuture(ABC):
+class AbstractBaseFutureWrapper(ABC):
     # if empty ignored; otherwise only months listed will be included in chain
     active_months: ClassVar[list[int]] = []
 
     contract: ibi.Future
-    details: ibi.ContractDetails
     # number of business days before last trading day that contract will be rolled
     roll_bdays: int = FUTURES_ROLL_BDAYS
 
@@ -72,14 +73,13 @@ class AbstractBaseSingleFuture(ABC):
             log.exception(e)
             raise
         assert contract
-        future_contract = ibi.Contract.create(**ibi.util.dataclassAsDict(contract))
+        future_contract = misc.general_to_specific_contract_class(contract)
         try:
             assert isinstance(future_contract, ibi.Future)
         except AssertionError:
             log.error(f"Expected future, got {type(contract)}: {contract=}")
             raise
-        details.contract = contract
-        return cls(future_contract, details, roll_bdays)
+        return cls(future_contract, roll_bdays)
 
     @property
     def lastTradeDateOrContractMonth(self) -> datetime:
@@ -109,7 +109,7 @@ class AbstractBaseSingleFuture(ABC):
 
 
 @dataclass
-class GoldComex(AbstractBaseSingleFuture):
+class GoldComex(AbstractBaseFutureWrapper):
 
     active_months: ClassVar[list[int]] = [2, 4, 6, 8, 10, 12]
 
@@ -126,8 +126,9 @@ class GoldComex(AbstractBaseSingleFuture):
 
 
 @dataclass
-class NG(AbstractBaseSingleFuture):
-
+class NG(AbstractBaseFutureWrapper):
+    # NOT IN USE
+    # should it be used?
     @property
     def last_trading_day(self) -> datetime:
         return (
@@ -138,7 +139,7 @@ class NG(AbstractBaseSingleFuture):
 
 
 @dataclass
-class EnergyNymex(AbstractBaseSingleFuture):
+class EnergyNymex(AbstractBaseFutureWrapper):
     # NOT IN USE
     # CL doesn't need offset
 
@@ -158,7 +159,7 @@ class EnergyNymex(AbstractBaseSingleFuture):
 
 
 @dataclass
-class NoOffset(AbstractBaseSingleFuture):
+class NoOffset(AbstractBaseFutureWrapper):
     # default unless otherwise specified
 
     @property
@@ -166,14 +167,25 @@ class NoOffset(AbstractBaseSingleFuture):
         return self.lastTradeDateOrContractMonth
 
 
+def future_wrapper_factory(contract: ibi.Contract) -> Type[AbstractBaseFutureWrapper]:
+    return {
+        "GC": GoldComex,
+        "MGC": GoldComex,
+    }.get(contract.symbol, NoOffset)
+
+
 # ######################################################################
 # Contract Selectors below
 # ######################################################################
 
 
-@dataclass
 class AbstractBaseContractSelector(ABC):
-    detailsChain: list[ibi.ContractDetails]
+
+    @classmethod
+    @abstractmethod
+    def from_details(
+        cls, detailsChain: list[ibi.ContractDetails], *args, **kwargs
+    ) -> Self: ...
 
     @property
     @abstractmethod
@@ -182,14 +194,6 @@ class AbstractBaseContractSelector(ABC):
     @property
     @abstractmethod
     def next_contract(self) -> ibi.Contract: ...
-
-    @property
-    @abstractmethod
-    def active_details(self) -> ibi.ContractDetails: ...
-
-    @property
-    @abstractmethod
-    def next_details(self) -> ibi.ContractDetails: ...
 
     def __str__(self) -> str:
         return (
@@ -200,71 +204,124 @@ class AbstractBaseContractSelector(ABC):
 
 @dataclass
 class DefaultSelector(AbstractBaseContractSelector):
-    detailsChain: list[ibi.ContractDetails]
+    contractChain: list[ibi.Contract]
+
+    @classmethod
+    def from_details(
+        cls, detailsChain: list[ibi.ContractDetails], *args, **kwargs
+    ) -> Self:
+        return cls(
+            [
+                misc.general_to_specific_contract_class(details.contract)
+                for details in detailsChain
+                if (details.contract and details.contract.exchange != "QBALGO")
+            ]
+        )
 
     def __post_init__(self):
-        if not self.detailsChain:
+        if not self.contractChain:
             raise NoContractFound
-        elif len(self.detailsChain) > 1:
-            raise AmbiguousContractError([d.contract for d in self.detailsChain])
+        elif len(self.contractChain) > 1:
+            raise AmbiguousContractError([d for d in self.contractChain])
 
     @property
     def active_contract(self) -> ibi.Contract:
-        assert len(self.detailsChain) == 1
-        assert self.detailsChain[0].contract
-        return self.detailsChain[0].contract
-
-    @property
-    def active_details(self) -> ibi.ContractDetails:
-        return self.detailsChain[0]
+        return self.contractChain[0]
 
     @property
     def next_contract(self) -> ibi.Contract:
         return self.active_contract
 
-    @property
-    def next_details(self) -> ibi.ContractDetails:
-        return self.active_details
-
 
 @dataclass
 class ContFutureSelector(DefaultSelector):
-
-    def __post_init__(self):
-        """Replace ContFuture with Future."""
-        super().__post_init__()
-        contract = self.detailsChain[0].contract
-        contfuture_contract = ibi.Contract.create(**ibi.util.dataclassAsDict(contract))
-        assert isinstance(contfuture_contract, ibi.ContFuture)
-        contract_kwargs = ibi.util.dataclassNonDefaults(contfuture_contract)
-        del contract_kwargs["secType"]
-        self.detailsChain[0].contract = ibi.Future(**contract_kwargs)
+    pass
 
 
 @dataclass
 class FutureSelector(AbstractBaseContractSelector):
-    detailsChain: list[ibi.ContractDetails]
-    single_future: Type[AbstractBaseSingleFuture]
+    futuresChain: list[AbstractBaseFutureWrapper]
     roll_bdays: int = FUTURES_ROLL_BDAYS
     roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS
     today: datetime = field(default_factory=datetime.now, repr=False)
 
-    @cached_property
-    def contracts(self) -> list[AbstractBaseSingleFuture]:
-        """Contracts eligible for trading sorted by roll_date."""
-        _contracts = (
-            self.single_future.from_details(details, self.roll_bdays)
-            for details in self.detailsChain
-            if details.contract.exchange != "QBALGO"  # type: ignore
+    def __post_init__(self):
+        if not self.futuresChain:
+            raise NoContractFound("No Future contracts found.")
+        for future_wrapper in self.futuresChain:
+            assert isinstance(future_wrapper, AbstractBaseFutureWrapper)
+
+    @classmethod
+    def from_details(
+        cls,
+        detailsChain: list[ibi.ContractDetails],
+        roll_bdays: int = FUTURES_ROLL_BDAYS,
+        roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS,
+        today: datetime = datetime.now(),
+        _future_wrapper_factory=future_wrapper_factory,  # for testing
+        *args,
+        **kwargs,
+    ) -> Self:
+
+        contract = detailsChain[0].contract
+        assert contract
+        future_wrapper = _future_wrapper_factory(contract)
+        return cls(
+            [
+                future_wrapper.from_details(details, roll_bdays)
+                for details in detailsChain
+                if details.contract.exchange != "QBALGO"  # type: ignore
+            ],
+            roll_bdays,
+            roll_margin_bdays,
+            today,
         )
+
+    @classmethod
+    def from_contracts(
+        cls,
+        futuresChain: list[ibi.Future],
+        roll_bdays: int = FUTURES_ROLL_BDAYS,
+        roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS,
+        today: datetime = datetime.now(),
+        _future_wrapper_factory=future_wrapper_factory,  # for testing
+    ) -> Self:
+
+        future_wrapper = _future_wrapper_factory(futuresChain[0])
+        return cls(
+            [future_wrapper(future) for future in futuresChain],
+            roll_bdays,
+            roll_margin_bdays,
+            today,
+        )
+
+    @cached_property
+    def contracts(self) -> list[AbstractBaseFutureWrapper]:
+        """Contracts eligible for trading sorted by roll_date."""
         return sorted(
             [
                 c
-                for c in _contracts
+                for c in self.futuresChain
                 if (c.isActiveMonth and self._bdays(self.today, c.roll_day)) > 0
             ],
             key=lambda x: x.roll_day,
         )
+
+    @cached_property
+    def back_contracts(self) -> list[AbstractBaseFutureWrapper]:
+        """Historical contracts sorted by roll_date."""
+        return sorted(
+            [
+                c
+                for c in self.futuresChain
+                if (c.isActiveMonth and self._bdays(self.today, c.roll_day)) <= 0
+            ],
+            key=lambda x: x.roll_day,
+        )
+
+    @cached_property
+    def back_roll_days(self) -> dict[ibi.Future, datetime]:
+        return {c.contract: c.roll_day for c in self.back_contracts}
 
     @staticmethod
     def _bdays(from_: datetime, to_: datetime) -> int:
@@ -274,14 +331,17 @@ class FutureSelector(AbstractBaseContractSelector):
     def bdays_till_roll(self) -> int:
         return self._bdays(self.today, self._active_contract().roll_day)
 
-    def nth_contract(self, index: int) -> AbstractBaseSingleFuture:
+    def nth_contract(self, index: int) -> AbstractBaseFutureWrapper:
+        """Return active contract at given index."""
+        assert index >= 0
+        # if index to large, return last element
         index = index if index < len(self.contracts) - 1 else len(self.contracts) - 1
         return self.contracts[index]
 
-    def _active_contract(self) -> AbstractBaseSingleFuture:
+    def _active_contract(self) -> AbstractBaseFutureWrapper:
         return self.nth_contract(0)
 
-    def _next_contract(self) -> AbstractBaseSingleFuture:
+    def _next_contract(self) -> AbstractBaseFutureWrapper:
         return (
             self._active_contract()
             if self.bdays_till_roll > self.roll_margin_bdays
@@ -296,27 +356,12 @@ class FutureSelector(AbstractBaseContractSelector):
     def next_contract(self) -> ibi.Future:
         return self._next_contract().contract
 
-    @property
-    def active_details(self) -> ibi.ContractDetails:
-        return self._active_contract().details
-
-    @property
-    def next_details(self) -> ibi.ContractDetails:
-        return self._next_contract().details
-
     def __str__(self) -> str:
         return (
             f"<{self.__class__.__name__} "
             f"active_contract={self.active_contract.localSymbol} "
             f"next_contract={self.next_contract.localSymbol}>"
         )
-
-
-def single_future_factory(contract: ibi.Contract) -> Type[AbstractBaseSingleFuture]:
-    return {
-        "GC": GoldComex,
-        "MGC": GoldComex,
-    }.get(contract.symbol, NoOffset)
 
 
 def selector_factory(
@@ -332,10 +377,9 @@ def selector_factory(
         "FUT": (
             FutureSelector,
             (
-                single_future_factory(contract),
                 futures_roll_bdays,
                 futures_roll_margin_bdays,
             ),
         ),
     }.get(contract.secType, (DefaultSelector, ()))
-    return selector_class(details_list, *args)
+    return selector_class.from_details(details_list, *args)  # type: ignore

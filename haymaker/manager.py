@@ -8,6 +8,7 @@ from typing import Final, Self
 
 import ib_insync as ibi
 
+from . import misc
 from .base import ActiveNext, Atom, DetailsContainer
 from .config import CONFIG
 from .contract_selector import selector_factory
@@ -53,12 +54,21 @@ class InitData:
             )
             for details_list in details
         )
+        _details = {
+            details.contract: details
+            for details_list in details
+            for details in details_list
+        }
 
         for (contract_hash, _), selector in zip(self.contract_dict.copy(), selectors):
-            self.contract_details[selector.active_contract] = selector.active_details
-            self.contract_details[selector.next_contract] = selector.next_details
-            self.contract_dict[(contract_hash, ActiveNext.ACTIVE)] = (
+            self.contract_details[selector.active_contract] = _details[
                 selector.active_contract
+            ]
+            self.contract_details[selector.next_contract] = _details[
+                misc.general_to_specific_contract_class(selector.next_contract)
+            ]
+            self.contract_dict[(contract_hash, ActiveNext.ACTIVE)] = (
+                misc.general_to_specific_contract_class(selector.active_contract)
             )
             self.contract_dict[(contract_hash, ActiveNext.NEXT)] = (
                 selector.next_contract

@@ -2000,3 +2000,42 @@ es_details_chain = [
         }
     },
 ]
+
+
+stock_details_chain = [
+    {
+        "ContractDetails": {
+            "contract": {
+                "Contract": {
+                    "secType": "STK",
+                    "conId": 4391,
+                    "symbol": "AMD",
+                    "exchange": "NASDAQ",
+                    "primaryExchange": "NASDAQ",
+                    "currency": "USD",
+                    "localSymbol": "AMD",
+                    "tradingClass": "NMS",
+                }
+            },
+            "marketName": "NMS",
+            "minTick": 0.01,
+            "orderTypes": "ACTIVETIM,AD,ADJUST,ALERT,ALLOC,AON,AVGCOST,BASKET,BENCHPX,CASHQTY,COND,CONDORDER,DAY,DEACT,DEACTDIS,DEACTEOD,DIS,GAT,GTC,GTD,GTT,HID,IOC,LIT,LMT,LOC,MIT,MKT,MOC,MTL,NGCOMB,NONALGO,OCA,OPG,PEGBENCH,RELPCTOFS,RTH,SCALE,SCALERST,SNAPMID,SNAPMKT,SNAPREL,STP,STPLMT,TRAIL,TRAILLIT,TRAILLMT,TRAILMIT,WHATIF",
+            "validExchanges": "SMART,AMEX,NYSE,CBOE,PHLX,ISE,CHX,ARCA,NASDAQ,DRCTEDGE,BEX,BATS,EDGEA,BYX,IEX,EDGX,FOXRIVER,PEARL,NYSENAT,LTSE,MEMX,IBEOS,OVERNIGHT,TPLUS0,PSX",
+            "priceMagnifier": 1,
+            "longName": "ADVANCED MICRO DEVICES",
+            "industry": "Technology",
+            "category": "Semiconductors",
+            "subcategory": "Electronic Compo-Semicon",
+            "timeZoneId": "US/Eastern",
+            "tradingHours": "20250822:0400-20250822:2000;20250823:CLOSED;20250824:CLOSED;20250825:0400-20250825:2000;20250826:0400-20250826:2000;20250827:0400-20250827:2000",
+            "liquidHours": "20250822:0930-20250822:1600;20250823:CLOSED;20250824:CLOSED;20250825:0930-20250825:1600;20250826:0930-20250826:1600;20250827:0930-20250827:1600",
+            "aggGroup": 1,
+            "marketRuleIds": "26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26",
+            "secIdList": [{"TagValue": {"tag": "ISIN", "value": "US0079031078"}}],
+            "stockType": "COMMON",
+            "minSize": 0.0001,
+            "sizeIncrement": 0.0001,
+            "suggestedSizeIncrement": 100.0,
+        }
+    }
+]

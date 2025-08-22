@@ -8,6 +8,7 @@ import pytest
 from haymaker.misc import (
     Counter,
     contractAsTuple,
+    general_to_specific_contract_class,
     hash_contract,
     is_active,
     next_active,
@@ -158,3 +159,97 @@ def test_contractAsTuple_works_for_every_contract_type_except_for_bag(contract):
 
 def test_hash_contract():
     assert isinstance(hash_contract(ibi.ContFuture("NQ", "CME")), int)
+
+
+def test_general_to_specific_contract_class():
+    contract = ibi.Contract(
+        secType="FUT",
+        conId=657106382,
+        symbol="HSI",
+        lastTradeDateOrContractMonth="20240130",
+        multiplier="50",
+        exchange="HKFE",
+        currency="HKD",
+        localSymbol="HSIF4",
+        tradingClass="HSI",
+    )
+    future = general_to_specific_contract_class(contract)
+
+    assert future == contract
+    assert isinstance(future, ibi.Future)
+
+
+def test_general_to_specific_contract_class_with_contfuture():
+    contract = ibi.ContFuture(
+        conId=656780482,
+        symbol="MGC",
+        lastTradeDateOrContractMonth="20250827",
+        multiplier="10",
+        exchange="COMEX",
+        currency="USD",
+        localSymbol="MGCQ5",
+        tradingClass="MGC",
+    )
+    future = general_to_specific_contract_class(contract)
+
+    assert future == contract
+    assert isinstance(future, ibi.Future)
+
+
+def test_general_to_specific_contract_class_with_contfuture_Contract():
+    contract = ibi.Contract(
+        secType="CONTFUT",
+        conId=674701641,
+        symbol="MGC",
+        lastTradeDateOrContractMonth="20251229",
+        multiplier="10",
+        exchange="COMEX",
+        currency="USD",
+        localSymbol="MGCZ5",
+        tradingClass="MGC",
+    )
+
+    future = general_to_specific_contract_class(contract)
+
+    assert future == contract
+    assert isinstance(future, ibi.Future)
+
+
+def test_general_to_specific_contract_class_works_with_non_futures():
+    contract = ibi.Contract(
+        secType="STK",
+        conId=4391,
+        symbol="AMD",
+        exchange="SMART",
+        primaryExchange="NASDAQ",
+        currency="USD",
+        localSymbol="AMD",
+        tradingClass="NMS",
+        comboLegs=[],
+    )
+
+    modified = general_to_specific_contract_class(contract)
+
+    assert modified == contract
+    assert isinstance(modified, ibi.Stock)
+
+
+def test_general_to_specific_contract_class_doesnt_touch_contract_subclasses():
+    contract = ibi.Future(
+        conId=637533641,
+        symbol="ES",
+        lastTradeDateOrContractMonth="20250919",
+        multiplier="50",
+        exchange="CME",
+        currency="USD",
+        localSymbol="ESU5",
+        tradingClass="ES",
+    )
+    future = general_to_specific_contract_class(contract)
+    assert future is contract
+
+
+def test_general_to_specific_contract_class_raises_with_non_contracts():
+    some_faulty_object = object()
+    with pytest.raises(AssertionError):
+        general_to_specific_contract_class(some_faulty_object)

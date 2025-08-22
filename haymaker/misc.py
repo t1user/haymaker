@@ -351,3 +351,15 @@ def contractAsTuple(contract: ibi.Contract) -> tuple:
 
 def hash_contract(contract: ibi.Contract) -> int:
     return hash(contractAsTuple(contract))
+
+
+def general_to_specific_contract_class(contract: ibi.Contract) -> ibi.Contract:
+    assert isinstance(contract, ibi.Contract), "this function works only with Contracts"
+    contract_kwargs = ibi.util.dataclassNonDefaults(contract)
+    if contract_kwargs["secType"] == "CONTFUT":
+        del contract_kwargs["secType"]
+        return ibi.Future(**contract_kwargs)
+    elif type(contract) != ibi.Contract:  # noqa
+        return contract
+    else:
+        return ibi.Contract.create(**ibi.util.dataclassAsDict(contract))

@@ -1,13 +1,21 @@
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Type
 
 import pytest
-from contract_details_data import es_details_chain, gold_details_chain  # type: ignore
-from ib_insync import Contract, ContractDetails, Future  # noqa
+from contract_details_data import (  # type: ignore
+    es_details_chain,
+    gold_details_chain,
+    stock_details_chain,
+)
+from ib_insync import Contract, ContractDetails, Future, Stock  # noqa
 
 from haymaker import misc
 from haymaker.contract_selector import (
+    AbstractBaseContractSelector,
+    AbstractBaseFutureWrapper,
     ContFutureSelector,
+    DefaultSelector,
     FutureSelector,
     GoldComex,
     NoOffset,
@@ -38,6 +46,9 @@ gold_chain: list[ContractDetails] = misc.decode_tree(gold_details_chain)
 gold_details_dict = {
     details.contract.localSymbol: details for details in gold_chain  # type: ignore
 }
+gold_contract_list = [details.contract for details in gold_chain]  # type: ignore
+
+stock_chain: list[ContractDetails] = misc.decode_tree(stock_details_chain)
 
 
 @pytest.mark.parametrize("symbol,expected_last_trading_day", gold_parameters)
@@ -49,13 +60,13 @@ def test_last_trading_day_for_GoldComex(symbol, expected_last_trading_day):
 
 
 def test_FutureSelector_active_contract():
-    selector = FutureSelector(gold_chain, GoldComex, today=datetime(2025, 3, 20))
+    selector = FutureSelector.from_details(gold_chain, today=datetime(2025, 3, 20))
     assert selector.active_contract.localSymbol == "GCJ5"
 
 
 def test_FutureSelector_next_contract():
-    selector = FutureSelector(
-        gold_chain, GoldComex, roll_margin_bdays=5, today=datetime(2025, 3, 20)
+    selector = FutureSelector.from_details(
+        gold_chain, roll_margin_bdays=5, today=datetime(2025, 3, 20)
     )
     # k contract is skipped because it's not liquid
     # days till roll is 3, which is smaller than roll_margin_bdays
@@ -65,14 +76,19 @@ def test_FutureSelector_next_contract():
 def test_appropriate_contracts_selected():
 
     @dataclass
-    class NoOffsetSelectorWithSchedule(NoOffset):
+    class NoOffsetWrapperWithSchedule(NoOffset):
         active_months = [6]
 
-    selector = FutureSelector(
+    def mock_future_wrapper_factory(
+        contract: Contract,
+    ) -> Type[AbstractBaseFutureWrapper]:
+        return NoOffsetWrapperWithSchedule
+
+    selector = FutureSelector.from_details(
         gold_chain,
-        NoOffsetSelectorWithSchedule,
         roll_margin_bdays=5,
         today=datetime(2025, 3, 20),
+        _future_wrapper_factory=mock_future_wrapper_factory,
     )
     # selecting only June (M) contracts
     assert selector.active_contract.localSymbol == "GCM5"
@@ -117,15 +133,37 @@ def test_last_trading_day_for_NoOffset(symbol, expected_last_trading_day):
 
 
 def test_FutureSelector_active_contract_ES():
-    selector = FutureSelector(es_chain, NoOffset, today=datetime(2025, 9, 10))
+    selector = FutureSelector.from_details(es_chain, today=datetime(2025, 9, 10))
     assert selector.active_contract.localSymbol == "ESU5"
 
 
 def test_FutureSelector_next_contract_ES():
-    selector = FutureSelector(
-        es_chain, NoOffset, roll_margin_bdays=5, today=datetime(2025, 9, 10)
+    selector = FutureSelector.from_details(
+        es_chain, roll_margin_bdays=5, today=datetime(2025, 9, 10)
     )
     assert selector.next_contract.localSymbol == "ESZ5"
+
+
+def test_FutureSelector_nth_contract():
+    selector = FutureSelector.from_details(
+        es_chain, roll_margin_bdays=5, today=datetime(2025, 9, 10)
+    )
+    assert selector.nth_contract(2).contract.localSymbol == "ESH6"
+
+
+def test_FutureSelector_no_negative_indices():
+    selector = FutureSelector.from_details(
+        es_chain, roll_margin_bdays=5, today=datetime(2025, 9, 10)
+    )
+    with pytest.raises(AssertionError):
+        selector.nth_contract(-1)
+
+
+def test_FutureSelector_no_out_of_bounds_error():
+    selector = FutureSelector.from_details(
+        es_chain, roll_margin_bdays=5, today=datetime(2025, 9, 10)
+    )
+    assert selector.nth_contract(200).contract.localSymbol == "ESM0"
 
 
 #####################
@@ -143,6 +181,12 @@ def test_correct_selector_chosen_contfuture(contfuture_details_chain):
     # should be picked
     selector = selector_factory(contfuture_details_chain)
     assert isinstance(selector, ContFutureSelector)
+
+
+def test_correct_selector_chosen_for_non_future():
+    details_chain = stock_chain
+    selector = selector_factory(details_chain)
+    assert isinstance(selector, DefaultSelector)
 
 
 def test_correct_active_contract(details_chain):
@@ -248,3 +292,23 @@ def test_selector_params_for_next_contract(details_chain):
         localSymbol="ESU5",
         tradingClass="ES",
     )
+
+
+def test_FutureWrapper_raises_with_futures():
+    with pytest.raises(AssertionError):
+        FutureSelector(gold_contract_list)
+
+
+def test_FutureSelector_ok_with_future_wrappers():
+    assert isinstance(
+        FutureSelector([GoldComex(contract) for contract in gold_contract_list]),
+        AbstractBaseContractSelector,
+    )
+
+
+def test_selector_with_stock():
+    selector = selector_factory(stock_chain)
+    stock_contract = stock_chain[0].contract
+    assert selector.active_contract == stock_contract
+    assert selector.next_contract == stock_contract
+    assert isinstance(stock_contract, Stock)
