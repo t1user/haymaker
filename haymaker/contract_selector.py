@@ -263,7 +263,10 @@ class FutureSelector(AbstractBaseContractSelector):
         **kwargs,
     ) -> Self:
 
-        contract = detailsChain[0].contract
+        try:
+            contract = detailsChain[0].contract
+        except IndexError:
+            raise NoContractFound("Passed detailsChain is empty!")
         assert contract
         future_wrapper = _future_wrapper_factory(contract)
         return cls(
@@ -287,7 +290,11 @@ class FutureSelector(AbstractBaseContractSelector):
         _future_wrapper_factory=future_wrapper_factory,  # for testing
     ) -> Self:
 
-        future_wrapper = _future_wrapper_factory(futuresChain[0])
+        try:
+            future_wrapper = _future_wrapper_factory(futuresChain[0])
+        except IndexError:
+            raise NoContractFound("Passed detailsChain is empty!")
+
         return cls(
             [future_wrapper(future) for future in futuresChain],
             roll_bdays,
