@@ -29,10 +29,10 @@ app:
   future_roll_timezone: "America/New_York" # must be a string acceptable by ZoneInfo
   
 controller:
-  use_blotter: True
   log_order_events: False
   # interval at which sync will be performed
   sync_frequency: 900 # 15min
+  health_check_frequency: 0 # in seconds
   # for strategy with zero position, cancel existing orders
   cancel_stray_orders: True
   # delay in sec after which controller will verify if transaction was executed correctly;
@@ -56,6 +56,9 @@ streamer:
     # number of seconds after which timeout triggered
     time: 300 # zero means no timeout, can also be set individually on every streamer instance
 
+
+use_blotter: True
+    
 # set-up saver used by Blotter; must have keys: class and kwds
 # saver will be initialized as class(**kwds) and passed to Blotter
 blotter:
@@ -67,13 +70,14 @@ blotter:
     
 # this is general definition of savers that are available to be used
 # they will not be instantiated unless used by an object inheriting from Atom
-saver:
-  ArcticSaver:
-    host: localhost
-    library: test_log
-  MongoSaver:
+mongodb:
     host: localhost
     port: 27017
+
+saver:
+  ArcticSaver:
+    library: test_log
+  MongoSaver:
     db: test_data
 
 # All savers saving to files will create sub-directories here:

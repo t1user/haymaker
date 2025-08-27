@@ -12,9 +12,9 @@ from typing import Any, Callable, Collection
 import eventkit as ev  # type: ignore
 import pandas as pd
 from arctic import Arctic  # type: ignore
-from pymongo import MongoClient  # type: ignore
 
 from .config import CONFIG as config
+from .databases import get_mongo_client
 from .misc import default_path
 
 log = logging.getLogger(__name__)
@@ -22,7 +22,6 @@ log = logging.getLogger(__name__)
 
 CONFIG = config.get("saver") or {}
 
-ARCTIC_SAVER_HOST = CONFIG["ArcticSaver"]["host"]
 ARCTIC_SAVER_LIBRARY = CONFIG["ArcticSaver"]["library"]
 
 
@@ -246,14 +245,13 @@ class ArcticSaver(AbstractBaseSaver):
     def __init__(
         self,
         name: str = "",
-        host: str = ARCTIC_SAVER_HOST,
         library: str = ARCTIC_SAVER_LIBRARY,
         use_timestamp=False,
     ) -> None:
         """
         Library given at init, collection determined by self.name_str.
         """
-        self.host = host
+        self.host = get_mongo_client()
         self.library = library
         self.db = Arctic(self.host)
         self.db.initialize_library(self.library)
@@ -282,7 +280,10 @@ class ArcticSaver(AbstractBaseSaver):
 
 class MongoSaver(AbstractBaseSaver):
     def __init__(
-        self, collection: str, query_key: str | None = None, use_timestamp: bool = False
+        self,
+        collection: str,
+        query_key: str | None = None,
+        use_timestamp: bool = False,
     ) -> None:
         """
         `query_key` if for type of records that need to be recalled
@@ -291,10 +292,8 @@ class MongoSaver(AbstractBaseSaver):
         methods, this is just a helper for a typical task done by Haymaker).
 
         """
-        host = CONFIG["MongoSaver"]["host"]
-        port = CONFIG["MongoSaver"]["port"]
+        self.client = get_mongo_client()
         db = CONFIG["MongoSaver"]["db"]
-        self.client = MongoClient(host, port)
         self.db = self.client[db]
         self.collection = self.db[collection]
         self.query_key = query_key

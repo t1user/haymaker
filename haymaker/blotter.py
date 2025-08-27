@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any, Type, cast
 
 import ib_insync as ibi
 
@@ -126,4 +126,34 @@ class Blotter:
     def __repr__(self):
         return (
             f"Blotter(save_immediately={self.save_immediately}, saver={BLOTTER_SAVER})"
+        )
+
+
+def blotter_factory(param: Type[Blotter] | bool | None) -> Blotter | None:
+    """
+    Instantiate Blotter based on passed param.
+
+    Args:
+        param: value read from config `use_blotter` key, which accepts
+            either a bool (wheather standard blotter should be used or not) or
+            a custom Blotter class
+    Returns:
+        An instance of :class:`Blotter` or `None`.
+    """
+
+    match param:
+        case False | None:
+            return None
+        case True:
+            return Blotter()
+    try:
+        blotter_instance = param()
+    except Exception as e:
+        log.exception(e)
+        return None
+    if isinstance(blotter_instance, Blotter):
+        return blotter_instance
+    else:
+        raise TypeError(
+            f"Custom Blotter object recevied from config is not a Blotter: {param}"
         )

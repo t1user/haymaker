@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 from collections import abc
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field, fields
 from functools import partial
-from typing import Self, Type
+from typing import TYPE_CHECKING, Self
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from haymaker import misc
 from haymaker.base import Atom
-from haymaker.blotter import Blotter
 from haymaker.state_machine import OrderInfo, Strategy
 from haymaker.trader import FakeTrader, Trader
 
@@ -25,37 +26,14 @@ from .sync_routines import (
     Terminator,
 )
 
+if TYPE_CHECKING:
+    from haymaker.blotter import Blotter
+
 log = logging.getLogger(__name__)
 
 
-def blotter_factory(param: Type[Blotter] | bool | None) -> Blotter | None:
-    """
-    Instantiate Blotter based on passed param.
-
-    Args:
-        param: value read from config use_blotter key, which accepts
-            either a bool (wheather standard blotter should be used or not) or
-            a custom Blotter class
-    Returns:
-        An instance of :class:`Blotter` or `None`.
-    """
-
-    match param:
-        case False | None:
-            return None
-        case True:
-            return Blotter()
-    try:
-        blotter_instance = param()
-    except Exception as e:
-        log.exception(e)
-        return None
-    if isinstance(blotter_instance, Blotter):
-        return blotter_instance
-    else:
-        raise TypeError(
-            f"Custom Blotter object recevied from config is not a Blotter: {param}"
-        )
+class ControllerError(Exception):
+    pass
 
 
 @dataclass
@@ -77,14 +55,27 @@ class Controller(Atom):
     cancel_stray_orders: bool = True
     log_order_events: bool = False
     sync_frequency: int = 0
+    health_check_frequency: int = 0
     execution_verification_delay: int = 0
-    _hold: bool = True
+    health_check_observables: list[list[Callable[[], bool]]] = field(
+        default_factory=list
+    )
+    _hold: bool = field(default=True, repr=False)
     _sync_timer: ev.Timer | None = None
+    _health_check_timer: ev.Timer | None = None
     _order_loggers: OrderLoggers | None = None
+    _health_check_functions: list[Callable[[], bool]] = field(
+        default_factory=list, repr=False
+    )
+    _health_check_triggers: list[str] = field(default_factory=list, repr=False)
 
     @classmethod
     def from_config(
-        cls, trader: Trader, top_config: abc.MutableMapping | None = None
+        cls,
+        trader: Trader,
+        blotter: Blotter | None = None,
+        top_config: abc.MutableMapping | None = None,
+        health_check_observables: list[list[Callable[[], bool]]] | None = None,
     ) -> Self:
         """
         Extract proper attributes from configuration file and perform
@@ -94,8 +85,17 @@ class Controller(Atom):
         if top_config is None:
             top_config = {}
 
+        if health_check_observables is None:
+            health_check_observables = []
+
         config = top_config.get("controller") or {}
-        blotter = blotter_factory(config.get("use_blotter"))
+
+        field_names = [field.name for field in fields(cls)]
+        for param in config:
+            if param not in field_names:
+                raise ControllerError(
+                    f"Wrong parameter: {param} in 'controller' section of config."
+                )
 
         top_kwargs = {
             i: top_config.get(i, False)
@@ -110,11 +110,9 @@ class Controller(Atom):
         return cls(
             trader=trader,
             blotter=blotter,
-            cancel_stray_orders=config.get("cancel_stray_orders", True),
-            log_order_events=config.get("log_order_events", False),
-            sync_frequency=config.get("sync_frequency", 900),
-            execution_verification_delay=config.get("execution_verification_delay", 0),
-            **top_kwargs,  # type: ignore
+            health_check_observables=health_check_observables,
+            **config,
+            **top_kwargs,
         )
 
     def __post_init__(self) -> None:
@@ -140,6 +138,12 @@ class Controller(Atom):
             self._sync_timer = ev.Timer(self.sync_frequency)
             self._sync_timer.connect(self.sync, error=self._log_event_error)
 
+        if self.health_check_frequency:
+            self._health_check_timer = ev.Timer(self.health_check_frequency)
+            self._health_check_timer.connect(
+                self.run_health_check, error=self._log_event_error
+            )
+
         if self.log_order_events:
             self._order_loggers = OrderLoggers(self.ib)
 
@@ -151,6 +155,19 @@ class Controller(Atom):
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
+
+    def set_health_check(self, func: Callable[[], bool]) -> None:
+        self._health_check_functions.append(func)
+
+    def run_health_check(self) -> None:
+        for func in itertools.chain(
+            itertools.chain(*self.health_check_observables),
+            self._health_check_functions,
+        ):
+            if not func() and func.__name__ not in self._health_check_triggers:
+                log.critical(f"Health check failure for checker: {func.__name__}")
+                # prevent repeating same error multiple times
+                self._health_check_triggers.append(func.__name__)
 
     def verify_have_contracts_for_positions(self) -> list[ibi.Contract]:
         return [

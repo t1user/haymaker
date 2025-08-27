@@ -10,9 +10,11 @@ import ib_insync as ibi
 
 from . import misc
 from .base import ActiveNext, Atom, DetailsContainer
+from .blotter import blotter_factory
 from .config import CONFIG
 from .contract_selector import selector_factory
 from .controller import Controller
+from .databases import HEALTH_CHECK_OBSERVABLES
 from .state_machine import StateMachine
 from .streamers import Streamer
 from .trader import Trader
@@ -26,6 +28,7 @@ class NotConnectedError(Exception):
 
 FUTURES_ROLL_BDAYS = CONFIG["futures_roll_bdays"]
 FUTURES_ROLL_MARGIN_BDAYS = CONFIG["futures_roll_margin_bdays"]
+USE_BLOTTER = CONFIG["use_blotter"]
 
 
 @dataclass
@@ -165,4 +168,7 @@ STATE_MACHINE = StateMachine()
 Atom.set_init_data(IB, STATE_MACHINE)
 log.debug("Will initialize Controller")
 trader = Trader(IB)
-CONTROLLER: Final[Controller] = Controller.from_config(trader, CONFIG)
+blotter = blotter_factory(USE_BLOTTER)
+CONTROLLER: Final[Controller] = Controller.from_config(
+    trader, blotter, CONFIG, [HEALTH_CHECK_OBSERVABLES]
+)

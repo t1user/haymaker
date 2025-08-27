@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import pickle
 from abc import ABC, abstractmethod
@@ -5,15 +7,19 @@ from collections import defaultdict
 from dataclasses import fields
 from datetime import datetime
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import ib_insync as ibi
 import numpy as np
 import pandas as pd
 from arctic import Arctic  # type: ignore
 from arctic.date import DateRange  # type: ignore
 from arctic.exceptions import NoDataFoundException  # type: ignore
 from arctic.store.versioned_item import VersionedItem  # type: ignore
-from ib_insync import ContFuture, Contract, Future, util
+
+if TYPE_CHECKING:
+    from pymongo import MongoClient  # type: ignore
+
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +31,9 @@ class AbstractBaseStore(ABC):
     """
 
     @abstractmethod
-    def write(self, symbol: str | Contract, data: pd.DataFrame, meta: dict = {}) -> Any:
+    def write(
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict = {}
+    ) -> Any:
         """
         Write data to datastore. Implementation has to recognize whether
         string or Contract was passed, extract metadata and save it in
@@ -34,12 +42,12 @@ class AbstractBaseStore(ABC):
         in store data is to be overriden (different behaviour possible in
         implementations).
         """
-        pass
+        ...
 
     @abstractmethod
     def read(
         self,
-        symbol: str | Contract,
+        symbol: str | ibi.Contract,
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> pd.DataFrame | None:
@@ -50,56 +58,59 @@ class AbstractBaseStore(ABC):
 
         Return df with data or None if the symbol is not in datastore.
         """
-        pass
+        ...
 
     @abstractmethod
-    def delete(self, symbol: str | Contract):
+    def delete(self, symbol: str | ibi.Contract):
         """
-        Implementation responsible for distinguishing between str and Contract.
+        Delete given symbol, if `ibi.Contract` is passed,
+        implementation must convert it to actual symbol first.
         """
-        pass
+        symbol = self._symbol(symbol)
+        # delete symbol here
+        ...
 
     @abstractmethod
     def keys(self) -> list[str]:
         """Return a list of symbols available in store."""
-        pass
+        ...
 
     @abstractmethod
-    def read_metadata(self, symbol: Contract | str) -> dict:
+    def read_metadata(self, symbol: ibi.Contract | str) -> dict:
         """
         Public method for reading metadata for given symbol.
         Implementation must distinguish between str and Contract.
         """
-        pass
+        ...
 
     @abstractmethod
-    def write_metadata(self, symbol: Contract | str, meta: dict) -> Any:
+    def write_metadata(self, symbol: ibi.Contract | str, meta: dict) -> Any:
         """
         Public method for writing metadata for given symbol.
         Implementation must distinguish between str and Contract.
         Metadata should be updated rather than overriden.
         """
-        pass
+        ...
 
     @abstractmethod
     def override_metadata(self, symbol: str, meta: dict[str, Any]) -> Any:
         """
         Delete any existing metadata for symbol and replace it with meta.
         """
-        pass
+        ...
 
-    def _symbol(self, sym: Contract | str) -> str:
+    def _symbol(self, sym: ibi.Contract | str) -> str:
         """
         If Contract passed extract string that is used as key.
         Otherwise return the string passed.
         """
-        if isinstance(sym, Contract):
+        if isinstance(sym, ibi.Contract):
             return f'{"_".join(sym.localSymbol.split())}_{sym.secType}'
         else:
             return sym
 
     def _update_metadata(
-        self, symbol: Contract | str, meta: dict[str, Any]
+        self, symbol: ibi.Contract | str, meta: dict[str, Any]
     ) -> dict[str, Any]:
         """
         To be used in implementations that override metadata. Read existing
@@ -113,13 +124,13 @@ class AbstractBaseStore(ABC):
             _meta = meta
         return _meta
 
-    def _metadata(self, obj: Contract | str) -> dict[str, Any]:
+    def _metadata(self, obj: ibi.Contract | str) -> dict[str, Any]:
         """
         If Contract passed extract metadata into a dict.
         Otherwise return empty dict.
         """
-        if isinstance(obj, Contract):
-            return {**util.dataclassNonDefaults(obj), "repr": repr(obj)}
+        if isinstance(obj, ibi.Contract):
+            return {**ibi.util.dataclassNonDefaults(obj), "repr": repr(obj)}
         else:
             return {}
 
@@ -333,15 +344,15 @@ class AbstractBaseStore(ABC):
 
     def contfuture_contract_object(
         self, symbol: str, index: int = -1, field: str = "tradingClass"
-    ) -> Contract | None:
+    ) -> ibi.Contract | None:
         """
         Return ib_insync object for latest contfuture for given symbol.
         """
         meta = self.read_metadata(self.latest_contfutures(index, field)[symbol])
         if meta:
             try:
-                return ContFuture(
-                    **{k: v for k, v in meta.items() if k in fields(ContFuture)}
+                return ibi.ContFuture(
+                    **{k: v for k, v in meta.items() if k in fields(ibi.ContFuture)}
                 )
             except Exception:
                 return None
@@ -350,7 +361,7 @@ class AbstractBaseStore(ABC):
 
 
 class ArcticStore(AbstractBaseStore):
-    def __init__(self, lib: str, host: str = "localhost") -> None:
+    def __init__(self, lib: str, host: str | MongoClient = "localhost") -> None:
         """
         Library name is whatToShow + barSize, eg.
         TRADES_1_min
@@ -366,7 +377,7 @@ class ArcticStore(AbstractBaseStore):
 
     def write(
         self,
-        symbol: str | Contract,
+        symbol: str | ibi.Contract,
         data: pd.DataFrame,
         meta: dict | None = None,
     ) -> str:
@@ -382,7 +393,7 @@ class ArcticStore(AbstractBaseStore):
 
     def read(
         self,
-        symbol: str | Contract,
+        symbol: str | ibi.Contract,
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> pd.DataFrame | None:
@@ -394,7 +405,7 @@ class ArcticStore(AbstractBaseStore):
 
     def read_object(
         self,
-        symbol: str | Contract,
+        symbol: str | ibi.Contract,
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> VersionedItem | None:
@@ -420,20 +431,20 @@ class ArcticStore(AbstractBaseStore):
         except NoDataFoundException:
             return None
 
-    def delete(self, symbol: str | Contract) -> None:
+    def delete(self, symbol: str | ibi.Contract) -> None:
         self.store.delete(self._symbol(symbol))
 
     def keys(self) -> list[str]:
         return self.store.list_symbols()
 
-    def read_metadata(self, symbol: str | Contract) -> dict:
+    def read_metadata(self, symbol: str | ibi.Contract) -> dict:
         try:
             return self.store.read_metadata(self._symbol(symbol)).metadata
         except (AttributeError, NoDataFoundException):
             return {}
 
     def write_metadata(
-        self, symbol: Contract | str, meta: dict[str, Any]
+        self, symbol: ibi.Contract | str, meta: dict[str, Any]
     ) -> VersionedItem | None:
         return self.store.write_metadata(
             self._symbol(symbol), self._update_metadata(symbol, meta)
@@ -444,8 +455,8 @@ class ArcticStore(AbstractBaseStore):
     ) -> VersionedItem | None:
         return self.store.write_metadata(symbol, meta)
 
-    def _metadata(self, obj: Contract | str) -> dict[str, dict[str, str]]:
-        if isinstance(obj, Contract):
+    def _metadata(self, obj: ibi.Contract | str) -> dict[str, dict[str, str]]:
+        if isinstance(obj, ibi.Contract):
             meta = super()._metadata(obj)
         else:
             meta = {}
@@ -471,20 +482,22 @@ class PyTablesStore(AbstractBaseStore):
         self.store = partial(pd.HDFStore, path)
         self.metastore = f"{path}/meta.pickle"
 
-    def write(self, symbol: str | Contract, data: pd.DataFrame, meta: dict = {}) -> str:
+    def write(
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict = {}
+    ) -> str:
         _symbol = self._symbol(symbol)
         with self.store() as store:
             store.put(_symbol, self._clean(data))
         self._write_meta(_symbol, self._metadata(symbol))
         return f"{_symbol}"
 
-    def read(self, symbol: str | Contract, *args, **kwargs) -> pd.DataFrame | None:
+    def read(self, symbol: str | ibi.Contract, *args, **kwargs) -> pd.DataFrame | None:
         with self.store() as store:
             data = store.get(self._symbol(symbol))
         assert isinstance(data, pd.DataFrame)
         return data
 
-    def delete(self, symbol: str | Contract) -> None:
+    def delete(self, symbol: str | ibi.Contract) -> None:
         self.store.remove(self._symbol(symbol))  # type: ignore
 
     def keys(self) -> list[str]:
@@ -492,7 +505,7 @@ class PyTablesStore(AbstractBaseStore):
             keys = store.keys()
         return keys
 
-    def read_metadata(self, symbol: str | Contract) -> dict:
+    def read_metadata(self, symbol: str | ibi.Contract) -> dict:
         """Return metadata for given symbol"""
         return self._read_meta()[self._symbol(symbol)]
 
@@ -576,14 +589,14 @@ class Store:
             return None
 
     def _symbol(self, s, freq):
-        if isinstance(s, ContFuture):
+        if isinstance(s, ibi.ContFuture):
             string = (
                 f"cont/{freq}/{s.symbol}_"
                 f"{s.lastTradeDateOrContractMonth}_{s.exchange}"
                 f"_{s.currency}"
             )
             return string
-        elif isinstance(s, Future):
+        elif isinstance(s, ibi.Future):
             string = (
                 f"{freq}/{s.symbol}_{s.lastTradeDateOrContractMonth}"
                 f"_{s.exchange}_{s.currency}"
