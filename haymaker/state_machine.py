@@ -407,6 +407,7 @@ class StateMachine:
         # dict of Strategy data (same as ExecModel data)
         self._strategies = StrategyContainer(strategy_saver, save_async=save_async)
         self.rejected_orders: dict[tuple[str, str, str], int] = defaultdict(int)
+        log.debug(f"StateMachine initialized: {self}")
 
     def register_rejected_order(
         self, errorCode: int, errorString: str, contract: ibi.Contract, order: ibi.Order
@@ -584,4 +585,7 @@ class StateMachine:
         return self.save_order(oi)
 
     def __repr__(self):
-        return self.__class__.__name__ + "()"
+        return (
+            f"{self.__class__.__name__}"
+            f"({', '.join([f'{k}={v}' for k, v in self.__dict__.items()])})"
+        )
