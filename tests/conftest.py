@@ -40,8 +40,6 @@ class FakeMongoSaver(AbstractBaseSaver):
         else:
             self.store[self.collection] = []
 
-        super().__init__("", timestamp)
-
     def save(self, data: dict[str, Any], *args: str) -> None:
         try:
             if self.query_key:

@@ -406,3 +406,31 @@ def is_timezone_aware(df: pd.DataFrame) -> bool:
     """Check if dataframe is timezone aware."""
     dt_obj = df.index[-1]
     return dt_obj.tzinfo is not None and dt_obj.tzinfo.utcoffset(dt_obj) is not None
+
+
+def name_str(
+    name: str, *args: str, timestamp: dt.datetime | None = None, join_str: str = "_"
+) -> str:
+    """
+    Helper method to generate file/collection names based on passed arguments.
+
+    Args:
+    -----
+
+    name - file/collection name
+
+    *args - additional strings to be concatenated with `name`
+
+    use_timestamp - if True timestamp (of when the object was instantiated rather
+    than the time of every save) will be added after the name
+
+    join_str - symbol used to join strings
+
+    This `name_str` can be used by :meth:`.save`to build filename,
+    database collection name, key-value store key, etc.
+    """
+    if timestamp:
+        args_str = join_str.join((name, *args, timestamp.strftime("%Y%m%d_%H_%M")))
+    else:
+        args_str = join_str.join((name, *args))
+    return args_str

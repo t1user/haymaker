@@ -16,9 +16,9 @@ from .misc import Lock, action_to_signal, decode_tree, tree
 from .saver import (
     AbstractBaseSaver,
     AsyncSaveManager,
+    MongoLatestSaver,
     MongoSaver,
     SyncSaveManager,
-    async_runner,
 )
 
 log = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ STRATEGY_COLLECTION_NAME = CONFIG.get("strategy_collection_name", "strategies")
 ORDER_COLLECTION_NAME = CONFIG.get("order_collection_name", "orders")
 MAX_REJECTED_ORDERS = CONFIG.get("max_rejected_orders", 3)
 
-STRATEGY_SAVER = MongoSaver(STRATEGY_COLLECTION_NAME)
+STRATEGY_SAVER = MongoLatestSaver(STRATEGY_COLLECTION_NAME)
 ORDER_SAVER = MongoSaver(ORDER_COLLECTION_NAME, query_key="orderId")
 
 
@@ -105,9 +105,8 @@ class OrderContainer(UserDict):
         self.index: dict[int, int] = {}  # translation of permId to orderId
         self.setitemEvent = ev.Event("setitemEvent")
         self.setitemEvent += self.onSetitemEvent
-        self.saver = saver
-        self._save = (
-            AsyncSaveManager(self.saver) if save_async else SyncSaveManager(self.saver)
+        self.save_manager = (
+            AsyncSaveManager(saver) if save_async else SyncSaveManager(saver)
         )
         super().__init__()
 
@@ -176,13 +175,13 @@ class OrderContainer(UserDict):
     def save(self, oi: OrderInfo) -> None:
         """Save data to database."""
         self[oi.trade.order.orderId] = oi
-        self._save(oi.encode())
+        self.save_manager.save(oi.encode())
 
     def delete(self, orderId: int) -> None:
         """
         Delete order from dict.  In db order will be marked as
         inactive so that it's not loaded again on startup.  It stays
-        in db as historical order, it will no longer be in memory for.
+        in db as historical order, it will no longer be in memory.
         """
         try:
             oi_dict = self[orderId].encode()
@@ -190,12 +189,12 @@ class OrderContainer(UserDict):
             log.error(f"Cannot delete {orderId}, no record.")
             return
         oi_dict.update({"active": False})
-        self._save(oi_dict)
+        self.save_manager.save(oi_dict)
         del self[orderId]
 
     async def read(self) -> None:
         """Read data from database and update itself."""
-        order_data = await async_runner(self.saver.read, {"active": True})
+        order_data = await self.save_manager.read({"active": True})
         self.decode(order_data)
 
     def __repr__(self) -> str:
@@ -265,7 +264,10 @@ class Strategy(UserDict):
 class StrategyContainer(UserDict):
 
     def __init__(
-        self, saver: AbstractBaseSaver, save_delay=SAVE_DELAY, save_async: bool = True
+        self,
+        saver: AbstractBaseSaver,
+        save_delay=SAVE_DELAY,
+        save_async: bool = True,
     ) -> None:
         self._strategyChangeEvent = ev.Event("strategyChangeEvent")
         self.strategyChangeEvent = self._strategyChangeEvent.debounce(save_delay, False)
@@ -273,9 +275,8 @@ class StrategyContainer(UserDict):
         # will automatically save strategies to db on every change
         # (but not more often than defined in CONFIG['state_machine']['save_delay'])
         self.strategyChangeEvent += self.save
-        self.saver = saver
-        self._save = (
-            AsyncSaveManager(self.saver) if save_async else SyncSaveManager(self.saver)
+        self.save_manager = (
+            AsyncSaveManager(saver) if save_async else SyncSaveManager(saver)
         )
         super().__init__()
 
@@ -358,13 +359,14 @@ class StrategyContainer(UserDict):
 
     def save(self) -> None:
         """Save data to database."""
-        self._save(self.encode())
+        self.save_manager.save(self.encode())
 
     async def read(self) -> None:
         """
         Read data from database and update itself.
         """
-        strategy_data = await async_runner(self.saver.read_latest)
+        strategy_data = await self.save_manager.read()
+        assert isinstance(strategy_data, dict)
         self.decode(strategy_data)
 
     def __repr__(self) -> str:
@@ -584,7 +586,7 @@ class StateMachine:
         oi.strategy = strategy
         return self.save_order(oi)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}"
             f"({', '.join([f'{k}={v}' for k, v in self.__dict__.items()])})"
