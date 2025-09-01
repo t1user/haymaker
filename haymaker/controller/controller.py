@@ -159,7 +159,7 @@ class Controller(Atom):
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
 
-    def run_health_check(self) -> None:
+    def run_health_check(self, *args) -> None:
         for func in itertools.chain(
             itertools.chain(*self.health_check_observables),
             self._health_check_functions,
