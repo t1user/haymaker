@@ -408,23 +408,20 @@ class StateMachine:
         self._orders = OrderContainer(order_saver, save_async=save_async)
         # dict of Strategy data (same as ExecModel data)
         self._strategies = StrategyContainer(strategy_saver, save_async=save_async)
-        self.rejected_orders: dict[tuple[str, str, str], int] = defaultdict(int)
+        self.rejected_orders: dict[str, int] = defaultdict(int)
         log.debug(f"StateMachine initialized: {self}")
 
-    def register_rejected_order(
-        self, errorCode: int, errorString: str, contract: ibi.Contract, order: ibi.Order
-    ):
-        self.rejected_orders[(contract.localSymbol, order.orderType, order.action)] += 1
+    def register_rejected_order(self, strategy_str: str) -> None:
+        self.rejected_orders[strategy_str] += 1
 
-    def verify_for_rejections(self, contract: ibi.Contract, order: ibi.Order) -> bool:
+    def verify_for_rejections(self, strategy_str: str) -> bool:
         """Return True if order approved, False otherwise."""
-        if (
-            count := self.rejected_orders.get(
-                (contract.localSymbol, order.orderType, order.action)
-            )
-        ) and (count >= MAX_REJECTED_ORDERS):
+        if (count := self.rejected_orders.get(strategy_str)) and (
+            count >= MAX_REJECTED_ORDERS
+        ):
             log.info(
-                f"Supressing order because of multiple rejections: {order} {contract}"
+                f"Supressing order because of multiple rejections for strategy: "
+                f"{strategy_str}"
             )
             return False
         else:

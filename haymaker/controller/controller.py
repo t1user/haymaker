@@ -295,7 +295,8 @@ class Controller(Atom):
         action: str,
         strategy: Strategy,
     ) -> ibi.Trade | None:
-        if self.sm.verify_for_rejections(contract, order):
+        # this will return False if order for the strategy has been repeatedly rejected
+        if self.sm.verify_for_rejections(strategy_str):
             trade = self.trader.trade(contract, order)
             self.register_order(strategy_str, action, trade, strategy)
             trade.filledEvent += partial(
@@ -682,7 +683,7 @@ class Controller(Atom):
                     f"ORDER REJECTED: {errorString} {errorCode=} {contract=}, "
                     f"{strategy} | {action} | {order}"
                 )
-                self.sm.register_rejected_order(errorCode, errorString, contract, order)
+                self.sm.register_rejected_order(strategy.strategy)
 
             else:
                 log.error(
