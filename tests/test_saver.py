@@ -22,11 +22,10 @@ from haymaker.saver import (
     CsvSaver,
     MongoSaver,
     PickleSaver,
-    SyncSaveManager,
 )
 
 # MONGOSAVER TESTS HAVE TO BE UNCOMMENTED ENSURING NO RACE CONDITIONS
-# (WHEN THE ISSUE IS SOLVED) LLM GENERATED TESTS HAVE TO REVIEWED
+# (WHEN THE ISSUE IS SOLVED) LLM GENERATED TESTS HAVE TO BE REVIEWED
 
 # Assuming your saver classes are in a module called 'savers'
 # from savers import PickleSaver, CsvSaver
@@ -104,8 +103,9 @@ async def test_AsyncSaveManager():
             return output.pop()
 
     class T:
-        save = AsyncSaveManager(FakeSaver())
-        read = save.read
+        saver = AsyncSaveManager(FakeSaver())
+        save = saver.save
+        read = saver.read
 
     t = T()
     t1 = T()
@@ -140,10 +140,12 @@ async def test_class_with_two_savers():
     class T:
         # it's not the same saver object, only the same type
         # potentially saving to two different files or collections
-        save_one = AsyncSaveManager(FakeSaver("one"))
-        save_two = AsyncSaveManager(FakeSaver("two"))
-        read_one = save_one.read
-        read_two = save_two.read
+        saver_one = AsyncSaveManager(FakeSaver("one"))
+        saver_two = AsyncSaveManager(FakeSaver("two"))
+        save_one = saver_one.save
+        save_two = saver_two.save
+        read_one = saver_one.read
+        read_two = saver_two.read
 
     t = T()
 
@@ -157,33 +159,7 @@ async def test_class_with_two_savers():
 
 
 @pytest.mark.asyncio
-async def test_AsyncSaveManager_as_non_descriptor():
-    output = []
-
-    class FakeSaver(AbstractBaseSaver):
-
-        def save(self, data, *args):
-            output.append(data)
-
-        def read(self, key=None):
-            return output.pop()
-
-    class T:
-        def __init__(self, saver):
-            self.save = AsyncSaveManager(saver)
-            self.read = self.save.read
-
-    t = T(FakeSaver())
-
-    t.save("xxx")
-
-    assert await wait_for_condition(lambda: output == ["xxx"])
-    result = await t.read()
-    assert await wait_for_condition(lambda: result == "xxx")
-
-
-@pytest.mark.asyncio
-async def test_AsyncSaveManager_as_descriptor():
+async def test_AsyncSaveManager_as_class_attribute():
     output = []
 
     class FakeSaver(AbstractBaseSaver):
@@ -195,16 +171,17 @@ async def test_AsyncSaveManager_as_descriptor():
             pass
 
     class T:
-        save = AsyncSaveManager(FakeSaver())
+        saver = AsyncSaveManager(FakeSaver())
+        save = saver.save
 
     t = T()
 
     t.save("xxx")
-
     assert await wait_for_condition(lambda: output == ["xxx"])
 
 
-def test_SyncSaveManager_as_non_descriptor():
+@pytest.mark.asyncio
+async def test_AsyncSaveManager_as_instance_attribute():
     output = []
 
     class FakeSaver(AbstractBaseSaver):
@@ -217,43 +194,17 @@ def test_SyncSaveManager_as_non_descriptor():
 
     class T:
         def __init__(self, saver):
-            saver = SyncSaveManager(saver)
-            self.save = saver.save
-            self.read = saver.read
+            self.saver = AsyncSaveManager(saver)
+            self.save = self.saver.save
+            self.read = self.saver.read
 
     t = T(FakeSaver())
 
     t.save("xxx")
 
-    assert output == ["xxx"]
-    result = t.read()
-    assert result == "xxx"
-
-
-def test_SyncSaveManager_as_descriptor():
-    output = []
-
-    class FakeSaver(AbstractBaseSaver):
-
-        def save(self, data, *args):
-            output.append(data)
-
-        def read(self, key=None):
-            return output.pop()
-
-    class T:
-        save_manager = SyncSaveManager(FakeSaver())
-        save = save_manager.save
-        read = save_manager.read
-
-    t = T()
-
-    t.save("xxx")
-
-    assert output == ["xxx"]
-
-    result = t.read()
-    assert result == "xxx"
+    assert await wait_for_condition(lambda: output == ["xxx"])
+    result = await t.read()
+    assert await wait_for_condition(lambda: result == "xxx")
 
 
 # #####################################
@@ -467,7 +418,10 @@ class TestCsvSaver:
     def test_save_many_should_not_recreate_header_on_existing_file(
         self, csv_saver, mock_name_str, temp_dir
     ):
-        """Test that save_many doesn't recreate header when override=False and file exists."""
+        """
+        Test that save_many doesn't recreate header when
+        override=False and file exists.
+        """
         # Create initial file with data
         initial_data = {"name": "Initial", "score": 100, "subject": "Test"}
         csv_saver.save(initial_data)
@@ -949,18 +903,6 @@ class TestMongoSaver:
         assert result == []
         mock_collection.find.assert_called_once_with({"nonexistent": "value"})
 
-    @patch("haymaker.saver.log")
-    def test_delete_method_logs_debug(self, mock_log, mongo_saver_without_query_key):
-        """Test delete method logs debug message (not implemented)."""
-        saver, mock_collection = mongo_saver_without_query_key
-
-        query = {"id": "user_to_delete"}
-        saver.delete(query)
-
-        mock_log.debug.assert_called_once_with(
-            f"Will mock delete data: {query}. DELETE METHOD NOT IMPLEMENTED"
-        )
-
     def test_str_representation(self, mongo_saver_without_query_key):
         """Test string representation of MongoSaver."""
         saver, mock_collection = mongo_saver_without_query_key
@@ -969,8 +911,9 @@ class TestMongoSaver:
         saver.db.name = "test_database"
         saver.collection.name = "test_collection"
 
-        expected_str = "MongoSaver(db=test_database, collection=test_collection)"
-        # Note: The actual __str__ method uses the objects directly, so we test the format
+        # expected_str = "MongoSaver(db=test_database, collection=test_collection)"
+        # Note: The actual __str__ method uses the objects directly,
+        # so we test the format
         result = str(saver)
         assert "MongoSaver" in result
         assert "db=" in result

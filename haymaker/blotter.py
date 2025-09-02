@@ -8,7 +8,7 @@ import ib_insync as ibi
 
 from . import misc
 from .config import CONFIG
-from .saver import AsyncSaveManager, CsvSaver, MongoSaver  # noqa
+from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver  # noqa
 
 log = logging.getLogger(__name__)
 
@@ -32,14 +32,21 @@ class Blotter:
       on i/o)
     """
 
-    save = AsyncSaveManager(BLOTTER_SAVER)
-
-    def __init__(self, save_immediately: bool = True, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        save_immediately: bool = True,
+        saver: AbstractBaseSaver = BLOTTER_SAVER,
+        *args,
+        **kwargs,
+    ) -> None:
         self.save_immediately = save_immediately  # False for backtester, True otherwise
         self.blotter: list[dict] = []
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
         self.done_trades: list[int] = []
+        self.saver = saver
+        # ensure async saving
+        self.save = AsyncSaveManager(saver).save
         log.debug(f"Blotter initiated: {self}")
 
     def log_trade(
@@ -112,7 +119,6 @@ class Blotter:
                 f"Trade will be logged to blotter: {report.get('order_id')} "
                 f"{report.get('perm_id')}"
             )
-            # log.debug(f"{report=}")
             self.save(report)
         else:
             self.blotter.append(report)
@@ -121,12 +127,16 @@ class Blotter:
         """
         Write full blotter (all rows) to store.
         """
-        BLOTTER_SAVER.save_many(self.blotter)
+        try:
+            self.saver.save_many(self.blotter)  # type: ignore
+        except AttributeError:
+            log.error(
+                f"saver: {self.saver} doesn't support `save_many`, "
+                f"use  different saver."
+            )
 
     def __repr__(self):
-        return (
-            f"Blotter(save_immediately={self.save_immediately}, saver={BLOTTER_SAVER})"
-        )
+        return f"Blotter(save_immediately={self.save_immediately}, saver={self.saver})"
 
 
 def blotter_factory(param: Type[Blotter] | bool | None) -> Blotter | None:

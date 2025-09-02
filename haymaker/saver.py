@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Collection
 
-import eventkit as ev  # type: ignore
 import pandas as pd
 from arctic import Arctic  # type: ignore
 
@@ -25,96 +24,32 @@ CONFIG = config.get("saver") or {}
 ARCTIC_SAVER_LIBRARY = CONFIG["ArcticSaver"]["library"]
 
 
-class AbstractBaseSaveManager(ABC):
+class AsyncSaveManager:
     """
-    Run savers, interface between :class:`Atom` and :class:`AbstractBaseSaver`.
-    In particular, the purpose of this class is to allow for running savers
-    asynchronously as a background task in a separate thread or process.
-
-    Classes implementing this abstract class can be used both: as
-    a descriptor and a regular instance attribute, i.e.
-
-    * as a descriptor:
-        ```
-        class Example:
-            save = SaveManager(saver_instance)
-        ```
-    * as an instance attribute:
-        ```
-        class Example:
-            def __init__(self, saver_instance):
-                self.save = SaveManager(saver_instance)
-        ```
+    Abstract away the process of perfoming asynchronous save and read
+    operations. Works as a wrapper for a saver object.
     """
 
     def __init__(self, saver: AbstractBaseSaver):
         self.saver = saver
 
-    def __get__(self, obj, objtype=None) -> Callable:
-        return self.save
-
-    @abstractmethod
-    def save(self, data: Any, *args: str): ...
-
-    def __call__(self, data: Any, *args: str):
-        return self.save(data, *args)
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__qualname__}({self.saver})"
-
-
-async def async_runner(func: Callable, *args):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, func, *args)
-
-
-class AsyncSaveManager(AbstractBaseSaveManager):
-    """
-    Abstract away the process of perfoming save operations.  Use
-    :class:`eventkit.Event` to put :func:`.saving_function` into
-    asyncio loop.
-    """
-
     @staticmethod
-    async def saving_function(data: Any, saver: AbstractBaseSaver, *args: str):
-        """
-        Function that actually peforms all saving.
-        :class:`AbstractBaseSaver` objects wishing to save should connect
-        events to it or await it directly.
-        """
+    async def async_runner(func: Callable, *args):
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, saver.save, data, *args)
-
-    @staticmethod
-    def error_reporting_function(event, exception: Exception) -> None:
-        log.error(f"Event error: {event.name()}: {exception}", exc_info=True)
-
-    saveEvent = ev.Event("saveEvent")
-    saveEvent.connect(saving_function, error=error_reporting_function)
+        return await loop.run_in_executor(None, func, *args)
 
     def save(self, data: Any, *args: str) -> None:
         # save is fire and forget
-        self.saveEvent.emit(data, self.saver, *args)
+        asyncio.create_task(
+            self.async_runner(self.saver.save, data, *args), name="saver"
+        )
 
     async def read(self, key: Any = None) -> Any:
-        # you don't want to proceed untill you get the result
-        return await async_runner(self.saver.read, key)
+        # you don't want to proceed until you get the result
+        return await self.async_runner(self.saver.read, key)
 
-    async def make_async(self, method: str, *args) -> Any:
-        return await async_runner(getattr(self.saver, method), *args)
-
-
-class SyncSaveManager(AbstractBaseSaveManager):
-    """
-    Saves immediately in the current thread without intermediation of
-    asyncio loop.
-    """
-
-    def save(self, data: Any, *args: str) -> None:
-        self.saver.save(data, *args)
-
-    def read(self, key: Any = None) -> Any:
-        return self.saver.read(key)
+    def __repr__(self) -> str:
+        return f"{self.__class__.__qualname__}({self.saver})"
 
 
 class AbstractBaseSaver(ABC):
@@ -157,7 +92,7 @@ class AbstractBaseFileSaver(AbstractBaseSaver):
 class PickleSaver(AbstractBaseFileSaver):
     _suffix = "pickle"
 
-    def save(self, data: pd.DataFrame, *args: str) -> None:
+    def save(self, data: Any, *args: str) -> None:
         if isinstance(data, pd.DataFrame):
             data.to_pickle(self._file(*args))
         else:
@@ -278,9 +213,8 @@ class MongoSaver(AbstractBaseSaver):
                 result = self.collection.update_one(
                     {self.query_key: key}, {"$set": data}, upsert=True
                 )
-            # this seems useless, verify keys?
             elif not all(data.keys()):
-                log.error(f"Attempt to save with wrong keys: {list(data.keys())}")
+                log.error(f"Attempt to save data with empty keys: {list(data.keys())}")
             else:
                 result = self.collection.insert_one(data)  # noqa
         except Exception:
@@ -293,9 +227,6 @@ class MongoSaver(AbstractBaseSaver):
         if key is None:
             key = {}
         return list(self.collection.find(key))
-
-    def delete(self, query: dict) -> None:
-        log.debug(f"Will mock delete data: {query}. DELETE METHOD NOT IMPLEMENTED")
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__}(db={self.db}, collection={self.collection})"

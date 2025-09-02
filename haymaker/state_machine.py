@@ -13,13 +13,7 @@ import ib_insync as ibi
 
 from .config import CONFIG as config
 from .misc import Lock, action_to_signal, decode_tree, tree
-from .saver import (
-    AbstractBaseSaver,
-    AsyncSaveManager,
-    MongoLatestSaver,
-    MongoSaver,
-    SyncSaveManager,
-)
+from .saver import AbstractBaseSaver, AsyncSaveManager, MongoLatestSaver, MongoSaver
 
 log = logging.getLogger(__name__)
 
@@ -105,9 +99,7 @@ class OrderContainer(UserDict):
         self.index: dict[int, int] = {}  # translation of permId to orderId
         self.setitemEvent = ev.Event("setitemEvent")
         self.setitemEvent += self.onSetitemEvent
-        self.save_manager = (
-            AsyncSaveManager(saver) if save_async else SyncSaveManager(saver)
-        )
+        self.saver = AsyncSaveManager(saver) if save_async else saver
         super().__init__()
 
     def __setitem__(self, key: int, item: OrderInfo) -> None:
@@ -175,7 +167,7 @@ class OrderContainer(UserDict):
     def save(self, oi: OrderInfo) -> None:
         """Save data to database."""
         self[oi.trade.order.orderId] = oi
-        self.save_manager.save(oi.encode())
+        self.saver.save(oi.encode())
 
     def delete(self, orderId: int) -> None:
         """
@@ -189,12 +181,12 @@ class OrderContainer(UserDict):
             log.error(f"Cannot delete {orderId}, no record.")
             return
         oi_dict.update({"active": False})
-        self.save_manager.save(oi_dict)
+        self.saver.save(oi_dict)
         del self[orderId]
 
     async def read(self) -> None:
         """Read data from database and update itself."""
-        order_data = await self.save_manager.read({"active": True})
+        order_data = await self.saver.read({"active": True})
         self.decode(order_data)
 
     def __repr__(self) -> str:
@@ -275,9 +267,7 @@ class StrategyContainer(UserDict):
         # will automatically save strategies to db on every change
         # (but not more often than defined in CONFIG['state_machine']['save_delay'])
         self.strategyChangeEvent += self.save
-        self.save_manager = (
-            AsyncSaveManager(saver) if save_async else SyncSaveManager(saver)
-        )
+        self.saver = AsyncSaveManager(saver) if save_async else saver
         super().__init__()
 
     def __setitem__(self, key: str, item: dict):
@@ -288,6 +278,7 @@ class StrategyContainer(UserDict):
         if isinstance(item, dict):
             self.data[key] = Strategy(item, self._strategyChangeEvent)
         elif isinstance(item, Strategy):
+            # todo: why do I need this?
             item.strategyChangeEvent = self._strategyChangeEvent
             self.data[key] = item
         self.data[key].strategy = key
@@ -359,13 +350,13 @@ class StrategyContainer(UserDict):
 
     def save(self) -> None:
         """Save data to database."""
-        self.save_manager.save(self.encode())
+        self.saver.save(self.encode())
 
     async def read(self) -> None:
         """
         Read data from database and update itself.
         """
-        strategy_data = await self.save_manager.read()
+        strategy_data = await self.saver.read()
         assert isinstance(strategy_data, dict)
         self.decode(strategy_data)
 
@@ -428,6 +419,7 @@ class StateMachine:
             return True
 
     def save_strategies(self, *args) -> None:
+        # NOT IN USE? REMOVE?
         self._strategies.save()
         log.debug("STRATEGIES SAVED")
 
@@ -481,6 +473,8 @@ class StateMachine:
         await asyncio.gather(self._strategies.read(), self._orders.read())
 
     async def save_order_status(self, trade: ibi.Trade) -> OrderInfo:
+
+        # todo: Why is this async?
         log.debug(
             f"updating trade status: {trade.order.orderId} {trade.order.permId} "
             f"{trade.orderStatus.status}"
