@@ -20,7 +20,6 @@ log = logging.getLogger(__name__)
 CONFIG = config.get("state_machine") or {}
 
 
-ORDER_CONTAINER_MAX_SIZE = CONFIG.get("order_container_max_size", 0)
 SAVE_DELAY = CONFIG.get("save_delay", 1)
 STRATEGY_COLLECTION_NAME = CONFIG.get("strategy_collection_name", "strategies")
 ORDER_COLLECTION_NAME = CONFIG.get("order_collection_name", "orders")
@@ -92,10 +91,8 @@ class OrderContainer(UserDict):
     def __init__(
         self,
         saver: AbstractBaseSaver,
-        max_size: int = ORDER_CONTAINER_MAX_SIZE,
         save_async: bool = True,
     ) -> None:
-        self.max_size = max_size
         self.index: dict[int, int] = {}  # translation of permId to orderId
         self.setitemEvent = ev.Event("setitemEvent")
         self.setitemEvent += self.onSetitemEvent
@@ -103,8 +100,6 @@ class OrderContainer(UserDict):
         super().__init__()
 
     def __setitem__(self, key: int, item: OrderInfo) -> None:
-        if self.max_size and (len(self.data) >= self.max_size):
-            self.data.pop(min(self.data.keys()))
         self.setitemEvent.emit(key, item)
         super().__setitem__(key, item)
 
@@ -190,11 +185,7 @@ class OrderContainer(UserDict):
         self.decode(order_data)
 
     def __repr__(self) -> str:
-        if self.max_size:
-            ms = f", max_size={self.max_size}"
-        else:
-            ms = ""
-        return f"OrderContainer({self.data}, {ms})"
+        return f"OrderContainer({self.data})"
 
 
 class Strategy(UserDict):
@@ -224,6 +215,7 @@ class Strategy(UserDict):
 
     def __setitem__(self, key, item):
         self.data[key] = item
+        # todo: think about it  WTF???
         self.data["timestamp"] = dt.datetime.now(tz=dt.timezone.utc)
         self.strategyChangeEvent.emit()
 
@@ -418,14 +410,9 @@ class StateMachine:
         else:
             return True
 
-    def save_strategies(self, *args) -> None:
-        # NOT IN USE? REMOVE?
-        self._strategies.save()
-        log.debug("STRATEGIES SAVED")
-
     def save_order(self, oi: OrderInfo) -> OrderInfo:
         self._orders.save(oi)
-        log.debug(f"ORDER {oi.trade.order.orderId} SAVED")
+        log.debug(f"ORDER {oi.trade.order.orderId} SAVED, trade object: {id(oi.trade)}")
         return oi
 
     def clear_strategies(self):
@@ -475,10 +462,10 @@ class StateMachine:
     async def save_order_status(self, trade: ibi.Trade) -> OrderInfo:
 
         # todo: Why is this async?
-        log.debug(
-            f"updating trade status: {trade.order.orderId} {trade.order.permId} "
-            f"{trade.orderStatus.status}"
-        )
+        # log.debug(
+        #     f"updating trade status: {trade.order.orderId} {trade.order.permId} "
+        #     f"{trade.orderStatus.status}"
+        # )
         # if orderId is zero, trade object has to be replaced
         order_info = self._orders.get(trade.order.orderId)
         if not order_info:
@@ -489,7 +476,7 @@ class StateMachine:
             log.exception(e)
         return order_info
 
-    # ### These are data access and modification methods ###
+    # ### data access and modification methods ###
 
     @property
     def strategy(self) -> StrategyContainer:

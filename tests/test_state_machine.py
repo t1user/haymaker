@@ -241,68 +241,10 @@ def test_OrderContainer_default_in_get_works_if_active_only_not_found(order_save
     assert orders.get(2, "Not Found", active_only=True) == "Not Found"
 
 
-def test_OrderContainer_limited_in_size_and_max_size_parameter_works(order_saver):
-    orders = OrderContainer(
-        order_saver,
-        max_size=5,
-    )
-    orders.update(
-        {
-            i: OrderInfo(
-                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
-            )
-            for i in range(20)
-        }
-    )
-
-    # done should keep only 10 last items
-    assert len(orders) == 5
-
-
-def test_OrderContainer_drops_oldest(order_saver):
-    # create dict with keys: 0...19, but keep only last 10 elements
-    orders = OrderContainer(
-        order_saver,
-        max_size=10,
-    )
-    orders.update(
-        {
-            i: OrderInfo(
-                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
-            )
-            for i in range(20)
-        },
-    )
-    # only last 10 keys kept: 10...19, so first item in dict should be 10
-    first_key = list(orders.keys())[0]
-    assert first_key == 10
-
-    # this is the last key, which should not have been affected
-    last_key = list(orders.keys())[-1]
-    assert last_key == 19
-
-
-def test_OrderContainer_max_size_ignored_if_zero(order_saver):
-    orders = OrderContainer(
-        order_saver,
-        max_size=0,
-    )
-    orders.update(
-        {
-            i: OrderInfo(
-                "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=i)), None
-            )
-            for i in range(20)
-        },
-    )
-    assert len(orders) == 20
-
-
 @pytest.mark.asyncio
 async def test_OrderContainer_recalls_permId(order_saver):
     orders = OrderContainer(
         order_saver,
-        max_size=0,
     )
     orders.update(
         {
@@ -323,7 +265,6 @@ async def test_OrderContainer_recalls_permId(order_saver):
 async def test_OrderContainer_get_recalls_permId(order_saver):
     orders = OrderContainer(
         order_saver,
-        max_size=0,
     )
 
     orders.update(
