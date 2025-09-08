@@ -30,6 +30,8 @@ class AsyncSaveManager:
     operations. Works as a wrapper for a saver object.
     """
 
+    _tasks: set[asyncio.Task] = set()
+
     def __init__(self, saver: AbstractBaseSaver):
         self.saver = saver
 
@@ -40,9 +42,18 @@ class AsyncSaveManager:
 
     def save(self, data: Any, *args: str) -> None:
         # save is fire and forget
-        asyncio.create_task(
+        task = asyncio.create_task(
             self.async_runner(self.saver.save, data, *args), name="saver"
         )
+
+        # Below is preventing tasks from being garbage collected
+        # Add task to the set. This creates a strong reference.
+        self._tasks.add(task)
+
+        # To prevent keeping references to finished tasks forever,
+        # make each task remove its own reference from the set after
+        # completion:
+        task.add_done_callback(self._tasks.discard)
 
     async def read(self, key: Any = None) -> Any:
         # you don't want to proceed until you get the result

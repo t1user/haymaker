@@ -102,7 +102,6 @@ class InitData:
 
 
 class Jobs:
-    _tasks: set = set()
 
     def __init__(self, init_data: InitData):
         self.init_data = init_data
@@ -136,20 +135,13 @@ class Jobs:
             )
         log.info(f"Orders on restart: {dict(order_dict)}")
         log.debug("Run streamers --->")
-        for streamer in self.streamers:
-            task = asyncio.create_task(streamer.run(), name=f"{streamer!s}, ")
-            log.debug(f"Task created: {task.get_name()}")
 
-            # Add task to the set. This creates a strong reference.
-            self._tasks.add(task)
-
-            # To prevent keeping references to finished tasks forever,
-            # make each task remove its own reference from the set after
-            # completion:
-            task.add_done_callback(self._tasks.discard)
-            # ensure errors are logged for debugging
-            task.add_done_callback(self._handle_error)
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await asyncio.gather(
+            *[
+                asyncio.create_task(streamer.run(), name=f"{streamer!s}, ")
+                for streamer in self.streamers
+            ]
+        )
 
     def __repr__(self) -> str:
         return (
