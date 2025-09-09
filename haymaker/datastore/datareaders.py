@@ -4,8 +4,9 @@ from typing import Type, TypeVar
 
 import pandas as pd
 
+from haymaker.research.utils import gap_tracer
+
 from .datastore import AbstractBaseStore, ArcticStore
-from .research.utils import gap_tracer
 
 
 @dataclass
