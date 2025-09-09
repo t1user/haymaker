@@ -32,8 +32,12 @@ class AsyncSaveManager:
 
     _tasks: set[asyncio.Task] = set()
 
-    def __init__(self, saver: AbstractBaseSaver):
+    def __init__(self, saver: AbstractBaseSaver, name: str = ""):
         self.saver = saver
+        if name:
+            self.name = f"saver_{name}"
+        else:
+            self.name = "saver"
 
     @staticmethod
     async def async_runner(func: Callable, *args):
@@ -43,7 +47,7 @@ class AsyncSaveManager:
     def save(self, data: Any, *args: str) -> None:
         # save is fire and forget
         task = asyncio.create_task(
-            self.async_runner(self.saver.save, data, *args), name="saver"
+            self.async_runner(self.saver.save, data, *args), name=self.name
         )
 
         # Below is preventing tasks from being garbage collected
