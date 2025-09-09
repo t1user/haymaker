@@ -332,7 +332,7 @@ class Controller(Atom):
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} "
             f"permId: {trade.order.permId} registered for: "
-            f"{trade.contract.localSymbol or trade.contract.symbol}"
+            f"{trade.contract.localSymbol or trade.contract.symbol} "
         )
 
         return oi
@@ -355,20 +355,20 @@ class Controller(Atom):
         This is an event handler (callback).  Connected (subscribed)
         to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
         """
-        # Consider whether essential or optional
-        # Maybe some order verification here?
-        log.debug(f"New order event: {trade.order.orderId, trade.order.permId}")
+
+        log.debug(f"New order event: {trade.order.orderId, trade.order.permId} ")
         if not (trade.order.orderId < 0 or self.sm.order.get(trade.order.orderId)):
             log.critical(
                 f"Unknown trade in the system {trade.order} {trade.contract.symbol}"
             )
 
-    async def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
+    def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
+
         if self._hold:
             return
 
         # this will create new order record if it doesn't already exist
-        await self.sm.save_order_status(trade)
+        self.sm.save_order_status(trade)
 
     def register_position(
         self, strategy_str: str, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
@@ -384,7 +384,7 @@ class Controller(Atom):
                 log.debug(
                     f"Registered position - orderId: {trade.order.orderId} permId: "
                     f"{trade.order.permId} BUY {trade.order.orderType} "
-                    f"for {strategy_str} --> position: {strategy.position}"
+                    f"for {strategy_str} --> position: {strategy.position} "
                 )
             elif fill.execution.side == "SLD":
                 strategy.position -= fill.execution.shares
@@ -415,7 +415,7 @@ class Controller(Atom):
         )
         self.register_position(strategy.strategy, strategy, trade, fill)
 
-    async def onCommissionReport(
+    def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ) -> None:
         """
@@ -428,8 +428,7 @@ class Controller(Atom):
         if self._hold:
             return
 
-        log.debug(f"Commission report for {trade.order.orderId} {trade.order.permId}")
-        order_info = await self.sm.save_order_status(trade)
+        order_info = self.sm.save_order_status(trade)
 
         if order_info:
             try:
@@ -457,7 +456,7 @@ class Controller(Atom):
                 log.error(f"Error while trying to create blotter entry: {e}")
 
         elif trade.order.totalQuantity == 0:
-            log.debug(f"empty CommissionReportEvent emit for trade: {trade}")
+            log.warning(f"empty CommissionReportEvent emit for trade: {trade}")
             return
         else:
             log.error(
@@ -627,7 +626,7 @@ class Controller(Atom):
         return strategy
 
     def log_order_status(self, trade: ibi.Trade) -> None:
-        # Connected to onOrderStatusEvent
+        # Connected to ib.OrderStatusEvent
 
         if self._hold:
             return
@@ -640,12 +639,12 @@ class Controller(Atom):
         elif trade.isDone():
             log.debug(
                 f"{trade.contract.symbol}: order {trade.order.orderId} "
-                f"{trade.order.orderType} done {trade.orderStatus.status}."
+                f"{trade.order.orderType} done {trade.orderStatus.status}. "
             )
         else:
             log.info(
                 f"{trade.contract.symbol}: OrderStatus ->{trade.orderStatus.status}<-"
-                f" for order: {trade.order},"
+                f" for order: {trade.order.orderId} {trade.order.permId}, "
             )
 
     @staticmethod
@@ -654,7 +653,7 @@ class Controller(Atom):
             f"{reason} trade filled: {trade.contract.localSymbol} "
             f"{trade.order.action} {trade.filled()}"
             f"@{misc.trade_fill_price(trade)} --> {strategy} "
-            f"orderId: {trade.order.orderId}, permId: {trade.order.permId}"
+            f"orderId: {trade.order.orderId}, permId: {trade.order.permId} "
         )
 
     def log_err(
@@ -665,6 +664,7 @@ class Controller(Atom):
         if errorCode < 400:
             # reqId is most likely orderId
             # order rejected is errorCode = 201
+            # order cancelled is errorCode = 202
             # 421: Error validating request.-'bN' : cause - Missing order exchange
             order_info = self.sm.order.get(reqId)
             if order_info:

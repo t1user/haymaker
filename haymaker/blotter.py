@@ -115,10 +115,6 @@ class Blotter:
         store immediately or just kept in self.blotter for later.
         """
         if self.save_immediately:
-            log.debug(
-                f"Trade will be logged to blotter: {report.get('order_id')} "
-                f"{report.get('perm_id')}"
-            )
             self.save(report)
         else:
             self.blotter.append(report)

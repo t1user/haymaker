@@ -101,9 +101,17 @@ class OrderSyncStrategy:
                 f"{[(i.order.orderId, i.order.permId) for i in self.inactive]}"
             )
 
+        # todo: WTF? changing orderId on a trade????
+        # this likely needs to be removed
+        # if cannot match inactive trade by orderId try by permId
+        # and if succcessful modify its orderId (WTF????)
         for old_trade in self.inactive:
             new_trade = ib_known_trades.get(old_trade.order.permId)
             if new_trade:
+                log.warning(
+                    f"Will change orderId: {new_trade.order.orderId} "
+                    f"to: {old_trade.order.orderId}"
+                )
                 new_trade.order.orderId = old_trade.order.orderId
                 self.done.append(new_trade)
                 self.sm.update_trade(new_trade)  # <- CHANGING RECORDS

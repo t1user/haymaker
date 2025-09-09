@@ -215,7 +215,7 @@ class Strategy(UserDict):
 
     def __setitem__(self, key, item):
         self.data[key] = item
-        # todo: think about it  WTF???
+        # todo: think about it
         self.data["timestamp"] = dt.datetime.now(tz=dt.timezone.utc)
         self.strategyChangeEvent.emit()
 
@@ -270,7 +270,6 @@ class StrategyContainer(UserDict):
         if isinstance(item, dict):
             self.data[key] = Strategy(item, self._strategyChangeEvent)
         elif isinstance(item, Strategy):
-            # todo: why do I need this?
             item.strategyChangeEvent = self._strategyChangeEvent
             self.data[key] = item
         self.data[key].strategy = key
@@ -410,9 +409,13 @@ class StateMachine:
         else:
             return True
 
+    def save_strategies(self, *args) -> None:
+        # used by sync routines/error handlers
+        self._strategies.save()
+        log.debug("STRATEGIES SAVED")
+
     def save_order(self, oi: OrderInfo) -> OrderInfo:
         self._orders.save(oi)
-        log.debug(f"ORDER {oi.trade.order.orderId} SAVED, trade object: {id(oi.trade)}")
         return oi
 
     def clear_strategies(self):
@@ -449,7 +452,7 @@ class StateMachine:
         This order is no longer of interest it's inactive in our
         orders and inactive in IB.  Called by startup sync routines.
 
-        Delete trade only from local records, not the db.  However, if
+        Delete trade only from local records, not the db.  However, it
         will be market as `inactive` in db regardless of its current
         status.
         """
@@ -459,13 +462,8 @@ class StateMachine:
         log.debug("Will read data from store...")
         await asyncio.gather(self._strategies.read(), self._orders.read())
 
-    async def save_order_status(self, trade: ibi.Trade) -> OrderInfo:
+    def save_order_status(self, trade: ibi.Trade) -> OrderInfo:
 
-        # todo: Why is this async?
-        # log.debug(
-        #     f"updating trade status: {trade.order.orderId} {trade.order.permId} "
-        #     f"{trade.orderStatus.status}"
-        # )
         # if orderId is zero, trade object has to be replaced
         order_info = self._orders.get(trade.order.orderId)
         if not order_info:
