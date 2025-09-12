@@ -5,12 +5,14 @@ import csv
 import logging
 import pickle
 from abc import ABC, abstractmethod
+from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Collection, Coroutine, Protocol, TypeVar
+from typing import Any, Protocol
 
 import pandas as pd
 
+from .async_wrappers import fire_and_forget, make_async
 from .config import CONFIG as config
 from .databases import get_mongo_client
 from .misc import default_path, name_str
@@ -19,65 +21,6 @@ log = logging.getLogger(__name__)
 
 
 CONFIG = config.get("saver") or {}
-
-
-class SavingObject(Protocol):
-    def read(self, *args) -> Any: ...
-
-    def save(self, *args) -> Any: ...
-
-
-R = TypeVar("R")
-
-
-class AsyncSaveManager:
-    """
-    Abstract away the process of perfoming asynchronous save and read
-    operations. Works as a wrapper for a saver object.
-    """
-
-    _tasks: set[asyncio.Task] = set()
-
-    def __init__(self, saver: SavingObject, name: str = ""):
-        self.saver = saver
-        self.name = f"saver_{name}" if name else "saver"
-
-    @staticmethod
-    async def async_runner(func: Callable[..., R], *args: Any) -> R:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, func, *args)
-
-    def create_task(self, coroutine: Coroutine[Any, Any, R]) -> None:
-        task: asyncio.Task[R] = asyncio.create_task(coroutine, name=self.name)
-
-        # Below is preventing tasks from being garbage collected
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    def save(self, *args: Any) -> None:
-        # save is fire and forget
-        self.fire_and_forget("save", *args)
-
-    async def read(self, *args: Any) -> Any:
-        # you don't want to proceed until you get the result
-        return await self.make_async("read", *args)
-
-    async def make_async(self, attr, *args) -> Any:
-        # can be used to make any saver's method async
-        fn = getattr(self.saver, attr)
-        if not callable(fn):
-            raise TypeError(f"{self.saver}.{attr} is not callable")
-        return await self.async_runner(fn, *args)
-
-    def fire_and_forget(self, attr: str, *args: Any) -> None:
-        # can be used on any saver's method that doesn't expect a return value
-        fn = getattr(self.saver, attr)
-        if not callable(fn):
-            raise TypeError(f"{self.saver}.{attr} is not callable")
-        self.create_task(self.async_runner(fn, *args))
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__qualname__}({self.saver!r})"
 
 
 class AbstractBaseSaver(ABC):
@@ -230,3 +173,33 @@ class MongoLatestSaver(MongoSaver):
             log.exception(Exception)
             raise
         return data or {}
+
+
+class SavingObject(Protocol):
+    def read(self, *args) -> Any: ...
+
+    def save(self, *args) -> Any: ...
+
+
+class AsyncSaveManager:
+    """
+    Abstract away the process of perfoming asynchronous save and read
+    operations. Works as a wrapper for a saver object.
+    """
+
+    _tasks: set[asyncio.Task] = set()
+
+    def __init__(self, saver: SavingObject, name: str = ""):
+        self.saver = saver
+        self.name = f"saver_{name}" if name else "saver"
+
+    def save(self, *args: Any) -> None:
+        # save is fire and forget
+        fire_and_forget(self.saver.save, *args)
+
+    async def read(self, *args: Any) -> Any:
+        # you don't want to proceed until you get the result
+        return await make_async(self.saver.read, *args)
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__qualname__}({self.saver!r})"
