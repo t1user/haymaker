@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import ib_insync as ibi
 import pandas as pd
@@ -10,6 +10,9 @@ from arctic import Arctic  # type: ignore
 from arctic.date import DateRange  # type: ignore
 from arctic.exceptions import NoDataFoundException  # type: ignore
 from arctic.store.versioned_item import VersionedItem  # type: ignore
+
+from haymaker.databases import get_mongo_client
+from haymaker.validators import bar_size_validator, wts_validator
 
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
@@ -95,6 +98,11 @@ class AbstractBaseStore(ABC):
         """
         ...
 
+    def save(
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict = {}
+    ) -> Any:
+        return self.write(symbol, data, meta)
+
     def _symbol(self, sym: ibi.Contract | str) -> str:
         """
         If Contract passed extract string that is used as key.
@@ -159,6 +167,27 @@ class ArcticStore(AbstractBaseStore):
         self.db = Arctic(host)
         self.db.initialize_library(lib)
         self.store = self.db[lib]
+
+    @classmethod
+    def from_params(cls, wts: str, barSize: str) -> Self:
+        """
+        Initiate store with standardized lib name and shared mongo
+        host.
+
+        Args:
+        ----
+
+        * wts:
+            `what to show` parameter of :meth:`ib_insync.ib.reqHistoricalData`
+
+        * barSize:
+            `barSize` parameter of :meth:`ib_insync.ib.reqHistoricalData`
+
+        """
+        _wts = wts_validator(wts)
+        _barSize = bar_size_validator(barSize)
+        client = get_mongo_client()
+        return cls(f"{_wts}_{_barSize}", client)
 
     def write(
         self,

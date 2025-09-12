@@ -7,10 +7,9 @@ import pickle
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Collection
+from typing import Any, Callable, Collection, Coroutine, Protocol, TypeVar
 
 import pandas as pd
-from arctic import Arctic  # type: ignore
 
 from .config import CONFIG as config
 from .databases import get_mongo_client
@@ -21,7 +20,14 @@ log = logging.getLogger(__name__)
 
 CONFIG = config.get("saver") or {}
 
-ARCTIC_SAVER_LIBRARY = CONFIG["ArcticSaver"]["library"]
+
+class SavingObject(Protocol):
+    def read(self, *args) -> Any: ...
+
+    def save(self, *args) -> Any: ...
+
+
+R = TypeVar("R")
 
 
 class AsyncSaveManager:
@@ -32,39 +38,46 @@ class AsyncSaveManager:
 
     _tasks: set[asyncio.Task] = set()
 
-    def __init__(self, saver: AbstractBaseSaver, name: str = ""):
+    def __init__(self, saver: SavingObject, name: str = ""):
         self.saver = saver
-        if name:
-            self.name = f"saver_{name}"
-        else:
-            self.name = "saver"
+        self.name = f"saver_{name}" if name else "saver"
 
     @staticmethod
-    async def async_runner(func: Callable, *args):
+    async def async_runner(func: Callable[..., R], *args: Any) -> R:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, func, *args)
 
-    def save(self, data: Any, *args: str) -> None:
-        # save is fire and forget
-        task = asyncio.create_task(
-            self.async_runner(self.saver.save, data, *args), name=self.name
-        )
+    def create_task(self, coroutine: Coroutine[Any, Any, R]) -> None:
+        task: asyncio.Task[R] = asyncio.create_task(coroutine, name=self.name)
 
         # Below is preventing tasks from being garbage collected
-        # Add task to the set. This creates a strong reference.
         self._tasks.add(task)
-
-        # To prevent keeping references to finished tasks forever,
-        # make each task remove its own reference from the set after
-        # completion:
         task.add_done_callback(self._tasks.discard)
 
-    async def read(self, key: Any = None) -> Any:
+    def save(self, *args: Any) -> None:
+        # save is fire and forget
+        self.fire_and_forget("save", *args)
+
+    async def read(self, *args: Any) -> Any:
         # you don't want to proceed until you get the result
-        return await self.async_runner(self.saver.read, key)
+        return await self.make_async("read", *args)
+
+    async def make_async(self, attr, *args) -> Any:
+        # can be used to make any saver's method async
+        fn = getattr(self.saver, attr)
+        if not callable(fn):
+            raise TypeError(f"{self.saver}.{attr} is not callable")
+        return await self.async_runner(fn, *args)
+
+    def fire_and_forget(self, attr: str, *args: Any) -> None:
+        # can be used on any saver's method that doesn't expect a return value
+        fn = getattr(self.saver, attr)
+        if not callable(fn):
+            raise TypeError(f"{self.saver}.{attr} is not callable")
+        self.create_task(self.async_runner(fn, *args))
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__qualname__}({self.saver})"
+        return f"{self.__class__.__qualname__}({self.saver!r})"
 
 
 class AbstractBaseSaver(ABC):
@@ -73,10 +86,10 @@ class AbstractBaseSaver(ABC):
     """
 
     @abstractmethod
-    def save(self, data: Any, *args: str) -> None: ...
+    def save(self, data: Any, /, *args: Any) -> None: ...
 
     @abstractmethod
-    def read(self, key=None): ...
+    def read(self, key=None, /, *args: Any): ...
 
     def __repr__(self) -> str:
         return (
@@ -107,14 +120,14 @@ class AbstractBaseFileSaver(AbstractBaseSaver):
 class PickleSaver(AbstractBaseFileSaver):
     _suffix = "pickle"
 
-    def save(self, data: Any, *args: str) -> None:
+    def save(self, data: Any, /, *args: str) -> None:
         if isinstance(data, pd.DataFrame):
             data.to_pickle(self._file(*args))
         else:
             with open(self._file(*args), "wb") as f:
                 pickle.dump(data, f)
 
-    def read(self, name: str | None = None) -> Any:
+    def read(self, name: str | None = None, /, *args: Any) -> Any:
         if name is None:
             raise ValueError("name must be a string, not None")
         with open(self._file(name), "rb") as f:
@@ -136,7 +149,7 @@ class CsvSaver(AbstractBaseFileSaver):
             writer = csv.DictWriter(f, fieldnames=keys)
             writer.writeheader()
 
-    def save(self, data: dict[str, Any], *args: str) -> None:
+    def save(self, data: dict[str, Any], /, *args: str) -> None:
         if not self._path_exists(*args):
             self._create_header(data.keys(), *args)
 
@@ -144,7 +157,9 @@ class CsvSaver(AbstractBaseFileSaver):
             writer = csv.DictWriter(f, fieldnames=data.keys())
             writer.writerow(data)
 
-    def save_many(self, data: list[dict[str, Any]], *args: str, override=True) -> None:
+    def save_many(
+        self, data: list[dict[str, Any]], /, *args: str, override=True
+    ) -> None:
         if not data:
             raise ValueError("Cannot save empty data list")
         if override or not self._path_exists(*args):
@@ -154,57 +169,12 @@ class CsvSaver(AbstractBaseFileSaver):
             for item in data:
                 writer.writerow(item)
 
-    def read(self, name: str | None = None, *args) -> list[dict[str, Any]]:
+    def read(self, name: str | None = None, /, *args) -> list[dict[str, Any]]:
         if name is None:
             raise ValueError("name must be a string, not None")
         with open(self._file(*args), newline="") as f:
             reader = csv.DictReader(f)
             return list(reader)
-
-
-class ArcticSaver(AbstractBaseSaver):
-    """
-    Saver for Arctic VersionStore.
-
-    WORKS ONLY ON DATAFRAMES
-    """
-
-    def __init__(
-        self,
-        name: str = "",
-        library: str = ARCTIC_SAVER_LIBRARY,
-        use_timestamp=False,
-    ) -> None:
-        """
-        Library given at init, collection determined by misc.name_str.
-        """
-        self.host = get_mongo_client()
-        self.library = library
-        self.db = Arctic(self.host)
-        self.db.initialize_library(self.library)
-        self.store = self.db[self.library]
-        self.name = name
-        self.timestamp = datetime.now(timezone.utc) if use_timestamp else None
-
-    def _make_key(self, *args: str) -> str:
-        return name_str(self.name, *args, timestamp=self.timestamp)
-
-    def save(self, data: pd.DataFrame, *args: str):
-        self.store.write(self._make_key(*args), data)
-
-    def keys(self) -> list[str]:
-        return self.store.list_symbols()
-
-    def read(self, key: str | None = None) -> pd.DataFrame:
-        if key is None:
-            raise ValueError("key must be string not None")
-        return self.store.read(key)
-
-    def __str__(self) -> str:
-        return (
-            f"<ArcticSaver(host={self.host}, library={self.library}, "
-            f"name={self.name})>"
-        )
 
 
 class MongoSaver(AbstractBaseSaver):
@@ -222,7 +192,7 @@ class MongoSaver(AbstractBaseSaver):
         self.collection = self.db[collection]
         self.query_key = query_key
 
-    def save(self, data: dict[str, Any], *args) -> None:
+    def save(self, data: dict[str, Any], /, *args) -> None:
         try:
             if self.query_key and (key := data.get(self.query_key)):
                 result = self.collection.update_one(
@@ -238,7 +208,7 @@ class MongoSaver(AbstractBaseSaver):
             raise
         # log.debug(f"{self}: transaction result: {result}")
 
-    def read(self, key: dict | None = None) -> Any:
+    def read(self, key: dict | None = None, /, *args) -> Any:
         if key is None:
             key = {}
         return list(self.collection.find(key))

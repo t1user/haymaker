@@ -27,13 +27,127 @@ from haymaker.saver import (
 # MONGOSAVER TESTS HAVE TO BE UNCOMMENTED ENSURING NO RACE CONDITIONS
 # (WHEN THE ISSUE IS SOLVED) LLM GENERATED TESTS HAVE TO BE REVIEWED
 
-# Assuming your saver classes are in a module called 'savers'
-# from savers import PickleSaver, CsvSaver
+
+##############################################
+# Test AsyncSaveManager
+##############################################
 
 
-def test_AbstractBaseSaver_is_abstract():
-    with pytest.raises(TypeError):
-        AbstractBaseSaver()  # type: ignore
+class DummySaver:
+    def __init__(self):
+        self.storage = {}
+        self.counter = 0
+
+    def save(self, key: str, value: str) -> None:
+        self.storage[key] = value
+        self.counter += 1
+
+    def read(self, key: str) -> str:
+        return self.storage[key]
+
+    def increment(self, x: int) -> int:
+        return x + 1
+
+    def __repr__(self) -> str:
+        return "DummySaver()"
+
+
+@pytest.mark.asyncio
+async def test_read_and_save():
+    saver = DummySaver()
+    manager = AsyncSaveManager(saver, name="dummy")
+
+    # fire and forget save
+    manager.save("foo", "bar")
+
+    # give time for background task
+    # await asyncio.sleep(0.05)
+    await wait_for_condition(lambda: saver.storage)
+
+    # read waits for result
+    result = await manager.read("foo")
+    assert result == "bar"
+    assert saver.counter == 1
+
+
+@pytest.mark.asyncio
+async def test_make_async_runs_custom_method():
+    saver = DummySaver()
+    manager = AsyncSaveManager(saver)
+
+    result = await manager.make_async("increment", 10)
+    assert result == 11
+
+
+@pytest.mark.asyncio
+async def test_fire_and_forget_runs_custom_method():
+    saver = DummySaver()
+    saver.increment = MagicMock(return_value=99)  # spy
+    manager = AsyncSaveManager(saver)
+
+    manager.fire_and_forget("increment", 5)
+    await wait_for_condition(lambda: saver.storage)
+    # await asyncio.sleep(0.05)
+
+    saver.increment.assert_called_once_with(5)
+
+
+@pytest.mark.asyncio
+async def test_make_async_non_callable_raises():
+    saver = DummySaver()
+    saver.not_callable = 123
+    manager = AsyncSaveManager(saver)
+
+    with pytest.raises(TypeError, match="not callable") as excinfo:
+        await manager.make_async("not_callable")
+    assert str(excinfo.value) == "DummySaver().not_callable is not callable"
+
+
+@pytest.mark.asyncio
+async def test_fire_and_forget_non_callable_raises():
+    saver = DummySaver()
+    saver.not_callable = 123
+    manager = AsyncSaveManager(saver)
+
+    with pytest.raises(TypeError) as excinfo:
+        manager.fire_and_forget("not_callable")
+    assert str(excinfo.value) == "DummySaver().not_callable is not callable"
+
+
+def test_repr_displays_class_and_saver():
+    saver = DummySaver()
+    manager = AsyncSaveManager(saver, name="dummy")
+    assert "AsyncSaveManager" in repr(manager)
+    assert "DummySaver" in repr(manager)
+
+
+@pytest.mark.asyncio
+async def test_AsyncSaveManager():
+    output = []
+
+    class FakeSaver(AbstractBaseSaver):
+
+        def save(self, data, *args):
+            output.append(data)
+
+        def read(self, key=None):
+            return output.pop()
+
+    class T:
+        saver = AsyncSaveManager(FakeSaver())
+        save = saver.save
+        read = saver.read
+
+    t = T()
+    t1 = T()
+
+    t.save("xxx")
+    t1.save("yyy")
+    assert await wait_for_condition(lambda: output == ["xxx", "yyy"])
+    await t.read()
+    assert await wait_for_condition(lambda: output == ["xxx"])
+    await t1.read()
+    assert await wait_for_condition(lambda: output == [])
 
 
 ##############################################
@@ -90,33 +204,9 @@ def test_CsvSaver_read_doesnt_accept_none():
         saver.read(None)
 
 
-@pytest.mark.asyncio
-async def test_AsyncSaveManager():
-    output = []
-
-    class FakeSaver(AbstractBaseSaver):
-
-        def save(self, data, *args):
-            output.append(data)
-
-        def read(self, key=None):
-            return output.pop()
-
-    class T:
-        saver = AsyncSaveManager(FakeSaver())
-        save = saver.save
-        read = saver.read
-
-    t = T()
-    t1 = T()
-
-    t.save("xxx")
-    t1.save("yyy")
-    assert await wait_for_condition(lambda: output == ["xxx", "yyy"])
-    await t.read()
-    assert await wait_for_condition(lambda: output == ["xxx"])
-    await t1.read()
-    assert await wait_for_condition(lambda: output == [])
+def test_AbstractBaseSaver_is_abstract():
+    with pytest.raises(TypeError):
+        AbstractBaseSaver()  # type: ignore
 
 
 ##############################################
