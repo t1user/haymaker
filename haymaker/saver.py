@@ -175,12 +175,6 @@ class MongoLatestSaver(MongoSaver):
         return data or {}
 
 
-class SavingObject(Protocol):
-    def read(self, *args) -> Any: ...
-
-    def save(self, *args) -> Any: ...
-
-
 class AsyncSaveManager:
     """
     Abstract away the process of perfoming asynchronous save and read
@@ -189,7 +183,7 @@ class AsyncSaveManager:
 
     _tasks: set[asyncio.Task] = set()
 
-    def __init__(self, saver: SavingObject, name: str = ""):
+    def __init__(self, saver: AbstractBaseSaver, name: str = ""):
         self.saver = saver
         self.name = f"saver_{name}" if name else "saver"
 

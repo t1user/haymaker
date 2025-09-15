@@ -105,6 +105,11 @@ class OrderSyncStrategy:
         # this likely needs to be removed
         # if cannot match inactive trade by orderId try by permId
         # and if succcessful modify its orderId (WTF????)
+        # THIS DOESN'T SEEM TO MAKE ANY SENSE AT ALL
+        # TODO
+        # Basically search for trades that have orderId==0
+        # If that's the point simlplify this
+        # Or find out what the point is
         for old_trade in self.inactive:
             new_trade = ib_known_trades.get(old_trade.order.permId)
             if new_trade:

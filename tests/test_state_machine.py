@@ -1,4 +1,3 @@
-import asyncio
 from typing import Any
 
 import eventkit as ev  # type: ignore
@@ -239,47 +238,6 @@ def test_OrderContainer_default_in_get_works_if_active_only_not_found(order_save
     orders[1] = o1
     orders[2] = o2
     assert orders.get(2, "Not Found", active_only=True) == "Not Found"
-
-
-@pytest.mark.asyncio
-async def test_OrderContainer_recalls_permId(order_saver):
-    orders = OrderContainer(
-        order_saver,
-    )
-    orders.update(
-        {
-            i: OrderInfo(
-                "coolstrategy",
-                "OPEN",
-                ibi.Trade(order=ibi.Order(orderId=i, permId=i * 100)),
-                None,
-            )
-            for i in range(1, 3)
-        },
-    )
-    await asyncio.sleep(0)
-    assert orders[100] == orders[1]
-
-
-@pytest.mark.asyncio
-async def test_OrderContainer_get_recalls_permId(order_saver):
-    orders = OrderContainer(
-        order_saver,
-    )
-
-    orders.update(
-        {
-            i: OrderInfo(
-                "coolstrategy",
-                "OPEN",
-                ibi.Trade(order=ibi.Order(orderId=i, permId=i * 100)),
-                None,
-            )
-            for i in range(1, 3)
-        },
-    )
-    await asyncio.sleep(0)
-    assert orders.get(100) == orders[1]
 
 
 def test_Strategy_default_dict_not_shared_among_instances(strategy_saver):

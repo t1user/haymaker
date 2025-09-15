@@ -93,35 +93,10 @@ class OrderContainer(UserDict):
         saver: AbstractBaseSaver,
         save_async: bool = True,
     ) -> None:
-        self.index: dict[int, int] = {}  # translation of permId to orderId
-        self.setitemEvent = ev.Event("setitemEvent")
-        self.setitemEvent += self.onSetitemEvent
-        self.saver = AsyncSaveManager(saver) if save_async else saver
+        self.saver = (
+            AsyncSaveManager(saver, name="OrderContainer") if save_async else saver
+        )
         super().__init__()
-
-    def __setitem__(self, key: int, item: OrderInfo) -> None:
-        self.setitemEvent.emit(key, item)
-        super().__setitem__(key, item)
-
-    def __getitem__(self, key: int) -> OrderInfo:
-        if key in self.data:
-            return self.data[key]
-        elif key in self.index:
-            if self.index[key] in self.data:
-                return self.data[self.index[key]]
-        if hasattr(self.__class__, "__missing__"):
-            return self.__class__.__missing__(self, key)  # type: ignore
-        raise KeyError(key)
-
-    def __delitem__(self, key: int) -> None:
-        if self.index.get(self.data[key].permId):
-            del self.index[self.data[key].permId]
-        super().__delitem__(key)
-
-    async def onSetitemEvent(self, key: int, item: OrderInfo) -> None:
-        while not item.permId:
-            await asyncio.sleep(0)
-        self.index[item.permId] = key
 
     def strategy(self, strategy: str) -> Iterator[OrderInfo]:
         """Get active orders associated with strategy."""
@@ -259,7 +234,9 @@ class StrategyContainer(UserDict):
         # will automatically save strategies to db on every change
         # (but not more often than defined in CONFIG['state_machine']['save_delay'])
         self.strategyChangeEvent += self.save
-        self.saver = AsyncSaveManager(saver) if save_async else saver
+        self.saver = (
+            AsyncSaveManager(saver, name="StrategyContainer") if save_async else saver
+        )
         super().__init__()
 
     def __setitem__(self, key: str, item: dict):
