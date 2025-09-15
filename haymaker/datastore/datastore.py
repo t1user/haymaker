@@ -258,7 +258,7 @@ class ArcticStore(AbstractBaseStore):
             return {}
 
     def write_metadata(
-        self, symbol: ibi.Contract | str, meta: dict[str, Any]
+        self, symbol: str | ibi.Contract, meta: dict[str, Any]
     ) -> VersionedItem | None:
         return self.store.write_metadata(
             self._symbol(symbol), self._update_metadata(symbol, meta)
