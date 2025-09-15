@@ -76,11 +76,14 @@ class FutureRoller:
         All previous properties are intermediate steps to get this one
         piece of information.
         """
-        # filter out contracts with zero position
-        positions = [future for future, position in self.positions.items() if position]
+        # filter out contracts with zero position (??? this is wrong ???)
+        # we don't want to filter zeros as positions that cancel each other
+        # still have sl/tp orders that need to be rolled
+        # positions = [future for future, position in self.positions.items() if position]
         # difference between contracts we hold vs active contracts
-        contracts_to_roll = set(positions) - self.futures
-        return contracts_to_roll
+        # not removing before I make sure it works
+        # TODO
+        return set(self.positions) - self.futures
 
     def positions_by_strategy_for_contract(
         self, contract: ibi.Future
