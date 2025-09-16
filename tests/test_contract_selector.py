@@ -241,6 +241,7 @@ def test_set_selector_params(details_chain):
 
 def test_correct_last_trading_day(details_chain):
     selector = selector_factory(details_chain)
+    selector.today = datetime(2025, 6, 20, 0, 0)
     assert selector._active_contract().last_trading_day == datetime(2025, 9, 19, 0, 0)
 
 
