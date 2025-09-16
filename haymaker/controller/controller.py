@@ -684,6 +684,8 @@ class Controller(Atom):
                     f"{strategy} | {action} | {order}"
                 )
                 self.sm.register_rejected_order(strategy.strategy)
+            elif errorCode in (321, 322, 323):
+                log.info(f"{errorString} {errorCode=}")
 
             else:
                 log.error(

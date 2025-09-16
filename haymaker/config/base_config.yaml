@@ -9,6 +9,7 @@ ignore_errors:
   - 2158  # Sec-def data farm connection is OK
   - 2110  # Connectivity between Trader Workstation and server is broken. It will be restored automatically.
   - 202  # Order cancelled
+  - 321 # Server error while validating an API request; frequently fired for no reason
   # Consider silencing 2103 - Market data connection is broken
 
 log_broker: False # if additional logger with all broker messages should be created

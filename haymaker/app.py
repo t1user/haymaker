@@ -190,6 +190,8 @@ class App:
         try:
             await CONTROLLER.run()
             await self.jobs()
+        except ConnectionError as ce:
+            log.info(f"Connection fault: {ce}")
         except Exception as e:
             log.exception(e)
             # raise
