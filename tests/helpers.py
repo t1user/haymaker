@@ -3,7 +3,7 @@ from typing import Callable
 
 
 async def wait_for_condition(
-    condition: Callable[[], bool], timeout: float = 1, interval: float = 0.0005
+    condition: Callable[[], bool], timeout: float = 0.5, interval: float = 0.0005
 ) -> bool:
     """
     Wait until condition() returns True or timeout is reached.  Meant

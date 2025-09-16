@@ -514,6 +514,7 @@ async def test_StrategyContainer_gets_events_on_Strategy_change():
     # make sure there is one emit
     assert await wait_for_condition(lambda: c.count == 1)
     # and then however long we wait no more emits
+    # this should  time out never reaching value 2
     assert not await wait_for_condition(lambda: c.count == 2)
 
 
