@@ -32,7 +32,11 @@ class FutureRoller:
         """
         List of active contracts that are futures.
         """
-        return set([f for f in self.controller.contracts if isinstance(f, ibi.Future)])
+        futures = set(
+            [f for f in self.controller.contracts if isinstance(f, ibi.Future)]
+        )
+        log.debug(f"Current active futures: {[fut.localSymbol for fut in futures]}")
+        return futures
 
     @cached_property
     def strategies(self) -> dict[ibi.Future, list[str]]:
@@ -61,7 +65,16 @@ class FutureRoller:
         dict for such contracts.
         """
         return {
-            fut: sum([self.sm.strategy[name].position for name in strategy_names])
+            # sum of non-zero position will still be zero for
+            # positions that cancel each other
+            fut: sum(
+                [
+                    position
+                    for name in strategy_names
+                    # only strategies that have position will be taken into account
+                    if (position := self.sm.strategy[name].position)
+                ]
+            )
             for fut, strategy_names in self.strategies.items()
         }
 
@@ -76,13 +89,6 @@ class FutureRoller:
         All previous properties are intermediate steps to get this one
         piece of information.
         """
-        # filter out contracts with zero position (??? this is wrong ???)
-        # we don't want to filter zeros as positions that cancel each other
-        # still have sl/tp orders that need to be rolled
-        # positions = [future for future, position in self.positions.items() if position]
-        # difference between contracts we hold vs active contracts
-        # not removing before I make sure it works
-        # TODO
         return set(self.positions) - self.futures
 
     def positions_by_strategy_for_contract(

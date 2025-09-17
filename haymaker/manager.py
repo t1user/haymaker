@@ -77,6 +77,7 @@ class InitData:
                 selector.next_contract
             )
         log.debug("InitData done...")
+        log.debug(f"{self.contract_dict=}")
         return self
 
     async def acquire_contract_details(
