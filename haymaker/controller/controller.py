@@ -155,6 +155,7 @@ class Controller(Atom):
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
+        log.debug(f"{self.contracts=}")
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)

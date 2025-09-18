@@ -8,7 +8,7 @@ from collections import UserDict
 from dataclasses import fields
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, TypeAlias
 from zoneinfo import ZoneInfo
 
 import ib_insync as ibi
@@ -350,8 +350,13 @@ def contractAsTuple(contract: ibi.Contract) -> tuple:
     )
 
 
-def hash_contract(contract: ibi.Contract) -> int:
-    return hash(contractAsTuple(contract))
+ContractKey: TypeAlias = str
+
+
+def hash_contract(contract: ibi.Contract) -> ContractKey:
+    return str(contract)
+    # return tuple(ibi.util.dataclassNonDefaults(contract).items())
+    # return hash(contractAsTuple(contract))
 
 
 def general_to_specific_contract_class(contract: ibi.Contract) -> ibi.Contract:

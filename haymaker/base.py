@@ -20,7 +20,13 @@ from typing import (
 
 import ib_insync as ibi
 
-from .misc import hash_contract, is_active, next_active, process_trading_hours
+from .misc import (
+    ContractKey,
+    hash_contract,
+    is_active,
+    next_active,
+    process_trading_hours,
+)
 
 if TYPE_CHECKING:
     from .state_machine import StateMachine, Strategy
@@ -32,6 +38,9 @@ log = logging.getLogger(__name__)
 class ActiveNext(Enum):
     ACTIVE = auto()
     NEXT = auto()
+
+    def __str__(self) -> str:
+        return self.name
 
 
 ContractOrSequence = Sequence[ibi.Contract] | ibi.Contract
@@ -98,7 +107,7 @@ class ContractManagingDescriptor:
     @_apply_to_contract_or_sequence
     def _get_contract(
         contract: ibi.Contract | None,
-        contract_dict: dict[tuple[int, ActiveNext], ibi.Contract],
+        contract_dict: dict[tuple[ContractKey, ActiveNext], ibi.Contract],
         active_next: ActiveNext,
     ) -> list[ibi.Contract] | ibi.Contract | None:
         if contract is None:
@@ -110,7 +119,7 @@ class ContractManagingDescriptor:
     @_apply_to_contract_or_sequence
     def _append_to_dict(
         contract: ibi.Contract,
-        contract_dict: dict[tuple[int, ActiveNext], ibi.Contract],
+        contract_dict: dict[tuple[ContractKey, ActiveNext], ibi.Contract],
         atom: Atom,
     ) -> None:
         contract_dict[(hash_contract(contract), ActiveNext.ACTIVE)] = contract
@@ -271,7 +280,7 @@ class Atom:
     ib: ClassVar[ibi.IB]
     sm: ClassVar[StateMachine]
     contract_details: ClassVar[DetailsContainer] = DetailsContainer()
-    contract_dict: ClassVar[dict[tuple[int, ActiveNext], ibi.Contract]] = {}
+    contract_dict: ClassVar[dict[tuple[ContractKey, ActiveNext], ibi.Contract]] = {}
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",

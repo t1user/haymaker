@@ -144,7 +144,7 @@ class TestAtom:
 
         atom = Atom()
         atom.which_contract = ActiveNext.NEXT
-        assert repr(atom) == "Atom(which_contract=ActiveNext.NEXT)"
+        assert repr(atom) == "Atom(which_contract=NEXT)"
 
     def test_no_duplicate_connections(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)

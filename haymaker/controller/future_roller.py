@@ -32,6 +32,8 @@ class FutureRoller:
         """
         List of active contracts that are futures.
         """
+        # controller is an Atom, so `controller.contracts` is a descriptor
+        # on :class:`Atom`
         futures = set(
             [f for f in self.controller.contracts if isinstance(f, ibi.Future)]
         )

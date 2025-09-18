@@ -158,7 +158,8 @@ def test_contractAsTuple_works_for_every_contract_type_except_for_bag(contract):
 
 
 def test_hash_contract():
-    assert isinstance(hash_contract(ibi.ContFuture("NQ", "CME")), int)
+    # test if result hashable
+    hash(hash_contract(ibi.ContFuture("NQ", "CME")))
 
 
 def test_general_to_specific_contract_class():

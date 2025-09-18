@@ -35,9 +35,9 @@ USE_BLOTTER = CONFIG["use_blotter"]
 class InitData:
     ib: ibi.IB
     # contract_dict and contract details are saved on Atom class
-    contract_dict: dict[tuple[int, ActiveNext], ibi.Contract]
+    contract_dict: dict[tuple[misc.ContractKey, ActiveNext], ibi.Contract]
     contract_details: DetailsContainer
-    _contracts: dict[tuple[int, ActiveNext], ibi.Contract] = field(
+    _contracts: dict[tuple[misc.ContractKey, ActiveNext], ibi.Contract] = field(
         default_factory=dict, repr=False
     )
 
@@ -77,7 +77,15 @@ class InitData:
                 selector.next_contract
             )
         log.debug("InitData done...")
-        log.debug(f"{self.contract_dict=}")
+        contract_dict_str = "\n".join(
+            [
+                f"{str(k[0])}_{str(k[1])}: {v.localSymbol}"
+                for k, v in self.contract_dict.items()
+            ]
+        )
+        log.debug(
+            f"contract_dict {len(self.contract_dict)} items:\n{contract_dict_str}\n"
+        )
         return self
 
     async def acquire_contract_details(
