@@ -7,21 +7,15 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
-from typing import Awaitable, ClassVar, DefaultDict
+from typing import Awaitable, ClassVar
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from haymaker.base import Atom
-from haymaker.config import CONFIG as config
-
-from .timeout import TimeoutContainerDefaultdict
+from haymaker.timeout import Timeout
 
 log = logging.getLogger(__name__)
-
-
-CONFIG = config.get("streamer") or {}
-TIMEOUT_TIME = CONFIG["timeout"]["time"]
 
 
 _counter = itertools.count().__next__
@@ -29,11 +23,7 @@ _counter = itertools.count().__next__
 
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
-    timeout: float = TIMEOUT_TIME
     _name: str = ""
-    _timers: DefaultDict["Streamer", dict[str, ev.Event]] = (
-        TimeoutContainerDefaultdict()
-    )
 
     def __new__(cls, *args, **kwargs):
         # Keep track of all :class:`.Streamer` instances created so that they
@@ -54,7 +44,7 @@ class Streamer(Atom, ABC):
     def streaming_func(self):
         raise NotImplementedError
 
-    async def run(self):
+    async def run(self) -> None:
         """
         Start subscription and start emitting data.  This is the main
         entry point into the streamer.
@@ -65,44 +55,33 @@ class Streamer(Atom, ABC):
 
     def onStart(self, data, *args) -> None:
         ticker = self.streaming_func()
-        self.timers["ticks"] = ticker.updateEvent
+        # automatically monitor updateEvent on streaming_func for
+        # stale data
+        Timeout.from_atom(self, ticker.updateEvent, "ticks")
         ticker.updateEvent += self.dataEvent
         # relies on superclass to emit startEvent
         super().onStart(data)
-
-    @property
-    def timers(self) -> dict[str, ev.Event]:
-        return self._timers[self]
-
-    @timers.setter
-    def timers(self, event: ev.Event) -> None:
-        raise ValueError(
-            "timers cannot be overridden, use: `self.timers[key] = event` to add timer"
-        )
 
     @cached_property
     def _id(self) -> int:
         return _counter()
 
     @property
-    def name(self):
+    def name(self) -> str:
         if self._name:
             return self._name
         elif getattr(self, "contract", None):
             identifier = self.contract.symbol
         else:
-            identifier = self._id
+            identifier = str(self._id)
         return f"{self.__class__.__name__}<{identifier}>"
 
     @name.setter
-    def name(self, value):
+    def name(self, value: str) -> None:
         self._name = value
 
     def __str__(self) -> str:
         return self.name
-
-    def __hash__(self):
-        return hash(id(self))
 
 
 @dataclass
@@ -113,7 +92,6 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # don't change
-    timeout: float = TIMEOUT_TIME
     incremental_only: bool = True
     startup_seconds: float = 5
     _last_bar_date: datetime | None = None
@@ -153,7 +131,7 @@ class HistoricalDataStreamer(Streamer):
     def onStart(self, data, *args) -> None:
         # this starts subscription so that current price is readily available from ib
         stream = self.ib.reqMktData(self.contract, "221")
-        self.timers["ticks"] = stream.updateEvent
+        Timeout.from_atom(self, stream.updateEvent, "ticks")
         # bypass onStart in class Streamer
         Atom.onStart(self, data)
 
@@ -216,7 +194,7 @@ class HistoricalDataStreamer(Streamer):
             log.debug(f"{self.name} duration str: {self.durationStr}")
 
         bars = await self.streaming_func()
-        self.timers["bars"] = bars.updateEvent
+        Timeout.from_atom(self, bars.updateEvent, "bars")
         log.debug(f"Historical bars received for {self.contract.localSymbol}")
 
         backfill_predicate = (
@@ -284,7 +262,6 @@ class HistoricalDataStreamer(Streamer):
 class MktDataStreamer(Streamer):
     contract: ibi.Contract
     tickList: str
-    timeout: float = TIMEOUT_TIME
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -302,7 +279,6 @@ class RealTimeBarsStreamer(Streamer):
     whatToShow: str
     useRTH: bool
     incremental_only: bool = True
-    timeout: float = TIMEOUT_TIME
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -322,7 +298,7 @@ class RealTimeBarsStreamer(Streamer):
     def _run(self):
         bars = self.streaming_func()
         bars.updateEvent.clear()
-        self.timers["bars"] = bars.updateEvent
+        Timeout.from_atom(self, bars.updateEvent, "bars")
         bars.updateEvent += self.onUpdate
 
     def onUpdate(self, bars, hasNewBar):
@@ -342,7 +318,6 @@ class TickByTickStreamer(Streamer):
     tickType: str
     numberOfTicks: int = 0
     ignoreSize: bool = False
-    timeout: float = TIMEOUT_TIME
 
     def __post_init__(self):
         Atom.__init__(self)

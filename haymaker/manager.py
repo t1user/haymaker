@@ -17,6 +17,7 @@ from .controller import Controller
 from .databases import HEALTH_CHECK_OBSERVABLES
 from .state_machine import StateMachine
 from .streamers import Streamer
+from .timeout import Timeout
 from .trader import Trader
 
 log = logging.getLogger(__name__)
@@ -77,15 +78,13 @@ class InitData:
                 selector.next_contract
             )
         log.debug("InitData done...")
-        contract_dict_str = "\n".join(
+        contract_dict_str = " | ".join(
             [
                 f"{str(k[0])}_{str(k[1])}: {v.localSymbol}"
                 for k, v in self.contract_dict.items()
             ]
         )
-        log.debug(
-            f"contract_dict {len(self.contract_dict)} items:\n{contract_dict_str}\n"
-        )
+        log.debug(f"contract_dict {len(self.contract_dict)} items: {contract_dict_str}")
         return self
 
     async def acquire_contract_details(
@@ -143,8 +142,8 @@ class Jobs:
                 )
             )
         log.info(f"Orders on restart: {dict(order_dict)}")
+        Timeout.reset()
         log.debug("Run streamers --->")
-
         await asyncio.gather(
             *[
                 asyncio.create_task(streamer.run(), name=f"{streamer!s}, ")
@@ -167,6 +166,7 @@ INIT_DATA = InitData(IB, Atom.contract_dict, Atom.contract_details)
 JOBS = Jobs(INIT_DATA)
 STATE_MACHINE = StateMachine()
 Atom.set_init_data(IB, STATE_MACHINE)
+Timeout.set_ib(IB)
 log.debug("Will initialize Controller")
 trader = Trader(IB)
 blotter = blotter_factory(USE_BLOTTER)

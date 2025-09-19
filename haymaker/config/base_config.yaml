@@ -48,13 +48,13 @@ state_machine:
   # number of attempts after which failed type of order for a contract will be suppressed
   max_rejected_orders: 3 
   
-streamer:
-  # timeout triggered after streamer hasn't received data for given amount of seconds
-  timeout:
-    # behaviour after timeout triggered
-    debug: False # debug: True -> log; debug: False -> restart
-    # number of seconds after which timeout triggered
-    time: 300 # zero means no timeout, can also be set individually on every streamer instance
+
+# timeout triggered after no data have been received for given amount of seconds
+timeout:
+  # behaviour after timeout triggered
+  debug: False # debug: True -> log; debug: False -> restart
+  # number of seconds after which timeout triggered
+  time: 300 # zero means no timeout
 
 
 use_blotter: True
