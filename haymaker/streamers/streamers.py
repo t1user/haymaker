@@ -6,7 +6,8 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Awaitable, Callable, ClassVar, DefaultDict
+from functools import cached_property
+from typing import Awaitable, ClassVar, DefaultDict
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -23,11 +24,13 @@ CONFIG = config.get("streamer") or {}
 TIMEOUT_TIME = CONFIG["timeout"]["time"]
 
 
+_counter = itertools.count().__next__
+
+
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
     timeout: float = TIMEOUT_TIME
-    _counter: ClassVar[Callable[[], int]] = itertools.count().__next__
-    _name: str | None = None
+    _name: str = ""
     _timers: DefaultDict["Streamer", dict[str, ev.Event]] = (
         TimeoutContainerDefaultdict()
     )
@@ -77,6 +80,10 @@ class Streamer(Atom, ABC):
             "timers cannot be overridden, use: `self.timers[key] = event` to add timer"
         )
 
+    @cached_property
+    def _id(self) -> int:
+        return _counter()
+
     @property
     def name(self):
         if self._name:
@@ -84,7 +91,7 @@ class Streamer(Atom, ABC):
         elif getattr(self, "contract", None):
             identifier = self.contract.symbol
         else:
-            identifier = self._counter()
+            identifier = self._id
         return f"{self.__class__.__name__}<{identifier}>"
 
     @name.setter

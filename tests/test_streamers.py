@@ -39,6 +39,8 @@ def test_StreamerId():
     assert s0.name == "ConcreteStreamer<0>"
     assert s1.name == "ConcreteStreamer<1>"
     assert s2.name == "my_streamer"
+    # repeated calls should not create another id
+    assert s0.name == "ConcreteStreamer<0>"
 
 
 def test_StreamerId_dataclass():
