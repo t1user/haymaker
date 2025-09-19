@@ -23,7 +23,6 @@ _counter = itertools.count().__next__
 
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
-    _name: str = ""
 
     def __new__(cls, *args, **kwargs):
         # Keep track of all :class:`.Streamer` instances created so that they
@@ -66,22 +65,13 @@ class Streamer(Atom, ABC):
     def _id(self) -> int:
         return _counter()
 
-    @property
-    def name(self) -> str:
-        if self._name:
-            return self._name
-        elif getattr(self, "contract", None):
-            identifier = self.contract.symbol
-        else:
-            identifier = str(self._id)
-        return f"{self.__class__.__name__}<{identifier}>"
-
-    @name.setter
-    def name(self, value: str) -> None:
-        self._name = value
-
     def __str__(self) -> str:
-        return self.name
+        identifier = [str(self._id)]
+        if contract := getattr(self, "contract", None):
+            identifier.append(contract.symbol)
+        if name := getattr(self, "name", None):
+            identifier.append(name)
+        return f"{self.__class__.__name__}<{"><".join(identifier)}>"
 
 
 @dataclass
@@ -143,7 +133,7 @@ class HistoricalDataStreamer(Streamer):
         # release control to allow for adjustments down the chain
         # await asyncio.sleep(0)
         log.debug(
-            f"Starting backfill {self.name}, pulled {len(bars)} bars, "
+            f"Starting backfill {self!s}, pulled {len(bars)} bars, "
             f"last bar: {bars[-1]}"
         )
         if self._last_bar_date and self._future_adjust_flag:
@@ -180,7 +170,7 @@ class HistoricalDataStreamer(Streamer):
         await stream
         await asyncio.sleep(self.startup_seconds)  # time in which backfill must happen
         log.info(
-            f"{self.name} backfilled from {self._last_bar_date or bars[0].date} to "
+            f"{self!s} backfilled from {self._last_bar_date or bars[0].date} to "
             f"{bars[-2].date}"
         )
         # let processor know backfill is finished
@@ -191,7 +181,7 @@ class HistoricalDataStreamer(Streamer):
         self.onStart({})
         if self._last_bar_date:
             self.durationStr = f"{self.date_to_delta(self._last_bar_date)} S"
-            log.debug(f"{self.name} duration str: {self.durationStr}")
+            log.debug(f"{self!s} duration str: {self.durationStr}")
 
         bars = await self.streaming_func()
         Timeout.from_atom(self, bars.updateEvent, "bars")
@@ -254,9 +244,6 @@ class HistoricalDataStreamer(Streamer):
         else:
             log.warning("onContractChanged triggered on non-future Contract")
 
-    def __hash__(self):
-        return hash(id(self))
-
 
 @dataclass
 class MktDataStreamer(Streamer):
@@ -268,9 +255,6 @@ class MktDataStreamer(Streamer):
 
     def streaming_func(self) -> ibi.Ticker:
         return self.ib.reqMktData(self.contract, self.tickList)
-
-    def __hash__(self):
-        return hash(id(self))
 
 
 @dataclass
@@ -308,9 +292,6 @@ class RealTimeBarsStreamer(Streamer):
             else:
                 self.dataEvent.emit(bars)
 
-    def __hash__(self):
-        return hash(id(self))
-
 
 @dataclass
 class TickByTickStreamer(Streamer):
@@ -329,6 +310,3 @@ class TickByTickStreamer(Streamer):
             numberOfTicks=self.numberOfTicks,
             ignoreSize=self.ignoreSize,
         )
-
-    def __hash__(self):
-        return hash(id(self))
