@@ -280,7 +280,7 @@ class StrategyContainer(UserDict):
     def strategies_by_contract(self) -> defaultdict[ibi.Contract, list[str]]:
         d: defaultdict[ibi.Contract, list[str]] = defaultdict(list)
         for data in self.data.values():
-            if data.active_contract:
+            if data.active_contract and data.position:
                 d[data.active_contract].append(data.strategy)
         return d
 

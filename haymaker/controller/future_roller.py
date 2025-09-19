@@ -44,14 +44,25 @@ class FutureRoller:
     def strategies(self) -> dict[ibi.Future, list[str]]:
         """
         Dict of future contracts with corresponding lists of
-        strategies for those contracts regardless of whether those
-        strategies have open positions.
+        strategies for those contracts excluding strategies that
+        shouldn't be rolled.  Future will appear in the dict only if
+        at least one strategy has active position in it.
         """
         strategies = {
-            fut: [i for i in strategy_list if i not in self.excluded_strategies]
+            fut: [
+                i
+                for i in strategy_list
+                if (i not in self.excluded_strategies) and strategy_list
+            ]
             for fut, strategy_list in self.sm.strategy.strategies_by_contract().items()
             if isinstance(fut, ibi.Future)
         }
+
+        debug_string = {
+            fut.localSymbol: strategy_list for fut, strategy_list in strategies.items()
+        }
+        log.debug(f"strategies: {debug_string}")
+
         return strategies
 
     @cached_property
@@ -66,19 +77,15 @@ class FutureRoller:
         orders must be rolled, so it's crucial to have an entry in the
         dict for such contracts.
         """
-        return {
-            # sum of non-zero position will still be zero for
-            # positions that cancel each other
-            fut: sum(
-                [
-                    position
-                    for name in strategy_names
-                    # only strategies that have position will be taken into account
-                    if (position := self.sm.strategy[name].position)
-                ]
-            )
+        positions = {
+            fut: sum([self.sm.strategy[name].position for name in strategy_names])
             for fut, strategy_names in self.strategies.items()
         }
+        debug_string = {
+            fut.localSymbol: position for fut, position in positions.items()
+        }
+        log.debug(f"positions: {debug_string}")
+        return positions
 
     @cached_property
     def contracts_to_roll(self) -> set:
@@ -91,7 +98,9 @@ class FutureRoller:
         All previous properties are intermediate steps to get this one
         piece of information.
         """
-        return set(self.positions) - self.futures
+        ctr = set(self.positions) - self.futures
+        log.debug(f"contracts to roll: {[c.localSymbol for c in ctr]}")
+        return ctr
 
     def positions_by_strategy_for_contract(
         self, contract: ibi.Future
