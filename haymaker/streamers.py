@@ -71,7 +71,7 @@ class Streamer(Atom, ABC):
             identifier.append(contract.symbol)
         if name := getattr(self, "name", None):
             identifier.append(name)
-        return f"{self.__class__.__name__}<{"><".join(identifier)}>"
+        return f"{self.__class__.__name__}<{'><'.join(identifier)}>"
 
 
 @dataclass
