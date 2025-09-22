@@ -38,7 +38,7 @@ class TqdmLoggingHandler(logging.Handler):
 
 
 class UTCFormatter(logging.Formatter):
-    converter = time.gmtime
+    converter = time.gmtime  # type: ignore[assignment]
 
 
 def filename_from_kwargs(**kwargs):
