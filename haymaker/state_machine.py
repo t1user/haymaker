@@ -25,9 +25,6 @@ STRATEGY_COLLECTION_NAME = CONFIG.get("strategy_collection_name", "strategies")
 ORDER_COLLECTION_NAME = CONFIG.get("order_collection_name", "orders")
 MAX_REJECTED_ORDERS = CONFIG.get("max_rejected_orders", 3)
 
-STRATEGY_SAVER = MongoLatestSaver(STRATEGY_COLLECTION_NAME)
-ORDER_SAVER = MongoSaver(ORDER_COLLECTION_NAME, query_key="orderId")
-
 
 @dataclass
 class OrderInfo:
@@ -359,8 +356,10 @@ class StateMachine:
 
     def __init__(
         self,
-        order_saver: AbstractBaseSaver = ORDER_SAVER,
-        strategy_saver: AbstractBaseSaver = STRATEGY_SAVER,
+        order_saver: AbstractBaseSaver = MongoSaver(
+            ORDER_COLLECTION_NAME, query_key="orderId"
+        ),
+        strategy_saver: AbstractBaseSaver = MongoLatestSaver(STRATEGY_COLLECTION_NAME),
         save_async: bool = True,
     ) -> None:
         # dict of OrderInfo
