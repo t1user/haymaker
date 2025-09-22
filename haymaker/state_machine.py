@@ -356,12 +356,16 @@ class StateMachine:
 
     def __init__(
         self,
-        order_saver: AbstractBaseSaver = MongoSaver(
-            ORDER_COLLECTION_NAME, query_key="orderId"
-        ),
-        strategy_saver: AbstractBaseSaver = MongoLatestSaver(STRATEGY_COLLECTION_NAME),
+        order_saver: AbstractBaseSaver | None = None,
+        strategy_saver: AbstractBaseSaver | None = None,
         save_async: bool = True,
     ) -> None:
+
+        if order_saver is None:
+            order_saver = MongoSaver(ORDER_COLLECTION_NAME, query_key="orderId")
+        if strategy_saver is None:
+            strategy_saver = MongoLatestSaver(STRATEGY_COLLECTION_NAME)
+
         # dict of OrderInfo
         self._orders = OrderContainer(order_saver, save_async=save_async)
         # dict of Strategy data (same as ExecModel data)

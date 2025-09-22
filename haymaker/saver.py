@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import pandas as pd
 

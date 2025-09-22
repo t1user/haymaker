@@ -24,14 +24,8 @@ class FakeMongoSaver(AbstractBaseSaver):
 
     store: dict[str, dict | list[dict]] = {}
 
-    def __init__(
-        self, collection: str, query_key: str | None = None, timestamp: bool = False
-    ) -> None:
-        host = "fakehostname"
-        port = 9999
-        db = "test"
-        self.client = f"MongoClient({host}, {port})"
-        self.db = f"{self.client}[{db}]"
+    def __init__(self, collection: str, query_key: str | None = None) -> None:
+
         self.collection = collection
         self.query_key = query_key
 
@@ -40,7 +34,7 @@ class FakeMongoSaver(AbstractBaseSaver):
         else:
             self.store[self.collection] = []
 
-    def save(self, data: dict[str, Any], *args: str) -> None:
+    def save(self, data: dict[str, Any], /, *args: str) -> None:
         try:
             if self.query_key:
                 key = data.get(self.query_key)
@@ -54,14 +48,7 @@ class FakeMongoSaver(AbstractBaseSaver):
             log.debug(f"Data that caused error: {data}")
             raise
 
-    def save_many(self, data: list[dict[str, Any]]):
-        for d in data:
-            if self.query_key:
-                self.store[self.collection][d.get(self.query_key)]  # type: ignore
-            else:
-                self.store[self.collection].append(d)  # type: ignore
-
-    def read(self, key: dict | None = None) -> list:
+    def read(self, key: dict | None = None, /, *args) -> list:
         s = self.store[self.collection]
         if key:
             try:
@@ -71,7 +58,9 @@ class FakeMongoSaver(AbstractBaseSaver):
         else:
             return s  # type: ignore
 
-    def read_latest(self):
+
+class FakeMongoLatestSaver(FakeMongoSaver):
+    def read(self, *args):
         s = self.store[self.collection]
         try:
             return s[s.keys()[-1]]  # type: ignore
@@ -86,7 +75,7 @@ def order_saver():
 
 @pytest.fixture
 def strategy_saver():
-    return FakeMongoSaver("models")
+    return FakeMongoLatestSaver("models")
 
 
 @pytest.fixture
