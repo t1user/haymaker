@@ -328,6 +328,7 @@ class FutureSelector(AbstractBaseContractSelector):
 
     @cached_property
     def back_roll_days(self) -> dict[ibi.Future, datetime]:
+        # roll date for every contract
         return {c.contract: c.roll_day for c in self.back_contracts}
 
     @staticmethod

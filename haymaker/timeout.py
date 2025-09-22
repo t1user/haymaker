@@ -129,7 +129,7 @@ class Timeout:
         if not self.details:
             self.triggered_action()
         else:
-            log.debug(f" Market open?: {self.details.is_open(self._now)}")
+            log.debug(f"{self!s} Market open?: {self.details.is_open(self._now)}")
 
             if self.details.is_open(self._now):
                 self.triggered_action()

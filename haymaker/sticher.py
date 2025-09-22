@@ -89,6 +89,7 @@ class FuturesSticher:
 
     @cached_property
     def _contracts(self) -> dict[ibi.Future, str]:
+        # contracts are not sorted, `_selector` will sort them
         return {
             future: symbol
             for future, symbol in {
@@ -120,10 +121,11 @@ class FuturesSticher:
 
     @cached_property
     def _df_list(self) -> list[tuple[pd.DataFrame, datetime]]:
+        # This method reads data from database
         assert len(self._target_symbols) == len(self._selector.back_roll_days)
         return [
             (
-                # df is not None because _target_symbols has only symbols
+                # df is not None because `_target_symbols` has only symbols
                 # that exist in database
                 (df := self.store.read(self._contracts[contract])),
                 pd.Timestamp(roll_date, tz=df.index.tzinfo),  # type: ignore

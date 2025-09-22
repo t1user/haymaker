@@ -11,7 +11,6 @@ from arctic.date import DateRange  # type: ignore
 from arctic.exceptions import NoDataFoundException  # type: ignore
 from arctic.store.versioned_item import VersionedItem  # type: ignore
 
-from haymaker.databases import get_mongo_client
 from haymaker.validators import bar_size_validator, wts_validator
 
 if TYPE_CHECKING:
@@ -184,6 +183,8 @@ class ArcticStore(AbstractBaseStore):
             `barSize` parameter of :meth:`ib_insync.ib.reqHistoricalData`
 
         """
+        from haymaker.databases import get_mongo_client
+
         _wts = wts_validator(wts)
         _barSize = bar_size_validator(barSize)
         client = get_mongo_client()
