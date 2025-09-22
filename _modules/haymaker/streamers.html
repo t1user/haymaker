@@ -4,31 +4,31 @@
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html" /><link rel="search" title="Search" href="../../search.html" />
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
+    <!-- Generated with Sphinx 8.2.3 and Furo 2025.07.19 -->
         <title>haymaker.streamers - Haymaker documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=354aac6f" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=302659d7" />
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=25af2a20" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
 
 
 <style>
   body {
-    --color-code-background: #f8f8f8;
-  --color-code-foreground: black;
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
   
   }
   @media not print {
     body[data-theme="dark"] {
-      --color-code-background: #202020;
-  --color-code-foreground: #d0d0d0;
+      --color-code-background: #2b2b2b;
+  --color-code-foreground: #f8f8f2;
   
     }
     @media (prefers-color-scheme: dark) {
       body:not([data-theme="light"]) {
-        --color-code-background: #202020;
-  --color-code-foreground: #d0d0d0;
+        --color-code-background: #2b2b2b;
+  --color-code-foreground: #f8f8f2;
   
       }
     }
@@ -188,7 +188,6 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  
   <span class="sidebar-brand-text">Haymaker  documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
@@ -254,162 +253,27 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">itertools</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ABC</span><span class="p">,</span> <span class="n">abstractmethod</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">UserDict</span><span class="p">,</span> <span class="n">defaultdict</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Awaitable</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">ClassVar</span><span class="p">,</span> <span class="n">DefaultDict</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">cached_property</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Awaitable</span><span class="p">,</span> <span class="n">ClassVar</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">eventkit</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ev</span>  <span class="c1"># type: ignore</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Atom</span><span class="p">,</span> <span class="n">Details</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">CONFIG</span> <span class="k">as</span> <span class="n">config</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Atom</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker.timeout</span><span class="w"> </span><span class="kn">import</span> <span class="n">Timeout</span>
 
 <span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
 
 
-<span class="n">CONFIG</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;streamer&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>
-<span class="n">TIMEOUT_DEBUG</span> <span class="o">=</span> <span class="n">CONFIG</span><span class="p">[</span><span class="s2">&quot;timeout&quot;</span><span class="p">][</span><span class="s2">&quot;debug&quot;</span><span class="p">]</span>
-<span class="n">TIMEOUT_TIME</span> <span class="o">=</span> <span class="n">CONFIG</span><span class="p">[</span><span class="s2">&quot;timeout&quot;</span><span class="p">][</span><span class="s2">&quot;time&quot;</span><span class="p">]</span>
-
-
-<span class="nd">@dataclass</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">Timeout</span><span class="p">:</span>
-    <span class="n">time</span><span class="p">:</span> <span class="nb">float</span>
-    <span class="n">event</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span>
-    <span class="n">ib</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">IB</span>
-    <span class="n">details</span><span class="p">:</span> <span class="n">Details</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-    <span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="n">TIMEOUT_DEBUG</span>
-    <span class="n">_timeout</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="nb">repr</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-    <span class="n">_now</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># for testing only</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">time</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">event</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_on_timeout_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> Timeout broken... </span><span class="si">{</span><span class="n">args</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-
-    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">_timeout_callback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Cannot set timout, no trading hours details.&quot;</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">log</span><span class="p">(</span>
-                <span class="mi">5</span><span class="p">,</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> - No data for </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">time</span><span class="si">}</span><span class="s2"> secs. Market open?: &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">is_open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_now</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-            <span class="p">)</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">is_open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_now</span><span class="p">):</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">triggered_action</span><span class="p">()</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="n">reactivate_time</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">next_open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_now</span><span class="p">)</span>
-
-                <span class="n">sleep_time</span> <span class="o">=</span> <span class="p">(</span><span class="n">reactivate_time</span> <span class="o">-</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">tz</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">))</span><span class="o">.</span><span class="n">seconds</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">log</span><span class="p">(</span>
-                    <span class="mi">5</span><span class="p">,</span>
-                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> will sleep till market reopen at: </span><span class="si">{</span><span class="n">reactivate_time</span><span class="si">}</span><span class="s2"> i.e. &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sleep_time</span><span class="si">}</span><span class="s2"> seconds&quot;</span><span class="p">,</span>
-                <span class="p">)</span>
-                <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">sleep_time</span><span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">event</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">triggered_action</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">debug</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Stale streamer </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> Reset?&quot;</span><span class="p">)</span>
-            <span class="k">return</span> <span class="kc">True</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Stale streamer </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> will disconnect ib...&quot;</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">disconnect</span><span class="p">()</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_set_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span> <span class="o">=</span> <span class="n">event</span><span class="o">.</span><span class="n">timeout</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">time</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_timeout_callback</span><span class="p">)</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Timeout set: </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2">&quot;</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Timeout &lt;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">time</span><span class="si">}</span><span class="s2">s&gt; for </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">  event id: </span><span class="si">{</span><span class="nb">id</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-
-
-<span class="k">class</span><span class="w"> </span><span class="nc">TimeoutContainer</span><span class="p">(</span><span class="n">UserDict</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Class that stores and creates timeouts based on parameters extracted from</span>
-<span class="sd">    passed :class:`Streamer` instance.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        streamer: :class:`Streamer` instance, whose streams are being kept alive</span>
-
-
-<span class="sd">    Usage:</span>
-<span class="sd">    .. code-block:: python</span>
-
-<span class="sd">        class MyStreamer(Streamer):</span>
-
-<span class="sd">            def some_meth(self):</span>
-<span class="sd">                ticker = self.streaming_func()</span>
-<span class="sd">                # this ensures streaming event is kept alive</span>
-<span class="sd">                # and timer is added to TimeoutContainerDefaultdict</span>
-<span class="sd">                self.timers[&quot;my_timer&quot;] = ticker.updateEvent</span>
-<span class="sd">                ticker.updateEvent += self.dataEvent</span>
-
-<span class="sd">            def other_meth(self):</span>
-<span class="sd">                # timer is accessible via:</span>
-<span class="sd">                timer = self.timers[&quot;my_timer&quot;]</span>
-
-<span class="sd">        s = MyStreamer()</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">streamer</span><span class="p">:</span> <span class="s2">&quot;Streamer&quot;</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">streamer</span> <span class="o">=</span> <span class="n">streamer</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__setitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">obj</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span><span class="p">):</span>
-            <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">streamer</span><span class="o">.</span><span class="n">details</span><span class="p">,</span> <span class="n">Details</span><span class="p">)</span>
-            <span class="n">obj</span> <span class="o">=</span> <span class="n">Timeout</span><span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">streamer</span><span class="o">.</span><span class="n">timeout</span><span class="p">,</span>
-                <span class="n">obj</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">streamer</span><span class="o">.</span><span class="n">ib</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">streamer</span><span class="o">.</span><span class="n">details</span><span class="p">,</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">streamer</span><span class="p">)</span><span class="si">}</span><span class="s2">-&lt;&lt;</span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">&gt;&gt;&quot;</span><span class="p">,</span>
-            <span class="p">)</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__setitem__</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">obj</span><span class="p">)</span>
-
-
-<span class="k">class</span><span class="w"> </span><span class="nc">TimeoutContainerDefaultdict</span><span class="p">(</span><span class="n">defaultdict</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Container for all timeouts.</span>
-
-<span class="sd">    This is one container shared among all instances of :class:`Streamer`.</span>
-<span class="sd">    * keys are :class:`Streamer` instances - each instance keeps its own dict of</span>
-<span class="sd">      timeouts with unique names; it&#39;s essential that each :class:`Streamer` is hashable</span>
-<span class="sd">    * values are :class:`TimeoutContainer`, which are modified dictionaries, where each</span>
-<span class="sd">        :class:`Streamer` can keep its timeouts with keys unique for that class.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        default_factory: essentially it has to be :type:`TimeoutContainer`</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">default_factory</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">=</span> <span class="n">TimeoutContainer</span><span class="p">):</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">default_factory</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__missing__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">default_factory</span><span class="p">:</span>
-            <span class="bp">self</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">default_factory</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
-        <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+<span class="n">_counter</span> <span class="o">=</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">()</span><span class="o">.</span><span class="fm">__next__</span>
 
 
 <div class="viewcode-block" id="Streamer">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.Streamer">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">Streamer</span><span class="p">(</span><span class="n">Atom</span><span class="p">,</span> <span class="n">ABC</span><span class="p">):</span>
     <span class="n">instances</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="s2">&quot;Streamer&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">TIMEOUT_TIME</span>
-    <span class="n">_counter</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">Callable</span><span class="p">[[],</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">()</span><span class="o">.</span><span class="fm">__next__</span>
-    <span class="n">_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">_timers</span><span class="p">:</span> <span class="n">DefaultDict</span><span class="p">[</span><span class="s2">&quot;Streamer&quot;</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span><span class="p">]]</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">TimeoutContainerDefaultdict</span><span class="p">()</span>
-    <span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="c1"># Keep track of all :class:`.Streamer` instances created so that they</span>
@@ -424,7 +288,7 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">awaitables</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Awaitable</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Coroutines from all instantiated streamers.  Can be passed to</span>
-<span class="sd">        :py:`asyncio.gather`</span>
+<span class="sd">        :py:func:`asyncio.gather`</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="p">[</span><span class="n">s</span><span class="o">.</span><span class="n">run</span><span class="p">()</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">cls</span><span class="o">.</span><span class="n">instances</span><span class="p">]</span></div>
 
@@ -435,7 +299,7 @@
 
 <div class="viewcode-block" id="Streamer.run">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.Streamer.run">[docs]</a>
-    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Start subscription and start emitting data.  This is the main</span>
 <span class="sd">        entry point into the streamer.</span>
@@ -449,41 +313,25 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.Streamer.onStart">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">ticker</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">timers</span><span class="p">[</span><span class="s2">&quot;ticks&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span>
+        <span class="c1"># automatically monitor updateEvent on streaming_func for</span>
+        <span class="c1"># stale data</span>
+        <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
         <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span>
         <span class="c1"># relies on superclass to emit startEvent</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="n">data</span><span class="p">)</span></div>
 
 
-    <span class="nd">@property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">timers</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span><span class="p">]:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_timers</span><span class="p">[</span><span class="bp">self</span><span class="p">]</span>
-
-    <span class="nd">@timers</span><span class="o">.</span><span class="n">setter</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">timers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;timers cannot be overridden, use: `self.timers[key] = event` to add timer&quot;</span>
-        <span class="p">)</span>
-
-    <span class="nd">@property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_name</span><span class="p">:</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_name</span>
-        <span class="k">elif</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;contract&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
-            <span class="n">identifier</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="o">.</span><span class="n">symbol</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">identifier</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_counter</span><span class="p">()</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&lt;</span><span class="si">{</span><span class="n">identifier</span><span class="si">}</span><span class="s2">&gt;&quot;</span>
-
-    <span class="nd">@name</span><span class="o">.</span><span class="n">setter</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_name</span> <span class="o">=</span> <span class="n">value</span>
+    <span class="nd">@cached_property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_id</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_counter</span><span class="p">()</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="nb">hash</span><span class="p">(</span><span class="nb">id</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span></div>
+        <span class="n">identifier</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_id</span><span class="p">)]</span>
+        <span class="k">if</span> <span class="n">contract</span> <span class="o">:=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;contract&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
+            <span class="n">identifier</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">contract</span><span class="o">.</span><span class="n">symbol</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">name</span> <span class="o">:=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
+            <span class="n">identifier</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&lt;</span><span class="si">{</span><span class="s1">&#39;&gt;&lt;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">identifier</span><span class="p">)</span><span class="si">}</span><span class="s2">&gt;&quot;</span></div>
 
 
 
@@ -497,7 +345,6 @@
     <span class="n">whatToShow</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">useRTH</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">formatDate</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># don&#39;t change</span>
-    <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">TIMEOUT_TIME</span>
     <span class="n">incremental_only</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">startup_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mi">5</span>
     <span class="n">_last_bar_date</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
@@ -542,18 +389,20 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="c1"># this starts subscription so that current price is readily available from ib</span>
         <span class="n">stream</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqMktData</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="s2">&quot;221&quot;</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">timers</span><span class="p">[</span><span class="s2">&quot;ticks&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">stream</span><span class="o">.</span><span class="n">updateEvent</span>
+        <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stream</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
         <span class="c1"># bypass onStart in class Streamer</span>
         <span class="n">Atom</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span></div>
 
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">backfill</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">):</span>
         <span class="c1"># this will switch processor into backfill mode</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">({</span><span class="s2">&quot;startup&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
+            <span class="p">{</span><span class="s2">&quot;startup&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;future_adjust_flag&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span><span class="p">}</span>
+        <span class="p">)</span>
         <span class="c1"># release control to allow for adjustments down the chain</span>
         <span class="c1"># await asyncio.sleep(0)</span>
         <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Starting backfill </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">, pulled </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span><span class="si">}</span><span class="s2"> bars, &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;Starting backfill </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2">, pulled </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span><span class="si">}</span><span class="s2"> bars, &quot;</span>
             <span class="sa">f</span><span class="s2">&quot;last bar: </span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span><span class="p">:</span>
@@ -567,7 +416,7 @@
                 <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> data requires roll adjustment &quot;</span>
                 <span class="sa">f</span><span class="s2">&quot;last bar: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">({</span><span class="s2">&quot;future_adjust_flag&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
+
             <span class="n">stream</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="n">ev</span><span class="o">.</span><span class="n">Sequence</span><span class="p">(</span><span class="n">bars</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
                 <span class="o">.</span><span class="n">pipe</span><span class="p">(</span>
@@ -590,7 +439,7 @@
         <span class="k">await</span> <span class="n">stream</span>
         <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">startup_seconds</span><span class="p">)</span>  <span class="c1"># time in which backfill must happen</span>
         <span class="n">log</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> backfilled from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="n">bars</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="si">}</span><span class="s2"> to &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> backfilled from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="n">bars</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="si">}</span><span class="s2"> to &quot;</span>
             <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
         <span class="c1"># let processor know backfill is finished</span>
@@ -603,10 +452,10 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">onStart</span><span class="p">({})</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">date_to_delta</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">)</span><span class="si">}</span><span class="s2"> S&quot;</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> duration str: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> duration str: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
         <span class="n">bars</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">timers</span><span class="p">[</span><span class="s2">&quot;bars&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span>
+        <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
         <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Historical bars received for </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
         <span class="n">backfill_predicate</span> <span class="o">=</span> <span class="p">(</span>
@@ -658,15 +507,17 @@
                 <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> set to adjust future&quot;</span><span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">True</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_adjusted</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">old_contract</span><span class="p">)</span>
+                <span class="c1"># don&#39;t move to backfill, because then aggregator doesn&#39;t get control</span>
+                <span class="c1"># until backfill is finished</span>
+                <span class="c1"># self.startEvent.emit({&quot;future_adjust_flag&quot;: True})</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> abandoning attempt to roll future &quot;</span>
                     <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">old_contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2"> for the second time&quot;</span>
-                <span class="p">)</span></div>
-
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="nb">hash</span><span class="p">(</span><span class="nb">id</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span></div>
+                <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;onContractChanged triggered on non-future Contract&quot;</span><span class="p">)</span></div>
+</div>
 
 
 
@@ -676,16 +527,12 @@
 <span class="k">class</span><span class="w"> </span><span class="nc">MktDataStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">tickList</span><span class="p">:</span> <span class="nb">str</span>
-    <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">TIMEOUT_TIME</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">streaming_func</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Ticker</span><span class="p">:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqMktData</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">tickList</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="nb">hash</span><span class="p">(</span><span class="nb">id</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span></div>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqMktData</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">tickList</span><span class="p">)</span></div>
 
 
 
@@ -697,7 +544,6 @@
     <span class="n">whatToShow</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">useRTH</span><span class="p">:</span> <span class="nb">bool</span>
     <span class="n">incremental_only</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
-    <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">TIMEOUT_TIME</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
@@ -720,7 +566,7 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">_run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">bars</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
         <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">timers</span><span class="p">[</span><span class="s2">&quot;bars&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span>
+        <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
         <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">onUpdate</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">onUpdate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">hasNewBar</span><span class="p">):</span>
@@ -728,10 +574,7 @@
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">incremental_only</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
             <span class="k">else</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="nb">hash</span><span class="p">(</span><span class="nb">id</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span></div>
+                <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span></div>
 
 
 
@@ -743,7 +586,6 @@
     <span class="n">tickType</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">numberOfTicks</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="n">ignoreSize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">TIMEOUT_TIME</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
@@ -754,10 +596,7 @@
             <span class="n">tickType</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">tickType</span><span class="p">,</span>
             <span class="n">numberOfTicks</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">numberOfTicks</span><span class="p">,</span>
             <span class="n">ignoreSize</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ignoreSize</span><span class="p">,</span>
-        <span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="nb">hash</span><span class="p">(</span><span class="nb">id</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span></div>
+        <span class="p">)</span></div>
 
 </pre></div>
         </article>
@@ -794,6 +633,6 @@
 </div><script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
-    <script src="../../_static/scripts/furo.js?v=5fa4622c"></script>
+    <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

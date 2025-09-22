@@ -5,31 +5,31 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="index" title="Index" href="genindex.html" /><link rel="search" title="Search" href="search.html" /><link rel="next" title="Dataloader Module" href="dataloader.html" /><link rel="prev" title="Logging" href="logging.html" />
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
+    <!-- Generated with Sphinx 8.2.3 and Furo 2025.07.19 -->
         <title>Execution Module - Haymaker documentation</title>
-      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=8f2a1f02" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=354aac6f" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=302659d7" />
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=25af2a20" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
 
 
 <style>
   body {
-    --color-code-background: #f8f8f8;
-  --color-code-foreground: black;
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
   
   }
   @media not print {
     body[data-theme="dark"] {
-      --color-code-background: #202020;
-  --color-code-foreground: #d0d0d0;
+      --color-code-background: #2b2b2b;
+  --color-code-foreground: #f8f8f2;
   
     }
     @media (prefers-color-scheme: dark) {
       body:not([data-theme="light"]) {
-        --color-code-background: #202020;
-  --color-code-foreground: #d0d0d0;
+        --color-code-background: #2b2b2b;
+  --color-code-foreground: #f8f8f2;
   
       }
     }
@@ -189,7 +189,6 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  
   <span class="sidebar-brand-text">Haymaker  documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
@@ -296,15 +295,33 @@ this Atom. This can be any <a class="reference external" href="https://ib-insync
 this contract will be qualified and available
 <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.contract.ContractDetails" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.contract.ContractDetails</span></code></a> will be downloaded from broker
 and made available through <a class="reference internal" href="#haymaker.base.Atom.details" title="haymaker.base.Atom.details"><code class="xref py py-attr docutils literal notranslate"><span class="pre">details</span></code></a> attribute. If contract
-is a <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.contract.ContFuture" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.contract.ContFuture</span></code></a>,
-it will be replaced with on-the-run <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.contract.Future" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.contract.Future</span></code></a>
-and whenever this contract needs to be rolled, <a class="reference internal" href="#haymaker.base.Atom.onContractChanged" title="haymaker.base.Atom.onContractChanged"><code class="xref py py-meth docutils literal notranslate"><span class="pre">onContractChanged()</span></code></a>
-method will be called. This attribute doesn’t need to be set. If this Atom
+is a <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.contract.ContFuture" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.contract.ContFuture</span></code></a> or
+<a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.contract.Future" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.contract.Future</span></code></a>, it will be replaced with on-the-run
+<a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.contract.Future" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.contract.Future</span></code></a>. <cite>ContFuture</cite> will pick contract that
+IB considers to be be current, <cite>Future</cite> allows for customization by tweaking
+<code class="xref py py-class docutils literal notranslate"><span class="pre">FutureSelector</span></code>. Whichever method is chose, when contract
+to be rolled, <a class="reference internal" href="#haymaker.base.Atom.onContractChanged" title="haymaker.base.Atom.onContractChanged"><code class="xref py py-meth docutils literal notranslate"><span class="pre">onContractChanged()</span></code></a> method will be called.</p>
+<p>This attribute doesn’t need to be set. If this Atom
 object is not related to any one particular contract, just don’t assign any
 value to this attribute.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
 <dd class="field-odd"><p><a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.contract.Contract" title="(in ib_insync v0.9)">ib_insync.contract.Contract</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="haymaker.base.Atom.which_contract">
+<span class="sig-name descname"><span class="pre">which_contract</span></span><a class="headerlink" href="#haymaker.base.Atom.which_contract" title="Link to this definition">¶</a></dt>
+<dd><p>default: ACTIVE; if NEXT chosen <a class="reference internal" href="#haymaker.base.Atom.contract" title="haymaker.base.Atom.contract"><code class="xref py py-attr docutils literal notranslate"><span class="pre">contract</span></code></a>
+will return next contract in chain (relative only for
+class:<a href="#id1"><span class="problematic" id="id2">`</span></a>ib_insync.Contract.Future`futures) allowing for using upcoming
+contracts for new positions a short period before they become active
+(length of this period can be in defined in config.)</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>ActiveNext</p>
 </dd>
 </dl>
 </dd></dl>
@@ -802,13 +819,13 @@ open now).  Should be used after it has been tested that
 <dd><dl class="py method">
 <dt class="sig sig-object py" id="haymaker.streamers.Streamer.awaitables">
 <em class="property"><span class="k"><span class="pre">classmethod</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">awaitables</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#Streamer.awaitables"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.Streamer.awaitables" title="Link to this definition">¶</a></dt>
-<dd><dl class="field-list simple">
+<dd><p>Coroutines from all instantiated streamers.  Can be passed to
+<a class="reference external" href="https://docs.python.org/3/library/asyncio-task.html#asyncio.gather" title="(in Python v3.13)"><code class="xref py py-func docutils literal notranslate"><span class="pre">asyncio.gather()</span></code></a></p>
+<dl class="field-list simple">
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
 <dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">list</span></code></a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Awaitable" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Awaitable</span></code></a>]</span></p>
 </dd>
 </dl>
-<p>Coroutines from all instantiated streamers.  Can be passed to
-<a href="#id1"><span class="problematic" id="id2">:py:`asyncio.gather`</span></a></p>
 </dd></dl>
 
 <dl class="py method">
@@ -843,6 +860,11 @@ loop.</p>
 <em class="property"><span class="k"><span class="pre">async</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">run</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#Streamer.run"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.Streamer.run" title="Link to this definition">¶</a></dt>
 <dd><p>Start subscription and start emitting data.  This is the main
 entry point into the streamer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></a></span></p>
+</dd>
+</dl>
 </dd></dl>
 
 </dd></dl>
@@ -852,7 +874,7 @@ entry point into the streamer.</p>
 <p>Every implementation accepts the same arguments as the respective <cite>ib_insync</cite> method it wraps, plus standard <a class="reference internal" href="#haymaker.streamers.Streamer" title="haymaker.streamers.Streamer"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.streamers.Streamer</span></code></a> parameters.</p>
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.streamers.HistoricalDataStreamer">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.streamers.</span></span><span class="sig-name descname"><span class="pre">HistoricalDataStreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">contract</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">durationStr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">barSizeSetting</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">whatToShow</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">useRTH=False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">formatDate=2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout=300</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">incremental_only=True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">startup_seconds=5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_last_bar_date=None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_future_adjust_flag=False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_adjusted=&lt;factory&gt;</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#HistoricalDataStreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.HistoricalDataStreamer" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.streamers.</span></span><span class="sig-name descname"><span class="pre">HistoricalDataStreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">contract</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">durationStr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">barSizeSetting</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">whatToShow</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">useRTH=False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">formatDate=2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">incremental_only=True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">startup_seconds=5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_last_bar_date=None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_future_adjust_flag=False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_adjusted=&lt;factory&gt;</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#HistoricalDataStreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.HistoricalDataStreamer" title="Link to this definition">¶</a></dt>
 <dd><dl class="py method">
 <dt class="sig sig-object py" id="haymaker.streamers.HistoricalDataStreamer.date_to_delta">
 <span class="sig-name descname"><span class="pre">date_to_delta</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#HistoricalDataStreamer.date_to_delta"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.HistoricalDataStreamer.date_to_delta" title="Link to this definition">¶</a></dt>
@@ -920,12 +942,12 @@ entry point into the streamer.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.streamers.MktDataStreamer">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.streamers.</span></span><span class="sig-name descname"><span class="pre">MktDataStreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">contract</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tickList</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">300</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#MktDataStreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.MktDataStreamer" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.streamers.</span></span><span class="sig-name descname"><span class="pre">MktDataStreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">contract</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tickList</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#MktDataStreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.MktDataStreamer" title="Link to this definition">¶</a></dt>
 <dd></dd></dl>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.streamers.RealTimeBarsStreamer">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.streamers.</span></span><span class="sig-name descname"><span class="pre">RealTimeBarsStreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">contract</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">whatToShow</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">useRTH</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">incremental_only</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">300</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#RealTimeBarsStreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.RealTimeBarsStreamer" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.streamers.</span></span><span class="sig-name descname"><span class="pre">RealTimeBarsStreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">contract</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">whatToShow</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">useRTH</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">incremental_only</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#RealTimeBarsStreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.RealTimeBarsStreamer" title="Link to this definition">¶</a></dt>
 <dd><dl class="py method">
 <dt class="sig sig-object py" id="haymaker.streamers.RealTimeBarsStreamer.onStart">
 <span class="sig-name descname"><span class="pre">onStart</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#RealTimeBarsStreamer.onStart"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.RealTimeBarsStreamer.onStart" title="Link to this definition">¶</a></dt>
@@ -957,7 +979,7 @@ loop.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.streamers.TickByTickStreamer">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.streamers.</span></span><span class="sig-name descname"><span class="pre">TickByTickStreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">contract</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tickType</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">numberOfTicks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ignoreSize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">300</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#TickByTickStreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.TickByTickStreamer" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.streamers.</span></span><span class="sig-name descname"><span class="pre">TickByTickStreamer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">contract</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tickType</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">numberOfTicks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ignoreSize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/streamers.html#TickByTickStreamer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.streamers.TickByTickStreamer" title="Link to this definition">¶</a></dt>
 <dd></dd></dl>
 
 </section>
@@ -981,26 +1003,19 @@ initiating the class.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="haymaker.aggregators.BarAggregator.onData">
 <span class="sig-name descname"><span class="pre">onData</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/aggregators.html#BarAggregator.onData"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.aggregators.BarAggregator.onData" title="Link to this definition">¶</a></dt>
-<dd><p>Connected to <code class="xref py py-attr docutils literal notranslate"><span class="pre">dataEvent</span></code> of the preceding object in the chain.
-This is the entry point to any processing perfmormed by this
-object.  Result of this processing should be added to the
-<cite>data</cite> dict and passed to the subsequent object in the chain
-using <code class="xref py py-attr docutils literal notranslate"><span class="pre">dataEvent</span></code> (by calling <cite>self.dataEvent.emit(data)</cite>).</p>
-<p>It’s up to the user to emit <cite>dataEvent</cite> with appropriate data,
-this event will NOT be emitted by the system, so if it’s not
-properly implemented, event chain will be broken.  This method
-must be obligatorily overriden in a subclass.</p>
-<p>Calling superclass on exit will add a timestamp with object’s
-name to <cite>data</cite>, which may be useful for logging.</p>
-<p>This method can be synchronous as well as asynchronous (in the
-subclass it’s ok to override it with <cite>async def onData(self,
-data, *args)</cite>).  If it’s async, it will be put in the asyncio
-loop.</p>
+<dd><p>This passes correct data to <cite>self._filter</cite>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
 <dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></a></span></p>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="haymaker.aggregators.BarAggregator.onDataBar">
+<span class="sig-name descname"><span class="pre">onDataBar</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">bars</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/aggregators.html#BarAggregator.onDataBar"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.aggregators.BarAggregator.onDataBar" title="Link to this definition">¶</a></dt>
+<dd><p>This is connected to <cite>self._filter</cite>, will emit whatever comes
+from filter.</p>
 </dd></dl>
 
 <dl class="py method">
@@ -1698,7 +1713,7 @@ save information required for bracket orders and attach events
 that will attach brackets after order completion.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.order.Trade" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Trade</span></code></a></span></p>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.order.Trade" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Trade</span></code></a> | <a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></a></span></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1808,9 +1823,9 @@ that will attach brackets after order completion.</p>
 </pre></div>
 </div>
 </div>
-<p>This defines the trading signals using <a class="reference internal" href="#haymaker.brick.AbstractDfBrick" title="haymaker.brick.AbstractDfBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.2.3)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
-<p>The data received via <cite>onData</cite> is wrapped into a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.2.3)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with column names matching the keys in the <cite>data</cite> dictionary. Users must ensure upstream components provide all required data for signal generation.</p>
-<p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.2.3)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
+<p>This defines the trading signals using <a class="reference internal" href="#haymaker.brick.AbstractDfBrick" title="haymaker.brick.AbstractDfBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.3.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
+<p>The data received via <cite>onData</cite> is wrapped into a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.3.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with column names matching the keys in the <cite>data</cite> dictionary. Users must ensure upstream components provide all required data for signal generation.</p>
+<p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.3.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
 <div class="literal-block-wrapper docutils container" id="id15">
 <div class="code-block-caption"><span class="caption-text">Defining the ES futures contract</span><a class="headerlink" href="#id15" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">&quot;ES&quot;</span><span class="p">,</span> <span class="s2">&quot;CME&quot;</span><span class="p">)</span>
@@ -1988,6 +2003,7 @@ that will attach brackets after order completion.</p>
 <li><a class="reference internal" href="#atom-object">Atom Object</a><ul>
 <li><a class="reference internal" href="#haymaker.base.Atom"><code class="docutils literal notranslate"><span class="pre">Atom</span></code></a><ul>
 <li><a class="reference internal" href="#haymaker.base.Atom.contract"><code class="docutils literal notranslate"><span class="pre">Atom.contract</span></code></a></li>
+<li><a class="reference internal" href="#haymaker.base.Atom.which_contract"><code class="docutils literal notranslate"><span class="pre">Atom.which_contract</span></code></a></li>
 <li><a class="reference internal" href="#haymaker.base.Atom.ib"><code class="docutils literal notranslate"><span class="pre">Atom.ib</span></code></a></li>
 <li><a class="reference internal" href="#haymaker.base.Atom.sm"><code class="docutils literal notranslate"><span class="pre">Atom.sm</span></code></a></li>
 <li><a class="reference internal" href="#haymaker.base.Atom.contracts"><code class="docutils literal notranslate"><span class="pre">Atom.contracts</span></code></a></li>
@@ -2054,6 +2070,7 @@ that will attach brackets after order completion.</p>
 <li><a class="reference internal" href="#haymaker.aggregators.BarAggregator"><code class="docutils literal notranslate"><span class="pre">BarAggregator</span></code></a><ul>
 <li><a class="reference internal" href="#haymaker.aggregators.BarAggregator.adjust_future"><code class="docutils literal notranslate"><span class="pre">BarAggregator.adjust_future()</span></code></a></li>
 <li><a class="reference internal" href="#haymaker.aggregators.BarAggregator.onData"><code class="docutils literal notranslate"><span class="pre">BarAggregator.onData()</span></code></a></li>
+<li><a class="reference internal" href="#haymaker.aggregators.BarAggregator.onDataBar"><code class="docutils literal notranslate"><span class="pre">BarAggregator.onDataBar()</span></code></a></li>
 <li><a class="reference internal" href="#haymaker.aggregators.BarAggregator.onStart"><code class="docutils literal notranslate"><span class="pre">BarAggregator.onStart()</span></code></a></li>
 </ul>
 </li>
@@ -2182,6 +2199,6 @@ that will attach brackets after order completion.</p>
 </div><script src="_static/documentation_options.js?v=5929fcd5"></script>
     <script src="_static/doctools.js?v=9bcbadda"></script>
     <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
-    <script src="_static/scripts/furo.js?v=5fa4622c"></script>
+    <script src="_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>
