@@ -2,7 +2,6 @@ import asyncio
 import logging
 
 import pytest
-
 from haymaker.async_wrappers import fire_and_forget, make_async
 
 
@@ -27,7 +26,7 @@ async def test_make_async_raises_typeerror_on_non_callable():
 
 
 @pytest.mark.asyncio
-async def test_fire_and_forget_schedules_task(event_loop):
+async def test_fire_and_forget_schedules_task():
     results = []
 
     def sync_fn(x):
