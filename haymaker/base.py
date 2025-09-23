@@ -253,10 +253,11 @@ class Atom:
             value to this attribute.
 
         which_contract (ActiveNext): default: ACTIVE; if NEXT chosen :attr:`contract`
-            will return next contract in chain (relative only for
-            class:`ib_insync.Contract.Future`futures) allowing for using upcoming
+            will return next contract in chain (relevant only for expiring contracts
+            like futures or options) allowing for early usage of upcoming
             contracts for new positions a short period before they become active
-            (length of this period can be in defined in config.)
+            (length of period during which NEXT will be used can be in defined
+             in config.)
 
         ib (ClassVar[ibi.IB]): The instance of the :class:`ib_insync.ib.IB` client used
            for interacting with the broker. It can be used to communicate with
