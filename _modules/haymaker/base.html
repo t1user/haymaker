@@ -516,10 +516,11 @@
 <span class="sd">            value to this attribute.</span>
 
 <span class="sd">        which_contract (ActiveNext): default: ACTIVE; if NEXT chosen :attr:`contract`</span>
-<span class="sd">            will return next contract in chain (relative only for</span>
-<span class="sd">            class:`ib_insync.Contract.Future`futures) allowing for using upcoming</span>
+<span class="sd">            will return next contract in chain (relevant only for expiring contracts</span>
+<span class="sd">            like futures or options) allowing for early usage of upcoming</span>
 <span class="sd">            contracts for new positions a short period before they become active</span>
-<span class="sd">            (length of this period can be in defined in config.)</span>
+<span class="sd">            (length of period during which NEXT will be used can be in defined</span>
+<span class="sd">             in config.)</span>
 
 <span class="sd">        ib (ClassVar[ibi.IB]): The instance of the :class:`ib_insync.ib.IB` client used</span>
 <span class="sd">           for interacting with the broker. It can be used to communicate with</span>

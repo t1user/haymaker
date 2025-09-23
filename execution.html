@@ -315,10 +315,13 @@ value to this attribute.</p>
 <dt class="sig sig-object py" id="haymaker.base.Atom.which_contract">
 <span class="sig-name descname"><span class="pre">which_contract</span></span><a class="headerlink" href="#haymaker.base.Atom.which_contract" title="Link to this definition">¶</a></dt>
 <dd><p>default: ACTIVE; if NEXT chosen <a class="reference internal" href="#haymaker.base.Atom.contract" title="haymaker.base.Atom.contract"><code class="xref py py-attr docutils literal notranslate"><span class="pre">contract</span></code></a>
-will return next contract in chain (relative only for
-class:<a href="#id1"><span class="problematic" id="id2">`</span></a>ib_insync.Contract.Future`futures) allowing for using upcoming
+will return next contract in chain (relevant only for expiring contracts
+like futures or options) allowing for early usage of upcoming
 contracts for new positions a short period before they become active
-(length of this period can be in defined in config.)</p>
+(length of period during which NEXT will be used can be in defined</p>
+<blockquote>
+<div><p>in config.)</p>
+</div></blockquote>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
 <dd class="field-odd"><p>ActiveNext</p>
@@ -990,7 +993,7 @@ loop.</p>
 <dt class="sig sig-object py" id="haymaker.aggregators.BarAggregator">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.aggregators.</span></span><span class="sig-name descname"><span class="pre">BarAggregator</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">incremental_only</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">future_adjust_type</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'add'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">debug</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/aggregators.html#BarAggregator"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.aggregators.BarAggregator" title="Link to this definition">¶</a></dt>
 <dd><p>Aggregate recieved data bars into new bars based on the
-criteria specified in :attr:<a href="#id3"><span class="problematic" id="id4">`</span></a>filter’. Store processed data.</p>
+criteria specified in :attr:<a href="#id1"><span class="problematic" id="id2">`</span></a>filter’. Store processed data.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="haymaker.aggregators.BarAggregator.adjust_future">
 <span class="sig-name descname"><span class="pre">adjust_future</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">new_bar</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/aggregators.html#BarAggregator.adjust_future"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.aggregators.BarAggregator.adjust_future" title="Link to this definition">¶</a></dt>
@@ -1197,8 +1200,8 @@ loop.</p>
 
 </dd></dl>
 
-<section id="id5">
-<h4>Implementations<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
+<section id="id3">
+<h4>Implementations<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.brick.AbstractDfBrick">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.brick.</span></span><span class="sig-name descname"><span class="pre">AbstractDfBrick</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">strategy</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contract</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/brick.html#AbstractDfBrick"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.brick.AbstractDfBrick" title="Link to this definition">¶</a></dt>
@@ -1287,8 +1290,8 @@ no position: 0)</p>
 </section>
 </dd></dl>
 
-<section id="id6">
-<h4>Implementations<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
+<section id="id4">
+<h4>Implementations<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.signals.BinarySignalProcessor">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.signals.</span></span><span class="sig-name descname"><span class="pre">BinarySignalProcessor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">signal_fields</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'signal'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">state_machine</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/signals.html#BinarySignalProcessor"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.signals.BinarySignalProcessor" title="Link to this definition">¶</a></dt>
@@ -1465,8 +1468,8 @@ this number is up to execution model.</p>
 
 </dd></dl>
 
-<section id="id7">
-<h4>Implementations<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
+<section id="id5">
+<h4>Implementations<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.portfolio.FixedPortfolio">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.portfolio.</span></span><span class="sig-name descname"><span class="pre">FixedPortfolio</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">amount</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/portfolio.html#FixedPortfolio"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.portfolio.FixedPortfolio" title="Link to this definition">¶</a></dt>
@@ -1541,8 +1544,8 @@ events returned by <code class="xref py py-meth docutils literal notranslate"><s
 <code class="xref py py-class docutils literal notranslate"><span class="pre">ibi.Contract</span></code> that has been used.</p>
 <p>Must keep track of current position in the market by updating
 <code class="xref py py-attr docutils literal notranslate"><span class="pre">self.data.position</span></code>.</p>
-<section id="id8">
-<h4>Args:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h4>
+<section id="id6">
+<h4>Args:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
 <p>data (dict): is a dict created by <code class="xref py py-class docutils literal notranslate"><span class="pre">Brick</span></code>, updated by
 <code class="xref py py-class docutils literal notranslate"><span class="pre">Portfolio</span></code>, which must contain all parameters required
 to execute transactions in line with this execution model.</p>
@@ -1588,8 +1591,8 @@ loop.</p>
 
 </dd></dl>
 
-<section id="id9">
-<h4>Implementations<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h4>
+<section id="id7">
+<h4>Implementations<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
 <dl class="py class">
 <dt class="sig sig-object py" id="haymaker.execution_models.BaseExecModel">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.execution_models.</span></span><span class="sig-name descname"><span class="pre">BaseExecModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">open_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">close_order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">controller</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/execution_models.html#BaseExecModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.execution_models.BaseExecModel" title="Link to this definition">¶</a></dt>
@@ -1604,7 +1607,7 @@ following keys are required:</p>
 where direction is determined by current position</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">contract</span></code> - this <code class="xref py py-class docutils literal notranslate"><span class="pre">ibi.Contract</span></code> instance will be
 traded</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">amount</span></code> - quantity of <a href="#id10"><span class="problematic" id="id11">``</span></a>contract``s that will be traded</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">amount</span></code> - quantity of <a href="#id8"><span class="problematic" id="id9">``</span></a>contract``s that will be traded</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">target_position</span></code> - one of {-1, 0, 1} determining
 direction AFTER transaction is executed; will be used by
 <code class="xref py py-class docutils literal notranslate"><span class="pre">Controller</span></code> to verify if the transaction’s effect
@@ -1626,14 +1629,14 @@ events returned by <code class="xref py py-meth docutils literal notranslate"><s
 <code class="xref py py-class docutils literal notranslate"><span class="pre">ibi.Contract</span></code> that has been used.</p>
 <p>Must keep track of current position in the market by updating
 <code class="xref py py-attr docutils literal notranslate"><span class="pre">self.data.position</span></code>.</p>
-<section id="id12">
-<h5>Args:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h5>
+<section id="id10">
+<h5>Args:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h5>
 <p>data (dict): is a dict created by <code class="xref py py-class docutils literal notranslate"><span class="pre">Brick</span></code>, updated by
 <code class="xref py py-class docutils literal notranslate"><span class="pre">Portfolio</span></code>, which must contain all parameters required
 to execute transactions in line with this execution model.</p>
 </section>
-<section id="id13">
-<h5>Returns:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h5>
+<section id="id11">
+<h5>Returns:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h5>
 <p>:</p>
 <p>(trade, note), where:</p>
 <ul class="simple">
@@ -1798,8 +1801,8 @@ that will attach brackets after order completion.</p>
 <li><p>Whenever the stop-loss is hit, prevents reopening a position in the same direction until an opposite position is opened and closed. This protects against repeated transactions in a volatile, non-trending market.</p></li>
 <li><p>Reverses the position when a signal indicates a direction opposite to the position currently held.</p></li>
 </ul>
-<div class="literal-block-wrapper docutils container" id="id14">
-<div class="code-block-caption"><span class="caption-text">Defining the EMA crossover strategy</span><a class="headerlink" href="#id14" title="Link to this code">¶</a></div>
+<div class="literal-block-wrapper docutils container" id="id12">
+<div class="code-block-caption"><span class="caption-text">Defining the EMA crossover strategy</span><a class="headerlink" href="#id12" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
@@ -1826,23 +1829,23 @@ that will attach brackets after order completion.</p>
 <p>This defines the trading signals using <a class="reference internal" href="#haymaker.brick.AbstractDfBrick" title="haymaker.brick.AbstractDfBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.3.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
 <p>The data received via <cite>onData</cite> is wrapped into a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.3.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with column names matching the keys in the <cite>data</cite> dictionary. Users must ensure upstream components provide all required data for signal generation.</p>
 <p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.3.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
-<div class="literal-block-wrapper docutils container" id="id15">
-<div class="code-block-caption"><span class="caption-text">Defining the ES futures contract</span><a class="headerlink" href="#id15" title="Link to this code">¶</a></div>
+<div class="literal-block-wrapper docutils container" id="id13">
+<div class="code-block-caption"><span class="caption-text">Defining the ES futures contract</span><a class="headerlink" href="#id13" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">&quot;ES&quot;</span><span class="p">,</span> <span class="s2">&quot;CME&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <p>The <code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.contracts.ContFuture</span></code> contract is not directly tradable. Haymaker replaces it with the current on-the-run futures contract and rolls it to the next contract near expiration. Refer to other documentation sections for customization details.</p>
-<div class="literal-block-wrapper docutils container" id="id16">
-<div class="code-block-caption"><span class="caption-text">Setting a fixed portfolio size</span><a class="headerlink" href="#id16" title="Link to this code">¶</a></div>
+<div class="literal-block-wrapper docutils container" id="id14">
+<div class="code-block-caption"><span class="caption-text">Setting a fixed portfolio size</span><a class="headerlink" href="#id14" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">portfolio</span>
 <span class="n">portfolio</span><span class="o">.</span><span class="n">FixedPortfolio</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <p>Typically, a <a class="reference internal" href="#haymaker.portfolio.FixedPortfolio" title="haymaker.portfolio.FixedPortfolio"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.portfolio.FixedPortfolio</span></code></a> would include more logic. Here, it trades one contract regardless of circumstances—a simplistic approach not recommended for real use.</p>
-<div class="literal-block-wrapper docutils container" id="id17">
-<div class="code-block-caption"><span class="caption-text">Assembling the pipeline</span><a class="headerlink" href="#id17" title="Link to this code">¶</a></div>
+<div class="literal-block-wrapper docutils container" id="id15">
+<div class="code-block-caption"><span class="caption-text">Assembling the pipeline</span><a class="headerlink" href="#id15" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">base</span><span class="p">,</span> <span class="n">streamers</span><span class="p">,</span> <span class="n">aggregators</span><span class="p">,</span> <span class="n">signals</span><span class="p">,</span> <span class="n">execution_models</span><span class="p">,</span> <span class="n">portfolio</span><span class="p">,</span> <span class="n">bracket_legs</span>
 
 <span class="n">pipe</span> <span class="o">=</span> <span class="n">base</span><span class="o">.</span><span class="n">Pipe</span><span class="p">(</span>
@@ -1861,24 +1864,24 @@ that will attach brackets after order completion.</p>
 <p>The <a class="reference internal" href="#haymaker.base.Pipe" title="haymaker.base.Pipe"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.base.Pipe</span></code></a> connects components into an event-driven pipeline. Market data from the streamer triggers processing, potentially resulting in broker orders.</p>
 <p>Components used:</p>
 <ul>
-<li><div class="literal-block-wrapper docutils container" id="id18">
-<div class="code-block-caption"><span class="caption-text">Historical data streamer</span><a class="headerlink" href="#id18" title="Link to this code">¶</a></div>
+<li><div class="literal-block-wrapper docutils container" id="id16">
+<div class="code-block-caption"><span class="caption-text">Historical data streamer</span><a class="headerlink" href="#id16" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">streamers</span><span class="o">.</span><span class="n">HistoricalDataStreamer</span><span class="p">(</span><span class="n">es_contract</span><span class="p">,</span> <span class="s2">&quot;10 D&quot;</span><span class="p">,</span> <span class="s2">&quot;1 hour&quot;</span><span class="p">,</span> <span class="s2">&quot;TRADES&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <p>Pulls 10 days of 1-hour “TRADES” data for <code class="docutils literal notranslate"><span class="pre">es_contract</span></code> from the broker, updating with new data points. The framework automatically fills gaps if disruptions occur.</p>
 </li>
-<li><div class="literal-block-wrapper docutils container" id="id19">
-<div class="code-block-caption"><span class="caption-text">No-op aggregator</span><a class="headerlink" href="#id19" title="Link to this code">¶</a></div>
+<li><div class="literal-block-wrapper docutils container" id="id17">
+<div class="code-block-caption"><span class="caption-text">No-op aggregator</span><a class="headerlink" href="#id17" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">aggregators</span><span class="o">.</span><span class="n">BarAggregator</span><span class="p">(</span><span class="n">aggregators</span><span class="o">.</span><span class="n">NoFilter</span><span class="p">())</span>
 </pre></div>
 </div>
 </div>
 <p>No aggregation or processing is applied (using <a class="reference internal" href="#haymaker.aggregators.NoFilter" title="haymaker.aggregators.NoFilter"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.aggregators.NoFilter</span></code></a>). An aggregator is currently required with historical data streamers to track history.</p>
 </li>
-<li><div class="literal-block-wrapper docutils container" id="id20">
-<div class="code-block-caption"><span class="caption-text">EMA crossover strategy instance</span><a class="headerlink" href="#id20" title="Link to this code">¶</a></div>
+<li><div class="literal-block-wrapper docutils container" id="id18">
+<div class="code-block-caption"><span class="caption-text">EMA crossover strategy instance</span><a class="headerlink" href="#id18" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">EMACrossStrategy</span><span class="p">(</span><span class="s2">&quot;ema_cross_ES&quot;</span><span class="p">,</span> <span class="n">es_contract</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">24</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -1889,8 +1892,8 @@ that will attach brackets after order completion.</p>
 <p>These parameters are illustrative and not optimized.</p>
 </div>
 </li>
-<li><div class="literal-block-wrapper docutils container" id="id21">
-<div class="code-block-caption"><span class="caption-text">Binary signal processor</span><a class="headerlink" href="#id21" title="Link to this code">¶</a></div>
+<li><div class="literal-block-wrapper docutils container" id="id19">
+<div class="code-block-caption"><span class="caption-text">Binary signal processor</span><a class="headerlink" href="#id19" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">signals</span><span class="o">.</span><span class="n">BinarySignalProcessor</span><span class="p">()</span>
 </pre></div>
 </div>
@@ -1900,16 +1903,16 @@ that will attach brackets after order completion.</p>
 * Post-stop-loss, prevents reopening in the same direction until an opposite position is cycled.
 * Reverses positions on opposing signals.</p>
 </li>
-<li><div class="literal-block-wrapper docutils container" id="id22">
-<div class="code-block-caption"><span class="caption-text">Portfolio wrapper</span><a class="headerlink" href="#id22" title="Link to this code">¶</a></div>
+<li><div class="literal-block-wrapper docutils container" id="id20">
+<div class="code-block-caption"><span class="caption-text">Portfolio wrapper</span><a class="headerlink" href="#id20" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">portfolio</span><span class="o">.</span><span class="n">PortfolioWrapper</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 <p>Connects to a single global <a class="reference internal" href="#haymaker.portfolio.FixedPortfolio" title="haymaker.portfolio.FixedPortfolio"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.portfolio.FixedPortfolio</span></code></a> instance, ensuring strategy-specific data flows correctly to downstream components.</p>
 </li>
-<li><div class="literal-block-wrapper docutils container" id="id23">
-<div class="code-block-caption"><span class="caption-text">Event-driven execution model</span><a class="headerlink" href="#id23" title="Link to this code">¶</a></div>
+<li><div class="literal-block-wrapper docutils container" id="id21">
+<div class="code-block-caption"><span class="caption-text">Event-driven execution model</span><a class="headerlink" href="#id21" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">execution_models</span><span class="o">.</span><span class="n">EventDrivenExecModel</span><span class="p">(</span>
     <span class="n">stop</span><span class="o">=</span><span class="n">bracket_legs</span><span class="o">.</span><span class="n">TrailingStop</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">vol_field</span><span class="o">=</span><span class="s2">&quot;atr&quot;</span><span class="p">)</span>
 <span class="p">)</span>
@@ -1919,8 +1922,8 @@ that will attach brackets after order completion.</p>
 <p>Sends a <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.order.MarketOrder" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.order.MarketOrder</span></code></a> to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an <code class="docutils literal notranslate"><span class="pre">atr</span></code> column from the <a class="reference internal" href="#haymaker.brick.AbstractDfBrick" title="haymaker.brick.AbstractDfBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick</span></code></a>).</p>
 </li>
 </ul>
-<div class="literal-block-wrapper docutils container" id="id24">
-<div class="code-block-caption"><span class="caption-text">Running the application</span><a class="headerlink" href="#id24" title="Link to this code">¶</a></div>
+<div class="literal-block-wrapper docutils container" id="id22">
+<div class="code-block-caption"><span class="caption-text">Running the application</span><a class="headerlink" href="#id22" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">app</span>
 
 <span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
@@ -1929,8 +1932,8 @@ that will attach brackets after order completion.</p>
 </div>
 </div>
 <p>Run this as a script (e.g., <code class="docutils literal notranslate"><span class="pre">strategy.py</span></code>):</p>
-<div class="literal-block-wrapper docutils container" id="id25">
-<div class="code-block-caption"><span class="caption-text">Starting the strategy</span><a class="headerlink" href="#id25" title="Link to this code">¶</a></div>
+<div class="literal-block-wrapper docutils container" id="id23">
+<div class="code-block-caption"><span class="caption-text">Starting the strategy</span><a class="headerlink" href="#id23" title="Link to this code">¶</a></div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>strategy.py
 </pre></div>
 </div>
@@ -2105,7 +2108,7 @@ that will attach brackets after order completion.</p>
 <li><a class="reference internal" href="#haymaker.brick.AbstractBaseBrick.onStart"><code class="docutils literal notranslate"><span class="pre">AbstractBaseBrick.onStart()</span></code></a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id5">Implementations</a><ul>
+<li><a class="reference internal" href="#id3">Implementations</a><ul>
 <li><a class="reference internal" href="#haymaker.brick.AbstractDfBrick"><code class="docutils literal notranslate"><span class="pre">AbstractDfBrick</span></code></a></li>
 </ul>
 </li>
@@ -2118,7 +2121,7 @@ that will attach brackets after order completion.</p>
 <li><a class="reference internal" href="#haymaker.signals.AbstractBaseBinarySignalProcessor.same_direction"><code class="docutils literal notranslate"><span class="pre">AbstractBaseBinarySignalProcessor.same_direction()</span></code></a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id6">Implementations</a><ul>
+<li><a class="reference internal" href="#id4">Implementations</a><ul>
 <li><a class="reference internal" href="#haymaker.signals.BinarySignalProcessor"><code class="docutils literal notranslate"><span class="pre">BinarySignalProcessor</span></code></a></li>
 <li><a class="reference internal" href="#haymaker.signals.BlipBinarySignalProcessor"><code class="docutils literal notranslate"><span class="pre">BlipBinarySignalProcessor</span></code></a></li>
 <li><a class="reference internal" href="#haymaker.signals.LockableBinarySignalProcessor"><code class="docutils literal notranslate"><span class="pre">LockableBinarySignalProcessor</span></code></a><ul>
@@ -2141,7 +2144,7 @@ that will attach brackets after order completion.</p>
 <li><a class="reference internal" href="#haymaker.portfolio.AbstractBasePortfolio.allocate"><code class="docutils literal notranslate"><span class="pre">AbstractBasePortfolio.allocate()</span></code></a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id7">Implementations</a><ul>
+<li><a class="reference internal" href="#id5">Implementations</a><ul>
 <li><a class="reference internal" href="#haymaker.portfolio.FixedPortfolio"><code class="docutils literal notranslate"><span class="pre">FixedPortfolio</span></code></a><ul>
 <li><a class="reference internal" href="#haymaker.portfolio.FixedPortfolio.allocate"><code class="docutils literal notranslate"><span class="pre">FixedPortfolio.allocate()</span></code></a></li>
 </ul>
@@ -2163,7 +2166,7 @@ that will attach brackets after order completion.</p>
 <li><a class="reference internal" href="#haymaker.execution_models.AbstractExecModel.onStart"><code class="docutils literal notranslate"><span class="pre">AbstractExecModel.onStart()</span></code></a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id9">Implementations</a><ul>
+<li><a class="reference internal" href="#id7">Implementations</a><ul>
 <li><a class="reference internal" href="#haymaker.execution_models.BaseExecModel"><code class="docutils literal notranslate"><span class="pre">BaseExecModel</span></code></a><ul>
 <li><a class="reference internal" href="#haymaker.execution_models.BaseExecModel.onData"><code class="docutils literal notranslate"><span class="pre">BaseExecModel.onData()</span></code></a></li>
 </ul>
