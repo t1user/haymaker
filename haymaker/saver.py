@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pymongo  # type: ignore
 
 from .async_wrappers import fire_and_forget, make_async
 from .config import CONFIG as config
@@ -121,7 +122,12 @@ class CsvSaver(AbstractBaseFileSaver):
 
 
 class MongoSaver(AbstractBaseSaver):
-    def __init__(self, collection: str, query_key: str | None = None) -> None:
+    def __init__(
+        self,
+        collection: str,
+        query_key: str | None = None,
+        client: pymongo.MongoClient | None = None,
+    ) -> None:
         """
         `query_key` if for type of records that need to be recalled
         and updated, this key will be used to identify the record (of
@@ -129,27 +135,45 @@ class MongoSaver(AbstractBaseSaver):
         methods, this is just a helper for a typical task done by Haymaker).
 
         """
-        self.client = get_mongo_client()
+        if client is None:
+            self.client = get_mongo_client()
+        else:
+            self.client = client
+
         db = CONFIG["MongoSaver"]["db"]
         self.db = self.client[db]
         self.collection = self.db[collection]
         self.query_key = query_key
 
+        if self.query_key:
+            # `query_key` has to be unique, subsequent writes to the same key
+            # have to be updates
+            self.collection.create_index([(self.query_key, 1)], unique=True)
+        else:
+            self.collection.create_index([("timestamp", -1)])
+
     def save(self, data: dict[str, Any], /, *args) -> None:
         try:
             if self.query_key and (key := data.get(self.query_key)):
-                result = self.collection.update_one(
-                    {self.query_key: key}, {"$set": data}, upsert=True
+                # higher priority wins, if no priority given, later write wins
+                # for two writes with equal priority later one wins
+                self.collection.update_one(
+                    {
+                        self.query_key: key,
+                        "$or": [
+                            {"priority": {"$lte": data.get("priority", 0)}},
+                            {"priority": {"$exists": False}},
+                        ],
+                    },
+                    {"$set": data},
+                    upsert=True,
                 )
-            elif not all(data.keys()):
-                log.error(f"Attempt to save data with empty keys: {list(data.keys())}")
             else:
-                result = self.collection.insert_one(data)  # noqa
+                self.collection.insert_one(data)  # noqa
         except Exception:
             log.exception("Error saving data to MongoDB")
             log.debug(f"Data that caused error: {data}")
             raise
-        # log.debug(f"{self}: transaction result: {result}")
 
     def read(self, key: dict | None = None, /, *args) -> Any:
         if key is None:
@@ -166,9 +190,11 @@ class MongoLatestSaver(MongoSaver):
     def read(self, *args) -> dict:
         log.debug(f"{self} will read latest.")
         try:
-            data = self.collection.find_one(
-                {"$query": {}, "$orderby": {"$natural": -1}}
-            )
+            data = self.collection.find_one({}, sort=[("timestamp", -1)])
+            # this is what it was before update, remove if new version works
+            # data = self.collection.find_one(
+            #     {"$query": {}, "$orderby": {"$natural": -1}}
+            # )
         except Exception:
             log.exception(Exception)
             raise

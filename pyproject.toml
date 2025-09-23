@@ -46,6 +46,7 @@ dev = [
   "sphinx",
   "sphinx-autodoc-typehints",
   "furo",
+  "mongomock"
 ]
 notebook = [
   "jupyter",

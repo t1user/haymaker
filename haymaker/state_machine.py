@@ -56,16 +56,15 @@ class OrderInfo:
             "orderId": self.trade.order.orderId,
             **{k: tree(v) for k, v in self.__dict__.items()},
             "active": self.active,
+            "priority": len(self.trade.log),
         }
 
     def decode(self, data: dict[str, Any]) -> None:
-        data.pop("active")
-        self.__dict__.update(**data)
+        self.__dict__.update(**self._clear_keys(data))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> OrderInfo:
-        data.pop("active")
-        return cls(**data)
+        return cls(**cls._clear_keys(data))
 
     @classmethod
     def from_trade(cls, trade: ibi.Trade) -> OrderInfo:
@@ -74,6 +73,12 @@ class OrderInfo:
             action="MANUAL" if trade.order.orderId < 0 else "UNKNOWN",
             trade=trade,
         )
+
+    @staticmethod
+    def _clear_keys(data: dict[str, Any]) -> dict[str, Any]:
+        data.pop("active", None)
+        data.pop("priority", None)
+        return data
 
 
 T = TypeVar("T")

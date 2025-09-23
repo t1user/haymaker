@@ -2,13 +2,12 @@ import csv
 import pickle
 import shutil
 import tempfile
-
-# import threading
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
-# import mongomock  # type: ignore
+import mongomock  # type: ignore
 import pandas as pd
 import pymongo  # type: ignore
 import pytest
@@ -23,10 +22,6 @@ from haymaker.saver import (
     MongoSaver,
     PickleSaver,
 )
-
-# MONGOSAVER TESTS HAVE TO BE UNCOMMENTED ENSURING NO RACE CONDITIONS
-# (WHEN THE ISSUE IS SOLVED) LLM GENERATED TESTS HAVE TO BE REVIEWED
-
 
 ##############################################
 # Test AsyncSaveManager
@@ -811,8 +806,14 @@ class TestMongoSaver:
         saver.save(test_data)
 
         mock_collection.update_one.assert_called_once_with(
-            {"id": "user123"},  # Query filter
-            {"$set": test_data},  # Update data
+            {
+                "id": "user123",
+                "$or": [
+                    {"priority": {"$lte": 0}},
+                    {"priority": {"$exists": False}},
+                ],
+            },
+            {"$set": test_data},
             upsert=True,
         )
         mock_collection.insert_one.assert_not_called()
@@ -975,7 +976,15 @@ class TestMongoSaver:
         saver.save(test_data)
 
         mock_collection.update_one.assert_called_once_with(
-            {"id": 12345}, {"$set": test_data}, upsert=True
+            {
+                "id": 12345,
+                "$or": [
+                    {"priority": {"$lte": 0}},
+                    {"priority": {"$exists": False}},
+                ],
+            },
+            {"$set": test_data},
+            upsert=True,
         )
 
     def test_multiple_saves_and_reads(self, mongo_saver_with_query_key):
@@ -1054,55 +1063,56 @@ class TestMongoSaverIntegration:
 # ##### Test if MongoSaver has no race conditions
 
 
-# @pytest.fixture
-# def mongo_saver(monkeypatch):
-#     client = mongomock.MongoClient()
-#     monkeypatch.setattr("haymaker.databases.get_mongo_client", lambda: client)
-#     saver = MongoSaver(collection="test_collection", query_key="id")
-#     return saver
+@pytest.fixture
+def mongo_saver(monkeypatch):
+    client = mongomock.MongoClient()
+    monkeypatch.setattr("haymaker.databases.get_mongo_client", lambda: client)
+    saver = MongoSaver(collection="test_collection", query_key="id", client=client)
+    yield saver
+    client.close()
 
 
-# def test_no_duplicates_under_race(mongo_saver):
-#     """
-#     Simulate concurrent inserts/updates with the same query_key
-#     and ensure only one document exists per query_key after all threads finish.
-#     """
-#     key = "race1"
-#     initial_data = {"id": key, "value": 0}
+def test_no_duplicates_under_race(mongo_saver):
+    """
+    Simulate concurrent inserts/updates with the same query_key
+    and ensure only one document exists per query_key after all threads finish.
+    """
+    key = "race1"
+    initial_data = {"id": key, "value": 0}
 
-#     def worker(value):
-#         data = initial_data.copy()
-#         data["value"] = value
-#         mongo_saver.save(data)
+    def worker(value):
+        data = initial_data.copy()
+        data["value"] = value
+        mongo_saver.save(data)
 
-#     threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
-#     for t in threads:
-#         t.start()
-#     for t in threads:
-#         t.join()
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
-#     docs = list(mongo_saver.collection.find({"id": key}))
-#     assert len(docs) == 1
-#     assert docs[0]["value"] in range(10)
+    docs = list(mongo_saver.collection.find({"id": key}))
+    assert len(docs) == 1
+    assert docs[0]["value"] in range(10)
 
 
-# def test_multiple_keys_race(mongo_saver):
-#     """
-#     Ensure that multiple query_keys concurrently saved do not interfere.
-#     """
-#     keys = [f"key{i}" for i in range(5)]
+def test_multiple_keys_race(mongo_saver):
+    """
+    Ensure that multiple query_keys concurrently saved do not interfere.
+    """
+    keys = [f"key{i}" for i in range(5)]
 
-#     def worker(k):
-#         for i in range(5):
-#             mongo_saver.save({"id": k, "value": i})
+    def worker(k):
+        for i in range(5):
+            mongo_saver.save({"id": k, "value": i})
 
-#     threads = [threading.Thread(target=worker, args=(k,)) for k in keys]
-#     for t in threads:
-#         t.start()
-#     for t in threads:
-#         t.join()
+    threads = [threading.Thread(target=worker, args=(k,)) for k in keys]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
-#     for k in keys:
-#         docs = list(mongo_saver.collection.find({"id": k}))
-#         assert len(docs) == 1
-#         assert docs[0]["value"] in range(5)
+    for k in keys:
+        docs = list(mongo_saver.collection.find({"id": k}))
+        assert len(docs) == 1
+        assert docs[0]["value"] in range(5)
