@@ -56,8 +56,14 @@ class OrderInfo:
             "orderId": self.trade.order.orderId,
             **{k: tree(v) for k, v in self.__dict__.items()},
             "active": self.active,
-            "priority": len(self.trade.log),
+            "priority": self._priority(self.trade),
         }
+
+    @staticmethod
+    def _priority(trade: ibi.Trade) -> int:
+        if not trade.log:
+            return 0
+        return int(max([t.time.timestamp() for t in trade.log]) * 1000)
 
     def decode(self, data: dict[str, Any]) -> None:
         self.__dict__.update(**self._clear_keys(data))

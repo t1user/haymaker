@@ -157,17 +157,28 @@ class MongoSaver(AbstractBaseSaver):
             if self.query_key and (key := data.get(self.query_key)):
                 # higher priority wins, if no priority given, later write wins
                 # for two writes with equal priority later one wins
-                self.collection.update_one(
-                    {
-                        self.query_key: key,
-                        "$or": [
-                            {"priority": {"$lte": data.get("priority", 0)}},
-                            {"priority": {"$exists": False}},
-                        ],
-                    },
-                    {"$set": data},
-                    upsert=True,
-                )
+                try:
+                    self.collection.update_one(
+                        {
+                            self.query_key: key,
+                            "$or": [
+                                {"priority": {"$lte": data.get("priority", 0)}},
+                                {"priority": {"$exists": False}},
+                            ],
+                        },
+                        {"$set": data},
+                        upsert=True,
+                    )
+                except pymongo.errors.DuplicateKeyError:
+                    # mongo didn't find an object with hired priority in db
+                    # so it tried to upsert and hit a duplicate
+                    # it doesn't matter, it just means object we're trying to
+                    # save has lower priority so should be ignored
+                    log.debug(
+                        f"Ignoring lower priority update for {self.query_key}={key}, "
+                        f"priority={data.get('priority', 0)}"
+                    )
+
             else:
                 self.collection.insert_one(data)  # noqa
         except Exception:
