@@ -25,6 +25,7 @@ class FutureRoller:
         self.sm = controller.sm
         self.excluded_strategies = excluded_strategies
         self._trade_generator: dict[int, Generator] = {}
+        self._fill_prices: dict[ibi.Future, float] = {}
         log.debug("FutureRoller initiated")
 
     @cached_property
@@ -228,6 +229,7 @@ class FutureRoller:
                     strategy,
                     old_contract,
                     new_contract,
+                    trade.orderStatus.avgFillPrice,
                 )
             )
             # generate commission report so that blotter record is created
@@ -249,6 +251,9 @@ class FutureRoller:
             self.adjust_records_and_orders_for_strategy(
                 strategy_str, strategy, old_contract, new_contract
             )
+
+    def register_fill_price(self, newContract: ibi.Future, price: float) -> None:
+        self._fill_prices[newContract] = price
 
     def trade_callback(self, trade: ibi.Trade):
         """
@@ -282,13 +287,16 @@ class FutureRoller:
         strategy: Strategy,
         old_contract: ibi.Future,
         new_contract: ibi.Future,
+        bag_fill_price: float,
     ) -> None:
         log.debug(
             f"Post-roll adjustment for {strategy_str} contract update from "
             f"{old_contract.localSymbol} to {new_contract.localSymbol}"
         )
         self.adjust_strategy_records(strategy_str, strategy, old_contract, new_contract)
-        self.adjust_strategy_orders(strategy_str, strategy, old_contract, new_contract)
+        self.adjust_strategy_orders(
+            strategy_str, strategy, old_contract, new_contract, bag_fill_price
+        )
 
     def figure_out_strategies_to_trade(
         self, contract: ibi.Future, total_position: float
@@ -451,8 +459,9 @@ class FutureRoller:
         strategy: Strategy,
         old_contract: ibi.Future,
         new_contract: ibi.Future,
+        fill_price: float,
     ) -> None:
-        log.debug(f"Will adjust resting orders for: {strategy_str}")
+        log.debug(f"Will adjust resting orders for: {strategy_str}, {fill_price=}")
         for oi in self.sm.orders_for_strategy(strategy_str):
             old_trade = oi.trade
             old_trade.cancelledEvent += partial(
@@ -461,6 +470,7 @@ class FutureRoller:
                 new_contract=new_contract,
                 strategy_str=strategy_str,
                 strategy=strategy,
+                fill_price=fill_price,
             )
             cancelled_trade = self.controller.cancel(oi.trade)
             if cancelled_trade:
@@ -477,8 +487,10 @@ class FutureRoller:
         new_contract: ibi.Future,
         strategy_str: str,
         strategy: Strategy,
+        fill_price: float,
     ) -> None:
         order_kwarg_dict = ibi.util.dataclassNonDefaults(cancelled_trade.order)
+        old_id = order_kwarg_dict.get("orderId")
 
         for key in ("orderId", "permId", "softDollarTier", "clientId"):
             if order_kwarg_dict.get(key):
@@ -491,6 +503,15 @@ class FutureRoller:
                 * oi.params["sl_points"],
                 oi.params["min_tick"],
             )
+
+        for price_field in ("lmtPrice", "trailStopPrice", "adjustedStopPrice"):
+            if order_kwarg_dict.get(price_field):
+                order_kwarg_dict[price_field] += fill_price
+                log.debug(
+                    f"Resting order {old_id} will adjust {price_field} "
+                    f"by: {fill_price} to: {order_kwarg_dict[price_field]}"
+                )
+
         new_order = ibi.Order(**order_kwarg_dict)
         new_trade = self.controller.trade(
             strategy_str, new_contract, new_order, oi.action, strategy
