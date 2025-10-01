@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import cached_property, partial
 from typing import TYPE_CHECKING, Generator
@@ -206,8 +207,10 @@ class FutureRoller:
             )
             del self._trade_generator[new_contract.conId]
 
-        self.handle_strategies_not_to_trade(
-            strategies_not_to_trade, old_contract, new_contract
+        asyncio.create_task(
+            self.handle_strategies_not_to_trade(
+                strategies_not_to_trade, old_contract, new_contract
+            )
         )
 
     def handle_strategies_to_trade(
@@ -242,15 +245,38 @@ class FutureRoller:
             log.debug(f"{strategy_str} will yield")
             yield
 
-    def handle_strategies_not_to_trade(
+    async def handle_strategies_not_to_trade(
         self, strategies: list[str], old_contract, new_contract
     ) -> None:
+        combos = []
         for strategy_str in strategies:
             strategy = self.sm.strategy[strategy_str]
-            log.debug(f"No roll trade for {strategy_str}")
-            self.adjust_records_and_orders_for_strategy(
-                strategy_str, strategy, old_contract, new_contract
-            )
+            log.debug(f"No roll trade for {strategy_str}, adjusting orders.")
+            combo = self.make_combo(old_contract, new_contract)
+            combos.append(combo)
+            price = await self.request_data(combo, self.controller.ib)
+            # testing for float('nan'), which will be returned here if
+            # no price obtained (it doesn't equal to itself)
+            if price == price:
+                self.adjust_records_and_orders_for_strategy(
+                    strategy_str, strategy, old_contract, new_contract, price
+                )
+            else:
+                log.error(f"Failed to obtain price for {combo.symbol}")
+        for combo in combos:
+            self.controller.ib.cancelMktData(combo)
+
+    @staticmethod
+    async def request_data(contract: ibi.Contract, ib: ibi.IB) -> float:
+        ticker = ib.reqMktData(contract, "221")
+        counter = 0
+        # if price not obtained, it's float('nan') which doesn't equal
+        # to anything, including itself
+        while (price := ticker.marketPrice()) != price and counter < 500:
+            await asyncio.sleep(0.01)
+            counter += 1
+        log.debug(f"Combo price for {contract.symbol}: {price}")
+        return price
 
     def register_fill_price(self, newContract: ibi.Future, price: float) -> None:
         self._fill_prices[newContract] = price
