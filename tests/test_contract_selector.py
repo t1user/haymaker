@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Type
 
 import pytest
@@ -122,6 +122,26 @@ es_chain: list[ContractDetails] = misc.decode_tree(es_details_chain)
 es_details_dict = {
     details.contract.localSymbol: details for details in es_chain  # type: ignore
 }
+
+
+def test_date_ranges():
+    selector = FutureSelector.from_details(es_chain)
+    roll_dates = [future_wrapper.roll_day for future_wrapper in selector.all_contracts]
+    date_tuples = [
+        (start, stop) for start, stop in zip(roll_dates[:-1], roll_dates[1:])
+    ]
+    # skipping first item as difficult to generate
+    date_tuples_from_ranges = [(x[1], x[2]) for x in selector.date_ranges[1:]]
+
+    assert date_tuples == date_tuples_from_ranges
+    # starts with first contract
+    assert selector.date_ranges[0][0] == selector.all_contracts[0].contract
+    # goes all the way to the last contract
+    assert selector.date_ranges[-1][0] == selector.all_contracts[-1].contract
+    # first contract date range at least 30 days
+    assert (selector.date_ranges[0][2] - selector.date_ranges[0][1]) >= timedelta(
+        days=30
+    )
 
 
 @pytest.mark.parametrize("symbol,expected_last_trading_day", es_parameters)

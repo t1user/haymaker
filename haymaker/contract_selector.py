@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import cached_property
 from logging import getLogger
 from typing import ClassVar, Self, Type
@@ -305,31 +305,55 @@ class FutureSelector(AbstractBaseContractSelector):
     @cached_property
     def contracts(self) -> list[AbstractBaseFutureWrapper]:
         """Contracts eligible for trading sorted by roll_date."""
+        # all contracts are already sorted so just filter by date
+        return [
+            c for c in self.all_contracts if self._bdays(self.today, c.roll_day) > 0
+        ]
+
+    @cached_property
+    def all_contracts(self) -> list[AbstractBaseFutureWrapper]:
+        """All contracts sorted by roll_date."""
         return sorted(
-            [
-                c
-                for c in self.futuresChain
-                if (c.isActiveMonth and self._bdays(self.today, c.roll_day)) > 0
-            ],
+            [c for c in self.futuresChain if c.isActiveMonth],
             key=lambda x: x.roll_day,
         )
 
-    @cached_property
-    def back_contracts(self) -> list[AbstractBaseFutureWrapper]:
-        """Historical contracts sorted by roll_date."""
-        return sorted(
-            [
-                c
-                for c in self.futuresChain
-                if (c.isActiveMonth and self._bdays(self.today, c.roll_day)) <= 0
-            ],
-            key=lambda x: x.roll_day,
-        )
+    @staticmethod
+    def _timedelta(roll_dates: list[timedelta], default=30) -> timedelta:
+        # typical timedelta between subsequent roll dates
+        # or default if cannot be determined
+        # used to determine earliest cutoff point for the first contract
+        if len(roll_dates) < 2:
+            return timedelta(days=default)
+        else:
+            return min([b - a for a, b in zip(roll_dates[:-1], roll_dates[1:])])
 
     @cached_property
-    def back_roll_days(self) -> dict[ibi.Future, datetime]:
-        # roll date for every contract
-        return {c.contract: c.roll_day for c in self.back_contracts}
+    def date_ranges(self) -> list[tuple[ibi.Future, datetime, datetime]]:
+        """Return a tuple of contract, start, end date for which contract is valid"""
+        # this is used to determine typical timedelta between roll
+        # dates of subsequent contracts
+        roll_dates_timedeltas = []
+        output = []
+        # starting at second contract get start and end dates
+        for first, second in zip(self.all_contracts[:-1], self.all_contracts[1:]):
+            output.append((second.contract, first.roll_day, second.roll_day))
+            roll_dates_timedeltas.append(second.roll_day - first.roll_day)
+        roll_timedelta = (
+            min(roll_dates_timedeltas)
+            if len(roll_dates_timedeltas) > 1
+            else timedelta(days=30)
+        )
+        first_contract = self.all_contracts[0]
+        output.insert(
+            0,
+            (
+                first_contract.contract,
+                first_contract.roll_day - roll_timedelta,
+                first_contract.roll_day,
+            ),
+        )
+        return output
 
     @staticmethod
     def _bdays(from_: datetime, to_: datetime) -> int:

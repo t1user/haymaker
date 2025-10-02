@@ -264,7 +264,10 @@ class FutureRoller:
             else:
                 log.error(f"Failed to obtain price for {combo.symbol}")
         for combo in combos:
-            self.controller.ib.cancelMktData(combo)
+            try:
+                self.controller.ib.cancelMktData(combo)
+            except Exception:
+                log.exception("Cannot cancel combo price subsription!")
 
     @staticmethod
     async def request_data(contract: ibi.Contract, ib: ibi.IB) -> float:
