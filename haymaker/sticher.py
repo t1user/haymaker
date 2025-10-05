@@ -1,9 +1,10 @@
 import operator as op
 from collections.abc import Callable
-from dataclasses import dataclass, field, fields
-from datetime import datetime, timedelta
+from dataclasses import dataclass, fields
+from datetime import datetime
 from functools import cached_property
-from typing import Any, Awaitable, Literal
+from itertools import accumulate
+from typing import Any, AsyncGenerator, Awaitable, Literal
 
 import ib_insync as ibi
 import pandas as pd
@@ -11,7 +12,7 @@ import pandas as pd
 from . import misc
 from .base import Atom
 from .contract_selector import FutureSelector
-from .datastore import AbstractBaseStore
+from .datastore import AbstractBaseStore, AsyncAbstractBaseStore
 from .saver import AbstractBaseSaver
 
 
@@ -23,9 +24,12 @@ class NonOverLappingDfsError(Exception):
     pass
 
 
+class MissingContract(Exception):
+    pass
+
+
 @dataclass
 class Sticher(Atom):
-    contract: ibi.Contract
     saver: AbstractBaseSaver
 
     def __post_init__(self):
@@ -33,6 +37,8 @@ class Sticher(Atom):
 
     def onStart(self, data: Any, *args: Any) -> None:
         super().onStart(data)
+        contract = data.get("contract")
+        assert contract, f"{self} received no contract onStart"
         self.pull_data()
 
     def pull_data(self):
@@ -52,18 +58,21 @@ class Sticher(Atom):
         pass
 
 
+_contract_fields: list[str] = [f.name for f in fields(ibi.Contract)]
+
+
 @dataclass
 class FuturesSticher:
-    symbol: str
-    store: AbstractBaseStore
+    source: dict[ibi.Future, pd.DataFrame]
     adjust_type: Literal["add", "mul", None] = "add"
-    _contract_fields: list[str] = field(
-        default_factory=lambda: [field.name for field in fields(ibi.Contract)],
-        repr=False,
-    )
+    roll_bdays: int | None = None
+    roll_margin_bdays: int | None = None
 
     def __post_init__(self):
-        assert self.adjust_type is None or self.adjust_type in ["add", "mul"]
+        assert self.adjust_type is None or self.adjust_type in [
+            "add",
+            "mul",
+        ], f"Unknown adjust type operator: {self.adjust_type}"
 
     @cached_property
     def operator(self) -> Callable | None:
@@ -76,116 +85,105 @@ class FuturesSticher:
         ]
 
     @cached_property
-    def _target_symbols(self) -> list[str]:
-        return [
-            symbol
-            for symbol in self._all_symbols
-            if symbol.startswith(self.symbol) and symbol.endswith("_FUT")
-        ]
+    def _selector(self) -> FutureSelector:
+        params = {
+            param: p
+            for param in ("roll_bdays", "roll_margin_bdays")
+            if (p := getattr(self, param)) is not None
+        }
+        return FutureSelector.from_contracts(list(self.source.keys()), **params)
 
     @cached_property
-    def _all_symbols(self) -> list[str]:
-        return self.store.keys()
+    def _date_ranges(self) -> dict[ibi.Future, tuple[datetime, datetime]]:
 
-    @cached_property
-    def _contracts(self) -> dict[ibi.Future, str]:
-        # contracts are not sorted, `_selector` will sort them
         return {
-            future: symbol
-            for future, symbol in {
-                ibi.Contract.create(
-                    **{
-                        k: v
-                        for k, v in self.store.read_metadata(symbol).items()
-                        if k in self._contract_fields
-                    }
-                ): symbol
-                for symbol in self._target_symbols
-            }.items()
-            if isinstance(future, ibi.Future)
+            contract: (start, stop)
+            for (contract, start, stop) in self._selector.date_ranges
         }
 
-    @cached_property
-    def _selector(self) -> FutureSelector:
-        return FutureSelector.from_contracts(
-            list(self._contracts.keys()),
-        )
+    @staticmethod
+    def _tz(date: datetime, df: pd.DataFrame) -> pd.Timestamp:
+        # just copy timezone from corresponding df even if I get it
+        # wrong, stiching point might get shifted a couple hours but
+        # it will not matter as long as the day is roughly correct
+        return pd.Timestamp(date, tz=df.index.tzinfo)  # type: ignore
 
     @cached_property
-    def _timedelta(self) -> timedelta:
-        roll_dates = list(self._selector.back_roll_days.values())
-        if len(roll_dates) < 2:
-            return timedelta(days=90)
-        else:
-            return min([b - a for a, b in zip(roll_dates[:-1], roll_dates[1:])])
+    def _dfs(self) -> list[pd.DataFrame]:
+        output: list[pd.DataFrame] = []
+        # it's ok to rely on dfs being sorted (`self._date_ranges`
+        # responsible for that)
+        for contract, (start_date, stop_date) in self._date_ranges.items():
+            try:
+                df = self.source[contract]
+            except KeyError:
+                # impossible to occur if code working
+                raise MissingContract("No df supplied for {contract}")
 
-    @cached_property
-    def _df_list(self) -> list[tuple[pd.DataFrame, datetime]]:
-        # This method reads data from database
-        assert len(self._target_symbols) == len(self._selector.back_roll_days)
-        return [
-            (
-                # df is not None because `_target_symbols` has only symbols
-                # that exist in database
-                (df := self.store.read(self._contracts[contract])),
-                pd.Timestamp(roll_date, tz=df.index.tzinfo),  # type: ignore
-            )
-            for contract, roll_date in self._selector.back_roll_days.items()
-        ]
-
-    @cached_property
-    def _filtered_df_list(self) -> list[tuple[pd.DataFrame, datetime]]:
-        dfs: list[tuple[pd.DataFrame, datetime]] = []
-        for df, roll_date in self._df_list:
-            if df is None or df.empty or not misc.is_timezone_aware(df):
-                dfs = []
+            df_slice = df.loc[
+                self._tz(start_date, df) : self._tz(stop_date, df)  # type: ignore
+            ]
+            if df_slice.empty or not misc.is_timezone_aware(df):
+                # one unusable df -> start-over
+                output = []
             else:
-                dfs.append((df, roll_date))
-        if dfs:
-            return dfs
-        else:
-            raise NoDataError("No non-empty dataframes returned from database.")
+                output.append(df_slice)
+        # No verification at this point if the whole series is continuous
+        # handled in `self._offsets` -> syncing indices
+        return output
 
     @cached_property
-    def df(self) -> pd.DataFrame:
-        full_df: pd.DataFrame | None = None
-        for df, roll_date in self._filtered_df_list:
-            if full_df is None:
-                # this is first df only
-                start = max(roll_date - self._timedelta, df.index[0])
-                full_df = df.loc[start:roll_date]  # type: ignore
+    def _offsets(self) -> list[float]:
+        offsets: list[float] = []
+        for df0, df1 in zip(self._dfs[1:], self._dfs[:-1]):
+            # find sync row
+            sync_index = df0.index[-1]
+
+            if sync_index in df1.index:
+                old_row = df0.loc[sync_index]
+                new_row = df1.loc[sync_index]
             else:
-                # process df by chosing only relevant rows
-                start_index = full_df.index[-1]
-                end_index = min(roll_date, df.index[-1])
-                new_df = df.loc[start_index:end_index]
+                try:
+                    new_sync_index = self._find_common_index(df0, df1, sync_index)
+                    old_row = df0.loc[new_sync_index]
+                    new_row = df1.loc[new_sync_index]
+                except NonOverLappingDfsError:
+                    # start over; discard all previous values because
+                    # there's a gap between dfs impossible to reconcile
+                    offsets = []
+                    continue
 
-                # find sync row
-                sync_index = full_df.index[-1]
+            offsets.append(self.offset(old_row.close, new_row.close))
+        if offsets:
+            return offsets
+        else:
+            raise NoDataError("No suitable data to create a continuous df.")
 
-                if sync_index in df.index:
-                    old_row = full_df.loc[sync_index]
-                    new_row = df.loc[sync_index]
-                else:
-                    try:
-                        new_sync_index = self._find_common_index(
-                            full_df, df, sync_index
+    @cached_property
+    def data(self) -> pd.DataFrame:
+        assert len(self._offsets) == len(self._dfs) - 1
+        dfs = list(
+            # we're going back to front
+            reversed(
+                [
+                    # latest df doesn't need adjusting
+                    self._dfs[-1],
+                    *[
+                        self.adjust(df, offset)
+                        for df, offset in zip(
+                            # going from end to start
+                            # skipping last df, which needs no adjstment
+                            reversed(self._dfs[:-1]),
+                            # no offset for last df
+                            accumulate(reversed(self._offsets)),
                         )
-                        old_row = full_df.loc[new_sync_index]
-                        new_row = df.loc[new_sync_index]
-                    except NonOverLappingDfsError:
-                        full_df = df.loc[roll_date:]  # type: ignore
-                        continue
-
-                offset = self.offset(old_row.close, new_row.close)
-
-                new_full_df = self.adjust(full_df, offset)
-                full_df = pd.concat([new_full_df, new_df.iloc[1:]])
-
-        if full_df is None or full_df.empty:
-            raise NoDataError()
-        else:
-            return full_df
+                    ],
+                ]
+            )
+        )
+        df = pd.concat(dfs)
+        # duplicates on df joining points
+        return df[~df.index.duplicated()]
 
     def offset(self, old_price: float, new_price: float) -> float:
         return self.reverse_operator(new_price, old_price)
@@ -218,3 +216,88 @@ class FuturesSticher:
             )
         inner_index_cut = inner.loc[:sync_index].index  # type: ignore
         return inner_index_cut[-1]
+
+
+@dataclass
+class FuturesReader:
+    symbol: str
+    store: AbstractBaseStore
+
+    @cached_property
+    def _all_symbols(self) -> list[str]:
+        return self.store.keys()
+
+    @cached_property
+    def _target_symbols(self) -> list[str]:
+        return [
+            symbol
+            for symbol in self._all_symbols
+            if symbol.startswith(self.symbol) and symbol.endswith("_FUT")
+        ]
+
+    @cached_property
+    def _contracts(self) -> dict[ibi.Future, str]:
+        # contracts are not sorted in any way
+        return {
+            future: symbol
+            for future, symbol in {
+                ibi.Contract.create(
+                    **{
+                        k: v
+                        for k, v in self.store.read_metadata(symbol).items()
+                        if k in _contract_fields
+                    }
+                ): symbol
+                for symbol in self._target_symbols
+            }.items()
+            if isinstance(future, ibi.Future)
+        }
+
+    @cached_property
+    def data(self) -> dict[ibi.Future, pd.DataFrame]:
+        # df is not None because `_contracts` has only symbols that
+        # exist in database -> make type checker shut-up
+        return {
+            contract: self.store.read(symbol)  # type: ignore
+            for contract, symbol in self._contracts.items()
+        }
+
+
+@dataclass
+class AsyncFuturesReader:
+    symbol: str
+    store: AsyncAbstractBaseStore
+
+    async def _all_symbols(self) -> AsyncGenerator[str, None]:
+        for symbol in await self.store.keys():
+            yield symbol
+
+    async def _target_symbols(self) -> AsyncGenerator[str, None]:
+        async for symbol in self._all_symbols():
+            if symbol.startswith(self.symbol) and symbol.endswith("_FUT"):
+                yield symbol
+
+    async def _contracts(self) -> AsyncGenerator[tuple[ibi.Future, str], None]:
+        # contracts are not sorted in any way
+        async for symbol in self._target_symbols():
+            metadata = await self.store.read_metadata(symbol)
+            if isinstance(
+                (
+                    future := ibi.Contract.create(
+                        **{k: v for k, v in metadata.items() if k in _contract_fields}
+                    )
+                ),
+                ibi.Future,
+            ):
+                yield (future, symbol)
+
+    async def _data(self) -> AsyncGenerator[tuple[ibi.Future, pd.DataFrame], None]:
+        # df is not None because `_contracts` has only symbols that
+        # exist in database -> make type checker shut-up
+        async for contract, symbol in self._contracts():
+            df = await self.store.read(symbol)
+            assert df is not None
+            yield contract, df
+
+    async def data(self) -> dict[ibi.Future, pd.DataFrame]:
+        return {contract: df async for contract, df in self._data()}

@@ -318,16 +318,6 @@ class FutureSelector(AbstractBaseContractSelector):
             key=lambda x: x.roll_day,
         )
 
-    @staticmethod
-    def _timedelta(roll_dates: list[timedelta], default=30) -> timedelta:
-        # typical timedelta between subsequent roll dates
-        # or default if cannot be determined
-        # used to determine earliest cutoff point for the first contract
-        if len(roll_dates) < 2:
-            return timedelta(days=default)
-        else:
-            return min([b - a for a, b in zip(roll_dates[:-1], roll_dates[1:])])
-
     @cached_property
     def date_ranges(self) -> list[tuple[ibi.Future, datetime, datetime]]:
         """Return a tuple of contract, start, end date for which contract is valid"""

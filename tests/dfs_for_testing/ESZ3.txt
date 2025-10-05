@@ -1,0 +1,1 @@
+{'Future': {'secType': 'FUT', 'conId': 495512552, 'symbol': 'ES', 'lastTradeDateOrContractMonth': '20231215', 'multiplier': '50', 'exchange': 'CME', 'currency': 'USD', 'localSymbol': 'ESZ3', 'tradingClass': 'ES'}}

@@ -1,38 +1,40 @@
+from pathlib import Path
 from unittest.mock import Mock
 
 import pandas as pd
 import pytest
 
+from haymaker import misc
 from haymaker.sticher import FuturesSticher
 
 
 def test_offset():
-    sticher = FuturesSticher("XX", Mock())
+    sticher = FuturesSticher({Mock(): Mock()})
     assert sticher.offset(5, 7) == 2
 
 
 def test_offset_negative():
-    sticher = FuturesSticher("XX", Mock())
+    sticher = FuturesSticher({Mock(): Mock()})
     assert sticher.offset(5, 4) == -1
 
 
 def test_offset_mul():
-    sticher = FuturesSticher("XXX", Mock(), "mul")
+    sticher = FuturesSticher({Mock(): Mock()}, "mul")
     assert sticher.offset(0.5, 1) == 2
 
 
 def test_offset_None():
-    sticher = FuturesSticher("XXX", Mock(), None)
+    sticher = FuturesSticher({Mock(): Mock()}, None)
     assert sticher.offset(5, 7) == 0
 
 
 def test_sticher_doesnt_accept_wrong_adjust_type():
     with pytest.raises(AssertionError):
-        FuturesSticher("XX", Mock(), "xxx")
+        FuturesSticher([(Mock(), Mock())], "xxx")
 
 
 def test_adjust():
-    sticher = FuturesSticher("XXX", Mock())
+    sticher = FuturesSticher({Mock(): Mock()})
     df = pd.DataFrame(
         {
             "open": [1, 2, 3],
@@ -62,7 +64,7 @@ def test_adjust():
 
 
 def test_adjust_negative():
-    sticher = FuturesSticher("XXX", Mock())
+    sticher = FuturesSticher({Mock(): Mock()})
     df = pd.DataFrame(
         {
             "open": [2, 3, 4],
@@ -93,7 +95,7 @@ def test_adjust_negative():
 
 
 def test_adjust_mul():
-    sticher = FuturesSticher("XXX", Mock(), "mul")
+    sticher = FuturesSticher({Mock(): Mock()}, "mul")
     df = pd.DataFrame(
         {
             "open": [1, 2, 3],
@@ -123,7 +125,7 @@ def test_adjust_mul():
 
 
 def test_adjust_mul_less_than_zero():
-    sticher = FuturesSticher("XXX", Mock(), "mul")
+    sticher = FuturesSticher({Mock(): Mock()}, "mul")
     df = pd.DataFrame(
         {
             "open": [2.0, 4.0, 6.0],
@@ -153,7 +155,7 @@ def test_adjust_mul_less_than_zero():
 
 
 def test_adjust_none():
-    sticher = FuturesSticher("XXX", Mock(), None)
+    sticher = FuturesSticher({Mock(): Mock()}, None)
     df = pd.DataFrame(
         {
             "open": [1, 2, 3],
@@ -167,3 +169,110 @@ def test_adjust_none():
     )
     adjusted = sticher.adjust(df, 0)
     pd.testing.assert_frame_equal(adjusted, df)
+
+
+def test_params_passed_from_FuturesSticher_to_FutureSelector_both_not_None():
+    sticher = FuturesSticher({Mock(): Mock()}, roll_bdays=666, roll_margin_bdays=999)
+    assert sticher._selector.roll_bdays == 666
+    assert sticher._selector.roll_margin_bdays == 999
+
+
+def test_params_passed_from_FuturesSticher_to_FutureSelector_one_not_None():
+    sticher = FuturesSticher({Mock(): Mock()}, roll_bdays=666)
+    assert sticher._selector.roll_bdays == 666
+    assert sticher._selector.roll_margin_bdays is not None
+
+
+def test_params_passed_from_FuturesSticher_to_FutureSelector_other_one_not_None():
+    sticher = FuturesSticher({Mock(): Mock()}, roll_margin_bdays=666)
+    assert sticher._selector.roll_margin_bdays == 666
+    assert sticher._selector.roll_bdays is not None
+
+
+def test_params_passed_from_FuturesSticher_to_FutureSelector_both_None():
+    sticher = FuturesSticher({Mock(): Mock()}, roll_margin_bdays=666)
+    assert sticher._selector.roll_bdays is not None
+    assert sticher._selector.roll_margin_bdays is not None
+
+
+@pytest.fixture(scope="module")
+def FuturesSticher_source():
+    """
+    Return a dict[ibi.Future, df] typically returned from db.
+    """
+    test_dir = Path(__file__).parent
+    p = Path(test_dir / "dfs_for_testing")
+    # print([i for i in p.iterdir()])
+    csv_files = p.glob("**/*.csv")
+    dfs = {}
+    for file in csv_files:
+        name = file.name.split(".")[0]
+        df = pd.read_csv(file).set_index("date")
+        df.index = pd.to_datetime(df.index)
+
+        txt_file = Path(p / f"{name}.txt")
+        # contract is saved as string
+        contract_object = misc.decode_tree(eval(txt_file.read_text()))
+
+        dfs[contract_object] = df
+    return dfs
+
+
+@pytest.fixture(scope="module")
+def one_sticher(FuturesSticher_source):
+    return FuturesSticher(FuturesSticher_source)
+
+
+def test_FuturesSticher_last_df_not_adjusted(one_sticher):
+    assert one_sticher._dfs[-1].close[-1] == one_sticher.data.iloc[-1].close
+
+
+def test_FuturesSticher_first_df_cummulative_adjustment_correct(one_sticher):
+    first_input_df = one_sticher._dfs[0]
+    output_df = one_sticher.data
+    cummulative_adjustment = sum(one_sticher._offsets)
+    assert (
+        output_df.iloc[0].close - first_input_df.iloc[0].close == cummulative_adjustment
+    )
+
+
+def test_resulting_df_monotonic(one_sticher):
+    assert one_sticher.data.index.is_monotonic_increasing
+
+
+def test_resulting_df_no_index_duplicates(one_sticher):
+    df = one_sticher.data
+    print(df[df.duplicated()])
+    assert df[df.index.duplicated()].empty
+
+
+def test_resulting_df_bounds_correct(one_sticher):
+    first_output_point = one_sticher.data.index[0]
+    last_output_point = one_sticher.data.index[-1]
+
+    first_input_point = one_sticher._dfs[0].index[0]
+    last_input_point = one_sticher._dfs[-1].index[-1]
+
+    assert first_input_point == first_output_point
+    assert last_input_point == last_output_point
+
+
+def test_all_data_points_used(one_sticher):
+    input_data_points = sum([len(df) for df in one_sticher._dfs])
+    output_data_points = len(one_sticher.data)
+    # number of offsets = number of joints, which drop duplicate point
+    assert input_data_points - len(one_sticher._offsets) == output_data_points
+
+
+def test_date_range_for_every_contract(one_sticher):
+    assert len(one_sticher.source) == len(one_sticher._date_ranges)
+
+
+def test_adjustment_correct(one_sticher):
+    # last but one df close point
+    unadjusted_index = one_sticher._dfs[-2].index[-1]
+    unadjusted_close = one_sticher._dfs[-2].iloc[-1].close
+
+    adjusted_close = one_sticher.data.loc[unadjusted_index].close
+
+    assert adjusted_close - unadjusted_close == one_sticher._offsets[-1]
