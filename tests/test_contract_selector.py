@@ -6,6 +6,7 @@ import pytest
 from contract_details_data import (  # type: ignore
     es_details_chain,
     gold_details_chain,
+    nq_details_chain,
     stock_details_chain,
 )
 from ib_insync import Contract, ContractDetails, Future, Stock  # noqa
@@ -240,6 +241,23 @@ def test_correct_active_contract_future_date(details_chain):
     )
 
 
+def test_previous_contract_no_expired_provided(details_chain):
+    # if expired contracts not include in chain previous is same as
+    # active
+    selector = selector_factory(details_chain)
+    selector.today = datetime(2025, 9, 17)
+    assert selector.active_contract == Future(
+        conId=495512563,
+        symbol="ES",
+        lastTradeDateOrContractMonth="20251219",
+        multiplier="50",
+        exchange="CME",
+        currency="USD",
+        localSymbol="ESZ5",
+        tradingClass="ES",
+    )
+
+
 def test_set_selector_params(details_chain):
     # roll only one day before last trading day
     selector = selector_factory(details_chain, futures_roll_bdays=1)
@@ -333,3 +351,42 @@ def test_selector_with_stock():
     assert selector.active_contract == stock_contract
     assert selector.next_contract == stock_contract
     assert isinstance(stock_contract, Stock)
+
+
+# this is full chain including expired, unlike previous
+nq_chain: list[ContractDetails] = misc.decode_tree(nq_details_chain)
+
+
+def test_FuturesSelector_correct_previuos_contract():
+    selector = FutureSelector.from_details(
+        nq_chain, roll_bdays=4, roll_margin_bdays=5, today=datetime(2025, 10, 6)
+    )
+    assert selector.previous_contract == Contract(
+        secType="FUT",
+        conId=691171690,
+        symbol="NQ",
+        lastTradeDateOrContractMonth="20250919",
+        multiplier="20",
+        exchange="CME",
+        currency="USD",
+        localSymbol="NQU5",
+        tradingClass="NQ",
+    )
+
+
+def test_FuturesSelector_correct_previuos_contract_during_active_change_over():
+    # active December contract just expired, so it became previous
+    selector = FutureSelector.from_details(
+        nq_chain, roll_bdays=4, roll_margin_bdays=5, today=datetime(2025, 12, 16)
+    )
+    assert selector.previous_contract == Contract(
+        secType="FUT",
+        conId=563947738,
+        symbol="NQ",
+        lastTradeDateOrContractMonth="20251219",
+        multiplier="20",
+        exchange="CME",
+        currency="USD",
+        localSymbol="NQZ5",
+        tradingClass="NQ",
+    )

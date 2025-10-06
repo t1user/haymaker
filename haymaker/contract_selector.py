@@ -195,6 +195,10 @@ class AbstractBaseContractSelector(ABC):
     @abstractmethod
     def next_contract(self) -> ibi.Contract: ...
 
+    @property
+    @abstractmethod
+    def previous_contract(self) -> ibi.Contract: ...
+
     def __str__(self) -> str:
         return (
             f"<{self.__class__.__name__} "
@@ -230,6 +234,10 @@ class DefaultSelector(AbstractBaseContractSelector):
 
     @property
     def next_contract(self) -> ibi.Contract:
+        return self.active_contract
+
+    @property
+    def previous_contract(self) -> ibi.Contract:
         return self.active_contract
 
 
@@ -319,6 +327,16 @@ class FutureSelector(AbstractBaseContractSelector):
         )
 
     @cached_property
+    def past_contracts(self) -> list[AbstractBaseFutureWrapper]:
+        """
+        Contracts earlier than current active contract (may be expired
+        or not) sorted by roll_date.
+        """
+        return [
+            c for c in self.all_contracts if self._bdays(self.today, c.roll_day) <= 0
+        ]
+
+    @cached_property
     def date_ranges(self) -> list[tuple[ibi.Future, datetime, datetime]]:
         """Return a tuple of contract, start, end date for which contract is valid"""
         # this is used to determine typical timedelta between roll
@@ -370,13 +388,47 @@ class FutureSelector(AbstractBaseContractSelector):
             else self.nth_contract(1)
         )
 
+    def _previous_contract(self) -> AbstractBaseFutureWrapper:
+        try:
+            return self.past_contracts[-1]
+        except IndexError:
+            # if not available return current contract
+            return self._active_contract()
+
     @property
     def active_contract(self) -> ibi.Future:
+        """
+        Contract currently considered as on-the-run according to
+        :property:`self.roll_bdays` and `roll_date` returned by
+        implementaion of :class:`AbstractFutureWrapper`.
+        """
         return self._active_contract().contract
 
     @property
     def next_contract(self) -> ibi.Future:
+        """
+        Return upcoming contract during days before active contract's
+        expiry.  This period is defined by
+        :property:`self.roll_margin_bdays`.  During other periods
+        return active contract.
+
+        Various atoms might chose to use next contract instead of
+        active one for instance to avoid openning new positions in a
+        contract that is just about to expire.  How this property is
+        used is fully up to the user.
+        """
         return self._next_contract().contract
+
+    @property
+    def previous_contract(self) -> ibi.Future:
+        """
+        If available, return contract that most recently ceased to
+        be current; otherwise return current contract.
+
+        Previous contract is available if object initialized with full
+        contract chain including active as well as expired contracts.
+        """
+        return self._previous_contract().contract
 
     def __str__(self) -> str:
         return (
