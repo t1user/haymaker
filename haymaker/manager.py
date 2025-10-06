@@ -65,18 +65,13 @@ class InitData:
         }
 
         for (contract_hash, _), selector in zip(self.contract_dict.copy(), selectors):
-            self.contract_details[selector.active_contract] = _details[
-                selector.active_contract
-            ]
-            self.contract_details[selector.next_contract] = _details[
-                misc.general_to_specific_contract_class(selector.next_contract)
-            ]
-            self.contract_dict[(contract_hash, ActiveNext.ACTIVE)] = (
-                misc.general_to_specific_contract_class(selector.active_contract)
-            )
-            self.contract_dict[(contract_hash, ActiveNext.NEXT)] = (
-                selector.next_contract
-            )
+            for tag in ActiveNext:
+                contract = misc.general_to_specific_contract_class(
+                    getattr(selector, f"{tag.name.lower()}_contract")
+                )
+                self.contract_details[contract] = _details[contract]
+                self.contract_dict[(contract_hash, tag)] = contract
+
         log.debug("InitData done...")
         contract_dict_str = " | ".join(
             [
@@ -100,13 +95,21 @@ class InitData:
 
             try:
                 details = await asyncio.gather(
-                    *(IB.reqContractDetailsAsync(contract) for contract in contracts),
+                    *(
+                        IB.reqContractDetailsAsync(self._include_expired(contract))
+                        for contract in contracts
+                    ),
                     return_exceptions=False,
                 )
             except Exception as e:
                 log.debug(f"Failed to get contract details {e}")
                 raise
         return details
+
+    @staticmethod
+    def _include_expired(contract):
+        contract.includeExpired = True
+        return contract
 
 
 class Jobs:

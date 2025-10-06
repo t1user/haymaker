@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .controller import Controller
 
 from haymaker import misc
-from haymaker.base import Atom
+from haymaker.base import ActiveNext, Atom
 from haymaker.state_machine import OrderInfo, Strategy
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,11 @@ class FutureRoller:
         # controller is an Atom, so `controller.contracts` is a descriptor
         # on :class:`Atom`
         futures = set(
-            [f for f in self.controller.contracts if isinstance(f, ibi.Future)]
+            [
+                contract
+                for (hash, tag), contract in self.controller.contract_dict.items()
+                if isinstance(contract, ibi.Future) and tag is not ActiveNext.PREVIOUS
+            ]
         )
         log.debug(f"Current active futures: {[fut.localSymbol for fut in futures]}")
         return futures

@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 class ActiveNext(Enum):
     ACTIVE = auto()
     NEXT = auto()
+    PREVIOUS = auto()
 
     def __str__(self) -> str:
         return self.name
