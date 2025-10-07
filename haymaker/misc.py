@@ -107,8 +107,12 @@ def process_trading_hours(
     output_tzname: output will be converted to this timezone (best if
     left at UTC); this param is really for testing
     """
-    input_tz_ = ZoneInfo(input_tz)
-    output_tz_ = ZoneInfo(output_tz)
+    try:
+        input_tz_: ZoneInfo | None = ZoneInfo(input_tz)
+        output_tz_: ZoneInfo | None = ZoneInfo(output_tz)
+    except ValueError:
+        input_tz_ = None
+        output_tz_ = None
 
     def datetime_tuples(s: str) -> tuple[dt.datetime | None, dt.datetime | None]:
         def to_datetime(datetime_string: str) -> dt.datetime | None:
@@ -147,7 +151,7 @@ def is_active(
     check if market is active at the moment.
     """
     if not time_tuples:
-        return True
+        return False
 
     if not now:
         now = dt.datetime.now(tz=dt.timezone.utc)
@@ -164,7 +168,7 @@ def is_active(
 def next_active(
     time_tuples: list[tuple[dt.datetime, dt.datetime]] | None = None,
     now: dt.datetime | None = None,
-) -> dt.datetime:
+) -> dt.datetime | None:
     """
     Given list of trading hours tuples from `.process_trading_hours`
     return time of nearest market re-open (regardless if market is
@@ -176,7 +180,7 @@ def next_active(
         now = dt.datetime.now(tz=ZoneInfo("UTC"))
 
     if not time_tuples:
-        return now
+        return None
 
     left_edges = [e[0] for e in time_tuples if e[0] > now]
     # print(left_edges)

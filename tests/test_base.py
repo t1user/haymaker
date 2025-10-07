@@ -1231,3 +1231,67 @@ class Test_ActiveNext:
         Atom.contract_dict[(hash_contract(self.es), ActiveNext.ACTIVE)] = self.es0
         Atom.contract_dict[(hash_contract(self.es), ActiveNext.NEXT)] = self.es1
         assert my_atom.contract == self.es1
+
+
+def test_details_work_for_expired_contracts():
+    # input details directly copied from the system
+    input_details = ibi.ContractDetails(
+        contract=ibi.Contract(
+            secType="FUT",
+            conId=563947728,
+            symbol="NQ",
+            lastTradeDateOrContractMonth="20231215",
+            multiplier="20",
+            exchange="CME",
+            currency="USD",
+            localSymbol="NQZ3",
+            tradingClass="NQ",
+        ),
+        marketName="NQ",
+        minTick=0.25,
+        orderTypes="LTH",
+        validExchanges="CME,QBALGO",
+        priceMagnifier=1,
+        underConId=11004958,
+        longName="E-mini NASDAQ 100 ",
+        contractMonth="202312",
+        industry="",
+        category="",
+        subcategory="",
+        timeZoneId="",
+        tradingHours="",
+        liquidHours="",
+        evRule="",
+        evMultiplier=0,
+        mdSizeMultiplier=1,
+        aggGroup=2147483647,
+        underSymbol="NQ",
+        underSecType="IND",
+        marketRuleIds="67,67",
+        secIdList=[],
+        realExpirationDate="20231215",
+        lastTradeTime="",
+        stockType="",
+        minSize=1.0,
+        sizeIncrement=1.0,
+        suggestedSizeIncrement=1.0,
+        cusip="",
+        ratings="",
+        descAppend="",
+        bondType="",
+        couponType="",
+        callable=False,
+        putable=False,
+        coupon=0,
+        convertible=False,
+        maturity="",
+        issueDate="",
+        nextOptionDate="",
+        nextOptionType="",
+        nextOptionPartial=False,
+        notes="",
+    )
+    d = Details(input_details)
+    assert d.is_open() is False
+    assert d.is_liquid() is False
+    assert d.next_open() is None

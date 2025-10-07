@@ -189,7 +189,7 @@ class Details:
         """
         return self._is_active(self.liquid_hours, _now)
 
-    def next_open(self, _now: datetime | None = None) -> datetime:
+    def next_open(self, _now: datetime | None = None) -> datetime | None:
         """
         Return time of nearest market re-open (regardless if market is
         open now).  Should be used after it has been tested that

@@ -69,8 +69,12 @@ class InitData:
                 contract = misc.general_to_specific_contract_class(
                     getattr(selector, f"{tag.name.lower()}_contract")
                 )
-                self.contract_details[contract] = _details[contract]
                 self.contract_dict[(contract_hash, tag)] = contract
+                # expired contracts have no trading schedule
+                # but they still should be handled fine (probably)
+                # anyway we don't need details for them so why bother
+                if tag is not ActiveNext.PREVIOUS:
+                    self.contract_details[contract] = _details[contract]
 
         log.debug("InitData done...")
         contract_dict_str = " | ".join(

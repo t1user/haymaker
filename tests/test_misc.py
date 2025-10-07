@@ -134,6 +134,25 @@ def test_next_active(
     )
 
 
+def test_process_trading_hours_accepts_empty_string():
+    # this is what IB returns for an expired contract
+    assert isinstance(process_trading_hours("", ""), list)
+
+
+def test_is_active_for_expired_contract():
+    trading_hours = process_trading_hours("", input_tz="")
+    assert is_active(trading_hours) is False
+
+
+def test_process_trading_hours_for_expired_contracts():
+    assert process_trading_hours("", "") == []
+
+
+def test_next_active_for_expired_contracts():
+    trading_hours = process_trading_hours("", input_tz="")
+    assert next_active(trading_hours) is None
+
+
 @pytest.mark.parametrize(
     "contract",
     [
