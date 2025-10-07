@@ -1,10 +1,11 @@
+import pickle
 from pathlib import Path
 from unittest.mock import Mock
 
+import ib_insync as ibi
 import pandas as pd
 import pytest
 
-from haymaker import misc
 from haymaker.sticher import FuturesSticher
 
 
@@ -196,26 +197,15 @@ def test_params_passed_from_FuturesSticher_to_FutureSelector_both_None():
 
 
 @pytest.fixture(scope="module")
-def FuturesSticher_source():
+def FuturesSticher_source() -> dict[ibi.Future, pd.DataFrame]:
     """
     Return a dict[ibi.Future, df] typically returned from db.
     """
     test_dir = Path(__file__).parent
-    p = Path(test_dir / "dfs_for_testing")
-    # print([i for i in p.iterdir()])
-    csv_files = p.glob("**/*.csv")
-    dfs = {}
-    for file in csv_files:
-        name = file.name.split(".")[0]
-        df = pd.read_csv(file).set_index("date")
-        df.index = pd.to_datetime(df.index)
-
-        txt_file = Path(p / f"{name}.txt")
-        # contract is saved as string
-        contract_object = misc.decode_tree(eval(txt_file.read_text()))
-
-        dfs[contract_object] = df
-    return dfs
+    p = Path(test_dir / "data" / "contract_df_dict_for_sticher.pickle")
+    with p.open("rb") as f:
+        contract_df_dict = pickle.load(f)
+    return contract_df_dict
 
 
 @pytest.fixture(scope="module")
