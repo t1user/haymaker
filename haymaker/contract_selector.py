@@ -399,7 +399,7 @@ class FutureSelector(AbstractBaseContractSelector):
     def active_contract(self) -> ibi.Future:
         """
         Contract currently considered as on-the-run according to
-        :property:`self.roll_bdays` and `roll_date` returned by
+        :attr:`self.roll_bdays` and `roll_date` returned by
         implementaion of :class:`AbstractFutureWrapper`.
         """
         return self._active_contract().contract
@@ -409,7 +409,7 @@ class FutureSelector(AbstractBaseContractSelector):
         """
         Return upcoming contract during days before active contract's
         expiry.  This period is defined by
-        :property:`self.roll_margin_bdays`.  During other periods
+        :attr:`self.roll_margin_bdays`.  During other periods
         return active contract.
 
         Various atoms might chose to use next contract instead of
