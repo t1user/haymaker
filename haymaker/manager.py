@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from copy import copy
 from dataclasses import dataclass, field
 from typing import Final, Self
 
@@ -112,8 +113,12 @@ class InitData:
 
     @staticmethod
     def _include_expired(contract):
-        contract.includeExpired = True
-        return contract
+        # make sure NOT to modify contracts because these objects are
+        # used as keys used to lookup `contract` on all Atoms
+        # Important as fuck!!!!
+        contract_ = copy(contract)
+        contract_.includeExpired = True
+        return contract_
 
 
 class Jobs:
