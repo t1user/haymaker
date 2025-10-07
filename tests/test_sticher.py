@@ -1,12 +1,17 @@
+import logging
 import pickle
+from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import ib_insync as ibi
 import pandas as pd
 import pytest
+from eventkit import Event  # type: ignore
 
-from haymaker.sticher import FuturesSticher
+from haymaker import misc
+from haymaker.base import ActiveNext, Atom
+from haymaker.sticher import FuturesSticher, Sticher
 
 
 def test_offset():
@@ -266,3 +271,125 @@ def test_adjustment_correct(one_sticher):
     adjusted_close = one_sticher.data.loc[unadjusted_index].close
 
     assert adjusted_close - unadjusted_close == one_sticher._offsets[-1]
+
+
+# ########################################
+# Sticher from here on
+# ########################################
+
+
+def test_Sticher_cannot_set_contract_in_int():
+    """Make sure user is not able to manually set contract."""
+    with pytest.raises(TypeError):
+        Sticher(saver=Mock(), contract=ibi.Contract(symbol="empty contract"))
+
+
+def test_new_Sticher_has_no_contract():
+    """Contract on Sticher needs to be set in `onStart` so that it's
+    alligned with Streamer it's connected to."""
+    sticher = Sticher(saver=Mock())
+    assert sticher.contract is None
+
+
+def test_Sticher_raises_if_contract_not_passed_onStart(caplog):
+    sticher = Sticher(saver=Mock())
+
+    class Source(Atom):
+        pass
+
+    source = Source()
+    source += sticher
+
+    # emit without contract
+    source.startEvent.emit({})
+
+    # Eventkit captures errors and logs then instead of raising
+    assert any(
+        "received no contract onStart" in record.message for record in caplog.records
+    )
+    assert any(record.levelname == "ERROR" for record in caplog.records)
+
+
+def test_Sticher_warns_when_contract_reset(caplog):
+    caplog.set_level(logging.DEBUG)
+    sticher = Sticher(saver=Mock())
+    sticher.contract = ibi.Contract()
+
+    class Source(Atom):
+        pass
+
+    source = Source()
+    source += sticher
+
+    source.startEvent.emit({"contract": ibi.Contract(conId=666)})
+
+    # a log was generated
+    print(caplog.records)
+    assert len(caplog.records) > 0
+
+
+def test_Sticher_gets_correct_previous_contract(Atom, Streamer):
+
+    contract_blueprint = ibi.Future(symbol="ES", exchange="CME")
+    previous = ibi.Future(
+        conId=637533641,
+        symbol="ES",
+        lastTradeDateOrContractMonth="20250919",
+        multiplier="50",
+        exchange="CME",
+        currency="USD",
+        localSymbol="ESU5",
+        tradingClass="ES",
+    )
+    active = ibi.Future(
+        conId=497222760,
+        symbol="ES",
+        lastTradeDateOrContractMonth="20230915",
+        multiplier="50",
+        exchange="CME",
+        currency="USD",
+        localSymbol="ESU3",
+        tradingClass="ES",
+    )
+    next_ = (
+        ibi.Future(
+            conId=495512569,
+            symbol="ES",
+            lastTradeDateOrContractMonth="20230616",
+            multiplier="50",
+            exchange="CME",
+            currency="USD",
+            localSymbol="ESM3",
+            tradingClass="ES",
+        ),
+    )
+
+    @dataclass
+    class FakeStreamer(Streamer):
+        contract: ibi.Contract
+
+        def __post_init__(self):
+            Atom.__init__(self)
+
+        def streaming_func(self):
+            return Mock(updateEvent=Event())
+
+    # making sure Streamer doesn't create any timeouts
+    with patch("haymaker.timeout.Timeout.from_atom"):
+        streamer = FakeStreamer(contract_blueprint)
+        sticher = Sticher(Mock())
+
+        streamer += sticher
+
+        Atom.contract_dict = {
+            (misc.hash_contract(contract_blueprint), ActiveNext.PREVIOUS): previous,
+            (misc.hash_contract(contract_blueprint), ActiveNext.ACTIVE): active,
+            (misc.hash_contract(contract_blueprint), ActiveNext.NEXT): next_,
+        }
+
+        # this should make the correct emit including the contract
+        streamer.onStart({})
+
+    assert sticher.previous_contract is previous
+    assert sticher.active_contract is active
+    assert sticher.next_contract is next_

@@ -1,6 +1,7 @@
+import logging
 import operator as op
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
 from itertools import accumulate
@@ -10,9 +11,11 @@ import ib_insync as ibi
 import pandas as pd
 
 from . import misc
-from .base import Atom
+from .base import ActiveNext, Atom
 from .contract_selector import FutureSelector
 from .saver import AbstractBaseSaver
+
+log = logging.getLogger(__name__)
 
 
 class NoDataError(Exception):
@@ -29,16 +32,44 @@ class MissingContract(Exception):
 
 @dataclass
 class Sticher(Atom):
+    # this object totally re-writes the way Atom looks up contracts
+    # because it needs very specific access to particular contract on
+    # a futures chain
     saver: AbstractBaseSaver
+    _contract: ibi.Contract | None = field(init=False)
 
     def __post_init__(self):
+        self._contract = None
         super().__init__()
 
     def onStart(self, data: Any, *args: Any) -> None:
         super().onStart(data)
         contract = data.get("contract")
         assert contract, f"{self} received no contract onStart"
+        # don't write to `self.contract` as that will be  directed to descriptor
+        self._contract = contract
+
         self.pull_data()
+
+    def _contract_getter(self, tag: ActiveNext) -> ibi.Contract:
+        assert self._contract is not None, f"Contract has not been set on {self}"
+        contract = self.contract_dict.get((misc.hash_contract(self._contract), tag))
+        if contract is None:
+            raise ValueError(f"Missing {tag.name} contract on {self}")
+        else:
+            return contract
+
+    @property
+    def previous_contract(self) -> ibi.Contract:
+        return self._contract_getter(ActiveNext.PREVIOUS)
+
+    @property
+    def active_contract(self) -> ibi.Contract:
+        return self._contract_getter(ActiveNext.ACTIVE)
+
+    @property
+    def next_contract(self) -> ibi.Contract:
+        return self._contract_getter(ActiveNext.NEXT)
 
     def pull_data(self):
         pass

@@ -10,6 +10,7 @@ from haymaker.base import Atom as BaseAtom
 from haymaker.controller import Controller
 from haymaker.saver import AbstractBaseSaver
 from haymaker.state_machine import StateMachine
+from haymaker.streamers import Streamer as ActualStreamer
 from haymaker.trader import Trader
 
 log = logging.getLogger(__name__)
@@ -1604,3 +1605,9 @@ def contfuture_details_chain():
             notes="",
         )
     ]
+
+
+@pytest.fixture
+def Streamer():
+    yield ActualStreamer
+    ActualStreamer.instances = []
