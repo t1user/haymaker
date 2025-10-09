@@ -29,8 +29,8 @@ from .misc import (
 )
 
 if TYPE_CHECKING:
+    from .contract_selector import AbstractBaseContractSelector
     from .state_machine import StateMachine, Strategy
-
 
 log = logging.getLogger(__name__)
 
@@ -283,6 +283,7 @@ class Atom:
     sm: ClassVar[StateMachine]
     contract_details: ClassVar[DetailsContainer] = DetailsContainer()
     contract_dict: ClassVar[dict[tuple[ContractKey, ActiveNext], ibi.Contract]] = {}
+    contract_selectors: ClassVar[dict[ContractKey, AbstractBaseContractSelector]] = {}
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",

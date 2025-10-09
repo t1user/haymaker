@@ -10,10 +10,10 @@ from typing import Final, Self
 import ib_insync as ibi
 
 from . import misc
-from .base import ActiveNext, Atom, DetailsContainer
+from .base import ActiveNext, Atom, ContractKey, DetailsContainer
 from .blotter import blotter_factory
 from .config import CONFIG
-from .contract_selector import selector_factory
+from .contract_selector import AbstractBaseContractSelector, selector_factory
 from .controller import Controller
 from .databases import HEALTH_CHECK_OBSERVABLES
 from .state_machine import StateMachine
@@ -35,10 +35,18 @@ USE_BLOTTER = CONFIG["use_blotter"]
 
 @dataclass
 class InitData:
+    """
+    Obtain certain information about traded contracts from Interactive
+    Brokers and directly set parameters on `Atom` class to be
+    available for all objects inheriting from `Atom`.
+    """
+
     ib: ibi.IB
-    # contract_dict and contract details are saved on Atom class
+    # contract_dict, contract_details and contract_selectors are saved on Atom class
+    # any changes here are directly accessible from any Atom
     contract_dict: dict[tuple[misc.ContractKey, ActiveNext], ibi.Contract]
     contract_details: DetailsContainer
+    contract_selectors: dict[ContractKey, AbstractBaseContractSelector]
     _contracts: dict[tuple[misc.ContractKey, ActiveNext], ibi.Contract] = field(
         default_factory=dict, repr=False
     )
@@ -76,6 +84,7 @@ class InitData:
                 # anyway we don't need details for them so why bother
                 if tag is not ActiveNext.PREVIOUS:
                     self.contract_details[contract] = _details[contract]
+            self.contract_selectors[contract_hash] = selector
 
         log.debug("InitData done...")
         contract_dict_str = " | ".join(
@@ -174,7 +183,9 @@ log.debug("--- INITIALIZATION ---")
 IB: Final[ibi.IB] = ibi.IB()
 # Atom passes empty contrianers so that INIT_DATA can supply them with data
 # InitData knows nothing about Atom, just gets containers to fill-up
-INIT_DATA = InitData(IB, Atom.contract_dict, Atom.contract_details)
+INIT_DATA = InitData(
+    IB, Atom.contract_dict, Atom.contract_details, Atom.contract_selectors
+)
 JOBS = Jobs(INIT_DATA)
 STATE_MACHINE = StateMachine()
 Atom.set_init_data(IB, STATE_MACHINE)
