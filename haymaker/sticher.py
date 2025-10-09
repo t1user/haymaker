@@ -92,6 +92,7 @@ class Sticher(Atom):
 class FuturesSticher:
     source: dict[ibi.Future, pd.DataFrame]
     adjust_type: Literal["add", "mul", None] = "add"
+    selector: FutureSelector | None = None
     roll_bdays: int | None = None
     roll_margin_bdays: int | None = None
 
@@ -113,11 +114,14 @@ class FuturesSticher:
 
     @cached_property
     def _selector(self) -> FutureSelector:
-        params = {
-            param: p
-            for param in ("roll_bdays", "roll_margin_bdays")
-            if (p := getattr(self, param)) is not None
-        }
+        if self.selector is not None:
+            return self.selector
+        else:
+            params = {
+                param: p
+                for param in ("roll_bdays", "roll_margin_bdays")
+                if (p := getattr(self, param)) is not None
+            }
         return FutureSelector.from_contracts(list(self.source.keys()), **params)
 
     @cached_property
