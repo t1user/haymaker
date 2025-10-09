@@ -168,7 +168,7 @@ class ArcticStore(AbstractBaseStore):
         self.store = self.db[lib]
 
     @classmethod
-    def from_params(cls, wts: str, barSize: str) -> Self:
+    def from_params(cls, wts: str, barSize: str, prefix: str = "") -> Self:
         """
         Initiate store with standardized lib name and shared mongo
         host.
@@ -188,7 +188,10 @@ class ArcticStore(AbstractBaseStore):
         _wts = wts_validator(wts)
         _barSize = bar_size_validator(barSize)
         client = get_mongo_client()
-        return cls(f"{_wts}_{_barSize}", client)
+        if prefix:
+            return cls(f"{prefix}_{_wts}_{_barSize}", client)
+        else:
+            return cls(f"{_wts}_{_barSize}", client)
 
     def write(
         self,
