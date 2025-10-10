@@ -342,6 +342,16 @@ class Atom:
         else:
             return self.contract_details
 
+    @property
+    def contract_selector(self) -> AbstractBaseContractSelector:
+        try:
+            assert (contract_blueprint := self.__dict__.get("contract"))
+        except AssertionError:
+            raise KeyError(
+                f"contract_selector not available because contract not set on {self}"
+            )
+        return self.contract_selectors[(hash_contract(contract_blueprint))]
+
     def _createEvents(self) -> None:
         self.startEvent = ibi.Event("startEvent")
         self.dataEvent = ibi.Event("dataEvent")

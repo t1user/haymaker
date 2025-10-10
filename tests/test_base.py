@@ -4,6 +4,7 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.base import ActiveNext, Atom, Details, DetailsContainer, Pipe
+from haymaker.contract_selector import AbstractBaseContractSelector
 from haymaker.misc import hash_contract
 from haymaker.state_machine import Strategy
 
@@ -1295,3 +1296,46 @@ def test_details_work_for_expired_contracts():
     assert d.is_open() is False
     assert d.is_liquid() is False
     assert d.next_open() is None
+
+
+def test_contract_selector_lookup():
+    class FakeAtom(Atom):
+        def __init__(self, contract: ibi.Contract) -> None:
+            self.contract = contract
+            super().__init__()
+
+    class FakeContractSelector(AbstractBaseContractSelector):
+
+        @classmethod
+        def from_details(cls):
+            return cls()
+
+        @property
+        def active_contract(self) -> ibi.Contract:
+            return ibi.Contract(symbol="doesntmatter")
+
+        @property
+        def next_contract(self) -> ibi.Contract:
+            return ibi.Contract(symbol="doesntmatter")
+
+        @property
+        def previous_contract(self) -> ibi.Contract:
+            return ibi.Contract(symbol="stilldoesntmatter")
+
+    my_contract = ibi.Future(symbol="NQ", exchange="CME")
+    fake_atom = FakeAtom(my_contract)
+
+    fake_selector = FakeContractSelector
+    Atom.contract_selectors[hash_contract(my_contract)] = fake_selector
+
+    assert fake_atom.contract_selector is fake_selector
+
+
+def test_no_selector_if_no_contract_set():
+    class FakeAtom(Atom):
+        pass
+
+    fake_atom = FakeAtom()
+
+    with pytest.raises(KeyError):
+        fake_atom.contract_selector
