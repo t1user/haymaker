@@ -12,7 +12,7 @@ from tqdm import tqdm
 from haymaker.config import CONFIG
 from haymaker.misc import default_path
 
-from . import setup_logging_queue
+from . import setup_asyncio_logger, setup_logging_queue
 
 LOGGING_PATH = CONFIG.get("logging_path", "logs")
 
@@ -96,3 +96,5 @@ def setup_logging(
 
 
 setup_logging_queue()
+
+setup_asyncio_logger()
