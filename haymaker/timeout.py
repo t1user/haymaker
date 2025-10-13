@@ -133,9 +133,7 @@ class Timeout:
 
             if self.details.is_open(self._now):
                 self.triggered_action()
-            else:
-                reactivate_time = self.details.next_open(self._now)
-
+            elif reactivate_time := self.details.next_open(self._now):
                 sleep_time = (reactivate_time - datetime.now(tz=timezone.utc)).seconds
                 log.log(
                     5,
