@@ -24,6 +24,11 @@ def asyncio_exception_handler(
 
     # Get the exception
     exception = context.get("exception")
+
+    # Silence specific ConnectionError, because it fires unnecessarily
+    if isinstance(exception, ConnectionError) and str(exception) == "Not connected":
+        return
+
     message = context.get("message", "Unhandled exception in async task")
 
     # Get the task
