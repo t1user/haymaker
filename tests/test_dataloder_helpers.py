@@ -24,7 +24,7 @@ def test_duration_in_secs():
 
 
 def test_duration_str():
-    duration_str(3600) == "2000 S"
+    assert duration_str(3600) == "3600 S"
 
 
 @pytest.mark.parametrize(
