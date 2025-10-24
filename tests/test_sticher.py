@@ -1,16 +1,13 @@
 import logging
 import pickle
-from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import ib_insync as ibi
 import pandas as pd
 import pytest
-from eventkit import Event  # type: ignore
 
-from haymaker import misc
-from haymaker.base import ActiveNext, Atom
+from haymaker.base import Atom
 from haymaker.sticher import FuturesSticher, Sticher
 
 
@@ -206,10 +203,12 @@ def FuturesSticher_source() -> dict[ibi.Future, pd.DataFrame]:
     """
     Return a dict[ibi.Future, df] typically returned from db.
     """
+    contract_df_dict = {}
     test_dir = Path(__file__).parent
-    p = Path(test_dir / "data" / "contract_df_dict_for_sticher.pickle")
-    with p.open("rb") as f:
-        contract_df_dict = pickle.load(f)
+    for i in range(1, 6):
+        p = Path(test_dir / "data" / f"contract_df_dict_part_{i}.pickle")
+        with p.open("rb") as f:
+            contract_df_dict.update(pickle.load(f))
     return contract_df_dict
 
 
