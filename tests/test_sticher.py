@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import pickle
 from pathlib import Path
@@ -205,10 +206,13 @@ def FuturesSticher_source() -> dict[ibi.Future, pd.DataFrame]:
     """
     contract_df_dict = {}
     test_dir = Path(__file__).parent
-    for i in range(1, 4):
-        p = Path(test_dir / "data" / f"contract_df_dict_part_{i}.pickle")
+    with open(Path(test_dir / "data" / "contract_list.pickle"), "rb") as f:
+        contract_list = pickle.load(f)
+    for contract in contract_list:
+        p = Path(test_dir / "data" / f"df_{contract.localSymbol}.pickle")
         with p.open("rb") as f:
-            contract_df_dict.update(pickle.load(f))
+            df = pickle.load(f)
+            contract_df_dict[contract] = df
     return contract_df_dict
 
 
@@ -280,18 +284,21 @@ def test_adjustment_correct(one_sticher):
 def test_Sticher_cannot_set_contract_in_int():
     """Make sure user is not able to manually set contract."""
     with pytest.raises(TypeError):
-        Sticher(saver=Mock(), contract=ibi.Contract(symbol="empty contract"))
+        Sticher(Mock(), contract=ibi.Contract(symbol="empty contract"))
 
 
 def test_new_Sticher_has_no_contract():
-    """Contract on Sticher needs to be set in `onStart` so that it's
-    alligned with Streamer it's connected to."""
-    sticher = Sticher(saver=Mock())
+    """
+    Contract on Sticher needs to be set in `onStart` so that it's
+    alligned with Streamer it's connected to.
+    """
+    sticher = Sticher(Mock())
     assert sticher.contract is None
 
 
-def test_Sticher_raises_if_contract_not_passed_onStart(caplog):
-    sticher = Sticher(saver=Mock())
+@pytest.mark.asyncio
+async def test_Sticher_raises_if_contract_not_passed_onStart(caplog):
+    sticher = Sticher(Mock())
 
     class Source(Atom):
         pass
@@ -301,7 +308,7 @@ def test_Sticher_raises_if_contract_not_passed_onStart(caplog):
 
     # emit without contract
     source.startEvent.emit({})
-
+    await asyncio.sleep(0.001)
     # Eventkit captures errors and logs then instead of raising
     assert any(
         "received no contract onStart" in record.message for record in caplog.records
@@ -311,7 +318,7 @@ def test_Sticher_raises_if_contract_not_passed_onStart(caplog):
 
 def test_Sticher_warns_when_contract_reset(caplog):
     caplog.set_level(logging.DEBUG)
-    sticher = Sticher(saver=Mock())
+    sticher = Sticher(Mock())
     sticher.contract = ibi.Contract()
 
     class Source(Atom):
