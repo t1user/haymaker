@@ -167,11 +167,11 @@ def swing(
     elif isinstance(f, (pd.DataFrame, pd.Series)):
         f = f.to_numpy()
     if margin is None:
-        _margin = 0 * f
+        _margin = 0 * f  # type: ignore
     elif isinstance(margin, (pd.DataFrame, pd.Series)):
-        _margin = margin.to_numpy() * f
+        _margin = margin.to_numpy() * f  # type: ignore
     elif isinstance(margin, float):
-        _margin = margin * f
+        _margin = margin * f  # type: ignore
     else:
         raise TypeError("Margin must be pd.Series, pd.DataFrame or float")
 
@@ -573,7 +573,7 @@ def pivot(
     if isinstance(f, pd.Series):
         _f = f.to_numpy()
     elif isinstance(f, (float, int)):
-        _f = np.ones((data.shape[0])) * f
+        _f = np.ones((data.shape[0])) * f  # type: ignore
     else:
         raise TypeError(f"Wrong type: {f}")
 
