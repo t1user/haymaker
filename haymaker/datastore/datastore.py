@@ -43,6 +43,15 @@ class AbstractBaseStore(ABC):
         ...
 
     @abstractmethod
+    def append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> Any: ...
+
+    @abstractmethod
     def read(
         self,
         symbol: str | ibi.Contract,
@@ -206,6 +215,24 @@ class ArcticStore(AbstractBaseStore):
             self._symbol(symbol),
             self._clean(data),
             metadata=self._update_metadata(symbol, metadata),
+        )
+        return f"symbol: {version.symbol} version: {version.version}"
+
+    def append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> str:
+        metadata = self._metadata(symbol)
+        if meta is not None:
+            metadata.update(meta)
+        version = self.store.append(
+            self._symbol(symbol),
+            data,
+            metadata=self._update_metadata(symbol, metadata),
+            upsert=upsert,
         )
         return f"symbol: {version.symbol} version: {version.version}"
 

@@ -21,6 +21,15 @@ class AsyncAbstractBaseStore(ABC):
     ) -> None: ...
 
     @abstractmethod
+    def append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> Any: ...
+
+    @abstractmethod
     async def read(
         self,
         symbol: str | ibi.Contract,
@@ -57,6 +66,15 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> None:
         return fire_and_forget(self.arctic_store.write, symbol, data, meta)
+
+    def append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> None:
+        return fire_and_forget(self.arctic_store.append, symbol, data, meta, upsert)
 
     async def read(
         self,
