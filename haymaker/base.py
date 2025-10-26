@@ -363,7 +363,7 @@ class Atom:
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
 
-    def onStart(self, data: Any, *args: Any) -> None:
+    def onStart(self, data: Any, *args: Any) -> Awaitable[None] | None:
         """
         Perform any initilization required on system (re)start.  It
         will be run automatically and it will be linked to
@@ -407,6 +407,7 @@ class Atom:
             self._contractChangedEvent.emit(self._contract_memo, self.contract)
         self._contract_memo = self.contract
         self.startEvent.emit(data, self)
+        return None
 
     def onData(self, data: Any, *args: Any) -> Awaitable[None] | None:
         """
