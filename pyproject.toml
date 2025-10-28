@@ -14,14 +14,14 @@ classifiers = [
   "Programming Language :: Python :: 3",
 ]
 dependencies = [
-  "arctic @ git+https://github.com/man-group/arctic.git",
-  "ib_insync",
-  "pandas",
-  "pandas-market-calendars",
-  "numba",
-  "pyyaml",
-  "tqdm",
-  "types-tqdm",
+  "arctic @ git+https://github.com/man-group/arctic.git@3cf2a9ce3a7f2c2544ececd20d0f4f5b917f7b2a",
+  "ib_insync==0.9.86",
+  "pandas==2.3.3",
+  "pandas-market-calendars==5.1.1",
+  "numba==0.62.1",
+  "pyyaml==6.0.3",
+  "tqdm==4.67.1",
+  "types-tqdm==4.67.0.20250809",
 ]
 description = 'Framework for trading with Interactive Brokers through ib_insync'
 dynamic = ["version"]
@@ -33,25 +33,26 @@ requires-python = ">= 3.11"
 [project.optional-dependencies]
 all = ["haymaker[notebook,dev]"]
 dev = [
-  "types-pyyaml",
-  "pandas-stubs",
-  "isort",
-  "mypy",
-  "autopep8",
-  "yapf",
-  "black",
-  "flake8",
-  "pytest",
-  "pytest-asyncio",
-  "sphinx",
-  "sphinx-autodoc-typehints",
-  "furo",
-  "mongomock"
+  "types-pyyaml==6.0.3",
+  "pandas-stubs==2.3.2.250926",
+  "numpy=2.3.4",
+  "isort==7.0.0",
+  "mypy==1.18.2",
+  "autopep8==2.3.2",
+  "yapf==0.43.0",
+  "black==25.9.0",
+  "flake8==7.3.0",
+  "pytest==8.4.2",
+  "pytest-asyncio==1.2.0",
+  "sphinx==8.2.3",
+  "sphinx-autodoc-typehints==3.5.2",
+  "furo==2025.9.25",
+  "mongomock==4.3.0"
 ]
 notebook = [
-  "jupyter",
-  "matplotlib",
-  "pyfolio-reloaded",
+  "jupyter==1.1.1",
+  "matplotlib==3.10.7",
+  "pyfolio-reloaded==0.9.9",
 ]
 
 [tool.setuptools]
