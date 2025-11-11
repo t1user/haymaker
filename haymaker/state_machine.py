@@ -74,6 +74,7 @@ class OrderInfo:
 
     @classmethod
     def from_trade(cls, trade: ibi.Trade) -> OrderInfo:
+        log.error(f"Creating unknown strategy for trade: {trade}")
         return cls(
             strategy="UNKNOWN",
             action="MANUAL" if trade.order.orderId < 0 else "UNKNOWN",

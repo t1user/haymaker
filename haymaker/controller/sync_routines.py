@@ -101,15 +101,13 @@ class OrderSyncStrategy:
                 f"{[(i.order.orderId, i.order.permId) for i in self.inactive]}"
             )
 
-        # todo: WTF? changing orderId on a trade????
-        # this likely needs to be removed
         # if cannot match inactive trade by orderId try by permId
-        # and if succcessful modify its orderId (WTF????)
-        # THIS DOESN'T SEEM TO MAKE ANY SENSE AT ALL
-        # TODO
-        # Basically search for trades that have orderId==0
-        # If that's the point simlplify this
-        # Or find out what the point is
+        # (permId persists in between restarts)
+        # if succcessful modify its orderId
+        # orders have orderId == 0 if they were filled while system was off
+        # we're assigning to them our last known orderId
+        # (from before system went off) so that they can be matched correctly
+        # to db records and their status updated (to done)
         for old_trade in self.inactive:
             new_trade = ib_known_trades.get(old_trade.order.permId)
             if new_trade:
