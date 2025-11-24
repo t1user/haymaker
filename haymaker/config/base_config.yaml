@@ -39,6 +39,8 @@ controller:
   # delay in sec after which controller will verify if transaction was executed correctly;
   # zero or comment-out for no verification
   execution_verification_delay: 15 # in seconds
+  execution_verification_max_retries: 5
+  handle_missing_brackets: "remove" # one of: "remove", "warn", "ignore"
 
 # best left untouched
 state_machine:

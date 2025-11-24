@@ -309,16 +309,24 @@ class OrderReconciliationSync:
     """
 
     def __init__(
-        self, ib: ibi.IB, sm: StateMachine, ct: Controller, cancel: bool = True
+        self,
+        ib: ibi.IB,
+        sm: StateMachine,
+        ct: Controller,
+        cancel: bool = True,
+        handle_missing_brackets: str = "ignore",
     ) -> None:
         self.ib = ib
         self.sm = sm
         self.ct = ct
         self.cancel = cancel
+        self.handle_missing_brackets = handle_missing_brackets
 
     @classmethod
     def run(cls, ct: Controller, cancel: bool = True) -> Self:
-        return cls(ct.ib, ct.sm, ct, ct.cancel_stray_orders).run_strategies()
+        return cls(
+            ct.ib, ct.sm, ct, ct.cancel_stray_orders, ct.handle_missing_brackets
+        ).run_strategies()
 
     def run_strategies(self) -> Self:
         for strategy_str, strategy in self.sm.strategy.items():
@@ -350,6 +358,9 @@ class OrderReconciliationSync:
             )
 
     def _check_brackets(self, strategy: Strategy, order_infos: list[OrderInfo]) -> None:
+        if self.handle_missing_brackets not in ["remove", "warn"]:
+            return
+
         params = strategy.get("params")
         if params and (
             brackets := [
@@ -367,12 +378,21 @@ class OrderReconciliationSync:
                     f"we have: {len(existing_orders)} orders, "
                     f"we should have: {len(brackets)} orders."
                 )
+                if self.handle_missing_brackets == "remove":
+                    log.error(
+                        f"Closing positions for strategy with missing bracket: "
+                        f"{strategy.strategy}"
+                    )
+                    self.ct.close_positions_for_strategy(
+                        strategy.strategy, "MISSING BRACKET EMERGENCY CLOSE"
+                    )
+                    self.ct.lock_new_positions()
 
 
 class Terminator:
     """
     Class organizing the process of cancelling all resting orders and
-    closing all positins.
+    closing all positions.
 
     First, an attempt is made to identify resting stop-losses that are
     associated with strategies.  Those orders are cancelled but
