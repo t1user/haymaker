@@ -293,16 +293,28 @@ class BaseExecModel(AbstractExecModel):
         )
 
     def reverse(self, data: dict) -> None:
+
+        def open_after_close(trade) -> None:
+            try:
+                log.debug(
+                    f"{self.strategy}: REVERSE executing deferred OPEN after CLOSE "
+                )
+                self.open(data)
+            except Exception as e:
+                log.exception(
+                    f"Failed to execute OPEN after CLOSE for {self.strategy}: {e}",
+                    extra={"data": data, "close_trade": trade},
+                )
+
         close_trade = self.close(data)
         if close_trade:
-            log.debug(
-                f"Reverse trade. OPEN will be issued after CLOSE "
-                f"{close_trade.order.orderId} is done"
-                f"filledEvent will call open with data: {data=} "
-                f"Trade is done? {close_trade.isDone()}"
+            close_trade.filledEvent += open_after_close
+            log.debug(f"REVERSE filledEvent attached to {close_trade.order.orderId} ")
+        else:
+            log.error(
+                f"Failed to close existing position for {self.strategy} "
+                f"in REVERSE trade"
             )
-            close_trade.filledEvent += partial(self.open, data=data)
-            log.debug(f"FillEvent attached. Trade is done? {close_trade.isDone()}")
 
     def __repr__(self):
         return self.__class__.__name__ + "()"
@@ -385,6 +397,7 @@ class EventDrivenExecModel(BaseExecModel):
 
         trade = super().open(data)
         if trade:
+            # it will also receive `ibi.Trade` object!
             trade.filledEvent += attach_bracket
             return trade
         else:
