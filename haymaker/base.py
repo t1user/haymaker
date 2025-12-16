@@ -81,8 +81,8 @@ class ContractManagingDescriptor:
 
         return wrapper
 
-    def __set_name__(self, obj: Atom, name: str) -> None:
-        self.name = name
+    def __set_name__(self, obj: type[Atom], name: str) -> None:
+        self.name = f"blueprint_{name}"
 
     def __set__(
         self, obj: Atom, value: ibi.Contract | collections.abc.Sequence
