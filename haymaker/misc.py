@@ -8,8 +8,7 @@ from collections import UserDict
 from dataclasses import fields
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal, TypeAlias
-from zoneinfo import ZoneInfo
+from typing import Any, Callable, Literal
 
 import ib_insync as ibi
 import pandas as pd
@@ -90,101 +89,6 @@ def round_tick(price: float, tick_size: float) -> float:
 
 def sign(x: float) -> Literal[-1, 0, 1]:
     return 0 if x == 0 else -1 if x < 0 else 1
-
-
-def process_trading_hours(
-    th: str, input_tz: str = "US/Central", *, output_tz: str = "UTC"
-) -> list[tuple[dt.datetime, dt.datetime]]:
-    """
-    Given string from :attr:`ibi.ContractDetails.tradingHours` return
-    active hours as a list of (from, to) tuples.
-
-    Args:
-    -----
-
-    tzname: instrument's timezone
-
-    output_tzname: output will be converted to this timezone (best if
-    left at UTC); this param is really for testing
-    """
-    try:
-        input_tz_: ZoneInfo | None = ZoneInfo(input_tz)
-        output_tz_: ZoneInfo | None = ZoneInfo(output_tz)
-    except ValueError:
-        input_tz_ = None
-        output_tz_ = None
-
-    def datetime_tuples(s: str) -> tuple[dt.datetime | None, dt.datetime | None]:
-        def to_datetime(datetime_string: str) -> dt.datetime | None:
-            if datetime_string[-6:] == "CLOSED":
-                return None
-            else:
-                return (
-                    dt.datetime.strptime(datetime_string, "%Y%m%d:%H%M")
-                    .replace(tzinfo=input_tz_)
-                    .astimezone(tz=output_tz_)
-                )
-
-        try:
-            f, t = s.split("-")
-        except ValueError:
-            return (None, None)
-
-        return to_datetime(f), to_datetime(t)
-
-    out = []
-    for i in th.split(";"):
-        tuples = datetime_tuples(i)
-        if not tuples[0]:
-            continue
-        else:
-            out.append(tuples)
-    return out  # type: ignore
-
-
-def is_active(
-    time_tuples: list[tuple[dt.datetime, dt.datetime]] | None = None,
-    now: dt.datetime | None = None,
-) -> bool:
-    """
-    Given list of trading hours tuples from `.process_trading_hours`
-    check if market is active at the moment.
-    """
-    if not time_tuples:
-        return False
-
-    if not now:
-        now = dt.datetime.now(tz=dt.timezone.utc)
-
-    def test_p(t):
-        return t[0] < now < t[1]
-
-    for t in time_tuples:
-        if test_p(t):
-            return True
-    return False
-
-
-def next_active(
-    time_tuples: list[tuple[dt.datetime, dt.datetime]] | None = None,
-    now: dt.datetime | None = None,
-) -> dt.datetime | None:
-    """
-    Given list of trading hours tuples from `.process_trading_hours`
-    return time of nearest market re-open (regardless if market is
-    open now).  Should be used after it has been tested that
-    `.is_active` is False.
-    """
-
-    if not now:
-        now = dt.datetime.now(tz=ZoneInfo("UTC"))
-
-    if not time_tuples:
-        return None
-
-    left_edges = [e[0] for e in time_tuples if e[0] > now]
-    # print(left_edges)
-    return left_edges[0]
 
 
 # ###### Serializer ########
@@ -354,15 +258,6 @@ def contractAsTuple(contract: ibi.Contract) -> tuple:
     )
 
 
-ContractKey: TypeAlias = str
-
-
-def hash_contract(contract: ibi.Contract) -> ContractKey:
-    return str(contract)
-    # return tuple(ibi.util.dataclassNonDefaults(contract).items())
-    # return hash(contractAsTuple(contract))
-
-
 def general_to_specific_contract_class(contract: ibi.Contract) -> ibi.Contract:
     assert isinstance(contract, ibi.Contract), "this function works only with Contracts"
     contract_kwargs = ibi.util.dataclassNonDefaults(contract)
@@ -443,3 +338,20 @@ def name_str(
     else:
         args_str = join_str.join((name, *args))
     return args_str
+
+
+deltas = {
+    "sec": dt.timedelta(seconds=1),
+    "min": dt.timedelta(minutes=1),
+    "hour": dt.timedelta(hours=1),
+    "day": dt.timedelta(days=1),
+    "week": dt.timedelta(days=5),
+    "month": dt.timedelta(days=22),
+}
+
+
+def barSizeSetting_to_timedelta(barSizeSetting):
+    number, time = barSizeSetting.split(" ")
+    time = time[:-1] if time.endswith("s") else time
+
+    return deltas.get(time) * int(number)

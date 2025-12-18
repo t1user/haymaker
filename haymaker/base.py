@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import collections.abc
 import logging
-from collections import UserDict
-from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum, auto
-from functools import wraps
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -15,24 +11,22 @@ from typing import (
     NamedTuple,
     Self,
     Sequence,
-    cast,
 )
 
 import ib_insync as ibi
 
-from .misc import (
-    ContractKey,
-    hash_contract,
-    is_active,
-    next_active,
-    process_trading_hours,
-)
+from .details_processor import Details
 
 if TYPE_CHECKING:
+    from .contract_registry import ContractRegistry
     from .contract_selector import AbstractBaseContractSelector
     from .state_machine import StateMachine, Strategy
 
 log = logging.getLogger(__name__)
+
+
+class MissingContractError(Exception):
+    pass
 
 
 class ActiveNext(Enum):
@@ -44,172 +38,38 @@ class ActiveNext(Enum):
         return self.name
 
 
-ContractOrSequence = Sequence[ibi.Contract] | ibi.Contract
-
-
 class ContractManagingDescriptor:
+    # DON'T CHANGE THIS TO PROPERTY or it will screw up inherited dataclasses
     """
     Manage accessing `contract` property on :class:`Atom`.
 
-    Contract needs to be qualified before use (by calling
-    :meth:`ib_insync.IB.qualifyContracts` on
-    :class:`ib_insync.Contract` object).  This is being managed by
-    :module:`Manager`, which ensures on every restart that
-    :attr:`contract_dict` on :class:`Atom` contains only qualified
-    contracts.  ContractManagingDescriptor in turn returns correct
-    contract from this dict, taking into account
-    :property:`which_contract` on this Atom.
+    Contract needs to be qualified and their details obtaned before.
+    This is being managed by :module:`Manager`, which puts correct
+    contracts and details into :class:`ContractRegistry`.  The role of
+    this descriptor is to pull the correct values from it.
     """
-
-    @staticmethod
-    def _apply_to_contract_or_sequence(func):
-        """
-        Decorator that applies the `func` either to contract or to
-        every contract in a sequence or if contract is neither
-        :class:`ibi.Contract` nor a sequence return this contract.
-        """
-
-        @wraps(func)
-        def wrapper(contract, *args, **kwargs):
-            if getattr(contract, "__iter__", None):
-                assert isinstance(contract, collections.abc.Sequence)
-                return [func(c, *args, **kwargs) for c in contract]
-            elif isinstance(contract, ibi.Contract):
-                return func(contract, *args, **kwargs)
-            else:
-                return contract
-
-        return wrapper
 
     def __set_name__(self, obj: type[Atom], name: str) -> None:
-        self.name = f"blueprint_{name}"
+        self.name = f"_{name}_blueprint"
 
-    def __set__(
-        self, obj: Atom, value: ibi.Contract | collections.abc.Sequence
-    ) -> None:
-        if not isinstance(value, (ibi.Contract, collections.abc.Sequence)):
-            raise TypeError(
-                f"attr contract must be ibi.Contract or sequence of ibi.Contract, "
-                f"not: {type(value)}"
-            )
+    def __set__(self, obj: Atom, value: ibi.Contract) -> None:
+        if not isinstance(value, ibi.Contract):
+            raise TypeError(f"attr contract must be ibi.Contract, not: {type(value)}")
         obj.__dict__[self.name] = value
-        self._register_contract(obj, value)
+        obj.contract_registry.register_blueprint(value)
 
-    def __get__(self, obj: Atom, type=None) -> list[ibi.Contract] | ibi.Contract | None:
-        # some methods rely on not raising an error here if attr self.name not set
-        # if Atom has not set `contract` attribute, it shouldn't raise an error
-        contract = obj.__dict__.get(self.name)
-        return self._get_contract(contract, obj.contract_dict, obj.which_contract)
-
-    def _register_contract(self, obj: Atom, value: ContractOrSequence) -> None:
-        self._append_to_dict(value, obj.contract_dict, obj)
-
-    @staticmethod
-    @_apply_to_contract_or_sequence
-    def _get_contract(
-        contract: ibi.Contract | None,
-        contract_dict: dict[tuple[ContractKey, ActiveNext], ibi.Contract],
-        active_next: ActiveNext,
-    ) -> list[ibi.Contract] | ibi.Contract | None:
-        if contract is None:
+    def __get__(self, obj: Atom, type=None) -> ibi.Contract | None:
+        contract_blueprint = obj.__dict__.get(self.name)
+        if contract_blueprint is None:
             return None
-        else:
-            return contract_dict.get((hash_contract(contract), active_next))
-
-    @staticmethod
-    @_apply_to_contract_or_sequence
-    def _append_to_dict(
-        contract: ibi.Contract,
-        contract_dict: dict[tuple[ContractKey, ActiveNext], ibi.Contract],
-        atom: Atom,
-    ) -> None:
-        contract_dict[(hash_contract(contract), ActiveNext.ACTIVE)] = contract
-        log.debug(f"Contract registered: {contract}")
-
-
-@dataclass
-class Details:
-    """
-    Wrapper object for :class:`ib_insync.contract.ContractDetails` extracting
-    and processing information that's most relevant for Haymaker.
-
-    Attributes:
-        details (ibi.ContractDetails): The original contract details object.
-        trading_hours (list[tuple[datetime, datetime]]): List of tuples with
-            start and end of trading hours for this contract.
-        liquid_hours (list[tuple[datetime, datetime]]): List of tuples with
-            start and end of liquid hours for this contract.
-    """
-
-    _fields: ClassVar[list[str]] = [f.name for f in fields(ibi.ContractDetails)]
-    details: ibi.ContractDetails
-    trading_hours: list[tuple[datetime, datetime]] = field(init=False, repr=False)
-    liquid_hours: list[tuple[datetime, datetime]] = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self.trading_hours = self._process_trading_hours(
-            self.details.tradingHours, self.details.timeZoneId
-        )
-        self.liquid_hours = self._process_trading_hours(
-            self.details.liquidHours, self.details.timeZoneId
-        )
-
-    def __getattr__(self, name: str) -> Any:
-        if name in self._fields:
-            return getattr(self.details, name)
-        else:
-            raise AttributeError(f"{self.__class__.__name__} has no attribute {name}")
-
-    def is_open(self, _now: datetime | None = None) -> bool:
-        """
-        Given current time check if the market is open for underlying contract.
-
-        Args:
-            _now (Optional[datetime], optional): Defaults to None.
-            If not provided current time will be used. Only situation when
-            it's useful to provide `_now` is in testing.
-
-        Returns:
-            bool: True if market is open, False otherwise.
-        """
-        return self._is_active(self.trading_hours, _now)
-
-    def is_liquid(self, _now: datetime | None = None) -> bool:
-        """
-        Given current time check if the market is during liquid hours
-        for underlying contract.
-
-        Args:
-            _now (Optional[datetime], optional): . Defaults to None.
-            If not provided current time will be used. Only situation when
-            it's useful to provide `_now` is in testing.
-
-        Returns:
-            bool: True if market is liquid, False otherwise.
-        """
-        return self._is_active(self.liquid_hours, _now)
-
-    def next_open(self, _now: datetime | None = None) -> datetime | None:
-        """
-        Return time of nearest market re-open (regardless if market is
-        open now).  Should be used after it has been tested that
-        :meth:`is_active` is False.
-
-        Args:
-            _now (Optional[datetime], optional): Defaults to None.
-            If not provided current time will be used. Only situation when
-            it's useful to provide `_now` is in testing.
-        """
-        return self._next_open(self.trading_hours, _now)
-
-    _process_trading_hours = staticmethod(process_trading_hours)
-    _is_active = staticmethod(is_active)
-    _next_open = staticmethod(next_active)
-
-
-class DetailsContainer(UserDict):
-    def __setitem__(self, key: ibi.Contract, value: ibi.ContractDetails) -> None:
-        super().__setitem__(key, Details(value))
+        try:
+            return obj.contract_registry.get_contract(
+                contract_blueprint, obj.which_contract
+            )
+        except KeyError:
+            raise MissingContractError(
+                f"Unknown contract: {contract_blueprint} on {obj}"
+            )
 
 
 class ContractRollData(NamedTuple):
@@ -281,22 +141,22 @@ class Atom:
 
     ib: ClassVar[ibi.IB]
     sm: ClassVar[StateMachine]
-    contract_details: ClassVar[DetailsContainer] = DetailsContainer()
-    contract_dict: ClassVar[dict[tuple[ContractKey, ActiveNext], ibi.Contract]] = {}
-    contract_selectors: ClassVar[dict[ContractKey, AbstractBaseContractSelector]] = {}
+    contract_registry: ClassVar[ContractRegistry]
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
         "feedbackEvent",
     )
-    contract = cast(ibi.Contract, ContractManagingDescriptor())
-    # this should be overriden by instances if neccessary to change
+    contract = ContractManagingDescriptor()
+    # these should be overriden by instances if neccessary to change
     which_contract: ActiveNext = ActiveNext.ACTIVE
+    _contract_blueprint: ibi.Contract | None = None
 
     @classmethod
-    def set_init_data(cls, ib: ibi.IB, sm: StateMachine) -> None:
+    def set_init_data(cls, ib: ibi.IB, sm: StateMachine, cr: ContractRegistry) -> None:
         cls.ib = ib
         cls.sm = sm
+        cls.contract_registry = cr
 
     def __init__(self) -> None:
         self._createEvents()
@@ -308,15 +168,7 @@ class Atom:
         self._roll_contract_data: ContractRollData | None = None
 
     @property
-    def contracts(self):
-        return self.contract_dict.values()
-
-    @contracts.setter
-    def contracts(self, arg: Any) -> None:
-        raise ValueError("Forbidden to set values on Atom.contracts.")
-
-    @property
-    def details(self) -> Details | list[Details] | DetailsContainer:
+    def contract_details(self) -> Details:
         """
         Contract details received from the broker.
 
@@ -329,28 +181,22 @@ class Atom:
         :class:`ib_insync.contract.ContractDetails` with some
         additional methods and attributes.
         """
-        if self.contract:
-            if getattr(self.contract, "__iter__", None):
-                assert isinstance(self.contract, collections.abc.Sequence)
-                return [self.contract_details[c] for c in self.contract]
-            else:
-                try:
-                    return self.contract_details[self.contract]
-                except KeyError:
-                    log.error(f"Missing contract details for: {self.contract}")
-                    return self.contract_details
-        else:
-            return self.contract_details
+        try:
+            return self.contract_registry.details[self.contract]
+        except KeyError:
+            log.error(f"Missing contract details for: {self.contract}")
+            # empty details
+            return Details(ibi.ContractDetails())
 
     @property
-    def contract_selector(self) -> AbstractBaseContractSelector:
+    def contract_selector(self) -> AbstractBaseContractSelector | None:
         try:
-            assert (contract_blueprint := self.__dict__.get("contract"))
+            assert self._contract_blueprint
         except AssertionError:
             raise KeyError(
                 f"contract_selector not available because contract not set on {self}"
             )
-        return self.contract_selectors[(hash_contract(contract_blueprint))]
+        return self.contract_registry.get_selector(self._contract_blueprint)
 
     def _createEvents(self) -> None:
         self.startEvent = ibi.Event("startEvent")

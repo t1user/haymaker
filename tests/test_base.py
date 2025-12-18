@@ -1,11 +1,12 @@
 import logging
+from unittest.mock import ANY, Mock
 
 import ib_insync as ibi
 import pytest
 
-from haymaker.base import ActiveNext, Atom, Details, DetailsContainer, Pipe
-from haymaker.contract_selector import AbstractBaseContractSelector
-from haymaker.misc import hash_contract
+from haymaker.base import ActiveNext, Atom, Pipe
+from haymaker.contract_registry import ContractRegistry
+from haymaker.details_processor import Details
 from haymaker.state_machine import Strategy
 
 
@@ -137,15 +138,14 @@ class TestAtom:
     def test_repr(self, atom1: NewAtom):
         assert repr(atom1) == "NewAtom(name=atom1)"
 
-    def test_repr_next_contract(self, Atom):
+    def test_repr_next_contract(self, atom1: NewAtom):
         """
         Repr should only show non-default attributes, `which_contract`
         has default value of `ActiveNext.ACTIVE`.
         """
 
-        atom = Atom()
-        atom.which_contract = ActiveNext.NEXT
-        assert repr(atom) == "Atom(which_contract=NEXT)"
+        atom1.which_contract = ActiveNext.NEXT
+        assert repr(atom1) == "NewAtom(name=atom1, which_contract=NEXT)"
 
     def test_no_duplicate_connections(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
@@ -758,9 +758,11 @@ def test_pipe_is_connected_to_input_feedbackEvent():
 
 
 class AtomWithContract(Atom):
+    contract_registry = ContractRegistry()
+
     def __init__(self, contract):
-        self.contract = contract
         super().__init__()
+        self.contract = contract
 
 
 class TestContract:
@@ -780,20 +782,6 @@ class TestContract:
         a = AtomWithContract(c)
         assert a.contract is c
 
-    def test_can_assign_and_retrieve_list_of_contracts(self):
-        c1 = ibi.Contract(symbol="ES", exchange="CME")
-        c2 = ibi.Contract(symbol="MES", exchange="CME")
-        atom = AtomWithContract([c1, c2])
-        assert isinstance(atom.contract, list)
-        assert atom.contract == [c1, c2]
-
-    def test_can_assign_and_retrieve_same_list_of_contracts(self):
-        c1 = ibi.Contract("ES", exchange="CME")
-        c2 = ibi.Contract("MES", exchange="CME")
-        list_of_contracts = [c1, c2]
-        atom = AtomWithContract(list_of_contracts)
-        assert atom.contract == list_of_contracts
-
 
 class TestContractList:
     @pytest.fixture
@@ -811,87 +799,47 @@ class TestContractList:
     @pytest.fixture
     def atom_with_contract(self, contract: ibi.Contract):
         class NewAtomWithContract(Atom):
+            contract_registry = ContractRegistry()
+
             def __init__(self, contract):
-                self.contract = contract
                 super().__init__()
+                self.contract = contract
 
         a = NewAtomWithContract(contract)
         yield a
-        a.contract_dict.clear()
+        a.contract_registry = ContractRegistry()
 
-    @pytest.fixture
-    def atom_with_list_of_contracts(self, list_of_contracts: list[ibi.Contract]):
-        class AtomWithListOfContracts(Atom):
-            def __init__(self, contract):
-                self.contract = contract
-
-        a = AtomWithListOfContracts(list_of_contracts)
-        yield a
-        a.contract_dict.clear()
-
-    def test_newly_added_contract_in_the_list(self):
-        class NewNewAtom(Atom):
-            def __init__(self, x):
-                self.contract = x
-                super().__init__()
-
-        cont = ibi.Future(symbol="GC", exchange="COMEX")
-        a = NewNewAtom(cont)
-        assert cont in a.contracts
-
-    def test_newly_added_contract_in_Atom_list(self, atom_with_contract: Atom):
+    def test_newly_added_contract_in_Atom_registry(self, atom_with_contract: Atom):
+        """
+        All we're testing here is that the contract made it to the
+        registry.  We're not checking if contract qualification and
+        selectors work.
+        """
         cont = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
         atom_with_contract.contract = cont
-        assert cont in atom_with_contract.contracts
-
-    def test_contract_list_on_instance_contains_contracts(
-        self, atom_with_contract: Atom, contract: ibi.Contract
-    ):
-        a = atom_with_contract
-        cont = a.contract
-        assert len(a.contracts) > 0
-        assert cont in a.contracts
-
-    def test_contract_list_on_class_contains_contracts(
-        self, atom_with_contract: Atom, contract: ibi.Contract
-    ):
-        assert list(atom_with_contract.contracts) == [contract]
-
-    def test_ContractList_new_instance_contains_contracts(
-        self, atom_with_contract: Atom, contract: ibi.Contract
-    ):
-        a = atom_with_contract
-        alt_list = list(a.contracts)
-        assert alt_list == [contract]
-
-    def test_contract_list_works_with_lists(
-        self, atom_with_list_of_contracts: Atom, list_of_contracts: list[ibi.Contract]
-    ):
-        a = atom_with_list_of_contracts
-        assert list(a.contracts) == list_of_contracts
+        assert cont in atom_with_contract.contract_registry.blueprints
 
 
-class Test_keep_adding_contracts:
-    def atom(self, contract):
-        class A(Atom):
-            def __init__(self, contract):
-                self.contract = contract
+def test_all_contracts_from_many_atoms_in_registry():
+    class A(Atom):
+        contract_registry = ContractRegistry()
 
-        return A(contract)
+        def __init__(self, contract):
+            self.contract = contract
 
-    def test_single(self):
-        cont = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
-        a = self.atom(cont)
-        assert cont in a.contracts
+    apple = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
+    nasdaq = ibi.ContFuture(symbol="NQ", exchange="CME")
+    gold = ibi.Future(symbol="GC", exchange="COMEX")
 
-    def test_list(self):
-        apple = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
-        nasdaq = ibi.ContFuture(symbol="NQ", exchange="CME")
-        gold = ibi.Future(symbol="GC", exchange="COMEX")
-        a = self.atom([apple, nasdaq, gold])
-        assert apple in a.contracts
-        assert nasdaq in a.contracts
-        assert gold in a.contracts
+    A(apple)
+    A(nasdaq)
+    A(gold)
+
+    registry = A.contract_registry.blueprints
+
+    assert apple in registry
+    assert nasdaq in registry
+    assert gold in registry
 
 
 def test_onData_sets_attribute_if_dict_passed():
@@ -1003,47 +951,60 @@ def test_event_error_logged_with_correct_logger(caplog: pytest.LogCaptureFixture
     ]
 
 
-class TestAtomDetails:
-    @pytest.fixture
-    def mock_atom(self, details: ibi.ContractDetails):
-        class MockAtom(Atom):
-            def __init__(self):
-                self.contract = details.contract
-                super().__init__()
+def test_details_attr(details):
+    """Only check if `details` on `Atom` properly linked to registry."""
 
-        Atom.contract_details[details.contract] = details  # type: ignore
-        return MockAtom()
+    registry = ContractRegistry()
 
-    def test_details_set_properly(self, mock_atom: Atom, details: ibi.ContractDetails):
-        assert isinstance(mock_atom.details, Details)
+    class MockAtom(Atom):
+        contract_registry = registry
 
-    def test_trading_hours_processed(
-        self, mock_atom: Atom, details: ibi.ContractDetails
-    ):
-        assert isinstance(mock_atom.details.trading_hours, list)  # type: ignore
+        def __init__(self):
+            super().__init__()
+            self.contract = details.contract
 
-    def test_trading_hours_is_open(self, mock_atom: Atom, details: ibi.ContractDetails):
-        assert isinstance(mock_atom.details.is_open(), bool)  # type: ignore
+    registry.details[details.contract] = details
 
-    def test_if_no_contract_set_all_details_returned(self, mock_atom: Atom):
-        class NewMockAtom(Atom):
-            pass
+    a = MockAtom()
 
-        atom = NewMockAtom()
-        assert isinstance(atom.details, DetailsContainer)
-        # mock atom has been created, so there are details for one contract
-        # even though I have no contract set on my `atom`
-        assert len(atom.details.keys()) == 1
+    assert a.contract_details.contract == details.contract
+    assert isinstance(a.contract_details, Details)
 
-    def test_missing_details_log(
-        self, caplog: pytest.LogCaptureFixture, mock_atom, details: ibi.ContractDetails
-    ):
-        caplog.set_level(logging.DEBUG)
 
-        del Atom.contract_details[details.contract]
+def test_if_no_contract_set_empty_details_returned():
+    registry = ContractRegistry()
 
-        mock_atom.details
-        assert f"Missing contract details for: {details.contract}" in caplog.messages
+    class NewMockAtom(Atom):
+        contract_registry = registry
+
+    atom = NewMockAtom()
+
+    assert atom.contract_details
+    # no details stored
+    assert len(registry.details) == 0
+    # empty object created
+    assert isinstance(atom.contract_details, Details)
+    assert atom.contract_details.contract is None
+
+
+def test_missing_details_log(
+    caplog: pytest.LogCaptureFixture, details: ibi.ContractDetails
+):
+    caplog.set_level(logging.DEBUG)
+
+    registry = ContractRegistry()
+
+    class NewMockAtom(Atom):
+        contract_registry = registry
+
+        def __init__(self, contract):
+            self.contract = contract
+
+    atom = NewMockAtom(details.contract)
+
+    atom.contract_details
+
+    assert f"Missing contract details for: {details.contract}" in caplog.messages
 
 
 class Test_data_property:
@@ -1193,144 +1154,6 @@ def test_startup_set():
     assert b.startup
 
 
-class Test_ActiveNext:
-
-    es = ibi.Future(symbol="ES", exchange="CME")
-    es0 = ibi.Future(
-        conId=637533641,
-        symbol="ES",
-        lastTradeDateOrContractMonth="20250919",
-        multiplier="50",
-        exchange="CME",
-        currency="USD",
-        localSymbol="ESU5",
-        tradingClass="ES",
-    )
-    es1 = ibi.Future(
-        conId=495512563,
-        symbol="ES",
-        lastTradeDateOrContractMonth="20251219",
-        multiplier="50",
-        exchange="CME",
-        currency="USD",
-        localSymbol="ESZ5",
-        tradingClass="ES",
-    )
-
-    def test_active_correct(self):
-        # active contract by default
-        my_atom = Atom()
-        my_atom.contract = self.es
-        Atom.contract_dict[(hash_contract(self.es), ActiveNext.ACTIVE)] = self.es0
-        Atom.contract_dict[(hash_contract(self.es), ActiveNext.NEXT)] = self.es1
-        assert my_atom.contract == self.es0
-
-    def test_next_correct(self):
-        my_atom = Atom()
-        my_atom.which_contract = ActiveNext.NEXT
-        my_atom.contract = self.es
-        Atom.contract_dict[(hash_contract(self.es), ActiveNext.ACTIVE)] = self.es0
-        Atom.contract_dict[(hash_contract(self.es), ActiveNext.NEXT)] = self.es1
-        assert my_atom.contract == self.es1
-
-
-def test_details_work_for_expired_contracts():
-    # input details directly copied from the system
-    input_details = ibi.ContractDetails(
-        contract=ibi.Contract(
-            secType="FUT",
-            conId=563947728,
-            symbol="NQ",
-            lastTradeDateOrContractMonth="20231215",
-            multiplier="20",
-            exchange="CME",
-            currency="USD",
-            localSymbol="NQZ3",
-            tradingClass="NQ",
-        ),
-        marketName="NQ",
-        minTick=0.25,
-        orderTypes="LTH",
-        validExchanges="CME,QBALGO",
-        priceMagnifier=1,
-        underConId=11004958,
-        longName="E-mini NASDAQ 100 ",
-        contractMonth="202312",
-        industry="",
-        category="",
-        subcategory="",
-        timeZoneId="",
-        tradingHours="",
-        liquidHours="",
-        evRule="",
-        evMultiplier=0,
-        mdSizeMultiplier=1,
-        aggGroup=2147483647,
-        underSymbol="NQ",
-        underSecType="IND",
-        marketRuleIds="67,67",
-        secIdList=[],
-        realExpirationDate="20231215",
-        lastTradeTime="",
-        stockType="",
-        minSize=1.0,
-        sizeIncrement=1.0,
-        suggestedSizeIncrement=1.0,
-        cusip="",
-        ratings="",
-        descAppend="",
-        bondType="",
-        couponType="",
-        callable=False,
-        putable=False,
-        coupon=0,
-        convertible=False,
-        maturity="",
-        issueDate="",
-        nextOptionDate="",
-        nextOptionType="",
-        nextOptionPartial=False,
-        notes="",
-    )
-    d = Details(input_details)
-    assert d.is_open() is False
-    assert d.is_liquid() is False
-    assert d.next_open() is None
-
-
-def test_contract_selector_lookup():
-    class FakeAtom(Atom):
-        def __init__(self, contract: ibi.Contract) -> None:
-            self.contract = contract
-            super().__init__()
-
-    class FakeContractSelector(AbstractBaseContractSelector):
-
-        @classmethod
-        def from_details(cls):
-            return cls()
-
-        @property
-        def active_contract(self) -> ibi.Contract:
-            return ibi.Contract(symbol="doesntmatter")
-
-        @property
-        def next_contract(self) -> ibi.Contract:
-            return ibi.Contract(symbol="doesntmatter")
-
-        @property
-        def previous_contract(self) -> ibi.Contract:
-            return ibi.Contract(symbol="stilldoesntmatter")
-
-    my_contract = ibi.Future(symbol="NQ", exchange="CME")
-    fake_atom = FakeAtom(my_contract)
-
-    fake_selector = FakeContractSelector
-    Atom.contract_selectors[hash_contract(my_contract)] = fake_selector
-
-    assert fake_atom.contract_selector is fake_selector
-
-
 def test_no_selector_if_no_contract_set():
     class FakeAtom(Atom):
         pass
@@ -1339,3 +1162,47 @@ def test_no_selector_if_no_contract_set():
 
     with pytest.raises(KeyError):
         fake_atom.contract_selector
+
+
+class Test_ActiveNext:
+    """
+    Test if correct contract requested.  Other modules determine if
+    correct contract returned.
+    """
+
+    es = ibi.Future(symbol="ES", exchange="CME")
+
+    def test_active_correct(self):
+        mock_registry = Mock()
+
+        class MyAtom(Atom):
+            contract_registry = mock_registry
+
+            def __init__(self, contract):
+                super().__init__()
+                self.contract = contract
+
+        my_atom = MyAtom(self.es)
+
+        # ACTIVE is the default
+        # requesting contract should trigger lookup and call contract_registry
+        contract = my_atom.contract  # noqa
+        mock_registry.get_contract.assert_called_once_with(ANY, ActiveNext.ACTIVE)
+
+    def test_next_correct(self):
+        mock_registry = Mock()
+
+        class MyAtom(Atom):
+            contract_registry = mock_registry
+
+            def __init__(self, contract):
+                super().__init__()
+                self.contract = contract
+                self.which_contract = ActiveNext.NEXT
+
+        my_atom = MyAtom(self.es)
+
+        # ACTIVE is the default, but it was overriden to NEXT in __init__
+        # requesting contract should trigger lookup and call contract_registry
+        contract = my_atom.contract  # noqa
+        mock_registry.get_contract.assert_called_once_with(ANY, ActiveNext.NEXT)

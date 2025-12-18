@@ -25,7 +25,12 @@ class AbstractBracketLeg(ABC):
     parameters for appropriate bracket order.
     """
 
-    details = Atom.contract_details
+    # this is a workaround for testing
+    try:
+        details = Atom.contract_registry.details
+    except AttributeError:
+        details = {}  # type: ignore
+
     vol_field: str = "atr"
 
     def __init__(self, stop_multiple: float, vol_field: Optional[str] = None) -> None:

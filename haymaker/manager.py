@@ -4,16 +4,15 @@ import asyncio
 import logging
 from collections import defaultdict
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Final, Self
 
 import ib_insync as ibi
 
-from . import misc
-from .base import ActiveNext, Atom, ContractKey, DetailsContainer
+from .base import Atom
 from .blotter import blotter_factory
 from .config import CONFIG
-from .contract_selector import AbstractBaseContractSelector, selector_factory
+from .contract_registry import ContractRegistry
 from .controller import Controller
 from .databases import HEALTH_CHECK_OBSERVABLES
 from .state_machine import StateMachine
@@ -28,8 +27,6 @@ class NotConnectedError(Exception):
     pass
 
 
-FUTURES_ROLL_BDAYS = CONFIG["futures_roll_bdays"]
-FUTURES_ROLL_MARGIN_BDAYS = CONFIG["futures_roll_margin_bdays"]
 USE_BLOTTER = CONFIG["use_blotter"]
 
 
@@ -42,58 +39,21 @@ class InitData:
     """
 
     ib: ibi.IB
-    # contract_dict, contract_details and contract_selectors are saved on Atom class
-    # any changes here are directly accessible from any Atom
-    contract_dict: dict[tuple[misc.ContractKey, ActiveNext], ibi.Contract]
-    contract_details: DetailsContainer
-    contract_selectors: dict[ContractKey, AbstractBaseContractSelector]
-    _contracts: dict[tuple[misc.ContractKey, ActiveNext], ibi.Contract] = field(
-        default_factory=dict, repr=False
-    )
+    contract_registry: ContractRegistry
 
     async def __call__(self) -> Self:
-        log.debug(f"---------- INIT START -----> {len(self.contract_dict)} contracts.")
-        if not self._contracts:
-            self._contracts = self.contract_dict.copy()
-            log.debug(
-                f"contracts blueprint saved: {[c for c in self._contracts.values()]}"
-            )
-        # details always from blueprint
-        details = await self.acquire_contract_details(list(self._contracts.values()))
+        log.debug(
+            f"---------- INIT START -----> "
+            f"{len(self.contract_registry.blueprints)} contracts."
+        )
+
+        # making tripple sure blueprints will not be modified
+        blueprints = self.contract_registry.blueprints.copy()
+
+        # details always from blueprint, not from qualified contracts
+        details = await self.acquire_contract_details(blueprints)
         log.debug(f"Acquired details for {len(details)} contracts.")
-        selectors = (
-            selector_factory(
-                details_list, FUTURES_ROLL_BDAYS, FUTURES_ROLL_MARGIN_BDAYS
-            )
-            for details_list in details
-        )
-        _details = {
-            details.contract: details
-            for details_list in details
-            for details in details_list
-        }
-
-        for (contract_hash, _), selector in zip(self.contract_dict.copy(), selectors):
-            for tag in ActiveNext:
-                contract = misc.general_to_specific_contract_class(
-                    getattr(selector, f"{tag.name.lower()}_contract")
-                )
-                self.contract_dict[(contract_hash, tag)] = contract
-                # expired contracts have no trading schedule
-                # but they still should be handled fine (probably)
-                # anyway we don't need details for them so why bother
-                if tag is not ActiveNext.PREVIOUS:
-                    self.contract_details[contract] = _details[contract]
-            self.contract_selectors[contract_hash] = selector
-
-        log.debug("InitData done...")
-        contract_dict_str = " | ".join(
-            [
-                f"{str(k[0])}_{str(k[1])}: {v.localSymbol}"
-                for k, v in self.contract_dict.items()
-            ]
-        )
-        log.debug(f"contract_dict {len(self.contract_dict)} items: {contract_dict_str}")
+        self.contract_registry.reset_data(details)
         return self
 
     async def acquire_contract_details(
@@ -183,12 +143,11 @@ log.debug("--- INITIALIZATION ---")
 IB: Final[ibi.IB] = ibi.IB()
 # Atom passes empty contrianers so that INIT_DATA can supply them with data
 # InitData knows nothing about Atom, just gets containers to fill-up
-INIT_DATA = InitData(
-    IB, Atom.contract_dict, Atom.contract_details, Atom.contract_selectors
-)
+CONTRACT_REGISTRY = ContractRegistry()
+INIT_DATA = InitData(IB, CONTRACT_REGISTRY)
 JOBS = Jobs(INIT_DATA)
 STATE_MACHINE = StateMachine()
-Atom.set_init_data(IB, STATE_MACHINE)
+Atom.set_init_data(IB, STATE_MACHINE, CONTRACT_REGISTRY)
 Timeout.set_ib(IB)
 log.debug("Will initialize Controller")
 trader = Trader(IB)

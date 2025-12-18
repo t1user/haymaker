@@ -158,7 +158,7 @@ class Controller(Atom):
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
-        log.debug(f"{self.contracts=}")
+        log.debug(f"{self.contract_registry.current_contracts=}")
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
@@ -175,7 +175,9 @@ class Controller(Atom):
 
     def verify_have_contracts_for_positions(self) -> list[ibi.Contract]:
         return [
-            p.contract for p in self.ib.positions() if p.contract not in self.contracts
+            p.contract
+            for p in self.ib.positions()
+            if p.contract not in self.contract_registry.all_contracts
         ]
 
     def set_hold(self) -> None:

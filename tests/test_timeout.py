@@ -8,7 +8,8 @@ import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.base import Atom, Details
+from haymaker.base import Atom as _Atom
+from haymaker.details_processor import Details
 from haymaker.timeout import Timeout as _Timeout
 
 
@@ -32,7 +33,7 @@ def test_all_timouts_cleared_on_reset(Timeout):
     assert Timeout.instances == []
 
 
-def test_timeout_created_from_atom(Timeout):
+def test_timeout_created_from_atom(Atom, Timeout):
 
     class FakeDetails(Details):
         def __post_init__(self):
@@ -43,8 +44,9 @@ def test_timeout_created_from_atom(Timeout):
             return "MyAtom"
 
         @property
-        def details(self):
-            return FakeDetails(ibi.ContractDetails())
+        def contract_details(self):
+            # overriding property so that it becomes irrelevant
+            return FakeDetails(ibi.ContractDetails(contract=ibi.Future("NQ", "CME")))
 
     a = MyAtom()
 
@@ -54,7 +56,7 @@ def test_timeout_created_from_atom(Timeout):
     assert "MyAtom" in str(t)
 
 
-def test_timeout_from_atom_raises_when_no_details(Timeout):
+def test_timeout_from_atom_raises_when_no_details(Timeout, Atom):
     class MyAtom(Atom):
         def __str__(self):
             return "MyAtom"
@@ -91,13 +93,13 @@ def timeout(Timeout) -> Type[_Timeout]:
 
 @pytest.mark.asyncio
 async def test_timer_not_triggered(
-    timeout: type[_Timeout], Atom: type[Atom], details: ibi.ContractDetails
+    timeout: type[_Timeout], Atom: type[_Atom], details: ibi.ContractDetails
 ):
     t = timeout(
         event=ev.Event(),
         time=0.15,
         name="xxx",
-        details=Atom.contract_details[details.contract],
+        details=Details(details),
         debug=True,
         _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
     )
@@ -108,13 +110,13 @@ async def test_timer_not_triggered(
 
 @pytest.mark.asyncio
 async def test_timer_triggered(
-    timeout: type[_Timeout], Atom: Atom, details: ibi.ContractDetails
+    timeout: type[_Timeout], Atom: _Atom, details: ibi.ContractDetails
 ):
     t = timeout(
         event=ev.Event(),
         time=0.1,
         name="xxx",
-        details=Atom.contract_details[details.contract],
+        details=Details(details),
         debug=True,
         _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
     )
@@ -123,7 +125,7 @@ async def test_timer_triggered(
 
 @pytest.mark.asyncio
 async def test_timer_works_with_no_details(
-    timeout: type[_Timeout], Atom: Atom, details: ibi.ContractDetails
+    timeout: type[_Timeout], Atom: _Atom, details: ibi.ContractDetails
 ):
     t = timeout(
         event=ev.Event(),

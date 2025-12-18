@@ -10,8 +10,9 @@ from typing import ClassVar, Self
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
-from haymaker.base import Atom, Details
+from haymaker.base import Atom
 from haymaker.config import CONFIG as config
+from haymaker.contract_registry import Details
 
 log = logging.getLogger(__name__)
 
@@ -85,15 +86,15 @@ class Timeout:
         default value will be used from config
         """
 
-        assert isinstance(atom.details, Details), (
-            f"{atom} is missing contract details."
+        assert atom.contract_details.contract is not None, (
+            f"{atom} is missing correct contract details."
             f"`Timeout.from_atom` can be used only with atoms that have details."
         )
         return cls(
             event,
             time,
             f"{str(atom)}-<<{key}>>",
-            atom.details,
+            atom.contract_details,
         )
 
     @classmethod
