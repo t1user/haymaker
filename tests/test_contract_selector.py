@@ -125,24 +125,56 @@ es_details_dict = {
 }
 
 
-def test_date_ranges():
+def test_all_contracts_sorted():
+    selector = FutureSelector.from_details(es_chain)
+    expiry_dates = [
+        datetime.strptime(wrapper.contract.lastTradeDateOrContractMonth, "%Y%m%d")
+        for wrapper in selector.all_contracts
+    ]
+    for earlier_date, later_date in zip(expiry_dates[:-1], expiry_dates[1:]):
+        assert later_date > earlier_date
+
+
+def test_date_ranges_correct_dates():
     selector = FutureSelector.from_details(es_chain)
     roll_dates = [future_wrapper.roll_day for future_wrapper in selector.all_contracts]
     date_tuples = [
         (start, stop) for start, stop in zip(roll_dates[:-1], roll_dates[1:])
     ]
     # skipping first item as difficult to generate
-    date_tuples_from_ranges = [(x[1], x[2]) for x in selector.date_ranges[1:]]
+    date_tuples_from_ranges = [(x[0], x[1]) for x in selector.date_ranges.values()][1:]
 
     assert date_tuples == date_tuples_from_ranges
-    # starts with first contract
-    assert selector.date_ranges[0][0] == selector.all_contracts[0].contract
-    # goes all the way to the last contract
-    assert selector.date_ranges[-1][0] == selector.all_contracts[-1].contract
-    # first contract date range at least 30 days
-    assert (selector.date_ranges[0][2] - selector.date_ranges[0][1]) >= timedelta(
-        days=30
-    )
+
+
+def test_date_ranges_correct_dates_first_date():
+    # first contract date range (not tested in previous test) at least 30 days
+    selector = FutureSelector.from_details(es_chain)
+
+    first_contract = list(selector.date_ranges.keys())[0]
+
+    assert (
+        selector.date_ranges[first_contract][1]
+        - selector.date_ranges[first_contract][0]
+    ) >= timedelta(days=30)
+
+
+def test_date_ranges_all_keys_present_and_sorted():
+    selector = FutureSelector.from_details(es_chain)
+    contracts_in_date_range = list(selector.date_ranges.keys())
+    all_contracts = [wrapper.contract for wrapper in selector.all_contracts]
+    assert contracts_in_date_range == all_contracts
+
+
+def test_date_ranges_correct_dates_assigned_to_contract():
+    selector = FutureSelector.from_details(es_chain)
+    # testing roll dates
+    roll_dates = {
+        future_wrapper.contract: future_wrapper.roll_day
+        for future_wrapper in selector.all_contracts
+    }
+    for contract, (_, roll_date) in selector.date_ranges.items():
+        assert roll_dates[contract] == roll_date
 
 
 @pytest.mark.parametrize("symbol,expected_last_trading_day", es_parameters)

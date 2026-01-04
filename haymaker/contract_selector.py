@@ -1,3 +1,8 @@
+"""
+The purpose of this module is to determine what is (or historically
+was) the 'current' futures contract at a given point in time.
+"""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -131,6 +136,10 @@ class NG(AbstractBaseFutureWrapper):
     # should it be used?
     @property
     def last_trading_day(self) -> datetime:
+        """
+        Trading terminates on the 3rd last business day of the month
+        prior to the contract month.
+        """
         return (
             self.lastTradeDateOrContractMonth
             - pd.offsets.BusinessMonthEnd()
@@ -248,6 +257,8 @@ class ContFutureSelector(DefaultSelector):
 
 @dataclass
 class FutureSelector(AbstractBaseContractSelector):
+    # all dates are not timezone aware because that's how they come
+    # from broker
     futuresChain: list[AbstractBaseFutureWrapper]
     roll_bdays: int = FUTURES_ROLL_BDAYS
     roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS
@@ -337,15 +348,15 @@ class FutureSelector(AbstractBaseContractSelector):
         ]
 
     @cached_property
-    def date_ranges(self) -> list[tuple[ibi.Future, datetime, datetime]]:
+    def date_ranges(self) -> dict[ibi.Future, tuple[datetime, datetime]]:
         """Return a tuple of contract, start, end date for which contract is valid"""
         # this is used to determine typical timedelta between roll
         # dates of subsequent contracts
         roll_dates_timedeltas = []
-        output = []
+        output = {}
         # starting at second contract get start and end dates
         for first, second in zip(self.all_contracts[:-1], self.all_contracts[1:]):
-            output.append((second.contract, first.roll_day, second.roll_day))
+            output[second.contract] = first.roll_day, second.roll_day
             roll_dates_timedeltas.append(second.roll_day - first.roll_day)
         roll_timedelta = (
             min(roll_dates_timedeltas)
@@ -353,15 +364,14 @@ class FutureSelector(AbstractBaseContractSelector):
             else timedelta(days=30)
         )
         first_contract = self.all_contracts[0]
-        output.insert(
-            0,
-            (
-                first_contract.contract,
+        # maintaining key order here, keys must be guaranteed to be sorted
+        return {
+            first_contract.contract: (
                 first_contract.roll_day - roll_timedelta,
                 first_contract.roll_day,
             ),
-        )
-        return output
+            **output,
+        }
 
     @staticmethod
     def _bdays(from_: datetime, to_: datetime) -> int:
