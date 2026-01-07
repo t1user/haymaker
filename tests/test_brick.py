@@ -17,7 +17,6 @@ from haymaker.contract_registry import ContractRegistry
 @pytest.fixture
 def brick() -> AbstractBaseBrick:
     class Brick(AbstractBaseBrick):
-        contract_registry = ContractRegistry()
 
         def _signal(self, data):
             return {"signal": 1, "abc": "xyz", "pqz": 5}
@@ -73,7 +72,6 @@ def data_for_df():
 @pytest.fixture
 def df_brick():
     class Brick(AbstractDfBrick):
-        contract_registry = ContractRegistry()
 
         def df(self, data):
             data["price_plus"] = data["price"] + 1
@@ -116,7 +114,6 @@ def test_signal_correct(
 @pytest.fixture
 def basic_df_brick():
     class Brick(AbstractDfBrick):
-        contract_registry = ContractRegistry()
 
         def df(self, data):
             return data

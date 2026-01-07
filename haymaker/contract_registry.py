@@ -5,10 +5,10 @@ from typing import TypeAlias
 
 import ib_insync as ibi
 
-from .base import ActiveNext
 from .config import CONFIG
 from .contract_selector import AbstractBaseContractSelector, selector_factory
 from .details_processor import Details
+from .enums import ActiveNext
 from .misc import general_to_specific_contract_class
 
 log = getLogger(__name__)

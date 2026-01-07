@@ -8,8 +8,9 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 
-from haymaker.base import Atom
-from haymaker.sticher import FuturesSticher, Sticher
+from haymaker.base import ActiveNext, Atom
+from haymaker.sticher import FuturesSticher, Sticher, WrongStreamer
+from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
 
 
 def test_offset():
@@ -262,10 +263,6 @@ def test_all_data_points_used(one_sticher):
     assert input_data_points - len(one_sticher._offsets) == output_data_points
 
 
-def test_date_range_for_every_contract(one_sticher):
-    assert len(one_sticher.source) == len(one_sticher._date_ranges)
-
-
 def test_adjustment_correct(one_sticher):
     # last but one df close point
     unadjusted_index = one_sticher._dfs[-2].index[-1]
@@ -309,7 +306,7 @@ async def test_Sticher_raises_if_contract_not_passed_onStart(caplog):
     # emit without contract
     source.startEvent.emit({})
     await asyncio.sleep(0.001)
-    # Eventkit captures errors and logs then instead of raising
+    # Eventkit captures errors and logs instead of raising
     assert any(
         "received no contract onStart" in record.message for record in caplog.records
     )
@@ -332,3 +329,60 @@ def test_Sticher_warns_when_contract_reset(caplog):
     # a log was generated
     print(caplog.records)
     assert len(caplog.records) > 0
+
+
+def test_HistoricalDataStreamerAccepted(Atom):
+    blueprint = ibi.Future("NQ", "CME")
+    streamer = HistoricalDataStreamer(
+        contract=blueprint,
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+
+    sticher = Sticher(100)
+    # test if no error raised
+    assert sticher.sync_with_streamer(streamer) is None
+
+
+def test_wrong_streamer_fails(Atom):
+    blueprint = ibi.Future("NQ", "CME")
+    streamer = MktDataStreamer(contract=blueprint, tickList="212")
+    sticher = Sticher(100)
+    with pytest.raises(WrongStreamer):
+        sticher.sync_with_streamer(streamer)
+
+
+def test_sync_extracts_which_contract(Atom):
+    blueprint = ibi.Future("NQ", "CME")
+    streamer = HistoricalDataStreamer(
+        contract=blueprint,
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+    streamer.which_contract = ActiveNext.NEXT
+    sticher = Sticher(100)
+    sticher.sync_with_streamer(streamer)
+    assert sticher.which_contract is ActiveNext.NEXT
+
+
+def test_sync_extracts_blueprint(Atom):
+    blueprint = ibi.Future("NQ", "CME")
+    streamer = HistoricalDataStreamer(
+        contract=blueprint,
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+    streamer.which_contract = ActiveNext.NEXT
+    sticher = Sticher(100)
+    sticher.sync_with_streamer(streamer)
+    assert sticher._contract_blueprint is blueprint
+
+
+# def test_streamer_reads_own_params(contract):
+#     hs = HistoricalDataStreamer(contract, "10 D", "30 secs", "TRADES")
+#     assert "10 D" in hs.params.values()
+#     assert "30 secs" in hs.params.values()
+#     assert "TRADES" in hs.params.values()

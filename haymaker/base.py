@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from enum import Enum, auto
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -15,10 +14,11 @@ from typing import (
 
 import ib_insync as ibi
 
+from .contract_registry import ContractRegistry
 from .details_processor import Details
+from .enums import ActiveNext
 
 if TYPE_CHECKING:
-    from .contract_registry import ContractRegistry
     from .contract_selector import AbstractBaseContractSelector
     from .state_machine import StateMachine, Strategy
 
@@ -27,15 +27,6 @@ log = logging.getLogger(__name__)
 
 class MissingContractError(Exception):
     pass
-
-
-class ActiveNext(Enum):
-    ACTIVE = auto()
-    NEXT = auto()
-    PREVIOUS = auto()
-
-    def __str__(self) -> str:
-        return self.name
 
 
 class ContractManagingDescriptor:
@@ -141,7 +132,7 @@ class Atom:
 
     ib: ClassVar[ibi.IB]
     sm: ClassVar[StateMachine]
-    contract_registry: ClassVar[ContractRegistry]
+    contract_registry: ClassVar[ContractRegistry] = ContractRegistry()
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
@@ -215,24 +206,35 @@ class Atom:
         will be run automatically and it will be linked to
         :attr:`startEvent` of the preceding object in the chain.
 
-        First `Atom` in a pipeline (typically a data streamer) will
-        be called by system, which is an indication that (re)start is
-        in progress and we have successfully connected to the broker.
+        First `Atom` in a pipeline (typically a data streamer) will be
+        called by system, which is an indication that (re)start is in
+        progress and we have successfully connected to the broker.
 
-        `data` by default is a dict and all keys on this dict are
-        being set as properties on the object.  Any information that
-        needs to be passed to atoms down the chain, should be appended
-        to `data` without removing any existing keys.
+        `data` by default is a dict.  Any information that needs to be
+        passed to atoms down the chain, should be appended to `data`
+        without removing any existing keys.
 
         If overriding the class, call superclass; call to
-        :meth:`super().onStart(data)` should be the last line in overriden
-        method; don't manually emit :attr:`startEvent` in subclass.
+        :meth:`super().onStart(data)` should usually be the last line
+        in overriden method as it will emit :attr:`startEvent` -
+        basically do any processing required in sub-class and then
+        call super-class, which will do standard processing and then
+        emit the event to initialize processing in the next Atom down
+        the chain; if you don't call superclass, make sure to emit
+        :attr:`startEvent`, otherwise subsequent Atoms in the chain
+        won't do startup initialization.
 
         This method can be synchronous as well as asynchronous (in the
         subclass it's ok to override it with `async def onData(self,
         data, *args)`).  If it's async, it will be put in the asyncio
         loop.
         """
+        self._set_startup_attrs(data)
+        self._process_contract_change()
+        self.startEvent.emit(data, self)
+        return None
+
+    def _set_startup_attrs(self, data):
         # set strategy if not already set and present in `data` dict
         if (
             (self.strategy == "")
@@ -244,6 +246,8 @@ class Atom:
         # set startup to whatever in dict
         if isinstance(data, dict) and (startup := data.get("startup")):
             self.startup = startup
+
+    def _process_contract_change(self) -> None:
         if (self._contract_memo is not None) and (self._contract_memo != self.contract):
             # it will not fire if the system has been restarted after contract changed
             # cannot be relied on for rolls
@@ -252,8 +256,6 @@ class Atom:
             log.debug(f"Future will reset: {self._contract_memo} --> {self.contract}")
             self._contractChangedEvent.emit(self._contract_memo, self.contract)
         self._contract_memo = self.contract
-        self.startEvent.emit(data, self)
-        return None
 
     def onData(self, data: Any, *args: Any) -> Awaitable[None] | None:
         """

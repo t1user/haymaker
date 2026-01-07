@@ -540,9 +540,9 @@ def test_pipe_is_not_bypassed_onStart():
             super().__init__()
 
         def onStart(self, data, *args):
+            super().onStart(data)
             data[self.name] = "xxx"
             self.output = data
-            super().onStart(data)
 
         def __repr__(self):
             return self.__class__.__name__ + "()"
@@ -758,7 +758,6 @@ def test_pipe_is_connected_to_input_feedbackEvent():
 
 
 class AtomWithContract(Atom):
-    contract_registry = ContractRegistry()
 
     def __init__(self, contract):
         super().__init__()
@@ -799,7 +798,6 @@ class TestContractList:
     @pytest.fixture
     def atom_with_contract(self, contract: ibi.Contract):
         class NewAtomWithContract(Atom):
-            contract_registry = ContractRegistry()
 
             def __init__(self, contract):
                 super().__init__()
@@ -807,7 +805,7 @@ class TestContractList:
 
         a = NewAtomWithContract(contract)
         yield a
-        a.contract_registry = ContractRegistry()
+        a.contract_registry = ContractRegistry()  # type: ignore
 
     def test_newly_added_contract_in_Atom_registry(self, atom_with_contract: Atom):
         """
@@ -822,7 +820,6 @@ class TestContractList:
 
 def test_all_contracts_from_many_atoms_in_registry():
     class A(Atom):
-        contract_registry = ContractRegistry()
 
         def __init__(self, contract):
             self.contract = contract
@@ -992,10 +989,7 @@ def test_missing_details_log(
 ):
     caplog.set_level(logging.DEBUG)
 
-    registry = ContractRegistry()
-
     class NewMockAtom(Atom):
-        contract_registry = registry
 
         def __init__(self, contract):
             self.contract = contract
