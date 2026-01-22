@@ -1,8 +1,11 @@
 """
-`details` is a list of lists that would typically be passed by `haymaker.manager.InitData` to `haymaker.contract_registry.ContractRegistry` during restart.
+`details` is a list of lists that would typically be passed by
+`haymaker.manager.InitData` to
+`haymaker.contract_registry.ContractRegistry` during restart.
 
 `blueprints` is a list of blueprints for which it was acquired.
 
+the data has been downloaded on 16/12/2025
 """
 from ib_insync import Contract, ContractDetails, Future
 

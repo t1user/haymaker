@@ -1,3 +1,4 @@
+from datetime import datetime
 from itertools import chain
 
 import ib_insync as ibi
@@ -25,7 +26,7 @@ def registry():
 
 @pytest.fixture(scope="module")
 def registry_with_data():
-    registry = ContractRegistry()
+    registry = ContractRegistry(today=datetime(2025, 12, 16))
     for blueprint in blueprints:
         registry.register_blueprint(blueprint)
 
@@ -68,6 +69,7 @@ def test_there_is_a_blueprint_for_each_contract(registry_with_data):
 
 def test_number_of_current_contracts(registry_with_data):
     # ACTIVE and NEXT for each blueprint, but they are the same and this is set
+    print(list(registry_with_data.current_contracts))
     assert len(registry_with_data.current_contracts) == len(blueprints)
 
 
