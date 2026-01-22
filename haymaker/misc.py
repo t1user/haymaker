@@ -338,20 +338,3 @@ def name_str(
     else:
         args_str = join_str.join((name, *args))
     return args_str
-
-
-deltas = {
-    "sec": dt.timedelta(seconds=1),
-    "min": dt.timedelta(minutes=1),
-    "hour": dt.timedelta(hours=1),
-    "day": dt.timedelta(days=1),
-    "week": dt.timedelta(days=5),
-    "month": dt.timedelta(days=22),
-}
-
-
-def barSizeSetting_to_timedelta(barSizeSetting):
-    number, time = barSizeSetting.split(" ")
-    time = time[:-1] if time.endswith("s") else time
-
-    return deltas.get(time) * int(number)

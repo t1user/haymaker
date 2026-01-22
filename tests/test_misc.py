@@ -1,4 +1,3 @@
-from datetime import timedelta
 from typing import Literal
 
 import ib_insync as ibi
@@ -6,7 +5,6 @@ import pytest
 
 from haymaker.misc import (
     Counter,
-    barSizeSetting_to_timedelta,
     contractAsTuple,
     general_to_specific_contract_class,
     sign,
@@ -158,7 +156,3 @@ def test_general_to_specific_contract_class_raises_with_non_contracts():
     some_faulty_object = object()
     with pytest.raises(AssertionError):
         general_to_specific_contract_class(some_faulty_object)
-
-
-def test_barSizeSetting_to_timedelta():
-    assert barSizeSetting_to_timedelta("30 secs") == timedelta(seconds=30)
