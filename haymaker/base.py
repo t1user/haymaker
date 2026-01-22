@@ -172,12 +172,12 @@ class Atom:
         :class:`ib_insync.contract.ContractDetails` with some
         additional methods and attributes.
         """
-        try:
-            return self.contract_registry.details[self.contract]
-        except KeyError:
+        details = self.contract_registry.get_details(self.contract)
+        if details is None:
             log.error(f"Missing contract details for: {self.contract}")
             # empty details
-            return Details(ibi.ContractDetails())
+            details = Details(ibi.ContractDetails())
+        return details
 
     @property
     def contract_selector(self) -> AbstractBaseContractSelector | None:

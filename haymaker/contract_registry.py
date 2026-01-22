@@ -1,5 +1,6 @@
 from collections import UserDict
 from dataclasses import dataclass, field
+from datetime import datetime
 from logging import getLogger
 from typing import TypeAlias
 
@@ -35,7 +36,8 @@ class ContractRegistry:
     __selectors: dict[ContractKey, AbstractBaseContractSelector] = field(
         default_factory=dict
     )
-    details: DetailsContainer = field(default_factory=DetailsContainer)
+    details: DetailsContainer = field(default_factory=DetailsContainer, repr=False)
+    today: datetime = datetime.now()  # for testing only
 
     @staticmethod
     def hash_contract(contract: Blueprint) -> ContractKey:
@@ -61,14 +63,20 @@ class ContractRegistry:
     def get_selector(self, blueprint: Blueprint) -> AbstractBaseContractSelector | None:
         return self.__selectors.get(self.hash_contract(blueprint))
 
-    def get_details(self, contract: ibi.Contract) -> Details | None:
-        return self.details.get(contract)
+    def get_details(self, contract: ibi.Contract | None) -> Details | None:
+        if contract is None:
+            return None
+        else:
+            return self.details.get(contract)
 
     def reset_data(self, input_details: list[list[ibi.ContractDetails]]) -> None:
 
         for blueprint, details_list in zip(self.__blueprints, input_details):
             self.__selectors[blueprint] = selector_factory(
-                details_list, FUTURES_ROLL_BDAYS, FUTURES_ROLL_MARGIN_BDAYS
+                details_list,
+                FUTURES_ROLL_BDAYS,
+                FUTURES_ROLL_MARGIN_BDAYS,
+                today=self.today,
             )
 
             for details in details_list:
