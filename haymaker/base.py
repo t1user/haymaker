@@ -232,7 +232,6 @@ class Atom:
         self._set_startup_attrs(data)
         self._process_contract_change()
         self.startEvent.emit(data, self)
-        return None
 
     def _set_startup_attrs(self, data):
         # set strategy if not already set and present in `data` dict
@@ -279,7 +278,6 @@ class Atom:
         loop.
         """
         data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
-        return None
 
     def onFeedback(self, data: Any, *args: Any) -> Awaitable[None] | None:
         """
@@ -296,7 +294,6 @@ class Atom:
         loop.
         """
         self.feedbackEvent.emit(data)
-        return None
 
     def onContractChanged(
         self, old_contract: ibi.Future, new_contract: ibi.Future
@@ -315,7 +312,6 @@ class Atom:
             f"to new contract {new_contract.localSymbol}"
         )
         self._roll_contract_data = ContractRollData(old_contract, new_contract)
-        return None
 
     @property
     def data(self) -> Strategy:

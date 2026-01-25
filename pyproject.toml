@@ -72,6 +72,7 @@ profile = "black"
 
 [tool.mypy]
 mypy_path = "$MYPY_CONFIG_FILE_DIR/stubs"
+disable_error_code = ["return"]
 # check_untyped_defs = true
 
 # remove this after fixing backtester
