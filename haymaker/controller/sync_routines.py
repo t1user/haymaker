@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+ERROR_STRATEGIES: set[str] = set()
+
+
 class OrderSyncStrategy:
     def __init__(self, ib: ibi.IB, sm: StateMachine) -> None:
         self.ib = ib
@@ -373,11 +376,17 @@ class OrderReconciliationSync:
                 if (oi.action in ("STOP-LOSS", "TAKE-PROFIT") and oi.active)
             ]
             if len(brackets) != len(existing_orders):
-                log.error(
+                _log = (
+                    log.error
+                    if strategy.strategy not in ERROR_STRATEGIES
+                    else log.debug
+                )
+                _log(
                     f"Bracket error for {strategy.strategy}, "
                     f"we have: {len(existing_orders)} orders, "
                     f"we should have: {len(brackets)} orders."
                 )
+                ERROR_STRATEGIES.add(strategy.strategy)
                 if self.handle_missing_brackets == "remove":
                     log.error(
                         f"Closing positions for strategy with missing bracket: "
