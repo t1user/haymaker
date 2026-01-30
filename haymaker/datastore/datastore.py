@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Self
 
 import ib_insync as ibi
@@ -55,8 +56,8 @@ class AbstractBaseStore(ABC):
     def read(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | datetime | None = None,
     ) -> pd.DataFrame | None:
         """
         Read data from store for a given symbol. Implementation has to
@@ -239,8 +240,8 @@ class ArcticStore(AbstractBaseStore):
     def read(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | datetime | None = None,
     ) -> pd.DataFrame | None:
         data = self.read_object(symbol, start_date, end_date)
         if data:
@@ -251,8 +252,8 @@ class ArcticStore(AbstractBaseStore):
     def read_object(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | None | datetime = None,
     ) -> VersionedItem | None:
         """
         Return Arctic object, which contains data and full metadata.

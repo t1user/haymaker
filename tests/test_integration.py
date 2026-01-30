@@ -25,6 +25,7 @@ def portfolio():
 
 @pytest.fixture
 def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
+
     class FakeStateMachine:
         strategy = StrategyContainer(strategy_saver)
 
@@ -60,7 +61,6 @@ def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
             self.dataEvent.emit(data_for_df)
 
     source = SourceAtom()
-
     Pipe(source, brick, signal, PortfolioWrapper(), exec_model)
     source.run()
 

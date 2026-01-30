@@ -88,7 +88,7 @@ class Blotter:
         fill: ibi.Fill,
         comm_report: ibi.CommissionReport,
         **kwargs,
-    ):
+    ) -> None:
         """
         Get trades that have all CommissionReport filled and log them.
         """

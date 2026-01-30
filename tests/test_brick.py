@@ -69,8 +69,9 @@ def data_for_df():
     }
 
 
+# don't remove Atom dependency, it ensures contract_registry cleaned for every test
 @pytest.fixture
-def df_brick():
+def df_brick(Atom):
     class Brick(AbstractDfBrick):
 
         def df(self, data):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import ib_insync as ibi
@@ -33,8 +34,8 @@ class AsyncAbstractBaseStore(ABC):
     async def read(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | datetime | None = None,
     ) -> pd.DataFrame | None: ...
 
     @abstractmethod
@@ -79,8 +80,8 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
     async def read(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | datetime | None = None,
     ) -> pd.DataFrame | None:
         return await make_async(self.arctic_store.read, symbol, start_date, end_date)
 

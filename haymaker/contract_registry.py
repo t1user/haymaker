@@ -67,7 +67,10 @@ class ContractRegistry:
         if contract is None:
             return None
         else:
-            return self.details.get(contract)
+            try:
+                return self.details.get(contract)
+            except ValueError:
+                return None
 
     def reset_data(self, input_details: list[list[ibi.ContractDetails]]) -> None:
 

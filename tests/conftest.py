@@ -116,7 +116,7 @@ def details():
     # Note: contains also ibi.Contract
     return ibi.ContractDetails(
         contract=ibi.Contract(
-            secType="CONTFUT",
+            secType="FUT",
             conId=603558814,
             symbol="NQ",
             lastTradeDateOrContractMonth="20240315",

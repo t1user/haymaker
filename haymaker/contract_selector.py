@@ -189,6 +189,7 @@ def future_wrapper_factory(contract: ibi.Contract) -> Type[AbstractBaseFutureWra
 
 
 class AbstractBaseContractSelector(ABC):
+    today = datetime.now()  # for testing only
 
     @classmethod
     @abstractmethod
@@ -218,6 +219,7 @@ class AbstractBaseContractSelector(ABC):
 @dataclass
 class DefaultSelector(AbstractBaseContractSelector):
     contractChain: list[ibi.Contract]
+    today: datetime = field(default=datetime.now(), repr=False)
 
     @classmethod
     def from_details(
@@ -262,7 +264,7 @@ class FutureSelector(AbstractBaseContractSelector):
     futuresChain: list[AbstractBaseFutureWrapper]
     roll_bdays: int = FUTURES_ROLL_BDAYS
     roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS
-    today: datetime = field(default_factory=datetime.now, repr=False)
+    today: datetime = field(default=datetime.now(), repr=False)
 
     def __post_init__(self):
         if not self.futuresChain:
@@ -331,7 +333,10 @@ class FutureSelector(AbstractBaseContractSelector):
 
     @cached_property
     def all_contracts(self) -> list[AbstractBaseFutureWrapper]:
-        """All contracts sorted by roll_date."""
+        """
+        Return all contracts sorted by roll_date.  Sorting happens
+        here.
+        """
         return sorted(
             [c for c in self.futuresChain if c.isActiveMonth],
             key=lambda x: x.roll_day,
@@ -452,6 +457,7 @@ def selector_factory(
     details_list: list[ibi.ContractDetails],
     futures_roll_bdays: int = FUTURES_ROLL_BDAYS,
     futures_roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS,
+    today: datetime = datetime.now(),  # for testing only
 ) -> AbstractBaseContractSelector:
     first_details_instance = details_list[0]
     contract = first_details_instance.contract
@@ -466,4 +472,4 @@ def selector_factory(
             ),
         ),
     }.get(contract.secType, (DefaultSelector, ()))
-    return selector_class.from_details(details_list, *args)  # type: ignore
+    return selector_class.from_details(details_list, today=today, *args)  # type: ignore
