@@ -31,7 +31,7 @@ class AbstractBaseStore(ABC):
 
     @abstractmethod
     def write(
-        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict = {}
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> Any:
         """
         Write data to datastore. Implementation has to recognize whether
@@ -187,7 +187,7 @@ class ArcticStore(AbstractBaseStore):
         ----
 
         * wts:
-            `what to show` parameter of :meth:`ib_insync.ib.reqHistoricalData`
+            `whatToShow` parameter of :meth:`ib_insync.ib.reqHistoricalData`
 
         * barSize:
             `barSize` parameter of :meth:`ib_insync.ib.reqHistoricalData`
@@ -300,13 +300,6 @@ class ArcticStore(AbstractBaseStore):
         self, symbol: str, meta: dict[str, Any]
     ) -> VersionedItem | None:
         return self.store.write_metadata(symbol, meta)
-
-    def _metadata(self, obj: ibi.Contract | str) -> dict[str, dict[str, str]]:
-        if isinstance(obj, ibi.Contract):
-            meta = super()._metadata(obj)
-        else:
-            meta = {}
-        return meta
 
     def __repr__(self) -> str:
         return f"{self.__class__.__qualname__}(lib={self.lib}, host={self.host})"
