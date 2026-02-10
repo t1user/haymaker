@@ -30,7 +30,8 @@ class MissingContractError(Exception):
 
 
 class ContractManagingDescriptor:
-    # DON'T CHANGE THIS TO PROPERTY or it will screw up inherited dataclasses
+    # DON'T CHANGE THIS TO PROPERTY or it will screw up dataclasses
+    # that inherit from Atom
     """
     Manage accessing `contract` property on :class:`Atom`.
 
@@ -248,11 +249,6 @@ class Atom:
 
     def _process_contract_change(self) -> None:
         if (self._contract_memo is not None) and (self._contract_memo != self.contract):
-            # it will not fire if the system has been restarted after contract changed
-            # cannot be relied on for rolls
-            # MUST be used to ensure streamers and processors don't mix-up data
-            # from old and new contracts
-            log.debug(f"Future will reset: {self._contract_memo} --> {self.contract}")
             self._contractChangedEvent.emit(self._contract_memo, self.contract)
         self._contract_memo = self.contract
 
@@ -296,7 +292,7 @@ class Atom:
         self.feedbackEvent.emit(data)
 
     def onContractChanged(
-        self, old_contract: ibi.Future, new_contract: ibi.Future
+        self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> Awaitable[None] | None:
         """
         Will be called if contract object on `self.contract` changes.
@@ -308,8 +304,8 @@ class Atom:
         `Controller` object.
         """
         log.warning(
-            f"Contract on {self} changed from {old_contract.localSymbol} "
-            f"to new contract {new_contract.localSymbol}"
+            f"{self!s} contract changed: {old_contract.localSymbol} "
+            f"--> {new_contract.localSymbol}"
         )
         self._roll_contract_data = ContractRollData(old_contract, new_contract)
 
@@ -399,10 +395,13 @@ class Atom:
                 for i, j in self.__dict__.items()
                 if ("Event" not in str(i))
                 and (i != "_log")
+                and (i != "_contract_blueprint")
                 and j
                 and j != ActiveNext.ACTIVE
             )
         )
+        if self.contract is not None:
+            attrs += f", contract={self.contract}"
         return f"{self.__class__.__name__}({attrs})"
 
 

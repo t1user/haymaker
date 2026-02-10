@@ -147,6 +147,14 @@ class TestAtom:
         atom1.which_contract = ActiveNext.NEXT
         assert repr(atom1) == "NewAtom(name=atom1, which_contract=NEXT)"
 
+    def test_repr_includes_contract(self, atom1: NewAtom):
+        """
+        If contract is set, it should be included in repr.
+        """
+        contract = ibi.Future("NQ", exchange="CME")
+        atom1.contract = contract
+        assert repr(atom1) == f"NewAtom(name=atom1, contract={repr(contract)})"
+
     def test_no_duplicate_connections(self, atom1: NewAtom, atom2: NewAtom):
         atom1.connect(atom2)
         atom1.connect(atom2)
