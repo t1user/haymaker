@@ -13,6 +13,7 @@ ignore_errors:
   # Consider silencing 2103 - Market data connection is broken
 
 log_broker: False # if additional logger with all broker messages should be created
+market_data_lib: live_data
 
 app:
   restart_time: 30 # after disconnection, time to wait before reconnection attempt

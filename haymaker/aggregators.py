@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import itertools
 import logging
 import operator as op
+from collections import deque
+from datetime import date, datetime
 from functools import cached_property
 from typing import Literal
 
@@ -12,117 +16,200 @@ from .base import Atom
 
 log = logging.getLogger(__name__)
 
+_counter = itertools.count().__next__
+
 
 class BarAggregator(Atom):
     """
-    Aggregate recieved data bars into new bars based on the
-    criteria specified in :attr:`filter'. Store processed data.
+    Aggregate recieved data bars into new bars based on the criteria
+    specified in :attr:`filter'.  Store processed data.
+
+    When future contract changes, data already in the filter will be
+    adjusted.  However, when system is started afresh right after
+    contract changed, all back data will be for the new contract,
+    which in some cases might be incorrect.
+
+    :class:`BarAggregator` works best for strategies that don't
+    require large amounts of back data.
+
+    Args:
+    -----
+
+    filter: one of :class:`CountBars`, :class:`VolumeBars`,
+    :class:`TimeBars`, :class:`NoFilter`, determines how input bars
+    are grouped into output bars
+
+    future_adjust_type: one of: "add" or "mul" on future contract
+    change, how price bars currently in the filter are to be adjusted;
+    resulting adjusted series will created by splicing two price
+    series using either addition or multiplication.
     """
 
     def __init__(
         self,
-        filter: "CountBars | VolumeBars | TimeBars | NoFilter",
-        incremental_only: bool = False,
+        filter: CountBars | VolumeBars | TimeBars | NoFilter,
         future_adjust_type: Literal["add", "mul", None] = "add",
-        debug: bool = False,
     ):
         Atom.__init__(self)
-        self._incremental_only = incremental_only
-        self._filter = filter
-        self._filter += self.onDataBar
-        self._log_level = log.level
-        self._debug = debug
-        self._future_adjust_type = future_adjust_type
-        # if future needs to be adjusted; set by onStart
+        self.filter = filter
+        self.filter += self.onDataBar
+        self.future_adjust_type = future_adjust_type
+        # if future needs to be adjusted; set by onContractChanged
         self._future_adjust_flag = False
+        # reference point for last bar processed
+        self._last_data_point: datetime | date | None = None
+        # data queued during long backfills
+        self._queue: asyncio.Queue = asyncio.Queue()
+        # task that processes queue where all data bars are put
+        self._worker_task: asyncio.Task | None = None
+        # used to determine if backfill in progress
+        self._backfill_event: asyncio.Event = asyncio.Event()
+        # start with cleared state (will not block)
+        self._backfill_event.set()
 
-    def onStart(self, data, *args):
-        if isinstance(data, dict):
-            startup = data.get("startup")
-            # prevent logging messages during startup phase
-            if startup and not self._debug:
-                log.debug(f"Startup: {self}")
-                log.setLevel(logging.ERROR)
-            else:
-                log.setLevel(self._log_level)
-            self._future_adjust_flag = data.get("future_adjust_flag", False)
+    def onStart(self, data: dict, *args) -> None:
+        """Syncing contract with streamer."""
         super().onStart(data, *args)
+        if (streamer := data.get("streamer")) and self.contract is None:
+            self._contract_blueprint = streamer._contract_blueprint
+            self.which_contract = streamer.which_contract
 
-        if self._future_adjust_flag:
-            log.warning(f"{self} onStart knows future needs adjust")
+    def onDataBar(self, bars, *args) -> None:
+        """
+        This is connected to `self.filter`, will emit whatever comes
+        from filter.  Additional filtering/adjustment/conversion logic
+        can be put here.
 
-    def onDataBar(self, bars, *args):
+        Backfill means this is stale data, it should not be emitted,
+        because we don't want this data to be treated as if it was
+        current.  It's up to other system components to determine how
+        we want to generate signals.  However :class:`BarAggregator`
+        emits only when latest data becomes available and passes
+        past data as such.
         """
-        This is connected to `self._filter`, will emit whatever comes
-        from filter.
-        """
-        if self._incremental_only:
-            try:
-                self.dataEvent.emit(bars[-1])
-            except KeyError:
-                log.debug(f"Empty input from filter {self._filter}")
-        else:
+        if self._backfill_event.is_set():
             self.dataEvent.emit(bars)
 
-    def onData(self, data: ibi.BarData | ibi.BarDataList, *args) -> None:
+    async def onData(self, data: ibi.BarDataList, *args) -> None:
         """
-        This passes correct data to `self._filter`.
+        The purpose of the queue is to avoid a race condition when
+        `onData` receives several datapoints during a backfill and
+        then has to process this data in the correct order when
+        backfill is finished.
         """
-        # data is just single BarData object (if incremental_only=True,
-        # which is default and currently only mode supported)
         if self._future_adjust_flag:
-            log.warning(f"{self} will adjust futures")
-            log.debug(f"{data=}")
-            # first data point is just to determine adjustment basis
-            # should be passed to adjust_future
-            try:
-                assert isinstance(data, ibi.BarData)
-                self.adjust_future(data)
-            except Exception as e:
-                log.exception(e)
-            # adjust mode should be switched off for subsequent emits
-            self._future_adjust_flag = False
-            # and it shouldn't be emitted further down the chain
-            return
-        if isinstance(data, ibi.BarDataList):
-            # Streamers with incremental_only=False have not been properly tested!
-            log.critical(
-                "WE SHOULD NOT BE HERE; DONT USE PROCESSOR WITH `incremental_only=True`"
+            self.adjust_future(data)
+
+        await self._queue.put(data)
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(
+                self._process_queue(), name=f"{self!s}_queue_worker"
             )
-            try:
-                data = data[-1]
-            except KeyError:
-                log.debug("Empty input from streamer.")
-        assert isinstance(data, ibi.BarData)
-        self._filter.on_source(data)
+
+    async def _process_queue(self) -> None:
+        while True:
+            data = await self._queue.get()
+            await self._process(data)
+            self._queue.task_done()
+
+    async def _process(self, data_: ibi.BarDataList, *args) -> None:
+        """
+        Pass correct data to `self.filter`.
+
+        If there is any more new data than the last bar, then it needs
+        to be backfilled (the reason may be: 1.  fresh start 2.
+        restart).  If after restart contract changed, data we already
+        have in the filter needs to be adjusted.  If we have just one
+        new data bar (as determined comparing timestamps on the
+        available data), it should be just passed to the filter.
+        """
+
+        # Guard against empty data
+        if len(data_) == 0:
+            log.warning(f"{self!s} received empty BarDataList, skipping")
+            return
+
+        data, last_bar = data_[:-1], data_[-1]
+
+        # wait for any ongoing backfill to complete
+        await self._backfill_event.wait()
+
+        # this is a fresh start
+        if len(self.filter.bars) == 0:
+            await self.backfill(data)
+
+        # this is backfill after restart
+        elif self._last_data_point and (data[-1].date > self._last_data_point):
+            # we already have some data in the filter, we expect to add
+            # only last few bars so its faster to iterate backwards to
+            # fine the new data
+            accumulator: deque[ibi.BarData] = deque()
+            for bar in reversed(data):
+                if bar.date > self._last_data_point:
+                    accumulator.appendleft(bar)
+                else:
+                    break
+
+            if len(accumulator) > 0:
+                await self.backfill(accumulator)
+
+        if self._last_data_point is None or last_bar.date > self._last_data_point:
+            # always reflects last bar processed
+            self._last_data_point = last_bar.date
+            # regular emit of a new datapoint
+            self.filter.on_source(last_bar)
+
+    async def backfill(self, bars: deque[ibi.BarData] | list[ibi.BarData]) -> None:
+        try:
+            log.debug(
+                f"BACKFILL: {self!s} ({len(bars)} bars), "
+                f"from: {self._last_data_point} "
+                f"to: {bars[-1].date if bars else 'empty'}"
+            )
+        except Exception:
+            pass  # don't let logging kill backfill
+        try:
+            self._backfill_event.clear()
+            stream = ev.Sequence(bars).connect(self.filter)
+            await stream.list()
+            self._backfill_event.set()
+        except Exception:
+            # in case of error _backfill_event will stay cleared
+            # disabling processing of faulty signals
+            log.exception(f"{self!s} error in backfill.")
+            raise
 
     @cached_property
     def operator(self):
-        return {"add": op.add, "mul": op.mul, None: None}.get(self._future_adjust_type)
+        return {"add": op.add, "mul": op.mul, None: None}.get(self.future_adjust_type)
 
     @cached_property
     def reverse_operator(self):
         return {"add": op.sub, "mul": op.truediv, None: None}.get(
-            self._future_adjust_type
+            self.future_adjust_type
         )
 
-    def adjust_future(self, new_bar: ibi.BarData):
-        """Create continuous future price series on future contract
-        change.  IB mechanism cannot be trusted.  This feature can be
-        turned off by passing `future_adjust_type=None` while
-        initiating the class.
+    def adjust_future(self, bars: ibi.BarDataList):
         """
+        Create continuous future price series on future contract
+        change.
+
+        Args:
+        -----
+
+        bars: new price bars not currently included in :meth:`self.filter`
+        for current (post-roll) contract that the old series needs to
+        be adjusted to
+        """
+
         log.warning(f"{self} adjusting future.")
-        if self.operator is None:
-            log.error(f"Skipping futures adjustment on {self}")
-            return
-        assert self.reverse_operator is not None
 
-        old_bar = self._filter.bars[-1]
-
-        if old_bar.date != new_bar.date:
-            log.error("Cannot back-adjust a future because dates don't match.")
-            return
+        old_bar = self.filter.bars[-1]
+        for bar_ in reversed(bars):
+            if bar_.date == old_bar.date:
+                new_bar = bar_
+                break
+        assert new_bar, f"{self} failed future adjustment: non-overlapping series."
 
         value = self.reverse_operator(new_bar.close, old_bar.close)
         log.warning(
@@ -130,32 +217,47 @@ class BarAggregator(Atom):
             f"| adjustment basis: {value} | operator: {self.operator}"
         )
 
-        for bar in self._filter.bars:
+        for bar in self.filter.bars:
             for field in ("open", "high", "low", "close", "average"):
                 setattr(bar, field, self.operator(getattr(bar, field), value))
 
+        self._future_adjust_flag = False
 
-class BarList(list[ibi.BarData]):
-    def __init__(self, *args):
-        super().__init__(*args)
-        self.updateEvent = ibi.Event("updateEvent")
+    def onContractChanged(
+        self, old_contract: ibi.Contract, new_contract: ibi.Contract
+    ) -> None:
+        self._future_adjust_flag = True
+        log.debug(f"Contract on {self} reset from {old_contract} to {new_contract}")
 
-    def __eq__(self, other):
-        return self is other
+    @cached_property
+    def _id(self) -> int:
+        return _counter()
 
-    def __hash__(self):  # type: ignore
-        return id(self)
+    def __str__(self):
+        contract_symbol = self.contract.localSymbol if self.contract else "NoContract"
+        return f"{self.__class__.__name__}<{contract_symbol}><{self._id}>"
 
 
 class CountBars(ev.Op):
+    """
+    Group input bars into new bars corresponding to a fixed number
+    of source bars.
+
+    Args:
+    -----
+
+    count: number of source bars that constitue one output bar
+    """
+
     __slots__ = ("_count", "bars", "label")
 
-    bars: BarList
+    bars: ibi.BarDataList
 
     def __init__(self, count: int, source: ev.Event | None = None, *, label: str = ""):
         ev.Op.__init__(self, source)
         self._count = count
-        self.bars = BarList()
+        self.bars = ibi.BarDataList()
+        self.label = label
 
     def on_source(self, new_bar: ibi.BarData, *args) -> None:
         if not self.bars or self.bars[-1].barCount == self._count:
@@ -187,16 +289,26 @@ class CountBars(ev.Op):
 
 
 class VolumeBars(ev.Op):
+    """
+    Group input bars into new bars so that each output corresponds to
+    the same volume.
+
+    Args:
+    -----
+
+    volume: desired volume of each output bar
+    """
+
     __slots__ = ("_volume", "bars", "label")
 
-    bars: BarList
+    bars: ibi.BarDataList
 
     def __init__(
         self, volume: int, source: ev.Event | None = None, *, label: str = ""
     ) -> None:
         ev.Op.__init__(self, source)
         self._volume = volume
-        self.bars = BarList()
+        self.bars = ibi.BarDataList()
         self.label = label
 
     def on_source(self, new_bar: ibi.BarData, *args) -> None:
@@ -238,16 +350,26 @@ class VolumeBars(ev.Op):
 
 
 class TickBars(ev.Op):
+    """
+    Group input bars into new bars so that each output bar corresponds
+    to the same number of ticks.
+
+    Args:
+    ----
+
+    count: desired number of ticks for every output bar
+    """
+
     __slots__ = ("_count", "bars", "label")
 
-    bars: BarList
+    bars: ibi.BarDataList
 
     def __init__(
         self, count: int, source: ev.Event | None = None, *, label: str = ""
     ) -> None:
         ev.Op.__init__(self, source)
         self._count = count
-        self.bars = BarList()
+        self.bars = ibi.BarDataList()
         self.label = label
 
     def on_source(self, new_bar: ibi.BarData, *args) -> None:
@@ -279,17 +401,28 @@ class TickBars(ev.Op):
 
 
 class TimeBars(ev.Op):
+    """
+    Group input bars into new bars so that every output bar
+    corresponds to the same time period.
+
+    Args:
+    -----
+
+    timer: :class:`eventkit.create.Timer` corresponding to desired
+    duration of output bars
+    """
+
     __slots__ = ("_timer", "bars", "_running_price_volume", "label")
 
-    bars: BarList
+    bars: ibi.BarDataList
 
     def __init__(
-        self, timer, source: ev.Event | None = None, *, label: str = ""
+        self, timer: ev.Timer, source: ev.Event | None = None, *, label: str = ""
     ) -> None:
         ev.Op.__init__(self, source)
         self._timer = timer
         self._timer.connect(self._on_timer, None, self._on_timer_done)
-        self.bars = BarList()
+        self.bars = ibi.BarDataList()
         self._running_price_volume = 0.0
         self.label = label
 
@@ -334,17 +467,17 @@ class TimeBars(ev.Op):
 
 class NoFilter(ev.Op):
     """
-    This works as an accumulator making sure that no bars are lost
-    during restarts.
+    Accumulate input bars to ensure no bars are lost during restarts.
+    Every input bar and output bar is the same.
     """
 
     __slots__ = ("bars", "label")
 
-    bars: BarList
+    bars: ibi.BarDataList
 
     def __init__(self, source: ev.Event | None = None, *, label: str = "") -> None:
         ev.Op.__init__(self, source)
-        self.bars = BarList()
+        self.bars = ibi.BarDataList()
         self.label = label
 
     def on_source(self, new_bar: ibi.BarData, *args) -> None:

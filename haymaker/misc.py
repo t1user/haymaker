@@ -338,3 +338,9 @@ def name_str(
     else:
         args_str = join_str.join((name, *args))
     return args_str
+
+
+def concat_dfs(*dfs: pd.DataFrame) -> pd.DataFrame:
+    """Concatenate sequence of dfs, cleaning duplicate values if any."""
+    df = pd.concat(dfs)
+    return df[~df.index.duplicated()]

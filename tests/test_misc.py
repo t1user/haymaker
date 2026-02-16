@@ -1,10 +1,13 @@
+import datetime
 from typing import Literal
 
 import ib_insync as ibi
+import pandas as pd
 import pytest
 
 from haymaker.misc import (
     Counter,
+    concat_dfs,
     contractAsTuple,
     general_to_specific_contract_class,
     sign,
@@ -156,3 +159,130 @@ def test_general_to_specific_contract_class_raises_with_non_contracts():
     some_faulty_object = object()
     with pytest.raises(AssertionError):
         general_to_specific_contract_class(some_faulty_object)
+
+
+@pytest.fixture
+def master_df():
+
+    return pd.DataFrame.from_dict(
+        {
+            "open": {
+                datetime.date(2025, 12, 5): 6913.5,
+                datetime.date(2025, 12, 12): 6942.75,
+                datetime.date(2025, 12, 19): 6890.0,
+                datetime.date(2025, 12, 26): 6906.25,
+                datetime.date(2026, 1, 2): 6980.5,
+                datetime.date(2026, 1, 9): 6911.5,
+                datetime.date(2026, 1, 16): 7007.0,
+                datetime.date(2026, 1, 23): 6918.25,
+                datetime.date(2026, 1, 29): 6904.0,
+            },
+            "high": {
+                datetime.date(2025, 12, 5): 6963.0,
+                datetime.date(2025, 12, 12): 6988.0,
+                datetime.date(2025, 12, 19): 6932.25,
+                datetime.date(2025, 12, 26): 6994.0,
+                datetime.date(2026, 1, 2): 6984.75,
+                datetime.date(2026, 1, 9): 7017.5,
+                datetime.date(2026, 1, 16): 7036.25,
+                datetime.date(2026, 1, 23): 6969.0,
+                datetime.date(2026, 1, 29): 7043.0,
+            },
+            "low": {
+                datetime.date(2025, 12, 5): 6862.0,
+                datetime.date(2025, 12, 12): 6864.0,
+                datetime.date(2025, 12, 19): 6771.5,
+                datetime.date(2025, 12, 26): 6900.5,
+                datetime.date(2026, 1, 2): 6866.75,
+                datetime.date(2026, 1, 9): 6899.5,
+                datetime.date(2026, 1, 16): 6923.25,
+                datetime.date(2026, 1, 23): 6814.5,
+                datetime.date(2026, 1, 29): 6879.0,
+            },
+            "close": {
+                datetime.date(2025, 12, 5): 6937.0,
+                datetime.date(2025, 12, 12): 6890.5,
+                datetime.date(2025, 12, 19): 6887.25,
+                datetime.date(2025, 12, 26): 6979.25,
+                datetime.date(2026, 1, 2): 6900.5,
+                datetime.date(2026, 1, 9): 7005.0,
+                datetime.date(2026, 1, 16): 6976.75,
+                datetime.date(2026, 1, 23): 6945.75,
+                datetime.date(2026, 1, 29): 7017.5,
+            },
+            "volume": {
+                datetime.date(2025, 12, 5): 12969.0,
+                datetime.date(2025, 12, 12): 283446.0,
+                datetime.date(2025, 12, 19): 7452031.0,
+                datetime.date(2025, 12, 26): 2766966.0,
+                datetime.date(2026, 1, 2): 3982529.0,
+                datetime.date(2026, 1, 9): 6045420.0,
+                datetime.date(2026, 1, 16): 6435822.0,
+                datetime.date(2026, 1, 23): 6888178.0,
+                datetime.date(2026, 1, 29): 3233976.0,
+            },
+            "average": {
+                datetime.date(2025, 12, 5): 6913.675,
+                datetime.date(2025, 12, 12): 6914.15,
+                datetime.date(2025, 12, 19): 6849.1,
+                datetime.date(2025, 12, 26): 6949.675,
+                datetime.date(2026, 1, 2): 6924.45,
+                datetime.date(2026, 1, 9): 6969.475,
+                datetime.date(2026, 1, 16): 6983.6,
+                datetime.date(2026, 1, 23): 6900.8,
+                datetime.date(2026, 1, 29): 6998.325,
+            },
+            "barCount": {
+                datetime.date(2025, 12, 5): 8422,
+                datetime.date(2025, 12, 12): 182334,
+                datetime.date(2025, 12, 19): 2573069,
+                datetime.date(2025, 12, 26): 835993,
+                datetime.date(2026, 1, 2): 1181006,
+                datetime.date(2026, 1, 9): 1809844,
+                datetime.date(2026, 1, 16): 2047671,
+                datetime.date(2026, 1, 23): 2375708,
+                datetime.date(2026, 1, 29): 1075470,
+            },
+        }
+    )
+
+
+def test_concat_dfs_1(master_df):
+    # dfs have overlapping values
+    df1 = master_df.iloc[:5]
+    df2 = master_df.iloc[3:]
+
+    cleaned_df = concat_dfs(df1, df2)
+
+    assert len(cleaned_df) == len(master_df)
+    assert cleaned_df.equals(master_df)
+
+
+def test_concat_dfs_2(master_df):
+    # dfs are the same
+    df1 = master_df
+    df2 = master_df
+
+    cleaned_df = concat_dfs(df1, df2)
+
+    assert cleaned_df.equals(master_df)
+
+
+def test_concat_dfs_3(master_df):
+    # dfs don't have overlapping values
+    df1 = master_df.iloc[:5]
+    df2 = master_df[5:]
+
+    cleaned_df = concat_dfs(df1, df2)
+
+    assert cleaned_df.equals(master_df)
+
+
+def test_concat_dfs_4(master_df):
+    # dfs are not continuous
+    df1 = master_df.iloc[:4]
+    df2 = master_df[5:]
+
+    cleaned_df = concat_dfs(df1, df2)
+    modified_df = master_df.drop(master_df.index[4])
+    assert cleaned_df.equals(modified_df)

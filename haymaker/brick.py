@@ -9,7 +9,6 @@ from typing import Any
 import ib_insync as ibi
 import pandas as pd
 
-from .aggregators import BarList
 from .base import Atom
 
 log = logging.getLogger(__name__)
@@ -27,15 +26,13 @@ class AbstractBaseBrick(Atom, ABC):
         if isinstance(data, dict):
             data["strategy"] = self.strategy
             log.log(5, f"Updated dict on start: {data}")
-        self.startup = data.get("startup", False)
         super().onStart(data, *args)
 
     def onData(self, data, *args) -> None:
-        if not self.startup:
-            d = self._params(**self._signal(data))
-            super().onData(d)  # timestamp on departure
-            self._log.debug(d)
-            self.dataEvent.emit(d)
+        d = self._params(**self._signal(data))
+        super().onData(d)  # timestamp on departure
+        self._log.debug(d)
+        self.dataEvent.emit(d)
 
     @abstractmethod
     def _signal(self, data) -> dict[str, Any]:
@@ -87,9 +84,8 @@ class AbstractDfBrick(AbstractBaseBrick):
             return self.df(data)
 
     # this is most likely redundand as dataframe constructor can handle these types
-    @_create_df.register(BarList)
     @_create_df.register(ibi.BarDataList)
-    def _(self, data: BarList | ibi.BarDataList) -> pd.DataFrame:
+    def _(self, data: ibi.BarDataList) -> pd.DataFrame:
         df_ = ibi.util.df(data)
         if df_ is not None:
             return self.df(df_.set_index("date"))

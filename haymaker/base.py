@@ -160,6 +160,11 @@ class Atom:
         self._roll_contract_data: ContractRollData | None = None
 
     @property
+    def details(self) -> Details:
+        """This is a deprecated property name, which will be removed"""
+        return self.contract_details
+
+    @property
     def contract_details(self) -> Details:
         """
         Contract details received from the broker.

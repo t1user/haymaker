@@ -8,6 +8,7 @@ import pytest
 from haymaker.durationStr_converters import (
     barSizeSetting_to_timedelta,
     datapoints_to_durationStr,
+    datapoints_to_timedelta,
     date_to_delta,
     date_to_delta_wrapper,
     delta_to_durationStr,
@@ -68,6 +69,34 @@ def test_barSizeSetting_to_timedelta_unadjusted(
 )
 def test_durationStr_to_timedelta(durationStr: str, delta: timedelta) -> None:
     assert durationStr_to_timedelta(durationStr) == delta
+
+
+@pytest.mark.parametrize(
+    "datapoints,barSizeSetting,delta",
+    [
+        (100, "30 secs", timedelta(minutes=50)),
+        (10000, "30 secs", timedelta(days=3.623188406)),
+        (10_000, "1 sec", timedelta(seconds=10_000)),
+        # default 23 hours per day
+        (10_000, "1 min", timedelta(days=10_000 / 60 / 23)),
+        # default 23 hours per day
+        (100, "1 hour", timedelta(days=100 / 23)),
+        (10000, "1 hour", timedelta(days=10000 / 23)),
+        (100, "1 day", timedelta(days=100)),
+        (1000, "1 day", timedelta(days=1000)),
+        (100, "1 week", 100 * timedelta(days=5)),
+        (10, "1 month", 10 * timedelta(days=22)),
+        (100, "1 month", 100 * timedelta(days=22)),
+    ],
+)
+def test_datapoints_to_timedelta(
+    datapoints: int, barSizeSetting: str, delta: timedelta
+) -> None:
+    result = datapoints_to_timedelta(datapoints, barSizeSetting)
+    # rounding to full seconds as more precision is not needed
+    assert timedelta(seconds=int(result.total_seconds())) == timedelta(
+        seconds=int(delta.total_seconds())
+    )
 
 
 @pytest.mark.parametrize(
@@ -244,50 +273,34 @@ def test_durationStr_to_datapoints_S_unit_hours(durationStr, expected_datapoints
     )
 
 
-# @pytest.mark.parametrize(
-#     "datapoints,barSizeSetting",
-#     [
-#         (100, "30 secs"),
-#         (100, "1 hour"),
-#         (100, "1 day"),
-#         (1000, "1 day"),
-#         (1, "1 sec"),
-#         (1, "1 hour"),
-#         (1, "1 day"),
-#     ],
-# )
-# def test_datapoints_to_durationStr_and_back(
-#     datapoints: int, barSizeSetting: str
-# ) -> None:
-#     session_length = timedelta(hours=23)
-#     durationStr = datapoints_to_durationStr(datapoints, barSizeSetting, session_length)
-#     print(durationStr)
-#     assert (
-#         durationStr_to_datapoints(durationStr, barSizeSetting, session_length)
-#         == datapoints
-#     )
+def test_date_to_delta_passed_now():
+    tz = ZoneInfo("UTC")
+    date = datetime(2025, 1, 11, 10, 0, tzinfo=tz)
+    mock_now = datetime(2025, 1, 11, 14, 30, tzinfo=tz)  # 4.5 hours later
+
+    with patch("haymaker.durationStr_converters.datetime") as mock_dt:
+        mock_dt.now.return_value = mock_now
+        end_date_or_now = datetime(2025, 1, 11, 12, 30, tzinfo=tz)
+        result = date_to_delta(
+            date, "1 hour", end_date_or_now=end_date_or_now, margin=0
+        )
+        # three bars elapsed (2.5 hours since passed end_date_or_now
+        # on 1 hour bars rounded UP), if it used mock_now, it would be
+        # 5 hours
+        assert result == 10800
 
 
-# @pytest.mark.parametrize(
-#     "durationStr,barSizeSetting",
-#     [
-#         ("1 D", "30 secs"),
-#         ("1 W", "30 secs"),
-#         ("1 M", "1 day"),
-#         ("1 D", "1 hour"),
-#         ("1 Y", "1 day"),
-#         ("2 Y", "1 day"),
-#     ],
-# )
-# def test_durationStr_to_datapoints_and_back(
-#     durationStr: str, barSizeSetting: str
-# ) -> None:
-#     session_length = timedelta(hours=23)
-#     datapoints = durationStr_to_datapoints(durationStr, barSizeSetting, session_length)
-#     assert (
-#         datapoints_to_durationStr(datapoints, barSizeSetting, session_length)
-#         == durationStr
-#     )
+def test_date_to_delta_passed_now_no_timezone():
+    date = datetime(2025, 1, 11, 10, 0, tzinfo=None)
+    mock_now = datetime(2025, 1, 11, 12, 30)  # 2.5 hours later
+
+    with patch("haymaker.durationStr_converters.datetime") as mock_dt:
+        mock_dt.now.return_value = mock_now
+        end_date_or_now = datetime(2025, 1, 11, 12, 30)
+        result = date_to_delta(
+            date, "1 hour", end_date_or_now=end_date_or_now, margin=0
+        )
+        assert result == 10800
 
 
 def test_date_to_delta():
@@ -302,6 +315,29 @@ def test_date_to_delta():
 
         # three bars elapsed (2.5 hours on 1 hour bars rounded UP)
         assert result == 10800
+
+
+def test_date_to_accepts_date_without_timezone():
+    date = datetime(2025, 1, 11, 10, 0)
+    result = date_to_delta(date, "1 hour", margin=0)
+    # test will throw an error if cannot handle the date doesn't make
+    # sense to test actual value as it will be different depending on
+    # test time
+    assert result
+
+
+def test_date_to_delta_sub_hour():
+    tz = ZoneInfo("UTC")
+    date = datetime(2026, 1, 26, 10, 0, tzinfo=tz)
+    mock_now = datetime(2026, 1, 26, 10, 10, tzinfo=tz)  # 10 minutes later
+
+    with patch("haymaker.durationStr_converters.datetime") as mock_dt:
+        mock_dt.now.return_value = mock_now
+
+        result = date_to_delta(date, "1 min", margin=0)
+
+        # three bars elapsed (2.5 hours on 1 hour bars rounded UP)
+        assert result == 600
 
 
 def test_date_to_delta_margin_applied():
@@ -362,7 +398,9 @@ def test_date_to_delta_margin_week_bars():
 
 
 def test_delta_to_durationStr_more_than_one_day():
-    assert delta_to_durationStr(1000000) == "12 D"
+    # 1,000,000 secs = 1,000,000 / 3600  = 277.77 hours / 24 = 11.57 days
+    # rounded up to 12 days
+    assert delta_to_durationStr(1_000_000) == "12 D"
 
 
 def test_delta_to_durationStr_less_than_one_day():
@@ -378,6 +416,23 @@ def test_date_to_delta_wrapper():
         mock_dt.now.return_value = mock_now
 
         result = date_to_delta_wrapper(date, "1 hour", margin=0)
+
+        # three bars elapsed (2.5 hours on 1 hour bars rounded UP)
+        assert result == "10800 S"
+
+
+def test_date_to_delta_wrapper_now_passed_as_argument():
+    tz = ZoneInfo("UTC")
+    date = datetime(2025, 1, 11, 10, 0, tzinfo=tz)
+    mock_now = datetime(2025, 1, 11, 14, 30, tzinfo=tz)  # 4.5 hours later
+    end_date_or_now = datetime(2025, 1, 11, 12, 30, tzinfo=tz)  # 2.5 hours later
+
+    with patch("haymaker.durationStr_converters.datetime") as mock_dt:
+        mock_dt.now.return_value = mock_now
+
+        result = date_to_delta_wrapper(
+            date, "1 hour", margin=0, end_date_or_now=end_date_or_now
+        )
 
         # three bars elapsed (2.5 hours on 1 hour bars rounded UP)
         assert result == "10800 S"

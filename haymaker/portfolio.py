@@ -10,8 +10,7 @@ log = logging.getLogger(__name__)
 
 class AbstractBasePortfolio(ABC):
     """
-    Decides what, if and how much to trade based on received signals
-    and queries to [SM?].
+    Decides what, if and how much to trade based on received signals.
 
     Each strategy should have its own instance of portfolio to ensure
     that signals form various strategies should not be mixed-up.

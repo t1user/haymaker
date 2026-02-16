@@ -69,6 +69,24 @@ def durationStr_to_timedelta(durationStr) -> timedelta:
     return (durationStr_deltas[time] * int(number)) + timedelta(days=adjustment_days)
 
 
+def datapoints_to_timedelta(
+    datapoints: int,
+    barSizeSetting: str,
+    session_length: timedelta = timedelta(hours=23),
+) -> timedelta:
+    barSize_timedelta = barSizeSetting_to_timedelta(barSizeSetting)
+    bars_per_session = session_length / barSize_timedelta
+    sessions_required = (
+        datapoints / bars_per_session
+        if barSize_timedelta < timedelta(days=1)
+        else barSize_timedelta * datapoints / timedelta(days=1)
+    )
+    if sessions_required < 1:
+        return barSize_timedelta * datapoints
+    else:
+        return timedelta(days=1) * sessions_required
+
+
 def datapoints_to_durationStr(
     datapoints: int, barSizeSetting: str, session_length: timedelta
 ) -> str:
@@ -126,7 +144,13 @@ def durationStr_to_datapoints(
     return int(-(-bars // 1))
 
 
-def date_to_delta(date: datetime, barSizeSetting: str, margin: int = 1) -> int:
+def date_to_delta(
+    start_date: datetime,
+    barSizeSetting: str,
+    *,
+    end_date_or_now: datetime | None = None,
+    margin: int = 1,
+) -> int:
     """
     Return number of seconds since date.  Makes sure that at least the
     minimum required number of bars is requested.  Used to determine
@@ -142,12 +166,13 @@ def date_to_delta(date: datetime, barSizeSetting: str, margin: int = 1) -> int:
     margin: number of extra bars
 
     """
-    secs = (datetime.now(date.tzinfo) - date).total_seconds()
+    now = end_date_or_now or datetime.now(start_date.tzinfo)
+    secs = (now - start_date).total_seconds()
     bar_size = barSizeSetting_to_timedelta(
         barSizeSetting, adjusted=False
     ).total_seconds()
-    # at least the covered period
-    bars = secs // bar_size + 1
+    # at least the covered period, number of bars rounded up
+    bars = int((secs + bar_size - 1) // bar_size)
     # with some margin for delays, duplicated bars will be filtered out anyway
     return int(max((bars + margin) * bar_size, bar_size))
 
@@ -159,12 +184,23 @@ def delta_to_durationStr(seconds: int) -> str:
     given the purpose of the function is to return a durationStr for
     requesting data since last restart.
     """
-
+    print(f"{seconds=}")
     if seconds < 86400:
         return f"{seconds} S"
     else:
-        return f"{seconds // 86400 + 1} D"
+        # round up: ceil(a/b) = (a + b - 1) // b
+        return f"{(seconds + 86400 - 1) // 86400} D"
 
 
-def date_to_delta_wrapper(date: datetime, barSizeSetting: str, margin: int = 1) -> str:
-    return delta_to_durationStr(date_to_delta(date, barSizeSetting, margin))
+def date_to_delta_wrapper(
+    start_date: datetime,
+    barSizeSetting: str,
+    *,
+    end_date_or_now: datetime | None = None,
+    margin: int = 1,
+) -> str:
+    return delta_to_durationStr(
+        date_to_delta(
+            start_date, barSizeSetting, end_date_or_now=end_date_or_now, margin=margin
+        )
+    )
