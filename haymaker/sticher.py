@@ -1,19 +1,17 @@
 import logging
 import operator as op
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property
 from itertools import accumulate
-from typing import Any, Awaitable, Literal
+from typing import Literal
 
 import ib_insync as ibi
 import pandas as pd
 
 from . import misc
-from .base import ActiveNext, Atom
 from .contract_selector import FutureSelector
-from .saver import AbstractBaseSaver
 
 log = logging.getLogger(__name__)
 
@@ -28,64 +26,6 @@ class NonOverLappingDfsError(Exception):
 
 class MissingContract(Exception):
     pass
-
-
-@dataclass
-class Sticher(Atom):
-    # this object totally re-writes the way Atom looks up contracts
-    # because it needs very specific access to particular contract on
-    # a futures chain
-    saver: AbstractBaseSaver
-    _contract: ibi.Contract | None = field(init=False)
-
-    def __post_init__(self):
-        self._contract = None
-        super().__init__()
-
-    def onStart(self, data: Any, *args: Any) -> None:
-        super().onStart(data)
-        contract = data.get("contract")
-        assert contract, f"{self} received no contract onStart"
-        # don't write to `self.contract` as that will be  directed to descriptor
-        self._contract = contract
-
-        self.pull_data()
-
-    def _contract_getter(self, tag: ActiveNext) -> ibi.Contract:
-        assert self._contract is not None, f"Contract has not been set on {self}"
-        contract = self.contract_dict.get((misc.hash_contract(self._contract), tag))
-        if contract is None:
-            raise ValueError(f"Missing {tag.name} contract on {self}")
-        else:
-            return contract
-
-    @property
-    def previous_contract(self) -> ibi.Contract:
-        return self._contract_getter(ActiveNext.PREVIOUS)
-
-    @property
-    def active_contract(self) -> ibi.Contract:
-        return self._contract_getter(ActiveNext.ACTIVE)
-
-    @property
-    def next_contract(self) -> ibi.Contract:
-        return self._contract_getter(ActiveNext.NEXT)
-
-    def pull_data(self):
-        pass
-
-    def onData(self, data: Any, *args: Any) -> Awaitable[None] | None:
-        self.save_data(data)
-        processed_data = self.process_data(data)
-        super().onData(data)
-        self.dataEvent.emit(processed_data)
-        return None
-
-    def save_data(self, data):
-        pass
-
-    def process_data(self, data: dict):
-        pass
 
 
 @dataclass
@@ -124,14 +64,6 @@ class FuturesSticher:
             }
         return FutureSelector.from_contracts(list(self.source.keys()), **params)
 
-    @cached_property
-    def _date_ranges(self) -> dict[ibi.Future, tuple[datetime, datetime]]:
-
-        return {
-            contract: (start, stop)
-            for (contract, start, stop) in self._selector.date_ranges
-        }
-
     @staticmethod
     def _tz(date: datetime, df: pd.DataFrame) -> pd.Timestamp:
         # just copy timezone from corresponding df even if I get it
@@ -142,9 +74,9 @@ class FuturesSticher:
     @cached_property
     def _dfs(self) -> list[pd.DataFrame]:
         output: list[pd.DataFrame] = []
-        # it's ok to rely on dfs being sorted (`self._date_ranges`
+        # it's ok to rely on dfs being sorted (`self._selector.date_ranges`
         # responsible for that)
-        for contract, (start_date, stop_date) in self._date_ranges.items():
+        for contract, (start_date, stop_date) in self._selector.date_ranges.items():
             try:
                 df = self.source[contract]
             except KeyError:
@@ -212,9 +144,8 @@ class FuturesSticher:
                 ]
             )
         )
-        df = pd.concat(dfs)
-        # duplicates on df joining points
-        return df[~df.index.duplicated()]
+        # concatenate and de-duplicate dfs
+        return misc.concat_dfs(*dfs)
 
     def offset(self, old_price: float, new_price: float) -> float:
         return self.reverse_operator(new_price, old_price)

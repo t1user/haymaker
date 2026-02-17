@@ -1,5 +1,3 @@
-import asyncio
-import logging
 import pickle
 from pathlib import Path
 from unittest.mock import Mock
@@ -8,9 +6,7 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 
-from haymaker.base import ActiveNext, Atom
-from haymaker.sticher import FuturesSticher, Sticher, WrongStreamer
-from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
+from haymaker.sticher import FuturesSticher
 
 
 def test_offset():
@@ -271,118 +267,3 @@ def test_adjustment_correct(one_sticher):
     adjusted_close = one_sticher.data.loc[unadjusted_index].close
 
     assert adjusted_close - unadjusted_close == one_sticher._offsets[-1]
-
-
-# ########################################
-# Sticher from here on
-# ########################################
-
-
-def test_Sticher_cannot_set_contract_in_int():
-    """Make sure user is not able to manually set contract."""
-    with pytest.raises(TypeError):
-        Sticher(Mock(), contract=ibi.Contract(symbol="empty contract"))
-
-
-def test_new_Sticher_has_no_contract():
-    """
-    Contract on Sticher needs to be set in `onStart` so that it's
-    alligned with Streamer it's connected to.
-    """
-    sticher = Sticher(Mock())
-    assert sticher.contract is None
-
-
-@pytest.mark.asyncio
-async def test_Sticher_raises_if_contract_not_passed_onStart(caplog):
-    sticher = Sticher(Mock())
-
-    class Source(Atom):
-        pass
-
-    source = Source()
-    source += sticher
-
-    # emit without contract
-    source.startEvent.emit({})
-    await asyncio.sleep(0.001)
-    # Eventkit captures errors and logs instead of raising
-    assert any(
-        "received no contract onStart" in record.message for record in caplog.records
-    )
-    assert any(record.levelname == "ERROR" for record in caplog.records)
-
-
-def test_Sticher_warns_when_contract_reset(caplog):
-    caplog.set_level(logging.DEBUG)
-    sticher = Sticher(Mock())
-    sticher.contract = ibi.Contract()
-
-    class Source(Atom):
-        pass
-
-    source = Source()
-    source += sticher
-
-    source.startEvent.emit({"contract": ibi.Contract(conId=666)})
-
-    # a log was generated
-    print(caplog.records)
-    assert len(caplog.records) > 0
-
-
-def test_HistoricalDataStreamerAccepted(Atom):
-    blueprint = ibi.Future("NQ", "CME")
-    streamer = HistoricalDataStreamer(
-        contract=blueprint,
-        durationStr="1D",
-        barSizeSetting="30 secs",
-        whatToShow="TRADES",
-    )
-
-    sticher = Sticher(100)
-    # test if no error raised
-    assert sticher.sync_with_streamer(streamer) is None
-
-
-def test_wrong_streamer_fails(Atom):
-    blueprint = ibi.Future("NQ", "CME")
-    streamer = MktDataStreamer(contract=blueprint, tickList="212")
-    sticher = Sticher(100)
-    with pytest.raises(WrongStreamer):
-        sticher.sync_with_streamer(streamer)
-
-
-def test_sync_extracts_which_contract(Atom):
-    blueprint = ibi.Future("NQ", "CME")
-    streamer = HistoricalDataStreamer(
-        contract=blueprint,
-        durationStr="1D",
-        barSizeSetting="30 secs",
-        whatToShow="TRADES",
-    )
-    streamer.which_contract = ActiveNext.NEXT
-    sticher = Sticher(100)
-    sticher.sync_with_streamer(streamer)
-    assert sticher.which_contract is ActiveNext.NEXT
-
-
-def test_sync_extracts_blueprint(Atom):
-    blueprint = ibi.Future("NQ", "CME")
-    streamer = HistoricalDataStreamer(
-        contract=blueprint,
-        durationStr="1D",
-        barSizeSetting="30 secs",
-        whatToShow="TRADES",
-    )
-    streamer.which_contract = ActiveNext.NEXT
-    sticher = Sticher(100)
-    sticher.sync_with_streamer(streamer)
-    assert sticher._contract_blueprint is blueprint
-
-
-# def test_streamer_reads_own_params(contract):
-#     hs = HistoricalDataStreamer(contract, "10 D", "30 secs", "TRADES")
-#     assert "10 D" in hs.params.values()
-#     assert "30 secs" in hs.params.values()
-#     assert "TRADES" in hs.params.values()
