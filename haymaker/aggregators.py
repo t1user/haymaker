@@ -105,6 +105,7 @@ class BarAggregator(Atom):
             self._worker_task = asyncio.create_task(
                 self._process_queue(), name=f"{self!s}_queue_worker"
             )
+        super().onData(data)
 
     async def _process_queue(self) -> None:
         while True:
@@ -235,7 +236,9 @@ class BarAggregator(Atom):
 
     def __str__(self):
         contract_symbol = self.contract.localSymbol if self.contract else "NoContract"
-        return f"{self.__class__.__name__}<{contract_symbol}><{self._id}>"
+        return (
+            f"{self.__class__.__name__}<{contract_symbol}><{self._id}><{self._filter}>"
+        )
 
 
 class CountBars(ev.Op):
