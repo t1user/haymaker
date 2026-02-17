@@ -5,9 +5,10 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 from contract_details_for_registry import blueprints, details
+from helpers import wait_for_condition
 from sample_barDataList import sample_barDataList
 
-from haymaker.base import ActiveNext
+from haymaker.base import ActiveNext, Atom
 from haymaker.contract_registry import ContractRegistry
 from haymaker.dfaggregator import DfAggregator, WrongStreamer
 from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
@@ -177,7 +178,7 @@ def test_back_contracts_iterable_going_backward(registry_with_data):
         previuos_contract = contract
 
 
-def test_df_combined_correctly_in_update_df_non_overlapping():
+def test_df_combined_correctly_in_append_data_non_overlapping():
     sample_df = pd.DataFrame(sample_barDataList).set_index("date")
     first_batch, last_batch = sample_df[:-5], sample_df[-5:]
 
@@ -185,13 +186,13 @@ def test_df_combined_correctly_in_update_df_non_overlapping():
     aggregator._df = first_batch
 
     with patch.object(aggregator, "save_data", new_callable=Mock) as mock_save:
-        aggregator.update_df(last_batch)
+        aggregator.append_data(last_batch)
 
     pd.testing.assert_frame_equal(aggregator._df, sample_df)
     mock_save.assert_called_once()
 
 
-def test_df_combined_correctly_in_update_df_overlapping():
+def test_df_combined_correctly_in_append_data_overlapping():
     sample_df = pd.DataFrame(sample_barDataList).set_index("date")
     first_batch, last_batch = sample_df[:-5], sample_df[-10:]
 
@@ -199,10 +200,50 @@ def test_df_combined_correctly_in_update_df_overlapping():
     aggregator._df = first_batch
 
     with patch.object(aggregator, "save_data", new_callable=Mock) as mock_save:
-        aggregator.update_df(last_batch)
+        aggregator.append_data(last_batch)
 
     pd.testing.assert_frame_equal(aggregator._df, sample_df)
     mock_save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_data_queued():
+    first_batch = sample_barDataList[:-3]
+    second_batch = sample_barDataList[:-2]
+    third_batch = sample_barDataList[:-1]
+    last_batch = sample_barDataList[:]
+
+    sample_df = pd.DataFrame(sample_barDataList).set_index("date")
+
+    class SourceAtom(Atom):
+        pass
+
+    class OutputAtom(Atom):
+        def onData(self, data, *args):
+            print(f"data on output: {len(data) if data else data}")
+
+    aggregator = DfAggregator()
+    source = SourceAtom()
+    aggregator.contract = source.contract = ibi.Future("ES", exchange="CME")
+    source += aggregator
+    aggregator += OutputAtom()
+    with patch.object(aggregator, "save_data") as mock_save_data:
+        with patch.object(
+            aggregator, "acquire_data", new_callable=AsyncMock
+        ) as mock_acquire:
+            mock_acquire.return_value = pd.DataFrame(first_batch).set_index("date")
+            source.dataEvent.emit(first_batch)
+            source.dataEvent.emit(second_batch)
+            source.dataEvent.emit(third_batch)
+            source.dataEvent.emit(last_batch)
+
+            await wait_for_condition(
+                lambda: aggregator._df is not None and aggregator._queue.empty()
+            )
+            # save every new data point
+            mock_save_data.call_count == 4
+            mock_acquire.assert_called_once()
+            pd.testing.assert_frame_equal(aggregator._df, sample_df)
 
 
 #####################

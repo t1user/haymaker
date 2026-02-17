@@ -53,10 +53,14 @@ class DfAggregator(Atom):
 
     _streamer_params: dict[str, Any] = field(repr=False, default_factory=dict)
     _df: pd.DataFrame | None = field(repr=False, default=None)
+    _queue: asyncio.Queue = field(init=False, repr=False)
+    _worker_task: asyncio.Task | None = field(init=False, repr=False)
     store: AsyncAbstractBaseStore = field(init=False)
 
     def __post_init__(self):
         self.store = AsyncArcticStore(lib=MARKET_DATA_LIB_NAME, host=get_mongo_client())
+        self._queue = asyncio.Queue()
+        self._worker_task = None
         super().__init__()
 
     def onStart(self, data: Any, *args: Any) -> None:
@@ -88,28 +92,45 @@ class DfAggregator(Atom):
             )
 
     async def onData(self, data: ibi.BarDataList, *args: Any) -> None:
-        df = await self.process_data(data)
-        super().onData(data)
-        # pd.DataFrame emitted, make sure next Atom accepts it
-        self.dataEvent.emit(df)
+        # processing may be slow so queue data before processing
+        await self._queue.put(data)
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(
+                self._process_queue(), name=f"{self}_process_queue"
+            )
 
-    async def process_data(self, data: ibi.BarDataList) -> pd.DataFrame:
+    async def _process_queue(self):
+        while True:
+            data = await self._queue.get()
+            await self.process_data(data)
+            self._queue.task_done()
+
+    async def process_data(self, data: ibi.BarDataList) -> None:
         data_df = pd.DataFrame(data).set_index("date")
-        df = self._df or await self.acquire_data(data_df)
+        if self._df is None:
+            df = self.append_data(await self.acquire_data(data_df))
+        else:
+            df = self.append_data(data_df)
         assert (
             df is not None
         ) and not df.empty, f"{self} failed to obtained back data."
-        last_point = df.index[-1]
-        new_df = data_df.loc[last_point:]
-        return self.update_df(new_df.iloc[1:] if last_point in new_df.index else new_df)
+        self.dataEvent.emit(self._df)
 
-    def update_df(self, data: pd.DataFrame) -> pd.DataFrame:
-        # this is an 'append' function, so only new data
-        self.save_data(data)
+    def append_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        # self.save_data must get only new data
         if self._df is None:
-            self._df = data
+            self._df = df
+            self.save_data(df)
         else:
-            self._df = misc.concat_dfs(self._df, data)
+            last_date = self._df.index[-1]
+            new_df = df.loc[last_date:]
+            self._df = misc.concat_dfs(self._df, new_df)
+            if last_date in new_df.index:
+                # if data is overlapping
+                self.save_data(new_df.iloc[1:])
+            else:
+                # non-overlapping
+                self.save_data(new_df)
         return self._df
 
     def save_data(self, df: pd.DataFrame) -> None:
@@ -157,6 +178,7 @@ class DfAggregator(Atom):
         for contract in self._back_contracts():
             date_range_or_none = self._compute_date_range(contract)
             if date_range_or_none is None:
+                # raise here?
                 continue
             else:
                 start, stop = date_range_or_none
