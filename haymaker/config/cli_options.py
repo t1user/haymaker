@@ -38,7 +38,7 @@ class SetSource(argparse.Action):
 
 help_string = (
     "Primary way to set up appplication is through a yaml file, or "
-    "environment variables. Command line options listed here override"
+    "environment variables. Command line options listed here override "
     "those default settings."
 )
 epilog = "Defaults will be used for all unset parameters."
@@ -57,7 +57,7 @@ common_options = [
         ("-s", "--set_option"),
         {
             "action": SetValues,
-            "metavar": "ARG",
+            "metavar": ("KEY", "VALUE"),
             "help": "Use provided KEY VALUE pair to set parameter KEY to VALUE.",
         },
     ),
