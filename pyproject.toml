@@ -28,7 +28,7 @@ dynamic = ["version"]
 keywords = ["ib_insync", "tws", "ibgateway", "asyncio", "interactive brokers", "algo trading"]
 name = "haymaker"
 readme = "README.md"
-requires-python = ">= 3.11"
+requires-python = ">= 3.11", "<3.13"
 
 [project.optional-dependencies]
 all = ["haymaker[notebook,dev]"]
