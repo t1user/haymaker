@@ -55,13 +55,21 @@ class DfAggregator(Atom):
     _df: pd.DataFrame | None = field(repr=False, default=None)
     _queue: asyncio.Queue = field(init=False, repr=False)
     _worker_task: asyncio.Task | None = field(init=False, repr=False)
-    store: AsyncAbstractBaseStore = field(init=False)
+    _store: AsyncAbstractBaseStore = field(init=False)
 
     def __post_init__(self):
-        self.store = AsyncArcticStore(lib=MARKET_DATA_LIB_NAME, host=get_mongo_client())
         self._queue = asyncio.Queue()
         self._worker_task = None
+        self._store = None
         super().__init__()
+
+    @property
+    def store(self):
+        if self._store is None:
+            self._store = AsyncArcticStore(
+                lib=MARKET_DATA_LIB_NAME, host=get_mongo_client()
+            )
+        return self._store
 
     def onStart(self, data: Any, *args: Any) -> None:
         assert data.get(
