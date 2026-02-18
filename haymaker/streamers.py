@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import cached_property
+from functools import cache, cached_property
 from typing import Awaitable, ClassVar
 
 import eventkit as ev  # type: ignore
@@ -29,11 +29,15 @@ log = logging.getLogger(__name__)
 _counter = itertools.count().__next__
 
 MARKET_DATA_LIB_NAME = CONFIG.get("market_data_lib", "market_data")
-STORE = (
-    AsyncArcticStore(lib=MARKET_DATA_LIB_NAME, host=get_mongo_client())
-    if MARKET_DATA_LIB_NAME
-    else None
-)
+
+
+@cache
+def get_store():
+    return (
+        AsyncArcticStore(lib=MARKET_DATA_LIB_NAME, host=get_mongo_client())
+        if MARKET_DATA_LIB_NAME
+        else None
+    )
 
 
 def last_db_point(
@@ -44,10 +48,10 @@ def last_db_point(
 
     start_date: how far back should available data be searched
     """
-    if STORE is None:
+    if get_store() is None:
         return None
     else:
-        df = STORE.read(contract, start_date=start_date)
+        df = get_store().read(contract, start_date=start_date)
         try:
             return df.iloc[-1].date  # type: ignore
         except (AttributeError, IndexError):
@@ -204,7 +208,6 @@ class HistoricalDataStreamer(Streamer):
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
     read_db: bool = False  # should attempt be made to read last point from db
-    wait_for_last_bar: bool = True
     _last_bar_date: datetime | None = None
 
     def __post_init__(self):

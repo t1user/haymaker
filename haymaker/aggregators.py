@@ -237,7 +237,7 @@ class BarAggregator(Atom):
     def __str__(self):
         contract_symbol = self.contract.localSymbol if self.contract else "NoContract"
         return (
-            f"{self.__class__.__name__}<{contract_symbol}><{self._id}><{self._filter}>"
+            f"{self.__class__.__name__}<{contract_symbol}><{self._id}><{self.filter}>"
         )
 
 
