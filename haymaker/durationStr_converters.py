@@ -16,6 +16,15 @@ hours: 1, 2, 3, 4, 8
 
 from datetime import datetime, timedelta
 
+import pandas as pd
+
+# from pandas.tseries.offsets import BusinessDay
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import BaseOffset, CustomBusinessDay
+
+# reusable business day object with holidays
+us_business_days_offset = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+
 barSizeSetting_deltas = {
     "sec": timedelta(seconds=1),
     "min": timedelta(minutes=1),
@@ -59,14 +68,20 @@ durationStr_deltas = {
 }
 
 
-def durationStr_to_timedelta(durationStr) -> timedelta:
-    number, time = durationStr.split(" ")
+def durationStr_to_offset(durationStr) -> timedelta | BaseOffset:
+    number_str, unit = durationStr.split(" ")
+    number = int(number_str)
     # 'D' durationStr needs adjustment if converting to calendar timedelta
     # as it includes only business days
-    adjustment_days = (
-        (int(number) // 5 - 1 + (int(number) % 5 > 0) * 1) * 2 if time == "D" else 0
+    return (
+        durationStr_deltas[unit] * number
+        if unit != "D"
+        else us_business_days_offset * number
     )
-    return (durationStr_deltas[time] * int(number)) + timedelta(days=adjustment_days)
+
+
+def offset_durationStr(durationStr, date: datetime) -> datetime:
+    return (pd.Timestamp(date) - durationStr_to_offset(durationStr)).to_pydatetime()
 
 
 def datapoints_to_timedelta(
@@ -134,7 +149,7 @@ def durationStr_to_datapoints(
     barSizeSetting_timedelta = barSizeSetting_to_timedelta(barSizeSetting)
 
     if duration_unit == "S":
-        bars = durationStr_to_timedelta(durationStr) / barSizeSetting_timedelta
+        bars = timedelta(seconds=duration_value) / barSizeSetting_timedelta
     else:
         bars_per_session = session_length / barSizeSetting_timedelta
         number_of_sessions = unit_dict[duration_unit] * duration_value

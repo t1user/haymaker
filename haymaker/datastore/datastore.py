@@ -212,6 +212,7 @@ class ArcticStore(AbstractBaseStore):
         metadata = self._metadata(symbol)
         if meta is not None:
             metadata.update(meta)
+        metadata["up_to"] = data.index[-1]
         version = self.store.write(
             self._symbol(symbol),
             self._clean(data),
@@ -227,8 +228,24 @@ class ArcticStore(AbstractBaseStore):
         upsert: bool = True,
     ) -> str:
         metadata = self._metadata(symbol)
+
         if meta is not None:
             metadata.update(meta)
+
+        if up_to := (
+            self.read_metadata(symbol).get("up_to") or self._last_date(symbol)
+        ):
+            try:
+                data = data[data.index > up_to]
+            except Exception:
+                # metadata had corrupted value, try again
+                data = data[data.index > self._last_date(symbol)]
+
+        try:
+            metadata["up_to"] = data.index[-1]
+        except IndexError:
+            pass
+
         version = self.store.append(
             self._symbol(symbol),
             data,
@@ -276,6 +293,13 @@ class ArcticStore(AbstractBaseStore):
             return self.store.read(self._symbol(symbol), date_range=date_range)
         except NoDataFoundException:
             return None
+
+    def _last_date(self, symbol: str | ibi.Contract) -> datetime | None:
+        if (d := self.read(symbol)) is not None:
+            try:
+                return d.index[-1]
+            except Exception:
+                pass
 
     def delete(self, symbol: str | ibi.Contract) -> None:
         self.store.delete(self._symbol(symbol))

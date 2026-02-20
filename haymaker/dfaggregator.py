@@ -19,7 +19,7 @@ from haymaker.durationStr_converters import (
     datapoints_to_timedelta,
     date_to_delta_wrapper,
     durationStr_to_datapoints,
-    durationStr_to_timedelta,
+    offset_durationStr,
 )
 from haymaker.streamers import Streamer
 
@@ -52,15 +52,12 @@ class DfAggregator(Atom):
     _compatible_with: ClassVar[tuple[str]] = ("HistoricalDataStreamer",)
 
     _streamer_params: dict[str, Any] = field(repr=False, default_factory=dict)
-    _df: pd.DataFrame | None = field(repr=False, default=None)
-    _queue: asyncio.Queue = field(init=False, repr=False)
-    _worker_task: asyncio.Task | None = field(init=False, repr=False)
-    _store: AsyncAbstractBaseStore = field(init=False)
+    _df: pd.DataFrame = field(repr=False, default_factory=pd.DataFrame)
+    _queue: asyncio.Queue = field(repr=False, default_factory=asyncio.Queue)
+    _worker_task: asyncio.Task | None = field(repr=False, default=None)
+    _store: AsyncAbstractBaseStore | None = None
 
     def __post_init__(self):
-        self._queue = asyncio.Queue()
-        self._worker_task = None
-        self._store = None
         super().__init__()
 
     @property
@@ -114,38 +111,49 @@ class DfAggregator(Atom):
             self._queue.task_done()
 
     async def process_data(self, data: ibi.BarDataList) -> None:
-        data_df = pd.DataFrame(data).set_index("date")
-        if self._df is None:
-            df = self.append_data(await self.acquire_data(data_df))
-        else:
+        data_df = await self.process_current_data(pd.DataFrame(data).set_index("date"))
+        # implicit assumption: if we already have data in `self._df`,
+        # together with the newly received data, it should give enough
+        # datapoints
+        if len(data_df) >= self.datapoints or not self._df.empty:
             df = self.append_data(data_df)
+        else:
+            log.debug("Acquiring back data...")
+            df = self.append_data(await self.acquire_back_data(), data_df)
         assert (
             df is not None
         ) and not df.empty, f"{self} failed to obtained back data."
         self.dataEvent.emit(self._df)
 
-    def append_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        # self.save_data must get only new data
-        if self._df is None:
-            self._df = df
-            self.save_data(df)
-        else:
-            last_date = self._df.index[-1]
-            new_df = df.loc[last_date:]
-            self._df = misc.concat_dfs(self._df, new_df)
-            if last_date in new_df.index:
-                # if data is overlapping
-                self.save_data(new_df.iloc[1:])
-            else:
-                # non-overlapping
-                self.save_data(new_df)
+    def append_data(self, *dfs: pd.DataFrame) -> pd.DataFrame:
+        self._df = misc.concat_dfs(self._df, *dfs)
+        # datastore must filter out any old data
+        self.save_data(self._df)
         return self._df
 
     def save_data(self, df: pd.DataFrame) -> None:
         assert (contract := self.contract), f"Missing contract on {self}"
         self.store.append(contract, df)
 
-    async def acquire_data(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _create_name(self, contract) -> str:
+        # TODO MAKE A UNIQUE COLLECTION NAME
+        return (
+            f'{"_".join(contract.localSymbol.split())}_{contract.secType}_'
+            f'{self._streamer_params["barSizeSetting"]}'
+        )
+
+    async def process_current_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Return only the part of the `data` that corresponds to the
+        period when current contract is active.
+        """
+        assert isinstance(self.contract, ibi.Future)
+        assert (date_range := self._compute_date_range(self.contract)) is not None
+        # enough data already?
+        start, _ = date_range
+        return data.loc[self._tz(start) :]  # type: ignore
+
+    async def acquire_back_data(self) -> pd.DataFrame:
         """
         This method is being called by :meth:`onData` if there is no
         data in self._df.  This happens if:
@@ -185,26 +193,21 @@ class DfAggregator(Atom):
         datapoints = 0
         for contract in self._back_contracts():
             date_range_or_none = self._compute_date_range(contract)
-            if date_range_or_none is None:
-                # raise here?
-                continue
-            else:
-                start, stop = date_range_or_none
+            assert date_range_or_none is not None
+            start, stop = date_range_or_none
 
             df = await self._acquire_data_for_contract(contract, start, stop)
 
-            # fallback to streamer data if no data for current
-            # contract in database
-            if df.empty and contract == self.contract:
-                df = data
-
-            dfs[contract] = df.loc[start:stop]  # type: ignore[misc]
+            dfs[contract] = df.loc[self._tz(start) : self._tz(stop)]  # type: ignore
             datapoints += len(dfs[contract])
             if datapoints >= self.datapoints:
                 break
 
         if datapoints < self.datapoints:
-            log.error(f"{self} failed to get required amount of back data.")
+            log.error(
+                f"{self} failed to get required amount of back data "
+                f"(have: {datapoints}, need: {self.datapoints})."
+            )
 
         return (
             dfs[cast(ibi.Future, self.contract)]
@@ -228,16 +231,14 @@ class DfAggregator(Atom):
         ), f"contract on {self} is not a Future: {self.contract}"
         start, stop = self.contract_selector.date_ranges[contract]
         now = datetime.now()
-        start_date = max(start, now - self.required_timedelta)
+        start_date = max(start, self.offset_by_durationStr())
         stop_date = min(stop, now)
-        return (
-            (self._tz(start_date), self._tz(stop_date))
-            if (start_date < stop_date)
-            else None
-        )
+        # Don't make this timezone aware or datastore will reject it
+        return (start_date, stop_date) if (start_date < stop_date) else None
 
     @staticmethod
     def _tz(dt: datetime) -> datetime:
+        # TODO: investigate implications of this throughout
         return dt.replace(tzinfo=timezone.utc)
 
     async def _historical_data_with_retry(
@@ -279,6 +280,7 @@ class DfAggregator(Atom):
             end_date_or_now=stop_date,
             margin=int(self.datapoints * 0.1),
         )
+        log.error(f"Calling broker with params: {params}")
         return await self._historical_data_with_retry(**params)
 
     def _back_contracts(self) -> Generator[ibi.Future, None, None]:
@@ -298,21 +300,22 @@ class DfAggregator(Atom):
     async def _acquire_data_for_contract(
         self, contract: ibi.Contract, start_date: datetime, stop_date: datetime
     ) -> pd.DataFrame:
+        log.debug(f"acquiring data for contract: {contract} {start_date=} {stop_date=}")
         if (df := await self.store.read(contract, start_date, stop_date)) is None:
             # don't pull data for current contract from broker, this
             # is :class:`Streamer`'s responsibility; data for previous
             # contracts may be missing if it's a new database and only
             # then it's acceptable; pulling data from broker here is
             # unusual and should be investigated if it happens
-            if contract != self.contract:
+            if contract == self.contract:
+                log.error(f"{self} requesting data from broker for current contract")
+                df = pd.DataFrame()
+            else:
                 log.warning(f"{self} requesting data from broker for: {contract}")
                 bars = await self._pull_history_from_broker(
                     contract, start_date, stop_date
                 )
                 df = pd.DataFrame(bars).set_index("date")
-            else:
-                # :meth:`acquire_data` needs to deal with this case
-                df = pd.DataFrame()
         return df
 
     @cached_property
@@ -345,8 +348,7 @@ class DfAggregator(Atom):
             else durationStr
         )
 
-    @cached_property
-    def required_timedelta(self) -> timedelta:
+    def offset_by_durationStr(self) -> datetime:
         """
         Return durationStr as timedelta, this is how far back we need data.
         durationStr can be given either directly as a str acceptable
@@ -357,10 +359,12 @@ class DfAggregator(Atom):
         to facilitate stiching of data for different contracts.
         """
         durationStr = self._streamer_params["durationStr"]
+        now = datetime.now()
         return (
-            durationStr_to_timedelta(durationStr)
+            offset_durationStr(durationStr, now)
             if isinstance(durationStr, str)
-            else datapoints_to_timedelta(
+            else now
+            - datapoints_to_timedelta(
                 # adding 10% margin
                 int(durationStr * 1.1),
                 self._streamer_params["barSizeSetting"],
@@ -380,5 +384,5 @@ class DfAggregator(Atom):
     def onContractChanged(
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> None:
-        self._df = None
+        self._df = pd.DataFrame()
         super().onContractChanged(old_contract, new_contract)

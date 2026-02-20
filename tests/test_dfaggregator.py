@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta, timezone
+import asyncio
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
 import ib_insync as ibi
@@ -208,12 +209,13 @@ def test_df_combined_correctly_in_append_data_overlapping():
 
 @pytest.mark.asyncio
 async def test_data_queued():
+    """
+    Test that rapidly emitted data will get processed in the right order.
+    """
     first_batch = sample_barDataList[:-3]
     second_batch = sample_barDataList[:-2]
     third_batch = sample_barDataList[:-1]
     last_batch = sample_barDataList[:]
-
-    sample_df = pd.DataFrame(sample_barDataList).set_index("date")
 
     class SourceAtom(Atom):
         pass
@@ -224,42 +226,29 @@ async def test_data_queued():
 
     aggregator = DfAggregator()
     source = SourceAtom()
-    aggregator.contract = source.contract = ibi.Future("ES", exchange="CME")
+    aggregator.contract = source.contract = ibi.Future(symbol="ES", exchange="CME")
     source += aggregator
     aggregator += OutputAtom()
-    with patch.object(aggregator, "save_data") as mock_save_data:
-        with patch.object(
-            aggregator, "acquire_data", new_callable=AsyncMock
-        ) as mock_acquire:
-            mock_acquire.return_value = pd.DataFrame(first_batch).set_index("date")
-            source.dataEvent.emit(first_batch)
-            source.dataEvent.emit(second_batch)
-            source.dataEvent.emit(third_batch)
-            source.dataEvent.emit(last_batch)
 
-            await wait_for_condition(
-                lambda: aggregator._df is not None and aggregator._queue.empty()
-            )
-            # save every new data point
-            mock_save_data.call_count == 4
-            mock_acquire.assert_called_once()
-            pd.testing.assert_frame_equal(aggregator._df, sample_df)
-
-
-#####################
-# Integration tests #
-#####################
-
-
-@pytest.mark.asyncio
-async def test_process_data_raises_if_no_data():
-    aggregator = DfAggregator()
     with patch.object(
-        aggregator, "acquire_data", new_callable=AsyncMock
-    ) as mock_acquire:
-        mock_acquire.return_value = pd.DataFrame()
-        with pytest.raises(AssertionError):
-            await aggregator.process_data(sample_barDataList)
+        aggregator, "process_data", new_callable=AsyncMock
+    ) as mock_process_data:
+        source.dataEvent.emit(first_batch)
+        source.dataEvent.emit(second_batch)
+        source.dataEvent.emit(third_batch)
+        source.dataEvent.emit(last_batch)
+
+        await wait_for_condition(lambda: aggregator._queue.empty())
+        await asyncio.sleep(0.1)
+
+        assert mock_process_data.call_count == 4
+        for call, batch in zip(
+            mock_process_data.call_args_list,
+            [first_batch, second_batch, third_batch, last_batch],
+        ):
+            args, kwargs = call
+            expected = args[0]
+            assert expected == batch
 
 
 @pytest.mark.parametrize(
@@ -275,10 +264,7 @@ async def test_process_data_raises_if_no_data():
         (
             495512563,
             "ESZ5",
-            (
-                datetime(2025, 12, 10, tzinfo=timezone.utc),
-                datetime(2025, 12, 12, tzinfo=timezone.utc),
-            ),
+            (datetime(2025, 12, 10), datetime(2025, 12, 12)),
         ),
         # this is a contract with start date in the future
         (649180695, "ESH6", None),
@@ -343,16 +329,16 @@ def test_compute_date_range(registry_with_data, conId, localSymbol, return_value
             637533641,
             "ESU5",
             (
-                datetime(2025, 9, 13, tzinfo=timezone.utc),
-                datetime(2025, 9, 16, tzinfo=timezone.utc),
+                datetime(2025, 9, 13),
+                datetime(2025, 9, 16),
             ),
         ),
         (
             495512563,
             "ESZ5",
             (
-                datetime(2025, 9, 16, tzinfo=timezone.utc),
-                datetime(2025, 12, 12, tzinfo=timezone.utc),
+                datetime(2025, 9, 16),
+                datetime(2025, 12, 12),
             ),
         ),
         # this is a contract with start date in the future
@@ -406,35 +392,41 @@ def test_compute_date_range_longer_period(
         assert date_range_or_none == return_value
 
 
-def test_aggregator_required_timedelta_durationStr_given_as_str(registry_with_data):
-    DfAggregator.contract_registry = registry_with_data
-    aggregator = DfAggregator()
-    aggregator.contract = ibi.Future("ES", exchange="CME")
-    aggregator._streamer_params = {
-        "durationStr": "2 D",
-        "barSizeSetting": "30 secs",
-        "whatToShow": "TRADES",
-        "useRTH": False,
-    }
-    # does it even work at all?
-    assert isinstance(aggregator.required_timedelta, timedelta)
-    assert aggregator.required_timedelta == timedelta(days=2)
+def test_aggregator_offset_by_durationStr_given_as_str(registry_with_data):
+    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 2, 20)
+        DfAggregator.contract_registry = registry_with_data
+        aggregator = DfAggregator()
+        aggregator.contract = ibi.Future("ES", exchange="CME")
+        aggregator._streamer_params = {
+            "durationStr": "2 D",
+            "barSizeSetting": "30 secs",
+            "whatToShow": "TRADES",
+            "useRTH": False,
+        }
+        # does it even work at all?
+        assert isinstance(aggregator.offset_by_durationStr(), datetime)
+        assert aggregator.offset_by_durationStr() == datetime(2026, 2, 18)
 
 
-def test_aggregator_required_timedelta_durationStr_given_as_int(registry_with_data):
-    DfAggregator.contract_registry = registry_with_data
-    aggregator = DfAggregator()
-    aggregator.contract = ibi.Future("ES", exchange="CME")
-    aggregator._streamer_params = {
-        "durationStr": 1000,
-        "barSizeSetting": "30 secs",
-        "whatToShow": "TRADES",
-        "useRTH": False,
-    }
-    # does it even work at all?
-    assert isinstance(aggregator.required_timedelta, timedelta)
-    # (1000 + margin) datapoints / 120 * 3600 = timedelta in seconds
-    assert aggregator.required_timedelta == timedelta(seconds=33000)
+def test_aggregator_offset_by_durationStr_given_as_int(registry_with_data):
+    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 2, 20)
+        DfAggregator.contract_registry = registry_with_data
+        aggregator = DfAggregator()
+        aggregator.contract = ibi.Future("ES", exchange="CME")
+        aggregator._streamer_params = {
+            "durationStr": 1000,
+            "barSizeSetting": "30 secs",
+            "whatToShow": "TRADES",
+            "useRTH": False,
+        }
+        # does it even work at all?
+        assert isinstance(aggregator.offset_by_durationStr(), datetime)
+        # (1000 + margin) datapoints / 120 * 3600 = timedelta in seconds
+        assert aggregator.offset_by_durationStr() == datetime(2026, 2, 20) - timedelta(
+            seconds=33000
+        )
 
 
 def test_aggregator_session_length(registry_with_data):

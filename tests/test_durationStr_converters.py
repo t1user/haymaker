@@ -13,7 +13,9 @@ from haymaker.durationStr_converters import (
     date_to_delta_wrapper,
     delta_to_durationStr,
     durationStr_to_datapoints,
-    durationStr_to_timedelta,
+    durationStr_to_offset,
+    offset_durationStr,
+    us_business_days_offset,
 )
 
 
@@ -55,20 +57,26 @@ def test_barSizeSetting_to_timedelta_unadjusted(
         ("34 S", timedelta(seconds=34)),
         ("2 W", timedelta(days=14)),
         ("1 W", timedelta(days=7)),
-        # IB would interpret durationStr "10 D" as 10 days of data required
-        # which would need 10 buiness days
-        # which would include 1 weekend, so 10 + 2
-        ("10 D", timedelta(days=12)),
-        # IB would interpret durationStr "11 D" as 11 days of data required
-        # which would need 11 buiness days
-        # which would include 2 weekends, so 11 + 4
-        ("11 D", timedelta(days=15)),
-        # one (business) week plus one day
-        ("6 D", timedelta(days=8)),
+        ("10 D", us_business_days_offset * 10),
+        ("11 D", us_business_days_offset * 11),
+        ("6 D", us_business_days_offset * 6),
     ],
 )
-def test_durationStr_to_timedelta(durationStr: str, delta: timedelta) -> None:
-    assert durationStr_to_timedelta(durationStr) == delta
+def test_durationStr_to_offset(durationStr: str, delta: timedelta) -> None:
+    assert durationStr_to_offset(durationStr) == delta
+
+
+def test_offset_durationStr_with_holida():
+    date = datetime(2026, 2, 19)
+    durationStr = "10 D"
+    assert offset_durationStr(durationStr, date) == datetime(2026, 2, 4)
+
+
+def test_offset_durationStr_no_holiday():
+    date = datetime(2026, 2, 13)
+    durationStr = "10 D"
+    # there was a holiday in between
+    assert offset_durationStr(durationStr, date) == datetime(2026, 1, 30)
 
 
 @pytest.mark.parametrize(

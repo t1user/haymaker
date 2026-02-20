@@ -105,7 +105,6 @@ class BarAggregator(Atom):
             self._worker_task = asyncio.create_task(
                 self._process_queue(), name=f"{self!s}_queue_worker"
             )
-        super().onData(data)
 
     async def _process_queue(self) -> None:
         while True:

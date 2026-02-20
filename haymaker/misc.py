@@ -341,6 +341,11 @@ def name_str(
 
 
 def concat_dfs(*dfs: pd.DataFrame) -> pd.DataFrame:
-    """Concatenate sequence of dfs, cleaning duplicate values if any."""
+    """
+    Concatenate sequence of dfs, cleaning duplicate values if any and
+    ensuring series is monotonously increasing.
+
+    De-duplication will keep later values.
+    """
     df = pd.concat(dfs)
-    return df[~df.index.duplicated()]
+    return df[~df.index.duplicated()].sort_index()
