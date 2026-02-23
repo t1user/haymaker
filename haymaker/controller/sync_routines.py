@@ -97,7 +97,8 @@ class OrderSyncStrategy:
             trade.order.orderId or trade.order.permId: trade
             for trade in self.ib.trades()
         }
-
+        if ib_known_trades:
+            log.debug(f"{ib_known_trades=}")
         if self.inactive:
             log.debug(
                 f"inactive trades: "
@@ -112,8 +113,7 @@ class OrderSyncStrategy:
         # (from before system went off) so that they can be matched correctly
         # to db records and their status updated (to done)
         for old_trade in self.inactive:
-            new_trade = ib_known_trades.get(old_trade.order.permId)
-            if new_trade:
+            if new_trade := ib_known_trades.get(old_trade.order.permId):
                 log.warning(
                     f"Will change orderId: {new_trade.order.orderId} "
                     f"to: {old_trade.order.orderId}"
@@ -121,6 +121,21 @@ class OrderSyncStrategy:
                 new_trade.order.orderId = old_trade.order.orderId
                 self.done.append(new_trade)
                 self.sm.update_trade(new_trade)  # <- CHANGING RECORDS
+
+            elif new_trade := ib_known_trades.get(old_trade.order.orderId):
+                # THIS IS ONLY FOR TESTING -> DELETE
+                # just in case justr try finding by orderId
+                # it wouldn't be typical to find the order here as they usually
+                # have orderId == 0 if they were executed while system was off
+                # but IB is not always consistent! this branch is meant for testing
+                # most likely will never end-up here because this is a standard
+                # case that would have been handles inside sync orders
+                log.warning(
+                    f"Trade: {new_trade.order.orderId} found in non-standard place. "
+                    f"Ivestigate! We maybe fucking-up records."
+                )
+                self.done.append(new_trade)
+                self.sm.update_trade(new_trade)
             else:
                 self.errors.append(old_trade)
 
