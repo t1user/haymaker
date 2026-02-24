@@ -67,6 +67,10 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
     def write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> None:
+        """
+        Warning: this is best efforts, may lead to race conditions for
+        very frequent writes.
+        """
         return fire_and_forget(self.store.write, symbol, data, meta)
 
     def append(
@@ -76,7 +80,28 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         meta: dict | None = None,
         upsert: bool = True,
     ) -> None:
+        """
+        Warning: this is best efforts, may lead to race conditions for
+        very frequent writes.
+        """
+        # race conditions shouldn't happen for write frequency of 1 sec
+        # it's unlikely to write more frequently
+        # if they do happend, use async_append
         fire_and_forget(self.store.append, symbol, data, meta, upsert)
+
+    async def async_write(
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
+    ) -> None:
+        await make_async(self.store.write, symbol, data, meta)
+
+    async def async_append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> None:
+        await make_async(self.store.append, symbol, data, meta, upsert)
 
     async def read(
         self,
