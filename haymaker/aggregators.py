@@ -5,6 +5,7 @@ import itertools
 import logging
 import operator as op
 from collections import deque
+from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 from functools import cached_property
 from typing import Literal
@@ -13,6 +14,8 @@ import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from .base import Atom
+from .dfaggregator import WrongStreamer
+from .streamers import Streamer
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +48,8 @@ class BarAggregator(Atom):
     series using either addition or multiplication.
     """
 
+    _compatible_with = ("HistoricalDataStreamer",)
+
     def __init__(
         self,
         filter: CountBars | VolumeBars | TimeBars | NoFilter,
@@ -69,10 +74,28 @@ class BarAggregator(Atom):
 
     def onStart(self, data: dict, *args) -> None:
         """Syncing contract with streamer."""
+        assert data.get(
+            "streamer"
+        ), f"{self} didn't receive streamer it is connected to"
+        streamer = data.pop("streamer")
+        self.sync_with_streamer(streamer)
         super().onStart(data, *args)
-        if (streamer := data.get("streamer")) and self.contract is None:
-            self._contract_blueprint = streamer._contract_blueprint
-            self.which_contract = streamer.which_contract
+
+    def sync_with_streamer(self, streamer: Streamer) -> None:
+        # streamer class used only to verify compatibility
+        self.verify_streamer_compatibility(streamer)
+        # sync contract with streamer
+        # these 2 properties together ensure that self.contract
+        # will be the same as on streamer
+        self.which_contract = streamer.which_contract
+        self._contract_blueprint = streamer._contract_blueprint
+
+    def verify_streamer_compatibility(self, streamer: Streamer) -> None:
+        streamer_class = streamer.__class__.__name__
+        if streamer_class not in self._compatible_with:
+            raise WrongStreamer(
+                f"Streamer {streamer_class} is not compatible with {self}"
+            )
 
     def onDataBar(self, bars, *args) -> None:
         """

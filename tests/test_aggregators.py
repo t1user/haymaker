@@ -6,8 +6,31 @@ import pytest
 from helpers import wait_for_condition
 from sample_barDataList import sample_barDataList
 
-from haymaker.aggregators import BarAggregator, NoFilter
+from haymaker.aggregators import BarAggregator, NoFilter, WrongStreamer
 from haymaker.base import Atom as BaseAtom
+from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
+
+
+def test_HistoricalDataStreamerAccepted():
+    blueprint = ibi.Future("NQ", exchange="CME")
+    streamer = HistoricalDataStreamer(
+        contract=blueprint,
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+
+    aggregator = BarAggregator(NoFilter())
+    # test if no error raised
+    assert aggregator.sync_with_streamer(streamer) is None
+
+
+def test_wrong_streamer_fails():
+    blueprint = ibi.Future("NQ", exchange="CME")
+    streamer = MktDataStreamer(contract=blueprint, tickList="212")
+    aggregator = BarAggregator(NoFilter())
+    with pytest.raises(WrongStreamer):
+        aggregator.sync_with_streamer(streamer)
 
 
 @pytest.fixture
@@ -53,9 +76,14 @@ def source_aggregator_output():
 
 
 def test_BarAggregator_passes_onStart_signal(source_aggregator_output):
-    source, aggregator, output = source_aggregator_output
+    _, aggregator, output = source_aggregator_output
 
-    source.onStart({"test_data": True})
+    streamer = HistoricalDataStreamer(
+        ibi.Future(symbol="ES", exchange="CME"), 1000, "1 min", "TRADES"
+    )
+    streamer += aggregator
+
+    streamer.onStart({"test_data": True})
 
     assert output.onStart_data.get("test_data")
 
