@@ -86,6 +86,12 @@ class ContractRegistry:
                 if details.contract:
                     self.details[details.contract] = details
 
+    def active_contracts_for_logs(self) -> list[str]:
+        return [
+            selector.active_contract.localSymbol
+            for selector in self.__selectors.values()
+        ]
+
     @property
     def current_contracts(self) -> set[ibi.Contract]:
         return {

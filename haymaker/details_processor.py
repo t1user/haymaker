@@ -47,8 +47,11 @@ def next_active(
         return None
 
     left_edges = [e[0] for e in time_tuples if e[0] > now]
-    # print(left_edges)
-    return left_edges[0]
+
+    if left_edges:
+        return left_edges[0]
+    else:
+        return None
 
 
 def process_trading_hours(
@@ -187,3 +190,16 @@ class Details:
     _process_trading_hours = staticmethod(process_trading_hours)
     _is_active = staticmethod(is_active)
     _next_open = staticmethod(next_active)
+
+    def __str__(self) -> str:
+        contract = (
+            self.details.contract.localSymbol
+            if isinstance(self.details.contract, ibi.Contract)
+            else self.details.contract
+        )
+        open_ = "OPEN" if self.is_open() else "CLOSED"
+        liquid = (
+            " LIQUID" if self.is_liquid() else " NOT LIQUID" if self.is_open() else ""
+        )
+        next_open = f"next open: {self.next_open()}" if not self.is_open() else ""
+        return f"<{contract}> <{open_}{liquid}> {next_open}"

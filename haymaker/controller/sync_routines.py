@@ -97,14 +97,13 @@ class OrderSyncStrategy:
             trade.order.orderId or trade.order.permId: trade
             for trade in self.ib.trades()
         }
-        if ib_known_trades:
-            log.debug(f"{ib_known_trades=}")
+
         if self.inactive:
             log.debug(
                 f"inactive trades: "
                 f"{[(i.order.orderId, i.order.permId) for i in self.inactive]}"
             )
-
+            log.debug(f"ib_known_trades: {list(ib_known_trades)}")
         # if cannot match inactive trade by orderId try by permId
         # (permId persists in between restarts)
         # if succcessful modify its orderId

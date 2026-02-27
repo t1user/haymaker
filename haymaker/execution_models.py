@@ -88,6 +88,7 @@ class AbstractExecModel(Atom, ABC):
     def onStart(self, data, *args) -> None:
         super().onStart(data, *args)
         # super just set strategy, only now subsequent is possible
+        log.debug(f"strategy on {self}: {self.strategy}")
         try:
             self.data.update(**data)
         except AttributeError:
@@ -192,6 +193,7 @@ class BaseExecModel(AbstractExecModel):
         order: ibi.Order,
         action: str,
     ) -> ibi.Trade | None:
+        # assert self.strategy, f"{self} has no strategy set, trade attempt cancelled."
         return self.controller.trade(self.strategy, contract, order, action, self.data)
 
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:

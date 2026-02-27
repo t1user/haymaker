@@ -54,6 +54,9 @@ class InitData:
         details = await self.acquire_contract_details(blueprints)
         log.debug(f"Acquired details for {len(details)} contracts.")
         self.contract_registry.reset_data(details)
+        log.debug(
+            f"Active contracts: {self.contract_registry.active_contracts_for_logs()}"
+        )
         return self
 
     async def acquire_contract_details(

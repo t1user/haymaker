@@ -39,6 +39,9 @@ def test_timeout_created_from_atom(Atom, Timeout):
         def __post_init__(self):
             pass
 
+        def __str__(self):
+            return ""
+
     class MyAtom(Atom):
         def __str__(self):
             return "MyAtom"

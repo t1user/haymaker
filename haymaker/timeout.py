@@ -157,4 +157,7 @@ class Timeout:
         log.debug(f"Timeout set: {self!s}")
 
     def __str__(self) -> str:
-        return f"Timeout <{self.time}s> for {self.name}  event id: {id(self._timeout)}"
+        return (
+            f"Timeout <{self.time}s> for {self.name}  event id: {id(self._timeout)} "
+            f"{self.details!s}"
+        )
