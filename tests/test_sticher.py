@@ -1,4 +1,6 @@
+import math
 import pickle
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -214,56 +216,201 @@ def FuturesSticher_source() -> dict[ibi.Future, pd.DataFrame]:
 
 
 @pytest.fixture(scope="module")
-def one_sticher(FuturesSticher_source):
-    return FuturesSticher(FuturesSticher_source)
+def add_sticher(FuturesSticher_source):
+    return FuturesSticher(FuturesSticher_source, "add")
 
 
-def test_FuturesSticher_last_df_not_adjusted(one_sticher):
-    assert one_sticher._dfs[-1].close[-1] == one_sticher.data.iloc[-1].close
+@pytest.fixture(scope="module")
+def mul_sticher(FuturesSticher_source):
+    return FuturesSticher(FuturesSticher_source, "mul")
 
 
-def test_FuturesSticher_first_df_cummulative_adjustment_correct(one_sticher):
-    first_input_df = one_sticher._dfs[0]
-    output_df = one_sticher.data
-    cummulative_adjustment = sum(one_sticher._offsets)
+def test_FuturesSticher_all_dfs_used(FuturesSticher_source, add_sticher):
+    source = FuturesSticher_source
+    dfs = add_sticher._dfs
+    assert len(source) == len(dfs)
+
+
+def test_FuturesSticher_last_df_not_adjusted(FuturesSticher_source, add_sticher):
+    source = FuturesSticher_source
+    latest_contract = sorted(
+        list(source),
+        key=lambda x: datetime.strptime(x.lastTradeDateOrContractMonth, "%Y%m%d"),
+    )[-1]
+    last_input_df = source[latest_contract]
+    assert last_input_df.iloc[-1].close == add_sticher.data.iloc[-1].close
+
+
+def test_FuturesSticher_last_but_one_df_adjusted(FuturesSticher_source, add_sticher):
+    source = FuturesSticher_source
+    last_but_one_contract = sorted(
+        list(source),
+        key=lambda x: datetime.strptime(x.lastTradeDateOrContractMonth, "%Y%m%d"),
+    )[-2]
+    input_df = source[last_but_one_contract]
+    mid_point = int(len(input_df.index) / 2)
+    datapoint_index = input_df.index[mid_point]
+    datapoint_input = input_df.loc[datapoint_index]
+    datapoint_output = add_sticher.data.loc[datapoint_index]
     assert (
-        output_df.iloc[0].close - first_input_df.iloc[0].close == cummulative_adjustment
+        datapoint_input["close"] == datapoint_output["close"] - add_sticher._offsets[-1]
     )
 
 
-def test_resulting_df_monotonic(one_sticher):
-    assert one_sticher.data.index.is_monotonic_increasing
+def test_FuturesSticher_third_from_last_df_adjusted(FuturesSticher_source, add_sticher):
+    source = FuturesSticher_source
+    third_from_last_contract = sorted(
+        list(source),
+        key=lambda x: datetime.strptime(x.lastTradeDateOrContractMonth, "%Y%m%d"),
+    )[-3]
+    input_df = source[third_from_last_contract]
+    mid_point = int(len(input_df.index) / 2)
+    datapoint_index = input_df.index[mid_point]
+    datapoint_input = input_df.loc[datapoint_index]
+    datapoint_output = add_sticher.data.loc[datapoint_index]
+    assert (
+        datapoint_input["close"]
+        == datapoint_output["close"]
+        - add_sticher._offsets[-1]
+        - add_sticher._offsets[-2]
+    )
 
 
-def test_resulting_df_no_index_duplicates(one_sticher):
-    df = one_sticher.data
+def test_FuturesSticher_correct_offset_calculated(add_sticher):
+    last_df = add_sticher._dfs[-1]
+    previous_df = add_sticher._dfs[-2]
+
+    sync_index = previous_df.index[-1]
+
+    offset = last_df.close.loc[sync_index] - previous_df.close.loc[sync_index]
+
+    test_df = add_sticher.data.loc[:sync_index]
+
+    assert test_df["close"].iloc[-5] == previous_df["close"].iloc[-5] + offset
+
+
+def test_FuturesSticher_first_df_cummulative_adjustment_correct(
+    FuturesSticher_source, add_sticher
+):
+    source = FuturesSticher_source
+    # source is: dict[ibi.Contract, pd.DataFrame]
+    first_contract = sorted(
+        list(source),
+        key=lambda x: datetime.strptime(x.lastTradeDateOrContractMonth, "%Y%m%d"),
+    )[0]
+    first_input_df = source[first_contract]
+    output_df = add_sticher.data
+    datapoint_index = output_df.index[0]
+
+    input_datapoint = first_input_df.loc[datapoint_index]
+    output_datapoint = output_df.loc[datapoint_index]
+
+    cummulative_adjustment = sum(add_sticher._offsets)
+    assert (
+        output_datapoint["close"] == input_datapoint["close"] + cummulative_adjustment
+    )
+
+
+def test_FuturesSticher_last_but_one_df_adjusted_mul(
+    FuturesSticher_source, mul_sticher
+):
+    source = FuturesSticher_source
+    last_but_one_contract = sorted(
+        list(source),
+        key=lambda x: datetime.strptime(x.lastTradeDateOrContractMonth, "%Y%m%d"),
+    )[-2]
+    input_df = source[last_but_one_contract]
+    mid_point = int(len(input_df.index) / 2)
+    datapoint_index = input_df.index[mid_point]
+    datapoint_input = input_df.loc[datapoint_index]
+    datapoint_output = mul_sticher.data.loc[datapoint_index]
+    assert (
+        datapoint_input["close"] * mul_sticher._offsets[-1] == datapoint_output["close"]
+    )
+
+
+def test_FuturesSticher_third_from_last_df_adjusted_mul(
+    FuturesSticher_source, mul_sticher
+):
+    source = FuturesSticher_source
+    third_from_last_contract = sorted(
+        list(source),
+        key=lambda x: datetime.strptime(x.lastTradeDateOrContractMonth, "%Y%m%d"),
+    )[-3]
+    input_df = source[third_from_last_contract]
+    mid_point = int(len(input_df.index) / 2)
+    datapoint_index = input_df.index[mid_point]
+    datapoint_input = input_df.loc[datapoint_index]
+    datapoint_output = mul_sticher.data.loc[datapoint_index]
+    assert (
+        datapoint_output["close"]
+        == datapoint_input["close"]
+        * mul_sticher._offsets[-1]
+        * mul_sticher._offsets[-2]
+    )
+
+
+def test_FuturesSticher_correct_offset_calculated_mul(mul_sticher):
+    last_df = mul_sticher._dfs[-1]
+    previous_df = mul_sticher._dfs[-2]
+
+    sync_index = previous_df.index[-1]
+
+    offset = last_df.close.loc[sync_index] / previous_df.close.loc[sync_index]
+
+    test_df = mul_sticher.data.loc[:sync_index]
+
+    assert test_df["close"].iloc[-5] == previous_df["close"].iloc[-5] * offset
+
+
+def test_FuturesSticher_first_df_cummulative_adjustment_correct_mul(
+    FuturesSticher_source, mul_sticher
+):
+    source = FuturesSticher_source
+    # source is: dict[ibi.Contract, pd.DataFrame]
+    first_contract = sorted(
+        list(source),
+        key=lambda x: datetime.strptime(x.lastTradeDateOrContractMonth, "%Y%m%d"),
+    )[0]
+    first_input_df = source[first_contract]
+    output_df = mul_sticher.data
+    datapoint_index = output_df.index[0]
+
+    input_datapoint = first_input_df.loc[datapoint_index]
+    output_datapoint = output_df.loc[datapoint_index]
+
+    cummulative_adjustment = math.prod(mul_sticher._offsets)
+    assert output_datapoint["close"] == pytest.approx(
+        input_datapoint["close"] * cummulative_adjustment
+    )
+
+
+def test_resulting_df_monotonic(add_sticher):
+    assert add_sticher.data.index.is_monotonic_increasing
+
+
+def test_resulting_df_no_index_duplicates(add_sticher):
+    df = add_sticher.data
     print(df[df.duplicated()])
     assert df[df.index.duplicated()].empty
 
 
-def test_resulting_df_bounds_correct(one_sticher):
-    first_output_point = one_sticher.data.index[0]
-    last_output_point = one_sticher.data.index[-1]
+def test_resulting_df_bounds_correct(add_sticher):
+    first_output_point = add_sticher.data.index[0]
+    last_output_point = add_sticher.data.index[-1]
 
-    first_input_point = one_sticher._dfs[0].index[0]
-    last_input_point = one_sticher._dfs[-1].index[-1]
+    first_input_point = add_sticher._dfs[0].index[0]
+    last_input_point = add_sticher._dfs[-1].index[-1]
 
     assert first_input_point == first_output_point
     assert last_input_point == last_output_point
 
 
-def test_all_data_points_used(one_sticher):
-    input_data_points = sum([len(df) for df in one_sticher._dfs])
-    output_data_points = len(one_sticher.data)
-    # number of offsets = number of joints, which drop duplicate point
-    assert input_data_points - len(one_sticher._offsets) == output_data_points
-
-
-def test_adjustment_correct(one_sticher):
+def test_adjustment_correct(add_sticher):
     # last but one df close point
-    unadjusted_index = one_sticher._dfs[-2].index[-1]
-    unadjusted_close = one_sticher._dfs[-2].iloc[-1].close
+    unadjusted_index = add_sticher._dfs[-2].index[-1]
+    unadjusted_close = add_sticher._dfs[-2].iloc[-1].close
 
-    adjusted_close = one_sticher.data.loc[unadjusted_index].close
+    adjusted_close = add_sticher.data.loc[unadjusted_index].close
 
-    assert adjusted_close - unadjusted_close == one_sticher._offsets[-1]
+    assert adjusted_close - unadjusted_close == add_sticher._offsets[-1]

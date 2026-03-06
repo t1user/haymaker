@@ -2,7 +2,7 @@ import logging
 import operator as op
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import cached_property
 from itertools import accumulate
 from typing import Literal
@@ -84,7 +84,8 @@ class FuturesSticher:
                 raise MissingContract("No df supplied for {contract}")
 
             df_slice = df.loc[
-                self._tz(start_date, df) : self._tz(stop_date, df)  # type: ignore
+                # add extra days to ensure dfs overlap
+                self._tz(start_date - timedelta(days=7), df) : self._tz(stop_date, df)
             ]
             if df_slice.empty or not misc.is_timezone_aware(df):
                 # one unusable df -> start-over
@@ -98,7 +99,7 @@ class FuturesSticher:
     @cached_property
     def _offsets(self) -> list[float]:
         offsets: list[float] = []
-        for df0, df1 in zip(self._dfs[1:], self._dfs[:-1]):
+        for df0, df1 in zip(self._dfs[:-1], self._dfs[1:]):
             # find sync row
             sync_index = df0.index[-1]
 
@@ -106,15 +107,10 @@ class FuturesSticher:
                 old_row = df0.loc[sync_index]
                 new_row = df1.loc[sync_index]
             else:
-                try:
-                    new_sync_index = self._find_common_index(df0, df1, sync_index)
-                    old_row = df0.loc[new_sync_index]
-                    new_row = df1.loc[new_sync_index]
-                except NonOverLappingDfsError:
-                    # start over; discard all previous values because
-                    # there's a gap between dfs impossible to reconcile
-                    offsets = []
-                    continue
+                # that shouldn't ever find a new sync index, remove?
+                new_sync_index = self._find_common_index(df0, df1, sync_index)
+                old_row = df0.loc[new_sync_index]
+                new_row = df1.loc[new_sync_index]
 
             offsets.append(self.offset(old_row.close, new_row.close))
         if offsets:
@@ -137,15 +133,16 @@ class FuturesSticher:
                             # going from end to start
                             # skipping last df, which needs no adjstment
                             reversed(self._dfs[:-1]),
-                            # no offset for last df
-                            accumulate(reversed(self._offsets)),
+                            accumulate(reversed(self._offsets), self.operator),
                         )
                     ],
                 ]
             )
         )
         # concatenate and de-duplicate dfs
-        return misc.concat_dfs(*dfs)
+        # return misc.concat_dfs(*dfs)
+        df = pd.concat(dfs)
+        return df[~df.index.duplicated()]
 
     def offset(self, old_price: float, new_price: float) -> float:
         return self.reverse_operator(new_price, old_price)
