@@ -444,9 +444,7 @@ class FutureRoller:
         }
         strategy["params"]["future-roll"] = params
         order = ibi.MarketOrder("BUY" if size > 0 else "SELL", abs(size))
-        return self.controller.trade(
-            strategy_str, combo, order, "FUTURE-ROLL", strategy
-        )
+        return self.controller.trade(strategy_str, combo, order, "FUTURE-ROLL", params)
 
     @staticmethod
     def make_combo(oc: ibi.Future, nc: ibi.Future) -> ibi.Bag:
@@ -544,7 +542,7 @@ class FutureRoller:
 
         new_order = ibi.Order(**order_kwarg_dict)
         new_trade = self.controller.trade(
-            strategy_str, new_contract, new_order, oi.action, strategy
+            strategy_str, new_contract, new_order, oi.action, order_kwarg_dict
         )
         assert new_trade
         log.debug(

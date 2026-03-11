@@ -314,12 +314,18 @@ class Atom:
         )
         self._roll_contract_data = ContractRollData(old_contract, new_contract)
 
+    def strategy_data(self, strategy_str: str | None = None) -> Strategy:
+        if strategy_str is None:
+            strategy_str = getattr(self, "strategy", "")
+        if not strategy_str:
+            log.warning(f"{self} accessing data for empty strategy.")
+        return self.sm.strategy[strategy_str]
+
     @property
     def data(self) -> Strategy:
-        strategy = getattr(self, "strategy", "")
-        if not strategy:
-            log.warning(f"{self} accessing data for empty strategy.")
-        return self.sm.strategy[strategy]
+        """Return strategy data if :attr:`strategy` has been set"""
+        # deprecated; to be removed in next version
+        return self.strategy_data()
 
     def connect(self, *targets: Atom) -> Self:
         """

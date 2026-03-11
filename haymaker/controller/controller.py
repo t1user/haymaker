@@ -299,7 +299,7 @@ class Controller(Atom):
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
-        strategy: Strategy,
+        params: dict,
     ) -> ibi.Trade | None:
         # this will return False if order for the strategy has been repeatedly rejected
         if action == "OPEN" and self._new_position_lock:
@@ -311,7 +311,7 @@ class Controller(Atom):
             return None
         if self.sm.verify_for_rejections(strategy_str):
             trade = self.trader.trade(contract, order)
-            self.register_order(strategy_str, action, trade, strategy)
+            self.register_order(strategy_str, action, trade, params)
             trade.filledEvent += partial(
                 self.log_trade, reason=action, strategy=strategy_str
             )
@@ -320,7 +320,7 @@ class Controller(Atom):
             return None
 
     def register_order(
-        self, strategy_str: str, action: str, trade: ibi.Trade, strategy: Strategy
+        self, strategy_str: str, action: str, trade: ibi.Trade, params: dict
     ) -> OrderInfo:
         """
         Register order, register lock, verify that position has been registered.
@@ -333,14 +333,14 @@ class Controller(Atom):
 
         This method is called by :class:`Controller`.
         """
-        params = strategy["params"].get(action.lower(), {})
+
         order_info = OrderInfo(strategy_str, action, trade, params)
         oi = self.sm.save_order(order_info)
 
         if action.upper() == "OPEN":
-            trade.filledEvent += partial(self.register_lock, strategy)
+            trade.filledEvent += partial(self.register_lock, strategy_str)
         elif action.upper() == "CLOSE":
-            trade.filledEvent += partial(self.remove_lock, strategy)
+            trade.filledEvent += partial(self.remove_lock, strategy_str)
 
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} "
@@ -350,10 +350,12 @@ class Controller(Atom):
 
         return oi
 
-    def register_lock(self, strategy: Strategy, trade: ibi.Trade) -> None:
+    def register_lock(self, strategy_str: str, trade: ibi.Trade) -> None:
+        strategy = self.sm.strategy[strategy_str]
         strategy.lock = 1 if trade.order.action == "BUY" else -1
 
-    def remove_lock(self, strategy: Strategy, trade: ibi.Trade) -> None:
+    def remove_lock(self, strategy_str: str, trade: ibi.Trade) -> None:
+        strategy = self.sm.strategy[strategy_str]
         strategy.lock = 0
 
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
@@ -384,8 +386,9 @@ class Controller(Atom):
         self.sm.save_order_status(trade)
 
     def register_position(
-        self, strategy_str: str, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
+        self, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
     ) -> None:
+        strategy_str = strategy.strategy
         try:
             if isinstance(trade.contract, ibi.Bag):
                 log.debug(
@@ -426,7 +429,7 @@ class Controller(Atom):
             # failing above try to assign
             or self.assign_unknown_trade(trade)
         )
-        self.register_position(strategy.strategy, strategy, trade, fill)
+        self.register_position(strategy, trade, fill)
 
     async def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
@@ -450,6 +453,12 @@ class Controller(Atom):
         if order_info:
             try:
                 strategy, action, _, params, _ = order_info
+                # position_id = params["position_id"]
+                # the part after `or` needs to be removed!!!
+                # it's temporary so that brackets with missing `position_id`
+                # can be properly allocated
+                # save to remove when all of 71081, 71083 (sell MBT) 70793 (sell NG)
+                # 71177 (sell NQ) are done
                 position_id = params.get("position_id") or self.sm.strategy[
                     strategy
                 ].get("position_id")

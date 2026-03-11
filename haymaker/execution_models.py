@@ -192,9 +192,14 @@ class BaseExecModel(AbstractExecModel):
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
+        params: dict | None = None,
     ) -> ibi.Trade | None:
-        # assert self.strategy, f"{self} has no strategy set, trade attempt cancelled."
-        return self.controller.trade(self.strategy, contract, order, action, self.data)
+
+        if params is None:
+            params = {}
+
+        assert self.strategy, f"{self} has no strategy set, trade attempt cancelled."
+        return self.controller.trade(self.strategy, contract, order, action, params)
 
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
         return self.controller.cancel(trade)
@@ -225,6 +230,7 @@ class BaseExecModel(AbstractExecModel):
         elif action == "CLOSE":
             self.close(data)
         elif action == "REVERSE":
+            log.warning("Executing REVERSE transaction. Check if correct!")
             self.reverse(data)
         else:
             log.error(f"Ambiguous action: {action} for {self}")
@@ -236,6 +242,10 @@ class BaseExecModel(AbstractExecModel):
         data: dict,
         dynamic_order_kwargs: dict | None = None,
     ) -> ibi.Trade | None:
+
+        if not self._verify_strategy(data):
+            return None
+
         self.data.params["close"] = {}
         data["position_id"] = self.get_position_id(True)
         self.data.params["open"] = data
@@ -246,6 +256,7 @@ class BaseExecModel(AbstractExecModel):
         except KeyError:
             log.exception("Insufficient data to execute OPEN transaction")
             return None
+
         self.data.active_contract = contract
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         if dynamic_order_kwargs:
@@ -255,13 +266,16 @@ class BaseExecModel(AbstractExecModel):
             f"{self.strategy} {contract.localSymbol} processing OPEN signal {signal}",
             extra={"data": data},
         )
-        return self.trade(contract, order, "OPEN")
+        return self.trade(contract, order, "OPEN", {**self.data.params["open"]})
 
     def close(
         self,
         data: dict,
         dynamic_order_kwargs: dict | None = None,
     ) -> ibi.Trade | None:
+        if not self._verify_strategy(data):
+            return None
+
         self.data.params["close"] = data
         data["position_id"] = self.get_position_id()
 
@@ -289,9 +303,7 @@ class BaseExecModel(AbstractExecModel):
             extra={"data": data},
         )
         return self.trade(
-            self.data.active_contract,
-            order,
-            "CLOSE",
+            self.data.active_contract, order, "CLOSE", {**self.data.params["close"]}
         )
 
     def reverse(self, data: dict) -> None:
@@ -317,6 +329,18 @@ class BaseExecModel(AbstractExecModel):
                 f"Failed to close existing position for {self.strategy} "
                 f"in REVERSE trade"
             )
+
+    def _verify_strategy(self, data: dict) -> bool:
+        if not self.strategy:
+            log.warning(f"{self} was missing strategy, will try to reset")
+            try:
+                self.strategy = data["strategy"]
+            except KeyError:
+                log.critical(
+                    f"failed to reset strategy on {self}, abandoning transaction."
+                )
+                return False
+        return True
 
     def __repr__(self):
         return self.__class__.__name__ + "()"
@@ -456,6 +480,7 @@ class EventDrivenExecModel(BaseExecModel):
                         trade.contract,
                         order,
                         label,
+                        {**memo},  # snapshot with position_id
                     )
                     if bracket_trade:
                         # this doesn't make it into database now, because it's updating

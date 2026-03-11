@@ -508,11 +508,7 @@ class Terminator:
             f"{strategy.strategy} {contract} {action} {amount}"
         )
         new_trade = self.controller.trade(
-            strategy.strategy,
-            contract,
-            ibi.MarketOrder(action, amount),
-            "RESET",
-            strategy,
+            strategy.strategy, contract, ibi.MarketOrder(action, amount), "RESET", {}
         )
         assert new_trade
         self.register_trade(new_trade)

@@ -5,7 +5,6 @@ import itertools
 import logging
 import operator as op
 from collections import deque
-from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 from functools import cached_property
 from typing import Literal
@@ -74,12 +73,12 @@ class BarAggregator(Atom):
 
     def onStart(self, data: dict, *args) -> None:
         """Syncing contract with streamer."""
+        super().onStart(data, *args)
         assert data.get(
             "streamer"
         ), f"{self} didn't receive streamer it is connected to"
         streamer = data.pop("streamer")
         self.sync_with_streamer(streamer)
-        super().onStart(data, *args)
 
     def sync_with_streamer(self, streamer: Streamer) -> None:
         # streamer class used only to verify compatibility
