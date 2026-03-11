@@ -247,6 +247,7 @@ class BaseExecModel(AbstractExecModel):
             return None
 
         self.data.params["close"] = {}
+        self.data.brackets = {}
         data["position_id"] = self.get_position_id(True)
         self.data.params["open"] = data
         try:
@@ -403,10 +404,6 @@ class EventDrivenExecModel(BaseExecModel):
             open_order=open_order, close_order=close_order, controller=controller
         )
 
-    def onStart(self, data, *args):
-        super().onStart(data, *args)
-        self.data.brackets = {}
-
     def open(
         self,
         data: dict,
@@ -448,6 +445,7 @@ class EventDrivenExecModel(BaseExecModel):
         return {"ocaGroup": self.data.oca_group, "ocaType": self.oca_type}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
+        brackets = {}
         # called once for sl/tp pair! Don't put inside the for loop!
         log.debug(f"Will attach brackets for {trade.order.orderId}")
         try:
@@ -483,22 +481,22 @@ class EventDrivenExecModel(BaseExecModel):
                         {**memo},  # snapshot with position_id
                     )
                     if bracket_trade:
-                        # this doesn't make it into database now, because it's updating
-                        # a nested dict and only top one triggers a save
-                        # so potentially it's obsolete
-                        self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
+                        brackets[str(bracket_trade.order.orderId)] = Bracket(
                             cast(BracketLabel, label),
                             order_key,
                             bracket_kwargs,
                             bracket_trade,
                         )
+            # assigning to data after brackets info is complete
+            # ensures it is saved to db
+            self.data.brackets = brackets
         except Exception as e:
             log.exception(f"Error while attaching bracket: {e}")
 
     # def re_attach_brackets(self):
     #     """
     #     Possibly used by :class:`Controller` if it's determined that a bracket
-    #     is missing.
+    #     is missing. NOT IMPLEMENTED NOW.
     #     """
 
     #     for orderId, bracket in self.data.brackets.copy().items():

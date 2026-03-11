@@ -362,6 +362,7 @@ def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade):
         stop=TrailingStop(2, vol_field="my_vol_field"),
         controller=Controller(fake_trader),
     )
+    em.strategy = "fake strategy"
     em._attach_bracket(trade, {"my_vol_field": 10})
 
     assert fake_trader.order.orderType == "TRAIL"
@@ -392,7 +393,14 @@ def test_OrderKey_picks_correct_order_higher_level(Atom):
         close_order={"orderType": "TRAIL"},
         controller=Controller(fake_trader),
     )
-    em.open({"contract": ibi.Future("NQ", "CME"), "signal": 1, "amount": 1})
+    em.open(
+        {
+            "contract": ibi.Future("NQ", "CME"),
+            "signal": 1,
+            "amount": 1,
+            "strategy": "fake strategy",
+        }
+    )
     assert fake_trader.order.orderType == "STPLMT"
 
 

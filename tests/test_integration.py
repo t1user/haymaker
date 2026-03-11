@@ -11,7 +11,7 @@ from haymaker.controller import Controller
 from haymaker.execution_models import BaseExecModel, EventDrivenExecModel
 from haymaker.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
 from haymaker.signals import BinarySignalProcessor
-from haymaker.state_machine import Strategy, StrategyContainer
+from haymaker.state_machine import StrategyContainer
 from haymaker.trader import Trader
 
 
@@ -76,7 +76,7 @@ def test_strategy_is_strategy(pipe):
 def test_data_is_dict(pipe):
     strategy, contract, order, action, data = pipe
 
-    assert isinstance(data, Strategy)
+    assert isinstance(data, dict)
 
 
 def test_contract_is_contract(pipe):
@@ -86,9 +86,8 @@ def test_contract_is_contract(pipe):
 
 def test_required_fields_in_data_present(pipe):
     _, _, _, _, data = pipe
-    data_ = data.params["open"]
     assert set(["strategy", "contract", "amount", "signal", "action"]).issubset(
-        set(data_.keys())
+        set(data.keys())
     )
 
 
