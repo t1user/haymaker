@@ -73,12 +73,10 @@ class BarAggregator(Atom):
 
     def onStart(self, data: dict, *args) -> None:
         """Syncing contract with streamer."""
-        super().onStart(data, *args)
-        assert data.get(
-            "streamer"
-        ), f"{self} didn't receive streamer it is connected to"
-        streamer = data.pop("streamer")
+        assert args, f"No streamer passed to {self}"
+        streamer = args[0]
         self.sync_with_streamer(streamer)
+        super().onStart(data, *args)
 
     def sync_with_streamer(self, streamer: Streamer) -> None:
         # streamer class used only to verify compatibility

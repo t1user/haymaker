@@ -69,12 +69,11 @@ class DfAggregator(Atom):
         return self._store
 
     def onStart(self, data: Any, *args: Any) -> None:
-        assert data.get(
-            "streamer"
-        ), f"{self} didn't receive streamer it is connected to"
-        streamer = data.pop("streamer")
+        """Syncing contract with streamer."""
+        assert args, f"No streamer passed to {self}"
+        streamer = args[0]
         self.sync_with_streamer(streamer)
-        super().onStart(data)
+        super().onStart(data, *args)
 
     def sync_with_streamer(self, streamer: Streamer) -> None:
         # streamer class used only to verify compatibility

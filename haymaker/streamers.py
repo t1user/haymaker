@@ -226,10 +226,6 @@ class HistoricalDataStreamer(Streamer):
             timeout=0,
         )
 
-    def onStart(self, data, *args) -> None:
-        data["streamer"] = self
-        super().onStart(data, *args)
-
     def _ensure_durationStr(self) -> str:
         """
         Accept durationStr as either ready str to be passed to

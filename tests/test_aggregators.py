@@ -8,7 +8,51 @@ from sample_barDataList import sample_barDataList
 
 from haymaker.aggregators import BarAggregator, NoFilter, WrongStreamer
 from haymaker.base import Atom as BaseAtom
+from haymaker.base import Pipe
 from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
+
+
+def test_onStart_receives_streamer():
+    blueprint = ibi.Future("NQ", exchange="CME")
+    streamer = HistoricalDataStreamer(
+        contract=blueprint,
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+
+    aggregator = BarAggregator(NoFilter())
+
+    streamer += aggregator
+    with patch.object(aggregator, "sync_with_streamer") as mock_sync_with_streamer:
+        streamer.onStart({})
+        mock_sync_with_streamer.assert_called_once()
+        mock_sync_with_streamer.assert_called_with(streamer)
+
+
+def test_onStart_works_as_part_of_Pipe():
+    blueprint = ibi.Future("NQ", exchange="CME")
+    streamer = HistoricalDataStreamer(
+        contract=blueprint,
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+    aggregator = BarAggregator(NoFilter())
+
+    streaming_pipe = Pipe(streamer, aggregator)
+
+    class SourceAtom(BaseAtom):
+        pass
+
+    source_atom = SourceAtom()
+
+    source_atom += streaming_pipe
+
+    with patch.object(aggregator, "sync_with_streamer") as mock_sync_with_streamer:
+        source_atom.onStart({})
+        mock_sync_with_streamer.assert_called_once()
+        mock_sync_with_streamer.assert_called_with(streamer)
 
 
 def test_HistoricalDataStreamerAccepted():
