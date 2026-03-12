@@ -107,8 +107,8 @@ def test_get_contract(registry_with_data):
     blueprint = blueprints[0]
     # details for one contract (corresponding to blueprint)
     det = details[0]
-    # manually created selector
-    selector = FutureSelector.from_details(det)
+    # manually created selector, same today as in `registry_with_data`
+    selector = FutureSelector.from_details(det, today=datetime(2025, 12, 16))
 
     previous_contract = selector.previous_contract
     active_contract = selector.active_contract
