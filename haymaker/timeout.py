@@ -135,7 +135,10 @@ class Timeout:
             if self.details.is_open(self._now):
                 self.triggered_action()
             elif reactivate_time := self.details.next_open(self._now):
-                sleep_time = (reactivate_time - datetime.now(tz=timezone.utc)).seconds
+                # extra 15 secs to let the market re-open
+                sleep_time = (
+                    reactivate_time - datetime.now(tz=timezone.utc)
+                ).seconds + 15
                 log.log(
                     5,
                     f"{self} will sleep till market reopen at: {reactivate_time} i.e. "
