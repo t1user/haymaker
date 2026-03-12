@@ -131,6 +131,21 @@ class GoldComex(AbstractBaseFutureWrapper):
 
 
 @dataclass
+class SoybeanCbot(AbstractBaseFutureWrapper):
+
+    @property
+    def last_trading_day(self) -> datetime:
+        # first notice is the last business day of the month preceding
+        # the delivery month, so our last trading day is one day prior
+        return (
+            customize_month_end(
+                self.lastTradeDateOrContractMonth - pd.offsets.BusinessMonthEnd()
+            )
+            - custom_bday
+        )
+
+
+@dataclass
 class NG(AbstractBaseFutureWrapper):
     # NOT IN USE
     # should it be used?
@@ -180,6 +195,7 @@ def future_wrapper_factory(contract: ibi.Contract) -> Type[AbstractBaseFutureWra
     return {
         "GC": GoldComex,
         "MGC": GoldComex,
+        "ZS": SoybeanCbot,
     }.get(contract.symbol, NoOffset)
 
 
