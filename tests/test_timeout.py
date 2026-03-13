@@ -82,6 +82,11 @@ def test_timeout_with_no_name_gets_a_number(Timeout):
     assert str(t1).startswith("Timeout <0.2s> for <1>  event id:")
 
 
+# ###########################################
+# Below created by claude
+# ###########################################
+
+
 @pytest.fixture
 def timeout(Timeout) -> Type[_Timeout]:
     @dataclass
@@ -137,3 +142,82 @@ async def test_timer_works_with_no_details(
         _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
     )
     assert await wait_for_condition(lambda: t.triggered)  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_timer_not_triggered_when_market_closed(
+    timeout: type[_Timeout], details: ibi.ContractDetails
+):
+    """Timeout fires but does not trigger action when market is closed."""
+    t = timeout(
+        event=ev.Event(),
+        time=0.1,
+        name="closed_market",
+        details=Details(details),
+        debug=True,
+        _now=datetime(2024, 3, 4, 22, 00, tzinfo=timezone.utc),  # outside hours
+    )
+    await asyncio.sleep(0.3)
+    assert not t.triggered  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_sleep_task_stored_when_market_closed(
+    timeout: type[_Timeout], details: ibi.ContractDetails
+):
+    """When market is closed, _sleep_taks is set after timeout fires."""
+    t = timeout(
+        event=ev.Event(),
+        time=0.1,
+        name="sleep_task_stored",
+        details=Details(details),
+        debug=True,
+        _now=datetime(2024, 3, 4, 22, 00, tzinfo=timezone.utc),
+    )
+    assert await wait_for_condition(lambda: t._sleep_taks is not None)
+    assert not t._sleep_taks.done()  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_sleep_task_cancelled_on_reset(
+    timeout: type[_Timeout], Timeout: type[_Timeout], details: ibi.ContractDetails
+):
+    """reset() cancels sleeping _timeout_callback tasks."""
+    t = timeout(
+        event=ev.Event(),
+        time=0.1,
+        name="cancel_on_reset",
+        details=Details(details),
+        debug=True,
+        _now=datetime(2024, 3, 4, 22, 00, tzinfo=timezone.utc),
+    )
+    await wait_for_condition(lambda: t._sleep_taks is not None)
+
+    Timeout.reset()
+    await asyncio.sleep(0.1)
+
+    assert t._sleep_taks.done()  # type: ignore
+    assert not t.triggered  # type: ignore
+    assert len(Timeout.instances) == 0
+
+
+@pytest.mark.asyncio
+async def test_set_timeout_not_called_after_cancellation(
+    timeout: type[_Timeout], Timeout: type[_Timeout], details: ibi.ContractDetails
+):
+    """After CancelledError, _set_timeout should not replace existing timeout."""
+    t = timeout(
+        event=ev.Event(),
+        time=0.1,
+        name="no_reset_after_cancel",
+        details=Details(details),
+        debug=True,
+        _now=datetime(2024, 3, 4, 22, 00, tzinfo=timezone.utc),
+    )
+    await wait_for_condition(lambda: t._sleep_taks is not None)
+    initial_timeout_id = id(t._timeout)
+
+    Timeout.reset()
+    await asyncio.sleep(0.1)
+
+    assert id(t._timeout) == initial_timeout_id

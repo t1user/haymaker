@@ -60,6 +60,7 @@ class Timeout:
     debug: bool = TIMEOUT_DEBUG
     _timeout: ev.Event | None = field(repr=False, default=None)
     _now: datetime | None = None  # for testing only
+    _sleep_taks: asyncio.Task | None = field(repr=False, default=None)
 
     @classmethod
     def set_ib(cls, ib: ibi.IB):
@@ -101,8 +102,14 @@ class Timeout:
     def reset(cls) -> None:
         # Must be run on system restart so that timouts are not duplicated
         n = len(cls.instances)
+        for instance in cls.instances:
+            instance._cancel()
         cls.instances.clear()
         log.debug(f"{n} timeouts cleared.")
+
+    def _cancel(self) -> None:
+        if self._sleep_taks and not self._sleep_taks.done():
+            self._sleep_taks.cancel()
 
     def __new__(cls, *args, **kwargs) -> Self:
         # Keep track of all :class:`.Timeout` instances created so that they
@@ -135,16 +142,20 @@ class Timeout:
             if self.details.is_open(self._now):
                 self.triggered_action()
             elif reactivate_time := self.details.next_open(self._now):
-                # extra 15 secs to let the market re-open
                 sleep_time = (
                     reactivate_time - datetime.now(tz=timezone.utc)
-                ).seconds + 15
+                ).seconds + 1
                 log.log(
                     5,
                     f"{self} will sleep till market reopen at: {reactivate_time} i.e. "
                     f"{sleep_time} seconds",
                 )
-                await asyncio.sleep(sleep_time)
+                self._sleep_taks = asyncio.current_task()
+                try:
+                    await asyncio.sleep(sleep_time)
+                except asyncio.CancelledError:
+                    log.debug(f"{self!s} sleep cancelled on reset.")
+                    return
                 self._set_timeout(self.event)
 
     def triggered_action(self) -> None:
@@ -162,5 +173,5 @@ class Timeout:
     def __str__(self) -> str:
         return (
             f"Timeout <{self.time}s> for {self.name}  event id: {id(self._timeout)} "
-            f"{self.details!s}"
+            f"timeout id: {id(self)} {self.details!s}"
         )
