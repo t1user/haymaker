@@ -322,7 +322,7 @@ class Controller(Atom):
             return None
 
     def verify_market_open(self, contract: ibi.Contract) -> bool:
-        details = self.contract_registry.get_details(self.contract)
+        details = self.contract_registry.get_details(contract)
         if details is None:
             log.error(f"Missing details for {contract.localSymbol}")
         if details and details.is_open():
