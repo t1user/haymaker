@@ -13,7 +13,11 @@ from haymaker.base import Atom
 from haymaker.config import CONFIG
 from haymaker.contract_selector import FutureSelector
 from haymaker.databases import get_mongo_client
-from haymaker.datastore import AsyncAbstractBaseStore, AsyncArcticStore
+from haymaker.datastore import (
+    AsyncAbstractBaseStore,
+    AsyncArcticStore,
+    CollectionNamerBarsizeSetting,
+)
 from haymaker.details_processor import typical_session_length
 from haymaker.durationStr_converters import (
     datapoints_to_timedelta,
@@ -47,15 +51,22 @@ class DfAggregator(Atom):
 
     For futures contracts ensure that a conitinuous series is created
     using appropriate back contracts.
+
+    Args:
+    -----
+
+    * _store - custom datastore can be passed, it needs to handle
+    naming contract collections in a manner that can be interpreted by
+    streamer
     """
 
     _compatible_with: ClassVar[tuple[str]] = ("HistoricalDataStreamer",)
 
+    _store: AsyncAbstractBaseStore | None = None
     _streamer_params: dict[str, Any] = field(repr=False, default_factory=dict)
     _df: pd.DataFrame = field(repr=False, default_factory=pd.DataFrame)
     _queue: asyncio.Queue = field(repr=False, default_factory=asyncio.Queue)
     _worker_task: asyncio.Task | None = field(repr=False, default=None)
-    _store: AsyncAbstractBaseStore | None = None
 
     def __post_init__(self):
         super().__init__()
@@ -63,8 +74,18 @@ class DfAggregator(Atom):
     @property
     def store(self):
         if self._store is None:
+            assert (barSizeSetting := self._streamer_params.get("barSizeSetting")), (
+                f"{self} cannot initialize "
+                f" datastore because barSizeSetting is not defined"
+            )
+            assert MARKET_DATA_LIB_NAME, (
+                f"{self} cannot initialize datastore because "
+                f"MARKET_DATA_LIB_NAME was not given"
+            )
             self._store = AsyncArcticStore(
-                lib=MARKET_DATA_LIB_NAME, host=get_mongo_client()
+                lib=MARKET_DATA_LIB_NAME,
+                host=get_mongo_client(),
+                collection_namer=CollectionNamerBarsizeSetting(barSizeSetting),
             )
         return self._store
 

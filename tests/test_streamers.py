@@ -1,10 +1,13 @@
 import importlib
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import ib_insync as ibi
+import pandas as pd
 import pytest
+from sample_barDataList import sample_barDataList
 
+from haymaker.datastore import AbstractBaseStore
 from haymaker.streamers import (
     HistoricalDataStreamer,
     bar_filter,
@@ -106,3 +109,91 @@ def test_HistoricalDataStreamer_durationStr_with_last_bar_date():
             mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
             # 10 min elapsed (600 S) + 2 bars as standard margin: (10 + 2) * 60 = 720 S
             assert streamer._durationStr == "720 S"
+
+
+@pytest.mark.asyncio
+async def test_HistoricalDataStreamer_sync_last_bar_date_last_bar_date_given():
+    streamer = HistoricalDataStreamer(
+        ibi.Future(symbol="NQ", exchange="CME"),
+        10000,
+        "1 min",
+        "TRADES",
+        _last_bar_date=datetime(2026, 1, 26, 10, 0),
+    )
+    await streamer.sync_last_bar_date()
+    assert streamer._last_bar_date == datetime(2026, 1, 26, 10, 0)
+
+
+@pytest.mark.asyncio
+async def test_HistoricalDataStreamer_sync_last_bar_date_store_True():
+    """
+    If HistoricalDataStreamer instantiated with `_store = True`,
+    default AsyncArcticStore should be instantiated and later used to
+    read last data point.
+    """
+    contract = ibi.Future(symbol="NQ", exchange="CME")
+    streamer = HistoricalDataStreamer(contract, 10000, "1 min", "TRADES", _store=True)
+
+    df = pd.DataFrame(sample_barDataList).set_index("date")
+
+    with patch("haymaker.streamers.AsyncArcticStore") as mock_store_class:
+        mock_store_instance = mock_store_class.return_value
+        mock_store_instance.read = AsyncMock(return_value=df)
+        assert streamer.store == mock_store_instance
+        assert await streamer.last_db_point() == df.index[-1]
+
+        await streamer.sync_last_bar_date()
+        assert streamer._last_bar_date == df.index[-1]
+
+        mock_store_instance.read.assert_awaited_with(contract)
+
+
+@pytest.mark.asyncio
+async def test_HistoricalDataStreamer_sync_last_bar_date_store_False():
+    """
+    If HistoricalDataStreamer instantiated with `_store = False`,
+    no data should be read from datastore.
+    """
+    streamer = HistoricalDataStreamer(
+        ibi.Future(symbol="NQ", exchange="CME"), 10000, "1 min", "TRADES", _store=False
+    )
+
+    with patch("haymaker.streamers.AsyncArcticStore") as mock_store_class:
+        assert streamer.store is False
+        assert await streamer.last_db_point() is None
+        mock_store_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_HistoricalDataStreamer_sync_last_bar_date_store_datastore_given():
+    """
+    If HistoricalDataStreamer instantiated with `_store = store_instance`,
+    it should be using this store_instance to read last datapoint.
+    """
+    df = pd.DataFrame(sample_barDataList).set_index("date")
+
+    class FakeStore:
+        saved_contract = None
+        call_counter = 0
+
+        async def read(self, symbol, *args):
+            self.saved_contract = symbol
+            self.call_counter += 1
+            return df
+
+    fake_store = FakeStore()
+
+    contract = ibi.Future(symbol="NQ", exchange="CME")
+    streamer = HistoricalDataStreamer(
+        contract, 10000, "1 min", "TRADES", _store=fake_store
+    )
+
+    assert streamer.store == fake_store
+    assert await streamer.last_db_point() == df.index[-1]
+    assert fake_store.call_counter == 1
+
+    await streamer.sync_last_bar_date()
+    assert streamer._last_bar_date == df.index[-1]
+
+    assert fake_store.saved_contract == contract
+    assert fake_store.call_counter == 2

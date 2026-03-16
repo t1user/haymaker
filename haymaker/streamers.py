@@ -4,6 +4,7 @@ import asyncio
 import itertools
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cache, cached_property
@@ -15,7 +16,11 @@ import ib_insync as ibi
 from .base import Atom
 from .config import CONFIG
 from .databases import get_mongo_client
-from .datastore import AsyncArcticStore
+from .datastore import (
+    AsyncAbstractBaseStore,
+    AsyncArcticStore,
+    CollectionNamerBarsizeSetting,
+)
 from .details_processor import typical_session_length
 from .durationStr_converters import (
     datapoints_to_durationStr,
@@ -38,24 +43,6 @@ def get_store():
         if MARKET_DATA_LIB_NAME
         else None
     )
-
-
-def last_db_point(
-    contract: ibi.Contract, start_date: datetime | str | None = None
-) -> datetime | None:
-    """
-    Return datetime for the last available bar for given contract.
-
-    start_date: how far back should available data be searched
-    """
-    if get_store() is None:
-        return None
-    else:
-        df = get_store().read(contract, start_date=start_date)
-        try:
-            return df.iloc[-1].date  # type: ignore
-        except (AttributeError, IndexError):
-            return None
 
 
 def bar_filter(bar: ibi.BarData) -> bool:
@@ -162,19 +149,21 @@ class HistoricalDataStreamer(Streamer):
     that has been tested, other values may be incompatible with other
     framework components
 
-    * read_db: bool = False - if True, before data request is made,
-    last available datapoint will be ready from database and only
-    newer data will be requested.
+    * datastore: bool | AsyncAbstractBaseStore = False
+
+        ** if True, or a datastore is passed, last available datapoint
+    will be ready from database and only newer data will be requested;
+
+        ** if False - no data will be read from datastore, only from
+    broker
 
     * _last_bar_date: datetime | None = None - for internal use only,
     shouldn't be set manually
 
-
     Notes on the specifics of Interactive Brokers API:
     --------------------------------------------------
 
-    The API does not stream data to a historical subscription; it
-    broadcasts a snapshot of the database every 5 seconds.
+    The API broadcasts a snapshot of the database every 5 seconds.
 
         - Bars are timestamped at the start of the bar period
 
@@ -207,7 +196,8 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
-    read_db: bool = False  # should attempt be made to read last point from db
+    # should attempt be made to read last point from datastore
+    _store: bool | AsyncAbstractBaseStore = False
     _last_bar_date: datetime | None = None
 
     def __post_init__(self):
@@ -225,6 +215,37 @@ class HistoricalDataStreamer(Streamer):
             keepUpToDate=True,
             timeout=0,
         )
+
+    @property
+    def store(self) -> bool | AsyncAbstractBaseStore:
+        if self._store is True:
+            assert MARKET_DATA_LIB_NAME, (
+                f"{self} cannot initialize datastore because "
+                f"MARKET_DATA_LIB_NAME was not given."
+            )
+            self._store = AsyncArcticStore(
+                lib=MARKET_DATA_LIB_NAME,
+                host=get_mongo_client(),
+                collection_namer=CollectionNamerBarsizeSetting(self.barSizeSetting),
+            )
+        return self._store
+
+    async def last_db_point(self) -> datetime | None:
+        """
+        Return datetime for the last bar availble in the datastore for
+        given contract.
+
+        start_date: how far back should available data be searched
+        """
+        # it's never True, but type checker is happy this way
+        if self.store is False or self.store is True:
+            return None
+        else:
+            df = await self.store.read(self.contract)
+            try:
+                return df.index[-1]  # type: ignore
+            except (AttributeError, IndexError):
+                return None
 
     def _ensure_durationStr(self) -> str:
         """
@@ -250,10 +271,9 @@ class HistoricalDataStreamer(Streamer):
             else self._ensure_durationStr()
         )
 
-    async def last_bar_date(self) -> datetime | None:
-        return self._last_bar_date or (
-            (self.read_db and last_db_point(self.contract)) or None
-        )
+    async def sync_last_bar_date(self) -> None:
+        if self._last_bar_date is None:
+            self._last_bar_date = await self.last_db_point()
 
     async def run(self) -> None:
         self.onStart({})
@@ -263,6 +283,7 @@ class HistoricalDataStreamer(Streamer):
         self._set_timeout(stream.updateEvent, "ticks")
 
         log.debug(f"{self!s} requesting bars {self._durationStr=}")
+        await self.sync_last_bar_date()
         bars = await self.streaming_func()
         log.debug(f"{self!s} received historical bars, last bar date: {bars[-1].date}")
         self._set_timeout(bars.updateEvent, "bars")
@@ -270,7 +291,7 @@ class HistoricalDataStreamer(Streamer):
         try:
             async for bars_, hasNewBar in bars.updateEvent:
                 if hasNewBar and (
-                    (not self._last_bar_date) or (bars[-2].date > self._last_bar_date)
+                    (not self._last_bar_date) or (bars_[-2].date > self._last_bar_date)
                 ):
                     self._last_bar_date = bars_[-2].date
                     self.on_new_bar(bars_[:-1])
