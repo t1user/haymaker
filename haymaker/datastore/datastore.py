@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Self
 
@@ -13,6 +14,8 @@ from arctic.exceptions import NoDataFoundException  # type: ignore
 from arctic.store.versioned_item import VersionedItem  # type: ignore
 
 from haymaker.validators import bar_size_validator, wts_validator
+
+from .collection_namer import simple_collection_namer
 
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
@@ -28,6 +31,8 @@ class AbstractBaseStore(ABC):
 
     Datastore is for saving and reading pandas dataframes and a dict of metadata.
     """
+
+    collection_namer = staticmethod(simple_collection_namer)
 
     @abstractmethod
     def write(
@@ -118,7 +123,7 @@ class AbstractBaseStore(ABC):
         Otherwise return the string passed.
         """
         if isinstance(sym, ibi.Contract):
-            return f'{"_".join(sym.localSymbol.split())}_{sym.secType}'
+            return self.collection_namer(sym)
         else:
             return sym
 
@@ -163,7 +168,12 @@ class AbstractBaseStore(ABC):
 
 
 class ArcticStore(AbstractBaseStore):
-    def __init__(self, lib: str, host: str | MongoClient = "localhost") -> None:
+    def __init__(
+        self,
+        lib: str,
+        host: str | MongoClient = "localhost",
+        collection_namer: Callable[[ibi.Contract], str] | None = None,
+    ) -> None:
         """
         Library name is whatToShow + barSize, eg.
         TRADES_1_min
@@ -176,9 +186,17 @@ class ArcticStore(AbstractBaseStore):
         self.db = Arctic(host)
         self.db.initialize_library(lib)
         self.store = self.db[lib]
+        if collection_namer is not None:
+            self.collection_namer = collection_namer  # type: ignore
 
     @classmethod
-    def from_params(cls, wts: str, barSize: str, prefix: str = "") -> Self:
+    def from_params(
+        cls,
+        wts: str,
+        barSize: str,
+        prefix: str = "",
+        collection_namer: Callable[[ibi.Contract], str] | None = None,
+    ) -> Self:
         """
         Initiate store with standardized lib name and shared mongo
         host.
@@ -199,9 +217,9 @@ class ArcticStore(AbstractBaseStore):
         _barSize = bar_size_validator(barSize)
         client = get_mongo_client()
         if prefix:
-            return cls(f"{prefix}_{_wts}_{_barSize}", client)
+            return cls(f"{prefix}_{_wts}_{_barSize}", client, collection_namer)
         else:
-            return cls(f"{_wts}_{_barSize}", client)
+            return cls(f"{_wts}_{_barSize}", client, collection_namer)
 
     def write(
         self,
@@ -235,6 +253,7 @@ class ArcticStore(AbstractBaseStore):
         if up_to := (
             self.read_metadata(symbol).get("up_to") or self._last_date(symbol)
         ):
+            # else is a new symbol in the store to be upserted
             try:
                 data = data[data.index > up_to]
             except Exception:

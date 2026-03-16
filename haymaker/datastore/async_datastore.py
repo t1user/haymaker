@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -61,8 +62,13 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
 
     from_params = _sync_class.from_params
 
-    def __init__(self, lib: str, host: str | MongoClient = "localhost") -> None:
-        self.store = self._sync_class(lib, host)
+    def __init__(
+        self,
+        lib: str,
+        host: str | MongoClient = "localhost",
+        collection_namer: Callable[[ibi.Contract], str] | None = None,
+    ) -> None:
+        self.store = self._sync_class(lib, host, collection_namer)
 
     def write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
