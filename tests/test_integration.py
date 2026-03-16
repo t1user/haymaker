@@ -124,6 +124,9 @@ def new_setup(Atom):
             self.trade_object = super().trade(*args, **kwargs)
             return self.trade_object
 
+        def verify_market_open(self, contract) -> bool:
+            return True
+
     controller = FakeController(trader=FakeTrader())
 
     class Source(Atom):
@@ -197,6 +200,7 @@ async def test_sell_position_registered(new_setup):
             tradingClass="ES",
         ),
     }
+
     source.dataEvent.emit(data)
     trade_object = controller.trade_object
     trade_object.fills.append(

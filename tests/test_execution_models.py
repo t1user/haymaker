@@ -4,6 +4,7 @@ import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import ib_insync as ibi
 import pytest
@@ -16,7 +17,6 @@ from haymaker.execution_models import (
     EventDrivenExecModel,
     OrderKey,
 )
-from haymaker.state_machine import Strategy
 
 
 def test_AbstraExecModel_is_abstract(controller: Controller):
@@ -163,12 +163,12 @@ def objects(Atom) -> tuple:
             contract: ibi.Contract,
             order: ibi.Order,
             action: str,
-            strategy: Strategy,
+            params: dict,
         ) -> ibi.Trade | None:
             output_data.contract = contract
             output_data.order = order
             output_data.action = action
-            return super().trade(strategy_str, contract, order, action, strategy)
+            return super().trade(strategy_str, contract, order, action, params)
 
     class Source(Atom):
         pass
@@ -188,19 +188,20 @@ def test_EventDrivenExecModel_brackets_have_same_oca(objects):
     )
     em.onStart({"strategy": "xxx"})
     source += em
-    source.dataEvent.emit(
-        {
-            "signal": 1,
-            "action": "OPEN",
-            "amount": 1,
-            "target_position": 1,
-            "atr": 5,
-            "contract": ibi.Future("NQ", "CME", conId=1),
-        }
-    )
-    data.trade_done()
-    brackets = list(em.data.brackets.values())
-    assert brackets[0].trade.order.ocaGroup == brackets[1].trade.order.ocaGroup
+    with patch.object(controller, "verify_market_open", return_value=True):
+        source.dataEvent.emit(
+            {
+                "signal": 1,
+                "action": "OPEN",
+                "amount": 1,
+                "target_position": 1,
+                "atr": 5,
+                "contract": ibi.Future("NQ", "CME", conId=1),
+            }
+        )
+        data.trade_done()
+        brackets = list(em.data.brackets.values())
+        assert brackets[0].trade.order.ocaGroup == brackets[1].trade.order.ocaGroup
 
 
 def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
@@ -212,29 +213,30 @@ def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
     )
     em.onStart({"strategy": "xxx"})
     source += em
-    source.dataEvent.emit(
-        {
-            "signal": 1,
-            "action": "OPEN",
-            "amount": 1,
-            "target_position": 1,
-            "atr": 5,
-            "contract": ibi.ContFuture("NQ", "CME", conId=1),
-        }
-    )
-    data.trade_done()
-    brackets = list(em.data.brackets.values())
-    # em.position = 1
-    source.dataEvent.emit(
-        {
-            "signal": -1,
-            "action": "CLOSE",
-            "amount": 1,
-            "target_position": 0,
-        }
-    )
-    data.trade_done()
-    assert data.order.ocaGroup == brackets[0].trade.order.ocaGroup
+    with patch.object(controller, "verify_market_open", return_value=True):
+        source.dataEvent.emit(
+            {
+                "signal": 1,
+                "action": "OPEN",
+                "amount": 1,
+                "target_position": 1,
+                "atr": 5,
+                "contract": ibi.ContFuture("NQ", "CME", conId=1),
+            }
+        )
+        data.trade_done()
+        brackets = list(em.data.brackets.values())
+        # em.position = 1
+        source.dataEvent.emit(
+            {
+                "signal": -1,
+                "action": "CLOSE",
+                "amount": 1,
+                "target_position": 0,
+            }
+        )
+        data.trade_done()
+        assert data.order.ocaGroup == brackets[0].trade.order.ocaGroup
 
 
 def test_BaseExecModel_open_signal_generates_order(objects):
@@ -357,18 +359,18 @@ def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade):
             return ibi.Trade(order=ibi.Order(orderId=1))
 
     fake_trader = FakeTrader()
-
+    controller = Controller(fake_trader)
     em = EventDrivenExecModel(
-        stop=TrailingStop(2, vol_field="my_vol_field"),
-        controller=Controller(fake_trader),
+        stop=TrailingStop(2, vol_field="my_vol_field"), controller=controller
     )
-    em.strategy = "fake strategy"
-    em._attach_bracket(trade, {"my_vol_field": 10})
+    with patch.object(controller, "verify_market_open", return_value=True):
+        em.strategy = "fake strategy"
+        em._attach_bracket(trade, {"my_vol_field": 10})
 
-    assert fake_trader.order.orderType == "TRAIL"
-    # basis for stop distance calculation is defined as `my_vol_field`
-    # its value is given as 10 and stop multiple is 2
-    assert fake_trader.order.auxPrice == 20
+        assert fake_trader.order.orderType == "TRAIL"
+        # basis for stop distance calculation is defined as `my_vol_field`
+        # its value is given as 10 and stop multiple is 2
+        assert fake_trader.order.auxPrice == 20
 
 
 def test_OrderKey_picks_correct_order_low_level(controller):
@@ -387,21 +389,22 @@ def test_OrderKey_picks_correct_order_higher_level(Atom):
             return ibi.Trade(order=ibi.Order(orderId=1))
 
     fake_trader = FakeTrader()
-
+    controller = Controller(fake_trader)
     em = BaseExecModel(
         open_order={"orderType": "STPLMT"},
         close_order={"orderType": "TRAIL"},
-        controller=Controller(fake_trader),
+        controller=controller,
     )
-    em.open(
-        {
-            "contract": ibi.Future("NQ", "CME"),
-            "signal": 1,
-            "amount": 1,
-            "strategy": "fake strategy",
-        }
-    )
-    assert fake_trader.order.orderType == "STPLMT"
+    with patch.object(controller, "verify_market_open", return_value=True):
+        em.open(
+            {
+                "contract": ibi.Future("NQ", "CME"),
+                "signal": 1,
+                "amount": 1,
+                "strategy": "fake strategy",
+            }
+        )
+        assert fake_trader.order.orderType == "STPLMT"
 
 
 def test_OrderKey_picks_correct_order_higher_level_2(Atom):
@@ -415,15 +418,17 @@ def test_OrderKey_picks_correct_order_higher_level_2(Atom):
 
     fake_trader = FakeTrader()
 
+    controller = Controller(fake_trader)
     em = BaseExecModel(
         open_order={"orderType": "STPLMT"},
         close_order={"orderType": "TRAIL"},
-        controller=Controller(fake_trader),
+        controller=controller,
     )
     em.strategy = "xxx"
-    em.open({"contract": ibi.Future("NQ", "CME"), "signal": 1, "amount": 1})
-    # brute forcing position here because we're not properly updating StateMachine
-    # and execution models abandon close positions for non-existing positions
-    em.data.position = 1
-    em.close({"contract": ibi.Future("NQ", "CME"), "signal": -1, "amount": 1})
-    assert fake_trader.order.orderType == "TRAIL"
+    with patch.object(controller, "verify_market_open", return_value=True):
+        em.open({"contract": ibi.Future("NQ", "CME"), "signal": 1, "amount": 1})
+        # brute forcing position here because we're not properly updating StateMachine
+        # and execution models abandon close positions for non-existing positions
+        em.data.position = 1
+        em.close({"contract": ibi.Future("NQ", "CME"), "signal": -1, "amount": 1})
+        assert fake_trader.order.orderType == "TRAIL"
