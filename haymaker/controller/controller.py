@@ -309,7 +309,9 @@ class Controller(Atom):
                 f"{contract.localSymbol}"
             )
             return None
-        if self.sm.verify_for_rejections(strategy_str):
+        if self.sm.verify_for_rejections(strategy_str) and self.verify_market_open(
+            contract
+        ):
             trade = self.trader.trade(contract, order)
             self.register_order(strategy_str, action, trade, params)
             trade.filledEvent += partial(
@@ -318,6 +320,19 @@ class Controller(Atom):
             return trade
         else:
             return None
+
+    def verify_market_open(self, contract: ibi.Contract) -> bool:
+        details = self.contract_registry.get_details(self.contract)
+        if details is None:
+            log.error(f"Missing details for {contract.localSymbol}")
+        if details and details.is_open():
+            return True
+        else:
+            log.error(
+                f"Attempt to place an order for "
+                f"{contract.localSymbol} while market is closed."
+            )
+            return False
 
     def register_order(
         self, strategy_str: str, action: str, trade: ibi.Trade, params: dict

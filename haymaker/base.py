@@ -169,14 +169,8 @@ class Atom:
         """
         Contract details received from the broker.
 
-        If :attr:`contract` is set, :attr:`details` will be returned
-        only for this contract, otherwise :attr:`details` will return
-        a dictionary of all available details,
-        ie. :class:`dict`[:class:`ibi.Contract`, :class:`Details`]
-
-        :class:`Details` is a wrapper around
-        :class:`ib_insync.contract.ContractDetails` with some
-        additional methods and attributes.
+        if :attr:`contract` is not set empty :class:`Details` object
+        will be returned.
         """
         details = self.contract_registry.get_details(self.contract)
         if details is None:
