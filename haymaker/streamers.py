@@ -4,7 +4,6 @@ import asyncio
 import itertools
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cache, cached_property
@@ -197,7 +196,7 @@ class HistoricalDataStreamer(Streamer):
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
     # should attempt be made to read last point from datastore
-    _store: bool | AsyncAbstractBaseStore = False
+    datastore: bool | AsyncAbstractBaseStore = False
     _last_bar_date: datetime | None = None
 
     def __post_init__(self):
@@ -218,17 +217,17 @@ class HistoricalDataStreamer(Streamer):
 
     @property
     def store(self) -> bool | AsyncAbstractBaseStore:
-        if self._store is True:
+        if self.datastore is True:
             assert MARKET_DATA_LIB_NAME, (
                 f"{self} cannot initialize datastore because "
                 f"MARKET_DATA_LIB_NAME was not given."
             )
-            self._store = AsyncArcticStore(
+            self.datastore = AsyncArcticStore(
                 lib=MARKET_DATA_LIB_NAME,
                 host=get_mongo_client(),
                 collection_namer=CollectionNamerBarsizeSetting(self.barSizeSetting),
             )
-        return self._store
+        return self.datastore
 
     async def last_db_point(self) -> datetime | None:
         """

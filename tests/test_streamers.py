@@ -7,7 +7,6 @@ import pandas as pd
 import pytest
 from sample_barDataList import sample_barDataList
 
-from haymaker.datastore import AbstractBaseStore
 from haymaker.streamers import (
     HistoricalDataStreamer,
     bar_filter,
@@ -132,7 +131,9 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_True():
     read last data point.
     """
     contract = ibi.Future(symbol="NQ", exchange="CME")
-    streamer = HistoricalDataStreamer(contract, 10000, "1 min", "TRADES", _store=True)
+    streamer = HistoricalDataStreamer(
+        contract, 10000, "1 min", "TRADES", datastore=True
+    )
 
     df = pd.DataFrame(sample_barDataList).set_index("date")
 
@@ -155,7 +156,11 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_False():
     no data should be read from datastore.
     """
     streamer = HistoricalDataStreamer(
-        ibi.Future(symbol="NQ", exchange="CME"), 10000, "1 min", "TRADES", _store=False
+        ibi.Future(symbol="NQ", exchange="CME"),
+        10000,
+        "1 min",
+        "TRADES",
+        datastore=False,
     )
 
     with patch("haymaker.streamers.AsyncArcticStore") as mock_store_class:
@@ -185,7 +190,7 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_datastore_given()
 
     contract = ibi.Future(symbol="NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract, 10000, "1 min", "TRADES", _store=fake_store
+        contract, 10000, "1 min", "TRADES", datastore=fake_store
     )
 
     assert streamer.store == fake_store
