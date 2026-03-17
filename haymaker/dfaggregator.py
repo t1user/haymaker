@@ -45,7 +45,7 @@ class WrongStreamer(Exception):
 @dataclass
 class DfAggregator(Atom):
     """
-    Covnert recieved data bars into a pandas DataFrame and store
+    Convert recieved data bars into a pandas DataFrame and store
     processed data.  Ensure required minimum amount of data is
     available, calling on database and/or broker if necessary.
 
@@ -55,25 +55,28 @@ class DfAggregator(Atom):
     Args:
     -----
 
-    * _store - custom datastore can be passed, it needs to handle
+    * datastore - custom datastore can be passed, it needs to handle
     naming contract collections in a manner that can be interpreted by
-    streamer
+    streamer; if nothing is passed, default :class:`AsyncArcticStore`
+    will be used
     """
 
     _compatible_with: ClassVar[tuple[str]] = ("HistoricalDataStreamer",)
 
-    _store: AsyncAbstractBaseStore | None = None
-    _streamer_params: dict[str, Any] = field(repr=False, default_factory=dict)
-    _df: pd.DataFrame = field(repr=False, default_factory=pd.DataFrame)
-    _queue: asyncio.Queue = field(repr=False, default_factory=asyncio.Queue)
-    _worker_task: asyncio.Task | None = field(repr=False, default=None)
+    datastore: AsyncAbstractBaseStore | None = None
+    _streamer_params: dict[str, Any] = field(
+        repr=False, init=False, default_factory=dict
+    )
+    _df: pd.DataFrame = field(repr=False, init=False, default_factory=pd.DataFrame)
+    _queue: asyncio.Queue = field(repr=False, init=False, default_factory=asyncio.Queue)
+    _worker_task: asyncio.Task | None = field(repr=False, init=False, default=None)
 
     def __post_init__(self):
         super().__init__()
 
     @property
     def store(self):
-        if self._store is None:
+        if self.datastore is None:
             assert (barSizeSetting := self._streamer_params.get("barSizeSetting")), (
                 f"{self} cannot initialize "
                 f" datastore because barSizeSetting is not defined"
@@ -82,12 +85,12 @@ class DfAggregator(Atom):
                 f"{self} cannot initialize datastore because "
                 f"MARKET_DATA_LIB_NAME was not given"
             )
-            self._store = AsyncArcticStore(
+            self.datastore = AsyncArcticStore(
                 lib=MARKET_DATA_LIB_NAME,
                 host=get_mongo_client(),
                 collection_namer=CollectionNamerBarsizeSetting(barSizeSetting),
             )
-        return self._store
+        return self.datastore
 
     def onStart(self, data: Any, *args: Any) -> None:
         """Syncing contract with streamer."""
