@@ -247,7 +247,7 @@ class BarAggregator(Atom):
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> None:
         self._future_adjust_flag = True
-        log.debug(f"Contract on {self} reset from {old_contract} to {new_contract}")
+        super().onContractChanged(old_contract, new_contract)
 
     @cached_property
     def _id(self) -> int:
