@@ -9,7 +9,8 @@ import pandas as pd
 import pytest
 from config import TEST_ROOT  # type: ignore
 
-from haymaker.base import ActiveNext, Atom
+from haymaker.base import ActiveNext
+from haymaker.base import Atom as BaseAtom
 from haymaker.brick import AbstractBaseBrick, AbstractDfBrick
 from haymaker.contract_registry import ContractRegistry
 
@@ -82,7 +83,9 @@ def df_brick(Atom):
 
 
 @pytest.fixture
-def df_connected_brick(df_brick: AbstractDfBrick) -> tuple[AbstractDfBrick, Atom]:
+def df_connected_brick(
+    df_brick: AbstractDfBrick, Atom
+) -> tuple[AbstractDfBrick, BaseAtom]:
     class NewAtom(Atom):
         def onData(self, data, *args):
             self.memo = data
@@ -103,7 +106,7 @@ def test_AbstractDfBrick_is_abstract():
 
 
 def test_signal_correct(
-    df_connected_brick: tuple[AbstractDfBrick, Atom], data_for_df: dict
+    df_connected_brick: tuple[AbstractDfBrick, BaseAtom], data_for_df: dict
 ):
     """Test that df_brick correctly emits the last row of df."""
     brick, atom = df_connected_brick
@@ -125,8 +128,7 @@ def basic_df_brick():
 def test_dispatchmethod_df(basic_df_brick: AbstractDfBrick, data_for_df: dict):
     df = pd.DataFrame(data_for_df)
     row = basic_df_brick.df_row(df)
-    # hard to compare two Series, easier with dicts, result the same
-    assert row.to_dict() == df.iloc[-1].to_dict()
+    assert row.equals(df.iloc[-1])
 
 
 def test_dispatchmethod_barList(basic_df_brick: AbstractDfBrick):
@@ -141,7 +143,25 @@ def test_dispatchmethod_dict(basic_df_brick: AbstractDfBrick, data_for_df: dict)
     out = basic_df_brick.df_row(data_for_df)
 
     should_be = pd.DataFrame(data_for_df).iloc[-1]
-    assert out.to_dict() == should_be.to_dict()
+    assert out.equals(should_be)
+
+
+def test_df_brick_accepts_df(basic_df_brick: AbstractDfBrick, data_for_df: dict, Atom):
+
+    class OutputAtom(Atom):
+        output = None
+
+        def onData(self, data, *args):
+            self.output = data
+
+    output_atom = OutputAtom()
+    basic_df_brick += output_atom
+    print(basic_df_brick)
+    df = pd.DataFrame(data_for_df)
+    basic_df_brick.onData(df)
+    assert output_atom.output is not None
+    last_row = df.iloc[-1].to_dict()
+    assert {k: v for k, v in output_atom.output.items() if k in last_row} == last_row
 
 
 def test_next_correct() -> None:
