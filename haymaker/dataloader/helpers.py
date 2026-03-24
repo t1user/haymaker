@@ -135,3 +135,7 @@ def datetime_normalizer(dt: datetime, barsize: str) -> datetime | date:
         return dt.date()
     else:
         return dt
+
+
+def strjoin(*args: str):
+    return "".join(args)

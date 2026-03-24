@@ -26,7 +26,7 @@ futures_current_index: 0 #  zero->current contfuture, positive index->future, ne
 datastore:
   !!python/object/apply:haymaker.datastore.ArcticStore
   # joins previuosly defined aliases to create collection name
-  - !!python/object/apply:haymaker.utilities.strjoin
+  - !!python/object/apply:haymaker.dataloader.helpers.strjoin
     - *wts
     - _
     - *barSize
