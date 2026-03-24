@@ -120,21 +120,22 @@ class OrderSyncStrategy:
                 new_trade.order.orderId = old_trade.order.orderId
                 self.done.append(new_trade)
                 self.sm.update_trade(new_trade)  # <- CHANGING RECORDS
-
-            elif new_trade := ib_known_trades.get(old_trade.order.orderId):
-                # THIS IS ONLY FOR TESTING -> DELETE
-                # just in case justr try finding by orderId
-                # it wouldn't be typical to find the order here as they usually
-                # have orderId == 0 if they were executed while system was off
-                # but IB is not always consistent! this branch is meant for testing
-                # most likely will never end-up here because this is a standard
-                # case that would have been handles inside sync orders
-                log.warning(
-                    f"Trade: {new_trade.order.orderId} found in non-standard place. "
-                    f"Ivestigate! We maybe fucking-up records."
+            # trying to manually update trade from fills
+            elif fills := [
+                f
+                for f in self.ib.fills()
+                if f.execution.orderId == old_trade.order.orderId
+            ]:
+                old_trade.fills = fills
+                old_trade.log.append(
+                    ibi.objects.TradeLogEntry(
+                        time=fills[-1].execution.time,
+                        status="Filled",
+                        message="composed by sync_routines",
+                    )
                 )
-                self.done.append(new_trade)
-                self.sm.update_trade(new_trade)
+                self.done.append(old_trade)
+                self.sm.update_trade(old_trade)
             else:
                 self.errors.append(old_trade)
 
