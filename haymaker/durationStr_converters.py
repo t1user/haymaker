@@ -195,11 +195,10 @@ def date_to_delta(
 def delta_to_durationStr(seconds: int) -> str:
     """
     Assume that the durationStr is shorter than 1 year.  Ignore that
-    session if offen shorter than 24 hours.  These are irrelevant
+    session is offen shorter than 24 hours.  These are irrelevant
     given the purpose of the function is to return a durationStr for
     requesting data since last restart.
     """
-    print(f"{seconds=}")
     if seconds < 86400:
         return f"{seconds} S"
     else:

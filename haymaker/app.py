@@ -113,7 +113,7 @@ class App:
     ) -> None:
         if errorCode in config.get("ignore_errors", []):
             return
-        elif "URGENT" in errorString:
+        elif "URGENT" in errorString or len(errorString) > 100:
             log.error(f"{errorString} {reqId=} code={errorCode} {contract=}")
         else:
             log.debug(f"{errorString} {reqId=} code={errorCode} {contract=}")

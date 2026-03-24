@@ -170,7 +170,7 @@ class FuturesSticher:
         inner = old_df.join(new_df, how="inner", rsuffix="_new")
         if inner.empty:
             raise NonOverLappingDfsError(
-                f"Previous last point: {old_df.index[1]}, "
+                f"Previous last point: {old_df.index[-1]}, "
                 f"next first point: {new_df.index[0]}"
             )
         inner_index_cut = inner.loc[:sync_index].index  # type: ignore
