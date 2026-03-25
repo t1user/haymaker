@@ -468,15 +468,7 @@ class Controller(Atom):
         if order_info:
             try:
                 strategy, action, _, params, _ = order_info
-                # position_id = params["position_id"]
-                # the part after `or` needs to be removed!!!
-                # it's temporary so that brackets with missing `position_id`
-                # can be properly allocated
-                # save to remove when all of 71081, 71083 (sell MBT) 70793 (sell NG)
-                # 71177 (sell NQ) are done
-                position_id = params.get("position_id") or self.sm.strategy[
-                    strategy
-                ].get("position_id")
+                position_id = params["position_id"]
 
                 kwargs = {
                     "strategy": strategy,
