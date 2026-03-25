@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from functools import partial
 from typing import TYPE_CHECKING, Self
 
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-ERROR_STRATEGIES: set[str] = set()
+ERROR_STRATEGIES: set[Strategy] = set()
 
 
 class OrderSyncStrategy:
@@ -391,26 +392,37 @@ class OrderReconciliationSync:
                 if (oi.action in ("STOP-LOSS", "TAKE-PROFIT") and oi.active)
             ]
             if len(brackets) != len(existing_orders):
-                _log = (
-                    log.error
-                    if strategy.strategy not in ERROR_STRATEGIES
-                    else log.debug
-                )
+                _log = log.error if strategy not in ERROR_STRATEGIES else log.debug
                 _log(
                     f"Bracket error for {strategy.strategy}, "
+                    f"position: {strategy.position}"
                     f"we have: {len(existing_orders)} orders, "
                     f"we should have: {len(brackets)} orders."
                 )
-                ERROR_STRATEGIES.add(strategy.strategy)
-                if self.handle_missing_brackets == "remove":
+                ERROR_STRATEGIES.add(strategy)
+
+        if ERROR_STRATEGIES and self.handle_missing_brackets == "remove":
+
+            # close positions for strategies without brackets, but
+            # only if they don't cancel each other (skip cancelling strategies)
+            non_cancelling_positions: defaultdict[ibi.Contract, int] = defaultdict(int)
+            for strategy in ERROR_STRATEGIES:
+                non_cancelling_positions[strategy.active_contract] += strategy.position
+                self.ct.lock_new_positions()
+
+            for strategy in ERROR_STRATEGIES:
+                if non_cancelling_positions.get(strategy.active_contract):
                     log.error(
                         f"Closing positions for strategy with missing bracket: "
                         f"{strategy.strategy}"
                     )
+                    non_cancelling_positions[
+                        strategy.active_contract
+                    ] -= strategy.position
                     self.ct.close_positions_for_strategy(
                         strategy.strategy, "MISSING BRACKET EMERGENCY CLOSE"
                     )
-                    self.ct.lock_new_positions()
+            ERROR_STRATEGIES.clear()
 
 
 class Terminator:
