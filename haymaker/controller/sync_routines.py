@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-ERROR_STRATEGIES: set[Strategy] = set()
+ERROR_STRATEGIES: set[str] = set()
 
 
 class OrderSyncStrategy:
@@ -128,13 +128,26 @@ class OrderSyncStrategy:
                 if f.execution.orderId == old_trade.order.orderId
             ]:
                 old_trade.fills = fills
+                filled = sum([fill.execution.shares for fill in fills])
+                remaining = old_trade.order.totalQuantity - filled
                 old_trade.log.append(
                     ibi.objects.TradeLogEntry(
                         time=fills[-1].execution.time,
-                        status="Filled",
+                        status="Filled" if remaining == 0 else "Submitted",
                         message="composed by sync_routines",
                     )
                 )
+                old_trade.orderStatus = ibi.OrderStatus(
+                    orderId=old_trade.order.orderId,
+                    status=(
+                        ibi.OrderStatus.Filled
+                        if remaining == 0
+                        else ibi.OrderStatus.Submitted
+                    ),
+                    filled=filled,
+                    remaining=remaining,
+                )
+
                 self.done.append(old_trade)
                 self.sm.update_trade(old_trade)
             else:
@@ -392,25 +405,31 @@ class OrderReconciliationSync:
                 if (oi.action in ("STOP-LOSS", "TAKE-PROFIT") and oi.active)
             ]
             if len(brackets) != len(existing_orders):
-                _log = log.error if strategy not in ERROR_STRATEGIES else log.debug
+                _log = (
+                    log.error
+                    if strategy.strategy not in ERROR_STRATEGIES
+                    else log.debug
+                )
                 _log(
                     f"Bracket error for {strategy.strategy}, "
-                    f"position: {strategy.position}"
+                    f"position: {strategy.position} "
                     f"we have: {len(existing_orders)} orders, "
                     f"we should have: {len(brackets)} orders."
                 )
-                ERROR_STRATEGIES.add(strategy)
+                ERROR_STRATEGIES.add(strategy.strategy)
 
         if ERROR_STRATEGIES and self.handle_missing_brackets == "remove":
 
             # close positions for strategies without brackets, but
             # only if they don't cancel each other (skip cancelling strategies)
             non_cancelling_positions: defaultdict[ibi.Contract, int] = defaultdict(int)
-            for strategy in ERROR_STRATEGIES:
+            for strategy_str in ERROR_STRATEGIES:
+                strategy = self.ct.sm.strategy[strategy_str]
                 non_cancelling_positions[strategy.active_contract] += strategy.position
                 self.ct.lock_new_positions()
 
-            for strategy in ERROR_STRATEGIES:
+            for strategy_str in ERROR_STRATEGIES:
+                strategy = self.ct.sm.strategy[strategy_str]
                 if non_cancelling_positions.get(strategy.active_contract):
                     log.error(
                         f"Closing positions for strategy with missing bracket: "
