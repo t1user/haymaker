@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
@@ -281,6 +282,8 @@ class ArcticStore(AbstractBaseStore):
     ) -> pd.DataFrame | None:
         data = self.read_object(symbol, start_date, end_date)
         if data:
+            if not data.data.index.is_monotonic_increasing:
+                warnings.warn("Index in read df is not monotonic increasing!")
             return data.data
         else:
             return None
@@ -312,6 +315,27 @@ class ArcticStore(AbstractBaseStore):
             return self.store.read(self._symbol(symbol), date_range=date_range)
         except NoDataFoundException:
             return None
+
+        except KeyError as e:
+            log.error(
+                f"trying to resolve error: {e} for {self._symbol(symbol)} {self.lib=}"
+            )
+            bad = pd.Timestamp(e.args[0]).tz_localize(None)
+            if start_date is not None and bad == pd.Timestamp(start_date).tz_localize(
+                None
+            ):
+                start_date = None
+            elif end_date is not None and bad == pd.Timestamp(end_date).tz_localize(
+                None
+            ):
+                end_date = None
+            elif start_date is not None:
+                start_date = None
+            elif end_date is not None:
+                end_date = None
+            log.error(f"Will try again with {start_date=} {end_date=}")
+            df = self.read_object(symbol, start_date, end_date)
+            return df
 
     def _last_date(self, symbol: str | ibi.Contract) -> datetime | None:
         if (d := self.read(symbol)) is not None:

@@ -324,7 +324,11 @@ class Controller(Atom):
     def verify_market_open(self, contract: ibi.Contract) -> bool:
         details = self.contract_registry.get_details(contract)
         if details is None:
-            log.error(f"Missing details for {contract.localSymbol}")
+            log.error(
+                f"Missing details for {contract.localSymbol}, "
+                f"won't verify if market open"
+            )
+            return True
         if details and details.is_open():
             return True
         else:
@@ -487,6 +491,7 @@ class Controller(Atom):
                     )
             except Exception as e:
                 log.error(f"Error while trying to create blotter entry: {e}")
+                kwargs = {}
 
         elif trade.order.totalQuantity == 0:
             log.warning(f"empty CommissionReportEvent emit for trade: {trade}")
