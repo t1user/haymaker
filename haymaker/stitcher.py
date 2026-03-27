@@ -129,7 +129,7 @@ class FuturesStitcher:
             if (aware := misc.is_timezone_aware(df)) is not tz_aware:
                 output = []
                 tz_aware = aware
-            if not df.is_monotonic_increasing:
+            if not df.index.is_monotonic_increasing:
                 raise CorruptData(
                     f"dataframe for {contract.localSymbol} is not monotonic increasing"
                 )
