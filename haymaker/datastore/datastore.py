@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-import warnings
+
+# import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
@@ -231,7 +232,7 @@ class ArcticStore(AbstractBaseStore):
         metadata = self._metadata(symbol)
         if meta is not None:
             metadata.update(meta)
-        metadata["up_to"] = data.index[-1]
+        metadata["up_to"] = self._up_to(data)
         version = self.store.write(
             self._symbol(symbol),
             self._clean(data),
@@ -256,13 +257,17 @@ class ArcticStore(AbstractBaseStore):
         ):
             # else is a new symbol in the store to be upserted
             try:
-                data = data[data.index > up_to]
-            except Exception:
+                up_to_ts = pd.Timestamp(up_to)
+                if up_to_ts.tzinfo is None:
+                    up_to_ts = up_to_ts.tz_localize(data.index.tz)  # type: ignore
+                data = data[data.index > up_to_ts]
+            except Exception as e:
+                log.exception(e)
                 # metadata had corrupted value, try again
                 data = data[data.index > self._last_date(symbol)]
 
         try:
-            metadata["up_to"] = data.index[-1]
+            metadata["up_to"] = self._up_to(data)
         except IndexError:
             pass
 
@@ -271,8 +276,13 @@ class ArcticStore(AbstractBaseStore):
             data,
             metadata=self._update_metadata(symbol, metadata),
             upsert=upsert,
+            prune_previous_version=True,
         )
         return f"symbol: {version.symbol} version: {version.version}"
+
+    @staticmethod
+    def _up_to(df: pd.DataFrame) -> str:
+        return df.index[-1].isoformat()
 
     def read(
         self,
@@ -283,7 +293,9 @@ class ArcticStore(AbstractBaseStore):
         data = self.read_object(symbol, start_date, end_date)
         if data:
             if not data.data.index.is_monotonic_increasing:
-                warnings.warn("Index in read df is not monotonic increasing!")
+                warning_msg = "Index in read df is not monotonic increasing!"
+                # warnings.warn(warning_msg)
+                log.debug(warning_msg)
             return data.data
         else:
             return None
@@ -316,32 +328,34 @@ class ArcticStore(AbstractBaseStore):
         except NoDataFoundException:
             return None
 
-        except KeyError as e:
-            log.error(
-                f"trying to resolve error: {e} for {self._symbol(symbol)} {self.lib=}"
-            )
-            bad = pd.Timestamp(e.args[0]).tz_localize(None)
-            if start_date is not None and bad == pd.Timestamp(start_date).tz_localize(
-                None
-            ):
-                start_date = None
-            elif end_date is not None and bad == pd.Timestamp(end_date).tz_localize(
-                None
-            ):
-                end_date = None
-            elif start_date is not None:
-                start_date = None
-            elif end_date is not None:
-                end_date = None
-            log.error(f"Will try again with {start_date=} {end_date=}")
-            df = self.read_object(symbol, start_date, end_date)
+        except KeyError:
+            df = self.read_object(symbol)
+            if df is not None and not df.index.is_monotonic_increasing:
+                warning_msg = (
+                    f"data for {self._symbol(symbol)} is not monotonic increasing "
+                    f"and it cannot be sliced, returning full dataframe"
+                )
+
+                # warnings.warn(warning_msg)
+                log.debug(warning_msg)
+            else:
+                warning_msg = (
+                    f"couldn't slice data for {self._symbol(symbol)} "
+                    f"returning full dataframe."
+                )
+                # warnings.warn(warning_msg)
+                log.debug(warning_msg)
             return df
 
-    def _last_date(self, symbol: str | ibi.Contract) -> datetime | None:
+    def _last_date(self, symbol: str | ibi.Contract) -> str | None:
+        warning_msg = f"{self._symbol} missing 'up_to' in metadata, reading full df."
+        # warnings.warn(warning_msg)
+        log.debug(warning_msg)
         if (d := self.read(symbol)) is not None:
             try:
-                return d.index[-1]
-            except Exception:
+                return self._up_to(d)
+            except Exception as e:
+                log.exception(e)
                 pass
 
     def delete(self, symbol: str | ibi.Contract) -> None:
