@@ -636,20 +636,6 @@ def test_offset_None_returns_zero():
     assert sticher.offset(5, 7) == 0
 
 
-def test_adjust_wap_not_adjusted():
-    sticher = FuturesStitcher({Mock(): Mock()})
-    df = pd.DataFrame(
-        {
-            "close": [1.0, 2.0],
-            "volume": [100, 200],
-            "WAP": [1.0, 2.0],
-            "barCount": [1, 1],
-        }
-    )
-    adjusted = sticher.adjust(df, 10)
-    pd.testing.assert_series_equal(adjusted["WAP"], df["WAP"])
-
-
 def test_inspect_returns_none_without_debug(FuturesStitcher_source):
     sticher = FuturesStitcher(FuturesStitcher_source, debug=False)
     assert sticher.inspect() is None

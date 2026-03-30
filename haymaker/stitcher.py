@@ -220,7 +220,7 @@ class FuturesStitcher:
         if self.adjust_type is None:
             return df
 
-        non_adjustable = {"volume", "WAP", "barCount"}
+        non_adjustable = {"volume", "barCount"}
         adjustable_columns = list(set(df.columns) - non_adjustable)
         non_adjustable_columns = list(set(df.columns) - set(adjustable_columns))
 
