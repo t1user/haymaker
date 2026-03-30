@@ -4,7 +4,7 @@ import asyncio
 import itertools
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from functools import cache, cached_property
 from typing import Awaitable, ClassVar
@@ -156,8 +156,6 @@ class HistoricalDataStreamer(Streamer):
         ** if False - no data will be read from datastore, only from
     broker
 
-    * _last_bar_date: datetime | None = None - for internal use only,
-    shouldn't be set manually
 
     Notes on the specifics of Interactive Brokers API:
     --------------------------------------------------
@@ -195,12 +193,13 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
-    # should attempt be made to read last point from datastore
-    datastore: bool | AsyncAbstractBaseStore = False
+    datastore: InitVar[bool | AsyncAbstractBaseStore] = False
+    _datastore: None | AsyncAbstractBaseStore = field(init=False, default=None)
     _last_bar_date: datetime | None = None
 
-    def __post_init__(self):
+    def __post_init__(self, datastore: bool | AsyncAbstractBaseStore) -> None:
         Atom.__init__(self)
+        self.store = datastore
 
     def streaming_func(self) -> Awaitable:
         return self.ib.reqHistoricalDataAsync(
@@ -216,18 +215,33 @@ class HistoricalDataStreamer(Streamer):
         )
 
     @property
-    def store(self) -> bool | AsyncAbstractBaseStore:
-        if self.datastore is True:
+    def store(self) -> None | AsyncAbstractBaseStore:
+        return self._datastore
+
+    @store.setter
+    def store(self, arg: bool | AsyncAbstractBaseStore) -> None:
+        if arg is False:
+            self._datastore = None
+        elif arg is True:
             assert MARKET_DATA_LIB_NAME, (
                 f"{self} cannot initialize datastore because "
                 f"MARKET_DATA_LIB_NAME was not given."
             )
-            self.datastore = AsyncArcticStore(
+            self._datastore = AsyncArcticStore(
                 lib=MARKET_DATA_LIB_NAME,
                 host=get_mongo_client(),
                 collection_namer=CollectionNamerBarsizeSetting(self.barSizeSetting),
             )
-        return self.datastore
+        elif (
+            getattr(arg, "read") is not None
+            and getattr(arg, "read_metadata") is not None
+        ):
+            self._datastore = arg
+        else:
+            raise ValueError(
+                f"datastore must be True, False or instance of async datastore, "
+                f"not{type(arg)}"
+            )
 
     async def last_db_point(self) -> datetime | None:
         """
@@ -236,15 +250,17 @@ class HistoricalDataStreamer(Streamer):
 
         start_date: how far back should available data be searched
         """
-        # it's never True, but type checker is happy this way
-        if self.store is False or self.store is True:
+        if (store := self._datastore) is None:
             return None
-        else:
-            df = await self.store.read(self.contract)
-            try:
-                return df.index[-1]  # type: ignore
-            except (AttributeError, IndexError):
-                return None
+
+        if up_to := (await store.read_metadata(self.contract)).get("up_to"):
+            return up_to
+
+        df = await store.read(self.contract)
+        try:
+            return df.index[-1]  # type: ignore
+        except (AttributeError, IndexError):
+            return None
 
     def _ensure_durationStr(self) -> str:
         """
