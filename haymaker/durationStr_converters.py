@@ -17,13 +17,14 @@ hours: 1, 2, 3, 4, 8
 from datetime import datetime, timedelta
 
 import pandas as pd
+import pandas_market_calendars as mcal  # type: ignore
 
 # from pandas.tseries.offsets import BusinessDay
-from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import BaseOffset, CustomBusinessDay
 
-# reusable business day object with holidays
-us_business_days_offset = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+nyse_calendar = mcal.get_calendar("NYSE")
+nyse_holidays = nyse_calendar.holidays().holidays  # type: ignore
+custom_bday = CustomBusinessDay(holidays=nyse_holidays)
 
 barSizeSetting_deltas = {
     "sec": timedelta(seconds=1),
@@ -68,20 +69,26 @@ durationStr_deltas = {
 }
 
 
-def durationStr_to_offset(durationStr) -> timedelta | BaseOffset:
+def durationStr_to_offset_bdays(durationStr) -> timedelta | BaseOffset:
     number_str, unit = durationStr.split(" ")
     number = int(number_str)
     # 'D' durationStr needs adjustment if converting to calendar timedelta
     # as it includes only business days
-    return (
-        durationStr_deltas[unit] * number
-        if unit != "D"
-        else us_business_days_offset * number
-    )
+    return durationStr_deltas[unit] * number if unit != "D" else custom_bday * number
+
+
+def durationStr_to_offset(durationStr) -> timedelta:
+    number_str, unit = durationStr.split(" ")
+    number = int(number_str)
+    # 'D' durationStr needs adjustment if converting to calendar timedelta
+    # as it includes only business days
+    return durationStr_deltas[unit] * number
 
 
 def offset_durationStr(durationStr, date: datetime) -> datetime:
-    return (pd.Timestamp(date) - durationStr_to_offset(durationStr)).to_pydatetime()
+    return (
+        pd.Timestamp(date) - durationStr_to_offset_bdays(durationStr)
+    ).to_pydatetime()
 
 
 def datapoints_to_timedelta(
