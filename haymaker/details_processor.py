@@ -1,5 +1,7 @@
+from collections import defaultdict
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
@@ -186,6 +188,33 @@ class Details:
             it's useful to provide `_now` is in testing.
         """
         return self._next_open(self.trading_hours, _now)
+
+    @cached_property
+    def typical_close(self) -> tuple[int, int]:
+        """
+        Return typical close time as a tuple of (hour, minute) in
+        instrument's timezone (not utc!).
+        """
+        c: defaultdict[tuple[int, int], int] = defaultdict(int)
+        closes = [(t[1].astimezone(self.zone_info)) for t in self.trading_hours]
+        closes_tuples = [(cc.hour, cc.minute) for cc in closes]
+
+        for i in closes_tuples:
+            c[i] += 1
+
+        max_v = 0
+        max_k = None
+        for k, v in c.items():
+            if v > max_v:
+                max_k = k
+                max_v = v
+        assert max_k is not None
+
+        return max_k
+
+    @property
+    def zone_info(self) -> ZoneInfo:
+        return ZoneInfo(self.details.timeZoneId)
 
     _process_trading_hours = staticmethod(process_trading_hours)
     _is_active = staticmethod(is_active)

@@ -147,6 +147,72 @@ class TestAtomDetails:
     ):
         assert isinstance(details_object.is_open(), bool)  # type: ignore
 
+    def test_typical_close(self, details_object):
+        print(details_object)
+        assert details_object.typical_close == (16, 0)
+
+
+def test_typical_close():
+    input_details = ibi.ContractDetails(
+        contract=ibi.Contract(
+            secType="FUT",
+            conId=495512563,
+            symbol="ES",
+            lastTradeDateOrContractMonth="20251219",
+            multiplier="50",
+            exchange="CME",
+            currency="USD",
+            localSymbol="ESZ5",
+            tradingClass="ES",
+        ),
+        marketName="ES",
+        minTick=0.25,
+        orderTypes="ACTIVETIM,AD,ADJUST,ALERT,ALGO,ALLOC,AVGCOST,BASKET,BENCHPX,COND,CONDORDER,DAY,DEACT,DEACTDIS,DEACTEOD,GAT,GTC,GTD,GTT,HID,ICE,IOC,LIT,LMT,LTH,MIT,MKT,MTL,NGCOMB,NONALGO,OCA,PEGBENCH,SCALE,SCALERST,SNAPMID,SNAPMKT,SNAPREL,STP,STPLMT,TRAIL,TRAILLIT,TRAILLMT,TRAILMIT,WHATIF",
+        validExchanges="CME,QBALGO",
+        priceMagnifier=1,
+        underConId=11004968,
+        longName="E-mini S&P 500",
+        contractMonth="202512",
+        industry="",
+        category="",
+        subcategory="",
+        timeZoneId="US/Central",
+        tradingHours="20251216:1700-20251217:1600;20251217:1700-20251218:1600;20251218:1700-20251219:0830;20251220:CLOSED;20251221:CLOSED",
+        liquidHours="20251217:0830-20251217:1600;20251218:0830-20251218:1600;20251219:CLOSED;20251220:CLOSED;20251221:CLOSED",
+        evRule="",
+        evMultiplier=0,
+        mdSizeMultiplier=1,
+        aggGroup=2147483647,
+        underSymbol="ES",
+        underSecType="IND",
+        marketRuleIds="67,67",
+        secIdList=[],
+        realExpirationDate="20251219",
+        lastTradeTime="08:30:00",
+        stockType="",
+        minSize=1.0,
+        sizeIncrement=1.0,
+        suggestedSizeIncrement=1.0,
+        cusip="",
+        ratings="",
+        descAppend="",
+        bondType="",
+        couponType="",
+        callable=False,
+        putable=False,
+        coupon=0,
+        convertible=False,
+        maturity="",
+        issueDate="",
+        nextOptionDate="",
+        nextOptionType="",
+        nextOptionPartial=False,
+        notes="",
+    )
+
+    details = Details(input_details)
+    assert details.typical_close == (16, 0)
+
 
 def test_details_work_for_expired_contracts():
     # input details directly copied from the system
