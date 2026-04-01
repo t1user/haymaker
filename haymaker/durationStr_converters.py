@@ -69,7 +69,7 @@ durationStr_deltas = {
 }
 
 
-def durationStr_to_offset_bdays(durationStr) -> timedelta | BaseOffset:
+def durationStr_to_offset(durationStr) -> timedelta | BaseOffset:
     number_str, unit = durationStr.split(" ")
     number = int(number_str)
     # 'D' durationStr needs adjustment if converting to calendar timedelta
@@ -77,18 +77,8 @@ def durationStr_to_offset_bdays(durationStr) -> timedelta | BaseOffset:
     return durationStr_deltas[unit] * number if unit != "D" else custom_bday * number
 
 
-def durationStr_to_offset(durationStr) -> timedelta:
-    number_str, unit = durationStr.split(" ")
-    number = int(number_str)
-    # 'D' durationStr needs adjustment if converting to calendar timedelta
-    # as it includes only business days
-    return durationStr_deltas[unit] * number
-
-
 def offset_durationStr(durationStr, date: datetime) -> datetime:
-    return (
-        pd.Timestamp(date) - durationStr_to_offset_bdays(durationStr)
-    ).to_pydatetime()
+    return (pd.Timestamp(date) - durationStr_to_offset(durationStr)).to_pydatetime()
 
 
 def datapoints_to_timedelta(
@@ -136,11 +126,14 @@ def datapoints_to_durationStr(
 
 
 def durationStr_to_datapoints(
-    durationStr: str, barSizeSetting: str, session_length: timedelta
+    durationStr: str,
+    barSizeSetting: str,
+    session_length: timedelta,
+    offset_days: int = 0,
 ) -> int:
     """
-    Estimated number of datapoints in a given durationStr
-    parameter passed to IB.
+    Estimated number of datapoints in a given durationStr parameter
+    passed to IB.
     """
 
     unit_dict = {
@@ -159,7 +152,7 @@ def durationStr_to_datapoints(
         bars = timedelta(seconds=duration_value) / barSizeSetting_timedelta
     else:
         bars_per_session = session_length / barSizeSetting_timedelta
-        number_of_sessions = unit_dict[duration_unit] * duration_value
+        number_of_sessions = unit_dict[duration_unit] * duration_value + offset_days
         bars = bars_per_session * number_of_sessions
 
     # round UP and then convert to int

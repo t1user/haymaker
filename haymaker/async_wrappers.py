@@ -43,6 +43,10 @@ async def make_async(fn: Callable[..., R], *args) -> R:
 def fire_and_forget(
     fn: Callable[..., Any], *args: Any, name: str | None = None
 ) -> None:
+    """
+    Schedule sync callable to run asynchronously in a different thread
+    in executor.
+    """
     # can be used on any callable that doesn't expect a return value
     if not callable(fn):
         raise TypeError(f"{fn} is not callable")

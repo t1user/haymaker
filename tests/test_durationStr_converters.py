@@ -7,6 +7,7 @@ import pytest
 
 from haymaker.durationStr_converters import (
     barSizeSetting_to_timedelta,
+    custom_bday,
     datapoints_to_durationStr,
     datapoints_to_timedelta,
     date_to_delta,
@@ -15,7 +16,6 @@ from haymaker.durationStr_converters import (
     durationStr_to_datapoints,
     durationStr_to_offset,
     offset_durationStr,
-    us_business_days_offset,
 )
 
 
@@ -57,16 +57,16 @@ def test_barSizeSetting_to_timedelta_unadjusted(
         ("34 S", timedelta(seconds=34)),
         ("2 W", timedelta(days=14)),
         ("1 W", timedelta(days=7)),
-        ("10 D", us_business_days_offset * 10),
-        ("11 D", us_business_days_offset * 11),
-        ("6 D", us_business_days_offset * 6),
+        ("10 D", custom_bday * 10),
+        ("11 D", custom_bday * 11),
+        ("6 D", custom_bday * 6),
     ],
 )
 def test_durationStr_to_offset(durationStr: str, delta: timedelta) -> None:
     assert durationStr_to_offset(durationStr) == delta
 
 
-def test_offset_durationStr_with_holida():
+def test_offset_durationStr_with_holiday():
     date = datetime(2026, 2, 19)
     durationStr = "10 D"
     assert offset_durationStr(durationStr, date) == datetime(2026, 2, 4)
@@ -278,6 +278,24 @@ def test_durationStr_to_datapoints_S_unit_hours(durationStr, expected_datapoints
     assert (
         durationStr_to_datapoints(durationStr, barSizeSetting, session_length)
         == expected_datapoints
+    )
+
+
+def test_durationStr_to_datapoints_offsets_by_days():
+    barSizeSetting = "1 hours"
+    session_length = timedelta(hours=23)
+    assert (
+        durationStr_to_datapoints("5 D", barSizeSetting, session_length, -1) == 4 * 23
+    )
+    assert durationStr_to_datapoints("5 D", barSizeSetting, session_length, 1) == 6 * 23
+    assert durationStr_to_datapoints("5 D", barSizeSetting, session_length, 0) == 5 * 23
+
+
+def test_durationStr_to_datapoints_offset():
+    # 4days * 23hours * 120datapoints per minute
+    assert (
+        durationStr_to_datapoints("5 D", "30 secs", timedelta(hours=23), offset_days=-1)
+        == 11040
     )
 
 
