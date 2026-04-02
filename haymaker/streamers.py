@@ -12,6 +12,8 @@ from typing import Awaitable, ClassVar
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
+from haymaker.misc import format_timestamp
+
 from .base import Atom
 from .config import CONFIG
 from .databases import get_mongo_client
@@ -254,7 +256,8 @@ class HistoricalDataStreamer(Streamer):
             return None
 
         if up_to := (await store.read_metadata(self.contract)).get("up_to"):
-            return up_to
+            log.debug(f"{self!s} retrieved last date from datastore: {up_to}")
+            return format_timestamp(up_to)
 
         df = await store.read(self.contract)
         try:

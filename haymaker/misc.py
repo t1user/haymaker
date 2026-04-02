@@ -349,3 +349,44 @@ def concat_dfs(*dfs: pd.DataFrame) -> pd.DataFrame:
     """
     df = pd.concat(dfs)
     return df[~df.index.duplicated()].sort_index()
+
+
+def format_timestamp(dt_input: dt.datetime | str) -> dt.datetime:
+    """Converts a datetime or date string to a Python datetime.
+
+    Supported string formats:
+    - YYYYMMDD (e.g., 20260101)
+    - YYYYMMDD HH:MM:SS TZ (e.g., 20260101 15:30:00 UTC)
+    - ISO format (e.g., 2026-01-01, or with time/TZ like 2026-01-01T15:30:00Z)
+
+    If the object is naive (no timezone), it localizes it to UTC.
+    If it already has a timezone, it preserves it.
+    """
+    # 1. Handle case if it's already a datetime object
+    if isinstance(dt_input, dt.datetime):
+        dt_ = dt_input
+
+    # 2. Handle strings
+    elif isinstance(dt_input, str):
+        # Handle YYYYMMDD format (exactly 8 digits)
+        if dt_input.isdigit() and len(dt_input) == 8:
+            dt_ = dt.datetime.strptime(dt_input, "%Y%m%d")
+
+        # Handle YYYYMMDD HH:MM:SS TZ
+        elif len(dt_input) >= 17 and dt_input[:8].isdigit() and dt_input[8] == " ":
+            dt_ = dt.datetime.strptime(dt_input[:17], "%Y%m%d %H:%M:%S")
+            if "UTC" in dt_input[17:].upper() or "Z" in dt_input[17:].upper():
+                dt_ = dt_.replace(tzinfo=dt.timezone.utc)
+
+        else:
+            # Catch-all: Handles 'YYYY-MM-DD', with or without time & offsets
+            dt_ = dt.datetime.fromisoformat(dt_input.replace("Z", "+00:00"))
+
+    else:
+        raise TypeError(f"Unsupported type {type(dt_input)}. Expected datetime or str.")
+
+    # 3. Check and apply timezone fallback
+    if dt_.tzinfo is None:
+        return dt_.replace(tzinfo=dt.timezone.utc)
+
+    return dt_

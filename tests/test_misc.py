@@ -9,6 +9,7 @@ from haymaker.misc import (
     Counter,
     concat_dfs,
     contractAsTuple,
+    format_timestamp,
     general_to_specific_contract_class,
     sign,
 )
@@ -286,3 +287,83 @@ def test_concat_dfs_4(master_df):
     cleaned_df = concat_dfs(df1, df2)
     modified_df = master_df.drop(master_df.index[4])
     assert cleaned_df.equals(modified_df)
+
+
+@pytest.mark.parametrize(
+    "dt_input, expected",
+    [
+        # 1. Native datetime inputs
+        pytest.param(
+            datetime.datetime(2026, 1, 1, 10, 30),
+            datetime.datetime(2026, 1, 1, 10, 30, tzinfo=datetime.timezone.utc),
+            id="naive_datetime_to_utc",
+        ),
+        pytest.param(
+            datetime.datetime(2026, 1, 1, 10, 30, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2026, 1, 1, 10, 30, tzinfo=datetime.timezone.utc),
+            id="preserve_existing_utc_datetime",
+        ),
+        # 2. Compact YYYYMMDD string format
+        pytest.param(
+            "20260101",
+            datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc),
+            id="compact_date_only_to_utc",
+        ),
+        # 3. YYYYMMDD HH:MM:SS TZ format (Interactive Brokers style)
+        pytest.param(
+            "20260101 15:30:00 UTC",
+            datetime.datetime(2026, 1, 1, 15, 30, tzinfo=datetime.timezone.utc),
+            id="compact_with_utc_tz",
+        ),
+        pytest.param(
+            "20260101 15:30:00 Z",
+            datetime.datetime(2026, 1, 1, 15, 30, tzinfo=datetime.timezone.utc),
+            id="compact_with_z_marker",
+        ),
+        pytest.param(
+            "20260101 15:30:00",
+            datetime.datetime(2026, 1, 1, 15, 30, tzinfo=datetime.timezone.utc),
+            id="compact_no_tz_fallback_to_utc",
+        ),
+        # 4. Standard ISO formats (Handled by fromisoformat)
+        pytest.param(
+            "2026-01-01",
+            datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc),
+            id="iso_date_only_to_utc",
+        ),
+        pytest.param(
+            "2026-01-01T15:30:00Z",
+            datetime.datetime(2026, 1, 1, 15, 30, tzinfo=datetime.timezone.utc),
+            id="iso_with_zulu_marker",
+        ),
+        pytest.param(
+            "2026-01-01 15:30:00",
+            datetime.datetime(2026, 1, 1, 15, 30, tzinfo=datetime.timezone.utc),
+            id="iso_no_tz_fallback_to_utc",
+        ),
+    ],
+)
+def test_format_timestamp_valid_inputs(dt_input, expected):
+    """Verifies that various valid date formats are parsed accurately and fall back to UTC."""
+    result = format_timestamp(dt_input)
+    assert result == expected
+    assert result.tzinfo == expected.tzinfo
+
+
+def test_format_timestamp_preserves_foreign_timezone():
+    """Verifies that a string holding an offset other than UTC is preserved."""
+    # Custom timezone offset (+02:00)
+    iso_with_offset = "2026-01-01T15:30:00+02:00"
+
+    result = format_timestamp(iso_with_offset)
+
+    assert result.tzinfo is not None
+    # Verifies the offset remains exactly +02:00 (7200 seconds)
+    assert result.utcoffset().total_seconds() == 7200
+
+
+@pytest.mark.parametrize("invalid_input", [12345678, ["20260101"], None])
+def test_format_timestamp_type_error(invalid_input):
+    """Verifies that passing an unsupported type triggers a TypeError."""
+    with pytest.raises(TypeError):
+        format_timestamp(invalid_input)
