@@ -1,17 +1,19 @@
 import asyncio
 import logging
+import random
 from dataclasses import dataclass, field, fields, is_dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from functools import cached_property
-from typing import Any, ClassVar, Generator, cast
+from typing import Any, ClassVar, Generator, Literal, cast
 
+import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pandas as pd
 
 from haymaker import misc
 from haymaker.base import Atom
 from haymaker.config import CONFIG
-from haymaker.contract_selector import FutureSelector
+from haymaker.contract_selector import FutureSelector, custom_bday
 from haymaker.databases import get_mongo_client
 from haymaker.datastore import (
     AsyncAbstractBaseStore,
@@ -20,14 +22,15 @@ from haymaker.datastore import (
 )
 from haymaker.details_processor import typical_session_length
 from haymaker.durationStr_converters import (
+    barSizeSetting_to_timedelta,
     datapoints_to_timedelta,
-    date_to_delta_wrapper,
     durationStr_to_datapoints,
     offset_durationStr,
 )
+from haymaker.research.numba_tools import volume_grouper
 from haymaker.streamers import Streamer
 
-from .sticher import FuturesSticher
+from .stitcher import FuturesStitcher
 
 log = logging.getLogger(__name__)
 
@@ -59,19 +62,29 @@ class DfAggregator(Atom):
     naming contract collections in a manner that can be interpreted by
     streamer; if nothing is passed, default :class:`AsyncArcticStore`
     will be used
+
+    * save_frequency: how often data will be saved to datastore, zero
+    means data will not be saved (which maybe useful for testing but
+    in a way defies the purpose of the whole object)
     """
+
+    datastore: AsyncAbstractBaseStore | None = None
+    save_frequency: int = 900  # in seconds
+
+    # ================================================================================
 
     _compatible_with: ClassVar[tuple[str]] = ("HistoricalDataStreamer",)
 
-    datastore: AsyncAbstractBaseStore | None = None
     _streamer_params: dict[str, Any] = field(
-        repr=False, init=False, default_factory=dict
+        init=False, repr=False, default_factory=dict
     )
-    _df: pd.DataFrame = field(repr=False, init=False, default_factory=pd.DataFrame)
-    _queue: asyncio.Queue = field(repr=False, init=False, default_factory=asyncio.Queue)
-    _worker_task: asyncio.Task | None = field(repr=False, init=False, default=None)
+    _df: pd.DataFrame = field(init=False, repr=False, default_factory=pd.DataFrame)
+    _queue: asyncio.Queue = field(init=False, repr=False, default_factory=asyncio.Queue)
+    _worker_task: asyncio.Task | None = field(init=False, repr=False, default=None)
+    _save_timer: ev.Timer = field(init=False, repr=False, default=None)
+    _timer_task: asyncio.Task | None = field(init=False, repr=False, default=None)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         super().__init__()
 
     @property
@@ -92,11 +105,21 @@ class DfAggregator(Atom):
             )
         return self.datastore
 
+    async def set_timer(self, save_frequency):
+        # if many objects created, they shouldn't all save at the same time
+        await asyncio.sleep(random.randint(0, 30))
+        self._save_timer = ev.Timer(save_frequency)
+        self._save_timer += self.save_data
+
     def onStart(self, data: Any, *args: Any) -> None:
         """Syncing contract with streamer."""
-        assert args, f"No streamer passed to {self}"
+        assert args, f"No streamer passed to {self!s}"
         streamer = args[0]
         self.sync_with_streamer(streamer)
+        if self._save_timer is None and self.save_frequency:
+            self._timer_task = asyncio.create_task(
+                self.set_timer(self.save_frequency), name=f"{self!s} timer setter"
+            )
         super().onStart(data, *args)
 
     def sync_with_streamer(self, streamer: Streamer) -> None:
@@ -116,7 +139,7 @@ class DfAggregator(Atom):
         streamer_class = streamer.__class__.__name__
         if streamer_class not in self._compatible_with:
             raise WrongStreamer(
-                f"Streamer {streamer_class} is not compatible with {self}"
+                f"Streamer {streamer_class} is not compatible with {self!s}"
             )
 
     async def onData(self, data: ibi.BarDataList, *args: Any) -> None:
@@ -124,7 +147,7 @@ class DfAggregator(Atom):
         await self._queue.put(data)
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(
-                self._process_queue(), name=f"{self}_process_queue"
+                self._process_queue(), name=f"{self!s}_process_queue"
             )
 
     async def _process_queue(self):
@@ -134,49 +157,49 @@ class DfAggregator(Atom):
             self._queue.task_done()
 
     async def process_data(self, data: ibi.BarDataList) -> None:
-        data_df = await self.process_current_data(pd.DataFrame(data).set_index("date"))
+        raw_df = pd.DataFrame(data).set_index("date")
+        current_df = self.process_current_data(raw_df)
         # implicit assumption: if we already have data in `self._df`,
         # together with the newly received data, it should give enough
         # datapoints
-        if len(data_df) >= self.datapoints or not self._df.empty:
-            df = self.append_data(data_df)
+        if (not self._df.empty) or (len(current_df) >= self.datapoints):
+            df = self.append_data(current_df)
         else:
-            log.debug("Acquiring back data...")
-            df = self.append_data(await self.acquire_back_data(), data_df)
+            back_data = await self.acquire_back_data(raw_df)
+            if len(back_data) > 0:
+                assert back_data.index.is_monotonic_increasing
+            df = self.append_data(back_data)
         assert (
             df is not None
-        ) and not df.empty, f"{self} failed to obtained back data."
+        ) and not df.empty, f"{self!s} failed to obtained back data."
+
+        if len(df) < self.datapoints:
+            log.warning(
+                f"{self!s} acquired too little back data, "
+                f"acquired: {len(df)} required: {self.datapoints}"
+            )
         self.dataEvent.emit(self._df)
 
     def append_data(self, *dfs: pd.DataFrame) -> pd.DataFrame:
         self._df = misc.concat_dfs(self._df, *dfs)
-        # datastore must filter out any old data
-        self.save_data(self._df)
         return self._df
 
-    def save_data(self, df: pd.DataFrame) -> None:
+    async def save_data(self) -> None:
         assert (contract := self.contract), f"Missing contract on {self}"
-        self.store.append(contract, df)
+        if not self._df.empty:
+            await self.store.async_append(contract, self._df)
 
-    def _create_name(self, contract) -> str:
-        # TODO MAKE A UNIQUE COLLECTION NAME
-        return (
-            f'{"_".join(contract.localSymbol.split())}_{contract.secType}_'
-            f'{self._streamer_params["barSizeSetting"]}'
-        )
-
-    async def process_current_data(self, data: pd.DataFrame) -> pd.DataFrame:
+    def process_current_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Return only the part of the `data` that corresponds to the
         period when current contract is active.
         """
         assert isinstance(self.contract, ibi.Future)
         assert (date_range := self._compute_date_range(self.contract)) is not None
-        # enough data already?
         start, _ = date_range
         return data.loc[self._tz(start) :]  # type: ignore
 
-    async def acquire_back_data(self) -> pd.DataFrame:
+    async def acquire_back_data(self, current_df: pd.DataFrame) -> pd.DataFrame:
         """
         This method is being called by :meth:`onData` if there is no
         data in self._df.  This happens if:
@@ -210,32 +233,37 @@ class DfAggregator(Atom):
         """
         assert isinstance(
             self.contract_selector, FutureSelector
-        ), f"contract on {self} is not a Future: {self.contract}"
+        ), f"contract on {self!s} is not a Future: {self.contract}"
 
         dfs = {}
-        datapoints = 0
+
         for contract in self._back_contracts():
             date_range_or_none = self._compute_date_range(contract)
-            assert date_range_or_none is not None
-            start, stop = date_range_or_none
 
-            df = await self._acquire_data_for_contract(contract, start, stop)
-
-            dfs[contract] = df.loc[self._tz(start) : self._tz(stop)]  # type: ignore
-            datapoints += len(dfs[contract])
-            if datapoints >= self.datapoints:
+            # if range is None it means no more data before
+            # `self.offset_durationStr` can be acquired
+            if date_range_or_none is None:
                 break
 
-        if datapoints < self.datapoints:
-            log.error(
-                f"{self} failed to get required amount of back data "
-                f"(have: {datapoints}, need: {self.datapoints})."
+            start, stop = date_range_or_none
+            #  extra datapoints on either side to ensure (???) overlapping series
+            df = await self._acquire_data_for_contract(
+                contract, start - timedelta(hours=2), stop + timedelta(hours=2)
             )
+            log.debug(
+                f"{self!s} acquired back data for contract: {contract.localSymbol}"
+                f"from {start} to {stop} {len(df)=}"
+            )
+            if df.empty and self.contract == contract:
+                df = current_df
+            elif contract == self.contract:
+                df = misc.concat_dfs(df, current_df)
+            dfs[contract] = df
 
         return (
             dfs[cast(ibi.Future, self.contract)]
             if len(dfs) == 1
-            else FuturesSticher(dfs).data
+            else FuturesStitcher(dfs).data
         )
 
     def _compute_date_range(
@@ -251,7 +279,7 @@ class DfAggregator(Atom):
         """
         assert isinstance(
             self.contract_selector, FutureSelector
-        ), f"contract on {self} is not a Future: {self.contract}"
+        ), f"contract on {self!s} is not a Future: {self.contract}"
         start, stop = self.contract_selector.date_ranges[contract]
         now = datetime.now()
         start_date = max(start, self.offset_by_durationStr())
@@ -259,21 +287,15 @@ class DfAggregator(Atom):
         # Don't make this timezone aware or datastore will reject it
         return (start_date, stop_date) if (start_date < stop_date) else None
 
-    @staticmethod
-    def _tz(dt: datetime) -> datetime:
-        # TODO: investigate implications of this throughout
-        return dt.replace(tzinfo=timezone.utc)
+    def _tz(self, dt: datetime) -> datetime:
+        return dt.replace(tzinfo=self.contract_details.zone_info)
 
-    async def _historical_data_with_retry(
-        self, **params
-    ) -> ibi.BarDataList:  # type: ignore
+    async def _historical_data_with_retry(self, **params) -> ibi.BarDataList:
         for attempt in range(3):
             try:
-                return await self.ib.reqHistoricalDataAsync(**params)
-            except Exception as e:
-                log.warning(
-                    f"Retry on pulling historical data for {self} because of {e}"
-                )
+                return await self.ib.reqHistoricalDataAsync(**params, timeout=0)
+            except Exception:
+                log.exception(f"Retry on pulling historical data for {self!s}")
                 if attempt == 2:
                     raise
                 await asyncio.sleep(2**attempt)
@@ -295,16 +317,19 @@ class DfAggregator(Atom):
             key = e.args[0]
             raise MissingStreamerParam(key)
 
-        params["endDateTime"] = stop_date
+        params["endDateTime"] = self.to_datetime(stop_date)
         params["contract"] = contract
-        params["durationStr"] = date_to_delta_wrapper(
-            start_date,
-            params["barSizeSetting"],
-            end_date_or_now=stop_date,
-            margin=int(self.datapoints * 0.1),
-        )
-        log.error(f"Calling broker with params: {params}")
-        return await self._historical_data_with_retry(**params)
+        params["durationStr"] = self._streamer_params["durationStr"]
+        log.warning(f"{self!s} calling broker with params: {params}")
+        data_from_broker = await self._historical_data_with_retry(**params)
+        if data_from_broker:
+            log.debug(
+                f"{self!s} {contract.localSymbol} received data from broker from: "
+                f"{data_from_broker[0].date} to: {data_from_broker[-1].date}"
+            )
+        else:
+            log.error(f"{self!s} {contract.localSymbol} received no data from broker")
+        return data_from_broker
 
     def _back_contracts(self) -> Generator[ibi.Future, None, None]:
         assert isinstance(
@@ -312,7 +337,7 @@ class DfAggregator(Atom):
         ), f"Missing contract selector for {self._contract_blueprint}"
         assert isinstance(
             self.contract, ibi.Future
-        ), f"{self} attempting stiching on a non-Future"
+        ), f"{self!s} attempting stiching on a non-Future"
 
         expiry = self.expiry_from_contract(self.contract)
 
@@ -320,10 +345,20 @@ class DfAggregator(Atom):
             if self.expiry_from_contract(wrapper.contract) <= expiry:
                 yield wrapper.contract
 
+    @staticmethod
+    def to_datetime(date):
+        try:
+            return date.to_pydatetime()
+        except Exception:
+            return date
+
     async def _acquire_data_for_contract(
         self, contract: ibi.Contract, start_date: datetime, stop_date: datetime
     ) -> pd.DataFrame:
-        log.debug(f"acquiring data for contract: {contract} {start_date=} {stop_date=}")
+        log.debug(
+            f"{self!s} acquiring back data for contract: {contract.localSymbol} "
+            f"{start_date=} {stop_date=}"
+        )
         if (df := await self.store.read(contract, start_date, stop_date)) is None:
             # don't pull data for current contract from broker, this
             # is :class:`Streamer`'s responsibility; data for previous
@@ -331,14 +366,23 @@ class DfAggregator(Atom):
             # then it's acceptable; pulling data from broker here is
             # unusual and should be investigated if it happens
             if contract == self.contract:
-                log.error(f"{self} requesting data from broker for current contract")
                 df = pd.DataFrame()
             else:
-                log.warning(f"{self} requesting data from broker for: {contract}")
+                log.warning(
+                    f"{self!s} requesting data from broker for: {contract.localSymbol}"
+                )
                 bars = await self._pull_history_from_broker(
                     contract, start_date, stop_date
                 )
+
                 df = pd.DataFrame(bars).set_index("date")
+                try:
+                    self.store.write(contract, pd.DataFrame(df))
+                except Exception:
+                    log.exception(
+                        "Error while writing data from broker to datastore. "
+                        "Data not saved to store."
+                    )
         return df
 
     @cached_property
@@ -355,21 +399,27 @@ class DfAggregator(Atom):
         datapoints.
 
         Data will be converted only once, i.e. either by Streamer or
-        by Sticher.  Converting data twice (eg.  str -> int -> str)
+        by Stitcher.  Converting data twice (eg.  str -> int -> str)
         would be wrong since every conversion entails a degree of
         rounding, which would make us get further away from the the
         duration requested by the user.
+
+        Conversion from str to int is approximated, rounded down.
+        Given querks of how many datapoints the broker returns for a
+        particular query, the safest option is to assume, it will be a
+        day less than really requested.
         """
         durationStr = self._streamer_params["durationStr"]
-        return (
-            durationStr_to_datapoints(
+        if isinstance(durationStr, str):
+            return durationStr_to_datapoints(
                 durationStr,
                 self._streamer_params["barSizeSetting"],
                 self.session_length,
+                offset_days=-1,
             )
-            if isinstance(durationStr, str)
-            else durationStr
-        )
+
+        else:
+            return durationStr
 
     def offset_by_durationStr(self) -> datetime:
         """
@@ -383,17 +433,15 @@ class DfAggregator(Atom):
         """
         durationStr = self._streamer_params["durationStr"]
         now = datetime.now()
-        return (
-            offset_durationStr(durationStr, now)
-            if isinstance(durationStr, str)
-            else now
-            - datapoints_to_timedelta(
-                # adding 10% margin
-                int(durationStr * 1.1),
+        if isinstance(durationStr, str):
+            return offset_durationStr(durationStr, now)
+        else:
+            delta = datapoints_to_timedelta(
+                durationStr,
                 self._streamer_params["barSizeSetting"],
                 self.session_length,
             )
-        )
+            return now - delta.days * custom_bday - timedelta(seconds=delta.seconds)
 
     @cached_property
     def session_length(self) -> timedelta:
@@ -404,8 +452,46 @@ class DfAggregator(Atom):
     def expiry_from_contract(contract: ibi.Contract) -> datetime:
         return datetime.strptime(contract.lastTradeDateOrContractMonth, "%Y%m%d")
 
+    @cached_property
+    def _barSizeSetting_timedelta(self) -> timedelta:
+        barSizeSetting = self._streamer_params["barSizeSetting"]
+        return barSizeSetting_to_timedelta(barSizeSetting, False)
+
     def onContractChanged(
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> None:
         self._df = pd.DataFrame()
         super().onContractChanged(old_contract, new_contract)
+
+    def __str__(self) -> str:
+        if self.contract is not None:
+            return f"<{self.__class__.__name__} {self.contract.symbol}>"
+        else:
+            return f"{self!r}"
+
+
+@dataclass
+class VolumeGrouper(Atom):
+    volume: int
+    group_on: str = "volume"
+    label: Literal["left", "right"] = "left"
+    _last_emitted_point: pd.Timestamp | None = field(repr=False, default=None)
+
+    def __post_init__(self):
+        super().__init__()
+
+    def onData(self, df, *args) -> None:
+        assert isinstance(
+            df, pd.DataFrame
+        ), f"{self} accepts only pandas DataFrame not {type(df)}"
+        assert self.group_on in df.columns, (
+            f"{self} attempts to group on {self.group_on}, which is not present "
+            f"in passed DataFrame"
+        )
+        grouped = volume_grouper(df, self.volume, field=self.group_on, label=self.label)
+        if self._last_emitted_point is None:
+            self._last_emitted_point = grouped.index[-2]
+        elif grouped.index[-2] > self._last_emitted_point:
+            log.debug(f"{self} will emit: {len(grouped.iloc[:-1])}")
+            self._last_emitted_point = grouped.index[-2]
+            self.dataEvent.emit(grouped.iloc[:-1])
