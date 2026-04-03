@@ -347,7 +347,7 @@ class VolumeBars(ev.Op):
             bar.low = min(bar.low, new_bar.low)
             bar.close = new_bar.close
             bar.volume += new_bar.volume
-            bar.average = new_bar.average * new_bar.volume
+            bar.average += new_bar.average * new_bar.volume
             bar.barCount += new_bar.barCount
         log.log(
             5,
