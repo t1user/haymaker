@@ -161,33 +161,25 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_last_bar_date_given():
 
 
 @pytest.mark.asyncio
-async def test_HistoricalDataStreamer_sync_last_bar_date_store_True():
-    """
-    If HistoricalDataStreamer instantiated with `datastore = True`,
-    default AsyncArcticStore should be instantiated and later used to
-    read last data point.
-    """
+async def test_HistoricalDataStreamer_sync_last_bar_date_store_True(mock_arctic_store):
     contract = ibi.Future(symbol="NQ", exchange="CME")
     df = pd.DataFrame(sample_barDataList).set_index("date")
+    mock_arctic_store.return_value.read = AsyncMock(return_value=df)
 
-    with patch("haymaker.streamers.AsyncArcticStore") as mock_store_class:
-        streamer = HistoricalDataStreamer(
-            contract, 10000, "1 min", "TRADES", datastore=True
-        )
-        mock_store_instance = mock_store_class.return_value
-        mock_store_instance.read = AsyncMock(return_value=df)
-        mock_store_instance.read_metadata = AsyncMock(return_value={})
-        assert streamer.store == mock_store_instance
-        assert await streamer.last_db_point() == df.index[-1]
+    streamer = HistoricalDataStreamer(
+        contract, 10000, "1 min", "TRADES", datastore=True
+    )
+    assert streamer.store == mock_arctic_store.return_value
+    assert await streamer.last_db_point() == df.index[-1]
 
-        await streamer.sync_last_bar_date()
-        assert streamer._last_bar_date == df.index[-1]
+    await streamer.sync_last_bar_date()
+    assert streamer._last_bar_date == df.index[-1]
 
-        mock_store_instance.read.assert_awaited_with(contract)
+    mock_arctic_store.return_value.read.assert_awaited_with(contract)
 
 
 @pytest.mark.asyncio
-async def test_HistoricalDataStreamer_sync_last_bar_date_store_False():
+async def test_HistoricalDataStreamer_sync_last_bar_date_store_False(mock_arctic_store):
     """
     If HistoricalDataStreamer instantiated with `datastore = False`,
     no data reads from datastore should be attempted.
