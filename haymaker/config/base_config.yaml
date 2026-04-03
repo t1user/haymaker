@@ -14,7 +14,6 @@ ignore_errors:
   # Consider silencing 2103 - Market data connection is broken
 
 log_broker: False # if additional logger with all broker messages should be created
-market_data_lib: live_data
 
 app:
   restart_time: 30 # after disconnection, time to wait before reconnection attempt
@@ -53,6 +52,11 @@ state_machine:
   max_rejected_orders: 3 
   
 
+dfaggregator:
+  market_data_lib: live_data # where market data will be saved
+  save_frequency: 900 # how frequently data will be saved (in secs)
+
+  
 # timeout triggered after no data have been received for given amount of seconds
 timeout:
   # behaviour after timeout triggered

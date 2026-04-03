@@ -34,7 +34,9 @@ from .stitcher import FuturesStitcher
 
 log = logging.getLogger(__name__)
 
-MARKET_DATA_LIB_NAME = CONFIG.get("market_data_lib", "market_data")
+AGG_CONFIG = CONFIG.get("dfaggregator", {})
+MARKET_DATA_LIB_NAME = AGG_CONFIG.get("market_data_lib", "market_data")
+SAVE_FREQUENCY = AGG_CONFIG.get("aggregator_save_frequency", 900)
 
 
 class MissingStreamerParam(Exception):
@@ -55,10 +57,13 @@ class DfAggregator(Atom):
     For futures contracts ensure that a conitinuous series is created
     using appropriate back contracts.
 
+    Both arguments can be set either directly while instantiating the
+    class or system-wide in config in `dfaggregator` section.
+
     Args:
     -----
 
-    * datastore - custom datastore can be passed, it needs to handle
+    * datastore: custom datastore can be passed, it needs to handle
     naming contract collections in a manner that can be interpreted by
     streamer; if nothing is passed, default :class:`AsyncArcticStore`
     will be used
@@ -69,7 +74,7 @@ class DfAggregator(Atom):
     """
 
     datastore: AsyncAbstractBaseStore | None = None
-    save_frequency: int = 900  # in seconds
+    save_frequency: int | None = None  # in seconds
 
     # ================================================================================
 
@@ -85,6 +90,11 @@ class DfAggregator(Atom):
     _timer_task: asyncio.Task | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
+        if self.save_frequency is None:
+            self.save_frequency = SAVE_FREQUENCY
+        assert isinstance(
+            self.save_frequency, int
+        ), f"{self!s} save_frequency must be an int, not {type(self.save_frequency)}"
         super().__init__()
 
     @property
@@ -105,10 +115,11 @@ class DfAggregator(Atom):
             )
         return self.datastore
 
-    async def set_timer(self, save_frequency):
+    async def set_timer(self) -> None:
         # if many objects created, they shouldn't all save at the same time
         await asyncio.sleep(random.randint(0, 30))
-        self._save_timer = ev.Timer(save_frequency)
+        log.debug(f"{self!s} setting save timer at {self.save_frequency}secs.")
+        self._save_timer = ev.Timer(self.save_frequency)
         self._save_timer += self.save_data
 
     def onStart(self, data: Any, *args: Any) -> None:
@@ -118,7 +129,7 @@ class DfAggregator(Atom):
         self.sync_with_streamer(streamer)
         if self._save_timer is None and self.save_frequency:
             self._timer_task = asyncio.create_task(
-                self.set_timer(self.save_frequency), name=f"{self!s} timer setter"
+                self.set_timer(), name=f"{self!s} timer setter"
             )
         super().onStart(data, *args)
 
@@ -132,6 +143,7 @@ class DfAggregator(Atom):
         # sync contract with streamer
         # these 2 properties together ensure that self.contract
         # will be the same as on streamer
+        log.debug(f"{self!s} streamer params: {self._streamer_params}")
         self.which_contract = streamer.which_contract
         self._contract_blueprint = streamer._contract_blueprint
 
@@ -184,7 +196,7 @@ class DfAggregator(Atom):
         self._df = misc.concat_dfs(self._df, *dfs)
         return self._df
 
-    async def save_data(self) -> None:
+    async def save_data(self, *args) -> None:
         assert (contract := self.contract), f"Missing contract on {self}"
         if not self._df.empty:
             await self.store.async_append(contract, self._df)
@@ -492,6 +504,5 @@ class VolumeGrouper(Atom):
         if self._last_emitted_point is None:
             self._last_emitted_point = grouped.index[-2]
         elif grouped.index[-2] > self._last_emitted_point:
-            log.debug(f"{self} will emit: {len(grouped.iloc[:-1])}")
             self._last_emitted_point = grouped.index[-2]
             self.dataEvent.emit(grouped.iloc[:-1])

@@ -313,7 +313,7 @@ def volume_grouper(
 
     df = df.copy().reset_index()
     df["labels"] = _volume_grouper(df[field].to_numpy(), target)
-    return _grouper_prepare(df, label)
+    return _grouper_prepare(df, label).drop(columns=["labels"])
 
 
 def _grouper_prepare(
