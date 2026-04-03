@@ -249,7 +249,6 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">.aggregators</span><span class="w"> </span><span class="kn">import</span> <span class="n">BarList</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Atom</span>
 
 <span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
@@ -271,18 +270,16 @@
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
             <span class="n">data</span><span class="p">[</span><span class="s2">&quot;strategy&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span>
             <span class="n">log</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Updated dict on start: </span><span class="si">{</span><span class="n">data</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">startup</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;startup&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="AbstractBaseBrick.onData">
 <a class="viewcode-back" href="../../execution.html#haymaker.brick.AbstractBaseBrick.onData">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">onData</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">startup</span><span class="p">:</span>
-            <span class="n">d</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">(</span><span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_signal</span><span class="p">(</span><span class="n">data</span><span class="p">))</span>
-            <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onData</span><span class="p">(</span><span class="n">d</span><span class="p">)</span>  <span class="c1"># timestamp on departure</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="n">d</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">d</span><span class="p">)</span></div>
+        <span class="n">d</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_params</span><span class="p">(</span><span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_signal</span><span class="p">(</span><span class="n">data</span><span class="p">))</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onData</span><span class="p">(</span><span class="n">d</span><span class="p">)</span>  <span class="c1"># timestamp on departure</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="n">d</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">d</span><span class="p">)</span></div>
 
 
     <span class="nd">@abstractmethod</span>
@@ -338,9 +335,8 @@
             <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
 
     <span class="c1"># this is most likely redundand as dataframe constructor can handle these types</span>
-    <span class="nd">@_create_df</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">BarList</span><span class="p">)</span>
     <span class="nd">@_create_df</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">BarList</span> <span class="o">|</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
         <span class="n">df_</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">df_</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">df</span><span class="p">(</span><span class="n">df_</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;date&quot;</span><span class="p">))</span>

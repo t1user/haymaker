@@ -244,27 +244,66 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">itertools</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ABC</span><span class="p">,</span> <span class="n">abstractmethod</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">InitVar</span><span class="p">,</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">cached_property</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">cache</span><span class="p">,</span> <span class="n">cached_property</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Awaitable</span><span class="p">,</span> <span class="n">ClassVar</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">eventkit</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ev</span>  <span class="c1"># type: ignore</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Atom</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker.timeout</span><span class="w"> </span><span class="kn">import</span> <span class="n">Timeout</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker.misc</span><span class="w"> </span><span class="kn">import</span> <span class="n">format_timestamp</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Atom</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">CONFIG</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.databases</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_mongo_client</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.datastore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">AsyncAbstractBaseStore</span><span class="p">,</span>
+    <span class="n">AsyncArcticStore</span><span class="p">,</span>
+    <span class="n">CollectionNamerBarsizeSetting</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.details_processor</span><span class="w"> </span><span class="kn">import</span> <span class="n">typical_session_length</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.durationStr_converters</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">datapoints_to_durationStr</span><span class="p">,</span>
+    <span class="n">date_to_delta_wrapper</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.timeout</span><span class="w"> </span><span class="kn">import</span> <span class="n">Timeout</span>
 
 <span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
 
 
 <span class="n">_counter</span> <span class="o">=</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">()</span><span class="o">.</span><span class="fm">__next__</span>
 
+<span class="n">MARKET_DATA_LIB_NAME</span> <span class="o">=</span> <span class="n">CONFIG</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;market_data_lib&quot;</span><span class="p">,</span> <span class="s2">&quot;market_data&quot;</span><span class="p">)</span>
+
+
+<span class="nd">@cache</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_store</span><span class="p">():</span>
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="n">AsyncArcticStore</span><span class="p">(</span><span class="n">lib</span><span class="o">=</span><span class="n">MARKET_DATA_LIB_NAME</span><span class="p">,</span> <span class="n">host</span><span class="o">=</span><span class="n">get_mongo_client</span><span class="p">())</span>
+        <span class="k">if</span> <span class="n">MARKET_DATA_LIB_NAME</span>
+        <span class="k">else</span> <span class="kc">None</span>
+    <span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">bar_filter</span><span class="p">(</span><span class="n">bar</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return `true` if bar is faulty&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="nb">any</span><span class="p">(</span>
+        <span class="p">(</span>
+            <span class="n">bar</span><span class="o">.</span><span class="n">close</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="n">bar</span><span class="o">.</span><span class="n">open</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="n">bar</span><span class="o">.</span><span class="n">high</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="n">bar</span><span class="o">.</span><span class="n">low</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="n">bar</span><span class="o">.</span><span class="n">average</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+
 
 <div class="viewcode-block" id="Streamer">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.Streamer">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">Streamer</span><span class="p">(</span><span class="n">Atom</span><span class="p">,</span> <span class="n">ABC</span><span class="p">):</span>
     <span class="n">instances</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="s2">&quot;Streamer&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">timeout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="c1"># Keep track of all :class:`.Streamer` instances created so that they</span>
@@ -295,22 +334,24 @@
 <span class="sd">        Start subscription and start emitting data.  This is the main</span>
 <span class="sd">        entry point into the streamer.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># this will check if contract changed and trigger</span>
+        <span class="c1"># `onContractChanged` if necessary</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">onStart</span><span class="p">({})</span>
+        <span class="n">ticker</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
+        <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
         <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">isConnected</span><span class="p">():</span>
             <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="Streamer.onStart">
-<a class="viewcode-back" href="../../execution.html#haymaker.streamers.Streamer.onStart">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">ticker</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
-        <span class="c1"># automatically monitor updateEvent on streaming_func for</span>
-        <span class="c1"># stale data</span>
-        <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
-        <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span>
-        <span class="c1"># relies on superclass to emit startEvent</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="n">data</span><span class="p">)</span></div>
-
+    <span class="k">def</span><span class="w"> </span><span class="nf">_set_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Automatically monitor event for stale data.  Can be switched</span>
+<span class="sd">        off by overriding class variable `set_timeout`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">timeout</span><span class="p">:</span>
+            <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
 
     <span class="nd">@cached_property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_id</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
@@ -330,28 +371,94 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.HistoricalDataStreamer">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">HistoricalDataStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Stream historical and realtime bars as generated by</span>
+<span class="sd">    :meth:`ib_insync.IB.reqHistoricalDataAsync`</span>
+
+<span class="sd">    Due to specifics of IB API, bars will be streamed with ca.  5</span>
+<span class="sd">    seconds delay.  If this is not suitable for your strategy, use a</span>
+<span class="sd">    different streamer (most likely you need</span>
+<span class="sd">    :class:`TickByTickStreamer`).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">    -----</span>
+
+<span class="sd">    * contract: ibi.Contract</span>
+
+<span class="sd">    * durationStr: str | int - can be given as either a string</span>
+<span class="sd">    acceptable by :meth:`ib_insync.IB.reqHistoricalDataAsync` or</span>
+<span class="sd">    number of historical bars required (which will internally be</span>
+<span class="sd">    converted to appropriate duration str)</span>
+
+<span class="sd">    * barSizeSetting: str</span>
+
+<span class="sd">    * whatToShow: str</span>
+
+<span class="sd">    * useRTH: bool = False</span>
+
+<span class="sd">    * formatDate: int = 2 - keeping the default 2 ensures timestamps</span>
+<span class="sd">    will be returned as timeaware utc based; this is the only value</span>
+<span class="sd">    that has been tested, other values may be incompatible with other</span>
+<span class="sd">    framework components</span>
+
+<span class="sd">    * datastore: bool | AsyncAbstractBaseStore = False</span>
+
+<span class="sd">        ** if True, or a datastore is passed, last available datapoint</span>
+<span class="sd">    will be ready from database and only newer data will be requested;</span>
+
+<span class="sd">        ** if False - no data will be read from datastore, only from</span>
+<span class="sd">    broker</span>
+
+
+<span class="sd">    Notes on the specifics of Interactive Brokers API:</span>
+<span class="sd">    --------------------------------------------------</span>
+
+<span class="sd">    The API broadcasts a snapshot of the database every 5 seconds.</span>
+
+<span class="sd">        - Bars are timestamped at the start of the bar period</span>
+
+<span class="sd">        - For bars with duration longer than 5 seconds:</span>
+
+<span class="sd">            - last bar is always work in progress, it is still bound</span>
+<span class="sd">              to be updated, it&#39;s not suitable for usage yet</span>
+
+<span class="sd">            - Updates happen every 5 seconds, `hasNewBar` will be True</span>
+<span class="sd">              only 5 seconds (+processing time, typically ca.  1 sec)</span>
+<span class="sd">              after new bar is ready</span>
+
+<span class="sd">            - There is no way to receive new bars immediately when</span>
+<span class="sd">              they&#39;re created; it doesn&#39;t matter how `updateEvent` is</span>
+<span class="sd">              accessed</span>
+
+<span class="sd">        - 5 second bars behave the same as RealTimeBars:</span>
+
+<span class="sd">            - `hasNewBar` is always True</span>
+
+<span class="sd">            - last bar is immediately ready (API update period is the</span>
+<span class="sd">              same as bar lenght so no reason)</span>
+
+<span class="sd">        - Bars shorter than 5 seconds are not allowed</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
-    <span class="n">durationStr</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">durationStr</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span>  <span class="c1"># can be given as number of required datapoints</span>
     <span class="n">barSizeSetting</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">whatToShow</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">useRTH</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">formatDate</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># don&#39;t change</span>
-    <span class="n">incremental_only</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
-    <span class="n">startup_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">formatDate</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># should be 2 for utc timestamp</span>
+    <span class="n">datastore</span><span class="p">:</span> <span class="n">InitVar</span><span class="p">[</span><span class="nb">bool</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">_datastore</span><span class="p">:</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">init</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
     <span class="n">_last_bar_date</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">_future_adjust_flag</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># flag that future needs to be adjusted</span>
-    <span class="n">_adjusted</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Future</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span>
-        <span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span>
-    <span class="p">)</span>  <span class="c1"># already adjusted futures</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">datastore</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">store</span> <span class="o">=</span> <span class="n">datastore</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">streaming_func</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Awaitable</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqHistoricalDataAsync</span><span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span>
             <span class="n">endDateTime</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
-            <span class="n">durationStr</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span><span class="p">,</span>
+            <span class="n">durationStr</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_durationStr</span><span class="p">,</span>
             <span class="n">barSizeSetting</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">,</span>
             <span class="n">whatToShow</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">whatToShow</span><span class="p">,</span>
             <span class="n">useRTH</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">useRTH</span><span class="p">,</span>
@@ -360,154 +467,125 @@
             <span class="n">timeout</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
         <span class="p">)</span>
 
-<div class="viewcode-block" id="HistoricalDataStreamer.date_to_delta">
-<a class="viewcode-back" href="../../execution.html#haymaker.streamers.HistoricalDataStreamer.date_to_delta">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">date_to_delta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">date</span><span class="p">:</span> <span class="n">datetime</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Return number of bars (as per barSizeSetting) since date. Used to determine</span>
-<span class="sd">        number of bars required to backfill since last reset.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">secs</span> <span class="o">=</span> <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">date</span><span class="o">.</span><span class="n">tzinfo</span><span class="p">)</span> <span class="o">-</span> <span class="n">date</span><span class="p">)</span><span class="o">.</span><span class="n">seconds</span>
-        <span class="n">bar_size</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot; &quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span>
-        <span class="n">bars</span> <span class="o">=</span> <span class="n">secs</span> <span class="o">//</span> <span class="n">bar_size</span>
-        <span class="c1"># with some margin for delays, duplicated bars will be filtered out</span>
-        <span class="n">duration</span> <span class="o">=</span> <span class="nb">max</span><span class="p">((</span><span class="n">bars</span> <span class="o">+</span> <span class="mi">3</span><span class="p">)</span> <span class="o">*</span> <span class="n">bar_size</span><span class="p">,</span> <span class="mi">30</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">duration</span></div>
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">store</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span>
 
-
-<div class="viewcode-block" id="HistoricalDataStreamer.onStart">
-<a class="viewcode-back" href="../../execution.html#haymaker.streamers.HistoricalDataStreamer.onStart">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># this starts subscription so that current price is readily available from ib</span>
-        <span class="n">stream</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqMktData</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="s2">&quot;221&quot;</span><span class="p">)</span>
-        <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stream</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
-        <span class="c1"># bypass onStart in class Streamer</span>
-        <span class="n">Atom</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span></div>
-
-
-    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">backfill</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">):</span>
-        <span class="c1"># this will switch processor into backfill mode</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
-            <span class="p">{</span><span class="s2">&quot;startup&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;future_adjust_flag&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span><span class="p">}</span>
-        <span class="p">)</span>
-        <span class="c1"># release control to allow for adjustments down the chain</span>
-        <span class="c1"># await asyncio.sleep(0)</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Starting backfill </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2">, pulled </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span><span class="si">}</span><span class="s2"> bars, &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;last bar: </span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
-        <span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span><span class="p">:</span>
-            <span class="c1"># this is a restart and contract has changed, emitting data since</span>
-            <span class="c1"># last emitted point, but:</span>
-            <span class="c1"># include one additional point in emit</span>
-            <span class="c1"># which is for the same time point as the value already emitted</span>
-            <span class="c1"># but for new, rolled future</span>
-            <span class="c1"># this way processor will be be able to calculate necessary adjustment</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> data requires roll adjustment &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;last bar: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="nd">@store</span><span class="o">.</span><span class="n">setter</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">store</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">arg</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">arg</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="n">arg</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="n">MARKET_DATA_LIB_NAME</span><span class="p">,</span> <span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> cannot initialize datastore because &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;MARKET_DATA_LIB_NAME was not given.&quot;</span>
             <span class="p">)</span>
-
-            <span class="n">stream</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">ev</span><span class="o">.</span><span class="n">Sequence</span><span class="p">(</span><span class="n">bars</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
-                <span class="o">.</span><span class="n">pipe</span><span class="p">(</span>
-                    <span class="n">ev</span><span class="o">.</span><span class="n">Filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">date</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
-                <span class="p">)</span>
-                <span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span> <span class="o">=</span> <span class="n">AsyncArcticStore</span><span class="p">(</span>
+                <span class="n">lib</span><span class="o">=</span><span class="n">MARKET_DATA_LIB_NAME</span><span class="p">,</span>
+                <span class="n">host</span><span class="o">=</span><span class="n">get_mongo_client</span><span class="p">(),</span>
+                <span class="n">collection_namer</span><span class="o">=</span><span class="n">CollectionNamerBarsizeSetting</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">),</span>
             <span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">False</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">:</span>
-            <span class="c1"># this is a regular restart; backfilling only data since last emitted point</span>
-            <span class="n">stream</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">ev</span><span class="o">.</span><span class="n">Sequence</span><span class="p">(</span><span class="n">bars</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
-                <span class="o">.</span><span class="n">pipe</span><span class="p">(</span><span class="n">ev</span><span class="o">.</span><span class="n">Filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">date</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">))</span>  <span class="c1"># type: ignore</span>
-                <span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="p">)</span>
-            <span class="p">)</span>
-
+        <span class="k">elif</span> <span class="p">(</span>
+            <span class="nb">getattr</span><span class="p">(</span><span class="n">arg</span><span class="p">,</span> <span class="s2">&quot;read&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">arg</span><span class="p">,</span> <span class="s2">&quot;read_metadata&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span> <span class="o">=</span> <span class="n">arg</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># this is not a restart, just getting all new data</span>
-            <span class="n">stream</span> <span class="o">=</span> <span class="n">ev</span><span class="o">.</span><span class="n">Sequence</span><span class="p">(</span><span class="n">bars</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="p">)</span>
-        <span class="k">await</span> <span class="n">stream</span>
-        <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">startup_seconds</span><span class="p">)</span>  <span class="c1"># time in which backfill must happen</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> backfilled from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="n">bars</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="si">}</span><span class="s2"> to &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;datastore must be True, False or instance of async datastore, &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;not</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">arg</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+<div class="viewcode-block" id="HistoricalDataStreamer.last_db_point">
+<a class="viewcode-back" href="../../execution.html#haymaker.streamers.HistoricalDataStreamer.last_db_point">[docs]</a>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">last_db_point</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return datetime for the last bar availble in the datastore for</span>
+<span class="sd">        given contract.</span>
+
+<span class="sd">        start_date: how far back should available data be searched</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">store</span> <span class="o">:=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">up_to</span> <span class="o">:=</span> <span class="p">(</span><span class="k">await</span> <span class="n">store</span><span class="o">.</span><span class="n">read_metadata</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">))</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;up_to&quot;</span><span class="p">):</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> retrieved last date from datastore: </span><span class="si">{</span><span class="n">up_to</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">format_timestamp</span><span class="p">(</span><span class="n">up_to</span><span class="p">)</span>
+
+        <span class="n">df</span> <span class="o">=</span> <span class="k">await</span> <span class="n">store</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>  <span class="c1"># type: ignore</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">IndexError</span><span class="p">):</span>
+            <span class="k">return</span> <span class="kc">None</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_ensure_durationStr</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Accept durationStr as either ready str to be passed to</span>
+<span class="sd">        :meth:`ib_insync.IB.reqHistoricalData` or if it&#39;s passed as a</span>
+<span class="sd">        number of required datapoints int, convert it to the correct str.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">datapoints_to_durationStr</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">,</span>
+                <span class="n">typical_session_length</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span><span class="o">.</span><span class="n">trading_hours</span><span class="p">),</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>
+            <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span>
         <span class="p">)</span>
-        <span class="c1"># let processor know backfill is finished</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">({</span><span class="s2">&quot;startup&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">})</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_durationStr</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">date_to_delta_wrapper</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">,</span> <span class="n">margin</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span>
+            <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ensure_durationStr</span><span class="p">()</span>
+        <span class="p">)</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">sync_last_bar_date</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">last_db_point</span><span class="p">()</span>
 
 <div class="viewcode-block" id="HistoricalDataStreamer.run">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.HistoricalDataStreamer.run">[docs]</a>
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Requesting bars for </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">onStart</span><span class="p">({})</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">date_to_delta</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">)</span><span class="si">}</span><span class="s2"> S&quot;</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> duration str: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
+        <span class="c1"># this starts subscription so that current price is readily available from ib</span>
+        <span class="n">stream</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqMktData</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="s2">&quot;221&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">stream</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
+
+        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> requesting bars </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_durationStr</span><span class="si">=}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">sync_last_bar_date</span><span class="p">()</span>
         <span class="n">bars</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
-        <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Historical bars received for </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-
-        <span class="n">backfill_predicate</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="p">(</span><span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">)</span>
-            <span class="ow">or</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span> <span class="o">&lt;</span> <span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="p">)</span>
-            <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span>
-        <span class="p">)</span>
-
-        <span class="k">if</span> <span class="n">bars</span> <span class="ow">and</span> <span class="n">backfill_predicate</span><span class="p">:</span>
-            <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">backfill</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2">: No backfill needed.&quot;</span><span class="p">)</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> received historical bars, last bar date: </span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
 
         <span class="k">try</span><span class="p">:</span>
             <span class="k">async</span> <span class="k">for</span> <span class="n">bars_</span><span class="p">,</span> <span class="n">hasNewBar</span> <span class="ow">in</span> <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">hasNewBar</span> <span class="ow">and</span> <span class="p">(</span>
-                    <span class="p">(</span><span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">date</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">)</span>
+                    <span class="p">(</span><span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span><span class="n">bars_</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">date</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span><span class="p">)</span>
                 <span class="p">):</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span> <span class="o">=</span> <span class="n">bars_</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">date</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">on_new_bar</span><span class="p">(</span><span class="n">bars_</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
         <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Empty emit for </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Empty emit for </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
 
 
     <span class="k">def</span><span class="w"> </span><span class="nf">on_new_bar</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span>
-            <span class="p">(</span>
-                <span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">close</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
-                <span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">open</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
-                <span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">high</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
-                <span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">low</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
-                <span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">average</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
-            <span class="p">)</span>
-        <span class="p">):</span>
+        <span class="k">if</span> <span class="n">bar_filter</span><span class="p">(</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]):</span>
             <span class="k">return</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">incremental_only</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span>
 
 <div class="viewcode-block" id="HistoricalDataStreamer.onContractChanged">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.HistoricalDataStreamer.onContractChanged">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onContractChanged</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">old_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">):</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">old_contract</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Future</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span>
-            <span class="n">new_contract</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Future</span>
-        <span class="p">):</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> will adjust for rolled future.&quot;</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">old_contract</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_adjusted</span><span class="p">:</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> set to adjust future&quot;</span><span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">True</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_adjusted</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">old_contract</span><span class="p">)</span>
-                <span class="c1"># don&#39;t move to backfill, because then aggregator doesn&#39;t get control</span>
-                <span class="c1"># until backfill is finished</span>
-                <span class="c1"># self.startEvent.emit({&quot;future_adjust_flag&quot;: True})</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> abandoning attempt to roll future &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">old_contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2"> for the second time&quot;</span>
-                <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;onContractChanged triggered on non-future Contract&quot;</span><span class="p">)</span></div>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onContractChanged</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">old_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onContractChanged</span><span class="p">(</span><span class="n">old_contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">)</span></div>
 </div>
 
 
@@ -516,6 +594,8 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.MktDataStreamer">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">MktDataStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Stream market data.&quot;&quot;&quot;</span>
+
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">tickList</span><span class="p">:</span> <span class="nb">str</span>
 
@@ -531,10 +611,28 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.RealTimeBarsStreamer">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">RealTimeBarsStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Stream realtime 5 seconds bars.</span>
+
+<span class="sd">    Notes on the specifics of Interactive Brokers API:</span>
+<span class="sd">    --------------------------------------------------</span>
+
+<span class="sd">    - Bars are timestamped at the start of the bar period</span>
+
+<span class="sd">    - The only possible bar interval is 5 seconds</span>
+
+<span class="sd">    - Emits also happen every 5 seconds so `hasNewBar` is always True</span>
+<span class="sd">      and the last bar is ready, i.e. it will not be adjusted</span>
+<span class="sd">      subsequently</span>
+
+<span class="sd">    - All bars including the last one are immediately usable</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">whatToShow</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">useRTH</span><span class="p">:</span> <span class="nb">bool</span>
-    <span class="n">incremental_only</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">realTimeBarsOptions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">TagValue</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
@@ -547,25 +645,29 @@
             <span class="bp">self</span><span class="o">.</span><span class="n">useRTH</span><span class="p">,</span>
         <span class="p">)</span>
 
-<div class="viewcode-block" id="RealTimeBarsStreamer.onStart">
-<a class="viewcode-back" href="../../execution.html#haymaker.streamers.RealTimeBarsStreamer.onStart">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_run</span><span class="p">()</span>
-        <span class="n">Atom</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
-
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<div class="viewcode-block" id="RealTimeBarsStreamer.run">
+<a class="viewcode-back" href="../../execution.html#haymaker.streamers.RealTimeBarsStreamer.run">[docs]</a>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The difference to superclass is that here we connect the</span>
+<span class="sd">        `updateEvent` to intermediary function `onUpdate`, which needs</span>
+<span class="sd">        to perform some additional checks before emitting `dataEvent`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">onStart</span><span class="p">({})</span>
         <span class="n">bars</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
         <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
-        <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
         <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">onUpdate</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
+        <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">isConnected</span><span class="p">():</span>
+            <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span></div>
+
 
     <span class="k">def</span><span class="w"> </span><span class="nf">onUpdate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="n">hasNewBar</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">hasNewBar</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">incremental_only</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span></div>
+        <span class="c1"># No need to filter out the last bar</span>
+        <span class="c1"># emits are every 5 secs, hasNewBar always True</span>
+        <span class="c1"># last bar is ready and not modified after emit</span>
+        <span class="k">if</span> <span class="n">hasNewBar</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">bar_filter</span><span class="p">(</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span></div>
 
 
 
@@ -573,6 +675,8 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.TickByTickStreamer">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">TickByTickStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Stream tick by tick data.&quot;&quot;&quot;</span>
+
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">tickType</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">numberOfTicks</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>

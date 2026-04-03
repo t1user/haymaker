@@ -240,8 +240,12 @@
           <h1>Source code for haymaker.aggregators</h1><div class="highlight"><pre>
 <span></span><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
+<span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">itertools</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">operator</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">op</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">deque</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">date</span><span class="p">,</span> <span class="n">datetime</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">cached_property</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
 
@@ -249,133 +253,236 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Atom</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.dfaggregator</span><span class="w"> </span><span class="kn">import</span> <span class="n">WrongStreamer</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.streamers</span><span class="w"> </span><span class="kn">import</span> <span class="n">Streamer</span>
 
 <span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+<span class="n">_counter</span> <span class="o">=</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">()</span><span class="o">.</span><span class="fm">__next__</span>
 
 
 <div class="viewcode-block" id="BarAggregator">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.BarAggregator">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">BarAggregator</span><span class="p">(</span><span class="n">Atom</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Aggregate recieved data bars into new bars based on the</span>
-<span class="sd">    criteria specified in :attr:`filter&#39;. Store processed data.</span>
+<span class="sd">    Aggregate recieved data bars into new bars based on the criteria</span>
+<span class="sd">    specified in :attr:`filter&#39;.  Store processed data.</span>
+
+<span class="sd">    When future contract changes, data already in the filter will be</span>
+<span class="sd">    adjusted.  However, when system is started afresh right after</span>
+<span class="sd">    contract changed, all back data will be for the new contract,</span>
+<span class="sd">    which in some cases might be incorrect.</span>
+
+<span class="sd">    :class:`BarAggregator` works best for strategies that don&#39;t</span>
+<span class="sd">    require large amounts of back data.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">    -----</span>
+
+<span class="sd">    filter: one of :class:`CountBars`, :class:`VolumeBars`,</span>
+<span class="sd">    :class:`TimeBars`, :class:`NoFilter`, determines how input bars</span>
+<span class="sd">    are grouped into output bars</span>
+
+<span class="sd">    future_adjust_type: one of: &quot;add&quot; or &quot;mul&quot; on future contract</span>
+<span class="sd">    change, how price bars currently in the filter are to be adjusted;</span>
+<span class="sd">    resulting adjusted series will created by splicing two price</span>
+<span class="sd">    series using either addition or multiplication.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_compatible_with</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;HistoricalDataStreamer&quot;</span><span class="p">,)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-        <span class="nb">filter</span><span class="p">:</span> <span class="s2">&quot;CountBars | VolumeBars | TimeBars | NoFilter&quot;</span><span class="p">,</span>
-        <span class="n">incremental_only</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+        <span class="nb">filter</span><span class="p">:</span> <span class="n">CountBars</span> <span class="o">|</span> <span class="n">VolumeBars</span> <span class="o">|</span> <span class="n">TimeBars</span> <span class="o">|</span> <span class="n">NoFilter</span><span class="p">,</span>
         <span class="n">future_adjust_type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;add&quot;</span><span class="p">,</span> <span class="s2">&quot;mul&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;add&quot;</span><span class="p">,</span>
-        <span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_incremental_only</span> <span class="o">=</span> <span class="n">incremental_only</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_filter</span> <span class="o">=</span> <span class="nb">filter</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_filter</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">onDataBar</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_log_level</span> <span class="o">=</span> <span class="n">log</span><span class="o">.</span><span class="n">level</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_debug</span> <span class="o">=</span> <span class="n">debug</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_type</span> <span class="o">=</span> <span class="n">future_adjust_type</span>
-        <span class="c1"># if future needs to be adjusted; set by onStart</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">filter</span> <span class="o">=</span> <span class="nb">filter</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">filter</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">onDataBar</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">future_adjust_type</span> <span class="o">=</span> <span class="n">future_adjust_type</span>
+        <span class="c1"># if future needs to be adjusted; set by onContractChanged</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="c1"># reference point for last bar processed</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_last_data_point</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="n">date</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="c1"># data queued during long backfills</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="p">:</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">Queue</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">Queue</span><span class="p">()</span>
+        <span class="c1"># task that processes queue where all data bars are put</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_worker_task</span><span class="p">:</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">Task</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="c1"># used to determine if backfill in progress</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_backfill_event</span><span class="p">:</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">Event</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">Event</span><span class="p">()</span>
+        <span class="c1"># start with cleared state (will not block)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_backfill_event</span><span class="o">.</span><span class="n">set</span><span class="p">()</span>
 
 <div class="viewcode-block" id="BarAggregator.onStart">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.BarAggregator.onStart">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-            <span class="n">startup</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;startup&quot;</span><span class="p">)</span>
-            <span class="c1"># prevent logging messages during startup phase</span>
-            <span class="k">if</span> <span class="n">startup</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_debug</span><span class="p">:</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Startup: </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">ERROR</span><span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_level</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;future_adjust_flag&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Syncing contract with streamer.&quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="n">args</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;No streamer passed to </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="n">streamer</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sync_with_streamer</span><span class="p">(</span><span class="n">streamer</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
 
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> onStart knows future needs adjust&quot;</span><span class="p">)</span></div>
 
+    <span class="k">def</span><span class="w"> </span><span class="nf">sync_with_streamer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">streamer</span><span class="p">:</span> <span class="n">Streamer</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># streamer class used only to verify compatibility</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_streamer_compatibility</span><span class="p">(</span><span class="n">streamer</span><span class="p">)</span>
+        <span class="c1"># sync contract with streamer</span>
+        <span class="c1"># these 2 properties together ensure that self.contract</span>
+        <span class="c1"># will be the same as on streamer</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">which_contract</span> <span class="o">=</span> <span class="n">streamer</span><span class="o">.</span><span class="n">which_contract</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_contract_blueprint</span> <span class="o">=</span> <span class="n">streamer</span><span class="o">.</span><span class="n">_contract_blueprint</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">verify_streamer_compatibility</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">streamer</span><span class="p">:</span> <span class="n">Streamer</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">streamer_class</span> <span class="o">=</span> <span class="n">streamer</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span>
+        <span class="k">if</span> <span class="n">streamer_class</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_compatible_with</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">WrongStreamer</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Streamer </span><span class="si">{</span><span class="n">streamer_class</span><span class="si">}</span><span class="s2"> is not compatible with </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
 
 <div class="viewcode-block" id="BarAggregator.onDataBar">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.BarAggregator.onDataBar">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onDataBar</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onDataBar</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        This is connected to `self._filter`, will emit whatever comes</span>
-<span class="sd">        from filter.</span>
+<span class="sd">        This is connected to `self.filter`, will emit whatever comes</span>
+<span class="sd">        from filter.  Additional filtering/adjustment/conversion logic</span>
+<span class="sd">        can be put here.</span>
+
+<span class="sd">        Backfill means this is stale data, it should not be emitted,</span>
+<span class="sd">        because we don&#39;t want this data to be treated as if it was</span>
+<span class="sd">        current.  It&#39;s up to other system components to determine how</span>
+<span class="sd">        we want to generate signals.  However :class:`BarAggregator`</span>
+<span class="sd">        emits only when latest data becomes available and passes</span>
+<span class="sd">        past data as such.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_incremental_only</span><span class="p">:</span>
-            <span class="k">try</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
-            <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Empty input from filter </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_filter</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_backfill_event</span><span class="o">.</span><span class="n">is_set</span><span class="p">():</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="BarAggregator.onData">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.BarAggregator.onData">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onData</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span> <span class="o">|</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">onData</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        This passes correct data to `self._filter`.</span>
+<span class="sd">        The purpose of the queue is to avoid a race condition when</span>
+<span class="sd">        `onData` receives several datapoints during a backfill and</span>
+<span class="sd">        then has to process this data in the correct order when</span>
+<span class="sd">        backfill is finished.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="c1"># data is just single BarData object (if incremental_only=True,</span>
-        <span class="c1"># which is default and currently only mode supported)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> will adjust futures&quot;</span><span class="p">)</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">data</span><span class="si">=}</span><span class="s2">&quot;</span><span class="p">)</span>
-            <span class="c1"># first data point is just to determine adjustment basis</span>
-            <span class="c1"># should be passed to adjust_future</span>
-            <span class="k">try</span><span class="p">:</span>
-                <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">adjust_future</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
-            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
-            <span class="c1"># adjust mode should be switched off for subsequent emits</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">False</span>
-            <span class="c1"># and it shouldn&#39;t be emitted further down the chain</span>
-            <span class="k">return</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">):</span>
-            <span class="c1"># Streamers with incremental_only=False have not been properly tested!</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span>
-                <span class="s2">&quot;WE SHOULD NOT BE HERE; DONT USE PROCESSOR WITH `incremental_only=True`&quot;</span>
-            <span class="p">)</span>
-            <span class="k">try</span><span class="p">:</span>
-                <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-            <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Empty input from streamer.&quot;</span><span class="p">)</span>
-        <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_filter</span><span class="o">.</span><span class="n">on_source</span><span class="p">(</span><span class="n">data</span><span class="p">)</span></div>
+            <span class="bp">self</span><span class="o">.</span><span class="n">adjust_future</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
 
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_worker_task</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">_worker_task</span><span class="o">.</span><span class="n">done</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_worker_task</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">create_task</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_process_queue</span><span class="p">(),</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2">_queue_worker&quot;</span>
+            <span class="p">)</span></div>
+
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">_process_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+            <span class="n">data</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+            <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_process</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="o">.</span><span class="n">task_done</span><span class="p">()</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">_process</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Pass correct data to `self.filter`.</span>
+
+<span class="sd">        If there is any more new data than the last bar, then it needs</span>
+<span class="sd">        to be backfilled (the reason may be: 1.  fresh start 2.</span>
+<span class="sd">        restart).  If after restart contract changed, data we already</span>
+<span class="sd">        have in the filter needs to be adjusted.  If we have just one</span>
+<span class="sd">        new data bar (as determined comparing timestamps on the</span>
+<span class="sd">        available data), it should be just passed to the filter.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># Guard against empty data</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">data_</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> received empty BarDataList, skipping&quot;</span><span class="p">)</span>
+            <span class="k">return</span>
+
+        <span class="n">data</span><span class="p">,</span> <span class="n">last_bar</span> <span class="o">=</span> <span class="n">data_</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">data_</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="c1"># wait for any ongoing backfill to complete</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_backfill_event</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span>
+
+        <span class="c1"># this is a fresh start</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="o">.</span><span class="n">bars</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">backfill</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+
+        <span class="c1"># this is backfill after restart</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_data_point</span> <span class="ow">and</span> <span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">date</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_data_point</span><span class="p">):</span>
+            <span class="c1"># we already have some data in the filter, we expect to add</span>
+            <span class="c1"># only last few bars so its faster to iterate backwards to</span>
+            <span class="c1"># fine the new data</span>
+            <span class="n">accumulator</span><span class="p">:</span> <span class="n">deque</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">]</span> <span class="o">=</span> <span class="n">deque</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">bar</span> <span class="ow">in</span> <span class="nb">reversed</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">bar</span><span class="o">.</span><span class="n">date</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_data_point</span><span class="p">:</span>
+                    <span class="n">accumulator</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">bar</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">break</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">accumulator</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">backfill</span><span class="p">(</span><span class="n">accumulator</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_data_point</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">last_bar</span><span class="o">.</span><span class="n">date</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_data_point</span><span class="p">:</span>
+            <span class="c1"># always reflects last bar processed</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_last_data_point</span> <span class="o">=</span> <span class="n">last_bar</span><span class="o">.</span><span class="n">date</span>
+            <span class="c1"># regular emit of a new datapoint</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="o">.</span><span class="n">on_source</span><span class="p">(</span><span class="n">last_bar</span><span class="p">)</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">backfill</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">:</span> <span class="n">deque</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;BACKFILL: </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span><span class="si">}</span><span class="s2"> bars), &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;from: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_data_point</span><span class="si">}</span><span class="s2"> &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;to: </span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">bars</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">&#39;empty&#39;</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="k">pass</span>  <span class="c1"># don&#39;t let logging kill backfill</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_backfill_event</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+            <span class="n">stream</span> <span class="o">=</span> <span class="n">ev</span><span class="o">.</span><span class="n">Sequence</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="p">)</span>
+            <span class="k">await</span> <span class="n">stream</span><span class="o">.</span><span class="n">list</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_backfill_event</span><span class="o">.</span><span class="n">set</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="c1"># in case of error _backfill_event will stay cleared</span>
+            <span class="c1"># disabling processing of faulty signals</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> error in backfill.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span>
 
     <span class="nd">@cached_property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">operator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;add&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">add</span><span class="p">,</span> <span class="s2">&quot;mul&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">mul</span><span class="p">,</span> <span class="kc">None</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_type</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;add&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">add</span><span class="p">,</span> <span class="s2">&quot;mul&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">mul</span><span class="p">,</span> <span class="kc">None</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">future_adjust_type</span><span class="p">)</span>
 
     <span class="nd">@cached_property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">reverse_operator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;add&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">sub</span><span class="p">,</span> <span class="s2">&quot;mul&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">truediv</span><span class="p">,</span> <span class="kc">None</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_type</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">future_adjust_type</span>
         <span class="p">)</span>
 
 <div class="viewcode-block" id="BarAggregator.adjust_future">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.BarAggregator.adjust_future">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">adjust_future</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_bar</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Create continuous future price series on future contract</span>
-<span class="sd">        change.  IB mechanism cannot be trusted.  This feature can be</span>
-<span class="sd">        turned off by passing `future_adjust_type=None` while</span>
-<span class="sd">        initiating the class.</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">adjust_future</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create continuous future price series on future contract</span>
+<span class="sd">        change.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">        -----</span>
+
+<span class="sd">        bars: new price bars not currently included in :meth:`self.filter`</span>
+<span class="sd">        for current (post-roll) contract that the old series needs to</span>
+<span class="sd">        be adjusted to</span>
 <span class="sd">        &quot;&quot;&quot;</span>
+
         <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> adjusting future.&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">operator</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Skipping futures adjustment on </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-            <span class="k">return</span>
-        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">reverse_operator</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
 
-        <span class="n">old_bar</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_filter</span><span class="o">.</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-
-        <span class="k">if</span> <span class="n">old_bar</span><span class="o">.</span><span class="n">date</span> <span class="o">!=</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">date</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Cannot back-adjust a future because dates don&#39;t match.&quot;</span><span class="p">)</span>
-            <span class="k">return</span>
+        <span class="n">old_bar</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="o">.</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">bar_</span> <span class="ow">in</span> <span class="nb">reversed</span><span class="p">(</span><span class="n">bars</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">bar_</span><span class="o">.</span><span class="n">date</span> <span class="o">==</span> <span class="n">old_bar</span><span class="o">.</span><span class="n">date</span><span class="p">:</span>
+                <span class="n">new_bar</span> <span class="o">=</span> <span class="n">bar_</span>
+                <span class="k">break</span>
+        <span class="k">assert</span> <span class="n">new_bar</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> failed future adjustment: non-overlapping series.&quot;</span>
 
         <span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reverse_operator</span><span class="p">(</span><span class="n">new_bar</span><span class="o">.</span><span class="n">close</span><span class="p">,</span> <span class="n">old_bar</span><span class="o">.</span><span class="n">close</span><span class="p">)</span>
         <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
@@ -383,36 +490,56 @@
             <span class="sa">f</span><span class="s2">&quot;| adjustment basis: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2"> | operator: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">operator</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
 
-        <span class="k">for</span> <span class="n">bar</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_filter</span><span class="o">.</span><span class="n">bars</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">bar</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="o">.</span><span class="n">bars</span><span class="p">:</span>
             <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">,</span> <span class="s2">&quot;high&quot;</span><span class="p">,</span> <span class="s2">&quot;low&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="s2">&quot;average&quot;</span><span class="p">):</span>
-                <span class="nb">setattr</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">field</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">operator</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">field</span><span class="p">),</span> <span class="n">value</span><span class="p">))</span></div>
-</div>
+                <span class="nb">setattr</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">field</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">operator</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">field</span><span class="p">),</span> <span class="n">value</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">False</span></div>
 
 
+<div class="viewcode-block" id="BarAggregator.onContractChanged">
+<a class="viewcode-back" href="../../execution.html#haymaker.aggregators.BarAggregator.onContractChanged">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onContractChanged</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">old_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onContractChanged</span><span class="p">(</span><span class="n">old_contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">)</span></div>
 
-<span class="k">class</span><span class="w"> </span><span class="nc">BarList</span><span class="p">(</span><span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">]):</span>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">updateEvent</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Event</span><span class="p">(</span><span class="s2">&quot;updateEvent&quot;</span><span class="p">)</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
-        <span class="k">return</span> <span class="bp">self</span> <span class="ow">is</span> <span class="n">other</span>
+    <span class="nd">@cached_property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_id</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_counter</span><span class="p">()</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>  <span class="c1"># type: ignore</span>
-        <span class="k">return</span> <span class="nb">id</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">contract_symbol</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="o">.</span><span class="n">localSymbol</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span> <span class="k">else</span> <span class="s2">&quot;NoContract&quot;</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&lt;</span><span class="si">{</span><span class="n">contract_symbol</span><span class="si">}</span><span class="s2">&gt;&lt;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_id</span><span class="si">}</span><span class="s2">&gt;&lt;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="si">}</span><span class="s2">&gt;&quot;</span>
+        <span class="p">)</span></div>
+
 
 
 <div class="viewcode-block" id="CountBars">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.CountBars">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">CountBars</span><span class="p">(</span><span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Group input bars into new bars corresponding to a fixed number</span>
+<span class="sd">    of source bars.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">    -----</span>
+
+<span class="sd">    count: number of source bars that constitue one output bar</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="vm">__slots__</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;_count&quot;</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">,</span> <span class="s2">&quot;label&quot;</span><span class="p">)</span>
 
-    <span class="n">bars</span><span class="p">:</span> <span class="n">BarList</span>
+    <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">):</span>
         <span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_count</span> <span class="o">=</span> <span class="n">count</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">BarList</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">label</span> <span class="o">=</span> <span class="n">label</span>
 
 <div class="viewcode-block" id="CountBars.on_source">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.CountBars.on_source">[docs]</a>
@@ -450,16 +577,26 @@
 <div class="viewcode-block" id="VolumeBars">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.VolumeBars">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">VolumeBars</span><span class="p">(</span><span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Group input bars into new bars so that each output corresponds to</span>
+<span class="sd">    the same volume.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">    -----</span>
+
+<span class="sd">    volume: desired volume of each output bar</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="vm">__slots__</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;_volume&quot;</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">,</span> <span class="s2">&quot;label&quot;</span><span class="p">)</span>
 
-    <span class="n">bars</span><span class="p">:</span> <span class="n">BarList</span>
+    <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">volume</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_volume</span> <span class="o">=</span> <span class="n">volume</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">BarList</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">label</span> <span class="o">=</span> <span class="n">label</span>
 
 <div class="viewcode-block" id="VolumeBars.on_source">
@@ -478,7 +615,7 @@
             <span class="n">bar</span><span class="o">.</span><span class="n">low</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">bar</span><span class="o">.</span><span class="n">low</span><span class="p">,</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">low</span><span class="p">)</span>
             <span class="n">bar</span><span class="o">.</span><span class="n">close</span> <span class="o">=</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">close</span>
             <span class="n">bar</span><span class="o">.</span><span class="n">volume</span> <span class="o">+=</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">volume</span>
-            <span class="n">bar</span><span class="o">.</span><span class="n">average</span> <span class="o">=</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">average</span> <span class="o">*</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">volume</span>
+            <span class="n">bar</span><span class="o">.</span><span class="n">average</span> <span class="o">+=</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">average</span> <span class="o">*</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">volume</span>
             <span class="n">bar</span><span class="o">.</span><span class="n">barCount</span> <span class="o">+=</span> <span class="n">new_bar</span><span class="o">.</span><span class="n">barCount</span>
         <span class="n">log</span><span class="o">.</span><span class="n">log</span><span class="p">(</span>
             <span class="mi">5</span><span class="p">,</span>
@@ -507,16 +644,26 @@
 <div class="viewcode-block" id="TickBars">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.TickBars">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">TickBars</span><span class="p">(</span><span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Group input bars into new bars so that each output bar corresponds</span>
+<span class="sd">    to the same number of ticks.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">    ----</span>
+
+<span class="sd">    count: desired number of ticks for every output bar</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="vm">__slots__</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;_count&quot;</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">,</span> <span class="s2">&quot;label&quot;</span><span class="p">)</span>
 
-    <span class="n">bars</span><span class="p">:</span> <span class="n">BarList</span>
+    <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_count</span> <span class="o">=</span> <span class="n">count</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">BarList</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">label</span> <span class="o">=</span> <span class="n">label</span>
 
 <div class="viewcode-block" id="TickBars.on_source">
@@ -554,17 +701,28 @@
 <div class="viewcode-block" id="TimeBars">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.TimeBars">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">TimeBars</span><span class="p">(</span><span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Group input bars into new bars so that every output bar</span>
+<span class="sd">    corresponds to the same time period.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">    -----</span>
+
+<span class="sd">    timer: :class:`eventkit.create.Timer` corresponding to desired</span>
+<span class="sd">    duration of output bars</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="vm">__slots__</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;_timer&quot;</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">,</span> <span class="s2">&quot;_running_price_volume&quot;</span><span class="p">,</span> <span class="s2">&quot;label&quot;</span><span class="p">)</span>
 
-    <span class="n">bars</span><span class="p">:</span> <span class="n">BarList</span>
+    <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">timer</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">timer</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Timer</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_timer</span> <span class="o">=</span> <span class="n">timer</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_timer</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_on_timer</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_on_timer_done</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">BarList</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_running_price_volume</span> <span class="o">=</span> <span class="mf">0.0</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">label</span> <span class="o">=</span> <span class="n">label</span>
 
@@ -615,17 +773,17 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.NoFilter">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">NoFilter</span><span class="p">(</span><span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    This works as an accumulator making sure that no bars are lost</span>
-<span class="sd">    during restarts.</span>
+<span class="sd">    Accumulate input bars to ensure no bars are lost during restarts.</span>
+<span class="sd">    Every input bar and output bar is the same.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="vm">__slots__</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;bars&quot;</span><span class="p">,</span> <span class="s2">&quot;label&quot;</span><span class="p">)</span>
 
-    <span class="n">bars</span><span class="p">:</span> <span class="n">BarList</span>
+    <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">ev</span><span class="o">.</span><span class="n">Op</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">BarList</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bars</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">label</span> <span class="o">=</span> <span class="n">label</span>
 
 <div class="viewcode-block" id="NoFilter.on_source">

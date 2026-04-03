@@ -240,13 +240,8 @@
           <h1>Source code for haymaker.base</h1><div class="highlight"><pre>
 <span></span><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">collections.abc</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">UserDict</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span><span class="p">,</span> <span class="n">fields</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">enum</span><span class="w"> </span><span class="kn">import</span> <span class="n">Enum</span><span class="p">,</span> <span class="n">auto</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">wraps</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">TYPE_CHECKING</span><span class="p">,</span>
     <span class="n">Any</span><span class="p">,</span>
@@ -255,18 +250,13 @@
     <span class="n">NamedTuple</span><span class="p">,</span>
     <span class="n">Self</span><span class="p">,</span>
     <span class="n">Sequence</span><span class="p">,</span>
-    <span class="n">cast</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">.misc</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">ContractKey</span><span class="p">,</span>
-    <span class="n">hash_contract</span><span class="p">,</span>
-    <span class="n">is_active</span><span class="p">,</span>
-    <span class="n">next_active</span><span class="p">,</span>
-    <span class="n">process_trading_hours</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.contract_registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">ContractRegistry</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.details_processor</span><span class="w"> </span><span class="kn">import</span> <span class="n">Details</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.enums</span><span class="w"> </span><span class="kn">import</span> <span class="n">ActiveNext</span>
 
 <span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">.contract_selector</span><span class="w"> </span><span class="kn">import</span> <span class="n">AbstractBaseContractSelector</span>
@@ -275,193 +265,43 @@
 <span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">ActiveNext</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
-    <span class="n">ACTIVE</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
-    <span class="n">NEXT</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
-    <span class="n">PREVIOUS</span> <span class="o">=</span> <span class="n">auto</span><span class="p">()</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span>
-
-
-<span class="n">ContractOrSequence</span> <span class="o">=</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]</span> <span class="o">|</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">MissingContractError</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+    <span class="k">pass</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ContractManagingDescriptor</span><span class="p">:</span>
+    <span class="c1"># DON&#39;T CHANGE THIS TO PROPERTY or it will screw up dataclasses</span>
+    <span class="c1"># that inherit from Atom</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Manage accessing `contract` property on :class:`Atom`.</span>
 
-<span class="sd">    Contract needs to be qualified before use (by calling</span>
-<span class="sd">    :meth:`ib_insync.IB.qualifyContracts` on</span>
-<span class="sd">    :class:`ib_insync.Contract` object).  This is being managed by</span>
-<span class="sd">    :module:`Manager`, which ensures on every restart that</span>
-<span class="sd">    :attr:`contract_dict` on :class:`Atom` contains only qualified</span>
-<span class="sd">    contracts.  ContractManagingDescriptor in turn returns correct</span>
-<span class="sd">    contract from this dict, taking into account</span>
-<span class="sd">    :property:`which_contract` on this Atom.</span>
+<span class="sd">    Contract needs to be qualified and their details obtaned before.</span>
+<span class="sd">    This is being managed by :module:`Manager`, which puts correct</span>
+<span class="sd">    contracts and details into :class:`ContractRegistry`.  The role of</span>
+<span class="sd">    this descriptor is to pull the correct values from it.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-    <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_apply_to_contract_or_sequence</span><span class="p">(</span><span class="n">func</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Decorator that applies the `func` either to contract or to</span>
-<span class="sd">        every contract in a sequence or if contract is neither</span>
-<span class="sd">        :class:`ibi.Contract` nor a sequence return this contract.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">__set_name__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">Atom</span><span class="p">],</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">_blueprint&quot;</span>
 
-        <span class="nd">@wraps</span><span class="p">(</span><span class="n">func</span><span class="p">)</span>
-        <span class="k">def</span><span class="w"> </span><span class="nf">wrapper</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-            <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="s2">&quot;__iter__&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
-                <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">collections</span><span class="o">.</span><span class="n">abc</span><span class="o">.</span><span class="n">Sequence</span><span class="p">)</span>
-                <span class="k">return</span> <span class="p">[</span><span class="n">func</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">contract</span><span class="p">]</span>
-            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">):</span>
-                <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="k">return</span> <span class="n">contract</span>
-
-        <span class="k">return</span> <span class="n">wrapper</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">__set_name__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">name</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__set__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="n">collections</span><span class="o">.</span><span class="n">abc</span><span class="o">.</span><span class="n">Sequence</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="p">(</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">collections</span><span class="o">.</span><span class="n">abc</span><span class="o">.</span><span class="n">Sequence</span><span class="p">)):</span>
-            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;attr contract must be ibi.Contract or sequence of ibi.Contract, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;not: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__set__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;attr contract must be ibi.Contract, not: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="n">obj</span><span class="o">.</span><span class="vm">__dict__</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_register_contract</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+        <span class="n">obj</span><span class="o">.</span><span class="n">contract_registry</span><span class="o">.</span><span class="n">register_blueprint</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]</span> <span class="o">|</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># some methods rely on not raising an error here if attr self.name not set</span>
-        <span class="c1"># if Atom has not set `contract` attribute, it shouldn&#39;t raise an error</span>
-        <span class="n">contract</span> <span class="o">=</span> <span class="n">obj</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_contract</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">obj</span><span class="o">.</span><span class="n">contract_dict</span><span class="p">,</span> <span class="n">obj</span><span class="o">.</span><span class="n">which_contract</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_register_contract</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">ContractOrSequence</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_append_to_dict</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">obj</span><span class="o">.</span><span class="n">contract_dict</span><span class="p">,</span> <span class="n">obj</span><span class="p">)</span>
-
-    <span class="nd">@staticmethod</span>
-    <span class="nd">@_apply_to_contract_or_sequence</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_get_contract</span><span class="p">(</span>
-        <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">contract_dict</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">ContractKey</span><span class="p">,</span> <span class="n">ActiveNext</span><span class="p">],</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">],</span>
-        <span class="n">active_next</span><span class="p">:</span> <span class="n">ActiveNext</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]</span> <span class="o">|</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">contract</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">contract_blueprint</span> <span class="o">=</span> <span class="n">obj</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">contract_blueprint</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">return</span> <span class="kc">None</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">contract_dict</span><span class="o">.</span><span class="n">get</span><span class="p">((</span><span class="n">hash_contract</span><span class="p">(</span><span class="n">contract</span><span class="p">),</span> <span class="n">active_next</span><span class="p">))</span>
-
-    <span class="nd">@staticmethod</span>
-    <span class="nd">@_apply_to_contract_or_sequence</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_append_to_dict</span><span class="p">(</span>
-        <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span>
-        <span class="n">contract_dict</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">ContractKey</span><span class="p">,</span> <span class="n">ActiveNext</span><span class="p">],</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">],</span>
-        <span class="n">atom</span><span class="p">:</span> <span class="n">Atom</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">contract_dict</span><span class="p">[(</span><span class="n">hash_contract</span><span class="p">(</span><span class="n">contract</span><span class="p">),</span> <span class="n">ActiveNext</span><span class="o">.</span><span class="n">ACTIVE</span><span class="p">)]</span> <span class="o">=</span> <span class="n">contract</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Contract registered: </span><span class="si">{</span><span class="n">contract</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-
-
-<div class="viewcode-block" id="Details">
-<a class="viewcode-back" href="../../execution.html#haymaker.base.Details">[docs]</a>
-<span class="nd">@dataclass</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">Details</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Wrapper object for :class:`ib_insync.contract.ContractDetails` extracting</span>
-<span class="sd">    and processing information that&#39;s most relevant for Haymaker.</span>
-
-<span class="sd">    Attributes:</span>
-<span class="sd">        details (ibi.ContractDetails): The original contract details object.</span>
-<span class="sd">        trading_hours (list[tuple[datetime, datetime]]): List of tuples with</span>
-<span class="sd">            start and end of trading hours for this contract.</span>
-<span class="sd">        liquid_hours (list[tuple[datetime, datetime]]): List of tuples with</span>
-<span class="sd">            start and end of liquid hours for this contract.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-
-    <span class="n">_fields</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">fields</span><span class="p">(</span><span class="n">ibi</span><span class="o">.</span><span class="n">ContractDetails</span><span class="p">)]</span>
-    <span class="n">details</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContractDetails</span>
-    <span class="n">trading_hours</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">datetime</span><span class="p">,</span> <span class="n">datetime</span><span class="p">]]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">init</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">repr</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">liquid_hours</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">datetime</span><span class="p">,</span> <span class="n">datetime</span><span class="p">]]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">init</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">repr</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">trading_hours</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_process_trading_hours</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">tradingHours</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">timeZoneId</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">liquid_hours</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_process_trading_hours</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">liquidHours</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="o">.</span><span class="n">timeZoneId</span>
-        <span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__getattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fields</span><span class="p">:</span>
-            <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">details</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> has no attribute </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-
-<div class="viewcode-block" id="Details.is_open">
-<a class="viewcode-back" href="../../execution.html#haymaker.base.Details.is_open">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">is_open</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_now</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Given current time check if the market is open for underlying contract.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            _now (Optional[datetime], optional): Defaults to None.</span>
-<span class="sd">            If not provided current time will be used. Only situation when</span>
-<span class="sd">            it&#39;s useful to provide `_now` is in testing.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            bool: True if market is open, False otherwise.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_active</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trading_hours</span><span class="p">,</span> <span class="n">_now</span><span class="p">)</span></div>
-
-
-<div class="viewcode-block" id="Details.is_liquid">
-<a class="viewcode-back" href="../../execution.html#haymaker.base.Details.is_liquid">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">is_liquid</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_now</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Given current time check if the market is during liquid hours</span>
-<span class="sd">        for underlying contract.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            _now (Optional[datetime], optional): . Defaults to None.</span>
-<span class="sd">            If not provided current time will be used. Only situation when</span>
-<span class="sd">            it&#39;s useful to provide `_now` is in testing.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            bool: True if market is liquid, False otherwise.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_active</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">liquid_hours</span><span class="p">,</span> <span class="n">_now</span><span class="p">)</span></div>
-
-
-<div class="viewcode-block" id="Details.next_open">
-<a class="viewcode-back" href="../../execution.html#haymaker.base.Details.next_open">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">next_open</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_now</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Return time of nearest market re-open (regardless if market is</span>
-<span class="sd">        open now).  Should be used after it has been tested that</span>
-<span class="sd">        :meth:`is_active` is False.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            _now (Optional[datetime], optional): Defaults to None.</span>
-<span class="sd">            If not provided current time will be used. Only situation when</span>
-<span class="sd">            it&#39;s useful to provide `_now` is in testing.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_next_open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trading_hours</span><span class="p">,</span> <span class="n">_now</span><span class="p">)</span></div>
-
-
-    <span class="n">_process_trading_hours</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="n">process_trading_hours</span><span class="p">)</span>
-    <span class="n">_is_active</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="n">is_active</span><span class="p">)</span>
-    <span class="n">_next_open</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="n">next_active</span><span class="p">)</span></div>
-
-
-
-<span class="k">class</span><span class="w"> </span><span class="nc">DetailsContainer</span><span class="p">(</span><span class="n">UserDict</span><span class="p">):</span>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__setitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContractDetails</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__setitem__</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">Details</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">obj</span><span class="o">.</span><span class="n">contract_registry</span><span class="o">.</span><span class="n">get_contract</span><span class="p">(</span>
+                <span class="n">contract_blueprint</span><span class="p">,</span> <span class="n">obj</span><span class="o">.</span><span class="n">which_contract</span>
+            <span class="p">)</span>
+        <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">MissingContractError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Unknown contract: </span><span class="si">{</span><span class="n">contract_blueprint</span><span class="si">}</span><span class="s2"> on </span><span class="si">{</span><span class="n">obj</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ContractRollData</span><span class="p">(</span><span class="n">NamedTuple</span><span class="p">):</span>
@@ -535,22 +375,22 @@
 
     <span class="n">ib</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">IB</span><span class="p">]</span>
     <span class="n">sm</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">StateMachine</span><span class="p">]</span>
-    <span class="n">contract_details</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">DetailsContainer</span><span class="p">]</span> <span class="o">=</span> <span class="n">DetailsContainer</span><span class="p">()</span>
-    <span class="n">contract_dict</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">ContractKey</span><span class="p">,</span> <span class="n">ActiveNext</span><span class="p">],</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
-    <span class="n">contract_selectors</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="n">ContractKey</span><span class="p">,</span> <span class="n">AbstractBaseContractSelector</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">contract_registry</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">ContractRegistry</span><span class="p">]</span> <span class="o">=</span> <span class="n">ContractRegistry</span><span class="p">()</span>
     <span class="n">events</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="p">(</span>
         <span class="s2">&quot;startEvent&quot;</span><span class="p">,</span>
         <span class="s2">&quot;dataEvent&quot;</span><span class="p">,</span>
         <span class="s2">&quot;feedbackEvent&quot;</span><span class="p">,</span>
     <span class="p">)</span>
-    <span class="n">contract</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">ContractManagingDescriptor</span><span class="p">())</span>
-    <span class="c1"># this should be overriden by instances if neccessary to change</span>
+    <span class="n">contract</span> <span class="o">=</span> <span class="n">ContractManagingDescriptor</span><span class="p">()</span>
+    <span class="c1"># these should be overriden by instances if neccessary to change</span>
     <span class="n">which_contract</span><span class="p">:</span> <span class="n">ActiveNext</span> <span class="o">=</span> <span class="n">ActiveNext</span><span class="o">.</span><span class="n">ACTIVE</span>
+    <span class="n">_contract_blueprint</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">set_init_data</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ib</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">IB</span><span class="p">,</span> <span class="n">sm</span><span class="p">:</span> <span class="n">StateMachine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_init_data</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ib</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">IB</span><span class="p">,</span> <span class="n">sm</span><span class="p">:</span> <span class="n">StateMachine</span><span class="p">,</span> <span class="n">cr</span><span class="p">:</span> <span class="n">ContractRegistry</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="bp">cls</span><span class="o">.</span><span class="n">ib</span> <span class="o">=</span> <span class="n">ib</span>
         <span class="bp">cls</span><span class="o">.</span><span class="n">sm</span> <span class="o">=</span> <span class="n">sm</span>
+        <span class="bp">cls</span><span class="o">.</span><span class="n">contract_registry</span> <span class="o">=</span> <span class="n">cr</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_createEvents</span><span class="p">()</span>
@@ -562,49 +402,34 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">_roll_contract_data</span><span class="p">:</span> <span class="n">ContractRollData</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="nd">@property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">contracts</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_dict</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
-
-    <span class="nd">@contracts</span><span class="o">.</span><span class="n">setter</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">contracts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">arg</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Forbidden to set values on Atom.contracts.&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">details</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Details</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;This is a deprecated property name, which will be removed&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span>
 
     <span class="nd">@property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">details</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Details</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">Details</span><span class="p">]</span> <span class="o">|</span> <span class="n">DetailsContainer</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">contract_details</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Details</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Contract details received from the broker.</span>
 
-<span class="sd">        If :attr:`contract` is set, :attr:`details` will be returned</span>
-<span class="sd">        only for this contract, otherwise :attr:`details` will return</span>
-<span class="sd">        a dictionary of all available details,</span>
-<span class="sd">        ie. :class:`dict`[:class:`ibi.Contract`, :class:`Details`]</span>
-
-<span class="sd">        :class:`Details` is a wrapper around</span>
-<span class="sd">        :class:`ib_insync.contract.ContractDetails` with some</span>
-<span class="sd">        additional methods and attributes.</span>
+<span class="sd">        if :attr:`contract` is not set empty :class:`Details` object</span>
+<span class="sd">        will be returned.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">:</span>
-            <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="s2">&quot;__iter__&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
-                <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="n">collections</span><span class="o">.</span><span class="n">abc</span><span class="o">.</span><span class="n">Sequence</span><span class="p">)</span>
-                <span class="k">return</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">]</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="k">try</span><span class="p">:</span>
-                    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">]</span>
-                <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
-                    <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing contract details for: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-                    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_details</span>
+        <span class="n">details</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_registry</span><span class="o">.</span><span class="n">get_details</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">details</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing contract details for: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="c1"># empty details</span>
+            <span class="n">details</span> <span class="o">=</span> <span class="n">Details</span><span class="p">(</span><span class="n">ibi</span><span class="o">.</span><span class="n">ContractDetails</span><span class="p">())</span>
+        <span class="k">return</span> <span class="n">details</span>
 
     <span class="nd">@property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">contract_selector</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">AbstractBaseContractSelector</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">contract_selector</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">AbstractBaseContractSelector</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">try</span><span class="p">:</span>
-            <span class="k">assert</span> <span class="p">(</span><span class="n">contract_blueprint</span> <span class="o">:=</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;contract&quot;</span><span class="p">))</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">_contract_blueprint</span>
         <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span>
                 <span class="sa">f</span><span class="s2">&quot;contract_selector not available because contract not set on </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_selectors</span><span class="p">[(</span><span class="n">hash_contract</span><span class="p">(</span><span class="n">contract_blueprint</span><span class="p">))]</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract_registry</span><span class="o">.</span><span class="n">get_selector</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_contract_blueprint</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_createEvents</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Event</span><span class="p">(</span><span class="s2">&quot;startEvent&quot;</span><span class="p">)</span>
@@ -619,30 +444,41 @@
 
 <div class="viewcode-block" id="Atom.onStart">
 <a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.onStart">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Perform any initilization required on system (re)start.  It</span>
 <span class="sd">        will be run automatically and it will be linked to</span>
 <span class="sd">        :attr:`startEvent` of the preceding object in the chain.</span>
 
-<span class="sd">        First `Atom` in a pipeline (typically a data streamer) will</span>
-<span class="sd">        be called by system, which is an indication that (re)start is</span>
-<span class="sd">        in progress and we have successfully connected to the broker.</span>
+<span class="sd">        First `Atom` in a pipeline (typically a data streamer) will be</span>
+<span class="sd">        called by system, which is an indication that (re)start is in</span>
+<span class="sd">        progress and we have successfully connected to the broker.</span>
 
-<span class="sd">        `data` by default is a dict and all keys on this dict are</span>
-<span class="sd">        being set as properties on the object.  Any information that</span>
-<span class="sd">        needs to be passed to atoms down the chain, should be appended</span>
-<span class="sd">        to `data` without removing any existing keys.</span>
+<span class="sd">        `data` by default is a dict.  Any information that needs to be</span>
+<span class="sd">        passed to atoms down the chain, should be appended to `data`</span>
+<span class="sd">        without removing any existing keys.</span>
 
 <span class="sd">        If overriding the class, call superclass; call to</span>
-<span class="sd">        :meth:`super().onStart(data)` should be the last line in overriden</span>
-<span class="sd">        method; don&#39;t manually emit :attr:`startEvent` in subclass.</span>
+<span class="sd">        :meth:`super().onStart(data)` should usually be the last line</span>
+<span class="sd">        in overriden method as it will emit :attr:`startEvent` -</span>
+<span class="sd">        basically do any processing required in sub-class and then</span>
+<span class="sd">        call super-class, which will do standard processing and then</span>
+<span class="sd">        emit the event to initialize processing in the next Atom down</span>
+<span class="sd">        the chain; if you don&#39;t call superclass, make sure to emit</span>
+<span class="sd">        :attr:`startEvent`, otherwise subsequent Atoms in the chain</span>
+<span class="sd">        won&#39;t do startup initialization.</span>
 
 <span class="sd">        This method can be synchronous as well as asynchronous (in the</span>
 <span class="sd">        subclass it&#39;s ok to override it with `async def onData(self,</span>
 <span class="sd">        data, *args)`).  If it&#39;s async, it will be put in the asyncio</span>
 <span class="sd">        loop.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_startup_attrs</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_process_contract_change</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_set_startup_attrs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
         <span class="c1"># set strategy if not already set and present in `data` dict</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span> <span class="o">==</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
@@ -654,16 +490,11 @@
         <span class="c1"># set startup to whatever in dict</span>
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">startup</span> <span class="o">:=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;startup&quot;</span><span class="p">)):</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">startup</span> <span class="o">=</span> <span class="n">startup</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_process_contract_change</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">):</span>
-            <span class="c1"># it will not fire if the system has been restarted after contract changed</span>
-            <span class="c1"># cannot be relied on for rolls</span>
-            <span class="c1"># MUST be used to ensure streamers and processors don&#39;t mix-up data</span>
-            <span class="c1"># from old and new contracts</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Future will reset: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span><span class="si">}</span><span class="s2"> --&gt; </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_contractChangedEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_contract_memo</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">startEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span></div>
-
 
 <div class="viewcode-block" id="Atom.onData">
 <a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.onData">[docs]</a>
@@ -688,8 +519,7 @@
 <span class="sd">        data, *args)`).  If it&#39;s async, it will be put in the asyncio</span>
 <span class="sd">        loop.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">data</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">_ts&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">tz</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
-        <span class="k">return</span> <span class="kc">None</span></div>
+        <span class="n">data</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">_ts&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">tz</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="Atom.onFeedback">
@@ -708,14 +538,13 @@
 <span class="sd">        data, *args)`).  If it&#39;s async, it will be put in the asyncio</span>
 <span class="sd">        loop.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">feedbackEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
-        <span class="k">return</span> <span class="kc">None</span></div>
+        <span class="bp">self</span><span class="o">.</span><span class="n">feedbackEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">data</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="Atom.onContractChanged">
 <a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.onContractChanged">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">onContractChanged</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">old_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Future</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Future</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">old_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Awaitable</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Will be called if contract object on `self.contract` changes.</span>
@@ -727,19 +556,24 @@
 <span class="sd">        `Controller` object.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Contract on </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> changed from </span><span class="si">{</span><span class="n">old_contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2"> &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;to new contract </span><span class="si">{</span><span class="n">new_contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> contract changed: </span><span class="si">{</span><span class="n">old_contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2"> &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;--&gt; </span><span class="si">{</span><span class="n">new_contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_roll_contract_data</span> <span class="o">=</span> <span class="n">ContractRollData</span><span class="p">(</span><span class="n">old_contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">)</span>
-        <span class="k">return</span> <span class="kc">None</span></div>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_roll_contract_data</span> <span class="o">=</span> <span class="n">ContractRollData</span><span class="p">(</span><span class="n">old_contract</span><span class="p">,</span> <span class="n">new_contract</span><span class="p">)</span></div>
 
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">strategy_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy_str</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Strategy</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">strategy_str</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">strategy_str</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;strategy&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">strategy_str</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> accessing data for empty strategy.&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">sm</span><span class="o">.</span><span class="n">strategy</span><span class="p">[</span><span class="n">strategy_str</span><span class="p">]</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">data</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Strategy</span><span class="p">:</span>
-        <span class="n">strategy</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;strategy&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">strategy</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> accessing data for empty strategy.&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">sm</span><span class="o">.</span><span class="n">strategy</span><span class="p">[</span><span class="n">strategy</span><span class="p">]</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return strategy data if :attr:`strategy` has been set&quot;&quot;&quot;</span>
+        <span class="c1"># deprecated; to be removed in next version</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategy_data</span><span class="p">()</span>
 
 <div class="viewcode-block" id="Atom.connect">
 <a class="viewcode-back" href="../../execution.html#haymaker.base.Atom.connect">[docs]</a>
@@ -829,10 +663,13 @@
                 <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">j</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
                 <span class="k">if</span> <span class="p">(</span><span class="s2">&quot;Event&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">))</span>
                 <span class="ow">and</span> <span class="p">(</span><span class="n">i</span> <span class="o">!=</span> <span class="s2">&quot;_log&quot;</span><span class="p">)</span>
+                <span class="ow">and</span> <span class="p">(</span><span class="n">i</span> <span class="o">!=</span> <span class="s2">&quot;_contract_blueprint&quot;</span><span class="p">)</span>
                 <span class="ow">and</span> <span class="n">j</span>
                 <span class="ow">and</span> <span class="n">j</span> <span class="o">!=</span> <span class="n">ActiveNext</span><span class="o">.</span><span class="n">ACTIVE</span>
             <span class="p">)</span>
         <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">contract</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">attrs</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">&quot;, contract=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">(</span><span class="si">{</span><span class="n">attrs</span><span class="si">}</span><span class="s2">)&quot;</span></div>
 
 

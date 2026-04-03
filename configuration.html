@@ -257,13 +257,9 @@
 <h2>Default Configuration Files<a class="headerlink" href="#default-configuration-files" title="Link to this heading">¶</a></h2>
 <p>Sensible starting configurations are defined in default configuration files located here:</p>
 <ul class="simple">
-<li><p>For the Execution Module:</p></li>
+<li><p>For the Execution Module: <a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml</a></p></li>
+<li><p>For the Dataloader Module: <a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml</a></p></li>
 </ul>
-<p><a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml</a></p>
-<ul class="simple">
-<li><p>For the Dataloader Module:</p></li>
-</ul>
-<p><a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml</a></p>
 </section>
 <section id="user-provided-configuration-file">
 <h2>User-Provided Configuration File<a class="headerlink" href="#user-provided-configuration-file" title="Link to this heading">¶</a></h2>
@@ -330,9 +326,10 @@
 <section id="cli-options">
 <h3>CLI Options<a class="headerlink" href="#cli-options" title="Link to this heading">¶</a></h3>
 <p>Assuming your strategy is in <code class="docutils literal notranslate"><span class="pre">your_module.py</span></code> and imports <code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.app.App</span></code>, the following options are available from the command line:</p>
-<p><p>Primary way to set up appplication is through a yaml file, or environment variables. Command line options listed here overridethose default settings.</p>
+<p><p>Primary way to set up appplication is through a yaml file, or environment variables. Command line options listed here override those default settings.</p>
 </p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">dataloader</span><span class="o">.</span><span class="n">py</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">ARG</span> <span class="n">ARG</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">r</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">z</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">c</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">n</span><span class="p">]</span> <span class="p">[</span><span class="n">source</span><span class="p">]</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">dataloader</span><span class="o">.</span><span class="n">py</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">KEY</span> <span class="n">VALUE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">r</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">z</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">c</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">n</span><span class="p">]</span>
+                     <span class="p">[</span><span class="n">source</span><span class="p">]</span>
 </pre></div>
 </div>
 <section id="haymaker.config.cli_options-get_parser_for_other_module-positional-arguments">
@@ -400,9 +397,9 @@
 <section id="dataloader-cli-options">
 <h3>Dataloader CLI Options<a class="headerlink" href="#dataloader-cli-options" title="Link to this heading">¶</a></h3>
 <p>Dataloader options differ from those of other modules:</p>
-<p><p>Primary way to set up appplication is through a yaml file, or environment variables. Command line options listed here overridethose default settings.</p>
+<p><p>Primary way to set up appplication is through a yaml file, or environment variables. Command line options listed here override those default settings.</p>
 </p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">dataloader</span><span class="o">.</span><span class="n">py</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">ARG</span> <span class="n">ARG</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">g</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">w</span><span class="p">]</span> <span class="p">[</span><span class="n">source</span><span class="p">]</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">dataloader</span><span class="o">.</span><span class="n">py</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">KEY</span> <span class="n">VALUE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">g</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">w</span><span class="p">]</span> <span class="p">[</span><span class="n">source</span><span class="p">]</span>
 </pre></div>
 </div>
 <section id="haymaker.config.cli_options-get_parser_for_dataloader-positional-arguments">
@@ -449,8 +446,8 @@
 </pre></div>
 </div>
 </div>
-<p>This runs the dataloader with settings from <code class="docutils literal notranslate"><span class="pre">settings.yaml</span></code> in the current directory. This file should be a modified copy of:</p>
-<p><a class="reference external" href="https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml">https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml</a></p>
+<p>This runs the dataloader with settings from <code class="docutils literal notranslate"><span class="pre">settings.yaml</span></code> in the current directory. This file should be a modified copy of:
+<a class="reference external" href="https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml">https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml</a></p>
 <p>specifying the source file with defined contracts, data type, frequency, etc.</p>
 </section>
 </section>

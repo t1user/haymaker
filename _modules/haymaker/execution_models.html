@@ -332,6 +332,7 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span>
         <span class="c1"># super just set strategy, only now subsequent is possible</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;strategy on </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="k">try</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="o">**</span><span class="n">data</span><span class="p">)</span>
         <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
@@ -442,8 +443,14 @@
         <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span><span class="p">,</span>
         <span class="n">order</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Order</span><span class="p">,</span>
         <span class="n">action</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">params</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Trade</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">controller</span><span class="o">.</span><span class="n">trade</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="p">,</span> <span class="n">contract</span><span class="p">,</span> <span class="n">order</span><span class="p">,</span> <span class="n">action</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">params</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> has no strategy set, trade attempt cancelled.&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">controller</span><span class="o">.</span><span class="n">trade</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="p">,</span> <span class="n">contract</span><span class="p">,</span> <span class="n">order</span><span class="p">,</span> <span class="n">action</span><span class="p">,</span> <span class="n">params</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">cancel</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trade</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Trade</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Trade</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">controller</span><span class="o">.</span><span class="n">cancel</span><span class="p">(</span><span class="n">trade</span><span class="p">)</span>
@@ -476,6 +483,7 @@
         <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;CLOSE&quot;</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">close</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
         <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;REVERSE&quot;</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Executing REVERSE transaction. Check if correct!&quot;</span><span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">reverse</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Ambiguous action: </span><span class="si">{</span><span class="n">action</span><span class="si">}</span><span class="s2"> for </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
@@ -488,7 +496,12 @@
         <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
         <span class="n">dynamic_order_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Trade</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_verify_strategy</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+            <span class="k">return</span> <span class="kc">None</span>
+
         <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">brackets</span> <span class="o">=</span> <span class="p">{}</span>
         <span class="n">data</span><span class="p">[</span><span class="s2">&quot;position_id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_position_id</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;open&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">data</span>
         <span class="k">try</span><span class="p">:</span>
@@ -498,6 +511,7 @@
         <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
             <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="s2">&quot;Insufficient data to execute OPEN transaction&quot;</span><span class="p">)</span>
             <span class="k">return</span> <span class="kc">None</span>
+
         <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">active_contract</span> <span class="o">=</span> <span class="n">contract</span>
         <span class="n">order_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="n">misc</span><span class="o">.</span><span class="n">action</span><span class="p">(</span><span class="n">signal</span><span class="p">),</span> <span class="s2">&quot;totalQuantity&quot;</span><span class="p">:</span> <span class="n">amount</span><span class="p">}</span>
         <span class="k">if</span> <span class="n">dynamic_order_kwargs</span><span class="p">:</span>
@@ -507,13 +521,16 @@
             <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">contract</span><span class="o">.</span><span class="n">localSymbol</span><span class="si">}</span><span class="s2"> processing OPEN signal </span><span class="si">{</span><span class="n">signal</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
             <span class="n">extra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="n">data</span><span class="p">},</span>
         <span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">trade</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">order</span><span class="p">,</span> <span class="s2">&quot;OPEN&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">trade</span><span class="p">(</span><span class="n">contract</span><span class="p">,</span> <span class="n">order</span><span class="p">,</span> <span class="s2">&quot;OPEN&quot;</span><span class="p">,</span> <span class="p">{</span><span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;open&quot;</span><span class="p">]})</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">close</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
         <span class="n">dynamic_order_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Trade</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_verify_strategy</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+            <span class="k">return</span> <span class="kc">None</span>
+
         <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">data</span>
         <span class="n">data</span><span class="p">[</span><span class="s2">&quot;position_id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_position_id</span><span class="p">()</span>
 
@@ -541,22 +558,44 @@
             <span class="n">extra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="n">data</span><span class="p">},</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">trade</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">active_contract</span><span class="p">,</span>
-            <span class="n">order</span><span class="p">,</span>
-            <span class="s2">&quot;CLOSE&quot;</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">active_contract</span><span class="p">,</span> <span class="n">order</span><span class="p">,</span> <span class="s2">&quot;CLOSE&quot;</span><span class="p">,</span> <span class="p">{</span><span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]}</span>
         <span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">reverse</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">open_after_close</span><span class="p">(</span><span class="n">trade</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="si">}</span><span class="s2">: REVERSE executing deferred OPEN after CLOSE &quot;</span>
+                <span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Failed to execute OPEN after CLOSE for </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                    <span class="n">extra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="n">data</span><span class="p">,</span> <span class="s2">&quot;close_trade&quot;</span><span class="p">:</span> <span class="n">trade</span><span class="p">},</span>
+                <span class="p">)</span>
+
         <span class="n">close_trade</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">close</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">close_trade</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Reverse trade. OPEN will be issued after CLOSE &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">close_trade</span><span class="o">.</span><span class="n">order</span><span class="o">.</span><span class="n">orderId</span><span class="si">}</span><span class="s2"> is done&quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;filledEvent will call open with data: </span><span class="si">{</span><span class="n">data</span><span class="si">=}</span><span class="s2"> &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;Trade is done? </span><span class="si">{</span><span class="n">close_trade</span><span class="o">.</span><span class="n">isDone</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="n">close_trade</span><span class="o">.</span><span class="n">filledEvent</span> <span class="o">+=</span> <span class="n">open_after_close</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;REVERSE filledEvent attached to </span><span class="si">{</span><span class="n">close_trade</span><span class="o">.</span><span class="n">order</span><span class="o">.</span><span class="n">orderId</span><span class="si">}</span><span class="s2"> &quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Failed to close existing position for </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="si">}</span><span class="s2"> &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;in REVERSE trade&quot;</span>
             <span class="p">)</span>
-            <span class="n">close_trade</span><span class="o">.</span><span class="n">filledEvent</span> <span class="o">+=</span> <span class="n">partial</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">open</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">)</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;FillEvent attached. Trade is done? </span><span class="si">{</span><span class="n">close_trade</span><span class="o">.</span><span class="n">isDone</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_verify_strategy</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="p">:</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> was missing strategy, will try to reset&quot;</span><span class="p">)</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;strategy&quot;</span><span class="p">]</span>
+            <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+                <span class="n">log</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;failed to reset strategy on </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2">, abandoning transaction.&quot;</span>
+                <span class="p">)</span>
+                <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span> <span class="o">+</span> <span class="s2">&quot;()&quot;</span></div>
@@ -622,13 +661,6 @@
             <span class="n">open_order</span><span class="o">=</span><span class="n">open_order</span><span class="p">,</span> <span class="n">close_order</span><span class="o">=</span><span class="n">close_order</span><span class="p">,</span> <span class="n">controller</span><span class="o">=</span><span class="n">controller</span>
         <span class="p">)</span>
 
-<div class="viewcode-block" id="EventDrivenExecModel.onStart">
-<a class="viewcode-back" href="../../execution.html#haymaker.execution_models.EventDrivenExecModel.onStart">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">onStart</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onStart</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">brackets</span> <span class="o">=</span> <span class="p">{}</span></div>
-
-
 <div class="viewcode-block" id="EventDrivenExecModel.open">
 <a class="viewcode-back" href="../../execution.html#haymaker.execution_models.EventDrivenExecModel.open">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">open</span><span class="p">(</span>
@@ -647,6 +679,7 @@
 
         <span class="n">trade</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">trade</span><span class="p">:</span>
+            <span class="c1"># it will also receive `ibi.Trade` object!</span>
             <span class="n">trade</span><span class="o">.</span><span class="n">filledEvent</span> <span class="o">+=</span> <span class="n">attach_bracket</span>
             <span class="k">return</span> <span class="n">trade</span>
         <span class="k">else</span><span class="p">:</span>
@@ -675,6 +708,7 @@
         <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;ocaGroup&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">oca_group</span><span class="p">,</span> <span class="s2">&quot;ocaType&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">oca_type</span><span class="p">}</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_attach_bracket</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trade</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Trade</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">brackets</span> <span class="o">=</span> <span class="p">{}</span>
         <span class="c1"># called once for sl/tp pair! Don&#39;t put inside the for loop!</span>
         <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Will attach brackets for </span><span class="si">{</span><span class="n">trade</span><span class="o">.</span><span class="n">order</span><span class="o">.</span><span class="n">orderId</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="k">try</span><span class="p">:</span>
@@ -707,24 +741,25 @@
                         <span class="n">trade</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span>
                         <span class="n">order</span><span class="p">,</span>
                         <span class="n">label</span><span class="p">,</span>
+                        <span class="p">{</span><span class="o">**</span><span class="n">memo</span><span class="p">},</span>  <span class="c1"># snapshot with position_id</span>
                     <span class="p">)</span>
                     <span class="k">if</span> <span class="n">bracket_trade</span><span class="p">:</span>
-                        <span class="c1"># this doesn&#39;t make it into database now, because it&#39;s updating</span>
-                        <span class="c1"># a nested dict and only top one triggers a save</span>
-                        <span class="c1"># so potentially it&#39;s obsolete</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">brackets</span><span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">bracket_trade</span><span class="o">.</span><span class="n">order</span><span class="o">.</span><span class="n">orderId</span><span class="p">)]</span> <span class="o">=</span> <span class="n">Bracket</span><span class="p">(</span>
+                        <span class="n">brackets</span><span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">bracket_trade</span><span class="o">.</span><span class="n">order</span><span class="o">.</span><span class="n">orderId</span><span class="p">)]</span> <span class="o">=</span> <span class="n">Bracket</span><span class="p">(</span>
                             <span class="n">cast</span><span class="p">(</span><span class="n">BracketLabel</span><span class="p">,</span> <span class="n">label</span><span class="p">),</span>
                             <span class="n">order_key</span><span class="p">,</span>
                             <span class="n">bracket_kwargs</span><span class="p">,</span>
                             <span class="n">bracket_trade</span><span class="p">,</span>
                         <span class="p">)</span>
+            <span class="c1"># assigning to data after brackets info is complete</span>
+            <span class="c1"># ensures it is saved to db</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">brackets</span> <span class="o">=</span> <span class="n">brackets</span>
         <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
             <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error while attaching bracket: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
     <span class="c1"># def re_attach_brackets(self):</span>
     <span class="c1">#     &quot;&quot;&quot;</span>
     <span class="c1">#     Possibly used by :class:`Controller` if it&#39;s determined that a bracket</span>
-    <span class="c1">#     is missing.</span>
+    <span class="c1">#     is missing. NOT IMPLEMENTED NOW.</span>
     <span class="c1">#     &quot;&quot;&quot;</span>
 
     <span class="c1">#     for orderId, bracket in self.data.brackets.copy().items():</span>
