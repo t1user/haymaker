@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from .controller import Controller
 
 from haymaker import misc
-from haymaker.base import ActiveNext, Atom
 from haymaker.state_machine import OrderInfo, Strategy
 
 log = logging.getLogger(__name__)
@@ -36,13 +35,11 @@ class FutureRoller:
         """
         # controller is an Atom, so `controller.contracts` is a descriptor
         # on :class:`Atom`
-        futures = set(
-            [
-                contract
-                for (hash, tag), contract in self.controller.contract_dict.items()
-                if isinstance(contract, ibi.Future) and tag is not ActiveNext.PREVIOUS
-            ]
-        )
+        futures = {
+            contract
+            for contract in self.controller.contract_registry.current_contracts
+            if isinstance(contract, ibi.Future)
+        }
         log.debug(f"Current active futures: {[fut.localSymbol for fut in futures]}")
         return futures
 
@@ -169,7 +166,7 @@ class FutureRoller:
             )
             if new_contract.conId == old_contract.conId:
                 log.error(f"Abandoning roll, no replacement found: {old_contract}")
-            elif not Atom.contract_details[new_contract].is_open():
+            elif not self.controller.contract_registry.details[new_contract].is_open():
                 log.error(f"Abandoning roll, {new_contract} is not trading now.")
             else:
                 self.execute(old_contract, new_contract)
@@ -447,9 +444,7 @@ class FutureRoller:
         }
         strategy["params"]["future-roll"] = params
         order = ibi.MarketOrder("BUY" if size > 0 else "SELL", abs(size))
-        return self.controller.trade(
-            strategy_str, combo, order, "FUTURE-ROLL", strategy
-        )
+        return self.controller.trade(strategy_str, combo, order, "FUTURE-ROLL", params)
 
     @staticmethod
     def make_combo(oc: ibi.Future, nc: ibi.Future) -> ibi.Bag:
@@ -547,7 +542,7 @@ class FutureRoller:
 
         new_order = ibi.Order(**order_kwarg_dict)
         new_trade = self.controller.trade(
-            strategy_str, new_contract, new_order, oi.action, strategy
+            strategy_str, new_contract, new_order, oi.action, order_kwarg_dict
         )
         assert new_trade
         log.debug(

@@ -72,6 +72,7 @@ class App:
         self.ib.errorEvent += self.onErr
         self.ib.connectedEvent += self.onConnected
         self.ib.disconnectedEvent += self.onDisconnected
+        ibi.util.globalErrorEvent += self.onGlobalErr
 
         self.watchdog = ibi.Watchdog(
             self.ibc,  # type: ignore
@@ -112,10 +113,13 @@ class App:
     ) -> None:
         if errorCode in config.get("ignore_errors", []):
             return
-        elif "URGENT" in errorString:
+        elif "URGENT" in errorString or len(errorString) > 100:
             log.error(f"{errorString} {reqId=} code={errorCode} {contract=}")
         else:
             log.debug(f"{errorString} {reqId=} code={errorCode} {contract=}")
+
+    def onGlobalErr(self, *args, **kwargs):
+        log.debug(f"Global err: {args} {kwargs}")
 
     def onStarting(self, watchdog: ibi.Watchdog) -> None:
         log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")

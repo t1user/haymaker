@@ -10,8 +10,9 @@ from typing import ClassVar, Self
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
-from haymaker.base import Atom, Details
+from haymaker.base import Atom
 from haymaker.config import CONFIG as config
+from haymaker.contract_registry import Details
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class Timeout:
     debug: bool = TIMEOUT_DEBUG
     _timeout: ev.Event | None = field(repr=False, default=None)
     _now: datetime | None = None  # for testing only
+    _sleep_taks: asyncio.Task | None = field(repr=False, default=None)
 
     @classmethod
     def set_ib(cls, ib: ibi.IB):
@@ -85,23 +87,29 @@ class Timeout:
         default value will be used from config
         """
 
-        assert isinstance(atom.details, Details), (
-            f"{atom} is missing contract details."
+        assert atom.contract_details.contract is not None, (
+            f"{atom} is missing correct contract details."
             f"`Timeout.from_atom` can be used only with atoms that have details."
         )
         return cls(
             event,
             time,
             f"{str(atom)}-<<{key}>>",
-            atom.details,
+            atom.contract_details,
         )
 
     @classmethod
     def reset(cls) -> None:
         # Must be run on system restart so that timouts are not duplicated
         n = len(cls.instances)
+        for instance in cls.instances:
+            instance._cancel()
         cls.instances.clear()
         log.debug(f"{n} timeouts cleared.")
+
+    def _cancel(self) -> None:
+        if self._sleep_taks and not self._sleep_taks.done():
+            self._sleep_taks.cancel()
 
     def __new__(cls, *args, **kwargs) -> Self:
         # Keep track of all :class:`.Timeout` instances created so that they
@@ -134,13 +142,20 @@ class Timeout:
             if self.details.is_open(self._now):
                 self.triggered_action()
             elif reactivate_time := self.details.next_open(self._now):
-                sleep_time = (reactivate_time - datetime.now(tz=timezone.utc)).seconds
+                sleep_time = (
+                    reactivate_time - datetime.now(tz=timezone.utc)
+                ).seconds + 1
                 log.log(
                     5,
                     f"{self} will sleep till market reopen at: {reactivate_time} i.e. "
                     f"{sleep_time} seconds",
                 )
-                await asyncio.sleep(sleep_time)
+                self._sleep_taks = asyncio.current_task()
+                try:
+                    await asyncio.sleep(sleep_time)
+                except asyncio.CancelledError:
+                    log.debug(f"{self!s} sleep cancelled on reset.")
+                    return
                 self._set_timeout(self.event)
 
     def triggered_action(self) -> None:
@@ -156,4 +171,7 @@ class Timeout:
         log.debug(f"Timeout set: {self!s}")
 
     def __str__(self) -> str:
-        return f"Timeout <{self.time}s> for {self.name}  event id: {id(self._timeout)}"
+        return (
+            f"Timeout <{self.time}s> for {self.name}  event id: {id(self._timeout)} "
+            f"timeout id: {id(self)} {self.details!s}"
+        )

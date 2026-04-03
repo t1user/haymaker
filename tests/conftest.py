@@ -7,6 +7,7 @@ import pytest
 from ib_insync import Contract, ContractDetails
 
 from haymaker.base import Atom as BaseAtom
+from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
 from haymaker.saver import AbstractBaseSaver
 from haymaker.state_machine import StateMachine
@@ -90,6 +91,11 @@ def state_machine(order_saver, strategy_saver):
 
 
 @pytest.fixture
+def registry():
+    yield ContractRegistry()
+
+
+@pytest.fixture
 def contract():
     # it's a different contract than in details below
     return ibi.Contract(
@@ -110,7 +116,7 @@ def details():
     # Note: contains also ibi.Contract
     return ibi.ContractDetails(
         contract=ibi.Contract(
-            secType="CONTFUT",
+            secType="FUT",
             conId=603558814,
             symbol="NQ",
             lastTradeDateOrContractMonth="20240315",
@@ -167,10 +173,10 @@ def details():
 
 
 @pytest.fixture
-def Atom(state_machine, details):
+def Atom(state_machine, details, registry):
+    registry.details[details.contract] = details
     sm = state_machine
-    BaseAtom.set_init_data(ibi.IB(), sm)
-    BaseAtom.contract_details[details.contract] = details
+    BaseAtom.set_init_data(ibi.IB(), sm, registry)
     return BaseAtom
 
 

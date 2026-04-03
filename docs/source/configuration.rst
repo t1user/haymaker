@@ -14,11 +14,9 @@ Default Configuration Files
 
 Sensible starting configurations are defined in default configuration files located here:
 
-- For the Execution Module: 
-https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml 
+- For the Execution Module: https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml 
 
-- For the Dataloader Module: 
-https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml 
+- For the Dataloader Module: https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml 
 
 
 User-Provided Configuration File
@@ -139,7 +137,6 @@ This runs the dataloader to collect historical data for contracts defined in ``m
    dataloader -f settings.yaml
 
 This runs the dataloader with settings from ``settings.yaml`` in the current directory. This file should be a modified copy of:
-
 https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml
 
 specifying the source file with defined contracts, data type, frequency, etc.

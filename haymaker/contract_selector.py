@@ -1,3 +1,8 @@
+"""
+The purpose of this module is to determine what is (or historically
+was) the 'current' futures contract at a given point in time.
+"""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -126,11 +131,30 @@ class GoldComex(AbstractBaseFutureWrapper):
 
 
 @dataclass
+class SoybeanCbot(AbstractBaseFutureWrapper):
+
+    @property
+    def last_trading_day(self) -> datetime:
+        # first notice is the last business day of the month preceding
+        # the delivery month, so our last trading day is one day prior
+        return (
+            customize_month_end(
+                self.lastTradeDateOrContractMonth - pd.offsets.BusinessMonthEnd()
+            )
+            - custom_bday
+        )
+
+
+@dataclass
 class NG(AbstractBaseFutureWrapper):
     # NOT IN USE
     # should it be used?
     @property
     def last_trading_day(self) -> datetime:
+        """
+        Trading terminates on the 3rd last business day of the month
+        prior to the contract month.
+        """
         return (
             self.lastTradeDateOrContractMonth
             - pd.offsets.BusinessMonthEnd()
@@ -171,6 +195,7 @@ def future_wrapper_factory(contract: ibi.Contract) -> Type[AbstractBaseFutureWra
     return {
         "GC": GoldComex,
         "MGC": GoldComex,
+        "ZS": SoybeanCbot,
     }.get(contract.symbol, NoOffset)
 
 
@@ -180,6 +205,7 @@ def future_wrapper_factory(contract: ibi.Contract) -> Type[AbstractBaseFutureWra
 
 
 class AbstractBaseContractSelector(ABC):
+    today = datetime.now()  # for testing only
 
     @classmethod
     @abstractmethod
@@ -209,6 +235,7 @@ class AbstractBaseContractSelector(ABC):
 @dataclass
 class DefaultSelector(AbstractBaseContractSelector):
     contractChain: list[ibi.Contract]
+    today: datetime = field(default=datetime.now(), repr=False)
 
     @classmethod
     def from_details(
@@ -248,10 +275,12 @@ class ContFutureSelector(DefaultSelector):
 
 @dataclass
 class FutureSelector(AbstractBaseContractSelector):
+    # all dates are not timezone aware because that's how they come
+    # from broker
     futuresChain: list[AbstractBaseFutureWrapper]
     roll_bdays: int = FUTURES_ROLL_BDAYS
     roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS
-    today: datetime = field(default_factory=datetime.now, repr=False)
+    today: datetime = field(default=datetime.now(), repr=False)
 
     def __post_init__(self):
         if not self.futuresChain:
@@ -320,7 +349,10 @@ class FutureSelector(AbstractBaseContractSelector):
 
     @cached_property
     def all_contracts(self) -> list[AbstractBaseFutureWrapper]:
-        """All contracts sorted by roll_date."""
+        """
+        Return all contracts sorted by roll_date.  Sorting happens
+        here.
+        """
         return sorted(
             [c for c in self.futuresChain if c.isActiveMonth],
             key=lambda x: x.roll_day,
@@ -337,15 +369,15 @@ class FutureSelector(AbstractBaseContractSelector):
         ]
 
     @cached_property
-    def date_ranges(self) -> list[tuple[ibi.Future, datetime, datetime]]:
+    def date_ranges(self) -> dict[ibi.Future, tuple[datetime, datetime]]:
         """Return a tuple of contract, start, end date for which contract is valid"""
         # this is used to determine typical timedelta between roll
         # dates of subsequent contracts
         roll_dates_timedeltas = []
-        output = []
+        output = {}
         # starting at second contract get start and end dates
         for first, second in zip(self.all_contracts[:-1], self.all_contracts[1:]):
-            output.append((second.contract, first.roll_day, second.roll_day))
+            output[second.contract] = first.roll_day, second.roll_day
             roll_dates_timedeltas.append(second.roll_day - first.roll_day)
         roll_timedelta = (
             min(roll_dates_timedeltas)
@@ -353,15 +385,14 @@ class FutureSelector(AbstractBaseContractSelector):
             else timedelta(days=30)
         )
         first_contract = self.all_contracts[0]
-        output.insert(
-            0,
-            (
-                first_contract.contract,
+        # maintaining key order here, keys must be guaranteed to be sorted
+        return {
+            first_contract.contract: (
                 first_contract.roll_day - roll_timedelta,
                 first_contract.roll_day,
             ),
-        )
-        return output
+            **output,
+        }
 
     @staticmethod
     def _bdays(from_: datetime, to_: datetime) -> int:
@@ -442,6 +473,7 @@ def selector_factory(
     details_list: list[ibi.ContractDetails],
     futures_roll_bdays: int = FUTURES_ROLL_BDAYS,
     futures_roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS,
+    today: datetime = datetime.now(),  # for testing only
 ) -> AbstractBaseContractSelector:
     first_details_instance = details_list[0]
     contract = first_details_instance.contract
@@ -456,4 +488,4 @@ def selector_factory(
             ),
         ),
     }.get(contract.secType, (DefaultSelector, ()))
-    return selector_class.from_details(details_list, *args)  # type: ignore
+    return selector_class.from_details(details_list, today=today, *args)  # type: ignore

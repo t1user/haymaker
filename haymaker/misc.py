@@ -8,8 +8,7 @@ from collections import UserDict
 from dataclasses import fields
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal, TypeAlias
-from zoneinfo import ZoneInfo
+from typing import Any, Callable, Literal
 
 import ib_insync as ibi
 import pandas as pd
@@ -90,101 +89,6 @@ def round_tick(price: float, tick_size: float) -> float:
 
 def sign(x: float) -> Literal[-1, 0, 1]:
     return 0 if x == 0 else -1 if x < 0 else 1
-
-
-def process_trading_hours(
-    th: str, input_tz: str = "US/Central", *, output_tz: str = "UTC"
-) -> list[tuple[dt.datetime, dt.datetime]]:
-    """
-    Given string from :attr:`ibi.ContractDetails.tradingHours` return
-    active hours as a list of (from, to) tuples.
-
-    Args:
-    -----
-
-    tzname: instrument's timezone
-
-    output_tzname: output will be converted to this timezone (best if
-    left at UTC); this param is really for testing
-    """
-    try:
-        input_tz_: ZoneInfo | None = ZoneInfo(input_tz)
-        output_tz_: ZoneInfo | None = ZoneInfo(output_tz)
-    except ValueError:
-        input_tz_ = None
-        output_tz_ = None
-
-    def datetime_tuples(s: str) -> tuple[dt.datetime | None, dt.datetime | None]:
-        def to_datetime(datetime_string: str) -> dt.datetime | None:
-            if datetime_string[-6:] == "CLOSED":
-                return None
-            else:
-                return (
-                    dt.datetime.strptime(datetime_string, "%Y%m%d:%H%M")
-                    .replace(tzinfo=input_tz_)
-                    .astimezone(tz=output_tz_)
-                )
-
-        try:
-            f, t = s.split("-")
-        except ValueError:
-            return (None, None)
-
-        return to_datetime(f), to_datetime(t)
-
-    out = []
-    for i in th.split(";"):
-        tuples = datetime_tuples(i)
-        if not tuples[0]:
-            continue
-        else:
-            out.append(tuples)
-    return out  # type: ignore
-
-
-def is_active(
-    time_tuples: list[tuple[dt.datetime, dt.datetime]] | None = None,
-    now: dt.datetime | None = None,
-) -> bool:
-    """
-    Given list of trading hours tuples from `.process_trading_hours`
-    check if market is active at the moment.
-    """
-    if not time_tuples:
-        return False
-
-    if not now:
-        now = dt.datetime.now(tz=dt.timezone.utc)
-
-    def test_p(t):
-        return t[0] < now < t[1]
-
-    for t in time_tuples:
-        if test_p(t):
-            return True
-    return False
-
-
-def next_active(
-    time_tuples: list[tuple[dt.datetime, dt.datetime]] | None = None,
-    now: dt.datetime | None = None,
-) -> dt.datetime | None:
-    """
-    Given list of trading hours tuples from `.process_trading_hours`
-    return time of nearest market re-open (regardless if market is
-    open now).  Should be used after it has been tested that
-    `.is_active` is False.
-    """
-
-    if not now:
-        now = dt.datetime.now(tz=ZoneInfo("UTC"))
-
-    if not time_tuples:
-        return None
-
-    left_edges = [e[0] for e in time_tuples if e[0] > now]
-    # print(left_edges)
-    return left_edges[0]
 
 
 # ###### Serializer ########
@@ -354,15 +258,6 @@ def contractAsTuple(contract: ibi.Contract) -> tuple:
     )
 
 
-ContractKey: TypeAlias = str
-
-
-def hash_contract(contract: ibi.Contract) -> ContractKey:
-    return str(contract)
-    # return tuple(ibi.util.dataclassNonDefaults(contract).items())
-    # return hash(contractAsTuple(contract))
-
-
 def general_to_specific_contract_class(contract: ibi.Contract) -> ibi.Contract:
     assert isinstance(contract, ibi.Contract), "this function works only with Contracts"
     contract_kwargs = ibi.util.dataclassNonDefaults(contract)
@@ -443,3 +338,55 @@ def name_str(
     else:
         args_str = join_str.join((name, *args))
     return args_str
+
+
+def concat_dfs(*dfs: pd.DataFrame) -> pd.DataFrame:
+    """
+    Concatenate sequence of dfs, cleaning duplicate values if any and
+    ensuring series is monotonously increasing.
+
+    De-duplication will keep later values.
+    """
+    df = pd.concat(dfs)
+    return df[~df.index.duplicated()].sort_index()
+
+
+def format_timestamp(dt_input: dt.datetime | str) -> dt.datetime:
+    """Converts a datetime or date string to a Python datetime.
+
+    Supported string formats:
+    - YYYYMMDD (e.g., 20260101)
+    - YYYYMMDD HH:MM:SS TZ (e.g., 20260101 15:30:00 UTC)
+    - ISO format (e.g., 2026-01-01, or with time/TZ like 2026-01-01T15:30:00Z)
+
+    If the object is naive (no timezone), it localizes it to UTC.
+    If it already has a timezone, it preserves it.
+    """
+    # 1. Handle case if it's already a datetime object
+    if isinstance(dt_input, dt.datetime):
+        dt_ = dt_input
+
+    # 2. Handle strings
+    elif isinstance(dt_input, str):
+        # Handle YYYYMMDD format (exactly 8 digits)
+        if dt_input.isdigit() and len(dt_input) == 8:
+            dt_ = dt.datetime.strptime(dt_input, "%Y%m%d")
+
+        # Handle YYYYMMDD HH:MM:SS TZ
+        elif len(dt_input) >= 17 and dt_input[:8].isdigit() and dt_input[8] == " ":
+            dt_ = dt.datetime.strptime(dt_input[:17], "%Y%m%d %H:%M:%S")
+            if "UTC" in dt_input[17:].upper() or "Z" in dt_input[17:].upper():
+                dt_ = dt_.replace(tzinfo=dt.timezone.utc)
+
+        else:
+            # Catch-all: Handles 'YYYY-MM-DD', with or without time & offsets
+            dt_ = dt.datetime.fromisoformat(dt_input.replace("Z", "+00:00"))
+
+    else:
+        raise TypeError(f"Unsupported type {type(dt_input)}. Expected datetime or str.")
+
+    # 3. Check and apply timezone fallback
+    if dt_.tzinfo is None:
+        return dt_.replace(tzinfo=dt.timezone.utc)
+
+    return dt_

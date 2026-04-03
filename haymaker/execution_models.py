@@ -88,6 +88,7 @@ class AbstractExecModel(Atom, ABC):
     def onStart(self, data, *args) -> None:
         super().onStart(data, *args)
         # super just set strategy, only now subsequent is possible
+        log.debug(f"strategy on {self}: {self.strategy}")
         try:
             self.data.update(**data)
         except AttributeError:
@@ -191,8 +192,14 @@ class BaseExecModel(AbstractExecModel):
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
+        params: dict | None = None,
     ) -> ibi.Trade | None:
-        return self.controller.trade(self.strategy, contract, order, action, self.data)
+
+        if params is None:
+            params = {}
+
+        assert self.strategy, f"{self} has no strategy set, trade attempt cancelled."
+        return self.controller.trade(self.strategy, contract, order, action, params)
 
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
         return self.controller.cancel(trade)
@@ -223,6 +230,7 @@ class BaseExecModel(AbstractExecModel):
         elif action == "CLOSE":
             self.close(data)
         elif action == "REVERSE":
+            log.warning("Executing REVERSE transaction. Check if correct!")
             self.reverse(data)
         else:
             log.error(f"Ambiguous action: {action} for {self}")
@@ -234,7 +242,12 @@ class BaseExecModel(AbstractExecModel):
         data: dict,
         dynamic_order_kwargs: dict | None = None,
     ) -> ibi.Trade | None:
+
+        if not self._verify_strategy(data):
+            return None
+
         self.data.params["close"] = {}
+        self.data.brackets = {}
         data["position_id"] = self.get_position_id(True)
         self.data.params["open"] = data
         try:
@@ -244,6 +257,7 @@ class BaseExecModel(AbstractExecModel):
         except KeyError:
             log.exception("Insufficient data to execute OPEN transaction")
             return None
+
         self.data.active_contract = contract
         order_kwargs = {"action": misc.action(signal), "totalQuantity": amount}
         if dynamic_order_kwargs:
@@ -253,13 +267,16 @@ class BaseExecModel(AbstractExecModel):
             f"{self.strategy} {contract.localSymbol} processing OPEN signal {signal}",
             extra={"data": data},
         )
-        return self.trade(contract, order, "OPEN")
+        return self.trade(contract, order, "OPEN", {**self.data.params["open"]})
 
     def close(
         self,
         data: dict,
         dynamic_order_kwargs: dict | None = None,
     ) -> ibi.Trade | None:
+        if not self._verify_strategy(data):
+            return None
+
         self.data.params["close"] = data
         data["position_id"] = self.get_position_id()
 
@@ -287,22 +304,44 @@ class BaseExecModel(AbstractExecModel):
             extra={"data": data},
         )
         return self.trade(
-            self.data.active_contract,
-            order,
-            "CLOSE",
+            self.data.active_contract, order, "CLOSE", {**self.data.params["close"]}
         )
 
     def reverse(self, data: dict) -> None:
+
+        def open_after_close(trade) -> None:
+            try:
+                log.debug(
+                    f"{self.strategy}: REVERSE executing deferred OPEN after CLOSE "
+                )
+                self.open(data)
+            except Exception as e:
+                log.exception(
+                    f"Failed to execute OPEN after CLOSE for {self.strategy}: {e}",
+                    extra={"data": data, "close_trade": trade},
+                )
+
         close_trade = self.close(data)
         if close_trade:
-            log.debug(
-                f"Reverse trade. OPEN will be issued after CLOSE "
-                f"{close_trade.order.orderId} is done"
-                f"filledEvent will call open with data: {data=} "
-                f"Trade is done? {close_trade.isDone()}"
+            close_trade.filledEvent += open_after_close
+            log.debug(f"REVERSE filledEvent attached to {close_trade.order.orderId} ")
+        else:
+            log.error(
+                f"Failed to close existing position for {self.strategy} "
+                f"in REVERSE trade"
             )
-            close_trade.filledEvent += partial(self.open, data=data)
-            log.debug(f"FillEvent attached. Trade is done? {close_trade.isDone()}")
+
+    def _verify_strategy(self, data: dict) -> bool:
+        if not self.strategy:
+            log.warning(f"{self} was missing strategy, will try to reset")
+            try:
+                self.strategy = data["strategy"]
+            except KeyError:
+                log.critical(
+                    f"failed to reset strategy on {self}, abandoning transaction."
+                )
+                return False
+        return True
 
     def __repr__(self):
         return self.__class__.__name__ + "()"
@@ -365,10 +404,6 @@ class EventDrivenExecModel(BaseExecModel):
             open_order=open_order, close_order=close_order, controller=controller
         )
 
-    def onStart(self, data, *args):
-        super().onStart(data, *args)
-        self.data.brackets = {}
-
     def open(
         self,
         data: dict,
@@ -385,6 +420,7 @@ class EventDrivenExecModel(BaseExecModel):
 
         trade = super().open(data)
         if trade:
+            # it will also receive `ibi.Trade` object!
             trade.filledEvent += attach_bracket
             return trade
         else:
@@ -409,6 +445,7 @@ class EventDrivenExecModel(BaseExecModel):
         return {"ocaGroup": self.data.oca_group, "ocaType": self.oca_type}
 
     def _attach_bracket(self, trade: ibi.Trade, params: dict) -> None:
+        brackets = {}
         # called once for sl/tp pair! Don't put inside the for loop!
         log.debug(f"Will attach brackets for {trade.order.orderId}")
         try:
@@ -441,24 +478,25 @@ class EventDrivenExecModel(BaseExecModel):
                         trade.contract,
                         order,
                         label,
+                        {**memo},  # snapshot with position_id
                     )
                     if bracket_trade:
-                        # this doesn't make it into database now, because it's updating
-                        # a nested dict and only top one triggers a save
-                        # so potentially it's obsolete
-                        self.data.brackets[str(bracket_trade.order.orderId)] = Bracket(
+                        brackets[str(bracket_trade.order.orderId)] = Bracket(
                             cast(BracketLabel, label),
                             order_key,
                             bracket_kwargs,
                             bracket_trade,
                         )
+            # assigning to data after brackets info is complete
+            # ensures it is saved to db
+            self.data.brackets = brackets
         except Exception as e:
             log.exception(f"Error while attaching bracket: {e}")
 
     # def re_attach_brackets(self):
     #     """
     #     Possibly used by :class:`Controller` if it's determined that a bracket
-    #     is missing.
+    #     is missing. NOT IMPLEMENTED NOW.
     #     """
 
     #     for orderId, bracket in self.data.brackets.copy().items():

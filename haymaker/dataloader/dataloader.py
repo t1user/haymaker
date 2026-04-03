@@ -114,7 +114,7 @@ class DataWriter:
 
     async def _onPulse(self, time: datetime):
         if self.is_done():
-            self._pulse -= self.onPulse  # type: ignore
+            self._pulse -= self._onPulse  # type: ignore
         else:
             await self.write_to_store()
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import ib_insync as ibi
@@ -15,17 +17,27 @@ if TYPE_CHECKING:
 
 
 class AsyncAbstractBaseStore(ABC):
+
     @abstractmethod
     def write(
-        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict = {}
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> None: ...
+
+    @abstractmethod
+    def append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> Any: ...
 
     @abstractmethod
     async def read(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | datetime | None = None,
     ) -> pd.DataFrame | None: ...
 
     @abstractmethod
@@ -50,39 +62,78 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
 
     from_params = _sync_class.from_params
 
-    def __init__(self, lib: str, host: str | MongoClient = "localhost") -> None:
-        self.arctic_store = self._sync_class(lib, host)
+    def __init__(
+        self,
+        lib: str,
+        host: str | MongoClient = "localhost",
+        collection_namer: Callable[[ibi.Contract], str] | None = None,
+    ) -> None:
+        self.store = self._sync_class(lib, host, collection_namer)
 
     def write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> None:
-        return fire_and_forget(self.arctic_store.write, symbol, data, meta)
+        """
+        Warning: this is best efforts, may lead to race conditions for
+        very frequent writes.
+        """
+        return fire_and_forget(self.store.write, symbol, data, meta)
+
+    def append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> None:
+        """
+        Warning: this is best efforts, may lead to race conditions for
+        very frequent writes.
+        """
+        # race conditions shouldn't happen for write frequency of 1 sec
+        # it's unlikely to write more frequently
+        # if they do happend, use async_append
+        fire_and_forget(self.store.append, symbol, data, meta, upsert)
+
+    async def async_write(
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
+    ) -> None:
+        await make_async(self.store.write, symbol, data, meta)
+
+    async def async_append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> None:
+        await make_async(self.store.append, symbol, data, meta, upsert)
 
     async def read(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | datetime | None = None,
     ) -> pd.DataFrame | None:
-        return await make_async(self.arctic_store.read, symbol, start_date, end_date)
+        return await make_async(self.store.read, symbol, start_date, end_date)
 
     def delete(self, symbol: str | ibi.Contract) -> None:
-        fire_and_forget(self.arctic_store.delete, symbol)
+        fire_and_forget(self.store.delete, symbol)
 
     async def keys(self) -> list[str]:
-        return await make_async(self.arctic_store.keys)
+        return await make_async(self.store.keys)
 
     async def read_metadata(self, symbol: str | ibi.Contract):
-        return await make_async(self.arctic_store.read_metadata, symbol)
+        return await make_async(self.store.read_metadata, symbol)
 
     def write_metadata(self, symbol: str | ibi.Contract, meta: dict[str, Any]) -> None:
-        fire_and_forget(self.arctic_store.write_metadata, symbol, meta)
+        fire_and_forget(self.store.write_metadata, symbol, meta)
 
     def override_metadata(self, symbol: str, meta: dict[str, Any]) -> None:
-        fire_and_forget(self.arctic_store.override_metadata, symbol, meta)
+        fire_and_forget(self.store.override_metadata, symbol, meta)
 
     def __repr__(self) -> str:
         return (
-            f"{self.__class__.__qualname__}(lib={self.arctic_store.lib}, "
-            f"host={self.arctic_store.host})"
+            f"{self.__class__.__qualname__}(lib={self.store.lib}, "
+            f"host={self.store.host})"
         )

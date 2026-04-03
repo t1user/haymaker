@@ -7,7 +7,7 @@ from collections import abc
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from functools import partial
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Literal, Self
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -57,6 +57,8 @@ class Controller(Atom):
     sync_frequency: int = 0
     health_check_frequency: int = 0
     execution_verification_delay: int = 0
+    execution_verification_max_retries: int = 5
+    handle_missing_brackets: str = "remove"
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
@@ -68,6 +70,7 @@ class Controller(Atom):
         default_factory=list, repr=False
     )
     _health_check_triggers: list[str] = field(default_factory=list, repr=False)
+    _new_position_lock: bool = False
 
     @classmethod
     def from_config(
@@ -155,7 +158,7 @@ class Controller(Atom):
         self.sync_handlers = ErrorHandlers(self.ib, self.sm, self)
         self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
-        log.debug(f"{self.contracts=}")
+        log.debug(f"{self.contract_registry.current_contracts=}")
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
@@ -172,7 +175,9 @@ class Controller(Atom):
 
     def verify_have_contracts_for_positions(self) -> list[ibi.Contract]:
         return [
-            p.contract for p in self.ib.positions() if p.contract not in self.contracts
+            p.contract
+            for p in self.ib.positions()
+            if p.contract not in self.contract_registry.all_contracts
         ]
 
     def set_hold(self) -> None:
@@ -294,12 +299,21 @@ class Controller(Atom):
         contract: ibi.Contract,
         order: ibi.Order,
         action: str,
-        strategy: Strategy,
+        params: dict,
     ) -> ibi.Trade | None:
         # this will return False if order for the strategy has been repeatedly rejected
-        if self.sm.verify_for_rejections(strategy_str):
+        if action == "OPEN" and self._new_position_lock:
+            log.debug(
+                f"New position lock - supressing trade for {strategy_str}: "
+                f"{order.orderType} {order.action} {order.totalQuantity} "
+                f"{contract.localSymbol}"
+            )
+            return None
+        if self.sm.verify_for_rejections(strategy_str) and self.verify_market_open(
+            contract
+        ):
             trade = self.trader.trade(contract, order)
-            self.register_order(strategy_str, action, trade, strategy)
+            self.register_order(strategy_str, action, trade, params)
             trade.filledEvent += partial(
                 self.log_trade, reason=action, strategy=strategy_str
             )
@@ -307,8 +321,25 @@ class Controller(Atom):
         else:
             return None
 
+    def verify_market_open(self, contract: ibi.Contract) -> bool:
+        details = self.contract_registry.get_details(contract)
+        if details is None:
+            log.error(
+                f"Missing details for {contract.localSymbol}, "
+                f"won't verify if market open"
+            )
+            return True
+        if details and details.is_open():
+            return True
+        else:
+            log.error(
+                f"Attempt to place an order for "
+                f"{contract.localSymbol} while market is closed."
+            )
+            return False
+
     def register_order(
-        self, strategy_str: str, action: str, trade: ibi.Trade, strategy: Strategy
+        self, strategy_str: str, action: str, trade: ibi.Trade, params: dict
     ) -> OrderInfo:
         """
         Register order, register lock, verify that position has been registered.
@@ -321,14 +352,14 @@ class Controller(Atom):
 
         This method is called by :class:`Controller`.
         """
-        params = strategy["params"].get(action.lower(), {})
+
         order_info = OrderInfo(strategy_str, action, trade, params)
         oi = self.sm.save_order(order_info)
 
         if action.upper() == "OPEN":
-            trade.filledEvent += partial(self.register_lock, strategy)
+            trade.filledEvent += partial(self.register_lock, strategy_str)
         elif action.upper() == "CLOSE":
-            trade.filledEvent += partial(self.remove_lock, strategy)
+            trade.filledEvent += partial(self.remove_lock, strategy_str)
 
         log.debug(
             f"{trade.order.orderType} orderId: {trade.order.orderId} "
@@ -338,10 +369,12 @@ class Controller(Atom):
 
         return oi
 
-    def register_lock(self, strategy: Strategy, trade: ibi.Trade) -> None:
+    def register_lock(self, strategy_str: str, trade: ibi.Trade) -> None:
+        strategy = self.sm.strategy[strategy_str]
         strategy.lock = 1 if trade.order.action == "BUY" else -1
 
-    def remove_lock(self, strategy: Strategy, trade: ibi.Trade) -> None:
+    def remove_lock(self, strategy_str: str, trade: ibi.Trade) -> None:
+        strategy = self.sm.strategy[strategy_str]
         strategy.lock = 0
 
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
@@ -372,8 +405,9 @@ class Controller(Atom):
         self.sm.save_order_status(trade)
 
     def register_position(
-        self, strategy_str: str, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
+        self, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
     ) -> None:
+        strategy_str = strategy.strategy
         try:
             if isinstance(trade.contract, ibi.Bag):
                 log.debug(
@@ -414,9 +448,9 @@ class Controller(Atom):
             # failing above try to assign
             or self.assign_unknown_trade(trade)
         )
-        self.register_position(strategy.strategy, strategy, trade, fill)
+        self.register_position(strategy, trade, fill)
 
-    def onCommissionReport(
+    async def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
     ) -> None:
         """
@@ -429,14 +463,16 @@ class Controller(Atom):
         if self._hold:
             return
 
+        await asyncio.sleep(1)
         order_info = self.sm.save_order_status(trade)
+        log.debug(
+            f"Saving order {trade.order.orderId} to blotter: {order_info.strategy}"
+        )
 
         if order_info:
             try:
                 strategy, action, _, params, _ = order_info
-                position_id = params.get("position_id") or self.sm.strategy[
-                    strategy
-                ].get("position_id")
+                position_id = params["position_id"]
 
                 kwargs = {
                     "strategy": strategy,
@@ -455,6 +491,7 @@ class Controller(Atom):
                     )
             except Exception as e:
                 log.error(f"Error while trying to create blotter entry: {e}")
+                kwargs = {}
 
         elif trade.order.totalQuantity == 0:
             log.warning(f"empty CommissionReportEvent emit for trade: {trade}")
@@ -488,6 +525,7 @@ class Controller(Atom):
         Any errors are logged but not corrected (may change in
         future).
         """
+        retries = 0
 
         data = self.sm.strategy.get(strategy)
         target = target_position * amount
@@ -504,6 +542,9 @@ class Controller(Atom):
                     f"{strategy} taking long to achive target position of {target}"
                 )
                 await asyncio.sleep(self.execution_verification_delay)
+                retries += 1
+                if retries >= self.execution_verification_max_retries:
+                    break
 
         log_str = f"target: {target}, position: {data.position}"
         if data:
@@ -536,47 +577,58 @@ class Controller(Atom):
 
         # assumed unknown trade is to close a position
         active_strategies_list = [
-            s
+            self.sm.strategy[s]
             for s in self.sm.for_contract[trade.contract]
             if self.sm.strategy[s].active
         ]
         log.debug(
             f"Attemp to assign unknown trade to a strategy: "
-            f"{active_strategies_list}"
+            f"{[s.strategy for s in active_strategies_list]}"
         )
 
         if len(active_strategies_list) == 1:
-            strategy_str = active_strategies_list[0]
-            strategy = self.sm.strategy[strategy_str]
+            strategy = active_strategies_list[0]
 
         # if more than 1 active, unknown trade is for the one without
         # resting orders (resting orders are most likely stop-losses or take-profit)
         elif candidate_strategies := [
-            s for s in active_strategies_list if not self.sm.orders_for_strategy(s)
+            s
+            for s in active_strategies_list
+            if not self.sm.orders_for_strategy(s.strategy)
         ]:
             log.debug(
-                f"Active strategies without resting orders: " f"{candidate_strategies}"
+                f"Active strategies without resting orders: "
+                f"{[s.strategy for s in candidate_strategies]}"
             )
-            # if more than one just pick first one
-            # there's no way to determine which strategy was meant
-            strategy_str = candidate_strategies[0]
+            self._assign_to_strategies(trade, candidate_strategies)
+            # if more than one pick the one with matching size
+            # (or None if not available)
+            strategy = self._assign_to_strategies(trade, candidate_strategies)
         elif active_strategies_list:
             # failing everything else, pick one on which there was most recent operation
             # (probably we're trying to correct a recent error)
-            strategy_str = sorted(
+            strategy = sorted(
                 active_strategies_list,
-                key=lambda x: self.sm.strategy[x].get("timestamp"),
+                key=lambda s: s.get("timestamp"),
             )[-1]
         else:
-            strategy_str = None
-
-        if strategy_str:
-            strategy = self.sm.strategy[strategy_str]
-            self.cancel_orders_for_strategy(strategy_str)
-        else:
+            # strategy doesn't correspond to open position
+            # no way to know what's the intention behind it
             strategy = None
 
+        if strategy:
+            self.cancel_orders_for_strategy(strategy.strategy)
+
         return strategy
+
+    def _assign_to_strategies(
+        self, trade: ibi.Trade, candidate_strategies: list[Strategy]
+    ) -> Strategy | None:
+        """Find strategy with holdings equal to trade size."""
+        for strategy in candidate_strategies:
+            if abs(strategy.position) == trade.order.totalQuantity:
+                return strategy
+        return None
 
     def cancel_orders_for_strategy(self, strategy: str) -> None:
         order_infos = self.sm.orders_for_strategy(strategy)
@@ -587,6 +639,31 @@ class Controller(Atom):
                     f"Cancelled trade: {cancelled_trade.order.orderId} for "
                     f"{cancelled_trade.contract.localSymbol}"
                 )
+
+    def close_positions_for_strategy(self, strategy: str, action: str) -> None:
+        strategy_obj = self.sm.strategy[strategy]
+        direction = "BUY" if strategy_obj.position < 0 else "SELL"
+        amount = abs(strategy_obj.position)
+        order = ibi.MarketOrder(direction, amount)
+        trade_object = self.trade(
+            strategy, strategy_obj.active_contract, order, action, strategy_obj
+        )
+        if trade_object:
+            trade_object.filledEvent += partial(
+                log.debug,
+                (
+                    f"Position for: {strategy} closed; reason: {action} "
+                    f"{direction} {amount} {strategy_obj.active_contract.localSymbol}"
+                ),
+            )
+
+    def lock_new_positions(self):
+        """
+        No new positions will be opened from now on.  Emergency
+        measure after a significant error.
+        """
+        log.error("Emergency lock for new positions.")
+        self._new_position_lock = True
 
     def _make_strategy(self, trade: ibi.Trade, description: str) -> Strategy:
         """
@@ -607,19 +684,21 @@ class Controller(Atom):
         if trade.order.orderId >= 0:
             return None
 
-        strategy = self._assign_trade(trade) or self._make_strategy(
-            trade, "manual_strategy"
-        )
-        log.debug(f"Manual trade assigned to strategy: {strategy.strategy}.")
-
-        # this will save strategy on OrderInfo
-        self.sm.update_strategy_on_order(trade.order.orderId, strategy.strategy)
-
-        return strategy
+        return self.assign_trade(trade, "manual")
 
     def assign_unknown_trade(self, trade: ibi.Trade) -> Strategy:
-        strategy = self._assign_trade(trade) or self._make_strategy(trade, "unknown")
-        log.critical(f"Unknow trade: {trade}")
+        return self.assign_trade(trade, "unknown")
+
+    def assign_trade(
+        self, trade: ibi.Trade, trade_type: Literal["manual", "unknown"]
+    ) -> Strategy:
+
+        strategy = self._assign_trade(trade) or self._make_strategy(trade, trade_type)
+
+        if trade_type == "manual":
+            log.debug(f"Manual trade assigned to strategy: {strategy.strategy}.")
+        else:
+            log.critical(f"Unknown trade: {trade}")
 
         # this will save strategy on OrderInfo
         self.sm.update_strategy_on_order(trade.order.orderId, strategy.strategy)

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import logging
+
+# import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Self
 
 import ib_insync as ibi
@@ -12,6 +16,8 @@ from arctic.exceptions import NoDataFoundException  # type: ignore
 from arctic.store.versioned_item import VersionedItem  # type: ignore
 
 from haymaker.validators import bar_size_validator, wts_validator
+
+from .collection_namer import simple_collection_namer
 
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
@@ -28,9 +34,11 @@ class AbstractBaseStore(ABC):
     Datastore is for saving and reading pandas dataframes and a dict of metadata.
     """
 
+    collection_namer = staticmethod(simple_collection_namer)
+
     @abstractmethod
     def write(
-        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict = {}
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> Any:
         """
         Write data to datastore. Implementation has to recognize whether
@@ -43,11 +51,20 @@ class AbstractBaseStore(ABC):
         ...
 
     @abstractmethod
+    def append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> Any: ...
+
+    @abstractmethod
     def read(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | datetime | None = None,
     ) -> pd.DataFrame | None:
         """
         Read data from store for a given symbol. Implementation has to
@@ -108,7 +125,7 @@ class AbstractBaseStore(ABC):
         Otherwise return the string passed.
         """
         if isinstance(sym, ibi.Contract):
-            return f'{"_".join(sym.localSymbol.split())}_{sym.secType}'
+            return self.collection_namer(sym)
         else:
             return sym
 
@@ -153,7 +170,12 @@ class AbstractBaseStore(ABC):
 
 
 class ArcticStore(AbstractBaseStore):
-    def __init__(self, lib: str, host: str | MongoClient = "localhost") -> None:
+    def __init__(
+        self,
+        lib: str,
+        host: str | MongoClient = "localhost",
+        collection_namer: Callable[[ibi.Contract], str] | None = None,
+    ) -> None:
         """
         Library name is whatToShow + barSize, eg.
         TRADES_1_min
@@ -166,9 +188,17 @@ class ArcticStore(AbstractBaseStore):
         self.db = Arctic(host)
         self.db.initialize_library(lib)
         self.store = self.db[lib]
+        if collection_namer is not None:
+            self.collection_namer = collection_namer  # type: ignore
 
     @classmethod
-    def from_params(cls, wts: str, barSize: str, prefix: str = "") -> Self:
+    def from_params(
+        cls,
+        wts: str,
+        barSize: str,
+        prefix: str = "",
+        collection_namer: Callable[[ibi.Contract], str] | None = None,
+    ) -> Self:
         """
         Initiate store with standardized lib name and shared mongo
         host.
@@ -177,7 +207,7 @@ class ArcticStore(AbstractBaseStore):
         ----
 
         * wts:
-            `what to show` parameter of :meth:`ib_insync.ib.reqHistoricalData`
+            `whatToShow` parameter of :meth:`ib_insync.ib.reqHistoricalData`
 
         * barSize:
             `barSize` parameter of :meth:`ib_insync.ib.reqHistoricalData`
@@ -189,9 +219,9 @@ class ArcticStore(AbstractBaseStore):
         _barSize = bar_size_validator(barSize)
         client = get_mongo_client()
         if prefix:
-            return cls(f"{prefix}_{_wts}_{_barSize}", client)
+            return cls(f"{prefix}_{_wts}_{_barSize}", client, collection_namer)
         else:
-            return cls(f"{_wts}_{_barSize}", client)
+            return cls(f"{_wts}_{_barSize}", client, collection_namer)
 
     def write(
         self,
@@ -202,6 +232,7 @@ class ArcticStore(AbstractBaseStore):
         metadata = self._metadata(symbol)
         if meta is not None:
             metadata.update(meta)
+        metadata["up_to"] = self._up_to(data)
         version = self.store.write(
             self._symbol(symbol),
             self._clean(data),
@@ -209,14 +240,62 @@ class ArcticStore(AbstractBaseStore):
         )
         return f"symbol: {version.symbol} version: {version.version}"
 
+    def append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> str:
+        metadata = self._metadata(symbol)
+
+        if meta is not None:
+            metadata.update(meta)
+
+        if up_to := (
+            self.read_metadata(symbol).get("up_to") or self._last_date(symbol)
+        ):
+            # else is a new symbol in the store to be upserted
+            try:
+                up_to_ts = pd.Timestamp(up_to)
+                if up_to_ts.tzinfo is None:
+                    up_to_ts = up_to_ts.tz_localize(data.index.tz)  # type: ignore
+                data = data[data.index > up_to_ts]
+            except Exception as e:
+                log.exception(e)
+                # metadata had corrupted value, try again
+                data = data[data.index > self._last_date(symbol)]
+
+        try:
+            metadata["up_to"] = self._up_to(data)
+        except IndexError:
+            pass
+
+        version = self.store.append(
+            self._symbol(symbol),
+            data,
+            metadata=self._update_metadata(symbol, metadata),
+            upsert=upsert,
+            prune_previous_version=True,
+        )
+        return f"symbol: {version.symbol} version: {version.version}"
+
+    @staticmethod
+    def _up_to(df: pd.DataFrame) -> str:
+        return df.index[-1].isoformat()
+
     def read(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | datetime | None = None,
     ) -> pd.DataFrame | None:
         data = self.read_object(symbol, start_date, end_date)
         if data:
+            if not data.data.index.is_monotonic_increasing:
+                warning_msg = "Index in read df is not monotonic increasing!"
+                # warnings.warn(warning_msg)
+                log.debug(warning_msg)
             return data.data
         else:
             return None
@@ -224,8 +303,8 @@ class ArcticStore(AbstractBaseStore):
     def read_object(
         self,
         symbol: str | ibi.Contract,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: str | datetime | None = None,
+        end_date: str | None | datetime = None,
     ) -> VersionedItem | None:
         """
         Return Arctic object, which contains data and full metadata.
@@ -248,6 +327,36 @@ class ArcticStore(AbstractBaseStore):
             return self.store.read(self._symbol(symbol), date_range=date_range)
         except NoDataFoundException:
             return None
+
+        except KeyError:
+            df = self.read_object(symbol)
+            if df is not None and not df.index.is_monotonic_increasing:
+                warning_msg = (
+                    f"data for {self._symbol(symbol)} is not monotonic increasing "
+                    f"and it cannot be sliced, returning full dataframe"
+                )
+
+                # warnings.warn(warning_msg)
+                log.debug(warning_msg)
+            else:
+                warning_msg = (
+                    f"couldn't slice data for {self._symbol(symbol)} "
+                    f"returning full dataframe."
+                )
+                # warnings.warn(warning_msg)
+                log.debug(warning_msg)
+            return df
+
+    def _last_date(self, symbol: str | ibi.Contract) -> str | None:
+        warning_msg = f"{self._symbol} missing 'up_to' in metadata, reading full df."
+        # warnings.warn(warning_msg)
+        log.debug(warning_msg)
+        if (d := self.read(symbol)) is not None:
+            try:
+                return self._up_to(d)
+            except Exception as e:
+                log.exception(e)
+                pass
 
     def delete(self, symbol: str | ibi.Contract) -> None:
         self.store.delete(self._symbol(symbol))
@@ -272,13 +381,6 @@ class ArcticStore(AbstractBaseStore):
         self, symbol: str, meta: dict[str, Any]
     ) -> VersionedItem | None:
         return self.store.write_metadata(symbol, meta)
-
-    def _metadata(self, obj: ibi.Contract | str) -> dict[str, dict[str, str]]:
-        if isinstance(obj, ibi.Contract):
-            meta = super()._metadata(obj)
-        else:
-            meta = {}
-        return meta
 
     def __repr__(self) -> str:
         return f"{self.__class__.__qualname__}(lib={self.lib}, host={self.host})"

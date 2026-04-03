@@ -2,6 +2,7 @@ coldstart: False # meant to be set from CLI, if necessary
 reset: False # doesn't really make sense to change here
 
 ignore_errors:
+  - 1102  # Connectivity restored
   - 2104  # Market data farm connection is ok
   - 2106  # Data farm connection is OK
   - 2107  # Data farm connection is inactive but should be available upon demand
@@ -39,6 +40,8 @@ controller:
   # delay in sec after which controller will verify if transaction was executed correctly;
   # zero or comment-out for no verification
   execution_verification_delay: 15 # in seconds
+  execution_verification_max_retries: 5
+  handle_missing_brackets: "remove" # one of: "remove", "warn", "ignore"
 
 # best left untouched
 state_machine:
@@ -49,6 +52,11 @@ state_machine:
   max_rejected_orders: 3 
   
 
+dfaggregator:
+  market_data_lib: live_data # where market data will be saved
+  save_frequency: 900 # how frequently data will be saved (in secs)
+
+  
 # timeout triggered after no data have been received for given amount of seconds
 timeout:
   # behaviour after timeout triggered

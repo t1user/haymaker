@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from functools import partial
 from typing import TYPE_CHECKING, Self
 
@@ -15,6 +16,9 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+
+
+ERROR_STRATEGIES: set[str] = set()
 
 
 class OrderSyncStrategy:
@@ -100,19 +104,16 @@ class OrderSyncStrategy:
                 f"inactive trades: "
                 f"{[(i.order.orderId, i.order.permId) for i in self.inactive]}"
             )
-
-        # todo: WTF? changing orderId on a trade????
-        # this likely needs to be removed
+            log.debug(f"ib_known_trades: {list(ib_known_trades)}")
         # if cannot match inactive trade by orderId try by permId
-        # and if succcessful modify its orderId (WTF????)
-        # THIS DOESN'T SEEM TO MAKE ANY SENSE AT ALL
-        # TODO
-        # Basically search for trades that have orderId==0
-        # If that's the point simlplify this
-        # Or find out what the point is
+        # (permId persists in between restarts)
+        # if succcessful modify its orderId
+        # orders have orderId == 0 if they were filled while system was off
+        # we're assigning to them our last known orderId
+        # (from before system went off) so that they can be matched correctly
+        # to db records and their status updated (to done)
         for old_trade in self.inactive:
-            new_trade = ib_known_trades.get(old_trade.order.permId)
-            if new_trade:
+            if new_trade := ib_known_trades.get(old_trade.order.permId):
                 log.warning(
                     f"Will change orderId: {new_trade.order.orderId} "
                     f"to: {old_trade.order.orderId}"
@@ -120,6 +121,35 @@ class OrderSyncStrategy:
                 new_trade.order.orderId = old_trade.order.orderId
                 self.done.append(new_trade)
                 self.sm.update_trade(new_trade)  # <- CHANGING RECORDS
+            # trying to manually update trade from fills
+            elif fills := [
+                f
+                for f in self.ib.fills()
+                if f.execution.orderId == old_trade.order.orderId
+            ]:
+                old_trade.fills = fills
+                filled = sum([fill.execution.shares for fill in fills])
+                remaining = old_trade.order.totalQuantity - filled
+                old_trade.log.append(
+                    ibi.objects.TradeLogEntry(
+                        time=fills[-1].execution.time,
+                        status="Filled" if remaining == 0 else "Submitted",
+                        message="composed by sync_routines",
+                    )
+                )
+                old_trade.orderStatus = ibi.OrderStatus(
+                    orderId=old_trade.order.orderId,
+                    status=(
+                        ibi.OrderStatus.Filled
+                        if remaining == 0
+                        else ibi.OrderStatus.Submitted
+                    ),
+                    filled=filled,
+                    remaining=remaining,
+                )
+
+                self.done.append(old_trade)
+                self.sm.update_trade(old_trade)
             else:
                 self.errors.append(old_trade)
 
@@ -311,16 +341,24 @@ class OrderReconciliationSync:
     """
 
     def __init__(
-        self, ib: ibi.IB, sm: StateMachine, ct: Controller, cancel: bool = True
+        self,
+        ib: ibi.IB,
+        sm: StateMachine,
+        ct: Controller,
+        cancel: bool = True,
+        handle_missing_brackets: str = "ignore",
     ) -> None:
         self.ib = ib
         self.sm = sm
         self.ct = ct
         self.cancel = cancel
+        self.handle_missing_brackets = handle_missing_brackets
 
     @classmethod
     def run(cls, ct: Controller, cancel: bool = True) -> Self:
-        return cls(ct.ib, ct.sm, ct, ct.cancel_stray_orders).run_strategies()
+        return cls(
+            ct.ib, ct.sm, ct, ct.cancel_stray_orders, ct.handle_missing_brackets
+        ).run_strategies()
 
     def run_strategies(self) -> Self:
         for strategy_str, strategy in self.sm.strategy.items():
@@ -352,6 +390,9 @@ class OrderReconciliationSync:
             )
 
     def _check_brackets(self, strategy: Strategy, order_infos: list[OrderInfo]) -> None:
+        if self.handle_missing_brackets not in ["remove", "warn"]:
+            return
+
         params = strategy.get("params")
         if params and (
             brackets := [
@@ -364,17 +405,49 @@ class OrderReconciliationSync:
                 if (oi.action in ("STOP-LOSS", "TAKE-PROFIT") and oi.active)
             ]
             if len(brackets) != len(existing_orders):
-                log.error(
+                _log = (
+                    log.error
+                    if strategy.strategy not in ERROR_STRATEGIES
+                    else log.debug
+                )
+                _log(
                     f"Bracket error for {strategy.strategy}, "
+                    f"position: {strategy.position} "
                     f"we have: {len(existing_orders)} orders, "
                     f"we should have: {len(brackets)} orders."
                 )
+                ERROR_STRATEGIES.add(strategy.strategy)
+
+        if ERROR_STRATEGIES and self.handle_missing_brackets == "remove":
+
+            # close positions for strategies without brackets, but
+            # only if they don't cancel each other (skip cancelling strategies)
+            non_cancelling_positions: defaultdict[ibi.Contract, int] = defaultdict(int)
+            for strategy_str in ERROR_STRATEGIES:
+                strategy = self.ct.sm.strategy[strategy_str]
+                non_cancelling_positions[strategy.active_contract] += strategy.position
+                self.ct.lock_new_positions()
+
+            for strategy_str in ERROR_STRATEGIES:
+                strategy = self.ct.sm.strategy[strategy_str]
+                if non_cancelling_positions.get(strategy.active_contract):
+                    log.error(
+                        f"Closing positions for strategy with missing bracket: "
+                        f"{strategy.strategy}"
+                    )
+                    non_cancelling_positions[
+                        strategy.active_contract
+                    ] -= strategy.position
+                    self.ct.close_positions_for_strategy(
+                        strategy.strategy, "MISSING BRACKET EMERGENCY CLOSE"
+                    )
+            ERROR_STRATEGIES.clear()
 
 
 class Terminator:
     """
     Class organizing the process of cancelling all resting orders and
-    closing all positins.
+    closing all positions.
 
     First, an attempt is made to identify resting stop-losses that are
     associated with strategies.  Those orders are cancelled but
@@ -467,11 +540,7 @@ class Terminator:
             f"{strategy.strategy} {contract} {action} {amount}"
         )
         new_trade = self.controller.trade(
-            strategy.strategy,
-            contract,
-            ibi.MarketOrder(action, amount),
-            "RESET",
-            strategy,
+            strategy.strategy, contract, ibi.MarketOrder(action, amount), "RESET", {}
         )
         assert new_trade
         self.register_trade(new_trade)

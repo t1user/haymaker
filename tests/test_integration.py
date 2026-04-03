@@ -11,7 +11,7 @@ from haymaker.controller import Controller
 from haymaker.execution_models import BaseExecModel, EventDrivenExecModel
 from haymaker.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
 from haymaker.signals import BinarySignalProcessor
-from haymaker.state_machine import Strategy, StrategyContainer
+from haymaker.state_machine import StrategyContainer
 from haymaker.trader import Trader
 
 
@@ -25,6 +25,7 @@ def portfolio():
 
 @pytest.fixture
 def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
+
     class FakeStateMachine:
         strategy = StrategyContainer(strategy_saver)
 
@@ -60,7 +61,6 @@ def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
             self.dataEvent.emit(data_for_df)
 
     source = SourceAtom()
-
     Pipe(source, brick, signal, PortfolioWrapper(), exec_model)
     source.run()
 
@@ -76,7 +76,7 @@ def test_strategy_is_strategy(pipe):
 def test_data_is_dict(pipe):
     strategy, contract, order, action, data = pipe
 
-    assert isinstance(data, Strategy)
+    assert isinstance(data, dict)
 
 
 def test_contract_is_contract(pipe):
@@ -86,9 +86,8 @@ def test_contract_is_contract(pipe):
 
 def test_required_fields_in_data_present(pipe):
     _, _, _, _, data = pipe
-    data_ = data.params["open"]
     assert set(["strategy", "contract", "amount", "signal", "action"]).issubset(
-        set(data_.keys())
+        set(data.keys())
     )
 
 
@@ -124,6 +123,9 @@ def new_setup(Atom):
         def trade(self, *args, **kwargs):
             self.trade_object = super().trade(*args, **kwargs)
             return self.trade_object
+
+        def verify_market_open(self, contract) -> bool:
+            return True
 
     controller = FakeController(trader=FakeTrader())
 
@@ -198,6 +200,7 @@ async def test_sell_position_registered(new_setup):
             tradingClass="ES",
         ),
     }
+
     source.dataEvent.emit(data)
     trade_object = controller.trade_object
     trade_object.fills.append(
@@ -257,4 +260,4 @@ async def test_manual_order_created(Atom):
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
     await asyncio.sleep(0)
     assert a.sm._strategies.total_positions()[trade_object.contract] == 1
-    assert "manual_strategy_ES" in a.sm._strategies
+    assert "manual_ES" in a.sm._strategies

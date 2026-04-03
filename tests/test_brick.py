@@ -1,20 +1,24 @@
 import os
 import pickle
 from dataclasses import dataclass
+from typing import ClassVar
+from unittest.mock import ANY, Mock
 
 import ib_insync as ibi
 import pandas as pd
 import pytest
 from config import TEST_ROOT  # type: ignore
 
-from haymaker.base import ActiveNext, Atom
+from haymaker.base import ActiveNext
+from haymaker.base import Atom as BaseAtom
 from haymaker.brick import AbstractBaseBrick, AbstractDfBrick
-from haymaker.misc import hash_contract
+from haymaker.contract_registry import ContractRegistry
 
 
 @pytest.fixture
 def brick() -> AbstractBaseBrick:
     class Brick(AbstractBaseBrick):
+
         def _signal(self, data):
             return {"signal": 1, "abc": "xyz", "pqz": 5}
 
@@ -66,9 +70,11 @@ def data_for_df():
     }
 
 
+# don't remove Atom dependency, it ensures contract_registry cleaned for every test
 @pytest.fixture
-def df_brick():
+def df_brick(Atom):
     class Brick(AbstractDfBrick):
+
         def df(self, data):
             data["price_plus"] = data["price"] + 1
             return data
@@ -77,7 +83,9 @@ def df_brick():
 
 
 @pytest.fixture
-def df_connected_brick(df_brick: AbstractDfBrick) -> tuple[AbstractDfBrick, Atom]:
+def df_connected_brick(
+    df_brick: AbstractDfBrick, Atom
+) -> tuple[AbstractDfBrick, BaseAtom]:
     class NewAtom(Atom):
         def onData(self, data, *args):
             self.memo = data
@@ -98,7 +106,7 @@ def test_AbstractDfBrick_is_abstract():
 
 
 def test_signal_correct(
-    df_connected_brick: tuple[AbstractDfBrick, Atom], data_for_df: dict
+    df_connected_brick: tuple[AbstractDfBrick, BaseAtom], data_for_df: dict
 ):
     """Test that df_brick correctly emits the last row of df."""
     brick, atom = df_connected_brick
@@ -110,6 +118,7 @@ def test_signal_correct(
 @pytest.fixture
 def basic_df_brick():
     class Brick(AbstractDfBrick):
+
         def df(self, data):
             return data
 
@@ -119,8 +128,7 @@ def basic_df_brick():
 def test_dispatchmethod_df(basic_df_brick: AbstractDfBrick, data_for_df: dict):
     df = pd.DataFrame(data_for_df)
     row = basic_df_brick.df_row(df)
-    # hard to compare two Series, easier with dicts, result the same
-    assert row.to_dict() == df.iloc[-1].to_dict()
+    assert row.equals(df.iloc[-1])
 
 
 def test_dispatchmethod_barList(basic_df_brick: AbstractDfBrick):
@@ -135,35 +143,37 @@ def test_dispatchmethod_dict(basic_df_brick: AbstractDfBrick, data_for_df: dict)
     out = basic_df_brick.df_row(data_for_df)
 
     should_be = pd.DataFrame(data_for_df).iloc[-1]
-    assert out.to_dict() == should_be.to_dict()
+    assert out.equals(should_be)
+
+
+def test_df_brick_accepts_df(basic_df_brick: AbstractDfBrick, data_for_df: dict, Atom):
+
+    class OutputAtom(Atom):
+        output = None
+
+        def onData(self, data, *args):
+            self.output = data
+
+    output_atom = OutputAtom()
+    basic_df_brick += output_atom
+    print(basic_df_brick)
+    df = pd.DataFrame(data_for_df)
+    basic_df_brick.onData(df)
+    assert output_atom.output is not None
+    last_row = df.iloc[-1].to_dict()
+    assert {k: v for k, v in output_atom.output.items() if k in last_row} == last_row
 
 
 def test_next_correct() -> None:
 
     es = ibi.Future(symbol="ES", exchange="CME")
-    es0 = ibi.Future(
-        conId=637533641,
-        symbol="ES",
-        lastTradeDateOrContractMonth="20250919",
-        multiplier="50",
-        exchange="CME",
-        currency="USD",
-        localSymbol="ESU5",
-        tradingClass="ES",
-    )
-    es1 = ibi.Future(
-        conId=495512563,
-        symbol="ES",
-        lastTradeDateOrContractMonth="20251219",
-        multiplier="50",
-        exchange="CME",
-        currency="USD",
-        localSymbol="ESZ5",
-        tradingClass="ES",
-    )
+
+    mock_registry = Mock()
 
     @dataclass
     class MyBrick(AbstractDfBrick):
+        contract_registry: ClassVar[ContractRegistry] = mock_registry
+
         strategy: str
         contract: ibi.Contract
         which_contract: ActiveNext = ActiveNext.NEXT
@@ -173,41 +183,23 @@ def test_next_correct() -> None:
 
     my_brick = MyBrick("my_strategy_name", es)
 
-    # this would be done automatically behind the curtain (in `Manager` module)
-    Atom.contract_dict[(hash_contract(es), ActiveNext.ACTIVE)] = es0
-    Atom.contract_dict[(hash_contract(es), ActiveNext.NEXT)] = es1
-
-    # just make sure correct contract picked in line with attr on the
-    # object (rather than class, which is by default ACTIVE)
-    assert my_brick.contract == es1
+    # just make sure `Brick` asks for correct contract
+    # class default is ACTIVE, we've changed it to NEXT
+    # wheather correct object actually returned is tested elsewhere
+    contract = my_brick.contract  # noqa
+    mock_registry.get_contract.assert_called_once_with(ANY, ActiveNext.NEXT)
 
 
 def test_active_correct() -> None:
 
     es = ibi.Future(symbol="ES", exchange="CME")
-    es0 = ibi.Future(
-        conId=637533641,
-        symbol="ES",
-        lastTradeDateOrContractMonth="20250919",
-        multiplier="50",
-        exchange="CME",
-        currency="USD",
-        localSymbol="ESU5",
-        tradingClass="ES",
-    )
-    es1 = ibi.Future(
-        conId=495512563,
-        symbol="ES",
-        lastTradeDateOrContractMonth="20251219",
-        multiplier="50",
-        exchange="CME",
-        currency="USD",
-        localSymbol="ESZ5",
-        tradingClass="ES",
-    )
+
+    mock_registry = Mock()
 
     @dataclass
     class MyBrick(AbstractDfBrick):
+        contract_registry: ClassVar[ContractRegistry] = mock_registry
+
         strategy: str
         contract: ibi.Contract
 
@@ -216,10 +208,6 @@ def test_active_correct() -> None:
 
     my_brick = MyBrick("my_strategy_name", es)
 
-    # this would be done automatically behind the curtain (in `Manager` module)
-    Atom.contract_dict[(hash_contract(es), ActiveNext.ACTIVE)] = es0
-    Atom.contract_dict[(hash_contract(es), ActiveNext.NEXT)] = es1
-
-    # just make sure correct contract picked in line with attr on the
-    # object (rather than class, which is by default ACTIVE)
-    assert my_brick.contract == es0
+    # just make sure correct contract requested in line with attr
+    contract = my_brick.contract  # noqa
+    mock_registry.get_contract.assert_called_once_with(ANY, ActiveNext.ACTIVE)
