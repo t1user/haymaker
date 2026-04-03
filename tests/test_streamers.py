@@ -82,7 +82,9 @@ class FakeStore:
 
 @pytest.fixture()
 def mock_arctic_store():
-    with patch("haymaker.streamers.AsyncArcticStore") as mock_store_class:
+    with patch("haymaker.streamers.AsyncArcticStore") as mock_store_class, patch(
+        "haymaker.streamers.get_mongo_client"
+    ):
         instance = mock_store_class.return_value
         instance.read = AsyncMock()
         instance.read_metadata = AsyncMock(return_value={})
