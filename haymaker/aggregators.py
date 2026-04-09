@@ -73,7 +73,7 @@ class BarAggregator(Atom):
 
     def onStart(self, data: dict, *args) -> None:
         """Syncing contract with streamer."""
-        assert args, f"No streamer passed to {self}"
+        assert args, f"No streamer passed to {self!s}"
         streamer = args[0]
         self.sync_with_streamer(streamer)
         super().onStart(data, *args)
@@ -91,7 +91,7 @@ class BarAggregator(Atom):
         streamer_class = streamer.__class__.__name__
         if streamer_class not in self._compatible_with:
             raise WrongStreamer(
-                f"Streamer {streamer_class} is not compatible with {self}"
+                f"Streamer {streamer_class} is not compatible with {self!s}"
             )
 
     def onDataBar(self, bars, *args) -> None:
@@ -117,8 +117,6 @@ class BarAggregator(Atom):
         then has to process this data in the correct order when
         backfill is finished.
         """
-        if self._future_adjust_flag:
-            self.adjust_future(data)
 
         await self._queue.put(data)
         if self._worker_task is None or self._worker_task.done():
@@ -148,6 +146,11 @@ class BarAggregator(Atom):
         if len(data_) == 0:
             log.warning(f"{self!s} received empty BarDataList, skipping")
             return
+
+        # anything emitted after flag was set cannot be processed
+        # until data in filter adjusted
+        if self._future_adjust_flag:
+            self.adjust_future(data_)
 
         data, last_bar = data_[:-1], data_[-1]
 
@@ -222,14 +225,14 @@ class BarAggregator(Atom):
         be adjusted to
         """
 
-        log.warning(f"{self} adjusting future.")
+        log.warning(f"{self!s} adjusting future.")
 
         old_bar = self.filter.bars[-1]
         for bar_ in reversed(bars):
             if bar_.date == old_bar.date:
                 new_bar = bar_
                 break
-        assert new_bar, f"{self} failed future adjustment: non-overlapping series."
+        assert new_bar, f"{self!s} failed future adjustment: non-overlapping series."
 
         value = self.reverse_operator(new_bar.close, old_bar.close)
         log.warning(
@@ -246,6 +249,10 @@ class BarAggregator(Atom):
     def onContractChanged(
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> None:
+        assert self._queue.qsize() == 0, (
+            f"{self!s} cannot process contract changed because there "
+            f"are unprocessed items in the queue."
+        )
         self._future_adjust_flag = True
         super().onContractChanged(old_contract, new_contract)
 
