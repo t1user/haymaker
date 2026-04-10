@@ -18,7 +18,7 @@ dependencies = [
   "ib_insync==0.9.86",
   "pandas==2.3.3",
   "pandas-market-calendars==5.1.1",
-  "numba==0.62.1",
+  "numba==0.65.0",
   "pyyaml==6.0.3",
   "tqdm==4.67.1",
   "types-tqdm==4.67.0.20250809",
