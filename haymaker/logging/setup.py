@@ -1,5 +1,6 @@
 import logging
 import logging.config
+import logging.handlers
 import sys
 import time
 from datetime import datetime, timezone
@@ -35,6 +36,20 @@ class TqdmLoggingHandler(logging.Handler):
             tqdm.write(msg)
         except Exception:
             self.handleError(record)
+
+
+class TelegramHandler(logging.handlers.HTTPHandler):
+
+    def __init__(self, host, url, chat_id, secure=True, method="POST"):
+        super().__init__(host=host, url=url, method=method, secure=secure)
+        self.chat_id = chat_id
+
+    def mapLogRecord(self, record):
+        return {
+            "chat_id": self.chat_id,
+            "text": self.format(record),
+            "parse_mode": "HTML",
+        }
 
 
 class UTCFormatter(logging.Formatter):
