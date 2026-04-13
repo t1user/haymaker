@@ -12,6 +12,7 @@ from typing import Literal
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
+from .async_wrappers import QueueRunner
 from .base import Atom
 from .dfaggregator import WrongStreamer
 from .streamers import Streamer
@@ -63,9 +64,7 @@ class BarAggregator(Atom):
         # reference point for last bar processed
         self._last_data_point: datetime | date | None = None
         # data queued during long backfills
-        self._queue: asyncio.Queue = asyncio.Queue()
-        # task that processes queue where all data bars are put
-        self._worker_task: asyncio.Task | None = None
+        self._queue: QueueRunner = QueueRunner(self._process, f"{self!s}")
         # used to determine if backfill in progress
         self._backfill_event: asyncio.Event = asyncio.Event()
         # start with cleared state (will not block)
@@ -117,20 +116,9 @@ class BarAggregator(Atom):
         then has to process this data in the correct order when
         backfill is finished.
         """
-
         await self._queue.put(data)
-        if self._worker_task is None or self._worker_task.done():
-            self._worker_task = asyncio.create_task(
-                self._process_queue(), name=f"{self!s}_queue_worker"
-            )
 
-    async def _process_queue(self) -> None:
-        while True:
-            data = await self._queue.get()
-            await self._process(data)
-            self._queue.task_done()
-
-    async def _process(self, data_: ibi.BarDataList, *args) -> None:
+    async def _process(self, data_: ibi.BarDataList) -> None:
         """
         Pass correct data to `self.filter`.
 
@@ -199,7 +187,8 @@ class BarAggregator(Atom):
         except Exception:
             # in case of error _backfill_event will stay cleared
             # disabling processing of faulty signals
-            log.exception(f"{self!s} error in backfill.")
+            # queue will become deadlocked
+            log.exception(f"{self!s} error in backfill. Queue frozen, restart system.")
             raise
 
     @cached_property

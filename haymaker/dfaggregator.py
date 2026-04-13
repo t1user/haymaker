@@ -11,6 +11,7 @@ import ib_insync as ibi
 import pandas as pd
 
 from haymaker import misc
+from haymaker.async_wrappers import QueueRunner
 from haymaker.base import Atom
 from haymaker.config import CONFIG
 from haymaker.contract_selector import FutureSelector, custom_bday
@@ -84,8 +85,7 @@ class DfAggregator(Atom):
         init=False, repr=False, default_factory=dict
     )
     _df: pd.DataFrame = field(init=False, repr=False, default_factory=pd.DataFrame)
-    _queue: asyncio.Queue = field(init=False, repr=False, default_factory=asyncio.Queue)
-    _worker_task: asyncio.Task | None = field(init=False, repr=False, default=None)
+    _queue: QueueRunner = field(init=False, repr=False)
     _save_timer: ev.Timer = field(init=False, repr=False, default=None)
     _timer_task: asyncio.Task | None = field(init=False, repr=False, default=None)
 
@@ -95,10 +95,11 @@ class DfAggregator(Atom):
         assert isinstance(
             self.save_frequency, int
         ), f"{self!s} save_frequency must be an int, not {type(self.save_frequency)}"
+        self._queue = QueueRunner(self.process_data, f"{self!s}")
         super().__init__()
 
     @property
-    def store(self):
+    def store(self) -> AsyncAbstractBaseStore:
         if self.datastore is None:
             assert (barSizeSetting := self._streamer_params.get("barSizeSetting")), (
                 f"{self} cannot initialize "
@@ -157,16 +158,6 @@ class DfAggregator(Atom):
     async def onData(self, data: ibi.BarDataList, *args: Any) -> None:
         # processing may be slow so queue data before processing
         await self._queue.put(data)
-        if self._worker_task is None or self._worker_task.done():
-            self._worker_task = asyncio.create_task(
-                self._process_queue(), name=f"{self!s}_process_queue"
-            )
-
-    async def _process_queue(self):
-        while True:
-            data = await self._queue.get()
-            await self.process_data(data)
-            self._queue.task_done()
 
     async def process_data(self, data: ibi.BarDataList) -> None:
         raw_df = pd.DataFrame(data).set_index("date")

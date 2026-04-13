@@ -55,6 +55,20 @@ class AsyncAbstractBaseStore(ABC):
     @abstractmethod
     def delete(self, symbol: str | ibi.Contract) -> None: ...
 
+    @abstractmethod
+    async def async_append(
+        self,
+        symbol: str | ibi.Contract,
+        data: pd.DataFrame,
+        meta: dict | None = None,
+        upsert: bool = True,
+    ) -> None: ...
+
+    @abstractmethod
+    async def async_write(
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
+    ) -> None: ...
+
 
 class AsyncArcticStore(AsyncAbstractBaseStore):
 

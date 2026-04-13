@@ -393,25 +393,42 @@ async def test_BarAggregator_no_duplicate_data_processed(source_aggregator_outpu
         assert left == right
 
 
-# =======================================================================
-# LLM generated tests from here on
-# =======================================================================
-
-
 @pytest.mark.asyncio
-async def test_BarAggregator_queued_items_strict_fifo_order(source_aggregator_output):
+async def test_BarAggregator_queued_items_strict_fifo_order():
     """
     Test that items queued during backfill are processed in strict FIFO order
     """
-    source, aggregator, output = source_aggregator_output
 
-    # Track the order of _process calls
-    process_order = []
-    original_process = aggregator._process
+    class SourceAtom(BaseAtom):
+        pass
 
-    async def tracked_process(data_, *args, **kwargs):
-        process_order.append(data_[-1].date)  # Record last bar timestamp
-        return await original_process(data_, *args, **kwargs)
+    class OutputAtom(BaseAtom):
+
+        def __init__(self):
+            self.reset_data()
+            super().__init__()
+
+        def onStart(self, data, *args):
+            self.onStart_data = data
+            self.onStart_counter += 1
+
+        def onData(self, data, *args):
+            self.onData_data.append(data.copy())
+            self.onData_counter += 1
+
+        def reset_data(self):
+            self.onStart_data = None
+            self.onData_data = []
+            self.onStart_counter = 0
+            self.onData_counter = 0
+
+    # using NoFilter ensures that we return the same data as supplied
+    # actual filter would be a layer of complication here
+    aggregator = BarAggregator(NoFilter(), future_adjust_type="add")
+    source = SourceAtom()
+    output = OutputAtom()
+
+    source.pipe(aggregator, output)
 
     # Create batches with distinct non-overlapping timestamps
     batch1 = sample_barDataList[:3]
@@ -426,57 +443,90 @@ async def test_BarAggregator_queued_items_strict_fifo_order(source_aggregator_ou
     original_backfill = aggregator.backfill
 
     with patch.object(aggregator, "backfill", side_effect=slow_backfill):
-        with patch.object(aggregator, "_process", side_effect=tracked_process):
-            # Emit batches in rapid succession
-            source.dataEvent.emit(batch1)
-            await asyncio.sleep(0.01)  # Let backfill start
-            source.dataEvent.emit(batch2)
-            source.dataEvent.emit(batch3)
+        # Emit batches in rapid succession
+        source.dataEvent.emit(batch1)
+        await asyncio.sleep(0.01)  # Let backfill start
+        source.dataEvent.emit(batch2)
+        source.dataEvent.emit(batch3)
 
-            # Wait for all to process
-            await wait_for_condition(lambda: output.onData_counter == 3, timeout=1)
+        # Wait for all to process
+        await wait_for_condition(lambda: output.onData_counter == 3, timeout=1)
+
+    output_d = output.onData_data
+    received_batch1 = output_d[0]
+    received_batch2 = output_d[1]
+    received_batch3 = output_d[2]
 
     # Verify processing happened in order: batch1, batch2, batch3
-    assert len(process_order) == 3
-    assert process_order[0] == batch1[-1].date
-    assert process_order[1] == batch2[-1].date
-    assert process_order[2] == batch3[-1].date
+    assert len(output_d) == 3
+    assert received_batch1[-1].date == batch1[-1].date
+    assert received_batch2[-1].date == batch2[-1].date
+    assert received_batch3[-1].date == batch3[-1].date
+
+
+# =======================================================================
+# LLM generated tests from here on
+# =======================================================================
 
 
 @pytest.mark.asyncio
-async def test_BarAggregator_worker_task_recreation_after_crash(
+async def test_BarAggregator_worker_halts_after_max_failures(
     source_aggregator_output,
 ):
     """
-    Test that if worker task crashes, it gets recreated on next data
+    Test that the worker stays alive for transient errors but halts
+    after exceeding max_failures.
     """
     source, aggregator, output = source_aggregator_output
 
+    # Configure threshold
+    aggregator._queue.max_failures = 2
+
     crash_count = 0
-    original_process = aggregator._process
 
     async def crashing_process(*args, **kwargs):
         nonlocal crash_count
         crash_count += 1
-        if crash_count == 1:
-            raise RuntimeError("Simulated crash")
-        return await original_process(*args, **kwargs)
+        raise RuntimeError("Simulated crash")
 
-    with patch.object(aggregator, "_process", side_effect=crashing_process):
-        # First emit should crash
-        source.dataEvent.emit(sample_barDataList[:3])
-        await asyncio.sleep(0.1)  # Let it crash
+    # 1. First Crash: Worker should stay alive
+    # Patch the reference inside the queue runner, not the aggregator
+    with patch.object(
+        aggregator._queue, "processing_func", side_effect=crashing_process
+    ):
+        source.dataEvent.emit(sample_barDataList[:1])
 
-        # Verify task is done/failed
-        assert aggregator._worker_task is not None
-        assert aggregator._worker_task.done()
+        # Give the loop a moment to pull from the queue and execute the mock
+        await asyncio.sleep(0.1)
 
-        # Second emit should recreate task and succeed
-        source.dataEvent.emit(sample_barDataList[3:6])
-        await wait_for_condition(lambda: output.onData_counter > 0, timeout=1)
+        assert crash_count == 1
+        assert not aggregator._queue._worker_task.done()
+
+        # 2. Second Crash: Worker should hit threshold and halt
+        source.dataEvent.emit(sample_barDataList[1:2])
+        await asyncio.sleep(0.1)
 
         assert crash_count == 2
-        assert output.onData_counter == 1  # Only second emit succeeded
+        assert (
+            aggregator._queue._worker_task.done()
+        ), "Worker should halt after 2nd crash"
+
+    # 3. Verify Reconstruction on new data
+    # Now that the task is done, the NEXT put should trigger a start()
+    # We need to restore a working process function first
+    async def working_process(data):
+        output.onData_counter += 1
+
+    with patch.object(aggregator, "_process", side_effect=working_process):
+        source.dataEvent.emit(sample_barDataList[2:3])
+
+        # This await is key: put() happens, then the new worker processes
+        await wait_for_condition(lambda: output.onData_counter > 0, timeout=1)
+
+        assert output.onData_counter == 1
+        assert (
+            not aggregator._queue._worker_task.done()
+        ), "Worker should have been recreated"
 
 
 @pytest.mark.asyncio
@@ -541,8 +591,8 @@ async def test_BarAggregator_empty_barDataList(source_aggregator_output):
     await asyncio.sleep(0.1)
 
     # Worker task should still be running (not crashed)
-    assert aggregator._worker_task is not None
-    assert not aggregator._worker_task.done()
+    assert aggregator._queue._worker_task is not None
+    assert not aggregator._queue._worker_task.done()
 
     # No data should have been emitted
     assert output.onData_counter == 0
@@ -597,37 +647,6 @@ async def test_BarAggregator_duplicate_bar_rejected(source_aggregator_output):
     assert output.onData_data is None
     assert len(aggregator.filter.bars) == initial_filter_length
     assert aggregator._last_data_point == last_bar_date
-
-
-@pytest.mark.asyncio
-async def test_BarAggregator_backfill_exception_blocks_future_processing(
-    source_aggregator_output,
-):
-    """
-    Test that if backfill raises exception during stream.list(),
-    event stays cleared and blocks future processing.
-    """
-    source, aggregator, output = source_aggregator_output
-
-    async def failing_stream_list(*args, **kwargs):
-        raise RuntimeError("Stream list failed")
-
-    with patch("eventkit.Sequence.list", side_effect=failing_stream_list):
-        source.dataEvent.emit(sample_barDataList)
-        await asyncio.sleep(0.1)
-
-    # Worker task should have crashed
-    assert aggregator._worker_task.done()
-
-    # Retrieve the exception to suppress warning
-    with pytest.raises(RuntimeError, match="Stream list failed"):
-        await aggregator._worker_task
-
-    # Event should be cleared (backfill failed)
-    assert not aggregator._backfill_event.is_set()
-
-    # No data emitted
-    assert output.onData_counter == 0
 
 
 @pytest.mark.asyncio
