@@ -83,13 +83,25 @@ class QueueRunner(Generic[T]):
         _worker_task: The asyncio.Task handle for the background consumer loop.
         _counter: A thread-safe class-level iterator for generating default owners.
 
+    Methods:
+    --------
+        await put - add data to the queue and wait if queue full, can be used only
+              in async functions
+        push - just add data to the queue, make sure it never gets full, can be
+              used in sync functions
+
     Example:
+    -------
         async def my_processor(data: int):
             await asyncio.sleep(1)
             print(f"Processed {data}")
 
         q = Queue(processing_func=my_processor, maxsize=10)
         await q.put(42)
+
+        or
+
+        q.push(42)
     """
 
     processing_func: Callable[[T], Coroutine[Any, Any, None]]
@@ -106,13 +118,21 @@ class QueueRunner(Generic[T]):
         if not self.owner:
             self.owner = str(next(self._counter))
 
-    async def put(self, data: T) -> None:
-        """Adds data to the queue. Awaits if maxsize is reached."""
-        await self._queue.put(data)
+    def _ensure_running_task(self) -> None:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(
                 self._process_queue(), name=f"{self!s}"
             )
+
+    async def put(self, data: T) -> None:
+        """Adds data to the queue. Awaits if maxsize is reached."""
+        await self._queue.put(data)
+        self._ensure_running_task()
+
+    def push(self, data: T) -> None:
+        """Synchronous method to add data to the queue."""
+        self._queue.put_nowait(data)
+        self._ensure_running_task()
 
     async def _process_queue(self) -> None:
         consecutive_failures = 0
