@@ -9,6 +9,7 @@ ignore_errors:
   - 2108  # Market data farm [...] is inactive but [...~ok]
   - 2158  # Sec-def data farm connection is OK
   - 2110  # Connectivity between Trader Workstation and server is broken. It will be restored automatically.
+  - 2109  # outside RTH ignored -> market doesn't distinguish regular trading hours
   - 202  # Order cancelled
   - 321 # Server error while validating an API request; frequently fired for no reason
   # Consider silencing 2103 - Market data connection is broken
@@ -66,7 +67,11 @@ timeout:
 
 
 use_blotter: True
-    
+
+# give collection name if brick data should be saved
+# False otherwise (or remove this entry)
+brick_data_library: False
+
 # set-up saver used by Blotter; must have keys: class and kwds
 # saver will be initialized as class(**kwds) and passed to Blotter
 blotter:
