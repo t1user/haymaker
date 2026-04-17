@@ -102,7 +102,11 @@ class FutureRoller:
         piece of information.
         """
         ctr = set(self.positions) - self.futures
-        log.debug(f"contracts to roll: {[c.localSymbol for c in ctr]}")
+        message = f"contracts to roll: {[c.localSymbol for c in ctr]}"
+        if ctr:
+            log.warning(message)
+        else:
+            log.debug(message)
         return ctr
 
     def positions_by_strategy_for_contract(
