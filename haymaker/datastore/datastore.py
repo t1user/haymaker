@@ -157,9 +157,10 @@ class AbstractBaseStore(ABC):
     @staticmethod
     def _clean(df: pd.DataFrame) -> pd.DataFrame:
         """Ensure no duplicates and ascending sorting of given df."""
-        df = df.sort_index(ascending=True)
-        df = df[~df.index.duplicated()]
-        # df.drop(index=df[df.index.duplicated()].index, inplace=True)
+        if not df.index.is_monotonic_increasing:
+            df = df.sort_index(ascending=True)
+        if df.index.has_duplicates:
+            df = df[~df.index.duplicated()]
         return df
 
     def __repr__(self) -> str:
@@ -260,7 +261,10 @@ class ArcticStore(AbstractBaseStore):
                 up_to_ts = pd.Timestamp(up_to)
                 if up_to_ts.tzinfo is None:
                     up_to_ts = up_to_ts.tz_localize(data.index.tz)  # type: ignore
-                data = data[data.index > up_to_ts]
+                data = self._clean(data)
+                pos = data.index.searchsorted(up_to_ts, side="right")
+                data = data.iloc[pos:]
+                # data = data[data.index > up_to_ts]
             except Exception as e:
                 log.exception(e)
                 # metadata had corrupted value, try again

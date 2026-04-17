@@ -156,7 +156,7 @@ class QueueRunner(Generic[T]):
                 finally:
                     self._queue.task_done()
         except asyncio.CancelledError:
-            pass
+            log.debug(f"{self!s} cancelled.")
 
     async def close(self) -> None:
         """Wait for remaining tasks and cancel the worker."""
