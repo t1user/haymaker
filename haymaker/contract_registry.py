@@ -37,7 +37,7 @@ class ContractRegistry:
         default_factory=dict
     )
     details: DetailsContainer = field(default_factory=DetailsContainer, repr=False)
-    today: datetime = datetime.now()  # for testing only
+    today: datetime | None = None  # for testing only
 
     @staticmethod
     def hash_contract(contract: Blueprint) -> ContractKey:
@@ -45,6 +45,10 @@ class ContractRegistry:
         # return tuple(ibi.util.dataclassNonDefaults(contract).items())
         # return hash(contractAsTuple(contract))
         return str(contract)
+
+    @property
+    def _today(self) -> datetime:
+        return self.today or datetime.now()
 
     def register_blueprint(self, blueprint: Blueprint) -> None:
         self.__blueprints[self.hash_contract(blueprint)] = blueprint
@@ -79,7 +83,7 @@ class ContractRegistry:
                 details_list,
                 FUTURES_ROLL_BDAYS,
                 FUTURES_ROLL_MARGIN_BDAYS,
-                today=self.today,
+                today=self._today,
             )
 
             for details in details_list:
