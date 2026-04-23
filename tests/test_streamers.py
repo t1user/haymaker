@@ -79,6 +79,9 @@ class FakeStore:
     async def read_metadata(self, x, *y):
         return {}
 
+    def override_collection_namer(self, *args):
+        pass
+
 
 @pytest.fixture()
 def mock_arctic_store():
@@ -106,7 +109,7 @@ def test_HistoricalDataStreamer_datastore_property(
         datastore=datastore_value,
     )
     expected_store = mock_arctic_store.return_value if expected == "mock" else expected
-    assert streamer.store == expected_store
+    assert streamer._datastore == expected_store
 
 
 def test_HistoricalDataStreamer_durationStr_given_as_int():
@@ -169,7 +172,7 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_True(mock_arctic_
     streamer = HistoricalDataStreamer(
         contract, 10000, "1 min", "TRADES", datastore=True
     )
-    assert streamer.store == mock_arctic_store.return_value
+    assert streamer._datastore == mock_arctic_store.return_value
     assert await streamer.last_db_point() == df.index[-1]
 
     await streamer.sync_last_bar_date()
@@ -193,7 +196,7 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_False(mock_arctic
     )
 
     with patch("haymaker.streamers.AsyncArcticStore") as mock_store_class:
-        assert streamer.store is None
+        assert streamer._datastore is None
         assert await streamer.last_db_point() is None
         mock_store_class.assert_not_called()
 
@@ -218,6 +221,9 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_datastore_given()
         async def read_metadata(self, symbol: ibi.Contract) -> dict:
             return {}
 
+        def override_collection_namer(self, *args):
+            pass
+
     fake_store = FakeStore()
 
     contract = ibi.Future(symbol="NQ", exchange="CME")
@@ -225,7 +231,7 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_datastore_given()
         contract, 10000, "1 min", "TRADES", datastore=fake_store
     )
 
-    assert streamer.store == fake_store
+    assert streamer._datastore == fake_store
     assert await streamer.last_db_point() == df.index[-1]
     assert fake_store.call_counter == 1
 
