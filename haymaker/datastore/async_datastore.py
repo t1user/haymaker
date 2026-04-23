@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 
 import ib_insync as ibi
 import pandas as pd
@@ -19,7 +19,11 @@ if TYPE_CHECKING:
 
 class AsyncAbstractBaseStore(ABC):
 
-    collection_namer = AbstractBaseStore.collection_namer
+    collection_namer: Callable[[ibi.Contract], str] = AbstractBaseStore.collection_namer
+
+    def override_collection_namer(self, namer: Callable[[ibi.Contract], str]) -> Self:
+        self.collection_namer = namer
+        return self
 
     @abstractmethod
     def write(

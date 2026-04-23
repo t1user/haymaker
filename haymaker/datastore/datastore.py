@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 import ib_insync as ibi
 import pandas as pd
@@ -22,7 +22,6 @@ from .collection_namer import simple_collection_namer
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
 
-
 log = logging.getLogger(__name__)
 
 
@@ -34,7 +33,13 @@ class AbstractBaseStore(ABC):
     Datastore is for saving and reading pandas dataframes and a dict of metadata.
     """
 
-    collection_namer = staticmethod(simple_collection_namer)
+    collection_namer: Callable[[ibi.Contract], str] = staticmethod(
+        simple_collection_namer
+    )
+
+    def override_collection_namer(self, namer: Callable[[ibi.Contract], str]) -> Self:
+        self.collection_namer = namer
+        return self
 
     @abstractmethod
     def write(
