@@ -13,6 +13,7 @@ from haymaker.base import ActiveNext
 from haymaker.base import Atom as BaseAtom
 from haymaker.brick import AbstractBaseBrick, AbstractDfBrick
 from haymaker.contract_registry import ContractRegistry
+from haymaker.datastore import CollectionNamerStrategySymbol
 
 
 @pytest.fixture
@@ -156,12 +157,29 @@ def test_df_brick_accepts_df(basic_df_brick: AbstractDfBrick, data_for_df: dict,
 
     output_atom = OutputAtom()
     basic_df_brick += output_atom
-    print(basic_df_brick)
     df = pd.DataFrame(data_for_df)
     basic_df_brick.onData(df)
     assert output_atom.output is not None
     last_row = df.iloc[-1].to_dict()
     assert {k: v for k, v in output_atom.output.items() if k in last_row} == last_row
+
+
+def test_DfBrick_has_correct_collection_namer():
+    class Brick(AbstractDfBrick):
+
+        def df(self, data):
+            return pd.DataFrame(data)
+
+    Brick.set_datastore(Mock())
+
+    brick = Brick("test_strategy", ibi.Future(symbol="NQ", exchange="CME"))
+
+    store = brick._datastore
+
+    store.override_collection_namer.assert_called_once()
+    store.override_collection_namer.assert_called_once_with(
+        CollectionNamerStrategySymbol("test_strategy")
+    )
 
 
 def test_next_correct() -> None:

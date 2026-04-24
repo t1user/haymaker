@@ -21,9 +21,10 @@ class AsyncAbstractBaseStore(ABC):
 
     collection_namer: Callable[[ibi.Contract], str] = AbstractBaseStore.collection_namer
 
-    def override_collection_namer(self, namer: Callable[[ibi.Contract], str]) -> Self:
-        self.collection_namer = namer
-        return self
+    @abstractmethod
+    def override_collection_namer(
+        self, namer: Callable[[ibi.Contract], str]
+    ) -> Self: ...
 
     @abstractmethod
     def write(
@@ -96,6 +97,10 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         collection_namer: Callable[[ibi.Contract], str] | None = None,
     ) -> None:
         self.store = self._sync_class(lib, host, collection_namer)
+
+    def override_collection_namer(self, collection_namer: Callable[..., str]) -> Self:
+        self.store.collection_namer = collection_namer
+        return self
 
     @property
     def _queue(self) -> QueueRunner:

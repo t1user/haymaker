@@ -357,7 +357,9 @@ class ArcticStore(AbstractBaseStore):
             return df
 
     def _last_date(self, symbol: str | ibi.Contract) -> str | None:
-        warning_msg = f"{self._symbol} missing 'up_to' in metadata, reading full df."
+        warning_msg = (
+            f"{self._symbol(symbol)} missing 'up_to' in metadata, reading full df."
+        )
         # warnings.warn(warning_msg)
         log.debug(warning_msg)
         if (d := self.read(symbol)) is not None:
