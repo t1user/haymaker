@@ -100,11 +100,11 @@ class DfAggregator(Atom):
 
     @property
     def store(self) -> AsyncAbstractBaseStore:
+        assert (barSizeSetting := self._streamer_params.get("barSizeSetting")), (
+            f"{self} cannot initialize "
+            f" datastore because barSizeSetting is not defined"
+        )
         if self.datastore is None:
-            assert (barSizeSetting := self._streamer_params.get("barSizeSetting")), (
-                f"{self} cannot initialize "
-                f" datastore because barSizeSetting is not defined"
-            )
             assert MARKET_DATA_LIB_NAME, (
                 f"{self} cannot initialize datastore because "
                 f"MARKET_DATA_LIB_NAME was not given"
@@ -114,6 +114,9 @@ class DfAggregator(Atom):
                 host=get_mongo_client(),
                 collection_namer=CollectionNamerBarsizeSetting(barSizeSetting),
             )
+        self.datastore.override_collection_namer(
+            CollectionNamerBarsizeSetting(barSizeSetting)
+        )
         return self.datastore
 
     async def set_timer(self) -> None:
