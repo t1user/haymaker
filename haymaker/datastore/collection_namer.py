@@ -31,7 +31,7 @@ class CollectionNamerBarsizeSetting:
 @dataclass
 class CollectionNamerStrategySymbol:
     strategy: str
-    _timestamp: datetime = datetime.now(timezone.utc)
+    _timestamp: str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
 
     def __call__(self, contract: ibi.Contract) -> str:
         return f"{self.strategy}_{contract.localSymbol}_{self._timestamp}"
