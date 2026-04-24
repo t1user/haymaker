@@ -2,16 +2,26 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from functools import singledispatchmethod
-from typing import Any
+from functools import cached_property, partial, singledispatchmethod
+from typing import Any, ClassVar
 
 import ib_insync as ibi
 import pandas as pd
 
 from .base import Atom
+from .config import CONFIG
+from .databases import get_mongo_client
+from .datastore import (
+    AsyncAbstractBaseStore,
+    AsyncArcticStore,
+    CollectionNamerStrategySymbol,
+)
 
 log = logging.getLogger(__name__)
+
+DATA_LIB = CONFIG.get("brick_data_library", None)
 
 
 @dataclass
@@ -57,11 +67,38 @@ class AbstractDfBrick(AbstractBaseBrick):
     strategy: str
     contract: ibi.Contract
 
+    datastore: ClassVar[AsyncAbstractBaseStore | None] = None
+
+    @classmethod
+    def set_datastore(cls, datastore: AsyncAbstractBaseStore) -> type[AbstractDfBrick]:
+        AbstractDfBrick.datastore = datastore
+        return cls
+
+    @cached_property
+    def _datastore(self) -> AsyncAbstractBaseStore:
+        datastore = self.datastore or AsyncArcticStore(
+            DATA_LIB, host=get_mongo_client()
+        )
+        datastore.override_collection_namer(
+            CollectionNamerStrategySymbol(self.strategy)
+        )
+        return datastore
+
+    @cached_property
+    def store(self) -> None | AsyncAbstractBaseStore:
+        if DATA_LIB:
+            return self._datastore
+        else:
+            return None
+
     def _signal(self, data) -> dict:
         return self.df_row(data).to_dict()
 
     def df_row(self, data) -> pd.Series:
-        return self._create_df(data).reset_index().iloc[-1]
+        df = self._create_df(data)
+        if self.store:
+            self.store.append(self.contract, df)
+        return df.reset_index().iloc[-1]
 
     @singledispatchmethod
     def _create_df(self, data) -> pd.DataFrame:
