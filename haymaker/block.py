@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass
-from functools import cached_property, partial, singledispatchmethod
+from functools import cached_property, singledispatchmethod
 from typing import Any, ClassVar
 
 import ib_insync as ibi
@@ -21,11 +20,11 @@ from .datastore import (
 
 log = logging.getLogger(__name__)
 
-DATA_LIB = CONFIG.get("brick_data_library", None)
+DATA_LIB = CONFIG.get("block_data_library", None)
 
 
 @dataclass
-class AbstractBaseBrick(Atom, ABC):
+class AbstractBaseBlock(Atom, ABC):
     strategy: str
     contract: ibi.Contract
 
@@ -63,15 +62,15 @@ class AbstractBaseBrick(Atom, ABC):
 
 
 @dataclass
-class AbstractDfBrick(AbstractBaseBrick):
+class AbstractDfBlock(AbstractBaseBlock):
     strategy: str
     contract: ibi.Contract
 
     datastore: ClassVar[AsyncAbstractBaseStore | None] = None
 
     @classmethod
-    def set_datastore(cls, datastore: AsyncAbstractBaseStore) -> type[AbstractDfBrick]:
-        AbstractDfBrick.datastore = datastore
+    def set_datastore(cls, datastore: AsyncAbstractBaseStore) -> type[AbstractDfBlock]:
+        AbstractDfBlock.datastore = datastore
         return cls
 
     @cached_property

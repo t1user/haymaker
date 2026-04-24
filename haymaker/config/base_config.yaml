@@ -68,9 +68,9 @@ timeout:
 
 use_blotter: True
 
-# give collection name if brick data should be saved
+# give collection name if block data should be saved
 # False otherwise (or remove this entry)
-brick_data_library: False
+block_data_library: False
 
 # set-up saver used by Blotter; must have keys: class and kwds
 # saver will be initialized as class(**kwds) and passed to Blotter

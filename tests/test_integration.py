@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import ib_insync as ibi
 import pytest
-from test_brick import data_for_df, df_brick  # noqa
+from test_block import data_for_df, df_block  # noqa
 
 from haymaker.base import Pipe
 from haymaker.bracket_legs import FixedStop
@@ -24,7 +24,7 @@ def portfolio():
 
 
 @pytest.fixture
-def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
+def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver):  # noqa
 
     class FakeStateMachine:
         strategy = StrategyContainer(strategy_saver)
@@ -45,7 +45,7 @@ def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
 
     controller = FakeController()
     # signal is 1, contract is NQ
-    brick = df_brick
+    block = df_block
     # so this should result in action "OPEN"
     signal = BinarySignalProcessor(state_machine=sm)
 
@@ -55,13 +55,13 @@ def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
     class SourceAtom(Atom):
         def run(self):
             # this should ensure setting "strategy" attr on exec_model
-            # brick has this attr so it will emit it on start
+            # block has this attr so it will emit it on start
             # and every subsequent Atom down the chain should set it on start
             self.startEvent.emit({})
             self.dataEvent.emit(data_for_df)
 
     source = SourceAtom()
-    Pipe(source, brick, signal, PortfolioWrapper(), exec_model)
+    Pipe(source, block, signal, PortfolioWrapper(), exec_model)
     source.run()
 
     return controller.out
@@ -69,7 +69,7 @@ def pipe(df_brick, data_for_df, portfolio, Atom, strategy_saver):  # noqa
 
 def test_strategy_is_strategy(pipe):
     strategy, contract, order, action, data = pipe
-    # this is the strategy that was set on Brick object
+    # this is the strategy that was set on Block object
     assert strategy == "eska_NQ"
 
 

@@ -143,7 +143,7 @@ class AbstractExecModel(Atom, ABC):
         Args:
         =====
 
-        data (dict): is a dict created by :class:`Brick`, updated by
+        data (dict): is a dict created by :class:`Block`, updated by
         :class:`Portfolio`, which must contain all parameters required
         to execute transactions in line with this execution model.
 
