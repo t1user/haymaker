@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import csv
 import logging
 import pickle
@@ -13,7 +12,7 @@ from typing import Any
 import pandas as pd
 import pymongo  # type: ignore
 
-from .async_wrappers import fire_and_forget, make_async
+from .async_wrappers import SyncQueueRunner, make_async
 from .config import CONFIG as config
 from .databases import get_mongo_client
 from .misc import default_path, name_str
@@ -218,7 +217,7 @@ class AsyncSaveManager:
     operations. Works as a wrapper for a saver object.
     """
 
-    _tasks: set[asyncio.Task] = set()
+    _queue = SyncQueueRunner("AsyncSaveManager_queue")
 
     def __init__(self, saver: AbstractBaseSaver, name: str = ""):
         self.saver = saver
@@ -226,7 +225,7 @@ class AsyncSaveManager:
 
     def save(self, *args: Any) -> None:
         # save is fire and forget
-        fire_and_forget(self.saver.save, *args)
+        self._queue.enqueue(self.saver.save, *args)
 
     async def read(self, *args: Any) -> Any:
         # you don't want to proceed until you get the result
