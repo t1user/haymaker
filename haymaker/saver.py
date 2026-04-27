@@ -214,7 +214,8 @@ class MongoLatestSaver(MongoSaver):
 class AsyncSaveManager:
     """
     Abstract away the process of perfoming asynchronous save and read
-    operations. Works as a wrapper for a saver object.
+    operations.  Works as a wrapper for a saver object.  Every saver
+    has its own async queue.
     """
 
     _queue = SyncQueueRunner("AsyncSaveManager_queue")

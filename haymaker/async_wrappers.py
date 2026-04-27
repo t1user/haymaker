@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import itertools
 import logging
@@ -6,54 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Coroutine, Generic, TypeAlias, TypeVar
 
 log = logging.getLogger(__name__)
-
-
-R = TypeVar("R")
-
-# Registry for active tasks
-_tasks: set[asyncio.Task] = set()
-
-
-async def _async_runner(func: Callable[..., R], *args: Any) -> R:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, func, *args)
-
-
-def _create_task(coroutine: Coroutine[Any, Any, R], *, name: str | None = None) -> None:
-    task: asyncio.Task[R] = asyncio.create_task(coroutine, name=name)
-
-    # Below is preventing tasks from being prematurely garbage collected
-    _tasks.add(task)
-
-    def _on_done(t: asyncio.Task[R]) -> None:
-        try:
-            exc = t.exception()
-            if exc:
-                log.error(f"fire_and_forget error: {exc}")
-        finally:
-            _tasks.discard(t)
-
-    task.add_done_callback(_on_done)
-
-
-async def make_async(fn: Callable[..., R], *args) -> R:
-    # can be used to make any callable async
-    if not callable(fn):
-        raise TypeError(f"{fn} is not callable")
-    return await _async_runner(fn, *args)
-
-
-def fire_and_forget(
-    fn: Callable[..., Any], *args: Any, name: str | None = None
-) -> None:
-    """
-    Schedule sync callable to run asynchronously in a different thread
-    in executor.
-    """
-    # can be used on any callable that doesn't expect a return value
-    if not callable(fn):
-        raise TypeError(f"{fn} is not callable")
-    _create_task(_async_runner(fn, *args), name=name)
 
 
 T = TypeVar("T")
@@ -112,11 +66,13 @@ class QueueRunner(Generic[T]):
     _queue: asyncio.Queue[T] = field(repr=False, init=False)
     _worker_task: asyncio.Task | None = field(repr=False, init=False, default=None)
     _counter: ClassVar[itertools.count] = itertools.count()
+    _instances: ClassVar[list[QueueRunner]] = []
 
     def __post_init__(self) -> None:
         self._queue = asyncio.Queue(maxsize=self.maxsize)
         if not self.owner:
             self.owner = str(next(self._counter))
+        self.__class__._instances.append(self)
 
     def _ensure_running_task(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -167,6 +123,15 @@ class QueueRunner(Generic[T]):
                 await self._worker_task
             except asyncio.CancelledError:
                 pass
+
+    @classmethod
+    async def close_all(cls) -> None:
+        """
+        Can be used system-level to ensure all queues have a chance to
+        complete their tasks.
+        """
+        tasks = [qr.close() for qr in cls._instances]
+        await asyncio.gather(*tasks)
 
     def qsize(self) -> int:
         return self._queue.qsize()
@@ -235,3 +200,50 @@ class SyncQueueRunner:
 
     async def close(self) -> None:
         await self._queue_runner.close()
+
+
+R = TypeVar("R")
+
+# Registry for active tasks
+_tasks: set[asyncio.Task] = set()
+_queue = SyncQueueRunner("async_wrappers_queue")
+
+
+async def _async_runner(func: Callable[..., R], *args: Any) -> R:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func, *args)
+
+
+def _create_task(coroutine: Coroutine[Any, Any, R], *, name: str | None = None) -> None:
+    task: asyncio.Task[R] = asyncio.create_task(coroutine, name=name)
+
+    # Below is preventing tasks from being prematurely garbage collected
+    _tasks.add(task)
+
+    def _on_done(t: asyncio.Task[R]) -> None:
+        try:
+            exc = t.exception()
+            if exc:
+                log.error(f"fire_and_forget error: {exc}")
+        finally:
+            _tasks.discard(t)
+
+    task.add_done_callback(_on_done)
+
+
+async def make_async(fn: Callable[..., R], *args) -> R:
+    # can be used to make any callable async
+    if not callable(fn):
+        raise TypeError(f"{fn} is not callable")
+    return await _async_runner(fn, *args)
+
+
+def fire_and_forget(fn: Callable[..., Any], *args: Any) -> None:
+    """
+    Schedule sync callable to run asynchronously in a different thread
+    in executor.
+    """
+    # can be used on any callable that doesn't expect a return value
+    if not callable(fn):
+        raise TypeError(f"{fn} is not callable")
+    _queue.enqueue(fn, *args)
