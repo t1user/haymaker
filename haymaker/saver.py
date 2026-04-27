@@ -215,14 +215,13 @@ class AsyncSaveManager:
     """
     Abstract away the process of perfoming asynchronous save and read
     operations.  Works as a wrapper for a saver object.  Every saver
-    has its own async queue.
+    has its own async queue, as savers are critical services.
     """
-
-    _queue = SyncQueueRunner("AsyncSaveManager_queue")
 
     def __init__(self, saver: AbstractBaseSaver, name: str = ""):
         self.saver = saver
-        self.name = f"saver_{name}" if name else "saver"
+        name = f"saver_{name}" if name else "saver"
+        self._queue = SyncQueueRunner(name)
 
     def save(self, *args: Any) -> None:
         # save is fire and forget
