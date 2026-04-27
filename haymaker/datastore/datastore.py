@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 import ib_insync as ibi
 import pandas as pd
@@ -22,7 +22,6 @@ from .collection_namer import simple_collection_namer
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
 
-
 log = logging.getLogger(__name__)
 
 
@@ -34,7 +33,13 @@ class AbstractBaseStore(ABC):
     Datastore is for saving and reading pandas dataframes and a dict of metadata.
     """
 
-    collection_namer = staticmethod(simple_collection_namer)
+    collection_namer: Callable[[ibi.Contract], str] = staticmethod(
+        simple_collection_namer
+    )
+
+    def override_collection_namer(self, namer: Callable[[ibi.Contract], str]) -> Self:
+        self.collection_namer = namer
+        return self
 
     @abstractmethod
     def write(
@@ -157,9 +162,10 @@ class AbstractBaseStore(ABC):
     @staticmethod
     def _clean(df: pd.DataFrame) -> pd.DataFrame:
         """Ensure no duplicates and ascending sorting of given df."""
-        df = df.sort_index(ascending=True)
-        df = df[~df.index.duplicated()]
-        # df.drop(index=df[df.index.duplicated()].index, inplace=True)
+        if not df.index.is_monotonic_increasing:
+            df = df.sort_index(ascending=True)
+        if df.index.has_duplicates:
+            df = df[~df.index.duplicated()]
         return df
 
     def __repr__(self) -> str:
@@ -260,7 +266,10 @@ class ArcticStore(AbstractBaseStore):
                 up_to_ts = pd.Timestamp(up_to)
                 if up_to_ts.tzinfo is None:
                     up_to_ts = up_to_ts.tz_localize(data.index.tz)  # type: ignore
-                data = data[data.index > up_to_ts]
+                data = self._clean(data)
+                pos = data.index.searchsorted(up_to_ts, side="right")
+                data = data.iloc[pos:]
+                # data = data[data.index > up_to_ts]
             except Exception as e:
                 log.exception(e)
                 # metadata had corrupted value, try again
@@ -348,7 +357,9 @@ class ArcticStore(AbstractBaseStore):
             return df
 
     def _last_date(self, symbol: str | ibi.Contract) -> str | None:
-        warning_msg = f"{self._symbol} missing 'up_to' in metadata, reading full df."
+        warning_msg = (
+            f"{self._symbol(symbol)} missing 'up_to' in metadata, reading full df."
+        )
         # warnings.warn(warning_msg)
         log.debug(warning_msg)
         if (d := self.read(symbol)) is not None:

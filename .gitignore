@@ -3,6 +3,7 @@
 .venv
 .ipynb_checkpoints
 .idea
+.agents/
 __pycache__
 temp/
 backtests/

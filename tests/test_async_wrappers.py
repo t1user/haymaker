@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 import pytest
+
 from haymaker.async_wrappers import fire_and_forget, make_async
 
 
@@ -63,5 +64,5 @@ async def test_fire_and_forget_logs_exceptions(caplog):
 
     # Check that one of them contains the text 'fire_and_forget'
     assert any(
-        "fire_and_forget" in record.message for record in error_logs
-    ), "Expected 'fire_and_forget' in the error log message"
+        "async_wrappers_queue" in record.message for record in error_logs
+    ), "Expected 'async_wrappers_queue' in the error log message"

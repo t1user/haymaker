@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import ib_insync as ibi
 
@@ -25,3 +26,12 @@ class CollectionNamerBarsizeSetting:
             f'{"_".join(contract.localSymbol.split())}_{contract.secType}_'
             f"{self._barSizeSetting}"
         )
+
+
+@dataclass
+class CollectionNamerStrategySymbol:
+    strategy: str
+    _timestamp: str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+
+    def __call__(self, contract: ibi.Contract) -> str:
+        return f"{self.strategy}_{contract.localSymbol}_{self._timestamp}"

@@ -4,9 +4,9 @@ import asyncio
 import itertools
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
-from functools import cache, cached_property
+from functools import cached_property
 from typing import Awaitable, ClassVar
 
 import eventkit as ev  # type: ignore
@@ -35,15 +35,6 @@ log = logging.getLogger(__name__)
 _counter = itertools.count().__next__
 
 MARKET_DATA_LIB_NAME = CONFIG.get("market_data_lib", "market_data")
-
-
-@cache
-def get_store():
-    return (
-        AsyncArcticStore(lib=MARKET_DATA_LIB_NAME, host=get_mongo_client())
-        if MARKET_DATA_LIB_NAME
-        else None
-    )
 
 
 def bar_filter(bar: ibi.BarData) -> bool:
@@ -195,13 +186,11 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
-    datastore: InitVar[bool | AsyncAbstractBaseStore] = False
-    _datastore: None | AsyncAbstractBaseStore = field(init=False, default=None)
+    datastore: bool | AsyncAbstractBaseStore = False
     _last_bar_date: datetime | None = None
 
-    def __post_init__(self, datastore: bool | AsyncAbstractBaseStore) -> None:
+    def __post_init__(self) -> None:
         Atom.__init__(self)
-        self.store = datastore
 
     def streaming_func(self) -> Awaitable:
         return self.ib.reqHistoricalDataAsync(
@@ -216,33 +205,33 @@ class HistoricalDataStreamer(Streamer):
             timeout=0,
         )
 
-    @property
-    def store(self) -> None | AsyncAbstractBaseStore:
-        return self._datastore
-
-    @store.setter
-    def store(self, arg: bool | AsyncAbstractBaseStore) -> None:
-        if arg is False:
-            self._datastore = None
-        elif arg is True:
+    @cached_property
+    def _datastore(self) -> None | AsyncAbstractBaseStore:
+        if self.datastore is False:
+            return None
+        elif self.datastore is True:
             assert MARKET_DATA_LIB_NAME, (
                 f"{self} cannot initialize datastore because "
                 f"MARKET_DATA_LIB_NAME was not given."
             )
-            self._datastore = AsyncArcticStore(
+            return AsyncArcticStore(
                 lib=MARKET_DATA_LIB_NAME,
                 host=get_mongo_client(),
                 collection_namer=CollectionNamerBarsizeSetting(self.barSizeSetting),
             )
         elif (
-            getattr(arg, "read") is not None
-            and getattr(arg, "read_metadata") is not None
+            getattr(self.datastore, "read") is not None
+            and getattr(self.datastore, "read_metadata") is not None
+            and getattr(self.datastore, "override_collection_namer") is not None
         ):
-            self._datastore = arg
+            self.datastore.override_collection_namer(
+                CollectionNamerBarsizeSetting(self.barSizeSetting)
+            )
+            return self.datastore
         else:
             raise ValueError(
                 f"datastore must be True, False or instance of async datastore, "
-                f"not{type(arg)}"
+                f"not{type(self.datastore)}"
             )
 
     async def last_db_point(self) -> datetime | None:

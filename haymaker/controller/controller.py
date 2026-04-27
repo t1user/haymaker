@@ -324,7 +324,7 @@ class Controller(Atom):
     def verify_market_open(self, contract: ibi.Contract) -> bool:
         details = self.contract_registry.get_details(contract)
         if details is None:
-            log.error(
+            log.warning(
                 f"Missing details for {contract.localSymbol}, "
                 f"won't verify if market open"
             )

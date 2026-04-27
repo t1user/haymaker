@@ -186,7 +186,7 @@ def test_df_combined_correctly_in_append_data_non_overlapping():
     aggregator = DfAggregator(save_frequency=0)
     aggregator._df = first_batch
 
-    with patch.object(aggregator, "save_data", new_callable=Mock) as mock_save:
+    with patch.object(aggregator, "save_data", new_callable=Mock):
         aggregator.append_data(last_batch)
 
     pd.testing.assert_frame_equal(aggregator._df, sample_df)
@@ -199,7 +199,7 @@ def test_df_combined_correctly_in_append_data_overlapping():
     aggregator = DfAggregator(save_frequency=0)
     aggregator._df = first_batch
 
-    with patch.object(aggregator, "save_data", new_callable=Mock) as mock_save:
+    with patch.object(aggregator, "save_data", new_callable=Mock):
         aggregator.append_data(last_batch)
 
     pd.testing.assert_frame_equal(aggregator._df, sample_df)
@@ -225,18 +225,19 @@ async def test_data_queued():
     aggregator = DfAggregator(save_frequency=0)
     source = SourceAtom()
     aggregator.contract = source.contract = ibi.Future(symbol="ES", exchange="CME")
+    print(aggregator.contract_selector)
     source += aggregator
     aggregator += OutputAtom()
 
     with patch.object(
-        aggregator, "process_data", new_callable=AsyncMock
+        aggregator._queue, "processing_func", new_callable=AsyncMock
     ) as mock_process_data:
         source.dataEvent.emit(first_batch)
         source.dataEvent.emit(second_batch)
         source.dataEvent.emit(third_batch)
         source.dataEvent.emit(last_batch)
 
-        await wait_for_condition(lambda: aggregator._queue.empty())
+        await wait_for_condition(lambda: aggregator._queue._queue.empty())
         await asyncio.sleep(0.1)
 
         assert mock_process_data.call_count == 4

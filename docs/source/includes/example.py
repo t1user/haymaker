@@ -9,7 +9,7 @@ from haymaker import (
     app,
     base,
     bracket_legs,
-    brick,
+    block,
     execution_models,
     indicators,
     portfolio,
@@ -19,7 +19,7 @@ from haymaker import (
 
 
 @dataclass
-class EMACrossStrategy(brick.AbstractDfBrick):
+class EMACrossStrategy(block.AbstractDfBlock):
     strategy: str
     contract: ibi.Contract
     fast_lookback: int
