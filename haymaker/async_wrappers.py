@@ -3,7 +3,7 @@ import itertools
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Coroutine, Generic, TypeVar
+from typing import Any, ClassVar, Coroutine, Generic, TypeAlias, TypeVar
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ class QueueRunner(Generic[T]):
     processing_func: Callable[[T], Coroutine[Any, Any, None]]
     owner: str = ""
     maxsize: int = 0
-    max_failures = 3
+    max_failures: int = 3
 
     _queue: asyncio.Queue[T] = field(repr=False, init=False)
     _worker_task: asyncio.Task | None = field(repr=False, init=False, default=None)
@@ -173,3 +173,65 @@ class QueueRunner(Generic[T]):
 
     def __str__(self) -> str:
         return f"<{self.__class__.__name__}-{self.owner}>"
+
+
+_SyncTask: TypeAlias = tuple[Callable[..., None], tuple[Any, ...]]
+
+
+@dataclass
+class SyncQueueRunner:
+    """
+    Executes synchronous I/O-bound callables sequentially in a background thread,
+    preserving enqueue order. Useful for offloading blocking I/O (e.g. database
+    writes) from an async context without blocking the event loop.
+
+    Internally wraps QueueRunner[_SyncTask], delegating execution to
+    asyncio.to_thread for each enqueued callable.
+
+    Attrs:
+    ------
+        owner: Identifier for this queue instance, used in logs and task names.
+            Defaults to an auto-incremented integer string.
+        maxsize: Maximum number of items allowed in the queue. 0 (default) means
+            unlimited. Use to apply backpressure when the consumer is slower than
+            the producer.
+        max_failures: Number of consecutive failures after which the background
+            worker halts. Defaults to 3.
+
+    Methods:
+    --------
+        enqueue(fn, *args) - Schedule fn(*args) to run in a background thread.
+            Safe to call from synchronous code. Preserves call order.
+        close() - Drain all pending items and shut down the background worker.
+            Must be awaited. Call on application shutdown to avoid dropped tasks.
+
+    Example:
+    --------
+        def save_to_db(record: dict) -> None:
+            db.insert(record)
+
+        queue = SyncQueueRunner(owner="db_writer", maxsize=100)
+        queue.enqueue(save_to_db, {"id": 1, "value": "foo"})
+        queue.enqueue(save_to_db, {"id": 2, "value": "bar"})
+    """
+
+    owner: str = ""
+    maxsize: int = 0
+    max_failures: int = 3
+
+    _queue_runner: QueueRunner[_SyncTask] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._queue_runner = QueueRunner(
+            self._execute_store_task, self.owner, self.maxsize, self.max_failures
+        )
+
+    def enqueue(self, fn: Callable[..., None], *args: Any) -> None:
+        self._queue_runner.push((fn, args))
+
+    async def _execute_store_task(self, data: _SyncTask) -> None:
+        func, args = data
+        await asyncio.to_thread(func, *args)
+
+    async def close(self) -> None:
+        await self._queue_runner.close()

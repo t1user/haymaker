@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 import ib_insync as ibi
 import pandas as pd
 
-from haymaker.async_wrappers import QueueRunner, make_async
+from haymaker.async_wrappers import QueueRunner, SyncQueueRunner, make_async
 
 from .datastore import AbstractBaseStore, ArcticStore
 
@@ -78,14 +78,9 @@ class AsyncAbstractBaseStore(ABC):
     ) -> None: ...
 
 
-class AsyncStoreTask(NamedTuple):
-    task: Callable
-    args: tuple
-
-
 class AsyncArcticStore(AsyncAbstractBaseStore):
 
-    _library_queues: ClassVar[dict[str, QueueRunner]] = {}
+    _queue = SyncQueueRunner("AsyncArcticStore_queue")
     _sync_class = ArcticStore
 
     from_params = _sync_class.from_params
@@ -102,29 +97,12 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         self.store.collection_namer = collection_namer
         return self
 
-    @property
-    def _queue(self) -> QueueRunner:
-        lib = self.store.lib
-        if lib not in self._library_queues:
-            AsyncArcticStore._library_queues[lib] = QueueRunner(
-                processing_func=self._execute_store_task, owner=str(self)
-            )
-        return AsyncArcticStore._library_queues[lib]
-
     def enqueue(self, fn: Callable[..., Any], *args) -> None:
-        self._queue.push(AsyncStoreTask(fn, args))
-
-    async def _execute_store_task(self, data: AsyncStoreTask) -> None:
-        func, args = data
-        await asyncio.to_thread(func, *args)
+        self._queue.enqueue(fn, *args)
 
     def write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> None:
-        """
-        Warning: this is best efforts, may lead to race conditions for
-        very frequent writes.
-        """
         return self.enqueue(self.store.write, symbol, data, meta)
 
     def append(
