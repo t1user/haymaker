@@ -29,11 +29,11 @@ The strategy:
    from dataclasses import dataclass
    import pandas as pd
    import numpy as np
-   from haymaker import brick, indicators
+   from haymaker import block, indicators
    import ib_insync as ibi
 
    @dataclass
-   class EMACrossStrategy(brick.AbstractDfBrick):
+   class EMACrossStrategy(block.AbstractDfBlock):
        strategy: str
        contract: ibi.Contract
        fast_lookback: int
@@ -47,11 +47,11 @@ The strategy:
            df["atr"] = indicators.atr(df, self.atr_lookback)
            return df
 
-This defines the trading signals using :class:`haymaker.brick.AbstractDfBrick`. It requires a :py:class:`dataclasses.dataclass` with the strategy name, contract, and parameters. The :meth:`haymaker.brick.AbstractDfBrick.df` method must be overridden to process a :class:`pandas.DataFrame` containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.
+This defines the trading signals using :class:`haymaker.block.AbstractDfBlock`. It requires a :py:class:`dataclasses.dataclass` with the strategy name, contract, and parameters. The :meth:`haymaker.block.AbstractDfBlock.df` method must be overridden to process a :class:`pandas.DataFrame` containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.
 
 The data received via `onData` is wrapped into a :class:`pandas.DataFrame` with column names matching the keys in the `data` dictionary. Users must ensure upstream components provide all required data for signal generation.
 
-The :meth:`haymaker.brick.AbstractDfBrick.df` method must return a :class:`pandas.DataFrame` with a ``signal`` column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., ``atr``) can be included for downstream components.
+The :meth:`haymaker.block.AbstractDfBlock.df` method must return a :class:`pandas.DataFrame` with a ``signal`` column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., ``atr``) can be included for downstream components.
 
 .. code-block:: python
    :caption: Defining the ES futures contract
@@ -136,7 +136,7 @@ Components used:
          stop=bracket_legs.TrailingStop(3, vol_field="atr")
      )
 
-  Sends a :class:`ib_insync.order.MarketOrder` to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an ``atr`` column from the :class:`haymaker.brick.AbstractDfBrick`).
+  Sends a :class:`ib_insync.order.MarketOrder` to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an ``atr`` column from the :class:`haymaker.block.AbstractDfBlock`).
 
 .. code-block:: python
    :caption: Running the application

@@ -257,7 +257,7 @@
     <span class="n">app</span><span class="p">,</span>
     <span class="n">base</span><span class="p">,</span>
     <span class="n">bracket_legs</span><span class="p">,</span>
-    <span class="n">brick</span><span class="p">,</span>
+    <span class="n">block</span><span class="p">,</span>
     <span class="n">execution_models</span><span class="p">,</span>
     <span class="n">indicators</span><span class="p">,</span>
     <span class="n">portfolio</span><span class="p">,</span>
@@ -267,7 +267,7 @@
 
 
 <span class="nd">@dataclass</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">EMACrossStrategy</span><span class="p">(</span><span class="n">brick</span><span class="o">.</span><span class="n">AbstractDfBrick</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">EMACrossStrategy</span><span class="p">(</span><span class="n">block</span><span class="o">.</span><span class="n">AbstractDfBlock</span><span class="p">):</span>
     <span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">fast_lookback</span><span class="p">:</span> <span class="nb">int</span>
@@ -322,11 +322,11 @@
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">brick</span><span class="p">,</span> <span class="n">indicators</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">block</span><span class="p">,</span> <span class="n">indicators</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
 
 <span class="nd">@dataclass</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">EMACrossStrategy</span><span class="p">(</span><span class="n">brick</span><span class="o">.</span><span class="n">AbstractDfBrick</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">EMACrossStrategy</span><span class="p">(</span><span class="n">block</span><span class="o">.</span><span class="n">AbstractDfBlock</span><span class="p">):</span>
     <span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">fast_lookback</span><span class="p">:</span> <span class="nb">int</span>
@@ -342,9 +342,9 @@
 </pre></div>
 </div>
 </div>
-<p>This defines the trading signals using <a class="reference internal" href="execution.html#haymaker.brick.AbstractDfBrick" title="haymaker.brick.AbstractDfBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
+<p>This defines the trading signals using <a class="reference internal" href="execution.html#haymaker.block.AbstractDfBlock" title="haymaker.block.AbstractDfBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
 <p>The data received via <cite>onData</cite> is wrapped into a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with column names matching the keys in the <cite>data</cite> dictionary. Users must ensure upstream components provide all required data for signal generation.</p>
-<p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
+<p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
 <div class="literal-block-wrapper docutils container" id="id2">
 <div class="code-block-caption"><span class="caption-text">Defining the ES futures contract</span><a class="headerlink" href="#id2" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">&quot;ES&quot;</span><span class="p">,</span> <span class="s2">&quot;CME&quot;</span><span class="p">)</span>
@@ -435,7 +435,7 @@
 </pre></div>
 </div>
 </div>
-<p>Sends a <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.order.MarketOrder" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.order.MarketOrder</span></code></a> to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an <code class="docutils literal notranslate"><span class="pre">atr</span></code> column from the <a class="reference internal" href="execution.html#haymaker.brick.AbstractDfBrick" title="haymaker.brick.AbstractDfBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick</span></code></a>).</p>
+<p>Sends a <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.order.MarketOrder" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.order.MarketOrder</span></code></a> to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an <code class="docutils literal notranslate"><span class="pre">atr</span></code> column from the <a class="reference internal" href="execution.html#haymaker.block.AbstractDfBlock" title="haymaker.block.AbstractDfBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock</span></code></a>).</p>
 </li>
 </ul>
 <div class="literal-block-wrapper docutils container" id="id11">

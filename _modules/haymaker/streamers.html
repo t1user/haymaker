@@ -244,9 +244,9 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">itertools</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ABC</span><span class="p">,</span> <span class="n">abstractmethod</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">InitVar</span><span class="p">,</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">cache</span><span class="p">,</span> <span class="n">cached_property</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">cached_property</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Awaitable</span><span class="p">,</span> <span class="n">ClassVar</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">eventkit</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ev</span>  <span class="c1"># type: ignore</span>
@@ -275,15 +275,6 @@
 <span class="n">_counter</span> <span class="o">=</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">()</span><span class="o">.</span><span class="fm">__next__</span>
 
 <span class="n">MARKET_DATA_LIB_NAME</span> <span class="o">=</span> <span class="n">CONFIG</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;market_data_lib&quot;</span><span class="p">,</span> <span class="s2">&quot;market_data&quot;</span><span class="p">)</span>
-
-
-<span class="nd">@cache</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">get_store</span><span class="p">():</span>
-    <span class="k">return</span> <span class="p">(</span>
-        <span class="n">AsyncArcticStore</span><span class="p">(</span><span class="n">lib</span><span class="o">=</span><span class="n">MARKET_DATA_LIB_NAME</span><span class="p">,</span> <span class="n">host</span><span class="o">=</span><span class="n">get_mongo_client</span><span class="p">())</span>
-        <span class="k">if</span> <span class="n">MARKET_DATA_LIB_NAME</span>
-        <span class="k">else</span> <span class="kc">None</span>
-    <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">bar_filter</span><span class="p">(</span><span class="n">bar</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
@@ -446,13 +437,11 @@
     <span class="n">whatToShow</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">useRTH</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">formatDate</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># should be 2 for utc timestamp</span>
-    <span class="n">datastore</span><span class="p">:</span> <span class="n">InitVar</span><span class="p">[</span><span class="nb">bool</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">_datastore</span><span class="p">:</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">init</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+    <span class="n">datastore</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">_last_bar_date</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">datastore</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">store</span> <span class="o">=</span> <span class="n">datastore</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">streaming_func</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Awaitable</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqHistoricalDataAsync</span><span class="p">(</span>
@@ -467,33 +456,33 @@
             <span class="n">timeout</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="nd">@property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">store</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span>
-
-    <span class="nd">@store</span><span class="o">.</span><span class="n">setter</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">store</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">arg</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">arg</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="k">elif</span> <span class="n">arg</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
+    <span class="nd">@cached_property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_datastore</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
             <span class="k">assert</span> <span class="n">MARKET_DATA_LIB_NAME</span><span class="p">,</span> <span class="p">(</span>
                 <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> cannot initialize datastore because &quot;</span>
                 <span class="sa">f</span><span class="s2">&quot;MARKET_DATA_LIB_NAME was not given.&quot;</span>
             <span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span> <span class="o">=</span> <span class="n">AsyncArcticStore</span><span class="p">(</span>
+            <span class="k">return</span> <span class="n">AsyncArcticStore</span><span class="p">(</span>
                 <span class="n">lib</span><span class="o">=</span><span class="n">MARKET_DATA_LIB_NAME</span><span class="p">,</span>
                 <span class="n">host</span><span class="o">=</span><span class="n">get_mongo_client</span><span class="p">(),</span>
                 <span class="n">collection_namer</span><span class="o">=</span><span class="n">CollectionNamerBarsizeSetting</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">),</span>
             <span class="p">)</span>
         <span class="k">elif</span> <span class="p">(</span>
-            <span class="nb">getattr</span><span class="p">(</span><span class="n">arg</span><span class="p">,</span> <span class="s2">&quot;read&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">arg</span><span class="p">,</span> <span class="s2">&quot;read_metadata&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">,</span> <span class="s2">&quot;read&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">,</span> <span class="s2">&quot;read_metadata&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">,</span> <span class="s2">&quot;override_collection_namer&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="p">):</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span> <span class="o">=</span> <span class="n">arg</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="o">.</span><span class="n">override_collection_namer</span><span class="p">(</span>
+                <span class="n">CollectionNamerBarsizeSetting</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="sa">f</span><span class="s2">&quot;datastore must be True, False or instance of async datastore, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;not</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">arg</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;not</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
 
 <div class="viewcode-block" id="HistoricalDataStreamer.last_db_point">

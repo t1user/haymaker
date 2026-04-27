@@ -40,7 +40,7 @@ Building on :class:`haymaker.base.Atom`, Haymaker offers skeletons of several co
 
 * **Streamer**: Connects to the broker and pipes market data.
 * **Aggregator**: Custom aggregation or processing of market data before signal generation.
-* **Brick**: Generates trading signals; this is the core building block of strategies (like bricks in a house).
+* **Block**: Generates trading signals; this is the core building block of strategies (like blocks in a house).
 
   .. note:: If you have an idea for a better name, email me! :)
 
@@ -113,24 +113,24 @@ Available Filters
 .. autoclass:: haymaker.aggregators.NoFilter
    :members:
 
-Brick
+Block
 -----
 
-.. autoclass:: haymaker.brick.AbstractBaseBrick
+.. autoclass:: haymaker.block.AbstractBaseBlock
    :members:
 
 Implementations
 ^^^^^^^^^^^^^^^
 
-.. autoclass:: haymaker.brick.AbstractDfBrick
+.. autoclass:: haymaker.block.AbstractDfBlock
    :members:
 
-Override :meth:`haymaker.brick.AbstractDfBrick.df` when creating a concrete `AbstractDfBrick`.
+Override :meth:`haymaker.block.AbstractDfBlock.df` when creating a concrete `AbstractDfBlock`.
 
 Signal Processor
 ----------------
 
-To better separate concerns, filter signals received from :class:`haymaker.brick.AbstractBaseBrick` based on strategy state (e.g., avoid repeated signals or re-entering after a stop-out). While this could be done in :class:`haymaker.brick.AbstractBaseBrick`, using a :class:`haymaker.signals.BinarySignalProcessor` is more modular.
+To better separate concerns, filter signals received from :class:`haymaker.block.AbstractBaseBlock` based on strategy state (e.g., avoid repeated signals or re-entering after a stop-out). While this could be done in :class:`haymaker.block.AbstractBaseBlock`, using a :class:`haymaker.signals.BinarySignalProcessor` is more modular.
 
 Available processors are designed for binary signals (on/off switches). For discrete signals (e.g., 0–10 strength), these implementations aren’t suitable, but you can develop custom ones.
 

@@ -789,7 +789,7 @@ instrument’s timezone (not utc!).</p>
 <ul>
 <li><p><strong>Streamer</strong>: Connects to the broker and pipes market data.</p></li>
 <li><p><strong>Aggregator</strong>: Custom aggregation or processing of market data before signal generation.</p></li>
-<li><p><strong>Brick</strong>: Generates trading signals; this is the core building block of strategies (like bricks in a house).</p>
+<li><p><strong>Block</strong>: Generates trading signals; this is the core building block of strategies (like blocks in a house).</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>If you have an idea for a better name, email me! :)</p>
@@ -1242,14 +1242,14 @@ Every input bar and output bar is the same.</p>
 
 </section>
 </section>
-<section id="brick">
-<h3>Brick<a class="headerlink" href="#brick" title="Link to this heading">¶</a></h3>
+<section id="block">
+<h3>Block<a class="headerlink" href="#block" title="Link to this heading">¶</a></h3>
 <dl class="py class">
-<dt class="sig sig-object py" id="haymaker.brick.AbstractBaseBrick">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.brick.</span></span><span class="sig-name descname"><span class="pre">AbstractBaseBrick</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">strategy</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contract</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/brick.html#AbstractBaseBrick"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.brick.AbstractBaseBrick" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="haymaker.block.AbstractBaseBlock">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.block.</span></span><span class="sig-name descname"><span class="pre">AbstractBaseBlock</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">strategy</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contract</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/block.html#AbstractBaseBlock"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.block.AbstractBaseBlock" title="Link to this definition">¶</a></dt>
 <dd><dl class="py method">
-<dt class="sig sig-object py" id="haymaker.brick.AbstractBaseBrick.onData">
-<span class="sig-name descname"><span class="pre">onData</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/brick.html#AbstractBaseBrick.onData"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.brick.AbstractBaseBrick.onData" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="haymaker.block.AbstractBaseBlock.onData">
+<span class="sig-name descname"><span class="pre">onData</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/block.html#AbstractBaseBlock.onData"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.block.AbstractBaseBlock.onData" title="Link to this definition">¶</a></dt>
 <dd><p>Connected to <code class="xref py py-attr docutils literal notranslate"><span class="pre">dataEvent</span></code> of the preceding object in the chain.
 This is the entry point to any processing perfmormed by this
 object.  Result of this processing should be added to the
@@ -1273,8 +1273,8 @@ loop.</p>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="haymaker.brick.AbstractBaseBrick.onStart">
-<span class="sig-name descname"><span class="pre">onStart</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/brick.html#AbstractBaseBrick.onStart"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.brick.AbstractBaseBrick.onStart" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="haymaker.block.AbstractBaseBlock.onStart">
+<span class="sig-name descname"><span class="pre">onStart</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/block.html#AbstractBaseBlock.onStart"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.block.AbstractBaseBlock.onStart" title="Link to this definition">¶</a></dt>
 <dd><p>Perform any initilization required on system (re)start.  It
 will be run automatically and it will be linked to
 <code class="xref py py-attr docutils literal notranslate"><span class="pre">startEvent</span></code> of the preceding object in the chain.</p>
@@ -1304,16 +1304,16 @@ loop.</p>
 <section id="id10">
 <h4>Implementations<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h4>
 <dl class="py class">
-<dt class="sig sig-object py" id="haymaker.brick.AbstractDfBrick">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.brick.</span></span><span class="sig-name descname"><span class="pre">AbstractDfBrick</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">strategy</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contract</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/brick.html#AbstractDfBrick"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.brick.AbstractDfBrick" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="haymaker.block.AbstractDfBlock">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">haymaker.block.</span></span><span class="sig-name descname"><span class="pre">AbstractDfBlock</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">strategy</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contract</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/haymaker/block.html#AbstractDfBlock"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#haymaker.block.AbstractDfBlock" title="Link to this definition">¶</a></dt>
 <dd></dd></dl>
 
-<p>Override <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> when creating a concrete <cite>AbstractDfBrick</cite>.</p>
+<p>Override <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> when creating a concrete <cite>AbstractDfBlock</cite>.</p>
 </section>
 </section>
 <section id="signal-processor">
 <h3>Signal Processor<a class="headerlink" href="#signal-processor" title="Link to this heading">¶</a></h3>
-<p>To better separate concerns, filter signals received from <a class="reference internal" href="#haymaker.brick.AbstractBaseBrick" title="haymaker.brick.AbstractBaseBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractBaseBrick</span></code></a> based on strategy state (e.g., avoid repeated signals or re-entering after a stop-out). While this could be done in <a class="reference internal" href="#haymaker.brick.AbstractBaseBrick" title="haymaker.brick.AbstractBaseBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractBaseBrick</span></code></a>, using a <a class="reference internal" href="#haymaker.signals.BinarySignalProcessor" title="haymaker.signals.BinarySignalProcessor"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.signals.BinarySignalProcessor</span></code></a> is more modular.</p>
+<p>To better separate concerns, filter signals received from <a class="reference internal" href="#haymaker.block.AbstractBaseBlock" title="haymaker.block.AbstractBaseBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractBaseBlock</span></code></a> based on strategy state (e.g., avoid repeated signals or re-entering after a stop-out). While this could be done in <a class="reference internal" href="#haymaker.block.AbstractBaseBlock" title="haymaker.block.AbstractBaseBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractBaseBlock</span></code></a>, using a <a class="reference internal" href="#haymaker.signals.BinarySignalProcessor" title="haymaker.signals.BinarySignalProcessor"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.signals.BinarySignalProcessor</span></code></a> is more modular.</p>
 <p>Available processors are designed for binary signals (on/off switches). For discrete signals (e.g., 0–10 strength), these implementations aren’t suitable, but you can develop custom ones.</p>
 <p>It’s easiest to create a binary signal processor by implementing <a class="reference internal" href="#haymaker.signals.AbstractBaseBinarySignalProcessor" title="haymaker.signals.AbstractBaseBinarySignalProcessor"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.signals.AbstractBaseBinarySignalProcessor</span></code></a>.</p>
 <dl class="py class">
@@ -1646,7 +1646,7 @@ events returned by <code class="xref py py-meth docutils literal notranslate"><s
 <code class="xref py py-attr docutils literal notranslate"><span class="pre">self.data.position</span></code>.</p>
 <section id="id14">
 <h4>Args:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h4>
-<p>data (dict): is a dict created by <code class="xref py py-class docutils literal notranslate"><span class="pre">Brick</span></code>, updated by
+<p>data (dict): is a dict created by <code class="xref py py-class docutils literal notranslate"><span class="pre">Block</span></code>, updated by
 <code class="xref py py-class docutils literal notranslate"><span class="pre">Portfolio</span></code>, which must contain all parameters required
 to execute transactions in line with this execution model.</p>
 </section>
@@ -1736,7 +1736,7 @@ events returned by <code class="xref py py-meth docutils literal notranslate"><s
 <code class="xref py py-attr docutils literal notranslate"><span class="pre">self.data.position</span></code>.</p>
 <section id="id18">
 <h5>Args:<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h5>
-<p>data (dict): is a dict created by <code class="xref py py-class docutils literal notranslate"><span class="pre">Brick</span></code>, updated by
+<p>data (dict): is a dict created by <code class="xref py py-class docutils literal notranslate"><span class="pre">Block</span></code>, updated by
 <code class="xref py py-class docutils literal notranslate"><span class="pre">Portfolio</span></code>, which must contain all parameters required
 to execute transactions in line with this execution model.</p>
 </section>
@@ -1824,7 +1824,7 @@ that will attach brackets after order completion.</p>
     <span class="n">app</span><span class="p">,</span>
     <span class="n">base</span><span class="p">,</span>
     <span class="n">bracket_legs</span><span class="p">,</span>
-    <span class="n">brick</span><span class="p">,</span>
+    <span class="n">block</span><span class="p">,</span>
     <span class="n">execution_models</span><span class="p">,</span>
     <span class="n">indicators</span><span class="p">,</span>
     <span class="n">portfolio</span><span class="p">,</span>
@@ -1834,7 +1834,7 @@ that will attach brackets after order completion.</p>
 
 
 <span class="nd">@dataclass</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">EMACrossStrategy</span><span class="p">(</span><span class="n">brick</span><span class="o">.</span><span class="n">AbstractDfBrick</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">EMACrossStrategy</span><span class="p">(</span><span class="n">block</span><span class="o">.</span><span class="n">AbstractDfBlock</span><span class="p">):</span>
     <span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">fast_lookback</span><span class="p">:</span> <span class="nb">int</span>
@@ -1889,11 +1889,11 @@ that will attach brackets after order completion.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">brick</span><span class="p">,</span> <span class="n">indicators</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">block</span><span class="p">,</span> <span class="n">indicators</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ibi</span>
 
 <span class="nd">@dataclass</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">EMACrossStrategy</span><span class="p">(</span><span class="n">brick</span><span class="o">.</span><span class="n">AbstractDfBrick</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">EMACrossStrategy</span><span class="p">(</span><span class="n">block</span><span class="o">.</span><span class="n">AbstractDfBlock</span><span class="p">):</span>
     <span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">fast_lookback</span><span class="p">:</span> <span class="nb">int</span>
@@ -1909,9 +1909,9 @@ that will attach brackets after order completion.</p>
 </pre></div>
 </div>
 </div>
-<p>This defines the trading signals using <a class="reference internal" href="#haymaker.brick.AbstractDfBrick" title="haymaker.brick.AbstractDfBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
+<p>This defines the trading signals using <a class="reference internal" href="#haymaker.block.AbstractDfBlock" title="haymaker.block.AbstractDfBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
 <p>The data received via <cite>onData</cite> is wrapped into a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with column names matching the keys in the <cite>data</cite> dictionary. Users must ensure upstream components provide all required data for signal generation.</p>
-<p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
+<p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.2)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
 <div class="literal-block-wrapper docutils container" id="id21">
 <div class="code-block-caption"><span class="caption-text">Defining the ES futures contract</span><a class="headerlink" href="#id21" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">&quot;ES&quot;</span><span class="p">,</span> <span class="s2">&quot;CME&quot;</span><span class="p">)</span>
@@ -2002,7 +2002,7 @@ that will attach brackets after order completion.</p>
 </pre></div>
 </div>
 </div>
-<p>Sends a <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.order.MarketOrder" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.order.MarketOrder</span></code></a> to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an <code class="docutils literal notranslate"><span class="pre">atr</span></code> column from the <a class="reference internal" href="#haymaker.brick.AbstractDfBrick" title="haymaker.brick.AbstractDfBrick"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.brick.AbstractDfBrick</span></code></a>).</p>
+<p>Sends a <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.order.MarketOrder" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.order.MarketOrder</span></code></a> to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an <code class="docutils literal notranslate"><span class="pre">atr</span></code> column from the <a class="reference internal" href="#haymaker.block.AbstractDfBlock" title="haymaker.block.AbstractDfBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock</span></code></a>).</p>
 </li>
 </ul>
 <div class="literal-block-wrapper docutils container" id="id30">
@@ -2187,14 +2187,14 @@ that will attach brackets after order completion.</p>
 </li>
 </ul>
 </li>
-<li><a class="reference internal" href="#brick">Brick</a><ul>
-<li><a class="reference internal" href="#haymaker.brick.AbstractBaseBrick"><code class="docutils literal notranslate"><span class="pre">AbstractBaseBrick</span></code></a><ul>
-<li><a class="reference internal" href="#haymaker.brick.AbstractBaseBrick.onData"><code class="docutils literal notranslate"><span class="pre">AbstractBaseBrick.onData()</span></code></a></li>
-<li><a class="reference internal" href="#haymaker.brick.AbstractBaseBrick.onStart"><code class="docutils literal notranslate"><span class="pre">AbstractBaseBrick.onStart()</span></code></a></li>
+<li><a class="reference internal" href="#block">Block</a><ul>
+<li><a class="reference internal" href="#haymaker.block.AbstractBaseBlock"><code class="docutils literal notranslate"><span class="pre">AbstractBaseBlock</span></code></a><ul>
+<li><a class="reference internal" href="#haymaker.block.AbstractBaseBlock.onData"><code class="docutils literal notranslate"><span class="pre">AbstractBaseBlock.onData()</span></code></a></li>
+<li><a class="reference internal" href="#haymaker.block.AbstractBaseBlock.onStart"><code class="docutils literal notranslate"><span class="pre">AbstractBaseBlock.onStart()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#id10">Implementations</a><ul>
-<li><a class="reference internal" href="#haymaker.brick.AbstractDfBrick"><code class="docutils literal notranslate"><span class="pre">AbstractDfBrick</span></code></a></li>
+<li><a class="reference internal" href="#haymaker.block.AbstractDfBlock"><code class="docutils literal notranslate"><span class="pre">AbstractDfBlock</span></code></a></li>
 </ul>
 </li>
 </ul>
