@@ -1,5 +1,6 @@
 from typing import Literal, Optional, Union
 
+import numpy as np
 import pandas as pd  # type: ignore
 
 from .numba_tools import _blip_to_signal_converter, _in_out_signal_unifier
@@ -104,6 +105,37 @@ def pos_trans(position: pd.Series, clip=True) -> pd.Series:
         return o.clip(-1, 1)
     else:
         return o
+
+
+def pos_trans_array(position: np.ndarray, clip: bool = True) -> np.ndarray:
+    """
+    NumPy position to transaction converter.
+
+    Intended for internal use in array-oriented research code paths.
+    """
+    arr = np.asarray(position)
+    out = np.zeros(arr.shape, dtype=np.int8)
+
+    if arr.size <= 1:
+        return out
+
+    diff = arr[1:] - arr[:-1]
+    changed = arr[1:] != arr[:-1]
+    out[1:] = diff * changed
+
+    if clip:
+        np.clip(out, -1, 1, out=out)
+
+    return out
+
+
+def pos_trans_numpy(position: pd.Series, clip: bool = True) -> pd.Series:
+    """
+    Position to transaction converter using NumPy instead of pandas ops.
+    """
+    values = position.to_numpy(copy=False)
+    out = pos_trans_array(values, clip=clip)
+    return pd.Series(out, index=position.index, name=position.name)
 
 
 def sig_pos(signal: pd.Series) -> pd.Series:

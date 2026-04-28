@@ -1,5 +1,5 @@
 from multiprocessing import Pool, cpu_count  # type: ignore
-from typing import Callable, List, Literal, Optional, Sequence, Set, Tuple, Union
+from typing import Callable, List, Literal, Optional, Sequence, Set, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd  # type: ignore
@@ -14,7 +14,7 @@ from haymaker.indicators import (  # noqa
 
 from .signal_converters import sig_pos
 from .stop import stop_loss
-from .vector_backtester import Results
+from .vector_backtester import Results, get_min_tick
 
 
 def true_sharpe(ret):
@@ -476,3 +476,32 @@ def vector_grouper(
         )
         .set_index("date")
     )
+
+
+
+
+def always_on(series: pd.Series) -> bool:
+    """
+    NOT IN USE
+    Based on passed position series determine whether system is always
+    in the market (closing position always means opening opposite position).
+    """
+    start = min(series.idxmax(), series.idxmin())
+    start_index = cast(int, series.index.get_indexer([start])[0])
+    return bool(series.iloc[start_index:].eq(0).sum() == 0)
+
+
+def round_tick(series: pd.Series) -> pd.Series:
+    tick = get_min_tick(series)
+    floor = series // tick
+    remainder = series % tick
+    return floor * tick + 1 * (remainder > tick / 2)
+
+
+def multiply(series: pd.Series, multiplier: float) -> pd.Series:
+    """
+    Floor multiplied price series to the nearest tick.
+    """
+    if multiplier != 1:
+        series = series * multiplier
+    return round_tick(series)

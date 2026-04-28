@@ -133,7 +133,6 @@ def get_min_tick(data: pd.Series) -> float:
     ps = data.sort_values().diff().abs().dropna()
     ps = ps[ps != 0]
     min_tick = ps.mode().iloc[0]
-    # print(f'estimated min-tick: {min_tick}')
     return min_tick  # type: ignore
 
 
