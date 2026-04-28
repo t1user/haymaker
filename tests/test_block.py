@@ -106,7 +106,7 @@ def test_AbstractDfBlock_is_abstract():
         AbstractDfBlock()  # type: ignore
 
 
-def test_signal_correct(
+async def test_signal_correct(
     df_connected_block: tuple[AbstractDfBlock, BaseAtom], data_for_df: dict
 ):
     """Test that df_block correctly emits the last row of df."""
@@ -126,13 +126,13 @@ def basic_df_block():
     return Block("eska_NQ", ibi.Future("NQ", "CME"))
 
 
-def test_dispatchmethod_df(basic_df_block: AbstractDfBlock, data_for_df: dict):
+async def test_dispatchmethod_df(basic_df_block: AbstractDfBlock, data_for_df: dict):
     df = pd.DataFrame(data_for_df)
     row = basic_df_block.df_row(df)
     assert row.equals(df.iloc[-1])
 
 
-def test_dispatchmethod_barList(basic_df_block: AbstractDfBlock):
+async def test_dispatchmethod_barList(basic_df_block: AbstractDfBlock):
     with open(os.path.join(TEST_ROOT, "data/data_from_streamer.pickle"), "rb") as f:
         data = pickle.loads(f.read())
     row_dict = data[-1].dict()
@@ -140,14 +140,16 @@ def test_dispatchmethod_barList(basic_df_block: AbstractDfBlock):
     assert row_dict == row.to_dict()
 
 
-def test_dispatchmethod_dict(basic_df_block: AbstractDfBlock, data_for_df: dict):
+async def test_dispatchmethod_dict(basic_df_block: AbstractDfBlock, data_for_df: dict):
     out = basic_df_block.df_row(data_for_df)
 
     should_be = pd.DataFrame(data_for_df).iloc[-1]
     assert out.equals(should_be)
 
 
-def test_df_block_accepts_df(basic_df_block: AbstractDfBlock, data_for_df: dict, Atom):
+async def test_df_block_accepts_df(
+    basic_df_block: AbstractDfBlock, data_for_df: dict, Atom
+):
 
     class OutputAtom(Atom):
         output = None

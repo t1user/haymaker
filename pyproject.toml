@@ -93,3 +93,4 @@ python_files = "test_*.py"
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:warnings"]
+asyncio_mode = "auto"
