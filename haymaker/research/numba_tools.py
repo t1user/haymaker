@@ -236,29 +236,21 @@ def _blip_to_signal_converter(data: np.ndarray, always_on=False) -> np.ndarray:
 
 
 @jit(nopython=True)
-def _in_out_signal_unifier(data: np.ndarray, always_on=False) -> np.ndarray:
+def _in_out_blip_unifier(data: np.ndarray) -> np.ndarray:
     """Given an array with two columns, one with entry and one with close
-    signal, return an array with signal resulting from combining those
-    two signals.
-
-    THIS IS FOR BLIPS???? WORKS FOR BOTH: SIGNALS AND BLIPS? -
-    !!!!!TEST!!!!!!  if entry is a signal, it will immediately reenter
-    position after close-out, right?
-
-    !!!!!!!WORKS ONLY FOR BLIPS!!!!!
-
-    always_on is not in use
+    blip, return an array with signal resulting from combining those
+    two blip series.
 
     Args:
     -----
 
-    data: must have two columns: [0] - entry signal/blip [1] - close signal/blip
+    data: must have two columns: [0] - blip [1] - close blip
 
     Returns:
     --------
 
     Numpy array of shape [data.shape[0], 1] with signal resulting
-    from applying entry and close signals/blips (1: long, 0: not on the market,
+    from applying entry and close blips (1: long, 0: not on the market,
     -1: short).
 
     """

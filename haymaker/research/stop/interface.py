@@ -78,10 +78,11 @@ def _blip_data(
     price_column: str,
     distance: DistanceLike,
 ) -> PreparedData:
-    close_blip = df["close_blip"] if "close_blip" in df.columns else df["blip"]
-
+    blip = df['blip'].shift().fillna(0).astype(int)
+    close_blip = df["close_blip"].shift().fillna(0).astype(int
+        ) if "close_blip" in df.columns else blip
     return PreparedData(
-        first=df["blip"].to_numpy(dtype=np.int8, copy=False),
+        first=blip.to_numpy(dtype=np.int8, copy=False),
         second=close_blip.to_numpy(dtype=np.int8, copy=False),
         high=df["high"].to_numpy(dtype=np.float64, copy=False),
         low=df["low"].to_numpy(dtype=np.float64, copy=False),
@@ -155,7 +156,12 @@ def stop_loss(
         If ``blip`` is given, ``close_blip`` may also be provided.
         Then ``blip`` is used to open positions and ``close_blip`` to
         close them. If only ``blip`` is given, it is used for both open
-        and close decisions.
+        and close decisions. In this case, if there is an existing position,
+        ``blip`` in the opposite direction closes existing position without
+        openning an opposing one.
+
+        ``position`` is the desired position before the stop loss is applied.
+        This function will return the position after the stop loss is applied.
 
     distance:
         Desired stop-loss distance. This may be:
@@ -208,19 +214,19 @@ def stop_loss(
         results.
 
     Important timing note:
-        Blips must already be shifted to the point in time where a
-        transaction could actually be executed. In other words, they
-        must appear at the earliest bar where action is possible, not
-        at the bar where the underlying information first began to form.
-
-        This function does not shift blips, signals, or any other
-        indicators for you. That is deliberate. The calling code must
-        ensure that the timing of signals reflects when the strategy
-        could have known about them and when it could first have acted
-        on them.
-
-        This is especially important for research integrity: even a
-        one-bar or sub-bar timing mistake can introduce future leakage.
+        Blip is a signal to be acted upon. It must be given at the bar 
+        where is generated (where information first appeared). The system will 
+        make sure it is executed at the first possible bar where it's possible
+        to act on the information.
+        
+        Position indicates a state. It's already pre-processed by the calling code.  
+        It must appear at the end of the bar where position already exists. 
+        This function does not shift positions.  
+        
+        The calling code must ensure, taking into account the above interpretations,
+        that the timing of signals reflects when the strategy could have known about
+        them and when it could first have acted on them. It's a fundamental part of
+        a research process, introduction of any 'future leakage' invalidates the results.
 
     Returns:
     --------

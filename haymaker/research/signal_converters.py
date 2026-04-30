@@ -3,7 +3,7 @@ from typing import Literal, Optional, Union
 import numpy as np
 import pandas as pd  # type: ignore
 
-from .numba_tools import _blip_to_signal_converter, _in_out_signal_unifier
+from .numba_tools import _blip_to_signal_converter, _in_out_blip_unifier
 
 """
 This module allows for most frequent conversions between various types
@@ -155,11 +155,13 @@ def blip_sig(blip: Union[pd.Series, pd.DataFrame], always_on=True) -> pd.Series:
     blip:
         if pd.Series - the series represents both open and close signals
 
-        if pd.DataFrame - first column is open signals, second column is close signals
+        if pd.DataFrame - first column is open signals, second column is close signals; 
+        in this case, where there is an active position, ``blip`` signals are ignored.
+        Only ``close_blip`` can close an existing position.
 
     always_on:
         relevant only if blip is a Series;
-        if True - close blip is simultanously an open blip for a reverse position.
+        if True - close ``blip`` is simultanously an open blip for a reverse position.
     """
 
     def verify(series: pd.Series) -> None:
@@ -177,7 +179,7 @@ def blip_sig(blip: Union[pd.Series, pd.DataFrame], always_on=True) -> pd.Series:
         verify(blip.iloc[:, 0])
         verify(blip.iloc[:, 1])
         return pd.Series(
-            _in_out_signal_unifier(blip.to_numpy(), always_on=always_on).flatten(),
+            _in_out_blip_unifier(blip.to_numpy()).flatten(),
             index=blip.index,
         )
     else:
