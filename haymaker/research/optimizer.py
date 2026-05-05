@@ -21,7 +21,7 @@ from pyfolio.timeseries import perf_stats  # type: ignore
 
 from .signal_converters import sig_pos
 from .stop import stop_loss
-from .vector_backtester import Results, perf
+from .backtester import Results, no_stop, perf
 
 
 class Optimizer:
@@ -217,7 +217,15 @@ class Optimizer:
         if isinstance(self.func, OptiWrapper):
             # stop requires position and df, also returns df
             data = self.func(self.df, self.in_data, *args, **kwargs)
-            out = perf(data["price"], data["position"], **self.kwargs)
+            out = perf(
+                no_stop(
+                    pd.DataFrame(
+                        {"price": data["price"], "position": data["position"]}
+                    ),
+                    price_column="price",
+                ),
+                **self.kwargs,
+            )
         else:
             try:
                 data = self.func(self.in_data, *args, **kwargs)
@@ -242,10 +250,24 @@ class Optimizer:
                         f"optimizer received df with columns: {data.columns}, "
                         f"looking for columns: 'price', 'position'"
                     )
-                out = perf(data["price"], data["position"], **self.kwargs)
+                out = perf(
+                    no_stop(
+                        pd.DataFrame(
+                            {"price": data["price"], "position": data["position"]}
+                        ),
+                        price_column="price",
+                    ),
+                    **self.kwargs,
+                )
             else:
                 # returned signal has to be converted to position
-                out = perf(self.df["open"], sig_pos(data), **self.kwargs)
+                out = perf(
+                    no_stop(
+                        pd.DataFrame({"open": self.df["open"], "position": sig_pos(data)}),
+                        price_column="open",
+                    ),
+                    **self.kwargs,
+                )
         if self.save_mem:
             # daily and df attributes dropped to limit memory usage
             return Results(

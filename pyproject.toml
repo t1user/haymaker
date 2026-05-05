@@ -87,10 +87,8 @@ disable_error_code = ["return"]
 ignore_errors = true
 module = "backtester"
 
-[tool.pytest]
-testpaths = "tests"
-python_files = "test_*.py"
-
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
 addopts = ["-p", "no:warnings"]
 asyncio_mode = "auto"

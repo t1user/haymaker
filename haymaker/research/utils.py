@@ -14,7 +14,7 @@ from haymaker.indicators import (  # noqa
 
 from .signal_converters import sig_pos
 from .stop import stop_loss
-from .vector_backtester import Results, get_min_tick
+from .backtester import Results, get_min_tick
 
 
 def true_sharpe(ret):

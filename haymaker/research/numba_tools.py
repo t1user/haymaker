@@ -756,8 +756,8 @@ def pivot_indicator(df: pd.DataFrame, func: Callable) -> pd.DataFrame:
     indicator = np.concatenate(out)
 
     index = d.iloc[df_start:].index
-    indicator = pd.DataFrame(indicator, index=index)
-    return indicator
+    indicator_df = pd.DataFrame(indicator, index=index)
+    return indicator_df
 
 
 @jit(nopython=True)

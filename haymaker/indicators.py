@@ -7,7 +7,7 @@ import pandas as pd
 from .research.decorators import ensure_df
 from .research.numba_tools import (
     _blip_to_signal_converter,
-    _in_out_signal_unifier,
+    _in_out_blip_unifier,
     rolling_min_max_index,
     swing,
 )
@@ -558,7 +558,7 @@ def breakout(
         df["break"] = _blip_to_signal_converter(df["in"].to_numpy())
     else:
         df["out"] = min_max_blip(df["price"], int(lookback * stop_frac))
-        df["break"] = _in_out_signal_unifier(df[["in", "out"]].to_numpy())
+        df["break"] = _in_out_blip_unifier(df[["in", "out"]].to_numpy())
     return df["break"]
 
 

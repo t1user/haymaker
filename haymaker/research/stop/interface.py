@@ -104,13 +104,16 @@ def _prepare_data(
     return _blip_data(df, price_column, distance)
 
 
-def _build_output(result: np.ndarray, index: pd.Index) -> pd.DataFrame:
+def _build_output(
+    result: np.ndarray, index: pd.Index, price_series: pd.Series
+) -> pd.DataFrame:
     out_df = pd.DataFrame(
         result,
         columns=["position", "open_price", "close_price", "stop_price"],
         index=index,
     )
     out_df["position"] = out_df["position"].astype(int, copy=False)
+    out_df["bar_price"] = price_series
     return out_df
 
 
@@ -274,4 +277,5 @@ def stop_loss(
             params,
         )
 
-    return _build_output(result, data.row_index)
+    price_series = df[price_column]
+    return _build_output(result, data.row_index, price_series)

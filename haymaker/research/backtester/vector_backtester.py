@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd  # type: ignore
 from pyfolio.timeseries import perf_stats  # type: ignore
 
-from .signal_converters import sig_pos
+from ..signal_converters import sig_pos
 
 
 def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
@@ -576,10 +576,13 @@ def perf(
     stats = pd.Series(dtype="O")
     try:
         # np.float64 and np.int64 can be divided by zero
+        avg_gain = win_pos.pnl.sum() / win_pos.pnl.count()
+        avg_loss = loss_pos.pnl.sum() / loss_pos.pnl.count()
+        stats["Payoff ratio"] = abs(avg_gain / avg_loss)
+        stats["Profit factor"] = abs(win_pos.pnl.sum() / loss_pos.pnl.sum())
         stats["Win ratio"] = win_pos.pnl.count() / len(positions)
-        stats["Average gain"] = win_pos.pnl.sum() / win_pos.pnl.count()
-        stats["Average loss"] = loss_pos.pnl.sum() / loss_pos.pnl.count()
-        stats["Profit factor"] = abs(stats["Average gain"] / stats["Average loss"])
+        stats["Average gain"] = avg_gain
+        stats["Average loss"] = avg_loss
         # stats["Position EV"] = (stats["Win percent"] * stats["Average gain"]) + (
         #    (1 - stats["Win percent"]) * stats["Average loss"]
         # )
