@@ -132,6 +132,7 @@ class FuturesStitcher:
     tz_info: ZoneInfo = ZoneInfo("US/Eastern")
     roll_hour: int = 11
     buffer_bdays: int = 3
+    _intraday: bool | None = None
 
     def __post_init__(self):
         assert self.adjust_type is None or self.adjust_type in [
@@ -365,6 +366,18 @@ class FuturesStitcher:
             return pd.Timestamp(date).tz_convert(self.tz_info)
         return pd.Timestamp(date, tz=self.tz_info)
 
+    def is_intraday(self, df: pd.DataFrame) -> bool:
+        """
+        Establish wheather data is intraday only once, subsequent df
+        are assumed to be the same.
+        """
+        if self._intraday is None:
+            diffs = pd.Series(df.index.to_series().diff().dropna().values)
+            self._intraday = not diffs.empty and pd.Timedelta(
+                diffs.mode()[0]
+            ) < timedelta(days=1)
+        return self._intraday
+
     def _make_roll_timestamp(
         self, roll_day: datetime, df: pd.DataFrame
     ) -> pd.Timestamp:
@@ -389,13 +402,9 @@ class FuturesStitcher:
         If roll_day is already tz-aware, it is converted to tz_info
         before applying roll_hour.
         """
-        diffs = pd.Series(df.index.to_series().diff().dropna().values)
-        is_intraday = not diffs.empty and pd.Timedelta(diffs.mode()[0]) < timedelta(
-            days=1
-        )
         df_tz = self._get_df_tz(df)
 
-        if is_intraday:
+        if self.is_intraday(df):
             if isinstance(roll_day, datetime) and roll_day.tzinfo is not None:
                 ts_instrument = (
                     pd.Timestamp(roll_day)
@@ -441,7 +450,8 @@ class FuturesStitcher:
         inner = old_df.join(new_df, how="inner", rsuffix="_new")
         if inner.empty:
             raise NonOverLappingDfsError(
-                f"Previous last point: {old_df.index[-1] if not old_df.empty else 'empty'}, "
+                f"Previous last point: "
+                f"{old_df.index[-1] if not old_df.empty else 'empty'}, "
                 f"next first point: {new_df.index[0] if not new_df.empty else 'empty'} "
                 f"sync index: {sync_index}"
             )
@@ -452,7 +462,7 @@ class FuturesStitcher:
         Return a DataFrame summarising each roll event, sorted by sync point.
 
         Columns: roll_day, sync_point, old_contract, new_contract,
-        old_close, new_close, offset.
+        old_close, new_close, offset, cum_offset (cummulative offset).
 
         Returns None if no roll records were computed.
         """
@@ -469,8 +479,9 @@ class FuturesStitcher:
                         "old_close": r.old_close,
                         "new_close": r.new_close,
                         "offset": r.individual_offset,
+                        "cum_offset": co,
                     }
-                    for r in self._roll_records
+                    for r, co in zip(self._roll_records, self._cumulative_offsets)
                 ]
             )
             .sort_values("sync_point")
