@@ -95,7 +95,8 @@ def no_stop(
 
     Dispatch precedence:
     1. ``position`` column – used directly.
-    2. ``blip`` column    – shifted by 1 bar then converted to a position series.
+    2. ``blip`` column    – treated as generated events, shifted by 1 bar,
+       then converted to a position series.
     3. Neither present    – raises :exc:`ValueError`.
 
     Args:

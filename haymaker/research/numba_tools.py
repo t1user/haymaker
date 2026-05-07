@@ -194,7 +194,7 @@ def swing(
         return output
 
 
-# Blip to position converter ###
+# Blip to stateful signal converter ###
 
 
 @jit(nopython=True)
@@ -202,6 +202,10 @@ def _blip_to_signal_converter(data: np.ndarray, always_on=False) -> np.ndarray:
     """
     Given a column with blips, return a column with signals
     resulting from those blips.
+
+    The returned array is a same-row desired state implied by generated blips.
+    It is not an executable position; apply the package timing conversion
+    before treating it as a held position.
 
     Args:
     -----
@@ -240,6 +244,10 @@ def _in_out_blip_unifier(data: np.ndarray) -> np.ndarray:
     """Given an array with two columns, one with entry and one with close
     blip, return an array with signal resulting from combining those
     two blip series.
+
+    The returned array is a same-row desired state implied by generated blips.
+    It is not an executable position; passing it directly as ``position`` can
+    execute one bar too early.
 
     Args:
     -----

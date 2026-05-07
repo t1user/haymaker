@@ -520,10 +520,15 @@ def breakout(
     stop_frac: float = 0.5,
 ) -> pd.Series:
     """
-    Create a Series with signal representing buying breakout
+    Create a Series with a generated signal representing buying breakout
     beyond lookback periods maximum and selling breakout below
     lookback periods minimum.  Once generated, signal stays constant
     until canceled or reversed.
+
+    The returned signal is recorded on the bar where the breakout
+    information becomes known. It is not an executable position. For
+    stop-loss workflows prefer :func:`breakout_blip` or raw blip columns
+    passed to ``stop_loss``.
 
     Args:
     -----
@@ -543,8 +548,8 @@ def breakout(
     Returns:
     --------
 
-    Series where 1 means long signal, -1 short position, 0 no position
-    at a given index point.
+    Series where 1 means long signal, -1 short signal, 0 no desired
+    position at a given index point.
     """
 
     if not isinstance(price, pd.Series):
@@ -570,6 +575,10 @@ def breakout_blip(
     """
     Same as :func:`.breakout`, but generating a series with blips
     rather than signals.
+
+    Blips are raw generated events recorded on the bar where the breakout
+    information becomes known. Do not pre-shift them before passing them to
+    blip-aware consumers such as ``stop_loss`` or ``no_stop``.
 
     Args:
     -----

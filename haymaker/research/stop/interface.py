@@ -78,9 +78,12 @@ def _blip_data(
     price_column: str,
     distance: DistanceLike,
 ) -> PreparedData:
-    blip = df['blip'].shift().fillna(0).astype(int)
-    close_blip = df["close_blip"].shift().fillna(0).astype(int
-        ) if "close_blip" in df.columns else blip
+    blip = df["blip"].shift().fillna(0).astype(int)
+    close_blip = (
+        df["close_blip"].shift().fillna(0).astype(int)
+        if "close_blip" in df.columns
+        else blip
+    )
     return PreparedData(
         first=blip.to_numpy(dtype=np.int8, copy=False),
         second=close_blip.to_numpy(dtype=np.int8, copy=False),
@@ -217,19 +220,20 @@ def stop_loss(
         results.
 
     Important timing note:
-        Blip is a signal to be acted upon. It must be given at the bar 
-        where is generated (where information first appeared). The system will 
-        make sure it is executed at the first possible bar where it's possible
-        to act on the information.
-        
-        Position indicates a state. It's already pre-processed by the calling code.  
-        It must appear at the end of the bar where position already exists. 
-        This function does not shift positions.  
-        
-        The calling code must ensure, taking into account the above interpretations,
-        that the timing of signals reflects when the strategy could have known about
-        them and when it could first have acted on them. It's a fundamental part of
-        a research process, introduction of any 'future leakage' invalidates the results.
+        ``blip`` is a generated event. It must be recorded on the bar
+        where the information first becomes known, not pre-shifted to
+        the execution bar. This function converts generated blips into
+        the first possible execution bar internally.
+
+        ``position`` is an already executable/held state. It is
+        pre-processed by the calling code and must appear on the bar
+        where the position already exists. This function does not shift
+        positions.
+
+        The calling code must ensure, taking into account the above
+        interpretations, that all inputs reflect when the strategy
+        could have known the information and when it could first have
+        acted on it. Future leakage invalidates research results.
 
     Returns:
     --------
