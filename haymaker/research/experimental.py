@@ -59,7 +59,7 @@ def down(
     price: np.ndarray,
     index: np.ndarray,
     func: Callable,
-    *args
+    *args,
 ) -> np.ndarray:
     """Numba implementation, to be called only from
     last_downsampled_func, which needs to prepare data.

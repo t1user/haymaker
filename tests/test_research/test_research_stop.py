@@ -99,9 +99,9 @@ def _blip_frame(length: int, seed: int) -> pd.DataFrame:
     position.iloc[0] = 0
     previous = position.shift(fill_value=0)
     df["blip"] = position.where((position != 0) & (position != previous), 0).astype(int)
-    df["close_blip"] = (-previous).where(
-        (previous != 0) & (position != previous), 0
-    ).astype(int)
+    df["close_blip"] = (
+        (-previous).where((previous != 0) & (position != previous), 0).astype(int)
+    )
     return df
 
 

@@ -197,10 +197,10 @@ def _make_engine_inputs(
     close_p = np.zeros(n)
     stop_p = np.zeros(n)
     # Manually set a few trades
-    open_p[2] = price[2]      # long entry
-    close_p[5] = -price[5]    # normal close
-    open_p[7] = -price[7]     # short entry
-    stop_p[9] = price[9]      # stop exit
+    open_p[2] = price[2]  # long entry
+    close_p[5] = -price[5]  # normal close
+    open_p[7] = -price[7]  # short entry
+    stop_p[9] = price[9]  # stop exit
     return price, open_p, close_p, stop_p, 0.5
 
 
@@ -235,7 +235,9 @@ def test_perf_positions_pnl_sum_matches_bar_df_pnl_sum() -> None:
     tx = no_stop(df, price_column="open")
     result = perf(tx, slippage=1.5, use_numba=False)
     diff = abs(result.positions.pnl.sum() - result.df.pnl.sum())
-    assert diff < 1e-8, f"PnL mismatch: positions={result.positions.pnl.sum():.6f}, bar_df={result.df.pnl.sum():.6f}"
+    assert (
+        diff < 1e-8
+    ), f"PnL mismatch: positions={result.positions.pnl.sum():.6f}, bar_df={result.df.pnl.sum():.6f}"
 
 
 def test_perf_no_positions_emits_warning() -> None:
@@ -341,9 +343,9 @@ def test_pnl_parity_simple_long_only() -> None:
     new_gpnl = new_result.positions.g_pnl.sum()
     old_gpnl = old_result.positions.g_pnl.sum()
 
-    assert abs(new_gpnl - old_gpnl) < 0.5, (
-        f"Gross PnL divergence: new={new_gpnl:.4f}, old={old_gpnl:.4f}"
-    )
+    assert (
+        abs(new_gpnl - old_gpnl) < 0.5
+    ), f"Gross PnL divergence: new={new_gpnl:.4f}, old={old_gpnl:.4f}"
 
 
 def test_pnl_parity_always_on() -> None:
@@ -370,6 +372,6 @@ def test_pnl_parity_always_on() -> None:
     new_gpnl = new_result.positions.g_pnl.sum()
     old_gpnl = old_result.positions.g_pnl.sum()
 
-    assert abs(new_gpnl - old_gpnl) < 0.5, (
-        f"Always-on gross PnL divergence: new={new_gpnl:.4f}, old={old_gpnl:.4f}"
-    )
+    assert (
+        abs(new_gpnl - old_gpnl) < 0.5
+    ), f"Always-on gross PnL divergence: new={new_gpnl:.4f}, old={old_gpnl:.4f}"

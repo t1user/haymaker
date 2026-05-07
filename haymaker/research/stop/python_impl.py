@@ -249,9 +249,9 @@ class Context:
         ) = row
 
         if self.transaction:
-            assert self.distance > 0, (
-                f"Wrong value for stop loss distance: {self.distance}"
-            )
+            assert (
+                self.distance > 0
+            ), f"Wrong value for stop loss distance: {self.distance}"
 
         return self.dispatch()
 
@@ -272,9 +272,9 @@ class Context:
         self.price = price
 
         if self.transaction:
-            assert self.distance > 0, (
-                f"Wrong value for stop loss distance: {self.distance}"
-            )
+            assert (
+                self.distance > 0
+            ), f"Wrong value for stop loss distance: {self.distance}"
 
         return self.dispatch()
 
@@ -355,9 +355,9 @@ class BlipContext(Context):
         ) = row
 
         if self.blip:
-            assert self.distance > 0, (
-                f"Wrong value for stop loss distance: {self.distance}"
-            )
+            assert (
+                self.distance > 0
+            ), f"Wrong value for stop loss distance: {self.distance}"
 
         return self.dispatch()
 
@@ -378,9 +378,9 @@ class BlipContext(Context):
         self.price = price
 
         if self.blip:
-            assert self.distance > 0, (
-                f"Wrong value for stop loss distance: {self.distance}"
-            )
+            assert (
+                self.distance > 0
+            ), f"Wrong value for stop loss distance: {self.distance}"
 
         return self.dispatch()
 
@@ -411,9 +411,7 @@ def _stop_loss(data: np.ndarray, stop: Context) -> np.ndarray:
     for i, row in enumerate(data):
         position[i], open_price[i], close_price[i], stop_price[i] = stop(row)
 
-    return np.concatenate(
-        (position, open_price, close_price, stop_price), axis=1
-    )
+    return np.concatenate((position, open_price, close_price, stop_price), axis=1)
 
 
 def run_stop_loss(

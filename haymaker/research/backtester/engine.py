@@ -56,9 +56,9 @@ def _perf_engine(
     trade_count = 0
 
     current_position: int = 0
-    entry_price: float = 0.0       # signed (positive = long entry, negative = short)
-    entry_price_abs: float = 0.0   # unsigned entry price for MtM
-    entry_cost: float = 0.0        # slippage paid at entry bar
+    entry_price: float = 0.0  # signed (positive = long entry, negative = short)
+    entry_price_abs: float = 0.0  # unsigned entry price for MtM
+    entry_cost: float = 0.0  # slippage paid at entry bar
     entry_bar: int = 0
     prev_bar_price: float = 0.0
 
@@ -152,12 +152,14 @@ def _perf_engine(
         trade_records[trade_count, 5] = total_slippage
         trade_records[trade_count, 6] = float(current_position)
         trade_count += 1
-        
+
         # Adjust last bar PnL to include the closing slippage
         bar_net_pnl[n - 1] -= cost
         # The MtM for the last bar is already computed correctly up to prev_bar_price (which is the last bar_price)
         # We just need to deduct the final slippage from the log return as well
-        denom = bar_price[n - 2] if n >= 2 and bar_price[n - 2] != 0.0 else bar_price[n - 1]
+        denom = (
+            bar_price[n - 2] if n >= 2 and bar_price[n - 2] != 0.0 else bar_price[n - 1]
+        )
         if denom != 0.0:
             # We subtract cost from the raw PnL and recompute
             bar_pnl_last = bar_net_pnl[n - 1]
@@ -211,10 +213,17 @@ def _perf_engine_python(
 
             gross_pnl = -(entry_price + exit_price)
             total_slippage = entry_cost + cost
-            trade_rows.append([
-                float(entry_bar), float(i), entry_price, exit_price,
-                gross_pnl, total_slippage, float(current_position),
-            ])
+            trade_rows.append(
+                [
+                    float(entry_bar),
+                    float(i),
+                    entry_price,
+                    exit_price,
+                    gross_pnl,
+                    total_slippage,
+                    float(current_position),
+                ]
+            )
 
             current_position = 0
             entry_price = 0.0
@@ -248,12 +257,21 @@ def _perf_engine_python(
         exit_price_synthetic = -current_position * prev_bar_price
         gross_pnl = -(entry_price + exit_price_synthetic)
         total_slippage = entry_cost + cost
-        trade_rows.append([
-            float(entry_bar), float(n - 1), entry_price, exit_price_synthetic,
-            gross_pnl, total_slippage, float(current_position),
-        ])
+        trade_rows.append(
+            [
+                float(entry_bar),
+                float(n - 1),
+                entry_price,
+                exit_price_synthetic,
+                gross_pnl,
+                total_slippage,
+                float(current_position),
+            ]
+        )
         bar_net_pnl[n - 1] -= cost
-        denom = bar_price[n - 2] if n >= 2 and bar_price[n - 2] != 0.0 else bar_price[n - 1]
+        denom = (
+            bar_price[n - 2] if n >= 2 and bar_price[n - 2] != 0.0 else bar_price[n - 1]
+        )
         if denom != 0.0:
             bar_pnl_last = bar_net_pnl[n - 1]
             bar_log_returns[n - 1] = np.log1p(bar_pnl_last / denom)

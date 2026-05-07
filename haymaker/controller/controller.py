@@ -748,7 +748,7 @@ class Controller(Atom):
             # 421: Error validating request.-'bN' : cause - Missing order exchange
             order_info = self.sm.order.get(reqId)
             if order_info:
-                (strategy, action, trade, *_) = order_info
+                strategy, action, trade, *_ = order_info
                 order = trade.order
             else:
                 strategy, action, trade, order = "", "", "", ""

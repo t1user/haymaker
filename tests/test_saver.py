@@ -678,8 +678,9 @@ class TestSaverIntegration:
     def test_pickle_save_and_read_roundtrip(self, temp_dir):
         """Test complete save/read cycle for PickleSaver."""
         # Mock the helper functions to use temp directory
-        with patch("haymaker.saver.default_path", return_value=temp_dir), patch(
-            "haymaker.saver.name_str", return_value="integration_test"
+        with (
+            patch("haymaker.saver.default_path", return_value=temp_dir),
+            patch("haymaker.saver.name_str", return_value="integration_test"),
         ):
 
             saver = PickleSaver(name="test", use_timestamp=False)
@@ -700,8 +701,9 @@ class TestSaverIntegration:
 
     def test_csv_save_and_read_roundtrip(self, temp_dir):
         """Test complete save/read cycle for CsvSaver."""
-        with patch("haymaker.saver.default_path", return_value=temp_dir), patch(
-            "haymaker.saver.name_str", return_value="integration_test"
+        with (
+            patch("haymaker.saver.default_path", return_value=temp_dir),
+            patch("haymaker.saver.name_str", return_value="integration_test"),
         ):
 
             saver = CsvSaver(name="test", use_timestamp=False)
@@ -746,8 +748,9 @@ class TestMongoSaver:
         """Create MongoSaver instance with query_key."""
         mock_client, mock_db, mock_collection = mock_mongo_client
 
-        with patch("haymaker.saver.get_mongo_client", return_value=mock_client), patch(
-            "haymaker.saver.CONFIG", mock_config
+        with (
+            patch("haymaker.saver.get_mongo_client", return_value=mock_client),
+            patch("haymaker.saver.CONFIG", mock_config),
         ):
             saver = MongoSaver(collection="test_collection", query_key="id")
             saver.collection = mock_collection  # Ensure we're using the mock
@@ -758,8 +761,9 @@ class TestMongoSaver:
         """Create MongoSaver instance without query_key."""
         mock_client, mock_db, mock_collection = mock_mongo_client
 
-        with patch("haymaker.saver.get_mongo_client", return_value=mock_client), patch(
-            "haymaker.saver.CONFIG", mock_config
+        with (
+            patch("haymaker.saver.get_mongo_client", return_value=mock_client),
+            patch("haymaker.saver.CONFIG", mock_config),
         ):
             saver = MongoSaver(collection="test_collection", query_key=None)
             saver.collection = mock_collection  # Ensure we're using the mock
@@ -769,8 +773,9 @@ class TestMongoSaver:
         """Test MongoSaver initialization with query_key."""
         mock_client, mock_db, mock_collection = mock_mongo_client
 
-        with patch("haymaker.saver.get_mongo_client", return_value=mock_client), patch(
-            "haymaker.saver.CONFIG", mock_config
+        with (
+            patch("haymaker.saver.get_mongo_client", return_value=mock_client),
+            patch("haymaker.saver.CONFIG", mock_config),
         ):
 
             saver = MongoSaver(collection="test_collection", query_key="user_id")
@@ -785,8 +790,9 @@ class TestMongoSaver:
         """Test MongoSaver initialization without query_key."""
         mock_client, mock_db, mock_collection = mock_mongo_client
 
-        with patch("haymaker.saver.get_mongo_client", return_value=mock_client), patch(
-            "haymaker.saver.CONFIG", mock_config
+        with (
+            patch("haymaker.saver.get_mongo_client", return_value=mock_client),
+            patch("haymaker.saver.CONFIG", mock_config),
         ):
 
             saver = MongoSaver(collection="users", query_key=None)

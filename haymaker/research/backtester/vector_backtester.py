@@ -429,7 +429,7 @@ def perf(
     assumed to be entered and closed on the next bar after signal was
     generated
 
-    position_or_stop_price - position held after each bar, possible values (-1, 0, 1), 
+    position_or_stop_price - position held after each bar, possible values (-1, 0, 1),
     or output of stoploss function
 
     slippage - transaction cost expressed as multiple of min tick
