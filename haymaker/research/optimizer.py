@@ -1,117 +1,88 @@
 from collections import defaultdict
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime as time
-from typing import (
-    Any,
-    Callable,
-    DefaultDict,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from functools import partial
+from typing import Any
 
-import matplotlib.pyplot as plt  # type: ignore
-import pandas as pd  # type: ignore
-import seaborn as sns  # type: ignore
-from pyfolio.timeseries import perf_stats  # type: ignore
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns  # type: ignore[import-untyped]
+from pyfolio.timeseries import perf_stats  # type: ignore[import-untyped]
 
 from .signal_converters import sig_pos
 from .stop import stop_loss
-from .backtester import Results, no_stop, perf
+from .backtester import Results, perf
+
+Pair = tuple[float, float]
+
+
+def _callable_name(func: Callable[..., Any]) -> str:
+    if isinstance(func, partial):
+        return _callable_name(func.func)
+    return getattr(func, "__name__", repr(func))
 
 
 class Optimizer:
-    """Backtest performance of func with parameters sp_1 and sp_2 over
-    prices in df.
+    """Run a two-parameter grid search over a transaction-producing function.
 
-    Optimizer object will run the backtests on instantiation and make
-    results available as properties.
+    The optimizer executes ``func`` for every parameter pair, passes the returned
+    transaction dataframe to :func:`haymaker.research.backtester.perf`, and stores
+    the resulting statistics, daily returns, positions, and bar-level data.
+
+    ``func`` must return a dataframe accepted by ``perf``. In practice this is
+    usually the output of :func:`haymaker.research.stop.stop_loss` or
+    :func:`haymaker.research.backtester.no_stop`.
 
     Args:
-    -----
+        df: Source data supplied to ``func``. If ``pass_full_df`` is ``False``,
+            only ``df["close"]`` is passed, so ``df`` must contain ``close``. If
+            ``pass_full_df`` is ``True``, the full dataframe is passed and the
+            required columns are defined by ``func``. For ``OptiWrapper`` usage,
+            ``df`` is also passed to ``stop_loss`` and must contain the columns
+            required by that function, such as ``open``, ``high``, and ``low``.
+        func: Callable receiving the input data and two optimization parameters.
+            It must return a transaction dataframe accepted by ``perf``.
+        sp_1: First parameter progression as ``(start, step[, mode])`` or an
+            explicit sequence of values. ``mode`` may be ``"geo"`` or ``"lin"``.
+        sp_2: Second parameter progression as ``(start, step[, mode])`` or an
+            explicit sequence of values. ``mode`` may be ``"geo"`` or ``"lin"``.
+        opti_params: Optional names for the optimized parameters. If given, the
+            generated pair values are passed to ``func`` as keyword arguments in
+            this order. Ignored when ``func`` is an ``OptiWrapper``.
+        pairs: Explicit parameter pairs. If provided, ``sp_1`` and ``sp_2`` are
+            ignored.
+        multiprocess: Whether to run parameter pairs in separate processes.
+        pass_full_df: Whether to pass the full ``df`` to ``func`` instead of
+            ``df["close"]``.
+        save_mem: If ``True``, omit daily returns and bar-level data from saved
+            results.
+        **kwargs: Additional keyword arguments passed to ``perf``.
 
-    df - must have columns 'open' and 'close' (signal is generated on
-    close, transactions executed on next open)
-
-    func - must take exactly two parameters and return a continuous
-    signal (transaction will be executed when signal changes, on index
-    point subsequent to the change)
-
-    sp_1 and sp_2 - given as tuples (start, step, mode), where mode is
-    either 'geo' for geometric progression or 'lin' for linear
-    progression, by default: 'geo'.  For 'geo' mode, if start is an
-    int, progression elements will also be cast into int.
-
-    opti_params - explicitly specify which paramaters are to be
-    optimized, if not given, two optimization paramaters will be pass
-    to func as positional arguments, order in which opti_params are
-    given is meaningful; if func is an OptiWrapper, opti_params are
-    ignored
-
-    slip - transaction cost expressed as percentage of ticksize
-
-    pairs - pairs of parameters to run the backtest on, if given, sp_1
-    and sp_2 will be ignored
-
-    multiprocess - whether simulation is to be run in single or multi
-    processes
-
-    pass_full_df - if False (default), <func> will get a price series
-    (typical for an indicator), otherwise full df will be passed (for
-    functions that require more than closing price to produce result)
-
-    save_mem - if True, raw_dfs and raw_dailys will not be saved to
-    conserve memory
-
-    Properties:
-    -----------
-
-    corr - correlation between returns of various backtests
-
-    rank - 20 best backtests ranked by total returns
-
-    return_mean - mean annual return of all backtests
-
-    return_median - median of annual return of all backtests
-
-    combine_stats - stats for a strategy that's equal weight
-    combination of all backtests
-
-    combine_paths - return path of all backtestest equal weighted
-
-    raw_dfs -
-
-    raw_dailys -
-
-    raw_positions -
-
-    raw_stats -
-
-    Review actual results of a given simulation.  They are all dicts
-    with keys being tuples with parameters.
-
+    Attributes:
+        raw_stats: Performance statistics keyed by parameter pair.
+        raw_dailys: Daily return data keyed by parameter pair.
+        raw_positions: Trade/position records keyed by parameter pair.
+        raw_dfs: Bar-level performance data keyed by parameter pair.
+        raw_warnings: Warning messages keyed by parameter pair.
     """
 
-    in_data: Union[pd.Series, pd.DataFrame]
+    in_data: pd.Series | pd.DataFrame
 
     def __init__(
         self,
         df: pd.DataFrame,
-        func: Callable,
+        func: Callable[..., Any],
         /,
-        sp_1: Tuple[float, float, str] = (100, 1.25, "geo"),
-        sp_2: Tuple[float, float, str] = (0.1, 0.1, "lin"),
-        opti_params: Optional[Sequence[str]] = None,
+        sp_1: tuple[Any, ...] = (100, 1.25, "geo"),
+        sp_2: tuple[Any, ...] = (0.1, 0.1, "lin"),
+        opti_params: Sequence[str] | None = None,
         # slip=1.5,
-        pairs: Optional[Sequence[Tuple[float, float]]] = None,
+        pairs: Sequence[Pair] | None = None,
         multiprocess: bool = True,
         pass_full_df: bool = False,
         save_mem: bool = False,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         self.time = time.now()
 
@@ -135,12 +106,12 @@ class Optimizer:
         else:
             self.opti_params = []
 
-        self.raw_stats: Dict[Tuple[float, float], pd.Series] = {}
-        self.raw_dailys: Dict[Tuple[float, float], pd.DataFrame] = {}
-        self.raw_positions: Dict[Tuple[float, float], pd.DataFrame] = {}
-        self.raw_dfs: Dict[Tuple[float, float], pd.DataFrame] = {}
-        self.raw_warnings: Dict[Tuple[float, float], List[str]] = {}
-        self._table: Dict[str, pd.DataFrame] = {}
+        self.raw_stats: dict[Pair, pd.Series] = {}
+        self.raw_dailys: dict[Pair, pd.DataFrame] = {}
+        self.raw_positions: dict[Pair, pd.DataFrame] = {}
+        self.raw_dfs: dict[Pair, pd.DataFrame] = {}
+        self.raw_warnings: dict[Pair, list[str]] = {}
+        self._table: dict[str, pd.DataFrame] = {}
 
         self.pairs = pairs or self.get_pairs(
             self.progression(sp_1), self.progression(sp_2)
@@ -164,7 +135,7 @@ class Optimizer:
         self.extract_dailys()
 
     @staticmethod
-    def progression(sp: Tuple[Any, ...]) -> Sequence:
+    def progression(sp: tuple[Any, ...]) -> Sequence[Any]:
         if len(sp) == 3:
             start, step, mode = sp
         elif len(sp) == 2:
@@ -197,12 +168,12 @@ class Optimizer:
     def get_pairs(
         sp_1: Iterable[float],
         sp_2: Iterable[float],
-    ) -> List[Tuple[float, float]]:
+    ) -> list[Pair]:
         return [(p_1, p_2) for p_1 in sp_1 for p_2 in sp_2]
 
     def args_kwargs(
         self, p_1: float, p_2: float
-    ) -> Tuple[List[float], Dict[str, float]]:
+    ) -> tuple[list[float], dict[str, float]]:
         if self.opti_params:
             kwargs = {key: value for key, value in zip(self.opti_params, (p_1, p_2))}
             args = []
@@ -211,63 +182,27 @@ class Optimizer:
             args = [p_1, p_2]
         return args, kwargs
 
-    def calc(self, pair: Tuple[float, float]) -> Results:
+    def calc(self, pair: Pair) -> Results:
         p_1, p_2 = pair
         args, kwargs = self.args_kwargs(p_1, p_2)
         if isinstance(self.func, OptiWrapper):
-            # stop requires position and df, also returns df
             data = self.func(self.df, self.in_data, *args, **kwargs)
-            out = perf(
-                no_stop(
-                    pd.DataFrame(
-                        {"price": data["price"], "position": data["position"]}
-                    ),
-                    price_column="price",
-                ),
-                **self.kwargs,
-            )
         else:
             try:
                 data = self.func(self.in_data, *args, **kwargs)
             except:  # noqa
                 print(f"Error running function for pair: {pair}")
                 raise
-            if isinstance(data, tuple):
-                # if tuple returned it must be directly passable to perf
-                assert (
-                    len(data) == 2
-                ), f"Function returned tuple of shape {len(data)} instead of 2."
-                try:
-                    out = perf(*data, **self.kwargs)  # type: ignore
-                except:  # noqa
-                    print(f"Error running perf for pair: {pair}")
-                    raise
-            elif isinstance(data, pd.DataFrame):
-                # likely doesn't work now
-                # NOT IN USE
-                if not set(["position", "price"]).issubset(set(data.columns)):
-                    raise ValueError(
-                        f"optimizer received df with columns: {data.columns}, "
-                        f"looking for columns: 'price', 'position'"
-                    )
-                out = perf(
-                    no_stop(
-                        pd.DataFrame(
-                            {"price": data["price"], "position": data["position"]}
-                        ),
-                        price_column="price",
-                    ),
-                    **self.kwargs,
-                )
-            else:
-                # returned signal has to be converted to position
-                out = perf(
-                    no_stop(
-                        pd.DataFrame({"open": self.df["open"], "position": sig_pos(data)}),
-                        price_column="open",
-                    ),
-                    **self.kwargs,
-                )
+        if not isinstance(data, pd.DataFrame):
+            raise ValueError(
+                "Optimizer functions must return a transaction dataframe "
+                "accepted by perf()."
+            )
+        try:
+            out = perf(data, **self.kwargs)
+        except:  # noqa
+            print(f"Error running perf for pair: {pair}")
+            raise
         if self.save_mem:
             # daily and df attributes dropped to limit memory usage
             return Results(
@@ -275,11 +210,11 @@ class Optimizer:
             )
         return out
 
-    def bulk_save(self, data: Dict[Tuple[float, float], Results]) -> None:
+    def bulk_save(self, data: dict[Pair, Results]) -> None:
         for k, v in data.items():
             self.save(k, v)
 
-    def save(self, pair: Tuple[float, float], out: Results) -> None:
+    def save(self, pair: Pair, out: Results) -> None:
         self.raw_stats[pair] = out.stats
         self.raw_positions[pair] = out.positions
         self.raw_warnings[pair] = out.warnings
@@ -289,7 +224,7 @@ class Optimizer:
         del out
 
     def extract_stats(self) -> None:
-        self._fields: List[str] = [
+        self._fields: list[str] = [
             i for i in self.raw_stats[self.pairs[-1]].index  # type: ignore
         ]
 
@@ -391,45 +326,39 @@ class Optimizer:
         return {k: v for k, v in self.raw_warnings.items() if len(v) != 0}
 
     def __repr__(self):
-        try:
-            func = self.func.__name__
-        except AttributeError:
-            # this is for partial objects
-            func = self.func.func.__name__
-        return f"{self.__class__.__name__}(func={func})"
+        return f"{self.__class__.__name__}(func={_callable_name(self.func)})"
 
     def __str__(self):
-        return f"TWo param simulation for {self.func.__name__}"
+        return f"Two param simulation for {_callable_name(self.func)}"
 
 
 class OptiWrapper:
-    """
-    Wrap signal function and stop loss to deliever a callable object
-    that can be fed into Optimizer.
+    """Combine a signal function with ``stop_loss`` for optimization.
+
+    ``OptiWrapper`` adapts a signal-producing function to the optimizer's
+    transaction-frame convention. On each call it evaluates ``func``, converts
+    the returned signal to a position with ``sig_pos``, stores that position on
+    the supplied dataframe, and returns the transaction dataframe produced by
+    :func:`haymaker.research.stop.stop_loss`.
 
     Args:
-    -----
+        func: Signal function. It receives the optimizer input data plus
+            ``signal_kwargs`` and optimized ``signal__`` parameters, and returns
+            data accepted by ``sig_pos``.
+        X: First optimized parameter name. Must be prefixed with ``signal__`` or
+            ``stop__`` to route the value to ``func`` or ``stop_loss``.
+        Y: Second optimized parameter name. Must use the same prefix convention
+            as ``X``.
 
-    func - signal function, on which stop is to be applied, this
-    function must return signal
-
-    X, Y - two optimization (must be exactly two) parameters expressed
-    as: 'signal__<param>' or 'stop__<param>'
-
-    Additionally, if optimization is to be run with non-default kwargs
-    (for signal function or stop function), those non-default values
-    must be given by setting following properties on the object:
-    signal_kwargs, stop_kwargs.
-
-    After initialization object can be passed as Optimizer (as func)
-    or alternatively, running object's 'optimize' method will return
-    Optimizer object.
+    Attributes:
+        signal_kwargs: Extra keyword arguments passed to ``func``.
+        stop_kwargs: Extra keyword arguments passed to ``stop_loss``.
     """
 
-    signal_kwargs: Dict[Any, Any] = {}
-    stop_kwargs: Dict[Any, Any] = {}
+    signal_kwargs: dict[str, Any] = {}
+    stop_kwargs: dict[str, Any] = {}
 
-    def __init__(self, func: Callable, X: str, Y: str):
+    def __init__(self, func: Callable[..., Any], X: str, Y: str):
         self.X = X
         self.Y = Y
         self.func = func
@@ -439,18 +368,18 @@ class OptiWrapper:
                 "optimization parameters must be given "
                 "as 'signal__<param>' or 'stop__<param>'"
             )
-        self.key_param: List[Tuple[str, str]] = []
+        self.key_param: list[tuple[str, str]] = []
         self.params_formater()
 
     @staticmethod
-    def extractor(i: Tuple[str, str]) -> DefaultDict[str, List[str]]:
+    def extractor(i: tuple[str, str]) -> defaultdict[str, list[str]]:
         """
         Convert user defined optimization parameters in the format
         'signal__<param>' or 'stop__<param>' into a dict that can to
         used to insert the params into appropriate function during
         simulation.
         """
-        d: DefaultDict[str, List[str]] = defaultdict(list)
+        d: defaultdict[str, list[str]] = defaultdict(list)
         for x in i:
             items = x.split("__")
             d[items[0]].append(items[1])
@@ -468,7 +397,7 @@ class OptiWrapper:
         and stop functions with placeholders for variable params in
         appropriate places.
         """
-        self.params_values_dict: Dict[str, Dict[str, float]] = {
+        self.params_values_dict: dict[str, dict[str, float]] = {
             k: {} for k in self.opti_params_dict.keys()
         }
         for key, param_list in self.opti_params_dict.items():
@@ -476,7 +405,7 @@ class OptiWrapper:
                 self.params_values_dict[key][param] = 0
                 self.key_param.append((key, param))
 
-    def assign(self, X: float, Y: float):
+    def assign(self, X: float, Y: float) -> dict[str, dict[str, float]]:
         """
         During every param iteration put the current value of params
         into the dict that will feed them into appropriate function.
@@ -489,17 +418,26 @@ class OptiWrapper:
     def __call__(
         self,
         df: pd.DataFrame,
-        in_data: Union[pd.Series, pd.DataFrame],
+        in_data: pd.Series | pd.DataFrame,
         X: float,
         Y: float,
     ) -> pd.DataFrame:
         params_values = self.assign(X, Y)
-        df["position"] = sig_pos(
-            self.func(in_data, **self.signal_kwargs, **params_values["signal"])
-        )
-        return stop_loss(df, **self.stop_kwargs, **params_values["stop"])
+        signal_kwargs: dict[str, Any] = {
+            **self.signal_kwargs,
+            **params_values["signal"],
+        }
+        stop_kwargs: dict[str, Any] = {**self.stop_kwargs, **params_values["stop"]}
+        df["position"] = sig_pos(self.func(in_data, **signal_kwargs))
+        return stop_loss(df, **stop_kwargs)
 
-    def optimize(self, df: pd.DataFrame, sp_1, sp_2, **kwargs) -> Optimizer:
+    def optimize(
+        self,
+        df: pd.DataFrame,
+        sp_1: tuple[Any, ...],
+        sp_2: tuple[Any, ...],
+        **kwargs: Any,
+    ) -> Optimizer:
         return Optimizer(df, self, sp_1, sp_2, **kwargs)
 
     @property
@@ -509,15 +447,17 @@ class OptiWrapper:
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(X={self.X}, Y={self.Y},"
-            f" self.func={self.func.__name__})"
+            f" self.func={_callable_name(self.func)})"
         )
 
 
 def plot_grid(
-    data: Optimizer, fields: List[str] = ["annual_return", "sharpe_ratio"]
+    data: Optimizer, fields: str | Sequence[str] = ("annual_return", "sharpe_ratio")
 ) -> None:
     if isinstance(fields, str):
         fields = ["annual_return", fields]
+    else:
+        fields = list(fields)
 
     assert isinstance(fields, Sequence), f"{fields} is neither string nor sequence"
 
@@ -546,7 +486,7 @@ def plot_grid(
     fig = plt.figure(figsize=(22, 12))
     gs = fig.add_gridspec(4, 7, width_ratios=widths, height_ratios=heights)
 
-    heatmap_kwargs = {
+    heatmap_kwargs: dict[str, Any] = {
         "square": True,
         "cmap": colormap,
         "annot": True,
@@ -554,10 +494,10 @@ def plot_grid(
         "cbar": False,
         "linewidth": 0.3,
     }
-    no_labels = {"xticklabels": False, "yticklabels": False}
+    no_labels: dict[str, Any] = {"xticklabels": False, "yticklabels": False}
 
-    def formater(field: str, table: pd.DataFrame) -> Dict[str, Any]:
-        kwargs_dict: Dict[str, Any] = {}
+    def formater(field: str, table: pd.DataFrame) -> dict[str, Any]:
+        kwargs_dict: dict[str, Any] = {}
         if field in [
             "annual_return",
             "sharpe_ratio",
