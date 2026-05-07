@@ -235,17 +235,25 @@ def upsample(
     Upsample time series by combining higher frequency and lower
     frequency dataframes.
 
-    df: higher frequency data, all columns will be kept; data is left labeled
+    df: higher frequency data, all columns will be kept
 
-    dfg: lower frequency data, only non-overlapping columns will be kept, unless
-    columns to keep are given explicitly
+    dfg: lower frequency data. Only non-overlapping columns will be kept, unless
+    columns to keep are given explicitly.
 
-    label: how the dfg is labeled; must be specified correctly or there
-    is strong future snooping; for positions and blips, series should be labeled: right;
+    label: how dfg is labeled. ``"left"`` means each lower-frequency row is
+    labeled by the first higher-frequency bar in the group. ``"right"`` means it
+    is labeled by the bar where the lower-frequency value becomes known.
+    Lower-frequency values are first aligned to the higher-frequency index point
+    where they become known, then propagated or kept sparse as requested.
 
-    propagate: columns, that will be propagated
+    propagate: columns that will be propagated after they become known
 
-    keep: don't propagate these columns; forward-fill NA with with zeros.
+    keep: don't propagate these columns; forward-fill NA with zeros.
+    ``blip`` and ``close_blip`` are always treated this way because they are
+    sparse events generated at a bar, not state values to forward-fill. When
+    either canonical blip column is upsampled, its original lower-frequency
+    label is preserved as ``raw_blip`` or ``raw_close_blip`` if that column does
+    not already exist.
 
     If none of propagate or keep given, all columns will be propagated.
 
@@ -257,13 +265,6 @@ def upsample(
     Columns specified in keep and propagate must not overlap.
 
     """
-
-    def warn_blip(columns: Union[Set[str], List[str]]) -> None:
-        """Blips should not be propagated. If any column name contains
-        word 'blip' warn user that they may be making a mistake."""
-        blip_columns = [b for b in columns if "blip" in b]
-        if blip_columns:
-            print(f"Warning: blip is being propagated: {blip_columns}")
 
     def verify(data: Union[Sequence[str], str, Set]) -> List[str]:
         if isinstance(data, (str, int, float)):
@@ -278,62 +279,136 @@ def upsample(
             )
         return list(data)
 
-    def join(
+    def align(
         df: pd.DataFrame,
         dfg: pd.DataFrame,
         upsampled_columns: List[str],
         label: Literal["left", "right"],
     ) -> pd.DataFrame:
         """
-        Before joining the two dataframes, ensure that they are
-        correctly aligned. Signal and blip should be shifted on dfg
-        BEFORE upsampling.
-
+        Align lower-frequency rows to the higher-frequency index point where
+        their values become known.
         """
-        if label == "left":
-            joined_df = df.join(dfg[upsampled_columns])
-        elif label == "right":
-            dfg = dfg.shift(-1)
-            joined_df = df.join(dfg[upsampled_columns])
-            joined_df[upsampled_columns] = joined_df[upsampled_columns].shift(1)
-        else:
+        if not df.index.is_monotonic_increasing:
+            raise ValueError("Higher frequency dataframe index must be sorted.")
+        if not dfg.index.is_monotonic_increasing:
+            raise ValueError("Lower frequency dataframe index must be sorted.")
+        if label not in ("left", "right"):
             raise ValueError(f"label must be 'left' or 'right', '{label}' given")
+        if not upsampled_columns:
+            return dfg[upsampled_columns].iloc[:0]
 
-        return joined_df
+        high_index = df.index
+        low_index = dfg.index
 
-    upsampled_columns = list(set(dfg.columns) - set(df.columns))
+        if len(high_index) == 0 or len(low_index) == 0:
+            return dfg[upsampled_columns].iloc[:0]
+
+        if label == "left":
+            high_locs = np.empty(len(low_index), dtype=np.int64)
+            if len(low_index) > 1:
+                high_locs[:-1] = (
+                    high_index.searchsorted(low_index[1:].to_numpy(), side="left") - 1
+                )
+            high_locs[-1] = len(high_index) - 1
+            rows = np.arange(len(low_index), dtype=np.int64)
+            valid = (
+                (low_index <= high_index[-1])
+                & (high_locs >= 0)
+                & (high_index.take(high_locs.clip(min=0)) >= low_index)
+            )
+        elif label == "right":
+            high_locs = high_index.searchsorted(low_index.to_numpy(), side="right") - 1
+            rows = np.arange(len(low_index), dtype=np.int64)
+            valid = (
+                (low_index >= high_index[0])
+                & (low_index <= high_index[-1])
+                & (high_locs >= 0)
+            )
+        high_locs = high_locs[valid]
+        rows = rows[valid]
+        aligned = dfg.iloc[rows][upsampled_columns].copy()
+        aligned.index = high_index.take(high_locs)
+        if aligned.index.has_duplicates:
+            raise ValueError(
+                "Cannot upsample: multiple lower-frequency rows align to the "
+                "same higher-frequency index point."
+            )
+        return aligned
+
+    def difference(columns: List[str], excluded: Sequence[str]) -> List[str]:
+        excluded_set = set(excluded)
+        return [column for column in columns if column not in excluded_set]
+
+    def union(first: List[str], second: Sequence[str]) -> List[str]:
+        seen = set(first)
+        combined = list(first)
+        for column in second:
+            if column not in seen:
+                combined.append(column)
+                seen.add(column)
+        return combined
+
+    upsampled_columns = [column for column in dfg.columns if column not in df.columns]
+    blip_columns = [
+        column for column in ("blip", "close_blip") if column in upsampled_columns
+    ]
+    raw_source_columns = [
+        column
+        for column in ("raw_blip", "raw_close_blip")
+        if column in upsampled_columns
+    ]
+    raw_blip_map = {
+        column: f"raw_{column}"
+        for column in blip_columns
+        if f"raw_{column}" not in df.columns and f"raw_{column}" not in dfg.columns
+    }
+    raw_blip_columns = raw_source_columns + list(raw_blip_map.values())
+    aligned_columns = difference(upsampled_columns, raw_source_columns)
     # preserve types to be able to cast back into them
     types = dfg[upsampled_columns].dtypes.to_dict()
+    types.update(
+        {raw_column: dfg[column].dtype for column, raw_column in raw_blip_map.items()}
+    )
 
     # ffill and subsequent dropnas depend on dfg not having n/a's
     if len(dfg[dfg.isna().any(axis=1)]) != 0:
         raise ValueError("Lower frequency dataframe (dfg) must not have n/a values.")
 
-    joined_df = join(df, dfg, upsampled_columns, label)  # type: ignore
+    aligned = align(df, dfg, aligned_columns, label)
+    joined_df = df.join(aligned)
+    raw_frames = []
+    if raw_source_columns:
+        raw_frames.append(dfg[raw_source_columns])
+    if raw_blip_map:
+        raw_frames.append(dfg[list(raw_blip_map)].rename(columns=raw_blip_map))
+    if raw_frames:
+        joined_df = joined_df.join(pd.concat(raw_frames, axis=1))
 
     if not (keep or propagate):
-        warn_blip(upsampled_columns)  # type: ignore
-        return joined_df.ffill().dropna()
+        keep = blip_columns
+        propagate = difference(upsampled_columns, keep)
     elif keep and propagate:
         keep = verify(keep)
         propagate = verify(propagate)
         assert not set(keep).intersection(
             propagate
         ), "Columns in keep and propagate must not overlap."
-        propagate.extend(
-            list(set(upsampled_columns) - set(keep) - set(propagate))  # type: ignore
-        )
+        propagate = union(propagate, difference(upsampled_columns, keep + propagate))
     else:
         if keep:
             keep = verify(keep)
-            propagate = list(set(upsampled_columns) - set(keep))  # type: ignore
+            propagate = difference(upsampled_columns, keep)
         else:
             assert propagate is not None
             propagate = verify(propagate)
-            keep = list(set(upsampled_columns) - set(propagate))  # type: ignore
+            keep = difference(upsampled_columns, propagate)
+
+    keep = union(keep, blip_columns + raw_blip_columns)
+    propagate = difference(propagate, blip_columns + raw_blip_columns)
+
     joined_df[keep] = joined_df[keep].fillna(0)
     joined_df[propagate] = joined_df[propagate].ffill()
-    warn_blip(propagate)
     return joined_df.dropna().astype(types)  # type: ignore
 
 
@@ -476,8 +551,6 @@ def vector_grouper(
         )
         .set_index("date")
     )
-
-
 
 
 def always_on(series: pd.Series) -> bool:
