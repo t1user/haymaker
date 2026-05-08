@@ -121,15 +121,11 @@ def no_stop(
     if "position" in df.columns:
         position: pd.Series = df["position"].astype(int)
     elif "blip" in df.columns:
-        # Blips are generated at bar N; execution is at bar N+1.
-        shifted_blip = df["blip"].shift().fillna(0).astype(int)
         if "close_blip" in df.columns:
-            shifted_close = df["close_blip"].shift().fillna(0).astype(int)
-            blip_df = pd.DataFrame({"blip": shifted_blip, "close_blip": shifted_close})
-            position = blip_sig(blip_df, always_on=True)
+            signal = blip_sig(df[["blip", "close_blip"]])
         else:
-            position = blip_sig(shifted_blip, always_on=True)
-        position = position.astype(int)
+            signal = blip_sig(df["blip"])
+        position = sig_pos(signal)
     else:
         raise ValueError("df must have either a 'position' column or a 'blip' column")
 
