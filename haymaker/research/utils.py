@@ -1,6 +1,6 @@
 import warnings
 from multiprocessing import Pool, cpu_count  # type: ignore
-from typing import Callable, List, Literal, Optional, Sequence, Set, Tuple, Union, cast
+from typing import Callable, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd  # type: ignore
@@ -229,8 +229,7 @@ def upsample(
     lf_df: pd.DataFrame,
     *,
     label: Literal["left", "right"] = "left",
-    keep: Optional[Union[str, Sequence[str]]] = None,
-    propagate: Optional[Union[str, Sequence[str]]] = None,
+    sparse: Optional[Union[str, Sequence[str]]] = None,
 ) -> pd.DataFrame:
     """
     Upsample time series by combining higher frequency and lower
@@ -238,49 +237,41 @@ def upsample(
 
     hf_df: higher frequency data, all columns will be kept
 
-    lf_df: lower frequency data. Only non-overlapping columns will be kept, unless
-    columns to keep are given explicitly. ``position`` must not be passed in
-    this dataframe because it is already executable state; upsample generated
+    lf_df: lower frequency data. Non-overlapping columns from this dataframe
+    will be added to ``hf_df``. ``position`` must not be passed in this
+    dataframe because it is already executable state; upsample generated
     signals or blips first, then derive ``position`` on the upsampled frame.
 
     label: how lf_df is labeled. ``"left"`` means each lower-frequency row is
     labeled by the first higher-frequency bar in the group. ``"right"`` means it
     is labeled by the bar where the lower-frequency value becomes known.
     Lower-frequency values are first aligned to the higher-frequency index point
-    where they become known, then propagated or kept sparse as requested.
+    where they become known. Ordinary lower-frequency values are then
+    propagated with forward-fill from that availability point onward.
 
-    propagate: columns that will be propagated after they become known
-
-    keep: don't propagate these columns; forward-fill NA with zeros.
-    ``blip`` and ``close_blip`` are always treated this way because they are
-    sparse events generated at a bar, not state values to forward-fill. When
-    either canonical blip column is upsampled, its original lower-frequency
+    sparse: optional column or columns that should remain sparse events instead
+    of being propagated. Sparse columns are filled with ``0`` on higher-frequency
+    rows where they did not occur. Use this for event-like values, not for state
+    or feature values. ``blip`` and ``close_blip`` are always treated as sparse
+    events because they are generated at a bar, not state values to forward-fill.
+    When either canonical blip column is upsampled, its original lower-frequency
     label is preserved as ``raw_blip`` or ``raw_close_blip`` if that column does
-    not already exist.
+    not already exist. Raw blip provenance columns are also always sparse.
 
-    If none of propagate or keep given, all columns will be propagated.
-
-    If only one given, non specified columns will be included in the other group.
-
-    If both propagate and keep specified, but they don't include all upsampled columns,
-    non specified columns will be propagated.
-
-    Columns specified in keep and propagate must not overlap.
+    All other lower-frequency columns are propagated by default.
 
     """
 
-    def verify(data: Union[Sequence[str], str, Set]) -> List[str]:
-        if isinstance(data, (str, int, float)):
-            data = [
-                data,
-            ]
-        data = set(data)  # ensure no double entries inserted by user
-        if not data.issubset(upsampled_columns):
+    def verify_sparse(data: Union[Sequence[str], str]) -> List[str]:
+        columns = [data] if isinstance(data, str) else list(data)
+        unique_columns = list(dict.fromkeys(columns))
+        sparse_set = set(unique_columns)
+        if not sparse_set.issubset(upsampled_columns):
             raise ValueError(
-                f"Cannot upsample: {list(data.difference(upsampled_columns))} "
-                f"- not in columns."
+                f"Cannot upsample sparse columns: "
+                f"{list(sparse_set.difference(upsampled_columns))} - not in columns."
             )
-        return list(data)
+        return unique_columns
 
     def align(
         hf_df: pd.DataFrame,
@@ -409,30 +400,12 @@ def upsample(
     if raw_frames:
         joined_df = joined_df.join(pd.concat(raw_frames, axis=1))
 
-    if not (keep or propagate):
-        keep = blip_columns
-        propagate = difference(upsampled_columns, keep)
-    elif keep and propagate:
-        keep = verify(keep)
-        propagate = verify(propagate)
-        assert not set(keep).intersection(
-            propagate
-        ), "Columns in keep and propagate must not overlap."
-        propagate = union(propagate, difference(upsampled_columns, keep + propagate))
-    else:
-        if keep:
-            keep = verify(keep)
-            propagate = difference(upsampled_columns, keep)
-        else:
-            assert propagate is not None
-            propagate = verify(propagate)
-            keep = difference(upsampled_columns, propagate)
+    sparse_columns = verify_sparse(sparse) if sparse is not None else []
+    sparse_columns = union(sparse_columns, blip_columns + raw_blip_columns)
+    propagated_columns = difference(upsampled_columns, sparse_columns)
 
-    keep = union(keep, blip_columns + raw_blip_columns)
-    propagate = difference(propagate, blip_columns + raw_blip_columns)
-
-    joined_df[keep] = joined_df[keep].fillna(0)
-    joined_df[propagate] = joined_df[propagate].ffill()
+    joined_df[sparse_columns] = joined_df[sparse_columns].fillna(0)
+    joined_df[propagated_columns] = joined_df[propagated_columns].ffill()
     return joined_df.dropna().astype(types)  # type: ignore
 
 

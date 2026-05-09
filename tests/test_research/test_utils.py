@@ -115,14 +115,14 @@ def test_upsample_noncanonical_blip_named_columns_are_not_special() -> None:
     assert actual.loc["2026-01-01 09:05", "custom_blip"] == -1
 
 
-def test_upsample_raw_blip_is_sparse_even_if_propagated() -> None:
+def test_upsample_raw_blip_is_always_sparse() -> None:
     raw = _raw_frame()
     grouped = pd.DataFrame(
         {"raw_blip": [1, -1], "feature": [10.0, 20.0]},
         index=raw.index[[0, 3]],
     )
 
-    actual = upsample(raw, grouped, label="left", propagate=["raw_blip", "feature"])
+    actual = upsample(raw, grouped, label="left")
 
     assert pd.Timestamp("2026-01-01 09:00") not in actual.index
     assert pd.Timestamp("2026-01-01 09:01") not in actual.index
@@ -131,6 +131,33 @@ def test_upsample_raw_blip_is_sparse_even_if_propagated() -> None:
     assert actual.loc["2026-01-01 09:04", "raw_blip"] == 0
     assert actual.loc["2026-01-01 09:05", "raw_blip"] == 0
     assert actual.loc["2026-01-01 09:03", "feature"] == 10.0
+
+
+def test_upsample_sparse_keeps_custom_event_from_propagating() -> None:
+    raw = _raw_frame()
+    grouped = pd.DataFrame(
+        {"custom_event": [1, -1], "feature": [10.0, 20.0]},
+        index=raw.index[[0, 3]],
+    )
+
+    actual = upsample(raw, grouped, label="left", sparse=["custom_event"])
+
+    assert actual.loc["2026-01-01 09:02", "custom_event"] == 1
+    assert actual.loc["2026-01-01 09:03", "custom_event"] == 0
+    assert actual.loc["2026-01-01 09:04", "custom_event"] == 0
+    assert actual.loc["2026-01-01 09:05", "custom_event"] == -1
+    assert actual.loc["2026-01-01 09:04", "feature"] == 10.0
+
+
+def test_upsample_rejects_unknown_sparse_column() -> None:
+    raw = _raw_frame()
+    grouped = pd.DataFrame(
+        {"feature": [10.0, 20.0]},
+        index=raw.index[[0, 3]],
+    )
+
+    with pytest.raises(ValueError, match="sparse columns"):
+        upsample(raw, grouped, label="left", sparse=["missing"])
 
 
 def test_upsample_right_labeled_blip_remains_on_generation_bar() -> None:
@@ -224,7 +251,7 @@ def test_upsampled_stop_distance_uses_value_available_on_execution_bar(
         },
         index=index[[0, 3]],
     )
-    upsampled = upsample(raw, grouped, keep=["blip"])
+    upsampled = upsample(raw, grouped)
 
     actual = stop_loss(
         upsampled,
@@ -256,7 +283,7 @@ def test_pre_upsample_shifted_stop_distance_is_rejected() -> None:
         },
         index=index[[0, 3]],
     )
-    upsampled = upsample(raw, grouped, keep=["blip"])
+    upsampled = upsample(raw, grouped)
 
     with pytest.raises(ValueError, match="same index as df"):
         stop_loss(
@@ -284,7 +311,7 @@ def test_unshifted_pre_upsample_stop_distance_is_rejected() -> None:
         },
         index=index[[0, 3]],
     )
-    upsampled = upsample(raw, grouped, keep=["blip"])
+    upsampled = upsample(raw, grouped)
 
     with pytest.raises(ValueError, match="same index as df"):
         stop_loss(
