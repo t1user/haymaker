@@ -214,6 +214,67 @@ def test_numba_and_python_engines_produce_identical_results(seed: int) -> None:
     np.testing.assert_allclose(trades_nb, trades_py, rtol=1e-12, atol=1e-12)
 
 
+_SAME_BAR_ENGINE_CASES = [
+    (
+        "flat_long_open_stop",
+        [99.0, 100.0, 101.0],
+        [0.0, 100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, -95.0, 0.0],
+    ),
+    (
+        "flat_short_open_stop",
+        [99.0, 100.0, 101.0],
+        [0.0, -100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 105.0, 0.0],
+    ),
+    (
+        "long_reversal_short_stopped",
+        [99.0, 100.0, 102.0, 101.0],
+        [0.0, 100.0, -102.0, 0.0],
+        [0.0, 0.0, -102.0, 0.0],
+        [0.0, 0.0, 107.0, 0.0],
+    ),
+    (
+        "short_reversal_long_stopped",
+        [101.0, 100.0, 98.0, 99.0],
+        [0.0, -100.0, 98.0, 0.0],
+        [0.0, 0.0, 98.0, 0.0],
+        [0.0, 0.0, -93.0, 0.0],
+    ),
+    (
+        "final_row_open_stop",
+        [99.0, 100.0],
+        [0.0, 100.0],
+        [0.0, 0.0],
+        [0.0, -95.0],
+    ),
+]
+
+
+@pytest.mark.parametrize("name, price, op, cp, sp", _SAME_BAR_ENGINE_CASES)
+def test_same_bar_cases_keep_numba_python_engine_parity(
+    name: str,
+    price: list[float],
+    op: list[float],
+    cp: list[float],
+    sp: list[float],
+) -> None:
+    cost = 1.0
+    lret_nb, pnl_nb, trades_nb = _perf_engine(
+        np.asarray(price), np.asarray(op), np.asarray(cp), np.asarray(sp), cost
+    )
+    lret_py, pnl_py, trades_py = _perf_engine_python(
+        np.asarray(price), np.asarray(op), np.asarray(cp), np.asarray(sp), cost
+    )
+    np.testing.assert_allclose(lret_nb, lret_py, rtol=1e-12, atol=1e-12, err_msg=name)
+    np.testing.assert_allclose(pnl_nb, pnl_py, rtol=1e-12, atol=1e-12, err_msg=name)
+    np.testing.assert_allclose(
+        trades_nb, trades_py, rtol=1e-12, atol=1e-12, err_msg=name
+    )
+
+
 # ---------------------------------------------------------------------------
 # perf() – smoke test and basic sanity
 # ---------------------------------------------------------------------------
@@ -265,6 +326,148 @@ def test_perf_numba_and_python_produce_same_positions_pnl() -> None:
         rtol=1e-10,
         atol=1e-10,
     )
+
+
+def _tx_frame(
+    bar_price: list[float],
+    position: list[int],
+    open_price: list[float],
+    close_price: list[float],
+    stop_price: list[float],
+) -> pd.DataFrame:
+    index = pd.date_range("2020-01-01", periods=len(bar_price), freq="h")
+    return pd.DataFrame(
+        {
+            "bar_price": bar_price,
+            "position": position,
+            "open_price": open_price,
+            "close_price": close_price,
+            "stop_price": stop_price,
+        },
+        index=index,
+    )
+
+
+def _assert_perf_gross(
+    tx: pd.DataFrame,
+    expected_gross: list[float],
+    *,
+    slippage: float = 0.0,
+) -> Results:
+    result = perf(tx, slippage=slippage, use_numba=False)
+    np.testing.assert_allclose(result.positions["g_pnl"], expected_gross)
+    assert abs(result.positions["g_pnl"].sum() - result.df["g_pnl"].sum()) < 1e-12
+    assert abs(result.positions["pnl"].sum() - result.df["pnl"].sum()) < 1e-12
+    return result
+
+
+def test_perf_flat_long_open_stop_same_bar() -> None:
+    tx = _tx_frame(
+        [99.0, 100.0, 101.0],
+        [0, 0, 0],
+        [0.0, 100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, -95.0, 0.0],
+    )
+    result = _assert_perf_gross(tx, [-5.0])
+    assert result.positions.iloc[0]["date_o"] == result.positions.iloc[0]["date_c"]
+    assert result.positions["duration"].iloc[0] == pd.Timedelta(0)
+    assert "No positions" not in result.warnings
+
+
+def test_perf_flat_short_open_stop_same_bar() -> None:
+    tx = _tx_frame(
+        [99.0, 100.0, 101.0],
+        [0, 0, 0],
+        [0.0, -100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 105.0, 0.0],
+    )
+    result = _assert_perf_gross(tx, [-5.0])
+    assert result.positions["duration"].iloc[0] == pd.Timedelta(0)
+
+
+def test_perf_flat_long_profitable_same_bar_stop_style_exit() -> None:
+    tx = _tx_frame(
+        [99.0, 100.0, 101.0],
+        [0, 0, 0],
+        [0.0, 100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, -105.0, 0.0],
+    )
+    result = _assert_perf_gross(tx, [5.0])
+    assert result.positions["duration"].iloc[0] == pd.Timedelta(0)
+
+
+def test_perf_existing_long_stop_unchanged() -> None:
+    tx = _tx_frame(
+        [99.0, 100.0, 100.0],
+        [0, 1, 0],
+        [0.0, 100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, -95.0],
+    )
+    _assert_perf_gross(tx, [-5.0])
+
+
+def test_perf_existing_short_stop_unchanged() -> None:
+    tx = _tx_frame(
+        [101.0, 100.0, 100.0],
+        [0, -1, 0],
+        [0.0, -100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 105.0],
+    )
+    _assert_perf_gross(tx, [-5.0])
+
+
+def test_perf_long_reversal_short_stopped_same_bar() -> None:
+    tx = _tx_frame(
+        [99.0, 100.0, 102.0, 101.0],
+        [0, 1, 0, 0],
+        [0.0, 100.0, -102.0, 0.0],
+        [0.0, 0.0, -102.0, 0.0],
+        [0.0, 0.0, 107.0, 0.0],
+    )
+    result = _assert_perf_gross(tx, [2.0, -5.0])
+    assert result.positions["duration"].iloc[-1] == pd.Timedelta(0)
+
+
+def test_perf_short_reversal_long_stopped_same_bar() -> None:
+    tx = _tx_frame(
+        [101.0, 100.0, 98.0, 99.0],
+        [0, -1, 0, 0],
+        [0.0, -100.0, 98.0, 0.0],
+        [0.0, 0.0, 98.0, 0.0],
+        [0.0, 0.0, -93.0, 0.0],
+    )
+    result = _assert_perf_gross(tx, [2.0, -5.0])
+    assert result.positions["duration"].iloc[-1] == pd.Timedelta(0)
+
+
+def test_perf_same_bar_open_stop_on_final_row_records_trade() -> None:
+    tx = _tx_frame(
+        [99.0, 100.0],
+        [0, 0],
+        [0.0, 100.0],
+        [0.0, 0.0],
+        [0.0, -95.0],
+    )
+    result = _assert_perf_gross(tx, [-5.0])
+    assert result.positions["duration"].iloc[0] == pd.Timedelta(0)
+
+
+def test_perf_same_bar_open_stop_slippage_reconciles() -> None:
+    tx = _tx_frame(
+        [99.0, 100.0, 101.0],
+        [0, 0, 0],
+        [0.0, 100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, -95.0, 0.0],
+    )
+    result = _assert_perf_gross(tx, [-5.0], slippage=1.0)
+    assert result.positions["pnl"].sum() == -7.0
+    assert result.df["slippage"].sum() == 2.0
 
 
 # ---------------------------------------------------------------------------

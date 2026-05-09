@@ -72,8 +72,17 @@ def _perf_engine(
         bar_slippage = t_count * cost
         bar_pnl: float = -bar_slippage  # slippage always costs
 
-        # Determine exit price (close and stop are mutually exclusive per bar)
-        exit_price: float = cp if cp != 0.0 else (sp if sp != 0.0 else 0.0)
+        # Determine the exit for the position held at the start of the bar.
+        # In reversal rows, close_price can close the old position while
+        # stop_price closes the newly opened position on the same bar.
+        exit_price: float = 0.0
+        stop_consumed_by_existing = False
+        if current_position != 0:
+            if cp != 0.0:
+                exit_price = cp
+            elif sp != 0.0:
+                exit_price = sp
+                stop_consumed_by_existing = True
         exit_price_abs: float = abs(exit_price)
 
         # ------------------------------------------------------------------
@@ -110,15 +119,35 @@ def _perf_engine(
         if op != 0.0:
             op_abs = abs(op)
             new_position = 1 if op > 0.0 else -1
-            # MtM from entry price to bar close price
-            bar_pnl += new_position * (bp - op_abs)
+            same_bar_stop = sp != 0.0 and not stop_consumed_by_existing
+            if same_bar_stop:
+                gross_pnl = -(op + sp)
+                bar_pnl += gross_pnl
 
-            entry_price = op
-            entry_price_abs = op_abs
-            entry_bar = i
-            entry_cost = cost  # one leg paid at open
-            current_position = new_position
-            prev_bar_price = bp  # next bar MtMs from this bar_price
+                trade_records[trade_count, 0] = float(i)
+                trade_records[trade_count, 1] = float(i)
+                trade_records[trade_count, 2] = op
+                trade_records[trade_count, 3] = sp
+                trade_records[trade_count, 4] = gross_pnl
+                trade_records[trade_count, 5] = 2.0 * cost
+                trade_records[trade_count, 6] = float(new_position)
+                trade_count += 1
+
+                current_position = 0
+                entry_price = 0.0
+                entry_price_abs = 0.0
+                entry_cost = 0.0
+                prev_bar_price = bp
+            else:
+                # MtM from entry price to bar close price
+                bar_pnl += new_position * (bp - op_abs)
+
+                entry_price = op
+                entry_price_abs = op_abs
+                entry_bar = i
+                entry_cost = cost  # one leg paid at open
+                current_position = new_position
+                prev_bar_price = bp  # next bar MtMs from this bar_price
 
         # ------------------------------------------------------------------
         # 3. Holding bar (no transaction): MtM from prev_bar_price to bar_price
@@ -202,7 +231,14 @@ def _perf_engine_python(
         bar_slippage = t_count * cost
         bar_pnl: float = -bar_slippage
 
-        exit_price: float = cp if cp != 0.0 else (sp if sp != 0.0 else 0.0)
+        exit_price: float = 0.0
+        stop_consumed_by_existing = False
+        if current_position != 0:
+            if cp != 0.0:
+                exit_price = cp
+            elif sp != 0.0:
+                exit_price = sp
+                stop_consumed_by_existing = True
         exit_price_abs: float = abs(exit_price)
 
         if exit_price != 0.0 and current_position != 0:
@@ -234,13 +270,35 @@ def _perf_engine_python(
         if op != 0.0:
             op_abs = abs(op)
             new_position = 1 if op > 0.0 else -1
-            bar_pnl += new_position * (bp - op_abs)
-            entry_price = op
-            entry_price_abs = op_abs
-            entry_bar = i
-            entry_cost = cost
-            current_position = new_position
-            prev_bar_price = bp
+            same_bar_stop = sp != 0.0 and not stop_consumed_by_existing
+            if same_bar_stop:
+                gross_pnl = -(op + sp)
+                bar_pnl += gross_pnl
+                trade_rows.append(
+                    [
+                        float(i),
+                        float(i),
+                        op,
+                        sp,
+                        gross_pnl,
+                        2.0 * cost,
+                        float(new_position),
+                    ]
+                )
+
+                current_position = 0
+                entry_price = 0.0
+                entry_price_abs = 0.0
+                entry_cost = 0.0
+                prev_bar_price = bp
+            else:
+                bar_pnl += new_position * (bp - op_abs)
+                entry_price = op
+                entry_price_abs = op_abs
+                entry_bar = i
+                entry_cost = cost
+                current_position = new_position
+                prev_bar_price = bp
         elif current_position != 0 and exit_price == 0.0:
             if prev_bar_price != 0.0:
                 bar_pnl += current_position * (bp - prev_bar_price)

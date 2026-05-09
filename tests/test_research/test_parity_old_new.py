@@ -8,6 +8,53 @@ from haymaker.research.signal_converters import sig_pos
 
 # New implementation
 from haymaker.research.backtester import perf as perf_new, no_stop
+from haymaker.research.stop import stop_loss
+
+
+def _tx_frame(
+    bar_price: list[float],
+    position: list[int],
+    open_price: list[float],
+    close_price: list[float],
+    stop_price: list[float],
+) -> pd.DataFrame:
+    index = pd.date_range("2020-01-01", periods=len(bar_price), freq="h", name="date")
+    return pd.DataFrame(
+        {
+            "bar_price": bar_price,
+            "position": position,
+            "open_price": open_price,
+            "close_price": close_price,
+            "stop_price": stop_price,
+        },
+        index=index,
+    )
+
+
+def _assert_old_new_perf_equal(tx: pd.DataFrame, slippage: float = 0.0) -> None:
+    old = perf_old(
+        tx["bar_price"],
+        tx[["position", "open_price", "close_price", "stop_price"]],
+        slippage=slippage,
+        raise_exceptions=False,
+    )
+    new = perf_new(tx, slippage=slippage, use_numba=True)
+
+    old_positions = old.positions[
+        ["date_o", "open", "date_c", "close", "g_pnl", "pnl", "duration"]
+    ].reset_index(drop=True)
+    new_positions = new.positions[
+        ["date_o", "open", "date_c", "close", "g_pnl", "pnl", "duration"]
+    ].reset_index(drop=True)
+    pd.testing.assert_frame_equal(old_positions, new_positions)
+    np.testing.assert_allclose(old.df["g_pnl"].sum(), new.df["g_pnl"].sum())
+    np.testing.assert_allclose(old.df["pnl"].sum(), new.df["pnl"].sum())
+    np.testing.assert_allclose(
+        np.asarray(old.daily["returns"], dtype=float),
+        np.asarray(new.daily["returns"], dtype=float),
+        rtol=1e-12,
+        atol=1e-12,
+    )
 
 
 def _make_test_data(seed: int = 42, length: int = 500) -> pd.DataFrame:
@@ -85,3 +132,84 @@ def test_parity_always_on_reversals() -> None:
     old_total_pnl = res_old.positions.pnl.sum()
     new_total_pnl = res_new.positions.pnl.sum()
     np.testing.assert_allclose(old_total_pnl, new_total_pnl, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "tx",
+    [
+        _tx_frame(
+            [99.0, 100.0, 101.0],
+            [0, 0, 0],
+            [0.0, 100.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, -95.0, 0.0],
+        ),
+        _tx_frame(
+            [99.0, 100.0, 101.0],
+            [0, 0, 0],
+            [0.0, -100.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 105.0, 0.0],
+        ),
+        _tx_frame(
+            [99.0, 100.0, 100.0],
+            [0, 1, 0],
+            [0.0, 100.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -95.0],
+        ),
+        _tx_frame(
+            [101.0, 100.0, 100.0],
+            [0, -1, 0],
+            [0.0, -100.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 105.0],
+        ),
+        _tx_frame(
+            [99.0, 100.0, 102.0, 101.0],
+            [0, 1, 0, 0],
+            [0.0, 100.0, -102.0, 0.0],
+            [0.0, 0.0, -102.0, 0.0],
+            [0.0, 0.0, 107.0, 0.0],
+        ),
+        _tx_frame(
+            [101.0, 100.0, 98.0, 99.0],
+            [0, -1, 0, 0],
+            [0.0, -100.0, 98.0, 0.0],
+            [0.0, 0.0, 98.0, 0.0],
+            [0.0, 0.0, -93.0, 0.0],
+        ),
+        _tx_frame(
+            [99.0, 100.0],
+            [0, 0],
+            [0.0, 100.0],
+            [0.0, 0.0],
+            [0.0, -95.0],
+        ),
+    ],
+)
+def test_parity_stop_transaction_frames_with_slippage(tx: pd.DataFrame) -> None:
+    _assert_old_new_perf_equal(tx, slippage=1.0)
+
+
+@pytest.mark.parametrize(
+    "stop_kwargs",
+    [
+        {"mode": "fixed"},
+        {"mode": "trail"},
+        {"mode": "fixed", "tp_multiple": 1.0},
+        {"mode": "trail", "time_stop": 3},
+        {"mode": "fixed", "adjust": ("trail", 1.0, 0.5)},
+    ],
+)
+def test_parity_stop_loss_generated_transaction_frames(stop_kwargs: dict) -> None:
+    df = _make_test_data(seed=303, length=300)
+    df.index.name = "date"
+    tx = stop_loss(
+        df,
+        distance=pd.Series(0.15, index=df.index),
+        price_column="open",
+        **stop_kwargs,
+    )
+
+    _assert_old_new_perf_equal(tx, slippage=0.0)

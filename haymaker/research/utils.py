@@ -1,3 +1,4 @@
+import warnings
 from multiprocessing import Pool, cpu_count  # type: ignore
 from typing import Callable, List, Literal, Optional, Sequence, Set, Tuple, Union, cast
 
@@ -12,9 +13,9 @@ from haymaker.indicators import (  # noqa
     zero_crosser,
 )
 
+from .backtester import Results, get_min_tick
 from .signal_converters import sig_pos
 from .stop import stop_loss
-from .backtester import Results, get_min_tick
 
 
 def true_sharpe(ret):
@@ -224,8 +225,8 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFra
 
 
 def upsample(
-    df: pd.DataFrame,
-    dfg: pd.DataFrame,
+    hf_df: pd.DataFrame,
+    lf_df: pd.DataFrame,
     *,
     label: Literal["left", "right"] = "left",
     keep: Optional[Union[str, Sequence[str]]] = None,
@@ -235,12 +236,14 @@ def upsample(
     Upsample time series by combining higher frequency and lower
     frequency dataframes.
 
-    df: higher frequency data, all columns will be kept
+    hf_df: higher frequency data, all columns will be kept
 
-    dfg: lower frequency data. Only non-overlapping columns will be kept, unless
-    columns to keep are given explicitly.
+    lf_df: lower frequency data. Only non-overlapping columns will be kept, unless
+    columns to keep are given explicitly. ``position`` must not be passed in
+    this dataframe because it is already executable state; upsample generated
+    signals or blips first, then derive ``position`` on the upsampled frame.
 
-    label: how dfg is labeled. ``"left"`` means each lower-frequency row is
+    label: how lf_df is labeled. ``"left"`` means each lower-frequency row is
     labeled by the first higher-frequency bar in the group. ``"right"`` means it
     is labeled by the bar where the lower-frequency value becomes known.
     Lower-frequency values are first aligned to the higher-frequency index point
@@ -280,8 +283,8 @@ def upsample(
         return list(data)
 
     def align(
-        df: pd.DataFrame,
-        dfg: pd.DataFrame,
+        hf_df: pd.DataFrame,
+        lf_df: pd.DataFrame,
         upsampled_columns: List[str],
         label: Literal["left", "right"],
     ) -> pd.DataFrame:
@@ -289,20 +292,20 @@ def upsample(
         Align lower-frequency rows to the higher-frequency index point where
         their values become known.
         """
-        if not df.index.is_monotonic_increasing:
+        if not hf_df.index.is_monotonic_increasing:
             raise ValueError("Higher frequency dataframe index must be sorted.")
-        if not dfg.index.is_monotonic_increasing:
+        if not lf_df.index.is_monotonic_increasing:
             raise ValueError("Lower frequency dataframe index must be sorted.")
         if label not in ("left", "right"):
             raise ValueError(f"label must be 'left' or 'right', '{label}' given")
         if not upsampled_columns:
-            return dfg[upsampled_columns].iloc[:0]
+            return lf_df[upsampled_columns].iloc[:0]
 
-        high_index = df.index
-        low_index = dfg.index
+        high_index = hf_df.index
+        low_index = lf_df.index
 
         if len(high_index) == 0 or len(low_index) == 0:
-            return dfg[upsampled_columns].iloc[:0]
+            return lf_df[upsampled_columns].iloc[:0]
 
         if label == "left":
             high_locs = np.empty(len(low_index), dtype=np.int64)
@@ -327,7 +330,7 @@ def upsample(
             )
         high_locs = high_locs[valid]
         rows = rows[valid]
-        aligned = dfg.iloc[rows][upsampled_columns].copy()
+        aligned = lf_df.iloc[rows][upsampled_columns].copy()
         aligned.index = high_index.take(high_locs)
         if aligned.index.has_duplicates:
             raise ValueError(
@@ -349,7 +352,28 @@ def upsample(
                 seen.add(column)
         return combined
 
-    upsampled_columns = [column for column in dfg.columns if column not in df.columns]
+    if "position" in lf_df.columns:
+        raise ValueError(
+            "Cannot upsample 'position'. Position is already executable state; "
+            "upsample generated signals or blips first, then derive position on "
+            "the upsampled dataframe."
+        )
+
+    position_like_columns = [
+        column for column in lf_df.columns if "position" in column.lower()
+    ]
+    if position_like_columns:
+        warnings.warn(
+            "Columns containing 'position' are not treated as executable state by "
+            f"upsample: {position_like_columns}. Ensure these are generated "
+            "values, not already-shifted positions.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    upsampled_columns = [
+        column for column in lf_df.columns if column not in hf_df.columns
+    ]
     blip_columns = [
         column for column in ("blip", "close_blip") if column in upsampled_columns
     ]
@@ -361,27 +385,27 @@ def upsample(
     raw_blip_map = {
         column: f"raw_{column}"
         for column in blip_columns
-        if f"raw_{column}" not in df.columns and f"raw_{column}" not in dfg.columns
+        if f"raw_{column}" not in hf_df.columns and f"raw_{column}" not in lf_df.columns
     }
     raw_blip_columns = raw_source_columns + list(raw_blip_map.values())
     aligned_columns = difference(upsampled_columns, raw_source_columns)
     # preserve types to be able to cast back into them
-    types = dfg[upsampled_columns].dtypes.to_dict()
+    types = lf_df[upsampled_columns].dtypes.to_dict()
     types.update(
-        {raw_column: dfg[column].dtype for column, raw_column in raw_blip_map.items()}
+        {raw_column: lf_df[column].dtype for column, raw_column in raw_blip_map.items()}
     )
 
-    # ffill and subsequent dropnas depend on dfg not having n/a's
-    if len(dfg[dfg.isna().any(axis=1)]) != 0:
-        raise ValueError("Lower frequency dataframe (dfg) must not have n/a values.")
+    # ffill and subsequent dropnas depend on lf_df not having n/a's
+    if len(lf_df[lf_df.isna().any(axis=1)]) != 0:
+        raise ValueError("Lower frequency dataframe (lf_df) must not have n/a values.")
 
-    aligned = align(df, dfg, aligned_columns, label)
-    joined_df = df.join(aligned)
+    aligned = align(hf_df, lf_df, aligned_columns, label)
+    joined_df = hf_df.join(aligned)
     raw_frames = []
     if raw_source_columns:
-        raw_frames.append(dfg[raw_source_columns])
+        raw_frames.append(lf_df[raw_source_columns])
     if raw_blip_map:
-        raw_frames.append(dfg[list(raw_blip_map)].rename(columns=raw_blip_map))
+        raw_frames.append(lf_df[list(raw_blip_map)].rename(columns=raw_blip_map))
     if raw_frames:
         joined_df = joined_df.join(pd.concat(raw_frames, axis=1))
 
@@ -487,24 +511,48 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFr
     """
 
     rdf = r.df.copy()
+    price_column = "price" if "price" in rdf.columns else "bar_price"
     if log_return:
         field = "lreturn"
-        price = np.log(rdf["price"].pct_change() + 1)  # type: ignore
+        price = np.log(rdf[price_column].pct_change() + 1)  # type: ignore
     else:
         field = "pnl"
-        price = rdf["price"].diff()  # type: ignore
+        price = rdf[price_column].diff()  # type: ignore
 
-    # this is to deal with always-on strategies where transaction is -2 or 2
-    # this line will result with np.inf when transaction is zero
-    # it's fixed subsequently
-    half_return = rdf[field] / rdf["transaction"].abs()
-    rdf["_return"] = half_return.mask(
-        half_return.replace([-np.inf, np.inf], np.nan).isna(), rdf[field]
-    )
-    # for 'double' transactions: they are included both in longs and shorts
-    # (the size has been halved previously)
-    longs = rdf[(rdf["curr_price"] > 0) | (rdf["position"] == 1)]
-    shorts = rdf[(rdf["curr_price"] < 0) | (rdf["position"] == -1)]
+    if {"transaction", "curr_price"}.issubset(rdf.columns):
+        # this is to deal with always-on strategies where transaction is -2 or 2
+        # this line will result with np.inf when transaction is zero
+        # it's fixed subsequently
+        half_return = rdf[field] / rdf["transaction"].abs()
+        rdf["_return"] = half_return.mask(
+            half_return.replace([-np.inf, np.inf], np.nan).isna(), rdf[field]
+        )
+        # for 'double' transactions: they are included both in longs and shorts
+        # (the size has been halved previously)
+        longs = rdf[(rdf["curr_price"] > 0) | (rdf["position"] == 1)]
+        shorts = rdf[(rdf["curr_price"] < 0) | (rdf["position"] == -1)]
+    else:
+        rdf["_return"] = rdf[field]
+        direction = rdf["position"].where(
+            rdf["position"] != 0, rdf["position"].shift().fillna(0)
+        )
+        if "open_price" in rdf.columns:
+            direction = direction.mask(
+                (direction == 0) & (rdf["open_price"] != 0),
+                np.sign(rdf["open_price"]),
+            )
+        if "close_price" in rdf.columns:
+            direction = direction.mask(
+                (direction == 0) & (rdf["close_price"] != 0),
+                -np.sign(rdf["close_price"]),
+            )
+        if "stop_price" in rdf.columns:
+            direction = direction.mask(
+                (direction == 0) & (rdf["stop_price"] != 0),
+                -np.sign(rdf["stop_price"]),
+            )
+        longs = rdf[direction > 0]
+        shorts = rdf[direction < 0]
     df = pd.DataFrame(
         {
             "price": price,
@@ -555,7 +603,6 @@ def vector_grouper(
 
 def always_on(series: pd.Series) -> bool:
     """
-    NOT IN USE
     Based on passed position series determine whether system is always
     in the market (closing position always means opening opposite position).
     """

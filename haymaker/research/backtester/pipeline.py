@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 from pyfolio.timeseries import perf_stats  # type: ignore
 
-from haymaker.research.signal_converters import blip_sig
+from haymaker.research.signal_converters import blip_sig, sig_pos
 
 from .engine import _perf_engine, _perf_engine_python
 
@@ -516,9 +516,6 @@ class _PerfCalculator:
         """
         data = self._tx.data
 
-        if len(data[data["position"] != 0]) == 0:
-            self._warnings.append("No positions")
-
         bar_price, open_price, close_price, stop_price, cost = self._prepare_arrays()
         min_tick = cost / self._slippage if self._slippage else 1.0
 
@@ -541,7 +538,9 @@ class _PerfCalculator:
                     bar_df = bar_df.loc[: positions["date_c"].iloc[-1]]
                 else:
                     bar_df = bar_df.iloc[:0]
-        else:
+        if len(positions) == 0:
+            self._warnings.append("No positions")
+        elif not self._skip_last_open:
             self._last_open_warning(positions)
 
         daily = _daily_returns(pd.Series(bar_log_returns, index=data.index))
