@@ -1,4 +1,4 @@
-from .interface import before_close, stop_loss
+from .interface import BeforeClose, before_close, stop_loss
 from .python_impl import (
     Adjust,
     BaseBracket,
@@ -19,6 +19,7 @@ from .python_impl import (
 __all__ = [
     "Adjust",
     "BaseBracket",
+    "BeforeClose",
     "BlipContext",
     "Context",
     "FixedStop",

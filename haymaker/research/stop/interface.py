@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import datetime as dt
+from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
 import numpy as np
@@ -8,9 +11,9 @@ from ..signal_converters import pos_trans, pos_trans_array
 from .python_impl import StopMode, StopParams, param_factory
 
 DistanceLike = float | int | pd.Series
-ScheduledCloseLike = dt.time | tuple[int, ...] | pd.Series | None
 TimedeltaLike = dt.timedelta | pd.Timedelta
 TransactionMethod = Literal["numpy", "pandas"]
+DEFAULT_SESSION_GAP = dt.timedelta(minutes=30)
 
 
 class PreparedData(NamedTuple):
@@ -52,10 +55,11 @@ def _validate_inputs(
         if scheduled_close.isna().any():
             raise ValueError("scheduled_close Series must not contain n/a values.")
     elif scheduled_close is not None and not isinstance(
-        scheduled_close, (dt.time, tuple)
+        scheduled_close, (dt.time, tuple, BeforeClose)
     ):
         raise ValueError(
-            "scheduled_close must be datetime.time, tuple, pandas Series, or None."
+            "scheduled_close must be datetime.time, tuple, pandas Series, "
+            "BeforeClose, or None."
         )
 
 
@@ -83,6 +87,7 @@ def _scheduled_close_time(value: dt.time | tuple[int, ...]) -> dt.time:
 def _scheduled_close_data(
     scheduled_close: ScheduledCloseLike, index: pd.Index
 ) -> np.ndarray:
+    scheduled_close = _resolve_scheduled_close(scheduled_close, index)
     if scheduled_close is None:
         return np.zeros(len(index), dtype=np.bool_)
     if isinstance(scheduled_close, pd.Series):
@@ -116,102 +121,112 @@ def _data_index(data: pd.DataFrame | pd.Series | pd.Index) -> pd.Index:
     return data.index
 
 
-def _infer_bar_duration(
-    index: pd.DatetimeIndex, session_gap: pd.Timedelta | None
-) -> pd.Timedelta:
+def _infer_bar_duration(index: pd.DatetimeIndex) -> pd.Timedelta:
     if len(index) < 2:
-        raise ValueError("bar_duration must be provided for fewer than two rows.")
+        raise ValueError("before_close requires at least two rows to infer frequency.")
     deltas = index[1:] - index[:-1]
     positive_deltas = deltas[deltas > pd.Timedelta(0)]
-    if session_gap is not None:
-        positive_deltas = positive_deltas[positive_deltas <= session_gap]
     if len(positive_deltas) == 0:
-        raise ValueError("Could not infer bar_duration from index.")
-    return positive_deltas.to_series().mode().iloc[0]
+        raise ValueError("Could not infer data frequency from index.")
+    modes = positive_deltas.to_series().mode()
+    if len(modes) != 1:
+        raise ValueError("Could not infer a unique data frequency from index.")
+    duration = modes.iloc[0]
+    if duration >= pd.Timedelta(days=1):
+        raise ValueError("before_close only supports intraday data.")
+    return duration
 
 
-def before_close(
-    data: pd.DataFrame | pd.Series | pd.Index,
-    offset: TimedeltaLike,
-    *,
-    session_gap: TimedeltaLike | None = None,
-    bar_duration: TimedeltaLike | None = None,
-) -> pd.Series:
+@dataclass(frozen=True)
+class BeforeClose:
     """
-    Build a scheduled-close mask for bars before each inferred session end.
+    Lazy scheduled-close mask builder for bars before session end.
 
-    The helper is intended for left-labeled bars, where each timestamp
-    marks the start of the bar. It infers each session's end as the last
-    bar timestamp plus ``bar_duration``. Rows whose timestamps are at or
-    after ``session_end - offset`` are marked ``True`` through the final
-    bar of that session.
+    Instances are accepted by ``stop_loss(..., scheduled_close=...)``.
+    They are evaluated against the dataframe index at call time, so the
+    researcher does not need to pre-compute a mask.
 
     Args:
     -----
-    data:
-        DataFrame, Series, or Index whose index is used to infer sessions.
-        The index must be a strictly increasing ``pd.DatetimeIndex``.
-
     offset:
         Positive timedelta before inferred session end where the close
         window begins.
 
     session_gap:
         Positive timedelta. A gap larger than this value starts a new
-        session. If omitted, the threshold is inferred as the larger of
-        one hour and three times the inferred ``bar_duration``.
-
-    bar_duration:
-        Positive timedelta representing one bar's duration. If omitted,
-        it is inferred as the most common positive index step, ignoring
-        gaps larger than ``session_gap`` when ``session_gap`` is provided.
-
-    Returns:
-    --------
-    pd.Series
-        Boolean mask named ``"scheduled_close"``. It can be passed
-        directly to ``stop_loss(..., scheduled_close=...)``.
+        session. Defaults to 30 minutes.
     """
 
-    index = _data_index(data)
-    if not isinstance(index, pd.DatetimeIndex):
-        raise ValueError("before_close requires a DatetimeIndex.")
-    if not index.is_monotonic_increasing or index.has_duplicates:
-        raise ValueError("before_close requires a strictly increasing index.")
-    if len(index) == 0:
-        return pd.Series(
-            np.zeros(len(index), dtype=np.bool_),
-            index=index,
-            name="scheduled_close",
+    offset: TimedeltaLike
+    session_gap: TimedeltaLike = DEFAULT_SESSION_GAP
+
+    def __call__(self, data: pd.DataFrame | pd.Series | pd.Index) -> pd.Series:
+        """
+        Build a scheduled-close mask for the supplied data or index.
+
+        The helper is intended for intraday left-labeled bars, where
+        each timestamp marks the start of the bar. It infers the bar
+        duration as the unique mode of positive index differences. Each
+        session's end is inferred as the last bar timestamp plus that
+        duration. Rows whose timestamps are at or after
+        ``session_end - offset`` are marked ``True`` through the final
+        bar of that session.
+
+        Returns:
+        --------
+        pd.Series
+            Boolean mask named ``"scheduled_close"``.
+        """
+
+        index = _data_index(data)
+        if not isinstance(index, pd.DatetimeIndex):
+            raise ValueError("before_close requires a DatetimeIndex.")
+        if not index.is_monotonic_increasing or index.has_duplicates:
+            raise ValueError("before_close requires a strictly increasing index.")
+
+        close_offset = _as_positive_timedelta(self.offset, "offset")
+        gap = _as_positive_timedelta(self.session_gap, "session_gap")
+        duration = _infer_bar_duration(index)
+        if gap < duration:
+            raise ValueError(
+                "session_gap must not be shorter than inferred data frequency."
+            )
+
+        deltas = index[1:] - index[:-1]
+        session_end_locs = np.concatenate(
+            (np.flatnonzero(deltas > gap), [len(index) - 1])
         )
+        row_locs = np.arange(len(index))
+        row_session_ids = np.searchsorted(session_end_locs, row_locs, side="left")
 
-    close_offset = _as_positive_timedelta(offset, "offset")
-    gap = (
-        _as_positive_timedelta(session_gap, "session_gap")
-        if session_gap is not None
-        else None
-    )
-    duration = (
-        _as_positive_timedelta(bar_duration, "bar_duration")
-        if bar_duration is not None
-        else _infer_bar_duration(index, gap)
-    )
-    if gap is None:
-        gap = max(pd.Timedelta(hours=1), duration * 3)
+        index_ns = index.to_numpy(dtype="datetime64[ns]", copy=False).astype(
+            np.int64, copy=False
+        )
+        session_end_ns = index_ns[session_end_locs[row_session_ids]] + duration.value
+        close_window_start_ns = session_end_ns - close_offset.value
+        close_mask = index_ns >= close_window_start_ns
 
-    deltas = index[1:] - index[:-1]
-    session_end_locs = np.concatenate((np.flatnonzero(deltas > gap), [len(index) - 1]))
-    row_locs = np.arange(len(index))
-    row_session_ids = np.searchsorted(session_end_locs, row_locs, side="left")
+        return pd.Series(close_mask, index=index, name="scheduled_close")
 
-    index_ns = index.to_numpy(dtype="datetime64[ns]", copy=False).astype(
-        np.int64, copy=False
-    )
-    session_end_ns = index_ns[session_end_locs[row_session_ids]] + duration.value
-    close_window_start_ns = session_end_ns - close_offset.value
-    close_mask = index_ns >= close_window_start_ns
 
-    return pd.Series(close_mask, index=index, name="scheduled_close")
+def before_close(
+    offset: TimedeltaLike,
+    *,
+    session_gap: TimedeltaLike = DEFAULT_SESSION_GAP,
+) -> BeforeClose:
+    """Create a lazy scheduled-close mask builder for ``stop_loss``."""
+    return BeforeClose(offset=offset, session_gap=session_gap)
+
+
+ScheduledCloseLike = dt.time | tuple[int, ...] | pd.Series | BeforeClose | None
+
+
+def _resolve_scheduled_close(
+    scheduled_close: ScheduledCloseLike, index: pd.Index
+) -> dt.time | tuple[int, ...] | pd.Series | None:
+    if isinstance(scheduled_close, BeforeClose):
+        return scheduled_close(index)
+    return scheduled_close
 
 
 def _position_data(
@@ -392,10 +407,13 @@ def stop_loss(
         index times. Naive times match the index's local wall-clock
         time. Timezone-aware times require a timezone-aware index and
         match after converting the index to the supplied time's
-        timezone. If given as a ``pd.Series``, it must be a same-index
-        boolean mask. Scheduled closes are execution-time events: they
-        are not shifted. They close existing positions, suppress new
-        opens on the same bar, and are reported as ``close_price``.
+        timezone. If given as ``BeforeClose`` through the
+        ``before_close(...)`` helper, the mask is built lazily from
+        ``df.index``. If given as a ``pd.Series``, it must be a
+        same-index boolean mask. Scheduled closes are execution-time
+        events: they are not shifted. They close existing positions,
+        suppress new opens on the same bar, and are reported as
+        ``close_price``.
 
     price_column:
         Name of the column containing the price at which non-stopped
@@ -441,6 +459,8 @@ def stop_loss(
         downstream research code.
     """
 
+    _validate_inputs(df, distance, price_column, scheduled_close)
+    scheduled_close = _resolve_scheduled_close(scheduled_close, df.index)
     _validate_inputs(df, distance, price_column, scheduled_close)
     params: StopParams = param_factory(mode, tp_multiple, time_stop, adjust)
     data = _prepare_data(df, distance, price_column, scheduled_close)

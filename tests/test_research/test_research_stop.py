@@ -15,7 +15,7 @@ from haymaker.research.signal_converters import (
     pos_trans_array,
     pos_trans_numpy,
 )
-from haymaker.research.stop import StopMode, before_close, stop_loss
+from haymaker.research.stop import BeforeClose, StopMode, before_close, stop_loss
 from haymaker.research.stop.interface import PreparedData, _prepare_data
 from haymaker.research.stop.numba_impl import run_stop_loss as run_stop_loss_numba
 from haymaker.research.stop.python_impl import (
@@ -375,10 +375,9 @@ def test_before_close_marks_window_before_each_inferred_session_end() -> None:
     )
 
     actual = before_close(
-        index,
         dt.timedelta(minutes=2),
         session_gap=dt.timedelta(minutes=30),
-    )
+    )(index)
 
     expected = pd.Series(
         [False, False, False, True, True, False, True, True],
@@ -391,11 +390,7 @@ def test_before_close_marks_window_before_each_inferred_session_end() -> None:
 def test_before_close_uses_left_labeled_bar_duration() -> None:
     index = pd.date_range("2026-01-01 09:00", periods=3, freq="5min")
 
-    actual = before_close(
-        index,
-        dt.timedelta(minutes=5),
-        bar_duration=dt.timedelta(minutes=5),
-    )
+    actual = before_close(dt.timedelta(minutes=5))(index)
 
     expected = pd.Series(
         [False, False, True],
@@ -407,54 +402,57 @@ def test_before_close_uses_left_labeled_bar_duration() -> None:
 
 def test_before_close_rejects_non_datetime_index() -> None:
     with pytest.raises(ValueError, match="requires a DatetimeIndex"):
-        before_close(pd.RangeIndex(3), dt.timedelta(minutes=5))
+        before_close(dt.timedelta(minutes=5))(pd.RangeIndex(3))
 
 
 def test_before_close_rejects_non_positive_offset() -> None:
     index = pd.date_range("2026-01-01 09:00", periods=3, freq="min")
 
     with pytest.raises(ValueError, match="offset must be a positive timedelta"):
-        before_close(index, dt.timedelta(0))
+        before_close(dt.timedelta(0))(index)
 
 
 def test_before_close_rejects_unsorted_index() -> None:
     index = pd.DatetimeIndex(["2026-01-01 09:01", "2026-01-01 09:00"])
 
     with pytest.raises(ValueError, match="strictly increasing index"):
-        before_close(index, dt.timedelta(minutes=1))
+        before_close(dt.timedelta(minutes=1))(index)
 
 
-def test_before_close_requires_bar_duration_for_single_row() -> None:
+def test_before_close_requires_two_rows_to_infer_frequency() -> None:
     index = pd.date_range("2026-01-01 09:00", periods=1, freq="min")
 
-    with pytest.raises(ValueError, match="bar_duration must be provided"):
-        before_close(index, dt.timedelta(minutes=1))
-
-
-def test_before_close_handles_single_row_with_bar_duration() -> None:
-    index = pd.date_range("2026-01-01 09:00", periods=1, freq="min")
-
-    actual = before_close(
-        index,
-        dt.timedelta(minutes=1),
-        bar_duration=dt.timedelta(minutes=1),
-    )
-
-    expected = pd.Series([True], index=index, name="scheduled_close")
-    pdt.assert_series_equal(actual, expected)
+    with pytest.raises(ValueError, match="at least two rows"):
+        before_close(dt.timedelta(minutes=1))(index)
 
 
 def test_before_close_shorter_than_bar_duration_can_leave_final_bar_unmarked() -> None:
     index = pd.date_range("2026-01-01 09:00", periods=3, freq="5min")
 
-    actual = before_close(
-        index,
-        dt.timedelta(minutes=4),
-        bar_duration=dt.timedelta(minutes=5),
-    )
+    actual = before_close(dt.timedelta(minutes=4))(index)
 
     expected = pd.Series([False, False, False], index=index, name="scheduled_close")
     pdt.assert_series_equal(actual, expected)
+
+
+def test_before_close_rejects_daily_data() -> None:
+    index = pd.date_range("2026-01-01", periods=3, freq="D")
+
+    with pytest.raises(ValueError, match="only supports intraday data"):
+        before_close(dt.timedelta(hours=1))(index)
+
+
+def test_before_close_rejects_session_gap_shorter_than_frequency() -> None:
+    index = pd.date_range("2026-01-01 09:00", periods=3, freq="h")
+
+    with pytest.raises(ValueError, match="session_gap"):
+        before_close(dt.timedelta(minutes=15))(index)
+
+
+def test_before_close_factory_returns_lazy_object() -> None:
+    scheduled_close = before_close(dt.timedelta(minutes=2))
+
+    assert isinstance(scheduled_close, BeforeClose)
 
 
 @pytest.mark.parametrize("use_numba", [False, True])
@@ -507,7 +505,6 @@ def test_before_close_integrates_with_stop_loss_and_blocks_reopens(
         index=index,
     )
     scheduled_close = before_close(
-        df,
         dt.timedelta(minutes=2),
         session_gap=dt.timedelta(minutes=30),
     )
