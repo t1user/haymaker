@@ -1,4 +1,5 @@
-from typing import Literal, NamedTuple, Optional, Tuple, Union
+import datetime as dt
+from typing import Literal, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -6,7 +7,9 @@ import pandas as pd
 from ..signal_converters import pos_trans, pos_trans_array
 from .python_impl import StopMode, StopParams, param_factory
 
-DistanceLike = Union[float, int, pd.Series]
+DistanceLike = float | int | pd.Series
+ScheduledCloseLike = dt.time | tuple[int, ...] | pd.Series | None
+TimedeltaLike = dt.timedelta | pd.Timedelta
 TransactionMethod = Literal["numpy", "pandas"]
 
 
@@ -17,6 +20,7 @@ class PreparedData(NamedTuple):
     low: np.ndarray
     price: np.ndarray
     distance: float | np.ndarray
+    scheduled_close: np.ndarray
     row_index: pd.Index
     use_blip: bool
 
@@ -25,6 +29,7 @@ def _validate_inputs(
     df: pd.DataFrame,
     distance: DistanceLike,
     price_column: str,
+    scheduled_close: ScheduledCloseLike,
 ) -> None:
     if not isinstance(df, pd.DataFrame):
         raise ValueError("df must be a pandas DataFrame")
@@ -41,6 +46,17 @@ def _validate_inputs(
             "distance Series must have the same index as df. Align or upsample "
             "distance explicitly before calling stop_loss."
         )
+    if isinstance(scheduled_close, pd.Series):
+        if not scheduled_close.index.equals(df.index):
+            raise ValueError("scheduled_close Series must have the same index as df.")
+        if scheduled_close.isna().any():
+            raise ValueError("scheduled_close Series must not contain n/a values.")
+    elif scheduled_close is not None and not isinstance(
+        scheduled_close, (dt.time, tuple)
+    ):
+        raise ValueError(
+            "scheduled_close must be datetime.time, tuple, pandas Series, or None."
+        )
 
 
 def _distance_data(
@@ -51,10 +67,157 @@ def _distance_data(
     return float(distance)
 
 
+def _scheduled_close_time(value: dt.time | tuple[int, ...]) -> dt.time:
+    if isinstance(value, dt.time):
+        return value
+    try:
+        assert isinstance(value, tuple)
+        return dt.time(*value)  # type: ignore
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "scheduled_close tuple must be acceptable by datetime.time."
+        ) from exc
+    raise ValueError("scheduled_close tuple must be acceptable by datetime.time.")
+
+
+def _scheduled_close_data(
+    scheduled_close: ScheduledCloseLike, index: pd.Index
+) -> np.ndarray:
+    if scheduled_close is None:
+        return np.zeros(len(index), dtype=np.bool_)
+    if isinstance(scheduled_close, pd.Series):
+        return scheduled_close.to_numpy(dtype=np.bool_, copy=False)
+    if not isinstance(index, pd.DatetimeIndex):
+        raise ValueError("scheduled_close as time or tuple requires a DatetimeIndex.")
+    close_time = _scheduled_close_time(scheduled_close)
+    if close_time.tzinfo is None:
+        return index.time == close_time
+    if index.tz is None:
+        raise ValueError(
+            "timezone-aware scheduled_close requires a timezone-aware DatetimeIndex."
+        )
+    index_in_close_timezone = index.tz_convert(close_time.tzinfo)
+    return index_in_close_timezone.time == close_time.replace(tzinfo=None)
+
+
+def _as_positive_timedelta(value: TimedeltaLike, name: str) -> pd.Timedelta:
+    try:
+        delta = pd.Timedelta(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a valid timedelta.") from exc
+    if pd.isna(delta) or delta <= pd.Timedelta(0):
+        raise ValueError(f"{name} must be a positive timedelta.")
+    return delta
+
+
+def _data_index(data: pd.DataFrame | pd.Series | pd.Index) -> pd.Index:
+    if isinstance(data, pd.Index):
+        return data
+    return data.index
+
+
+def _infer_bar_duration(
+    index: pd.DatetimeIndex, session_gap: pd.Timedelta | None
+) -> pd.Timedelta:
+    if len(index) < 2:
+        raise ValueError("bar_duration must be provided for fewer than two rows.")
+    deltas = index[1:] - index[:-1]
+    positive_deltas = deltas[deltas > pd.Timedelta(0)]
+    if session_gap is not None:
+        positive_deltas = positive_deltas[positive_deltas <= session_gap]
+    if len(positive_deltas) == 0:
+        raise ValueError("Could not infer bar_duration from index.")
+    return positive_deltas.to_series().mode().iloc[0]
+
+
+def before_close(
+    data: pd.DataFrame | pd.Series | pd.Index,
+    offset: TimedeltaLike,
+    *,
+    session_gap: TimedeltaLike | None = None,
+    bar_duration: TimedeltaLike | None = None,
+) -> pd.Series:
+    """
+    Build a scheduled-close mask for bars before each inferred session end.
+
+    The helper is intended for left-labeled bars, where each timestamp
+    marks the start of the bar. It infers each session's end as the last
+    bar timestamp plus ``bar_duration``. Rows whose timestamps are at or
+    after ``session_end - offset`` are marked ``True`` through the final
+    bar of that session.
+
+    Args:
+    -----
+    data:
+        DataFrame, Series, or Index whose index is used to infer sessions.
+        The index must be a strictly increasing ``pd.DatetimeIndex``.
+
+    offset:
+        Positive timedelta before inferred session end where the close
+        window begins.
+
+    session_gap:
+        Positive timedelta. A gap larger than this value starts a new
+        session. If omitted, the threshold is inferred as the larger of
+        one hour and three times the inferred ``bar_duration``.
+
+    bar_duration:
+        Positive timedelta representing one bar's duration. If omitted,
+        it is inferred as the most common positive index step, ignoring
+        gaps larger than ``session_gap`` when ``session_gap`` is provided.
+
+    Returns:
+    --------
+    pd.Series
+        Boolean mask named ``"scheduled_close"``. It can be passed
+        directly to ``stop_loss(..., scheduled_close=...)``.
+    """
+
+    index = _data_index(data)
+    if not isinstance(index, pd.DatetimeIndex):
+        raise ValueError("before_close requires a DatetimeIndex.")
+    if not index.is_monotonic_increasing or index.has_duplicates:
+        raise ValueError("before_close requires a strictly increasing index.")
+    if len(index) == 0:
+        return pd.Series(
+            np.zeros(len(index), dtype=np.bool_),
+            index=index,
+            name="scheduled_close",
+        )
+
+    close_offset = _as_positive_timedelta(offset, "offset")
+    gap = (
+        _as_positive_timedelta(session_gap, "session_gap")
+        if session_gap is not None
+        else None
+    )
+    duration = (
+        _as_positive_timedelta(bar_duration, "bar_duration")
+        if bar_duration is not None
+        else _infer_bar_duration(index, gap)
+    )
+    if gap is None:
+        gap = max(pd.Timedelta(hours=1), duration * 3)
+
+    close_mask = np.zeros(len(index), dtype=np.bool_)
+    deltas = index[1:] - index[:-1]
+    session_starts = np.concatenate(([0], np.flatnonzero(deltas > gap) + 1))
+    session_ends = np.concatenate((session_starts[1:] - 1, [len(index) - 1]))
+
+    for start, end in zip(session_starts, session_ends):
+        session_index = index[start : end + 1]
+        session_end = session_index[-1] + duration
+        close_window_start = session_end - close_offset
+        close_mask[start : end + 1] = session_index >= close_window_start
+
+    return pd.Series(close_mask, index=index, name="scheduled_close")
+
+
 def _position_data(
     df: pd.DataFrame,
     price_column: str,
     distance: DistanceLike,
+    scheduled_close: np.ndarray,
     transaction_method: TransactionMethod,
 ) -> PreparedData:
     position_series = df["position"]
@@ -72,6 +235,7 @@ def _position_data(
         low=df["low"].to_numpy(dtype=np.float64, copy=False),
         price=df[price_column].to_numpy(dtype=np.float64, copy=False),
         distance=_distance_data(distance),
+        scheduled_close=scheduled_close,
         row_index=df.index,
         use_blip=False,
     )
@@ -81,6 +245,7 @@ def _blip_data(
     df: pd.DataFrame,
     price_column: str,
     distance: DistanceLike,
+    scheduled_close: np.ndarray,
 ) -> PreparedData:
     blip = df["blip"].shift().fillna(0).astype(int)
     close_blip = (
@@ -95,6 +260,7 @@ def _blip_data(
         low=df["low"].to_numpy(dtype=np.float64, copy=False),
         price=df[price_column].to_numpy(dtype=np.float64, copy=False),
         distance=_distance_data(distance),
+        scheduled_close=scheduled_close,
         row_index=df.index,
         use_blip=True,
     )
@@ -104,11 +270,15 @@ def _prepare_data(
     df: pd.DataFrame,
     distance: DistanceLike,
     price_column: str,
+    scheduled_close: ScheduledCloseLike = None,
     transaction_method: TransactionMethod = "numpy",
 ) -> PreparedData:
+    scheduled_close_data = _scheduled_close_data(scheduled_close, df.index)
     if "position" in df.columns:
-        return _position_data(df, price_column, distance, transaction_method)
-    return _blip_data(df, price_column, distance)
+        return _position_data(
+            df, price_column, distance, scheduled_close_data, transaction_method
+        )
+    return _blip_data(df, price_column, distance, scheduled_close_data)
 
 
 def _build_output(
@@ -126,11 +296,12 @@ def _build_output(
 
 def stop_loss(
     df: pd.DataFrame,
-    distance: Union[float, pd.Series],
+    distance: float | pd.Series,
     mode: StopMode = "trail",
     tp_multiple: float = 0,
-    adjust: Optional[Tuple[StopMode, float, float]] = None,
+    adjust: tuple[StopMode, float, float] | None = None,
     time_stop: int = 0,
+    scheduled_close: ScheduledCloseLike = None,
     price_column: str = "open",
     use_numba: bool = True,
 ) -> pd.DataFrame:
@@ -213,6 +384,18 @@ def stop_loss(
         closed at ``price_column`` after the specified number of
         processed bars.
 
+    scheduled_close:
+        Optional scheduled flattening instruction. If given as
+        ``datetime.time`` or a tuple accepted by ``datetime.time``, any
+        existing position is closed at ``price_column`` on matching
+        index times. Naive times match the index's local wall-clock
+        time. Timezone-aware times require a timezone-aware index and
+        match after converting the index to the supplied time's
+        timezone. If given as a ``pd.Series``, it must be a same-index
+        boolean mask. Scheduled closes are execution-time events: they
+        are not shifted. They close existing positions, suppress new
+        opens on the same bar, and are reported as ``close_price``.
+
     price_column:
         Name of the column containing the price at which non-stopped
         and time-stopped transactions are executed. In the most common
@@ -257,9 +440,9 @@ def stop_loss(
         downstream research code.
     """
 
-    _validate_inputs(df, distance, price_column)
+    _validate_inputs(df, distance, price_column, scheduled_close)
     params: StopParams = param_factory(mode, tp_multiple, time_stop, adjust)
-    data = _prepare_data(df, distance, price_column)
+    data = _prepare_data(df, distance, price_column, scheduled_close)
 
     if use_numba:
         from .numba_impl import run_stop_loss as run_stop_loss_numba
@@ -271,6 +454,7 @@ def stop_loss(
             data.low,
             data.distance,
             data.price,
+            data.scheduled_close,
             data.use_blip,
             params,
         )
@@ -284,6 +468,7 @@ def stop_loss(
             data.low,
             data.distance,
             data.price,
+            data.scheduled_close,
             data.use_blip,
             params,
         )

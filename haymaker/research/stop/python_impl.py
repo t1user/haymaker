@@ -246,9 +246,10 @@ class Context:
             self.low,
             self.distance,
             self.price,
+            self.force_close,
         ) = row
 
-        if self.transaction:
+        if self.transaction and not self.force_close:
             assert (
                 self.distance > 0
             ), f"Wrong value for stop loss distance: {self.distance}"
@@ -263,6 +264,7 @@ class Context:
         low: float,
         distance: float,
         price: float,
+        force_close: bool,
     ) -> Tuple[int, float, float, float]:
         self.target_position = first
         self.transaction = second
@@ -270,8 +272,9 @@ class Context:
         self.low = low
         self.distance = distance
         self.price = price
+        self.force_close = force_close
 
-        if self.transaction:
+        if self.transaction and not self.force_close:
             assert (
                 self.distance > 0
             ), f"Wrong value for stop loss distance: {self.distance}"
@@ -283,7 +286,10 @@ class Context:
         self.close_price = 0.0
         self.stop_price = 0.0
 
-        if self.position:
+        if self.force_close:
+            if self.position:
+                self.close_position()
+        elif self.position:
             self.eval_for_close()
         else:
             self.eval_for_open()
@@ -352,9 +358,10 @@ class BlipContext(Context):
             self.low,
             self.distance,
             self.price,
+            self.force_close,
         ) = row
 
-        if self.blip:
+        if self.blip and not self.force_close:
             assert (
                 self.distance > 0
             ), f"Wrong value for stop loss distance: {self.distance}"
@@ -369,6 +376,7 @@ class BlipContext(Context):
         low: float,
         distance: float,
         price: float,
+        force_close: bool,
     ) -> Tuple[int, float, float, float]:
         self.blip = first
         self.close_blip = second
@@ -376,8 +384,9 @@ class BlipContext(Context):
         self.low = low
         self.distance = distance
         self.price = price
+        self.force_close = force_close
 
-        if self.blip:
+        if self.blip and not self.force_close:
             assert (
                 self.distance > 0
             ), f"Wrong value for stop loss distance: {self.distance}"
@@ -421,6 +430,7 @@ def run_stop_loss(
     low: np.ndarray,
     distance: float | np.ndarray,
     price: np.ndarray,
+    scheduled_close: np.ndarray,
     use_blip: bool,
     params: StopParams,
 ) -> np.ndarray:
@@ -436,6 +446,7 @@ def run_stop_loss(
                 float(low[i]),
                 float(distance[i]),
                 float(price[i]),
+                bool(scheduled_close[i]),
             )
     else:
         current_distance = float(distance)
@@ -447,6 +458,7 @@ def run_stop_loss(
                 float(low[i]),
                 current_distance,
                 float(price[i]),
+                bool(scheduled_close[i]),
             )
 
     return out

@@ -175,6 +175,7 @@ def _stop_loss_numba(
     scalar_distance: float,
     distance_is_scalar: bool,
     price_values: np.ndarray,
+    scheduled_close: np.ndarray,
     use_blip: bool,
     stop_mode: int,
     tp_multiple: float,
@@ -203,6 +204,7 @@ def _stop_loss_numba(
         low = low_values[i]
         distance = scalar_distance if distance_is_scalar else distance_values[i]
         price = price_values[i]
+        force_close = scheduled_close[i]
 
         open_price = 0.0
         close_price = 0.0
@@ -215,15 +217,19 @@ def _stop_loss_numba(
         if use_blip:
             blip = first_value
             close_blip = second_value
-            if blip:
+            if blip and not force_close:
                 assert distance > 0
         else:
             target_position = first_value
             transaction = second_value
-            if transaction:
+            if transaction and not force_close:
                 assert distance > 0
 
-        if position:
+        if force_close:
+            if position:
+                close_price = price * -position
+                position = 0
+        elif position:
             should_close = (
                 close_blip == -position if use_blip else transaction == -position
             )
@@ -338,6 +344,7 @@ def run_stop_loss(
     low: np.ndarray,
     distance: float | np.ndarray,
     price: np.ndarray,
+    scheduled_close: np.ndarray,
     use_blip: bool,
     params: StopParams,
 ) -> np.ndarray:
@@ -359,6 +366,7 @@ def run_stop_loss(
         scalar_distance,
         distance_is_scalar,
         price,
+        scheduled_close,
         use_blip,
         *runtime_config(params),
     )

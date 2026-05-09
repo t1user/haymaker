@@ -1,4 +1,4 @@
-from .interface import stop_loss
+from .interface import before_close, stop_loss
 from .python_impl import (
     Adjust,
     BaseBracket,
@@ -30,6 +30,7 @@ __all__ = [
     "TimeStop",
     "TrailStop",
     "_stop_loss",
+    "before_close",
     "param_factory",
     "stop_loss",
 ]
