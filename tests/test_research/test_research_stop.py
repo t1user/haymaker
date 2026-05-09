@@ -417,6 +417,46 @@ def test_before_close_rejects_non_positive_offset() -> None:
         before_close(index, dt.timedelta(0))
 
 
+def test_before_close_rejects_unsorted_index() -> None:
+    index = pd.DatetimeIndex(["2026-01-01 09:01", "2026-01-01 09:00"])
+
+    with pytest.raises(ValueError, match="strictly increasing index"):
+        before_close(index, dt.timedelta(minutes=1))
+
+
+def test_before_close_requires_bar_duration_for_single_row() -> None:
+    index = pd.date_range("2026-01-01 09:00", periods=1, freq="min")
+
+    with pytest.raises(ValueError, match="bar_duration must be provided"):
+        before_close(index, dt.timedelta(minutes=1))
+
+
+def test_before_close_handles_single_row_with_bar_duration() -> None:
+    index = pd.date_range("2026-01-01 09:00", periods=1, freq="min")
+
+    actual = before_close(
+        index,
+        dt.timedelta(minutes=1),
+        bar_duration=dt.timedelta(minutes=1),
+    )
+
+    expected = pd.Series([True], index=index, name="scheduled_close")
+    pdt.assert_series_equal(actual, expected)
+
+
+def test_before_close_shorter_than_bar_duration_can_leave_final_bar_unmarked() -> None:
+    index = pd.date_range("2026-01-01 09:00", periods=3, freq="5min")
+
+    actual = before_close(
+        index,
+        dt.timedelta(minutes=4),
+        bar_duration=dt.timedelta(minutes=5),
+    )
+
+    expected = pd.Series([False, False, False], index=index, name="scheduled_close")
+    pdt.assert_series_equal(actual, expected)
+
+
 @pytest.mark.parametrize("use_numba", [False, True])
 def test_before_close_integrates_with_stop_loss_and_blocks_reopens(
     use_numba: bool,

@@ -199,16 +199,17 @@ def before_close(
     if gap is None:
         gap = max(pd.Timedelta(hours=1), duration * 3)
 
-    close_mask = np.zeros(len(index), dtype=np.bool_)
     deltas = index[1:] - index[:-1]
-    session_starts = np.concatenate(([0], np.flatnonzero(deltas > gap) + 1))
-    session_ends = np.concatenate((session_starts[1:] - 1, [len(index) - 1]))
+    session_end_locs = np.concatenate((np.flatnonzero(deltas > gap), [len(index) - 1]))
+    row_locs = np.arange(len(index))
+    row_session_ids = np.searchsorted(session_end_locs, row_locs, side="left")
 
-    for start, end in zip(session_starts, session_ends):
-        session_index = index[start : end + 1]
-        session_end = session_index[-1] + duration
-        close_window_start = session_end - close_offset
-        close_mask[start : end + 1] = session_index >= close_window_start
+    index_ns = index.to_numpy(dtype="datetime64[ns]", copy=False).astype(
+        np.int64, copy=False
+    )
+    session_end_ns = index_ns[session_end_locs[row_session_ids]] + duration.value
+    close_window_start_ns = session_end_ns - close_offset.value
+    close_mask = index_ns >= close_window_start_ns
 
     return pd.Series(close_mask, index=index, name="scheduled_close")
 
