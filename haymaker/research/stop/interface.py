@@ -36,14 +36,18 @@ def _validate_inputs(
         raise ValueError(f"'{price_column}' indicated as price column, but not in df")
     if not isinstance(distance, (pd.Series, float, int)):
         raise ValueError(f"distance must be series or number, not {type(distance)}")
+    if isinstance(distance, pd.Series) and not distance.index.equals(df.index):
+        raise ValueError(
+            "distance Series must have the same index as df. Align or upsample "
+            "distance explicitly before calling stop_loss."
+        )
 
 
 def _distance_data(
     distance: DistanceLike,
-    index: pd.Index,
 ) -> float | np.ndarray:
     if isinstance(distance, pd.Series):
-        return distance.reindex(index).to_numpy(dtype=np.float64, copy=False)
+        return distance.to_numpy(dtype=np.float64, copy=False)
     return float(distance)
 
 
@@ -67,7 +71,7 @@ def _position_data(
         high=df["high"].to_numpy(dtype=np.float64, copy=False),
         low=df["low"].to_numpy(dtype=np.float64, copy=False),
         price=df[price_column].to_numpy(dtype=np.float64, copy=False),
-        distance=_distance_data(distance, df.index),
+        distance=_distance_data(distance),
         row_index=df.index,
         use_blip=False,
     )
@@ -90,7 +94,7 @@ def _blip_data(
         high=df["high"].to_numpy(dtype=np.float64, copy=False),
         low=df["low"].to_numpy(dtype=np.float64, copy=False),
         price=df[price_column].to_numpy(dtype=np.float64, copy=False),
-        distance=_distance_data(distance, df.index),
+        distance=_distance_data(distance),
         row_index=df.index,
         use_blip=True,
     )
@@ -176,7 +180,10 @@ def stop_loss(
         - a ``pd.Series``, to provide a different value for every bar
 
         ``distance`` must already be expressed in the same price units
-        as the prices in ``df``. This function does not rescale it.
+        as the prices in ``df``. This function does not rescale it. If
+        provided as a ``pd.Series``, it must already have the same index
+        as ``df``; this function does not align, upsample, or forward-fill
+        distance values.
 
     mode:
         Stop-loss type to apply. Allowed values are ``"fixed"`` and

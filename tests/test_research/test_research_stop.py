@@ -115,6 +115,15 @@ def _distance_options(df: pd.DataFrame) -> list[float | pd.Series]:
     return [scalar, series]
 
 
+def test_stop_loss_rejects_distance_series_with_mismatched_index() -> None:
+    df = _position_frame(10, seed=101)
+    wrong_index = pd.RangeIndex(1, len(df) + 1)
+    distance = pd.Series(1.75, index=wrong_index)
+
+    with pytest.raises(ValueError, match="same index as df"):
+        stop_loss(df, distance)
+
+
 def _stop_kwargs() -> list[StopKwargs]:
     return [
         {"mode": "fixed"},
