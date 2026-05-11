@@ -38,7 +38,7 @@ def test_offset_None_returns_zero():
 
 def test_sticher_doesnt_accept_wrong_adjust_type():
     with pytest.raises(AssertionError):
-        FuturesStitcher([(Mock(), Mock())], "xxx")
+        FuturesStitcher({Mock(): Mock()}, "xxx")  # type: ignore
 
 
 def test_adjust():
