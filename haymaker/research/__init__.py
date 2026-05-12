@@ -24,6 +24,7 @@ from .signal_converters import (
     sig_blip,
     sig_pos,
 )
+from .upsampling import upsample
 
 __all__ = [
     "Results",
@@ -43,5 +44,6 @@ __all__ = [
     "sig_blip",
     "sig_pos",
     "summary",
+    "upsample",
     "v_backtester",
 ]

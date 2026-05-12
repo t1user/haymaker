@@ -5,8 +5,9 @@ import pandas as pd
 import pytest
 
 from haymaker.research.backtester import no_stop, perf
+from haymaker.research import upsample
 from haymaker.research.stop import stop_loss
-from haymaker.research.utils import paths, upsample
+from haymaker.research.utils import paths
 
 
 def _raw_frame() -> pd.DataFrame:
