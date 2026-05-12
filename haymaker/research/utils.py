@@ -1,20 +1,10 @@
-from multiprocessing import Pool, cpu_count  # type: ignore
-from typing import Callable, List, Literal, Optional, Tuple, cast
+from multiprocessing import Pool, cpu_count
+from typing import cast
 
 import numpy as np
-import pandas as pd  # type: ignore
-
-from haymaker.indicators import (  # noqa
-    combine_signals,
-    range_blip,
-    range_crosser,
-    signal_generator,
-    zero_crosser,
-)
+import pandas as pd
 
 from .backtester import Results, get_min_tick
-from .signal_converters import sig_pos
-from .stop import stop_loss
 
 
 def true_sharpe(ret):
@@ -186,7 +176,7 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFra
     out["from_time"] = out["from"].apply(lambda x: x.time())
 
     # most frequent time cutoff (end of day)
-    def time_cut(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Timestamp]:
+    def time_cut(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Timestamp]:
         df = df.copy()
         cutoff_time = df["from_time"].mode()[0]
         gapless = df[(df["from_time"] != cutoff_time)].reset_index(drop=True)
@@ -234,7 +224,7 @@ def rolling_weighted_std(
     price: pd.Series,
     weights: pd.Series,
     periods: int,
-    weighted_mean: Optional[pd.Series] = None,
+    weighted_mean: pd.Series | None = None,
 ) -> pd.Series:
     """weighted_mean can be passed to save one computation"""
 
@@ -255,21 +245,6 @@ def weighted_zscore(df: pd.DataFrame, lookback: int) -> pd.Series:
     wmean = rolling_weighted_mean(df["close"], df["volume"], lookback)
     wstd = rolling_weighted_std(df["close"], df["volume"], lookback, wmean)
     return ((df["close"] - wmean) / wstd).dropna()
-
-
-def stop_signal(df, signal_func: Callable, /, *func_args, **stop_kwargs) -> pd.Series:
-    """Wrapper to allow applying stop loss to any signal function.
-
-
-    Args are passed to function, kwargs to stop loss.
-
-    THIS SHOULDN'T BE USED WITHOUT FURTHER REVIEW. IT'S PROBABLY WRONG.
-    """
-    _df = df.copy()
-    _df["position"] = sig_pos(signal_func(_df["close"], *func_args))
-    stopped = stop_loss(_df, **stop_kwargs)
-    assert isinstance(stopped, pd.DataFrame)
-    return stopped["position"]
 
 
 def long_short_returns(r: Results) -> pd.DataFrame:
@@ -326,17 +301,17 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFr
         if "open_price" in rdf.columns:
             direction = direction.mask(
                 (direction == 0) & (rdf["open_price"] != 0),
-                np.sign(rdf["open_price"]),
+                np.sign(rdf["open_price"]),  # type: ignore
             )
         if "close_price" in rdf.columns:
             direction = direction.mask(
                 (direction == 0) & (rdf["close_price"] != 0),
-                -np.sign(rdf["close_price"]),
+                -np.sign(rdf["close_price"]),  # type: ignore
             )
         if "stop_price" in rdf.columns:
             direction = direction.mask(
                 (direction == 0) & (rdf["stop_price"] != 0),
-                -np.sign(rdf["stop_price"]),
+                -np.sign(rdf["stop_price"]),  # type: ignore
             )
         longs = rdf[direction > 0]
         shorts = rdf[direction < 0]
@@ -353,39 +328,6 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFr
         return df.cumsum()
     else:
         return df
-
-
-def vector_grouper(
-    df: pd.DataFrame,
-    number: int,
-    field: str = "volume",
-    label: Literal["left", "right"] = "left",
-) -> pd.DataFrame:
-    """
-    Alternative (volume) grouper. Vector based. Difference with
-    numba_tools grouper is about the treatment of the first/last bar
-    in a grouped candle.  This method has a small look-ahead bias,
-    i.e. is not usable for anything serious.
-
-    """
-    df = df.copy()
-    df = df.reset_index(drop=False)
-    df["index_"] = (df[field].cumsum() // number).shift().fillna(0)
-    return (
-        df.groupby("index_")
-        .agg(
-            {
-                "date": "first",
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum",
-                "barCount": "sum",
-            }
-        )
-        .set_index("date")
-    )
 
 
 def always_on(series: pd.Series) -> bool:
