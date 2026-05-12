@@ -16,7 +16,13 @@ import pandas as pd
 import pandas.testing as pdt
 import pytest
 
-from haymaker.research.backtester import Results, _TransactionFrame, no_stop, perf
+from haymaker.research.backtester import (
+    Results,
+    _TransactionFrame,
+    auto_perf,
+    no_stop,
+    perf,
+)
 from haymaker.research.stop import stop_loss
 from haymaker.research.backtester.engine import _perf_engine, _perf_engine_python
 
@@ -326,6 +332,57 @@ def test_perf_numba_and_python_produce_same_positions_pnl() -> None:
         rtol=1e-10,
         atol=1e-10,
     )
+
+
+def test_auto_perf_passes_ready_transaction_frame_to_perf() -> None:
+    df = _simple_df(n=30, seed=6)
+    tx = no_stop(df, price_column="open")
+
+    expected = perf(tx, slippage=0, use_numba=False)
+    actual = auto_perf(tx, slippage=0, use_numba=False)
+
+    pdt.assert_series_equal(actual.stats, expected.stats, check_exact=False)
+    pdt.assert_frame_equal(actual.daily, expected.daily)
+    pdt.assert_frame_equal(actual.positions, expected.positions)
+    pdt.assert_frame_equal(actual.df, expected.df)
+    assert actual.warnings == expected.warnings
+
+
+def test_auto_perf_converts_raw_position_frame_through_no_stop() -> None:
+    df = _simple_df(n=30, seed=7)
+
+    expected = perf(no_stop(df, price_column="open"), slippage=0, use_numba=False)
+    actual = auto_perf(df, price_column="open", slippage=0, use_numba=False)
+
+    pdt.assert_frame_equal(actual.df, expected.df)
+    pdt.assert_frame_equal(actual.positions, expected.positions)
+
+
+def test_auto_perf_converts_raw_blip_frame_through_no_stop() -> None:
+    n = 10
+    df = pd.DataFrame(
+        {
+            "open": np.linspace(100, 110, n),
+            "blip": [0, 1, 0, 0, -1, 0, 1, 0, -1, 0],
+        },
+        index=pd.date_range("2020-01-01", periods=n, freq="h"),
+    )
+
+    expected = perf(no_stop(df, price_column="open"), slippage=0, use_numba=False)
+    actual = auto_perf(df, price_column="open", slippage=0, use_numba=False)
+
+    pdt.assert_frame_equal(actual.df, expected.df)
+    pdt.assert_frame_equal(actual.positions, expected.positions)
+
+
+def test_auto_perf_raises_when_transaction_and_no_stop_paths_fail() -> None:
+    df = pd.DataFrame(
+        {"open": [100.0, 101.0]},
+        index=pd.date_range("2020-01-01", periods=2, freq="h"),
+    )
+
+    with pytest.raises(ValueError, match="could not interpret data"):
+        auto_perf(df, price_column="open", use_numba=False)
 
 
 def _tx_frame(

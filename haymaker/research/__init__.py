@@ -5,6 +5,7 @@ Research module for Haymaker.
 from .backtester import (
     Results,
     adverse_excursions,
+    auto_perf,
     blip_extractor,
     excursions,
     factor_extractor,
@@ -27,6 +28,7 @@ from .signal_converters import (
 __all__ = [
     "Results",
     "adverse_excursions",
+    "auto_perf",
     "blip_extractor",
     "blip_sig",
     "excursions",

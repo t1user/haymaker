@@ -14,6 +14,11 @@ Public interface
     Main entry point.  Accepts the output of :func:`no_stop` or
     :func:`~haymaker.research.stop.interface.stop_loss`.
 
+``auto_perf(data, price_column, slippage, skip_last_open, raise_exceptions)``
+    Convenience wrapper around :func:`perf`.  If ``data`` already matches
+    the transaction-frame schema, it is passed directly to :func:`perf`.
+    Otherwise the wrapper tries :func:`no_stop` first.
+
 ``Results``
     NamedTuple returned by :func:`perf`.
 
@@ -594,3 +599,66 @@ def perf(
     return _PerfCalculator(
         tx, slippage, skip_last_open, raise_exceptions, use_numba
     ).run()
+
+
+def auto_perf(
+    data: pd.DataFrame,
+    price_column: str = "open",
+    slippage: float = 1.5,
+    skip_last_open: bool = False,
+    raise_exceptions: bool = True,
+    use_numba: bool = True,
+) -> Results:
+    """Return performance statistics, converting raw signals if needed.
+
+    This is a convenience wrapper around :func:`perf` for notebook and
+    exploratory workflows.  It first checks whether ``data`` already satisfies
+    the transaction-frame schema produced by :func:`no_stop` or
+    :func:`~haymaker.research.stop.interface.stop_loss`.  If so, it passes the
+    dataframe directly to :func:`perf`.
+
+    If ``data`` does not match that schema, the wrapper treats it as a raw
+    strategy dataframe and tries to convert it through :func:`no_stop` using
+    ``price_column``.  If neither path works, a :class:`ValueError` explains
+    both failures.
+
+    Args:
+        data:             Either a transaction-frame dataframe ready for
+                          :func:`perf`, or a raw dataframe accepted by
+                          :func:`no_stop`.
+        price_column:     Price column used only for the fallback
+                          :func:`no_stop` conversion.
+        slippage:         Transaction cost expressed as a multiple of min tick.
+        skip_last_open:   Passed through to :func:`perf`.
+        raise_exceptions: Passed through to :func:`perf`.
+        use_numba:        Passed through to :func:`perf`.
+
+    Returns:
+        :class:`Results` NamedTuple.
+    """
+    try:
+        _TransactionFrame(data)
+    except ValueError as transaction_error:
+        try:
+            return perf(
+                no_stop(data, price_column=price_column),
+                slippage=slippage,
+                skip_last_open=skip_last_open,
+                raise_exceptions=raise_exceptions,
+                use_numba=use_numba,
+            )
+        except Exception as no_stop_error:
+            raise ValueError(
+                "auto_perf() could not interpret data as a transaction frame "
+                "or convert it with no_stop(). "
+                f"Transaction-frame error: {transaction_error}. "
+                f"no_stop error: {no_stop_error}."
+            ) from no_stop_error
+
+    return perf(
+        data,
+        slippage=slippage,
+        skip_last_open=skip_last_open,
+        raise_exceptions=raise_exceptions,
+        use_numba=use_numba,
+    )

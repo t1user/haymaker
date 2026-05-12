@@ -88,6 +88,7 @@ Modules
 from .pipeline import (
     Results,
     _TransactionFrame,
+    auto_perf,
     get_min_tick,
     no_stop,
     perf,
@@ -106,6 +107,7 @@ __all__ = [
     "Results",
     "_TransactionFrame",
     "adverse_excursions",
+    "auto_perf",
     "blip_extractor",
     "excursions",
     "factor_extractor",
