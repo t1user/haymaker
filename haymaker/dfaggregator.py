@@ -86,7 +86,7 @@ class DfAggregator(Atom):
     )
     _df: pd.DataFrame = field(init=False, repr=False, default_factory=pd.DataFrame)
     _queue: QueueRunner = field(init=False, repr=False)
-    _save_timer: ev.Timer = field(init=False, repr=False, default=None)
+    _save_timer: ev.Timer | None = field(init=False, repr=False, default=None)
     _timer_task: asyncio.Task | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
