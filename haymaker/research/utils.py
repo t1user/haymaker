@@ -49,57 +49,6 @@ def plot_rolling_vol(returns: pd.Series, months: float) -> None:
     rolling[["vol", "mean_vol"]].plot(figsize=(20, 5), grid=True)
 
 
-def bootstrap(data, start=None, end=None, period_length=3, paths=100, replace=True):
-    """
-    Generate hypothetical time series by randomly drawing from price data.
-    """
-    if start:
-        data = data.loc[start:]
-    if end:
-        data = data.loc[:end]
-
-    daily = data.resample("B").first()
-    data_indexed = pd.DataFrame(
-        {
-            "open": data["open"] / data["close"],
-            "high": data["high"] / data["close"],
-            "low": data["low"] / data["close"],
-            "close": data["close"].pct_change(),
-            "volume": data["volume"],
-            "barCount": data["barCount"],
-        }
-    )
-    data_indexed = data_indexed.iloc[1:]
-
-    days = len(daily.index)
-    draws = int(days / period_length)
-
-    d = np.random.choice(daily.index[:-period_length], size=(draws, paths))
-    lookup_table = pd.Series(daily.index.shift(period_length), index=daily.index)
-
-    output = []
-    for path in d.T:
-        p = pd.concat([data_indexed.loc[i : lookup_table[i]].iloc[:-1] for i in path])
-        p.set_index(
-            pd.date_range(freq="min", start=data.index[0], periods=len(p), name="date"),
-            inplace=True,
-        )
-
-        p["close"] = (p["close"] + 1).cumprod() * data.iloc[0]["close"]
-        o = pd.DataFrame(
-            {
-                "open": p["open"] * p["close"],
-                "high": p["high"] * p["close"],
-                "low": p["low"] * p["close"],
-                "close": p["close"],
-                "volume": p["volume"],
-                "barCount": p["barCount"],
-            }
-        )
-        output.append(o)
-    return output
-
-
 def sampler(data, start=None, end=None, period_length=25, paths=100):
     if start:
         data = data.loc[start:]
