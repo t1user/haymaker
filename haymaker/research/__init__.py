@@ -16,7 +16,17 @@ from .backtester import (
     summary,
     v_backtester,
 )
-from .bootstrap import bootstrap, optimal_block_length, prepare_bootstrap_frame
+from .bootstrap import (
+    bootstrap,
+    combine_states,
+    optimal_block_length,
+    prepare_bootstrap_frame,
+    range_states,
+    regime_bootstrap,
+    return_states,
+    trend_states,
+    volatility_states,
+)
 from .signal_converters import (
     blip_sig,
     pos_trans,
@@ -34,6 +44,7 @@ __all__ = [
     "blip_extractor",
     "blip_sig",
     "bootstrap",
+    "combine_states",
     "excursions",
     "factor_extractor",
     "get_min_tick",
@@ -45,9 +56,14 @@ __all__ = [
     "pos_trans_numpy",
     "prepare_bootstrap_frame",
     "profitable_excursions",
+    "range_states",
+    "regime_bootstrap",
+    "return_states",
     "sig_blip",
     "sig_pos",
     "summary",
+    "trend_states",
     "upsample",
     "v_backtester",
+    "volatility_states",
 ]
