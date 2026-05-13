@@ -54,6 +54,7 @@ dev = [
   "mongomock==4.3.0",
   "pyfolio-reloaded==0.9.9",
   "arch==8.0.0",
+  "hmmlearn==0.3.3",
 ]
 
 notebook = [

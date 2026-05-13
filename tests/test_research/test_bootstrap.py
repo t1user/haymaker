@@ -7,6 +7,7 @@ import pytest
 from haymaker.research import (
     bootstrap,
     combine_states,
+    hmm_states,
     optimal_block_length,
     prepare_bootstrap_frame,
     range_states,
@@ -318,3 +319,30 @@ def test_state_helpers_return_feedable_state_series() -> None:
 
     assert len(actual) == 1
     pd.testing.assert_index_equal(actual[0].index, source.index[1:])
+
+
+def test_hmm_states_return_feedable_state_series() -> None:
+    pytest.importorskip("hmmlearn")
+    source = _regime_ohlc_frame()
+
+    states = hmm_states(source, n_states=2, random_state=1)
+    actual = regime_bootstrap(
+        source,
+        states=states,
+        paths=1,
+        random_state=2,
+        min_state_count=1,
+        min_transition_count=1,
+    )
+
+    assert states.index.equals(source.index[1:])
+    assert states.nunique() <= 2
+    assert len(actual) == 1
+    pd.testing.assert_index_equal(actual[0].index, source.index[1:])
+
+
+def test_hmm_states_rejects_too_few_states() -> None:
+    source = _regime_ohlc_frame()
+
+    with pytest.raises(ValueError, match="n_states"):
+        hmm_states(source, n_states=1)

@@ -19,6 +19,7 @@ from .backtester import (
 from .bootstrap import (
     bootstrap,
     combine_states,
+    hmm_states,
     optimal_block_length,
     prepare_bootstrap_frame,
     range_states,
@@ -45,6 +46,7 @@ __all__ = [
     "blip_sig",
     "bootstrap",
     "combine_states",
+    "hmm_states",
     "excursions",
     "factor_extractor",
     "get_min_tick",

@@ -7,6 +7,7 @@ from .data import PRICE_COLUMNS, RAW_COLUMNS, RandomState, prepare_bootstrap_fra
 from .regime import regime_bootstrap
 from .states import (
     combine_states,
+    hmm_states,
     range_states,
     return_states,
     trend_states,
@@ -19,6 +20,7 @@ __all__ = [
     "RandomState",
     "bootstrap",
     "combine_states",
+    "hmm_states",
     "optimal_block_length",
     "prepare_bootstrap_frame",
     "range_states",

@@ -9,6 +9,7 @@ import pandas as pd
 
 __all__ = [
     "combine_states",
+    "hmm_states",
     "range_states",
     "return_states",
     "trend_states",
@@ -34,6 +35,69 @@ def combine_states(*states: pd.Series) -> pd.Series:
     combined = pd.concat(states, axis=1).dropna()
     labels = list(map(tuple, combined.to_numpy(dtype=object)))
     return pd.Series(labels, index=combined.index, name="state")
+
+
+def hmm_states(
+    data: pd.DataFrame,
+    *,
+    n_states: int,
+    features: pd.DataFrame | None = None,
+    covariance_type: str = "diag",
+    n_iter: int = 100,
+    random_state: int | None = None,
+) -> pd.Series:
+    """
+    Infer hard state labels with a Gaussian hidden Markov model.
+
+    Args:
+        data: Source OHLC dataframe. Used to build default features and align
+            output states.
+        n_states: Number of hidden states to fit.
+        features: Optional feature matrix. If omitted, uses OHLC log distances
+            from previous close, matching bootstrap data preparation.
+        covariance_type: Covariance type passed to ``hmmlearn.GaussianHMM``.
+            Defaults to ``"diag"`` because OHLC-derived features are often
+            collinear enough to make full covariance estimates unstable.
+        n_iter: Maximum EM iterations passed to ``hmmlearn.GaussianHMM``.
+        random_state: Optional model random seed.
+
+    Returns:
+        Integer state labels indexed to ``data.index[1:]``.
+    """
+    if n_states < 2:
+        raise ValueError("n_states must be at least 2.")
+    if n_iter < 1:
+        raise ValueError("n_iter must be at least 1.")
+
+    try:
+        from hmmlearn.hmm import (  # type: ignore[import-not-found, import-untyped]
+            GaussianHMM,
+        )
+    except ImportError as exc:
+        raise ImportError(
+            "hmm_states requires hmmlearn. Install haymaker with its research "
+            "dependencies or install hmmlearn directly."
+        ) from exc
+
+    if features is None:
+        from .data import PRICE_COLUMNS, prepare_bootstrap_frame
+
+        feature_frame = prepare_bootstrap_frame(data)[list(PRICE_COLUMNS)]
+    else:
+        feature_frame = features.copy()
+
+    feature_frame = feature_frame.dropna()
+    if len(feature_frame) < n_states:
+        raise ValueError("features must contain at least n_states non-null rows.")
+
+    model = GaussianHMM(
+        n_components=n_states,
+        covariance_type=covariance_type,
+        n_iter=n_iter,
+        random_state=random_state,
+    )
+    labels = model.fit(feature_frame.to_numpy()).predict(feature_frame.to_numpy())
+    return pd.Series(labels, index=feature_frame.index, name="hmm_state")
 
 
 def trend_states(data: pd.DataFrame, *, window: int = 50) -> pd.Series:
