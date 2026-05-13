@@ -99,14 +99,15 @@ def no_stop(
     (and optionally a ``close_blip`` column).
 
     Dispatch precedence:
-    1. ``position`` column – used directly.
-    2. ``blip`` column    – treated as generated events, shifted by 1 bar,
-       then converted to a position series.
-    3. Neither present    – raises :exc:`ValueError`.
+
+    - ``position`` column: used directly.
+    - ``blip`` column: treated as generated events and converted to a
+      next-bar position series.
+    - Neither present: raises :exc:`ValueError`.
 
     Args:
-        df:           Input DataFrame.  Must contain ``price_column`` and either
-                      ``position`` or ``blip``.
+        df: Input DataFrame. Must contain ``price_column`` and either
+            ``position`` or ``blip``.
         price_column: Column used for execution prices and mark-to-market.
 
     Returns:

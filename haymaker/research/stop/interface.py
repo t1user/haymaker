@@ -340,95 +340,57 @@ def stop_loss(
     implementation.
 
     Args:
-    -----
-    df:
-        Input dataframe. It must contain:
+        df: Input dataframe. It must contain ``high`` and ``low`` price
+            columns and either ``position`` or ``blip`` as the strategy input.
+            If both ``position`` and ``blip`` are present, ``position`` takes
+            precedence. If ``blip`` is given, ``close_blip`` may also be
+            provided. Then ``blip`` is used to open positions and
+            ``close_blip`` to close them. If only ``blip`` is given, it is used
+            for both open and close decisions. In this case, if there is an
+            existing position, ``blip`` in the opposite direction closes the
+            existing position without opening an opposing one.
+        distance: Desired stop-loss distance. This may be a scalar or a
+            ``pd.Series`` with one value for every bar. ``distance`` must
+            already be expressed in the same price units as the prices in
+            ``df``. This function does not rescale it. If provided as a
+            ``pd.Series``, it must already have the same index as ``df``; this
+            function does not align, upsample, or forward-fill distance values.
+        mode: Stop-loss type to apply. Allowed values are ``"fixed"`` and
+            ``"trail"``.
+        tp_multiple: Optional take-profit distance expressed as a multiple of
+            ``distance``. For example, if ``tp_multiple=3``, then the
+            take-profit trigger is placed at ``3 * distance`` from entry. If
+            zero, no take-profit is used.
+        adjust: Optional stop-adjustment specification as
+            ``(mode, trigger_multiple, adjusted_distance_multiple)``. This
+            allows an initial stop to be replaced by another stop definition
+            after the trade has moved sufficiently in favor.
+        time_stop: Optional time-based exit. If greater than zero, the
+            position is closed at ``price_column`` after the specified number
+            of processed bars.
+        scheduled_close: Optional scheduled flattening instruction. If given
+            as ``datetime.time`` or a tuple accepted by ``datetime.time``, any
+            existing position is closed at ``price_column`` on matching index
+            times. Naive times match the index's local wall-clock time.
+            Timezone-aware times require a timezone-aware index and match after
+            converting the index to the supplied time's timezone. If given as
+            ``BeforeClose`` through the ``before_close(...)`` helper, the mask
+            is built lazily from ``df.index``. If given as a ``pd.Series``, it
+            must be a same-index boolean mask. Scheduled closes are
+            execution-time events: they are not shifted. They close existing
+            positions, suppress new opens on the same bar, and are reported as
+            ``close_price``.
+        price_column: Name of the column containing the price at which
+            non-stopped and time-stopped transactions are executed. In the most
+            common use case this is ``"open"``, meaning that a bar's decision
+            is acted upon at the next bar's open once the relevant signal is
+            already known.
+        use_numba: If ``True``, run the stop engine through the Numba
+            implementation. If ``False``, use the reference Python
+            implementation. Both paths are intended to produce identical
+            results.
 
-        - ``high`` and ``low`` price columns for each processed bar
-        - either ``position`` or ``blip`` as the strategy input
-
-        If both ``position`` and ``blip`` are present, ``position``
-        takes precedence.
-
-        If ``blip`` is given, ``close_blip`` may also be provided.
-        Then ``blip`` is used to open positions and ``close_blip`` to
-        close them. If only ``blip`` is given, it is used for both open
-        and close decisions. In this case, if there is an existing position,
-        ``blip`` in the opposite direction closes existing position without
-        openning an opposing one.
-
-        ``position`` is the desired position before the stop loss is applied.
-        This function will return the position after the stop loss is applied.
-
-    distance:
-        Desired stop-loss distance. This may be:
-
-        - a scalar, if distance is the same at all time points
-        - a ``pd.Series``, to provide a different value for every bar
-
-        ``distance`` must already be expressed in the same price units
-        as the prices in ``df``. This function does not rescale it. If
-        provided as a ``pd.Series``, it must already have the same index
-        as ``df``; this function does not align, upsample, or forward-fill
-        distance values.
-
-    mode:
-        Stop-loss type to apply. Allowed values are ``"fixed"`` and
-        ``"trail"``.
-
-    tp_multiple:
-        Optional take-profit distance expressed as a multiple of
-        ``distance``. For example, if ``tp_multiple=3``, then the
-        take-profit trigger is placed at ``3 * distance`` from entry.
-        If zero, no take-profit is used.
-
-    adjust:
-        Optional stop-adjustment specification as a tuple:
-
-        - ``adjust[0]``: stop-loss type to adjust to, ``"fixed"`` or
-          ``"trail"``
-        - ``adjust[1]``: trigger distance from entry, expressed as a
-          multiple of the original stop distance
-        - ``adjust[2]``: adjusted stop distance, expressed as a
-          multiple of the original stop distance
-
-        This allows an initial stop to be replaced by another stop
-        definition after the trade has moved sufficiently in favor.
-
-    time_stop:
-        Optional time-based exit. If greater than zero, the position is
-        closed at ``price_column`` after the specified number of
-        processed bars.
-
-    scheduled_close:
-        Optional scheduled flattening instruction. If given as
-        ``datetime.time`` or a tuple accepted by ``datetime.time``, any
-        existing position is closed at ``price_column`` on matching
-        index times. Naive times match the index's local wall-clock
-        time. Timezone-aware times require a timezone-aware index and
-        match after converting the index to the supplied time's
-        timezone. If given as ``BeforeClose`` through the
-        ``before_close(...)`` helper, the mask is built lazily from
-        ``df.index``. If given as a ``pd.Series``, it must be a
-        same-index boolean mask. Scheduled closes are execution-time
-        events: they are not shifted. They close existing positions,
-        suppress new opens on the same bar, and are reported as
-        ``close_price``.
-
-    price_column:
-        Name of the column containing the price at which non-stopped
-        and time-stopped transactions are executed. In the most common
-        use case this is ``"open"``, meaning that a bar's decision is
-        acted upon at the next bar's open once the relevant signal is
-        already known.
-
-    use_numba:
-        If ``True``, run the stop engine through the Numba
-        implementation. If ``False``, use the reference Python
-        implementation. Both paths are intended to produce identical
-        results.
-
-    Important timing note:
+    Notes:
         ``blip`` is a generated event. It must be recorded on the bar
         where the information first becomes known, not pre-shifted to
         the execution bar. This function converts generated blips into
@@ -445,8 +407,6 @@ def stop_loss(
         acted on it. Future leakage invalidates research results.
 
     Returns:
-    --------
-    pd.DataFrame
         Dataframe with columns:
 
         - ``position``: resulting position after transactions on the bar
@@ -454,6 +414,8 @@ def stop_loss(
         - ``close_price``: signed price of a normal close transaction
         - ``stop_price``: signed price of a stop/take-profit/time-stop
           transaction
+        - ``bar_price``: unsigned bar price used by ``perf`` for
+          mark-to-market
 
         Prices are signed by trade direction to remain consistent with
         downstream research code.

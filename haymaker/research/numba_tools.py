@@ -305,6 +305,21 @@ def volume_grouper(
     field: str = "volume",
     label: Literal["left", "right"] = "left",
 ) -> pd.DataFrame:
+    """Group OHLC bars until cumulative volume reaches ``target``.
+
+    Args:
+        df: Source dataframe with ``open``, ``high``, ``low``, ``close``, and
+            the selected volume ``field``. ``barCount`` is summed when present;
+            other columns are carried forward with their last value in each
+            group.
+        target: Volume threshold for each generated group.
+        field: Column used as the cumulative grouping quantity.
+        label: Timestamp label for grouped bars. ``"left"`` uses the first
+            source timestamp in the group; ``"right"`` uses the last.
+
+    Returns:
+        Grouped OHLC dataframe indexed by the selected group label.
+    """
     if not set(["open", "high", "low", "close", field]).issubset(set(df.columns)):
         raise ValueError(
             f"df must have all of the columns: 'open', 'high', 'low',"

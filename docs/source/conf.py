@@ -27,11 +27,11 @@ extensions = [
     "sphinx.ext.intersphinx",  # Refer to other projects docs
     "sphinxarg.ext",  # Support for argparse
     "sphinx.ext.autosectionlabel",  # Refer to sections using their title
-    "sphinxarg.ext",  # Support for argparse
 ]
 
 templates_path = ["_templates"]
 exclude_patterns: list[str] = []
+autosectionlabel_prefix_document = True
 
 
 # -- Options for HTML output -------------------------------------------------

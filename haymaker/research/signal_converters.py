@@ -58,23 +58,19 @@ def sig_blip(
     clip: bool = True,
     side: Optional[Literal["open", "close"]] = None,
 ) -> pd.Series:
-    """
-    Signal to blip converter.
+    """Convert a stateful signal series to sparse blip events.
 
     Args:
-    -----
+        signal: Desired strategy state indexed by bar.
+        clip: If ``True``, clip generated blips to ``-1``/``0``/``1``.
+            If ``False``, direct reversals in always-in-market systems may
+            produce ``-2`` or ``2``.
+        side: Optional side filter. ``"open"`` keeps only opening events,
+            ``"close"`` keeps only closing events, and ``None`` keeps all
+            events.
 
-    clip: determines behaviour for 'always-in-the-market' systems;
-    False - resulting blips will be -2 or 2 when signal is reversed,
-    True - resulting blips will be -1 or 1, i.e. it will be impossible
-    to determine from the blips that the system is reversing position
-    rather than closing it, user must account for it otherwise;
-
-    side: 'open' or 'close' will filter resulting blips to include
-    only the desired side; any other value ignored, i.e. all blips
-    will be included;
-
-    NOT TESTED
+    Returns:
+        Sparse blip series indexed like ``signal``.
     """
     if signal.isna().any():
         raise ValueError("signal series must not have any n/a values")
@@ -150,26 +146,26 @@ def sig_pos(signal: pd.Series) -> pd.Series:
 
 
 def blip_sig(blip: Union[pd.Series, pd.DataFrame], always_on=True) -> pd.Series:
-    """
-    Blip to stateful signal converter. Numba optimized.
+    """Convert sparse blip events to a stateful signal series.
 
     This does not produce an executable position. It produces the same-row
     desired state implied by generated blips. To backtest without stops, use
     the blip-aware ``no_stop`` path or apply the proper next-bar timing
     conversion after any frequency alignment.
 
-    Parameters:
-    ----------
-    blip:
-        if pd.Series - the series represents both open and close signals
+    Args:
+        blip: Sparse blip input. If a ``pd.Series`` is given, the same series
+            represents both open and close events. If a ``pd.DataFrame`` is
+            given, the first column is used for open events and the second
+            column is used for close events. In the dataframe case, open blips
+            are ignored while a position is active; only ``close_blip`` can
+            close an existing position.
+        always_on: Relevant only for ``pd.Series`` input. If ``True``, an
+            opposite blip reverses the desired state immediately. If ``False``,
+            an opposite blip first moves the desired state to flat.
 
-        if pd.DataFrame - first column is open signals, second column is close signals;
-        in this case, where there is an active position, ``blip`` signals are ignored.
-        Only ``close_blip`` can close an existing position.
-
-    always_on:
-        relevant only if blip is a Series;
-        if True - close ``blip`` is simultanously an open blip for a reverse position.
+    Returns:
+        Stateful signal series indexed like ``blip``.
     """
 
     def verify(series: pd.Series) -> None:
