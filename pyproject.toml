@@ -63,16 +63,21 @@ notebook = [
   "hmmlearn==0.3.3",
 ]
 
-all = ["haymaker[dev,notebook]"]
+dashboard = [
+  "streamlit",
+]
 
-[tool.setuptools]
-packages = ["haymaker"]
+all = ["haymaker[dev,notebook,dashboard]"]
+
+[tool.setuptools.packages.find]
+include = ["haymaker*", "dashboard*"]
 
 [project.urls]
 Repository = "https://github.com/t1user/haymaker"
 
 [project.scripts]
 dataloader = "haymaker.dataloader.dataloader:start"
+haymaker-dashboard = "dashboard.cli:main"
 
 [tool.setuptools_scm]
 version_file = "haymaker/_version.py"
@@ -89,6 +94,14 @@ disable_error_code = ["return"]
 [[tool.mypy.overrides]]
 ignore_errors = true
 module = "backtester"
+
+[[tool.mypy.overrides]]
+ignore_missing_imports = true
+module = ["streamlit", "streamlit.*"]
+
+[[tool.mypy.overrides]]
+ignore_missing_imports = true
+module = ["arch.bootstrap"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
