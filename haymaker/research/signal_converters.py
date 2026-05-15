@@ -26,7 +26,8 @@ the indicator
 
 signal - usually based on an indicator; at every bar shows where the
 strategy wants to be after seeing that bar. A signal is generated on
-that bar and is not itself an executable position.
+that bar and is not itself an executable position. The earlies it can 
+be executed is on the next bar. 
 
 blip - a sparse event recorded on the bar where the strategy learns
 that it wants to execute a trade. It is not immediately actionable;
