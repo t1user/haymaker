@@ -1,7 +1,8 @@
 import logging
 from functools import cache
 
-import pymongo  # type: ignore
+from pymongo import MongoClient  # type: ignore
+from pymongo.errors import ConfigurationError  # type: ignore
 
 from .config import CONFIG
 
@@ -15,12 +16,12 @@ HEALTH_CHECK_OBSERVABLES = []
 
 
 @cache
-def get_mongo_client() -> pymongo.MongoClient:
+def get_mongo_client() -> MongoClient:
     try:
-        client = pymongo.MongoClient(**MONGODB_CONFIG)
+        client = MongoClient(**MONGODB_CONFIG)
         client.admin.command("ping")
         log.debug(f"Started mongodb with parameters: {MONGODB_CONFIG}")
-    except pymongo.errors.ConfigurationError:
+    except ConfigurationError:
         log.critical(f"Wrong mongodb parameters: {MONGODB_CONFIG}")
         raise
     except Exception as e:
