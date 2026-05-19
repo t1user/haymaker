@@ -192,7 +192,10 @@ class App:
             await asyncio.sleep(5)
         log.debug("Probe successful. Will run controller...")
         try:
-            await CONTROLLER.run()
+            controller_started = await CONTROLLER.run()
+            if not controller_started:
+                log.critical("Controller did not start; jobs will not be started.")
+                return
             await self.jobs()
         except ConnectionError as ce:
             log.info(f"Connection fault: {ce}")

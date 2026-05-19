@@ -34,7 +34,6 @@ class OrderSyncStrategy:
         # Trades on record that we cannot resolve with IB
         self.errors: list[ibi.Trade] = []  # <- We're potentially fucked
         self._issues: list[int] = []  # done orders for double checking
-        self.is_ok: bool = True
 
     @classmethod
     def run(cls, ib: ibi.IB, sm: StateMachine) -> Self:
@@ -431,6 +430,8 @@ class OrderReconciliationSync:
             for strategy_str in ERROR_STRATEGIES:
                 strategy = self.ct.sm.strategy[strategy_str]
                 if non_cancelling_positions.get(strategy.active_contract):
+                    if not self.ct.can_emergency_close_strategy(strategy):
+                        continue
                     log.error(
                         f"Closing positions for strategy with missing bracket: "
                         f"{strategy.strategy}"

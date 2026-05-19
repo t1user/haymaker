@@ -15,7 +15,7 @@ import ib_insync as ibi
 from haymaker import misc
 from haymaker.base import Atom
 from haymaker.state_machine import OrderInfo, Strategy
-from haymaker.trader import FakeTrader, Trader
+from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
 from .sync_routines import (
@@ -36,6 +36,14 @@ class ControllerError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class SyncResult:
+    """Outcome of broker/local synchronization."""
+
+    ok: bool
+    reason: str = "ok"
+
+
 @dataclass
 class Controller(Atom):
     """
@@ -53,12 +61,14 @@ class Controller(Atom):
     zero: bool = False
     nuke: bool = False
     cancel_stray_orders: bool = True
+    cancel_unknown_trades: bool = True
     log_order_events: bool = False
     sync_frequency: int = 0
     health_check_frequency: int = 0
     execution_verification_delay: int = 0
     execution_verification_max_retries: int = 5
     handle_missing_brackets: str = "remove"
+    broker_request_timeout: int = 10
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
@@ -71,6 +81,7 @@ class Controller(Atom):
     )
     _health_check_triggers: list[str] = field(default_factory=list, repr=False)
     _new_position_lock: bool = False
+    _trading_disabled: bool = False
 
     @classmethod
     def from_config(
@@ -192,7 +203,7 @@ class Controller(Atom):
     def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
         self.no_future_roll_strategies.extend(strategies)
 
-    async def run(self) -> None:
+    async def run(self) -> bool:
         """
         Main entry point into the programme.  Ensure records up to
         date and any remaining initialization complete.
@@ -213,7 +224,13 @@ class Controller(Atom):
                 log.exception(e)
 
         log.debug("Will sync...")
-        await self.sync()
+        sync_result = await self.sync()
+        if not sync_result.ok:
+            log.critical(
+                f"Controller startup sync failed: {sync_result.reason}. "
+                "Trading remains disabled."
+            )
+            return False
         log.debug("Sync completed.")
 
         if self.zero:
@@ -229,8 +246,9 @@ class Controller(Atom):
 
         log.debug("Controller run sequence completed successfully.")
         # now Streamers will run
+        return True
 
-    def roll_futures(self, *args):
+    def roll_futures(self, *args) -> None:
         """
         This method is scheduled to run once a day in :class:`.app.App`
         """
@@ -238,38 +256,119 @@ class Controller(Atom):
         roller = FutureRoller(self)
         roller.roll()
 
-    async def sync(self, *args) -> None:
-        if self.ib.isConnected():
-            log.debug("--- Sync ---")
-            positions = {
-                p.contract.localSymbol: p.position for p in self.ib.positions()
-            }
-            req_positions = {
-                p.contract.localSymbol: p.position
-                for p in await self.ib.reqPositionsAsync()
-                if p.position
-            }
-            if positions != req_positions:
-                log.warning(f"{positions=} {req_positions=}")
-            else:
-                log.debug(f"{positions=}")
-
-            orders_report = OrderSyncStrategy.run(self.ib, self.sm)
-            if not orders_report.is_ok:
-                log.debug("Order sync error, will attempt to restart.")
-                self.ib.disconnect()
-                return
-            # IB events will be handled so that matched trades can be sent to blotter
-            self.release_hold()
-            await self.sync_handlers.handle_orders(orders_report)
-
-            error_position_report = PositionSyncStrategy.run(self.ib, self.sm)
-            await self.sync_handlers.handle_positions(error_position_report)
-            OrderReconciliationSync.run(self)
-
-            log.debug("--- Sync completed ---")
-        else:
+    async def sync(self, *args) -> SyncResult:
+        if not self.ib.isConnected():
+            reason = "broker not connected"
+            self.disable_trading(reason)
             log.debug("No connection. Abandoning sync.")
+            return SyncResult(False, reason)
+
+        log.debug("--- Sync ---")
+
+        broker_result = await self.verify_broker_position_source()
+        if not broker_result.ok:
+            return broker_result
+
+        orders_report = OrderSyncStrategy.run(self.ib, self.sm)
+        order_result = await self.handle_order_sync(orders_report)
+        if not order_result.ok:
+            return order_result
+
+        position_result = await self.check_and_repair_positions()
+        if not position_result.ok:
+            return position_result
+
+        if self.should_skip_correction_trades(orders_report, position_result):
+            log.error(
+                "Order or position recovery happened during sync; "
+                "skipping correction trades for this sync cycle."
+            )
+            log.debug("--- Sync completed ---")
+            return SyncResult(True, "recovery completed")
+
+        OrderReconciliationSync.run(self)
+
+        log.debug("--- Sync completed ---")
+        return SyncResult(True)
+
+    async def verify_broker_position_source(self) -> SyncResult:
+        positions = {p.contract.localSymbol: p.position for p in self.ib.positions()}
+        try:
+            req_positions_response = await asyncio.wait_for(
+                self.ib.reqPositionsAsync(), self.broker_request_timeout
+            )
+        except asyncio.TimeoutError:
+            reason = (
+                "broker position request timed out "
+                f"after {self.broker_request_timeout}s"
+            )
+            self.disable_trading(reason)
+            return SyncResult(False, reason)
+        except Exception as e:
+            reason = f"broker position request failed: {e!r}"
+            self.disable_trading(reason)
+            return SyncResult(False, reason)
+
+        req_positions = {
+            p.contract.localSymbol: p.position
+            for p in req_positions_response
+            if p.position
+        }
+        if positions != req_positions:
+            reason = f"broker position sources disagree: {positions=} {req_positions=}"
+            self.disable_trading(reason)
+            return SyncResult(False, reason)
+
+        log.debug(f"{positions=}")
+        return SyncResult(True)
+
+    async def handle_order_sync(self, orders_report: OrderSyncStrategy) -> SyncResult:
+        self.handle_unknown_broker_orders(orders_report.unknown)
+
+        # IB events will be handled so that matched trades can be sent to blotter.
+        self.release_hold()
+        await self.sync_handlers.handle_orders(orders_report)
+        return SyncResult(True)
+
+    def handle_unknown_broker_orders(self, trades: list[ibi.Trade]) -> None:
+        if not trades:
+            return
+
+        log.critical(f"Unknown broker orders during sync: {trades}.")
+        if not self.cancel_unknown_trades:
+            log.critical(
+                "Unknown broker orders left active because "
+                "cancel_unknown_trades is False."
+            )
+            return
+
+        for trade in trades:
+            self.cancel(trade)
+
+    async def check_and_repair_positions(self) -> SyncResult:
+        position_report = PositionSyncStrategy.run(self.ib, self.sm)
+        if not position_report.errors:
+            return SyncResult(True)
+
+        await self.sync_handlers.handle_positions(position_report)
+
+        recheck = PositionSyncStrategy.run(self.ib, self.sm)
+        if recheck.errors:
+            reason = "local state does not match broker state"
+            self.disable_trading(reason)
+            return SyncResult(False, reason)
+
+        return SyncResult(True, "position records repaired")
+
+    def should_skip_correction_trades(
+        self, orders_report: OrderSyncStrategy, position_result: SyncResult
+    ) -> bool:
+        return bool(
+            orders_report.unknown
+            or orders_report.done
+            or orders_report.errors
+            or position_result.reason != "ok"
+        )
 
     def onStart(self, data, *args) -> None:
         # prevent superclass from setting attributes here
@@ -301,6 +400,14 @@ class Controller(Atom):
         action: str,
         params: dict,
     ) -> ibi.Trade | None:
+        if self._trading_disabled:
+            log.debug(
+                f"Trade suppressed because trading is disabled: "
+                f"{strategy_str} {action} {order.orderType} {order.action} "
+                f"{order.totalQuantity} {contract.localSymbol or contract.symbol}"
+            )
+            return None
+
         # this will return False if order for the strategy has been repeatedly rejected
         if action == "OPEN" and self._new_position_lock:
             log.debug(
@@ -409,30 +516,44 @@ class Controller(Atom):
     ) -> None:
         strategy_str = strategy.strategy
         try:
+            if self.sm.execution_already_accounted(trade, fill):
+                log.debug(
+                    f"Skipping already accounted execution for orderId: "
+                    f"{trade.order.orderId} permId: {trade.order.permId} "
+                    f"execId: {self.sm.execution_key(trade, fill)} "
+                    f"strategy: {strategy_str}"
+                )
+                return
+
             if isinstance(trade.contract, ibi.Bag):
                 log.debug(
                     f"Combo trade registered for: {trade.contract.symbol}, "
                     f"position kept unchanged at: {strategy.position}"
                 )
-            elif fill.execution.side == "BOT":
-                strategy.position += fill.execution.shares
+                self.sm.mark_execution_accounted(trade, fill)
+                return
+
+            if fill.execution.side not in {"BOT", "SLD"}:
+                log.critical(
+                    f"Abiguous fill: {fill} for order: {trade.order} for "
+                    f"{trade.contract.localSymbol} strategy: {strategy}"
+                )
+                return
+
+            strategy.apply_fill(fill)
+            if fill.execution.side == "BOT":
                 log.debug(
                     f"Registered position - orderId: {trade.order.orderId} permId: "
                     f"{trade.order.permId} BUY {trade.order.orderType} "
                     f"for {strategy_str} --> position: {strategy.position} "
                 )
             elif fill.execution.side == "SLD":
-                strategy.position -= fill.execution.shares
                 log.debug(
                     f"Registered position - orderId {trade.order.orderId} permId: "
                     f"{trade.order.permId} SELL {trade.order.orderType} "
                     f"for {strategy_str} --> position: {strategy.position}"
                 )
-            else:
-                log.critical(
-                    f"Abiguous fill: {fill} for order: {trade.order} for "
-                    f"{trade.contract.localSymbol} strategy: {strategy}"
-                )
+            self.sm.mark_execution_accounted(trade, fill)
         except Exception as e:
             log.exception(e)
 
@@ -657,6 +778,74 @@ class Controller(Atom):
                 ),
             )
 
+    def can_emergency_close_strategy(self, strategy: Strategy) -> bool:
+        """Return True if broker state confirms an unprotected position."""
+        if self._trading_disabled:
+            log.debug(
+                f"Emergency close suppressed because trading is disabled: "
+                f"{strategy.strategy}"
+            )
+            return False
+
+        contract = strategy.active_contract
+        broker_position = self.trader.position_for_contract(contract)
+        if not broker_position:
+            log.error(
+                f"Emergency close suppressed for {strategy.strategy}: "
+                f"broker reports no position for {contract.localSymbol}."
+            )
+            return False
+
+        strategies = self.sm.for_contract.get(contract) or []
+        if len(strategies) != 1:
+            log.error(
+                f"Emergency close suppressed for {strategy.strategy}: "
+                f"contract {contract.localSymbol} is shared by strategies "
+                f"{strategies}."
+            )
+            return False
+
+        if self._broker_position_is_protected(contract, broker_position):
+            log.error(
+                f"Emergency close suppressed for {strategy.strategy}: "
+                f"broker position for {contract.localSymbol} appears protected."
+            )
+            return False
+
+        return True
+
+    def _broker_position_is_protected(
+        self, contract: ibi.Contract, broker_position: float
+    ) -> bool:
+        """Return True if broker has enough opposite-side stop protection."""
+        protective_action = "SELL" if broker_position > 0 else "BUY"
+        protective_order_types = {
+            "STP",
+            "STP LMT",
+            "TRAIL",
+            "TRAIL LIMIT",
+            "TRAILLIT",
+            "TRAIL LIT",
+            "TRAILLMT",
+            "TRAIL LMT",
+        }
+        protective_quantity = sum(
+            trade.order.totalQuantity
+            for trade in self.trader.trades_for_contract(contract)
+            if (
+                trade.isActive()
+                and trade.order.action == protective_action
+                and trade.order.orderType in protective_order_types
+            )
+        )
+        return protective_quantity >= abs(broker_position)
+
+    def disable_trading(self, reason: str) -> None:
+        """Disable future outbound orders from normal controller flow."""
+        if not self._trading_disabled:
+            self._trading_disabled = True
+            log.critical(f"Trading disabled: {reason}")
+
     def lock_new_positions(self):
         """
         No new positions will be opened from now on.  Emergency
@@ -801,10 +990,9 @@ class Controller(Atom):
 
         ---> Currently not in use. <---
         """
-        # this will ignore any further orders coming from the system
-        self.trader = FakeTrader(self.ib)
         self.ib.reqGlobalCancel()
         self.close_positions()
+        self.disable_trading("self nuke requested")
 
         log.critical("Self nuked!!!!! No more trades will be executed until restart.")
 

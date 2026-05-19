@@ -48,6 +48,31 @@ def test_OrderInfo_iterator():
         assert i == j
 
 
+def test_OrderInfo_decodes_old_record_without_accounted_exec_ids():
+    trade = ibi.Trade()
+    order_info = OrderInfo.from_dict(
+        {
+            "strategy": "coolstrategy",
+            "action": "OPEN",
+            "trade": trade,
+            "params": {},
+            "active": True,
+            "priority": 0,
+        }
+    )
+
+    assert order_info.accounted_exec_ids == []
+
+
+def test_OrderInfo_encode_includes_accounted_exec_ids():
+    trade = ibi.Trade(order=ibi.Order(orderId=1))
+    order_info = OrderInfo(
+        "coolstrategy", "OPEN", trade, {}, accounted_exec_ids=["exec-1"]
+    )
+
+    assert order_info.encode()["accounted_exec_ids"] == ["exec-1"]
+
+
 def test_OrderInfo_not_active():
     trade1 = ibi.Trade(orderStatus=ibi.OrderStatus(orderId=2, status="Filled"))
     o1 = OrderInfo("coolstrategy", "STOP", trade1, None)
@@ -238,6 +263,18 @@ def test_OrderContainer_default_in_get_works_if_active_only_not_found(order_save
     orders[1] = o1
     orders[2] = o2
     assert orders.get(2, "Not Found", active_only=True) == "Not Found"
+
+
+def test_update_trade_preserves_accounted_exec_ids(state_machine, trade):
+    order_info = OrderInfo(
+        "coolstrategy", "OPEN", ibi.Trade(order=ibi.Order(orderId=55308)), {}
+    )
+    order_info.accounted_exec_ids.append("exec-1")
+    state_machine.order[55308] = order_info
+
+    state_machine.update_trade(trade)
+
+    assert state_machine.order[55308].accounted_exec_ids == ["exec-1"]
 
 
 def test_Strategy_default_dict_not_shared_among_instances(strategy_saver):

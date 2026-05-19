@@ -5,7 +5,7 @@ import datetime as dt
 import logging
 from collections import UserDict, defaultdict
 from copy import deepcopy
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from typing import Any, Iterator, TypeVar
 
 import eventkit as ev  # type: ignore
@@ -32,6 +32,7 @@ class OrderInfo:
     action: str
     trade: ibi.Trade
     params: dict = field(default_factory=dict)
+    accounted_exec_ids: list[str] = field(default_factory=list)
 
     @property
     def active(self) -> bool:
@@ -48,8 +49,11 @@ class OrderInfo:
         )
 
     def __iter__(self) -> Iterator[Any]:
-        for f in (*(x.name for x in fields(self)), "active"):
-            yield getattr(self, f)
+        yield self.strategy
+        yield self.action
+        yield self.trade
+        yield self.params
+        yield self.active
 
     def encode(self) -> dict[str, Any]:
         return {
@@ -70,7 +74,9 @@ class OrderInfo:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> OrderInfo:
-        return cls(**cls._clear_keys(data))
+        clear_data = cls._clear_keys(data)
+        clear_data.setdefault("accounted_exec_ids", [])
+        return cls(**clear_data)
 
     @classmethod
     def from_trade(cls, trade: ibi.Trade) -> OrderInfo:
@@ -210,6 +216,15 @@ class Strategy(UserDict):
     @property
     def active(self) -> bool:
         return self["position"] != 0
+
+    def apply_fill(self, fill: ibi.Fill) -> None:
+        """Apply a broker execution fill to this strategy's local position."""
+        if fill.execution.side == "BOT":
+            self.position += fill.execution.shares
+        elif fill.execution.side == "SLD":
+            self.position -= fill.execution.shares
+        else:
+            raise ValueError(f"Ambiguous fill side: {fill.execution.side}")
 
     def __setattr__(self, key, item):
         if key in {"data", "strategyChangeEvent"}:
@@ -429,7 +444,13 @@ class StateMachine:
                 f"Trade will be updated - id: {oi.trade.order.orderId} "
                 f"permId: {oi.trade.order.permId}"
             )
-            new_oi = OrderInfo(oi.strategy, oi.action, trade, oi.params)
+            new_oi = OrderInfo(
+                oi.strategy,
+                oi.action,
+                trade,
+                oi.params,
+                list(oi.accounted_exec_ids),
+            )
             self.save_order(new_oi)
             return None
         # trade object exists and is the same as in the records
@@ -465,6 +486,36 @@ class StateMachine:
         except Exception as e:
             log.exception(e)
         return order_info
+
+    def execution_key(self, trade: ibi.Trade, fill: ibi.Fill) -> str:
+        """Return stable key identifying a broker execution fill."""
+        if exec_id := fill.execution.execId:
+            return exec_id
+
+        execution = fill.execution
+        time = execution.time.isoformat() if execution.time else ""
+        return (
+            f"{trade.order.permId}:{trade.order.orderId}:"
+            f"{time}:{execution.side}:{execution.shares}:{execution.price}"
+        )
+
+    def execution_already_accounted(self, trade: ibi.Trade, fill: ibi.Fill) -> bool:
+        """Return True if this execution already changed local position."""
+        order_info = self.order.get(trade.order.orderId)
+        if not order_info:
+            return False
+        return self.execution_key(trade, fill) in order_info.accounted_exec_ids
+
+    def mark_execution_accounted(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
+        """Record that this execution has changed local position."""
+        order_info = self.order.get(trade.order.orderId)
+        if not order_info:
+            return
+
+        exec_key = self.execution_key(trade, fill)
+        if exec_key not in order_info.accounted_exec_ids:
+            order_info.accounted_exec_ids.append(exec_key)
+            self.save_order(order_info)
 
     # ### data access and modification methods ###
 

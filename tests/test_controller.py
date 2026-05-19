@@ -1,11 +1,15 @@
+import asyncio
 import random
+from copy import deepcopy
 from itertools import count
 
 import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.controller import Controller
+from haymaker.controller.controller import Controller, SyncResult
+from haymaker.controller.sync_routines import OrderSyncStrategy
+from haymaker.state_machine import OrderInfo
 from haymaker.trader import Trader
 
 # from haymaker.manager import IB
@@ -112,6 +116,146 @@ async def test_StateMachine_linked_to_ib_newOrderEvent(caplog, Atom):
     controller = Controller(Trader(Atom.ib))  # noqa
     Atom.ib.newOrderEvent.emit(ibi.Trade(order=ibi.Order(orderId=123, permId=45678)))
     assert await wait_for_condition(lambda: "123" in caplog.text)
+
+
+def test_register_position_skips_already_accounted_execution(controller, trade):
+    strategy = controller.sm.strategy["coolstrategy"]
+    controller.sm.order[trade.order.orderId] = OrderInfo(
+        "coolstrategy", "OPEN", trade, {}
+    )
+
+    controller.register_position(strategy, trade, trade.fills[0])
+    controller.register_position(strategy, trade, trade.fills[0])
+
+    assert strategy.position == 1
+    assert controller.sm.order[trade.order.orderId].accounted_exec_ids == [
+        trade.fills[0].execution.execId
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sync_timeout_disables_trading(controller, monkeypatch):
+    async def pending_positions():
+        await asyncio.sleep(1)
+        return []
+
+    controller.broker_request_timeout = 0.01
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", pending_positions)
+
+    result = await controller.sync()
+
+    assert not result.ok
+    assert controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_broker_position_source_disagreement_disables_trading(
+    controller, trade, monkeypatch
+):
+    position = ibi.Position(
+        account="DU123",
+        contract=trade.contract,
+        position=1,
+        avgCost=1,
+    )
+
+    async def requested_positions():
+        return []
+
+    monkeypatch.setattr(controller.ib, "positions", lambda: [position])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+
+    result = await controller.verify_broker_position_source()
+
+    assert not result.ok
+    assert controller._trading_disabled
+
+
+def test_disabled_trading_does_not_register_order(controller, trade, monkeypatch):
+    called = False
+
+    def fake_trade(contract, order):
+        nonlocal called
+        called = True
+        return trade
+
+    controller.disable_trading("test")
+    monkeypatch.setattr(controller.trader, "trade", fake_trade)
+
+    result = controller.trade(
+        "coolstrategy",
+        trade.contract,
+        ibi.MarketOrder("BUY", 1),
+        "OPEN",
+        {},
+    )
+
+    assert result is None
+    assert not called
+    assert list(controller.sm.order.values()) == []
+
+
+def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
+    controller, trade, monkeypatch
+):
+    cancelled = []
+
+    def fake_cancel(received_trade):
+        cancelled.append(received_trade)
+
+    monkeypatch.setattr(controller, "cancel", fake_cancel)
+
+    controller.handle_unknown_broker_orders([trade])
+
+    assert cancelled == [trade]
+    assert not controller._trading_disabled
+
+
+def test_unknown_broker_orders_can_be_left_active_by_config(
+    controller, trade, monkeypatch
+):
+    cancelled = []
+
+    def fake_cancel(received_trade):
+        cancelled.append(received_trade)
+
+    controller.cancel_unknown_trades = False
+    monkeypatch.setattr(controller, "cancel", fake_cancel)
+
+    controller.handle_unknown_broker_orders([trade])
+
+    assert cancelled == []
+    assert not controller._trading_disabled
+
+
+def test_unknown_broker_orders_skip_correction_trades(controller, trade):
+    report = OrderSyncStrategy(controller.ib, controller.sm)
+    report.unknown.append(trade)
+
+    assert controller.should_skip_correction_trades(report, SyncResult(True))
+
+
+def test_emergency_close_blocked_when_broker_position_protected(
+    controller, trade, monkeypatch
+):
+    strategy = controller.sm.strategy["coolstrategy"]
+    strategy.position = 1
+    strategy.active_contract = trade.contract
+
+    protective_trade = deepcopy(trade)
+    protective_trade.order = ibi.Order(
+        action="SELL", totalQuantity=1, orderType="TRAIL"
+    )
+    protective_trade.orderStatus = ibi.OrderStatus(status="Submitted")
+
+    monkeypatch.setattr(controller.trader, "position_for_contract", lambda contract: 1)
+    monkeypatch.setattr(
+        controller.trader, "trades_for_contract", lambda contract: [protective_trade]
+    )
+
+    assert not controller.can_emergency_close_strategy(strategy)
 
 
 # def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):
