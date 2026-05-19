@@ -3,13 +3,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from functools import partial
 from typing import TYPE_CHECKING, Self
 
 import ib_insync as ibi
 
 from haymaker import misc
 from haymaker.state_machine import OrderInfo, StateMachine, Strategy
+from haymaker.config import CONFIG
+
+config = CONFIG.get("sync", {})
+
+CANCEL_UNKNOWN_TRADES: bool = config.get("cancel_unknown_trades", False)
+CANCEL_STRAY_ORDERS: bool = config.get("cancel_stray_orders", False)
+HANDLE_MISSING_BRACKETS: str = config.get("handle_missing_brackets", "remove")
+
 
 if TYPE_CHECKING:
     from .controller import Controller
@@ -227,14 +234,23 @@ class PositionSyncStrategy:
         return self
 
 
-class ErrorHandlers:
-    def __init__(self, ib: ibi.IB, sm: StateMachine, ct: Controller) -> None:
+class OrderErrorHandlers:
+    def __init__(
+        self,
+        ib: ibi.IB,
+        sm: StateMachine,
+        ct: Controller,
+        faulty_trades: list[OrderInfo] | None = None,
+    ) -> None:
         self.ib = ib
         self.sm = sm
         self.controller = ct
-        self.faulty_trades: list[OrderInfo] = []
+        self.faulty_trades = faulty_trades if faulty_trades is not None else []
 
-    async def handle_orders(self, report: OrderSyncStrategy) -> None:
+    async def handle_report(self, report: OrderSyncStrategy) -> None:
+
+        self.handle_unknown_broker_orders(report.unknown)
+
         try:
             for done_trade in report.done:
                 self.report_done_trade(done_trade)
@@ -250,7 +266,68 @@ class ErrorHandlers:
 
         await asyncio.sleep(0)
 
-    async def handle_positions(self, report: PositionSyncStrategy) -> None:
+    def handle_unknown_broker_orders(self, trades: list[ibi.Trade]) -> None:
+        if not trades:
+            return
+
+        log.critical(f"Unknown broker orders during sync: {trades}.")
+        if not CANCEL_UNKNOWN_TRADES:
+            log.critical(
+                "Unknown broker orders left active because "
+                "cancel_unknown_trades is False."
+            )
+            return
+
+        for trade in trades:
+            log.debug(f"Cancelling unknown broker order: {trade.order.orderId}")
+            self.controller.cancel(trade)
+
+    def clear_error_trades(self, trades: list[ibi.Trade]) -> None:
+        """
+        Trades that we have as active but IB doesn't know about them.
+        """
+        for trade in trades:
+            log.error(
+                f"Will delete record for trade that IB doesn't known about: "
+                f"{trade.order.orderId}"
+            )
+            self.faulty_trades.append(self.sm._orders[trade.order.orderId])
+            self.sm.prune_order(trade.order.orderId)
+
+    def report_done_trade(self, trade: ibi.Trade) -> None:
+        """
+        IB events artificially emitted here will trigger saving trade
+        to blotter.
+        """
+        log.debug(
+            f"Back-reporting trade: {trade.contract.symbol} "
+            f"{trade.order.action} {misc.trade_fill_price(trade)} "
+            f"order id: {trade.order.orderId} {trade.order.permId} "
+            f"active?: {trade.isActive()}"
+        )
+        self.ib.orderStatusEvent.emit(trade)
+        for fill in trade.fills:
+            self.ib.execDetailsEvent.emit(trade, fill)
+        if trade.orderStatus.status == "Filled":
+            self.ib.commissionReportEvent.emit(
+                trade, trade.fills[-1], trade.fills[-1].commissionReport
+            )
+
+
+class PositionErrorHandlers:
+    def __init__(
+        self,
+        ib: ibi.IB,
+        sm: StateMachine,
+        ct: Controller,
+        faulty_trades: list[OrderInfo] | None = None,
+    ) -> None:
+        self.ib = ib
+        self.sm = sm
+        self.controller = ct
+        self.faulty_trades = faulty_trades if faulty_trades is not None else []
+
+    async def handle_report(self, report: PositionSyncStrategy) -> None:
         errors: dict[ibi.Contract, float] = report.errors
         if not errors:
             return
@@ -298,39 +375,8 @@ class ErrorHandlers:
                 )
             self.faulty_trades.clear()
 
-    def clear_error_trades(self, trades: list[ibi.Trade]) -> None:
-        """
-        Trades that we have as active but IB doesn't know about them.
-        """
-        for trade in trades:
-            log.error(
-                f"Will delete record for trade that IB doesn't known about: "
-                f"{trade.order.orderId}"
-            )
-            self.faulty_trades.append(self.sm._orders[trade.order.orderId])
-            self.sm.prune_order(trade.order.orderId)
-
-    def report_done_trade(self, trade: ibi.Trade) -> None:
-        """
-        IB events artificially emitted here will trigger saving trade
-        to blotter.
-        """
-        log.debug(
-            f"Back-reporting trade: {trade.contract.symbol} "
-            f"{trade.order.action} {misc.trade_fill_price(trade)} "
-            f"order id: {trade.order.orderId} {trade.order.permId} "
-            f"active?: {trade.isActive()}"
-        )
-        self.ib.orderStatusEvent.emit(trade)
-        for fill in trade.fills:
-            self.ib.execDetailsEvent.emit(trade, fill)
-        if trade.orderStatus.status == "Filled":
-            self.ib.commissionReportEvent.emit(
-                trade, trade.fills[-1], trade.fills[-1].commissionReport
-            )
-
     def __repr__(self):
-        return "ErrorHandlers()"
+        return f"{self.__class__.__name__}()"
 
 
 class OrderReconciliationSync:
@@ -344,20 +390,14 @@ class OrderReconciliationSync:
         ib: ibi.IB,
         sm: StateMachine,
         ct: Controller,
-        cancel: bool = True,
-        handle_missing_brackets: str = "ignore",
     ) -> None:
         self.ib = ib
         self.sm = sm
         self.ct = ct
-        self.cancel = cancel
-        self.handle_missing_brackets = handle_missing_brackets
 
     @classmethod
-    def run(cls, ct: Controller, cancel: bool = True) -> Self:
-        return cls(
-            ct.ib, ct.sm, ct, ct.cancel_stray_orders, ct.handle_missing_brackets
-        ).run_strategies()
+    def run(cls, ct: Controller) -> Self:
+        return cls(ct.ib, ct.sm, ct).run_strategies()
 
     def run_strategies(self) -> Self:
         for strategy_str, strategy in self.sm.strategy.items():
@@ -376,7 +416,7 @@ class OrderReconciliationSync:
         return [oi for oi in order_infos if (oi.action != "OPEN") and oi.active]
 
     def _handle_obsolete_order(self, strategy_str: str, oi: OrderInfo) -> None:
-        if self.cancel:
+        if CANCEL_STRAY_ORDERS:
             log.error(
                 f"Cancelling obsolete order: "
                 f"{strategy_str, oi.action, oi.trade.order.orderId}"
@@ -389,7 +429,7 @@ class OrderReconciliationSync:
             )
 
     def _check_brackets(self, strategy: Strategy, order_infos: list[OrderInfo]) -> None:
-        if self.handle_missing_brackets not in ["remove", "warn"]:
+        if HANDLE_MISSING_BRACKETS not in ["remove", "warn"]:
             return
 
         params = strategy.get("params")
@@ -417,7 +457,7 @@ class OrderReconciliationSync:
                 )
                 ERROR_STRATEGIES.add(strategy.strategy)
 
-        if ERROR_STRATEGIES and self.handle_missing_brackets == "remove":
+        if ERROR_STRATEGIES and HANDLE_MISSING_BRACKETS == "remove":
 
             # close positions for strategies without brackets, but
             # only if they don't cancel each other (skip cancelling strategies)
@@ -443,197 +483,3 @@ class OrderReconciliationSync:
                         strategy.strategy, "MISSING BRACKET EMERGENCY CLOSE"
                     )
             ERROR_STRATEGIES.clear()
-
-
-class Terminator:
-    """
-    Class organizing the process of cancelling all resting orders and
-    closing all positions.
-
-    First, an attempt is made to identify resting stop-losses that are
-    associated with strategies.  Those orders are cancelled but
-    corresponding identical market orders are issued associated with
-    those strategies.  The purpose of this operation is to create
-    blotter records allowing to match those closing positions with
-    their openning counterparts.
-
-    All other orders are cancelled and remaining positions closed.
-    Throughout the process records are kept to make sure no double
-    orders are issued for the same position or stop losses are not
-    executed for non-existing positions.
-    """
-
-    def __init__(self, controller: Controller) -> None:
-        log.warning("RESET initiated.")
-        self.controller = controller
-        self.in_progress_trades: list[ibi.Trade] = []
-        self.read_broker_state()
-
-    def read_broker_state(self):
-        self.trades = self.controller.ib.openTrades()
-        self.positions = self.controller.trader.positions()
-
-    async def run(self):
-        log.debug("Reset S T A G E 1: Cancel stops and send close market orders")
-        await self.cancel_orders()
-
-        log.debug("Reset S T A G E 2: Close remaining positions...")
-        await self.controller.ib.qualifyContractsAsync(*self.positions.keys())
-        await self.close_positions()
-
-        log.debug("Closing positions finished, will verify now.")
-        if unsuccessful_trades := await self.report():
-            log.debug(
-                f"These trades failed to execute: "
-                f"{[self.describe_trade(t) for t in unsuccessful_trades]}"
-            )
-            log.debug("Going nuclear...")
-            self.controller.ib.reqGlobalCancel()
-            await asyncio.sleep(3)
-            log.debug("All orders should be cancelled now.")
-            log.debug(f"Opend trades: {self.controller.ib.openTrades()}")
-            log.debug("Will run close positions.")
-            self.controller.close_positions()
-        # neccessary to make sure order cancelletions completed
-        await asyncio.sleep(1)
-        if self.verify_zero():
-            log.debug(
-                f"Closed all positions (trades in progress: {self.in_progress_trades}, "
-                f"all open trades: {self.trades})."
-            )
-        else:
-            log.critical("We are F U C K E D !")
-            # Nuke here ?
-
-    def verify_zero(self):
-        self.read_broker_state()
-        if positions := self.positions:
-            log.critical(f"Failed to close positions: {positions}")
-        if trades := self.trades:
-            log.critical(f"Failed to cancel orders: {trades}")
-        return positions or trades or True
-
-    def register_trade(self, trade: ibi.Trade) -> None:
-        self.in_progress_trades.append(trade)
-        trade.filledEvent += self.in_progress_trades.remove
-        trade.cancelledEvent += self.in_progress_trades.remove
-        trade.cancelledEvent += lambda x: log.error(f"Rejected trade: {x}")
-
-    @staticmethod
-    def describe_trade(t: ibi.Trade) -> tuple[str, str, float, int]:
-        return (
-            t.contract.symbol,
-            t.order.action,
-            t.order.totalQuantity,
-            t.order.orderId,
-        )
-
-    async def _strategy_trade(
-        self,
-        trade: ibi.Trade,
-        strategy: Strategy,
-        contract: ibi.Contract,
-        action: str,
-        amount: float,
-    ) -> ibi.Trade:
-        log.debug(
-            f"Will attempt to execute closing trade for "
-            f"{strategy.strategy} {contract} {action} {amount}"
-        )
-        new_trade = self.controller.trade(
-            strategy.strategy, contract, ibi.MarketOrder(action, amount), "RESET", {}
-        )
-        assert new_trade
-        self.register_trade(new_trade)
-        return new_trade
-
-    async def cancel_orders(self):
-        log.debug(
-            f"Will attempt to cancel orders: "
-            f"{[self.describe_trade(t) for t in self.trades]}"
-        )
-
-        for trade in self.trades:
-            if (
-                trade.order.orderType in ("STP", "TRAIL")
-                and (strategy := self.controller.sm.strategy_for_trade(trade))
-                and (strategy != "UNKNOWN")
-            ):
-                # Make sure no orders executed if there's no corresponding position
-                try:
-                    stop_amount = (
-                        trade.remaining()
-                        if trade.order.action == "BUY"
-                        else -trade.remaining()
-                    )
-                    existing_amount = self.positions.get(trade.contract, 0)
-                except Exception as e:
-                    log.exception(e)
-                    existing_amount = 0
-                    stop_amount = 0
-                if existing_amount and (
-                    misc.sign(stop_amount) == -misc.sign(existing_amount)
-                ):
-                    trade_amount = min(
-                        abs(existing_amount), abs(stop_amount)
-                    ) * misc.sign(stop_amount)
-
-                    log.debug(f"Will cancel {trade_amount} for {strategy.strategy}")
-                    assert trade
-                    trade.cancelledEvent.connect(
-                        partial(
-                            self._strategy_trade,
-                            strategy=strategy,
-                            contract=trade.contract,
-                            action=trade.order.action,
-                            amount=abs(trade_amount),
-                        ),
-                        self.controller._log_event_error,
-                    )
-                    self.controller.cancel(trade)
-                    self.positions[trade.contract] += trade_amount
-                    await asyncio.sleep(0)
-                    continue
-            self.controller.cancel(trade)
-
-    async def close_positions(self):
-        log.debug(
-            f"Trades in progress: "
-            f"{[self.describe_trade(t) for t in self.in_progress_trades]}."
-        )
-        log.debug(
-            f"Will attempt to close remaining positions: "
-            f"{ {c.symbol: p for c, p in self.positions.items() if p} }"
-        )
-
-        for contract, position in self.positions.items():
-            if position:
-                log.debug(f"Closing {contract.symbol}, {position}")
-                # Again make sure total orders issued match existing positions
-                self.register_trade(
-                    self.controller.trader.trade(
-                        contract,
-                        ibi.MarketOrder(
-                            "BUY" if position < 0 else "SELL",
-                            abs(position),
-                            tif="DAY",
-                            outsideRth=True,
-                        ),
-                    )
-                )
-                await asyncio.sleep(0)
-
-    async def report(self):
-        n = 0
-        log.debug(
-            f"Reset in progress: {[t.order.orderId for t in self.in_progress_trades]}"
-        )
-        while not all([t.isDone() for t in self.in_progress_trades]):
-            log.warning(
-                f"Trades in progress: "
-                f"{[self.describe_trade(t) for t in self.trades]}"
-            )
-            await asyncio.sleep(1)
-            if (n := n + 1) > 10:
-                break
-        return [t for t in self.in_progress_trades if not t.isDone()]

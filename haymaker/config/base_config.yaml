@@ -16,6 +16,7 @@ ignore_errors:
 
 log_broker: False # if additional logger with all broker messages should be created
 
+
 app:
   restart_time: 30 # after disconnection, time to wait before reconnection attempt
   host: 127.0.0.1
@@ -36,16 +37,17 @@ controller:
   # interval at which sync will be performed
   sync_frequency: 900 # 15min
   health_check_frequency: 0 # in seconds
-  # for strategy with zero position, cancel existing orders
-  cancel_stray_orders: True
-  # cancel broker-reported active orders not known to local state
-  cancel_unknown_trades: True
   # delay in sec after which controller will verify if transaction was executed correctly;
   # zero or comment-out for no verification
   execution_verification_delay: 15 # in seconds
   execution_verification_max_retries: 5
   broker_request_timeout: 10 # seconds to wait for broker sync requests
+
+sync:
+  cancel_unknown_trades: False # broker-reported active orders not known to local state
+  cancel_stray_orders: False # for strategies with zero position
   handle_missing_brackets: "remove" # one of: "remove", "warn", "ignore"
+
 
 # best left untouched
 state_machine:

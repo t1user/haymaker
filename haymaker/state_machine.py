@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+from contextlib import contextmanager
 from collections import UserDict, defaultdict
+from collections.abc import Generator, Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Iterator, TypeVar
+from typing import Any, TypeVar
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -47,6 +49,28 @@ class OrderInfo:
         return self.trade.order.totalQuantity * action_to_signal(
             self.trade.order.action
         )
+
+    def execution_key(self, fill: ibi.Fill) -> str:
+        """Return stable key identifying a broker execution fill."""
+        if exec_id := fill.execution.execId:
+            return exec_id
+
+        execution = fill.execution
+        time = execution.time.isoformat() if execution.time else ""
+        return (
+            f"{self.trade.order.permId}:{self.trade.order.orderId}:"
+            f"{time}:{execution.side}:{execution.shares}:{execution.price}"
+        )
+
+    def execution_accounted(self, fill: ibi.Fill) -> bool:
+        """Return True if this execution already changed local position."""
+        return self.execution_key(fill) in self.accounted_exec_ids
+
+    def mark_execution(self, fill: ibi.Fill) -> None:
+        """Record that this execution has changed local position."""
+        exec_key = self.execution_key(fill)
+        if exec_key not in self.accounted_exec_ids:
+            self.accounted_exec_ids.append(exec_key)
 
     def __iter__(self) -> Iterator[Any]:
         yield self.strategy
@@ -217,7 +241,7 @@ class Strategy(UserDict):
     def active(self) -> bool:
         return self["position"] != 0
 
-    def apply_fill(self, fill: ibi.Fill) -> None:
+    def register_fill(self, fill: ibi.Fill) -> None:
         """Apply a broker execution fill to this strategy's local position."""
         if fill.execution.side == "BOT":
             self.position += fill.execution.shares
@@ -487,34 +511,21 @@ class StateMachine:
             log.exception(e)
         return order_info
 
-    def execution_key(self, trade: ibi.Trade, fill: ibi.Fill) -> str:
-        """Return stable key identifying a broker execution fill."""
-        if exec_id := fill.execution.execId:
-            return exec_id
-
-        execution = fill.execution
-        time = execution.time.isoformat() if execution.time else ""
-        return (
-            f"{trade.order.permId}:{trade.order.orderId}:"
-            f"{time}:{execution.side}:{execution.shares}:{execution.price}"
-        )
-
-    def execution_already_accounted(self, trade: ibi.Trade, fill: ibi.Fill) -> bool:
-        """Return True if this execution already changed local position."""
+    @contextmanager
+    def guard_execution(
+        self, trade: ibi.Trade, fill: ibi.Fill
+    ) -> Generator[bool, None, None]:
+        """Guard against applying the same broker execution more than once."""
         order_info = self.order.get(trade.order.orderId)
         if not order_info:
-            return False
-        return self.execution_key(trade, fill) in order_info.accounted_exec_ids
-
-    def mark_execution_accounted(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
-        """Record that this execution has changed local position."""
-        order_info = self.order.get(trade.order.orderId)
-        if not order_info:
-            return
-
-        exec_key = self.execution_key(trade, fill)
-        if exec_key not in order_info.accounted_exec_ids:
-            order_info.accounted_exec_ids.append(exec_key)
+            log.error(
+                f"Attempt to register execution for unknown order: {trade.order.orderId} "
+                f"{trade.contract.localSymbol}"
+            )
+            yield False
+        else:
+            yield order_info.execution_accounted(fill)
+            order_info.mark_execution(fill)
             self.save_order(order_info)
 
     # ### data access and modification methods ###

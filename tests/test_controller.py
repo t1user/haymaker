@@ -2,13 +2,20 @@ import asyncio
 import random
 from copy import deepcopy
 from itertools import count
+from types import SimpleNamespace
 
 import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.controller.controller import Controller, SyncResult
-from haymaker.controller.sync_routines import OrderSyncStrategy
+from haymaker.controller import sync_routines
+from haymaker.controller.controller import Controller
+from haymaker.controller.objects import SyncResult
+from haymaker.controller.sync_routines import (
+    OrderReconciliationSync,
+    OrderSyncStrategy,
+    PositionSyncStrategy,
+)
 from haymaker.state_machine import OrderInfo
 from haymaker.trader import Trader
 
@@ -167,7 +174,7 @@ async def test_broker_position_source_disagreement_disables_trading(
     monkeypatch.setattr(controller.ib, "positions", lambda: [position])
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
 
-    result = await controller.verify_broker_position_source()
+    result = await controller.sync()
 
     assert not result.ok
     assert controller._trading_disabled
@@ -205,9 +212,10 @@ def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
     def fake_cancel(received_trade):
         cancelled.append(received_trade)
 
+    monkeypatch.setattr(sync_routines, "CANCEL_UNKNOWN_TRADES", True)
     monkeypatch.setattr(controller, "cancel", fake_cancel)
 
-    controller.handle_unknown_broker_orders([trade])
+    controller.order_sync_handlers.handle_unknown_broker_orders([trade])
 
     assert cancelled == [trade]
     assert not controller._trading_disabled
@@ -221,20 +229,50 @@ def test_unknown_broker_orders_can_be_left_active_by_config(
     def fake_cancel(received_trade):
         cancelled.append(received_trade)
 
-    controller.cancel_unknown_trades = False
+    monkeypatch.setattr(sync_routines, "CANCEL_UNKNOWN_TRADES", False)
     monkeypatch.setattr(controller, "cancel", fake_cancel)
 
-    controller.handle_unknown_broker_orders([trade])
+    controller.order_sync_handlers.handle_unknown_broker_orders([trade])
 
     assert cancelled == []
     assert not controller._trading_disabled
 
 
-def test_unknown_broker_orders_skip_correction_trades(controller, trade):
+@pytest.mark.asyncio
+async def test_unknown_broker_orders_skip_correction_trades(
+    controller, trade, monkeypatch
+):
     report = OrderSyncStrategy(controller.ib, controller.sm)
     report.unknown.append(trade)
+    reconciled = []
 
-    assert controller.should_skip_correction_trades(report, SyncResult(True))
+    async def requested_positions():
+        return []
+
+    def fake_order_sync_run(cls, ib, sm):
+        return report
+
+    def fake_reconciliation_run(cls, ct):
+        reconciled.append(ct)
+
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(OrderSyncStrategy, "run", classmethod(fake_order_sync_run))
+    monkeypatch.setattr(
+        PositionSyncStrategy,
+        "run",
+        classmethod(lambda cls, ib, sm: SimpleNamespace(errors={})),
+    )
+    monkeypatch.setattr(
+        OrderReconciliationSync, "run", classmethod(fake_reconciliation_run)
+    )
+    monkeypatch.setattr(sync_routines, "CANCEL_UNKNOWN_TRADES", False)
+
+    result = await controller.sync()
+
+    assert result == SyncResult(True, "recovery completed")
+    assert reconciled == []
 
 
 def test_emergency_close_blocked_when_broker_position_protected(
