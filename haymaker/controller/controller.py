@@ -938,9 +938,11 @@ class Controller(Atom):
             order_info = self.sm.order.get(reqId)
             if order_info:
                 strategy, action, trade, *_ = order_info
+                strategy_str = strategy.strategy
                 order = trade.order
             else:
                 strategy, action, trade, order = "", "", "", ""
+                strategy_str = ""
 
             if errorCode == 202 and ("YOUR ORDER IS NOT ACCEPTED" not in errorString):
                 log.info(
