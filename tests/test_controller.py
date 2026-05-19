@@ -8,9 +8,8 @@ import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.controller import sync_routines
-from haymaker.controller.controller import Controller
-from haymaker.controller.objects import SyncResult
+from haymaker.controller.controller import Controller, ControllerError
+from haymaker.controller.sync_types import SyncResult
 from haymaker.controller.sync_routines import (
     OrderErrorHandlers,
     OrderReconciliationSync,
@@ -213,15 +212,44 @@ def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
     def fake_cancel(received_trade):
         cancelled.append(received_trade)
 
-    monkeypatch.setattr(sync_routines, "CANCEL_UNKNOWN_TRADES", True)
     monkeypatch.setattr(controller, "cancel", fake_cancel)
 
     OrderErrorHandlers(
-        controller.ib, controller.sm, controller
+        controller.ib,
+        controller.sm,
+        controller,
+        True,
     ).handle_unknown_broker_orders([trade])
 
     assert cancelled == [trade]
     assert not controller._trading_disabled
+
+
+def test_from_config_loads_controller_sync_options(Atom):
+    controller = Controller.from_config(
+        Trader(Atom.ib),
+        top_config={
+            "controller": {
+                "broker_request_timeout": 3,
+                "cancel_unknown_trades": True,
+                "cancel_stray_orders": True,
+                "handle_missing_brackets": "warn",
+            },
+        },
+    )
+
+    assert controller.broker_request_timeout == 3
+    assert controller.cancel_unknown_trades
+    assert controller.cancel_stray_orders
+    assert controller.handle_missing_brackets == "warn"
+
+
+def test_from_config_rejects_unknown_controller_config(Atom):
+    with pytest.raises(ControllerError, match="Wrong parameter: invalid"):
+        Controller.from_config(
+            Trader(Atom.ib),
+            top_config={"controller": {"invalid": True}},
+        )
 
 
 def test_unknown_broker_orders_can_be_left_active_by_config(
@@ -232,11 +260,13 @@ def test_unknown_broker_orders_can_be_left_active_by_config(
     def fake_cancel(received_trade):
         cancelled.append(received_trade)
 
-    monkeypatch.setattr(sync_routines, "CANCEL_UNKNOWN_TRADES", False)
     monkeypatch.setattr(controller, "cancel", fake_cancel)
 
     OrderErrorHandlers(
-        controller.ib, controller.sm, controller
+        controller.ib,
+        controller.sm,
+        controller,
+        False,
     ).handle_unknown_broker_orders([trade])
 
     assert cancelled == []
@@ -245,7 +275,7 @@ def test_unknown_broker_orders_can_be_left_active_by_config(
 
 @pytest.mark.asyncio
 async def test_order_error_handler_returns_fresh_actions_per_report(controller, trade):
-    handler = OrderErrorHandlers(controller.ib, controller.sm, controller)
+    handler = OrderErrorHandlers(controller.ib, controller.sm, controller, False)
     controller.sm.order[trade.order.orderId] = OrderInfo(
         "coolstrategy", "OPEN", trade, {}
     )
@@ -290,7 +320,7 @@ async def test_unknown_broker_orders_skip_correction_trades(
     monkeypatch.setattr(
         OrderReconciliationSync, "run", classmethod(fake_reconciliation_run)
     )
-    monkeypatch.setattr(sync_routines, "CANCEL_UNKNOWN_TRADES", False)
+    controller.cancel_unknown_trades = False
 
     result = await controller.sync()
 

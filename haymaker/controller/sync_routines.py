@@ -10,14 +10,6 @@ import ib_insync as ibi
 
 from haymaker import misc
 from haymaker.state_machine import OrderInfo, StateMachine, Strategy
-from haymaker.config import CONFIG
-
-config = CONFIG.get("sync", {})
-
-CANCEL_UNKNOWN_TRADES: bool = config.get("cancel_unknown_trades", False)
-CANCEL_STRAY_ORDERS: bool = config.get("cancel_stray_orders", False)
-HANDLE_MISSING_BRACKETS: str = config.get("handle_missing_brackets", "remove")
-
 
 if TYPE_CHECKING:
     from .controller import Controller
@@ -248,10 +240,12 @@ class OrderErrorHandlers:
         ib: ibi.IB,
         sm: StateMachine,
         ct: Controller,
+        cancel_unknown_trades: bool,
     ) -> None:
         self.ib = ib
         self.sm = sm
         self.controller = ct
+        self.cancel_unknown_trades = cancel_unknown_trades
 
     async def handle_report(self, report: OrderSyncStrategy) -> OrderSyncActions:
         actions = OrderSyncActions()
@@ -279,7 +273,7 @@ class OrderErrorHandlers:
             return
 
         log.critical(f"Unknown broker orders during sync: {trades}.")
-        if not CANCEL_UNKNOWN_TRADES:
+        if not self.cancel_unknown_trades:
             log.critical(
                 "Unknown broker orders left active because "
                 "cancel_unknown_trades is False."
@@ -399,14 +393,24 @@ class OrderReconciliationSync:
         ib: ibi.IB,
         sm: StateMachine,
         ct: Controller,
+        cancel_stray_orders: bool,
+        handle_missing_brackets: str,
     ) -> None:
         self.ib = ib
         self.sm = sm
         self.ct = ct
+        self.cancel_stray_orders = cancel_stray_orders
+        self.handle_missing_brackets = handle_missing_brackets
 
     @classmethod
     def run(cls, ct: Controller) -> Self:
-        return cls(ct.ib, ct.sm, ct).run_strategies()
+        return cls(
+            ct.ib,
+            ct.sm,
+            ct,
+            ct.cancel_stray_orders,
+            ct.handle_missing_brackets,
+        ).run_strategies()
 
     def run_strategies(self) -> Self:
         for strategy_str, strategy in self.sm.strategy.items():
@@ -425,7 +429,7 @@ class OrderReconciliationSync:
         return [oi for oi in order_infos if (oi.action != "OPEN") and oi.active]
 
     def _handle_obsolete_order(self, strategy_str: str, oi: OrderInfo) -> None:
-        if CANCEL_STRAY_ORDERS:
+        if self.cancel_stray_orders:
             log.error(
                 f"Cancelling obsolete order: "
                 f"{strategy_str, oi.action, oi.trade.order.orderId}"
@@ -438,7 +442,7 @@ class OrderReconciliationSync:
             )
 
     def _check_brackets(self, strategy: Strategy, order_infos: list[OrderInfo]) -> None:
-        if HANDLE_MISSING_BRACKETS not in ["remove", "warn"]:
+        if self.handle_missing_brackets not in ["remove", "warn"]:
             return
 
         params = strategy.get("params")
@@ -466,7 +470,7 @@ class OrderReconciliationSync:
                 )
                 ERROR_STRATEGIES.add(strategy.strategy)
 
-        if ERROR_STRATEGIES and HANDLE_MISSING_BRACKETS == "remove":
+        if ERROR_STRATEGIES and self.handle_missing_brackets == "remove":
 
             # close positions for strategies without brackets, but
             # only if they don't cancel each other (skip cancelling strategies)

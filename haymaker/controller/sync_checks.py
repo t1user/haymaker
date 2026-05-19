@@ -1,6 +1,6 @@
 import asyncio
 import ib_insync as ibi
-from .objects import SyncResult
+from .sync_types import SyncResult
 import logging
 
 log = logging.getLogger(__name__)

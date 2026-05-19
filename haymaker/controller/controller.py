@@ -26,7 +26,7 @@ from .sync_routines import (
     PositionSyncStrategy,
 )
 from .sync_checks import verify_broker_position_source, verify_broker_connected
-from .objects import SyncResult
+from .sync_types import SyncResult
 from .terminator import Terminator
 
 if TYPE_CHECKING:
@@ -61,6 +61,9 @@ class Controller(Atom):
     execution_verification_delay: int = 0
     execution_verification_max_retries: int = 5
     broker_request_timeout: int = 10
+    cancel_unknown_trades: bool = False
+    cancel_stray_orders: bool = False
+    handle_missing_brackets: str = "remove"
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
@@ -264,7 +267,9 @@ class Controller(Atom):
         orders_report = OrderSyncStrategy.run(self.ib, self.sm)
         # IB events will be handled so that matched trades can be sent to blotter.
         self.release_hold()
-        order_sync_handlers = OrderErrorHandlers(self.ib, self.sm, self)
+        order_sync_handlers = OrderErrorHandlers(
+            self.ib, self.sm, self, self.cancel_unknown_trades
+        )
         order_actions = await order_sync_handlers.handle_report(orders_report)
 
         position_report = PositionSyncStrategy.run(self.ib, self.sm)
