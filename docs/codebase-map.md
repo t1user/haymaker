@@ -1,15 +1,14 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-05-15.
+Last updated: 2026-05-18.
 
 ## High-Level Purpose
 
-Haymaker is a Python framework for building Interactive Brokers trading systems on top of `ib_insync`. It has four main operating surfaces:
+Haymaker is a Python framework for building Interactive Brokers trading systems on top of `ib_insync`. It has three main operating surfaces:
 
 - live strategy execution as a long-running event-driven process,
 - historical data download from Interactive Brokers into Arctic/Mongo-backed stores,
-- dataframe-first research and vector backtesting utilities,
-- a local Streamlit dashboard for inspecting trading state.
+- dataframe-first research and vector backtesting utilities.
 
 The package is still alpha-stage. Some public docs describe the live backtester bridge as in development, while the research package contains an active vector backtester and stop engine.
 
@@ -31,8 +30,6 @@ The dataloader is a separate command-line path. It connects to IB, schedules his
 
 The research package is intentionally separate from live execution. It works directly with pandas dataframes and NumPy/Numba kernels to validate signal timing, stops, synthetic data, and performance without depending on live `Atom` pipelines.
 
-The dashboard is a local Streamlit app. It reads MongoDB collections for blotter/orders/models and optionally connects directly to IB for account and open-position PnL.
-
 ## Module Responsibilities
 
 ### Live Execution Core
@@ -41,7 +38,7 @@ The dashboard is a local Streamlit app. It reads MongoDB collections for blotter
 - `haymaker/app.py`: application watchdog, connection probe, restart lifecycle, futures-roll schedule, and top-level `App.run()`.
 - `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
 - `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling.
-- `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`; includes `FakeTrader` for nuke/no-trade mode.
+- `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/state_machine.py`: persisted strategy and order state, rejection tracking, active positions, and locks.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.
 
@@ -80,19 +77,10 @@ The dashboard is a local Streamlit app. It reads MongoDB collections for blotter
 - `haymaker/research/bootstrap/`: block and regime/state bootstrap generators for synthetic OHLC paths.
 - `haymaker/research/optimizer.py`, `tester.py`, `plotting.py`, `grouper.py`, `candlesticks.py`: research workflow helpers around parameter sweeps, plotting, grouping, and indicators.
 
-### Dashboard
-
-- `dashboard/app.py`: Streamlit entrypoint with Blotter, Orders / Models, and Account tabs.
-- `dashboard/config.py`: `.env` loading and dashboard-specific config object.
-- `dashboard/data/`: Mongo, blotter, orders, account, and shared data-normalization helpers.
-- `dashboard/views/`: Streamlit rendering for account, blotter, orders, and formatting.
-- `dashboard/cli.py`: `haymaker-dashboard` console-script wrapper around `streamlit run`.
-
 ## Entry Points
 
 - Live strategy scripts import and instantiate `haymaker.app.App`, then call `App().run()`.
 - `dataloader` console script maps to `haymaker.dataloader.dataloader:start`.
-- `haymaker-dashboard` console script maps to `dashboard.cli:main`.
 - Research code usually imports from `haymaker.research`, `haymaker.research.stop`, or `haymaker.research.backtester`.
 - Sphinx docs are built from `docs/source` with `make html` from the `docs/` directory.
 
@@ -102,14 +90,14 @@ The dashboard is a local Streamlit app. It reads MongoDB collections for blotter
 
 1. User strategy code builds `Atom` pipelines and starts `App.run()`.
 2. `App` starts the IB watchdog and waits for a successful historical-data probe.
-3. `Controller.run()` reads or initializes state, syncs open IB orders and positions, optionally resets/nukes/zeros state, then releases hold.
+3. `Controller.run()` reads or initializes state, syncs open IB orders and positions, and only continues startup if broker/local sync succeeds.
 4. `Jobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
 5. Streamers emit market data into strategy blocks.
 6. Blocks add strategy fields and emit dictionaries.
 7. Signal processors create `action`, `target_position`, and existing-position context.
 8. Portfolio sizing adds `amount`.
 9. Execution models create IB orders and call `Controller.trade()`.
-10. Controller registers orders, reconciles broker events, updates the state machine, and sends blotter records when enabled.
+10. Controller registers orders, reconciles broker events, updates the state machine, and sends blotter records when enabled; sync failures disable further outbound trading.
 
 ### Dataloader Flow
 
@@ -128,13 +116,6 @@ The dashboard is a local Streamlit app. It reads MongoDB collections for blotter
 4. Convert to the transaction-frame schema with `no_stop()` or `stop_loss()`.
 5. Run `perf()` to get stats, daily returns, bar-level results, trade records, and warnings.
 
-### Dashboard Flow
-
-1. `dashboard/config.py` loads `.env` values without overriding exported environment variables.
-2. `dashboard/data/mongo.py` connects to MongoDB.
-3. Blotter and orders tabs read configured Mongo collections.
-4. Account tab connects to IB directly and retries client IDs if needed.
-
 ## External Integrations
 
 - Interactive Brokers TWS/Gateway through `ib_insync`.
@@ -143,7 +124,6 @@ The dashboard is a local Streamlit app. It reads MongoDB collections for blotter
 - Arctic through `arctic` for dataframe time-series storage.
 - pandas, NumPy, and Numba for dataframe research and kernels.
 - Pyfolio Reloaded for research performance statistics.
-- Streamlit for the dashboard.
 - Sphinx/Furo for docs.
 - Optional research extras include Jupyter, matplotlib, `arch`, and `hmmlearn`.
 
@@ -164,15 +144,12 @@ Important config files:
 - `haymaker/config/dataloader_base_config.yaml`: dataloader defaults.
 - `haymaker/logging/logging_config.yaml`: live logging defaults.
 - `haymaker/logging/dataloader_logging_config.yaml`: dataloader logging defaults.
-- `dashboard/.env.example`: dashboard-local Mongo and IB settings.
 
 Important environment variables:
 
 - `HAYMAKER_HAYMAKER_CONFIG_OVERRIDES`: live execution YAML override path after `HAYMAKER_` prefix stripping.
 - `HAYMAKER_DATALOADER_CONFIG_OVERRIDES`: dataloader YAML override path after `HAYMAKER_` prefix stripping.
 - `HAYMAKER_LOGGING_CONFIG`, `HAYMAKER_LOGGING_PATH`, and other top-level `HAYMAKER_` keys: quick overrides.
-- `DASHBOARD_MONGO_URI`, `DASHBOARD_MONGO_DB`, `DASHBOARD_BLOTTER_COLLECTION`, `DASHBOARD_ORDERS_COLLECTION`, `DASHBOARD_MODELS_COLLECTION`.
-- `DASHBOARD_IB_HOST`, `DASHBOARD_IB_PORT`, `DASHBOARD_IB_CLIENT_ID`, `DASHBOARD_IB_ACCOUNT`.
 
 Do not commit real `.env` files. `.gitignore` already ignores `.env`, `.venv`, generated builds, local backtests, and credential files.
 
@@ -182,12 +159,6 @@ Install editable development environment:
 
 ```bash
 python -m pip install -e ".[dev]"
-```
-
-Install dashboard extras:
-
-```bash
-python -m pip install -e ".[dashboard]"
 ```
 
 Run all tests:
@@ -228,18 +199,6 @@ Run dataloader:
 dataloader -f settings.yaml
 ```
 
-Run dashboard:
-
-```bash
-haymaker-dashboard
-```
-
-or:
-
-```bash
-python -m streamlit run dashboard/app.py
-```
-
 ## Technical Debt
 
 - `pyproject.toml` declares `readme = "README.md"`, but the repo has `README.rst` and no top-level `README.md`.
@@ -261,7 +220,6 @@ python -m streamlit run dashboard/app.py
 - Futures rolling changes active contracts, next-contract selection, and strategy state; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.
 - Config files can instantiate Python objects through YAML tags; operational config must be treated as trusted and reviewed.
-- Dashboard account code connects to IB directly with client-id retries. It should remain isolated from live trading order paths.
 
 ## AGENTS.md Notes
 
@@ -273,3 +231,5 @@ Useful repo-root additions, if a root `AGENTS.md` is created later:
 - Add a pointer to `haymaker/research/AGENTS.md` before editing research code.
 - Document the standard focused checks: `python -m pytest tests/test_research`, mypy/flake8 for research changes, and full `python -m pytest` for broader runtime changes.
 - Warn that importing `haymaker.app` sets up logging and runtime singletons, so tests should import lower-level modules where possible.
+
+Dashboard is experimental and should not be looked at.

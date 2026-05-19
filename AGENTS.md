@@ -72,9 +72,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 
 - This is an Interactive Brokers trading framework built around `ib_insync`,
   event-driven runtime components, a historical dataloader, dataframe-first
-  research tools, and a local Streamlit dashboard.
+  research tools.
 - Live trading, controller sync, futures rolling, and order reconciliation are
   high-risk areas. Keep changes especially narrow and well verified there.
 - Configuration is primarily YAML-driven. Do not change real local `.env` files
   or credential files.
 - See `docs/codebase-map.md` for the current repository map.
+
+Dashboard is experimental and should not be looked at.
