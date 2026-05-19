@@ -50,7 +50,7 @@ class FakeMongoSaver(AbstractBaseSaver):
             log.debug(f"Data that caused error: {data}")
             raise
 
-    def read(self, key: dict | None = None, /, *args) -> list:
+    def read(self, key: dict | None = None, /, *args) -> Any:
         s = self.store[self.collection]
         if key:
             try:
