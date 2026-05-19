@@ -12,6 +12,7 @@ from haymaker.controller import sync_routines
 from haymaker.controller.controller import Controller
 from haymaker.controller.objects import SyncResult
 from haymaker.controller.sync_routines import (
+    OrderErrorHandlers,
     OrderReconciliationSync,
     OrderSyncStrategy,
     PositionSyncStrategy,
@@ -215,7 +216,9 @@ def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
     monkeypatch.setattr(sync_routines, "CANCEL_UNKNOWN_TRADES", True)
     monkeypatch.setattr(controller, "cancel", fake_cancel)
 
-    controller.order_sync_handlers.handle_unknown_broker_orders([trade])
+    OrderErrorHandlers(
+        controller.ib, controller.sm, controller
+    ).handle_unknown_broker_orders([trade])
 
     assert cancelled == [trade]
     assert not controller._trading_disabled
@@ -232,10 +235,30 @@ def test_unknown_broker_orders_can_be_left_active_by_config(
     monkeypatch.setattr(sync_routines, "CANCEL_UNKNOWN_TRADES", False)
     monkeypatch.setattr(controller, "cancel", fake_cancel)
 
-    controller.order_sync_handlers.handle_unknown_broker_orders([trade])
+    OrderErrorHandlers(
+        controller.ib, controller.sm, controller
+    ).handle_unknown_broker_orders([trade])
 
     assert cancelled == []
     assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_order_error_handler_returns_fresh_actions_per_report(controller, trade):
+    handler = OrderErrorHandlers(controller.ib, controller.sm, controller)
+    controller.sm.order[trade.order.orderId] = OrderInfo(
+        "coolstrategy", "OPEN", trade, {}
+    )
+
+    error_report = OrderSyncStrategy(controller.ib, controller.sm)
+    error_report.errors.append(trade)
+    first_actions = await handler.handle_report(error_report)
+
+    empty_report = OrderSyncStrategy(controller.ib, controller.sm)
+    second_actions = await handler.handle_report(empty_report)
+
+    assert [oi.trade for oi in first_actions.faulty_trades] == [trade]
+    assert second_actions.faulty_trades == []
 
 
 @pytest.mark.asyncio

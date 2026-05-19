@@ -158,13 +158,6 @@ class Controller(Atom):
                 f"No qualified contracts for open position: {missing_contracts}"
             )
 
-        faulty_trades: list[OrderInfo] = []
-        self.order_sync_handlers = OrderErrorHandlers(
-            self.ib, self.sm, self, faulty_trades
-        )
-        self.position_sync_handlers = PositionErrorHandlers(
-            self.ib, self.sm, self, faulty_trades
-        )
         self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
         log.debug(f"{self.contract_registry.current_contracts=}")
@@ -271,10 +264,12 @@ class Controller(Atom):
         orders_report = OrderSyncStrategy.run(self.ib, self.sm)
         # IB events will be handled so that matched trades can be sent to blotter.
         self.release_hold()
-        await self.order_sync_handlers.handle_report(orders_report)
+        order_sync_handlers = OrderErrorHandlers(self.ib, self.sm, self)
+        order_actions = await order_sync_handlers.handle_report(orders_report)
 
         position_report = PositionSyncStrategy.run(self.ib, self.sm)
-        await self.position_sync_handlers.handle_report(position_report)
+        position_sync_handlers = PositionErrorHandlers(self.ib, self.sm, self)
+        await position_sync_handlers.handle_report(position_report, order_actions)
 
         recheck = PositionSyncStrategy.run(self.ib, self.sm)
         if recheck.errors:

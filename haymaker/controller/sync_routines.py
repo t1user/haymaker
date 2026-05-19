@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self
 
 import ib_insync as ibi
@@ -26,6 +27,13 @@ log = logging.getLogger(__name__)
 
 
 ERROR_STRATEGIES: set[str] = set()
+
+
+@dataclass
+class OrderSyncActions:
+    """Actions taken during order sync that later checks must know about."""
+
+    faulty_trades: list[OrderInfo] = field(default_factory=list)
 
 
 class OrderSyncStrategy:
@@ -240,14 +248,13 @@ class OrderErrorHandlers:
         ib: ibi.IB,
         sm: StateMachine,
         ct: Controller,
-        faulty_trades: list[OrderInfo] | None = None,
     ) -> None:
         self.ib = ib
         self.sm = sm
         self.controller = ct
-        self.faulty_trades = faulty_trades if faulty_trades is not None else []
 
-    async def handle_report(self, report: OrderSyncStrategy) -> None:
+    async def handle_report(self, report: OrderSyncStrategy) -> OrderSyncActions:
+        actions = OrderSyncActions()
 
         self.handle_unknown_broker_orders(report.unknown)
 
@@ -259,12 +266,13 @@ class OrderErrorHandlers:
 
         await asyncio.sleep(0)
         try:
-            self.clear_error_trades(report.errors)
+            self.clear_error_trades(report.errors, actions)
 
         except Exception as e:
             log.exception(f"Error handling inactive trades: {e}")
 
         await asyncio.sleep(0)
+        return actions
 
     def handle_unknown_broker_orders(self, trades: list[ibi.Trade]) -> None:
         if not trades:
@@ -282,7 +290,9 @@ class OrderErrorHandlers:
             log.debug(f"Cancelling unknown broker order: {trade.order.orderId}")
             self.controller.cancel(trade)
 
-    def clear_error_trades(self, trades: list[ibi.Trade]) -> None:
+    def clear_error_trades(
+        self, trades: list[ibi.Trade], actions: OrderSyncActions
+    ) -> None:
         """
         Trades that we have as active but IB doesn't know about them.
         """
@@ -291,7 +301,7 @@ class OrderErrorHandlers:
                 f"Will delete record for trade that IB doesn't known about: "
                 f"{trade.order.orderId}"
             )
-            self.faulty_trades.append(self.sm._orders[trade.order.orderId])
+            actions.faulty_trades.append(self.sm._orders[trade.order.orderId])
             self.sm.prune_order(trade.order.orderId)
 
     def report_done_trade(self, trade: ibi.Trade) -> None:
@@ -320,14 +330,14 @@ class PositionErrorHandlers:
         ib: ibi.IB,
         sm: StateMachine,
         ct: Controller,
-        faulty_trades: list[OrderInfo] | None = None,
     ) -> None:
         self.ib = ib
         self.sm = sm
         self.controller = ct
-        self.faulty_trades = faulty_trades if faulty_trades is not None else []
 
-    async def handle_report(self, report: PositionSyncStrategy) -> None:
+    async def handle_report(
+        self, report: PositionSyncStrategy, order_actions: OrderSyncActions
+    ) -> None:
         errors: dict[ibi.Contract, float] = report.errors
         if not errors:
             return
@@ -357,7 +367,7 @@ class PositionErrorHandlers:
                 )
             elif strategies:
                 strategy_faults = [
-                    order_info.strategy for order_info in self.faulty_trades
+                    order_info.strategy for order_info in order_actions.faulty_trades
                 ]
                 for strategy in strategies:
                     if strategy in strategy_faults:
@@ -373,7 +383,6 @@ class PositionErrorHandlers:
                     f"Cannot fix position records for {contract.localSymbol}, "
                     f"{strategies=}."
                 )
-            self.faulty_trades.clear()
 
     def __repr__(self):
         return f"{self.__class__.__name__}()"
