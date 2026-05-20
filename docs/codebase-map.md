@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-05-18.
+Last updated: 2026-05-19.
 
 ## High-Level Purpose
 
@@ -37,7 +37,7 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/app.py`: application watchdog, connection probe, restart lifecycle, futures-roll schedule, and top-level `App.run()`.
 - `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
-- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling.
+- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync is split into broker/local snapshots, read-only reconcilers, explicit mutation/action appliers, and a thin coordinator.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/state_machine.py`: persisted strategy and order state, rejection tracking, active positions, and locks.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.
@@ -90,7 +90,7 @@ The research package is intentionally separate from live execution. It works dir
 
 1. User strategy code builds `Atom` pipelines and starts `App.run()`.
 2. `App` starts the IB watchdog and waits for a successful historical-data probe.
-3. `Controller.run()` reads or initializes state, syncs open IB orders and positions, and only continues startup if broker/local sync succeeds.
+3. `Controller.run()` reads or initializes state, then `Controller.sync()` delegates to a sync coordinator. The coordinator captures a validated broker snapshot and a local state snapshot, runs read-only order/position/bracket reconciliation, applies local recovery only through explicit appliers, and only runs broker correction actions after broker state has been validated.
 4. `Jobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
 5. Streamers emit market data into strategy blocks.
 6. Blocks add strategy fields and emit dictionaries.
@@ -216,7 +216,7 @@ dataloader -f settings.yaml
 - `upsample()` must preserve the rule that lower-frequency values become available when the grouped bar completes. `position` must not be upsampled.
 - `stop_loss()` treats `blip` as generated events and shifts internally, while `position` is already executable state. `distance` and `scheduled_close` Series must match the dataframe index exactly.
 - Python and Numba implementations in the stop engine and backtester engine must stay behaviorally identical.
-- Controller sync and reconciliation touches live broker state, state-machine records, blotter output, and order cancellation/close logic.
+- Controller sync and reconciliation touches live broker state, state-machine records, blotter output, and order cancellation/close logic. Sync correction actions should be based on a valid `BrokerSnapshot`; if broker snapshot capture fails or broker position sources disagree, trading is disabled before recovery or correction actions are attempted.
 - Futures rolling changes active contracts, next-contract selection, and strategy state; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.
 - Config files can instantiate Python objects through YAML tags; operational config must be treated as trusted and reviewed.

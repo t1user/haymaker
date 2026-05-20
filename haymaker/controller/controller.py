@@ -18,14 +18,7 @@ from haymaker.state_machine import OrderInfo, Strategy
 from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
-from .sync_routines import (
-    OrderErrorHandlers,
-    PositionErrorHandlers,
-    OrderReconciliationSync,
-    OrderSyncStrategy,
-    PositionSyncStrategy,
-)
-from .sync_checks import verify_broker_position_source, verify_broker_connected
+from .sync_coordinator import SyncCoordinator
 from .sync_types import SyncResult
 from .terminator import Terminator
 
@@ -249,56 +242,7 @@ class Controller(Atom):
         roller.roll()
 
     async def sync(self, *args) -> SyncResult:
-
-        log.debug("--- Sync ---")
-
-        connection_result = verify_broker_connected(self.ib)
-        if not connection_result.ok:
-            self.disable_trading(connection_result.reason)
-            return connection_result
-
-        broker_result = await verify_broker_position_source(
-            self.ib, self.broker_request_timeout
-        )
-        if not broker_result.ok:
-            self.disable_trading(broker_result.reason)
-            return broker_result
-
-        orders_report = OrderSyncStrategy.run(self.ib, self.sm)
-        # IB events will be handled so that matched trades can be sent to blotter.
-        self.release_hold()
-        order_sync_handlers = OrderErrorHandlers(
-            self.ib, self.sm, self, self.cancel_unknown_trades
-        )
-        order_actions = await order_sync_handlers.handle_report(orders_report)
-
-        position_report = PositionSyncStrategy.run(self.ib, self.sm)
-        position_sync_handlers = PositionErrorHandlers(self.ib, self.sm, self)
-        await position_sync_handlers.handle_report(position_report, order_actions)
-
-        recheck = PositionSyncStrategy.run(self.ib, self.sm)
-        if recheck.errors:
-            reason = "local state does not match broker state"
-            self.disable_trading(reason)
-            return SyncResult(False, reason)
-
-        if (
-            orders_report.unknown
-            or orders_report.done
-            or orders_report.errors
-            or position_report.errors
-        ):
-            log.error(
-                "Order or position recovery happened during sync; "
-                "skipping correction trades for this sync cycle."
-            )
-            log.debug("--- Sync completed ---")
-            return SyncResult(True, "recovery completed")
-
-        OrderReconciliationSync.run(self)
-
-        log.debug("--- Sync completed ---")
-        return SyncResult(True)
+        return await SyncCoordinator(self).run()
 
     def onStart(self, data, *args) -> None:
         # prevent superclass from setting attributes here
@@ -463,7 +407,8 @@ class Controller(Atom):
                 strategy.register_fill(fill)
                 log.debug(
                     f"Registered position - orderId: {trade.order.orderId} permId: "
-                    f"{trade.order.permId} {fill.execution.side} {trade.order.orderType} "
+                    f"{trade.order.permId} {fill.execution.side} "
+                    f"{trade.order.orderType} "
                     f"for {strategy_str} --> position: {strategy.position} "
                 )
 
@@ -687,68 +632,6 @@ class Controller(Atom):
                     f"{direction} {amount} {strategy_obj.active_contract.localSymbol}"
                 ),
             )
-
-    def can_emergency_close_strategy(self, strategy: Strategy) -> bool:
-        """Return True if broker state confirms an unprotected position."""
-        if self._trading_disabled:
-            log.debug(
-                f"Emergency close suppressed because trading is disabled: "
-                f"{strategy.strategy}"
-            )
-            return False
-
-        contract = strategy.active_contract
-        broker_position = self.trader.position_for_contract(contract)
-        if not broker_position:
-            log.error(
-                f"Emergency close suppressed for {strategy.strategy}: "
-                f"broker reports no position for {contract.localSymbol}."
-            )
-            return False
-
-        strategies = self.sm.for_contract.get(contract) or []
-        if len(strategies) != 1:
-            log.error(
-                f"Emergency close suppressed for {strategy.strategy}: "
-                f"contract {contract.localSymbol} is shared by strategies "
-                f"{strategies}."
-            )
-            return False
-
-        if self._broker_position_is_protected(contract, broker_position):
-            log.error(
-                f"Emergency close suppressed for {strategy.strategy}: "
-                f"broker position for {contract.localSymbol} appears protected."
-            )
-            return False
-
-        return True
-
-    def _broker_position_is_protected(
-        self, contract: ibi.Contract, broker_position: float
-    ) -> bool:
-        """Return True if broker has enough opposite-side stop protection."""
-        protective_action = "SELL" if broker_position > 0 else "BUY"
-        protective_order_types = {
-            "STP",
-            "STP LMT",
-            "TRAIL",
-            "TRAIL LIMIT",
-            "TRAILLIT",
-            "TRAIL LIT",
-            "TRAILLMT",
-            "TRAIL LMT",
-        }
-        protective_quantity = sum(
-            trade.order.totalQuantity
-            for trade in self.trader.trades_for_contract(contract)
-            if (
-                trade.isActive()
-                and trade.order.action == protective_action
-                and trade.order.orderType in protective_order_types
-            )
-        )
-        return protective_quantity >= abs(broker_position)
 
     def disable_trading(self, reason: str) -> None:
         """Disable future outbound orders from normal controller flow."""
