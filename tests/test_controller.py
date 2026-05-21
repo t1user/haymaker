@@ -9,16 +9,14 @@ import pytest
 from helpers import wait_for_condition
 
 from haymaker.controller.controller import Controller, ControllerError
-from haymaker.controller.sync_actions import (
+from haymaker.controller.sync_coordinator import (
     BracketSyncer,
-    OrderSyncApplier,
-)
-from haymaker.controller.sync_snapshots import capture_local_snapshot
-from haymaker.controller.sync_types import (
     BracketSyncResult,
     BrokerSnapshot,
     OrderFindings,
     OrderRecoveryResult,
+    OrderSyncApplier,
+    capture_local_snapshot,
 )
 from haymaker.state_machine import OrderInfo
 from haymaker.trader import Trader
