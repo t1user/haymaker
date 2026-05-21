@@ -23,6 +23,15 @@ from haymaker.saver import (
     PickleSaver,
 )
 
+@pytest.fixture(autouse=True)
+def mock_default_path_globally(tmp_path, monkeypatch):
+    """Mock default_path globally to a temp directory to protect user's real home folder."""
+    temp_dir = str(tmp_path)
+    monkeypatch.setattr("haymaker.misc.default_path", lambda *args: temp_dir)
+    monkeypatch.setattr("haymaker.saver.default_path", lambda *args: temp_dir)
+    monkeypatch.setattr(f"{__name__}.default_path", lambda *args: temp_dir)
+
+
 ##############################################
 # Test AsyncSaveManager
 ##############################################
