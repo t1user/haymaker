@@ -19,7 +19,7 @@ from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
 from .sync_coordinator import SyncCoordinator
-from .sync_types import SyncResult
+from .sync_types import MissingBracketsPolicy
 from .terminator import Terminator
 
 if TYPE_CHECKING:
@@ -54,9 +54,10 @@ class Controller(Atom):
     execution_verification_delay: int = 0
     execution_verification_max_retries: int = 5
     broker_request_timeout: int = 10
+    sync_max_attempts: int = 3
+    sync_resync_delay: float = 1
     cancel_unknown_trades: bool = False
-    cancel_stray_orders: bool = False
-    handle_missing_brackets: str = "remove"
+    missing_brackets: MissingBracketsPolicy = "ignore"
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
@@ -119,6 +120,11 @@ class Controller(Atom):
 
     def __post_init__(self) -> None:
         super().__init__()
+        if self.missing_brackets not in ("ignore", "warn", "remove"):
+            raise ControllerError(
+                "Wrong value for controller.missing_brackets: "
+                f"{self.missing_brackets!r}."
+            )
 
         # these are essential (non-optional) events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent, self._log_event_error)
@@ -210,12 +216,9 @@ class Controller(Atom):
             except Exception as e:
                 log.exception(e)
 
-        sync_result = await self.sync()
-        if not sync_result.ok:
-            log.critical(
-                f"Controller startup sync failed: {sync_result.reason}. "
-                "Trading remains disabled."
-            )
+        sync_ok = await self.sync()
+        if not sync_ok:
+            log.critical("Controller startup sync failed. Trading remains disabled.")
             return False
 
         if self.zero:
@@ -241,7 +244,7 @@ class Controller(Atom):
         roller = FutureRoller(self)
         roller.roll()
 
-    async def sync(self, *args) -> SyncResult:
+    async def sync(self, *args) -> bool:
         return await SyncCoordinator(self).run()
 
     def onStart(self, data, *args) -> None:

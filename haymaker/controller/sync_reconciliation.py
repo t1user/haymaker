@@ -7,6 +7,8 @@ from haymaker.state_machine import OrderInfo, Strategy
 from .sync_types import (
     BracketFindings,
     BracketIssue,
+    BrokerProtectionFindings,
+    BrokerProtectionIssue,
     BrokerSnapshot,
     LocalSnapshot,
     OrderFindings,
@@ -150,3 +152,19 @@ class BracketReconciler:
             existing_orders=existing_orders,
             expected_bracket_count=len(brackets),
         )
+
+
+class BrokerProtectionReconciler:
+    """Find broker positions that lack stop-loss protection."""
+
+    def compare(self, broker: BrokerSnapshot) -> BrokerProtectionFindings:
+        """Return broker positions not covered by active stop-loss orders."""
+        exposed_positions = [
+            BrokerProtectionIssue(
+                contract=contract,
+                broker_position=position,
+            )
+            for contract, position in broker.positions_by_contract.items()
+            if position and not broker.position_is_protected(contract, position)
+        ]
+        return BrokerProtectionFindings(exposed_positions=tuple(exposed_positions))

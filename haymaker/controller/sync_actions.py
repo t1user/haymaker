@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
 from typing import TYPE_CHECKING
 
 import ib_insync as ibi
 
 from haymaker import misc
-from haymaker.state_machine import OrderInfo, StateMachine, Strategy
+from haymaker.state_machine import OrderInfo, StateMachine
 
+from .sync_reconciliation import BracketReconciler, BrokerProtectionReconciler
 from .sync_types import (
     BracketFindings,
+    BracketSyncResult,
+    BrokerProtectionFindings,
+    BrokerProtectionIssue,
     BrokerSnapshot,
+    LocalSnapshot,
     OrderFindings,
     OrderRecoveryResult,
     PositionFindings,
+    PositionRecoveryResult,
 )
 
 if TYPE_CHECKING:
@@ -51,7 +56,7 @@ class OrderSyncApplier:
         self.update_broker_trade_records(findings, result)
         self.prune_inactive_local_orders(findings, result)
         self.recover_missing_active_orders(findings, broker, result)
-        self.handle_unknown_broker_orders(result.unknown_broker_trades)
+        self.handle_unknown_broker_orders(result)
 
         try:
             for done_trade in result.done_trades:
@@ -157,8 +162,9 @@ class OrderSyncApplier:
             remaining=remaining,
         )
 
-    def handle_unknown_broker_orders(self, trades: list[ibi.Trade]) -> None:
+    def handle_unknown_broker_orders(self, result: OrderRecoveryResult) -> None:
         """Cancel or report broker orders that do not exist in local records."""
+        trades = result.unknown_broker_trades
         if not trades:
             return
 
@@ -173,6 +179,7 @@ class OrderSyncApplier:
         for trade in trades:
             log.debug(f"Cancelling unknown broker order: {trade.order.orderId}")
             self.controller.cancel(trade)
+            result.cancelled_unknown_trades.append(trade)
 
     def report_done_trade(self, trade: ibi.Trade) -> None:
         """Emit synthetic broker events for a done trade found during sync."""
@@ -211,10 +218,11 @@ class PositionRecordApplier:
 
     def apply(
         self, findings: PositionFindings, order_recovery: OrderRecoveryResult
-    ) -> None:
+    ) -> PositionRecoveryResult:
         """Correct local position records based on position findings."""
+        result = PositionRecoveryResult()
         if not findings.errors:
-            return
+            return result
 
         log.error("Will attempt to fix position records")
         strategy_faults = {
@@ -230,6 +238,7 @@ class PositionRecordApplier:
                     f"{strategies[0]} by {-diff}"
                 )
                 self.sm.save_strategies()
+                result.corrected_contracts.append(contract)
             elif strategies and self.broker.position_for_contract(contract) == 0:
                 for strategy in strategies:
                     self.sm.strategy[strategy].position = 0
@@ -238,6 +247,7 @@ class PositionRecordApplier:
                     f"Position records zeroed for {strategies} "
                     f"to reflect zero position for {contract.symbol}."
                 )
+                result.corrected_contracts.append(contract)
             elif strategies:
                 for strategy in strategies:
                     if strategy in strategy_faults:
@@ -246,110 +256,56 @@ class PositionRecordApplier:
                             f"Position records zeroed for {strategy} "
                             f"to reflect faulty trade previously removed."
                         )
+                        result.corrected_contracts.append(contract)
             else:
                 log.critical(
                     f"Cannot fix position records for {contract.localSymbol}, "
                     f"{strategies=}."
                 )
+        return result
 
 
-class EmergencyCloseGuard:
-    """Authorize emergency closes from local state and a broker snapshot."""
-
-    def __init__(
-        self,
-        sm: StateMachine,
-        broker: BrokerSnapshot,
-        trading_disabled: bool,
-    ) -> None:
-        """Initialize the guard with local records and captured broker state."""
-        self.sm = sm
-        self.broker = broker
-        self.trading_disabled = trading_disabled
-
-    def can_close(self, strategy: Strategy) -> bool:
-        """Return True if broker state confirms an unprotected position."""
-        if self.trading_disabled:
-            log.debug(
-                f"Emergency close suppressed because trading is disabled: "
-                f"{strategy.strategy}"
-            )
-            return False
-
-        contract = strategy.active_contract
-        broker_position = self.broker.position_for_contract(contract)
-        if not broker_position:
-            log.error(
-                f"Emergency close suppressed for {strategy.strategy}: "
-                f"broker reports no position for {contract.localSymbol}."
-            )
-            return False
-
-        strategies = self.sm.for_contract.get(contract) or []
-        if len(strategies) != 1:
-            log.error(
-                f"Emergency close suppressed for {strategy.strategy}: "
-                f"contract {contract.localSymbol} is shared by strategies "
-                f"{strategies}."
-            )
-            return False
-
-        if self.broker.position_is_protected(contract, broker_position):
-            log.error(
-                f"Emergency close suppressed for {strategy.strategy}: "
-                f"broker position for {contract.localSymbol} appears protected."
-            )
-            return False
-
-        return True
-
-
-class BracketActionExecutor:
-    """Apply bracket findings after broker/local recovery has completed."""
+class BracketSyncer:
+    """Check bracket records and broker stop-loss protection."""
 
     def __init__(
         self,
         controller: Controller,
+        local: LocalSnapshot,
         broker: BrokerSnapshot,
-        cancel_stray_orders: bool,
-        handle_missing_brackets: str,
+        missing_brackets: str,
     ) -> None:
-        """Initialize the executor with controller policy and broker snapshot."""
+        """Initialize bracket sync with local records and broker snapshot."""
         self.controller = controller
+        self.local = local
         self.broker = broker
-        self.cancel_stray_orders = cancel_stray_orders
-        self.handle_missing_brackets = handle_missing_brackets
-        self.emergency_close_guard = EmergencyCloseGuard(
-            controller.sm,
-            broker,
-            controller._trading_disabled,
-        )
+        self.missing_brackets = missing_brackets
 
-    def apply(self, findings: BracketFindings) -> None:
-        """Apply bracket findings according to controller policy."""
-        self.handle_obsolete_orders(findings)
-        if self.handle_missing_brackets not in ["remove", "warn"]:
-            return
-        self.handle_missing_bracket_issues(findings)
+    def run(self) -> BracketSyncResult:
+        """Apply configured bracket checks and return broker action summary."""
+        result = BracketSyncResult()
+        if self.missing_brackets == "ignore":
+            return result
 
-    def handle_obsolete_orders(self, findings: BracketFindings) -> None:
-        """Cancel or report active closing orders for flat strategies."""
+        bracket_findings = BracketReconciler().compare(self.local)
+        protection_findings = BrokerProtectionReconciler().compare(self.broker)
+        self.report_bracket_record_findings(bracket_findings)
+        self.report_broker_protection_findings(protection_findings)
+
+        if self.missing_brackets == "remove":
+            self.cancel_obsolete_orders(bracket_findings, result)
+            self.close_exposed_positions(protection_findings, result)
+
+        return result
+
+    def report_bracket_record_findings(self, findings: BracketFindings) -> None:
+        """Log local bracket record inconsistencies."""
         for strategy_str, order_info in findings.obsolete_orders:
             order_id = order_info.trade.order.orderId
-            if self.cancel_stray_orders:
-                log.error(
-                    f"Cancelling obsolete order: "
-                    f"{strategy_str, order_info.action, order_id}"
-                )
-                self.controller.trader.cancel(order_info.trade)
-            else:
-                log.critical(
-                    f"Obsolete order for "
-                    f"{strategy_str}: {order_info.action, order_id}"
-                )
+            log.error(
+                f"Obsolete order for " f"{strategy_str}: {order_info.action, order_id}"
+            )
 
-    def handle_missing_bracket_issues(self, findings: BracketFindings) -> None:
-        """Warn or close positions for strategies with missing brackets."""
         for issue in findings.missing_brackets:
             strategy = issue.strategy
             log.error(
@@ -359,26 +315,66 @@ class BracketActionExecutor:
                 f"we should have: {issue.expected_bracket_count} orders."
             )
 
-        if self.handle_missing_brackets != "remove":
-            return
-
-        non_cancelling_positions: defaultdict[ibi.Contract, float] = defaultdict(float)
-        for issue in findings.missing_brackets:
-            strategy = issue.strategy
-            non_cancelling_positions[strategy.active_contract] += strategy.position
-            self.controller.lock_new_positions()
-
-        for issue in findings.missing_brackets:
-            strategy = issue.strategy
-            if not non_cancelling_positions.get(strategy.active_contract):
-                continue
-            if not self.emergency_close_guard.can_close(strategy):
-                continue
+    def report_broker_protection_findings(
+        self, findings: BrokerProtectionFindings
+    ) -> None:
+        """Log broker positions that lack stop-loss protection."""
+        for issue in findings.exposed_positions:
             log.error(
-                f"Closing positions for strategy with missing bracket: "
-                f"{strategy.strategy}"
+                f"Broker position lacks stop-loss protection: "
+                f"{issue.contract.localSymbol} {issue.broker_position}"
             )
-            non_cancelling_positions[strategy.active_contract] -= strategy.position
-            self.controller.close_positions_for_strategy(
-                strategy.strategy, "MISSING BRACKET EMERGENCY CLOSE"
+
+    def cancel_obsolete_orders(
+        self, findings: BracketFindings, result: BracketSyncResult
+    ) -> None:
+        """Cancel active local bracket/closing orders for flat strategies."""
+        for strategy_str, order_info in findings.obsolete_orders:
+            order_id = order_info.trade.order.orderId
+            log.error(
+                f"Cancelling obsolete order: "
+                f"{strategy_str, order_info.action, order_id}"
             )
+            self.controller.trader.cancel(order_info.trade)
+            result.cancelled_obsolete_orders.append(order_info)
+
+    def close_exposed_positions(
+        self, findings: BrokerProtectionFindings, result: BracketSyncResult
+    ) -> None:
+        """Close unprotected broker positions when they can be attributed safely."""
+        for issue in findings.exposed_positions:
+            strategy = self.strategy_for_contract(issue)
+            if strategy is None:
+                result.blocked_reason = (
+                    "cannot attribute unprotected broker position to one strategy"
+                )
+                continue
+            self.controller.lock_new_positions()
+            log.error(
+                f"Closing broker position without stop-loss protection: "
+                f"{strategy} {issue.close_action} {issue.close_quantity} "
+                f"{issue.contract.localSymbol}"
+            )
+            trade = self.controller.trade(
+                strategy,
+                issue.contract,
+                ibi.MarketOrder(issue.close_action, issue.close_quantity),
+                "MISSING BRACKET EMERGENCY CLOSE",
+                self.controller.sm.strategy[strategy],
+            )
+            if trade:
+                result.closed_positions.append(issue)
+            else:
+                result.blocked_reason = "failed to submit missing-bracket close order"
+
+    def strategy_for_contract(self, issue: BrokerProtectionIssue) -> str | None:
+        """Return the single local strategy for a broker position contract."""
+        strategies = self.local.strategies_by_contract.get(issue.contract) or []
+        if len(strategies) == 1:
+            return strategies[0]
+
+        log.critical(
+            f"Cannot close unprotected broker position for "
+            f"{issue.contract.localSymbol}: {strategies=}."
+        )
+        return None

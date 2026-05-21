@@ -9,7 +9,7 @@ import ib_insync as ibi
 
 from haymaker.state_machine import OrderInfo, StateMachine
 
-from .sync_types import BrokerSnapshot, LocalSnapshot, SyncResult
+from .sync_types import BrokerSnapshot, LocalSnapshot
 
 log = logging.getLogger(__name__)
 
@@ -17,19 +17,10 @@ log = logging.getLogger(__name__)
 class BrokerSnapshotError(Exception):
     """Raised when broker state cannot be captured safely."""
 
-    def __init__(self, result: SyncResult) -> None:
-        """Initialize the exception with the failed sync result."""
-        super().__init__(result.reason)
-        self.result = result
-
-
-def verify_broker_connected(ib: ibi.IB) -> SyncResult:
-    """Return a failed sync result when the broker is disconnected."""
-    if not ib.isConnected():
-        reason = "broker not connected"
-        log.debug("No connection. Abandoning sync.")
-        return SyncResult(False, reason)
-    return SyncResult(True)
+    def __init__(self, reason: str) -> None:
+        """Initialize the exception with a human-readable failure reason."""
+        super().__init__(reason)
+        self.reason = reason
 
 
 async def capture_broker_snapshot(ib: ibi.IB, timeout: float) -> BrokerSnapshot:
@@ -41,10 +32,10 @@ async def capture_broker_snapshot(ib: ibi.IB, timeout: float) -> BrokerSnapshot:
         )
     except asyncio.TimeoutError as exc:
         reason = f"broker position request timed out after {timeout}s"
-        raise BrokerSnapshotError(SyncResult(False, reason)) from exc
+        raise BrokerSnapshotError(reason) from exc
     except Exception as exc:
         reason = f"broker position request failed: {exc!r}"
-        raise BrokerSnapshotError(SyncResult(False, reason)) from exc
+        raise BrokerSnapshotError(reason) from exc
 
     positions_dict = {
         position.contract.localSymbol: position.position for position in positions
@@ -59,7 +50,7 @@ async def capture_broker_snapshot(ib: ibi.IB, timeout: float) -> BrokerSnapshot:
             "broker position sources disagree: "
             f"positions={positions_dict} req_positions={requested_positions_dict}"
         )
-        raise BrokerSnapshotError(SyncResult(False, reason))
+        raise BrokerSnapshotError(reason)
 
     log.debug(f"broker positions: {positions_dict}")
     return BrokerSnapshot(

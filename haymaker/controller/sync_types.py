@@ -4,18 +4,13 @@ import datetime as dt
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Literal
 
 import ib_insync as ibi
 
 from haymaker.state_machine import OrderInfo, Strategy
 
-
-@dataclass(frozen=True)
-class SyncResult:
-    """Outcome of broker/local synchronization."""
-
-    ok: bool
-    reason: str = "ok"
+MissingBracketsPolicy = Literal["ignore", "warn", "remove"]
 
 
 @dataclass(frozen=True)
@@ -89,6 +84,24 @@ class BrokerSnapshot:
 
 
 @dataclass(frozen=True)
+class BrokerProtectionIssue:
+    """Broker position that lacks enough opposite-side stop-loss protection."""
+
+    contract: ibi.Contract
+    broker_position: float
+
+    @property
+    def close_action(self) -> str:
+        """Return the order action needed to flatten the broker position."""
+        return "BUY" if self.broker_position < 0 else "SELL"
+
+    @property
+    def close_quantity(self) -> float:
+        """Return the absolute quantity needed to flatten the broker position."""
+        return abs(self.broker_position)
+
+
+@dataclass(frozen=True)
 class LocalSnapshot:
     """State-machine data captured once for a sync phase."""
 
@@ -130,21 +143,33 @@ class OrderRecoveryResult:
     """Actions taken while applying order reconciliation findings."""
 
     unknown_broker_trades: list[ibi.Trade] = field(default_factory=list)
+    cancelled_unknown_trades: list[ibi.Trade] = field(default_factory=list)
     updated_orders: list[OrderInfo] = field(default_factory=list)
     pruned_orders: list[OrderInfo] = field(default_factory=list)
     done_trades: list[ibi.Trade] = field(default_factory=list)
     faulty_orders: list[OrderInfo] = field(default_factory=list)
 
     @property
-    def recovery_happened(self) -> bool:
-        """Return True when order sync should suppress correction trades."""
+    def changed_local(self) -> bool:
+        """Return True when order sync changed local records or emitted events."""
         return any(
             (
-                self.unknown_broker_trades,
+                self.updated_orders,
+                self.pruned_orders,
                 self.done_trades,
                 self.faulty_orders,
             )
         )
+
+    @property
+    def changed_broker(self) -> bool:
+        """Return True when order sync sent broker-affecting requests."""
+        return bool(self.cancelled_unknown_trades)
+
+    @property
+    def has_unresolved_unknown_orders(self) -> bool:
+        """Return True when unknown broker orders were left active."""
+        return bool(self.unknown_broker_trades and not self.cancelled_unknown_trades)
 
 
 @dataclass(frozen=True)
@@ -152,6 +177,18 @@ class PositionFindings:
     """Read-only position differences between local and broker state."""
 
     errors: Mapping[ibi.Contract, float] = field(default_factory=dict)
+
+
+@dataclass
+class PositionRecoveryResult:
+    """Actions taken while correcting local position records."""
+
+    corrected_contracts: list[ibi.Contract] = field(default_factory=list)
+
+    @property
+    def changed_local(self) -> bool:
+        """Return True when position sync changed local records."""
+        return bool(self.corrected_contracts)
 
 
 @dataclass(frozen=True)
@@ -174,3 +211,34 @@ class BracketFindings:
     def has_findings(self) -> bool:
         """Return True when any bracket discrepancy was found."""
         return bool(self.obsolete_orders or self.missing_brackets)
+
+
+@dataclass(frozen=True)
+class BrokerProtectionFindings:
+    """Broker positions that are not protected by stop-loss orders."""
+
+    exposed_positions: tuple[BrokerProtectionIssue, ...] = ()
+
+    @property
+    def has_findings(self) -> bool:
+        """Return True when any broker position lacks stop-loss protection."""
+        return bool(self.exposed_positions)
+
+
+@dataclass
+class BracketSyncResult:
+    """Actions taken by bracket synchronization."""
+
+    cancelled_obsolete_orders: list[OrderInfo] = field(default_factory=list)
+    closed_positions: list[BrokerProtectionIssue] = field(default_factory=list)
+    blocked_reason: str | None = None
+
+    @property
+    def changed_broker(self) -> bool:
+        """Return True when bracket sync sent broker-affecting requests."""
+        return bool(self.cancelled_obsolete_orders or self.closed_positions)
+
+    @property
+    def terminal_action(self) -> bool:
+        """Return True when sync should stop after a broker action."""
+        return bool(self.closed_positions)
