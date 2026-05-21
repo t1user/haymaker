@@ -306,7 +306,8 @@ class Controller(Atom):
         details = self.contract_registry.get_details(contract)
         if details is None:
             log.warning(
-                f"Missing details for {contract.localSymbol}, "
+                f"Missing details for "
+                f"{contract.localSymbol or contract.symbol or contract}, "
                 f"won't verify if market open"
             )
             return True
