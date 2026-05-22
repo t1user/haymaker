@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 import logging
 from collections import defaultdict
 from collections.abc import Mapping
@@ -22,76 +21,6 @@ MissingBracketsPolicy = Literal["ignore", "warn", "remove"]
 
 
 @dataclass(frozen=True)
-class BrokerSnapshot:
-    """Broker state captured once for a sync cycle."""
-
-    positions: tuple[ibi.Position, ...]
-    open_trades: tuple[ibi.Trade, ...]
-    trades: tuple[ibi.Trade, ...]
-    fills: tuple[ibi.Fill, ...]
-    captured_at: dt.datetime
-
-    @property
-    def positions_by_contract(self) -> dict[ibi.Contract, float]:
-        """Return broker positions keyed by contract."""
-        return {position.contract: position.position for position in self.positions}
-
-    @property
-    def open_trades_by_order_id(self) -> dict[int, ibi.Trade]:
-        """Return active broker trades keyed by order id."""
-        return {trade.order.orderId: trade for trade in self.open_trades}
-
-    @property
-    def trades_by_order_id_or_perm_id(self) -> dict[int, ibi.Trade]:
-        """Return session trades keyed by order id, falling back to perm id."""
-        return {
-            trade.order.orderId or trade.order.permId: trade for trade in self.trades
-        }
-
-    @property
-    def fills_by_order_id(self) -> defaultdict[int, list[ibi.Fill]]:
-        """Return broker fills grouped by order id."""
-        fills: defaultdict[int, list[ibi.Fill]] = defaultdict(list)
-        for fill in self.fills:
-            fills[fill.execution.orderId].append(fill)
-        return fills
-
-    def position_for_contract(self, contract: ibi.Contract) -> float:
-        """Return broker position for ``contract`` from this snapshot."""
-        return self.positions_by_contract.get(contract, 0.0)
-
-    def open_trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
-        """Return active broker trades for ``contract`` from this snapshot."""
-        return [trade for trade in self.open_trades if trade.contract == contract]
-
-    def position_is_protected(
-        self, contract: ibi.Contract, broker_position: float
-    ) -> bool:
-        """Return True if snapshot contains enough opposite-side stop protection."""
-        protective_action = "SELL" if broker_position > 0 else "BUY"
-        protective_order_types = {
-            "STP",
-            "STP LMT",
-            "TRAIL",
-            "TRAIL LIMIT",
-            "TRAILLIT",
-            "TRAIL LIT",
-            "TRAILLMT",
-            "TRAIL LMT",
-        }
-        protective_quantity = sum(
-            trade.order.totalQuantity
-            for trade in self.open_trades_for_contract(contract)
-            if (
-                trade.isActive()
-                and trade.order.action == protective_action
-                and trade.order.orderType in protective_order_types
-            )
-        )
-        return protective_quantity >= abs(broker_position)
-
-
-@dataclass(frozen=True)
 class BrokerProtectionIssue:
     """Broker position that lacks enough opposite-side stop-loss protection."""
 
@@ -107,21 +36,6 @@ class BrokerProtectionIssue:
     def close_quantity(self) -> float:
         """Return the absolute quantity needed to flatten the broker position."""
         return abs(self.broker_position)
-
-
-@dataclass(frozen=True)
-class LocalSnapshot:
-    """State-machine data captured once for a sync phase."""
-
-    orders_by_id: Mapping[int, OrderInfo]
-    strategies: Mapping[str, Strategy]
-    positions_by_contract: Mapping[ibi.Contract, float]
-    strategies_by_contract: Mapping[ibi.Contract, list[str]]
-    orders_by_strategy: Mapping[str, tuple[OrderInfo, ...]]
-
-    def orders_for_strategy(self, strategy: str) -> tuple[OrderInfo, ...]:
-        """Return active order records for ``strategy``."""
-        return self.orders_by_strategy.get(strategy, ())
 
 
 @dataclass(frozen=True)
@@ -252,8 +166,8 @@ class BracketSyncResult:
         return bool(self.closed_positions)
 
 
-class BrokerSnapshotError(Exception):
-    """Raised when broker state cannot be captured safely."""
+class BrokerStateError(Exception):
+    """Raised when broker state cannot be queried safely."""
 
     def __init__(self, reason: str) -> None:
         """Initialize the exception with a human-readable failure reason."""
@@ -261,8 +175,8 @@ class BrokerSnapshotError(Exception):
         self.reason = reason
 
 
-async def capture_broker_snapshot(ib: ibi.IB, timeout: float) -> BrokerSnapshot:
-    """Capture broker state once and verify the position source."""
+async def verify_broker_position_source(ib: ibi.IB, timeout: float) -> None:
+    """Verify that synchronous and requested broker positions agree."""
     positions = tuple(ib.positions())
     try:
         requested_positions = tuple(
@@ -270,10 +184,10 @@ async def capture_broker_snapshot(ib: ibi.IB, timeout: float) -> BrokerSnapshot:
         )
     except asyncio.TimeoutError as exc:
         reason = f"broker position request timed out after {timeout}s"
-        raise BrokerSnapshotError(reason) from exc
+        raise BrokerStateError(reason) from exc
     except Exception as exc:
         reason = f"broker position request failed: {exc!r}"
-        raise BrokerSnapshotError(reason) from exc
+        raise BrokerStateError(reason) from exc
 
     positions_dict = {
         position.contract.localSymbol: position.position for position in positions
@@ -288,54 +202,106 @@ async def capture_broker_snapshot(ib: ibi.IB, timeout: float) -> BrokerSnapshot:
             "broker position sources disagree: "
             f"positions={positions_dict} req_positions={requested_positions_dict}"
         )
-        raise BrokerSnapshotError(reason)
+        raise BrokerStateError(reason)
 
     log.debug(f"broker positions: {positions_dict}")
-    return BrokerSnapshot(
-        positions=positions,
-        open_trades=tuple(ib.openTrades()),
-        trades=tuple(ib.trades()),
-        fills=tuple(ib.fills()),
-        captured_at=dt.datetime.now(tz=dt.timezone.utc),
+
+
+def broker_positions_by_contract(ib: ibi.IB) -> dict[ibi.Contract, float]:
+    """Return current broker positions keyed by contract."""
+    return {position.contract: position.position for position in ib.positions()}
+
+
+def broker_trades_by_order_id_or_perm_id(ib: ibi.IB) -> dict[int, ibi.Trade]:
+    """Return current session trades keyed by order id, falling back to perm id."""
+    return {trade.order.orderId or trade.order.permId: trade for trade in ib.trades()}
+
+
+def broker_fills_by_order_id(ib: ibi.IB) -> defaultdict[int, list[ibi.Fill]]:
+    """Return current broker fills grouped by order id."""
+    fills: defaultdict[int, list[ibi.Fill]] = defaultdict(list)
+    for fill in ib.fills():
+        fills[fill.execution.orderId].append(fill)
+    return fills
+
+
+def broker_position_for_contract(ib: ibi.IB, contract: ibi.Contract) -> float:
+    """Return current broker position for ``contract``."""
+    return broker_positions_by_contract(ib).get(contract, 0.0)
+
+
+def broker_open_trades_for_contract(
+    ib: ibi.IB, contract: ibi.Contract
+) -> list[ibi.Trade]:
+    """Return current active broker trades for ``contract``."""
+    return [trade for trade in ib.openTrades() if trade.contract == contract]
+
+
+def broker_position_is_protected(
+    ib: ibi.IB, contract: ibi.Contract, broker_position: float
+) -> bool:
+    """Return True if broker currently has enough opposite-side stop protection."""
+    protective_action = "SELL" if broker_position > 0 else "BUY"
+    protective_order_types = {
+        "STP",
+        "STP LMT",
+        "TRAIL",
+        "TRAIL LIMIT",
+        "TRAILLIT",
+        "TRAIL LIT",
+        "TRAILLMT",
+        "TRAIL LMT",
+    }
+    protective_quantity = sum(
+        trade.order.totalQuantity
+        for trade in broker_open_trades_for_contract(ib, contract)
+        if (
+            trade.isActive()
+            and trade.order.action == protective_action
+            and trade.order.orderType in protective_order_types
+        )
+    )
+    return protective_quantity >= abs(broker_position)
+
+
+def local_positions_by_contract(sm: StateMachine) -> dict[ibi.Contract, float]:
+    """Return current local positions keyed by contract."""
+    return dict(sm.strategy.total_positions())
+
+
+def local_strategies_by_contract(sm: StateMachine) -> dict[ibi.Contract, list[str]]:
+    """Return current strategy names grouped by active contract."""
+    return dict(sm.strategy.strategies_by_contract())
+
+
+def active_orders_for_strategy(
+    sm: StateMachine, strategy_name: str
+) -> tuple[OrderInfo, ...]:
+    """Return current active order records for a strategy."""
+    return tuple(
+        order_info
+        for order_info in sm.order.values()
+        if order_info.active and order_info.strategy == strategy_name
     )
 
 
-def capture_local_snapshot(sm: StateMachine) -> LocalSnapshot:
-    """Capture state-machine records for one sync phase."""
-    orders_by_id = dict(sm.order.items())
-    orders_by_strategy: defaultdict[str, list[OrderInfo]] = defaultdict(list)
-    for order_info in orders_by_id.values():
-        if order_info.active:
-            orders_by_strategy[order_info.strategy].append(order_info)
-
-    return LocalSnapshot(
-        orders_by_id=orders_by_id,
-        strategies=dict(sm.strategy.items()),
-        positions_by_contract=dict(sm.strategy.total_positions()),
-        strategies_by_contract=dict(sm.strategy.strategies_by_contract()),
-        orders_by_strategy={
-            strategy: tuple(order_infos)
-            for strategy, order_infos in orders_by_strategy.items()
-        },
-    )
-
-
-def compare_order_state(local: LocalSnapshot, broker: BrokerSnapshot) -> OrderFindings:
-    """Compare local order records with a broker snapshot."""
+def compare_order_state(sm: StateMachine, ib: ibi.IB) -> OrderFindings:
+    """Compare local order records with current broker order state."""
     unknown_broker_trades = []
     broker_trade_updates = []
     inactive_local_orders = []
     missing_active_orders = []
 
-    for trade in broker.open_trades:
-        order_info = local.orders_by_id.get(trade.order.orderId)
+    open_trades = ib.openTrades()
+    for trade in open_trades:
+        order_info = sm.order.get(trade.order.orderId)
         if order_info is None:
             unknown_broker_trades.append(trade)
         elif order_info.trade is not trade:
             broker_trade_updates.append((order_info, trade))
 
-    broker_open_order_ids = set(broker.open_trades_by_order_id)
-    for order_id, order_info in local.orders_by_id.items():
+    broker_open_order_ids = {trade.order.orderId for trade in open_trades}
+    for order_id, order_info in sm.order.items():
         if order_id in broker_open_order_ids:
             continue
         if order_info.active:
@@ -370,12 +336,10 @@ def report_order_findings(findings: OrderFindings) -> None:
         log.critical(f"Unknown trade in the system: {unknown_trade}.")
 
 
-def compare_position_state(
-    local: LocalSnapshot, broker: BrokerSnapshot
-) -> PositionFindings:
-    """Compare local strategy positions with a broker snapshot."""
-    broker_positions = broker.positions_by_contract
-    local_positions = local.positions_by_contract
+def compare_position_state(sm: StateMachine, ib: ibi.IB) -> PositionFindings:
+    """Compare local strategy positions with current broker positions."""
+    broker_positions = broker_positions_by_contract(ib)
+    local_positions = local_positions_by_contract(sm)
     diff = {
         contract: (
             (local_positions.get(contract) or 0.0)
@@ -392,13 +356,13 @@ def compare_position_state(
     return PositionFindings(errors=errors)
 
 
-def compare_bracket_records(local: LocalSnapshot) -> BracketFindings:
+def compare_bracket_records(sm: StateMachine) -> BracketFindings:
     """Compare local positions with local bracket/order records."""
     obsolete_orders: list[tuple[str, OrderInfo]] = []
     missing_brackets: list[BracketIssue] = []
 
-    for strategy_str, strategy in local.strategies.items():
-        order_infos = local.orders_for_strategy(strategy.strategy)
+    for strategy_str, strategy in sm.strategy.items():
+        order_infos = active_orders_for_strategy(sm, strategy.strategy)
         if strategy.position == 0:
             obsolete_orders.extend(
                 (strategy_str, order_info)
@@ -434,15 +398,15 @@ def compare_bracket_records(local: LocalSnapshot) -> BracketFindings:
     )
 
 
-def compare_broker_protection(broker: BrokerSnapshot) -> BrokerProtectionFindings:
+def compare_broker_protection(ib: ibi.IB) -> BrokerProtectionFindings:
     """Find broker positions that lack active stop-loss protection."""
     exposed_positions = [
         BrokerProtectionIssue(
             contract=contract,
             broker_position=position,
         )
-        for contract, position in broker.positions_by_contract.items()
-        if position and not broker.position_is_protected(contract, position)
+        for contract, position in broker_positions_by_contract(ib).items()
+        if position and not broker_position_is_protected(ib, contract, position)
     ]
     return BrokerProtectionFindings(exposed_positions=tuple(exposed_positions))
 
@@ -462,16 +426,14 @@ class OrderSyncApplier:
         self.controller = controller
         self.cancel_unknown_trades = cancel_unknown_trades
 
-    async def apply(
-        self, findings: OrderFindings, broker: BrokerSnapshot
-    ) -> OrderRecoveryResult:
+    async def apply(self, findings: OrderFindings) -> OrderRecoveryResult:
         result = OrderRecoveryResult(
             unknown_broker_trades=list(findings.unknown_broker_trades)
         )
 
         self.update_broker_trade_records(findings, result)
         self.prune_inactive_local_orders(findings, result)
-        self.recover_missing_active_orders(findings, broker, result)
+        self.recover_missing_active_orders(findings, result)
         self.handle_unknown_broker_orders(result)
 
         try:
@@ -515,11 +477,10 @@ class OrderSyncApplier:
     def recover_missing_active_orders(
         self,
         findings: OrderFindings,
-        broker: BrokerSnapshot,
         result: OrderRecoveryResult,
     ) -> None:
-        broker_trades = broker.trades_by_order_id_or_perm_id
-        fills_by_order_id = broker.fills_by_order_id
+        broker_trades = broker_trades_by_order_id_or_perm_id(self.ib)
+        fills_by_order_id = broker_fills_by_order_id(self.ib)
 
         if findings.missing_active_orders:
             inactive_trades = [
@@ -619,7 +580,7 @@ class OrderSyncApplier:
 
 def apply_position_recovery(
     sm: StateMachine,
-    broker: BrokerSnapshot,
+    ib: ibi.IB,
     findings: PositionFindings,
     order_recovery: OrderRecoveryResult,
 ) -> PositionRecoveryResult:
@@ -643,7 +604,7 @@ def apply_position_recovery(
             )
             sm.save_strategies()
             result.corrected_contracts.append(contract)
-        elif strategies and broker.position_for_contract(contract) == 0:
+        elif strategies and broker_position_for_contract(ib, contract) == 0:
             for strategy in strategies:
                 sm.strategy[strategy].position = 0
             sm.save_strategies()
@@ -675,13 +636,9 @@ class BracketSyncer:
     def __init__(
         self,
         controller: Controller,
-        local: LocalSnapshot,
-        broker: BrokerSnapshot,
         missing_brackets: str,
     ) -> None:
         self.controller = controller
-        self.local = local
-        self.broker = broker
         self.missing_brackets = missing_brackets
 
     def run(self) -> BracketSyncResult:
@@ -689,8 +646,8 @@ class BracketSyncer:
         if self.missing_brackets == "ignore":
             return result
 
-        bracket_findings = compare_bracket_records(self.local)
-        protection_findings = compare_broker_protection(self.broker)
+        bracket_findings = compare_bracket_records(self.controller.sm)
+        protection_findings = compare_broker_protection(self.controller.ib)
         self.report_bracket_record_findings(bracket_findings)
         self.report_broker_protection_findings(protection_findings)
 
@@ -766,7 +723,9 @@ class BracketSyncer:
                 result.blocked_reason = "failed to submit missing-bracket close order"
 
     def strategy_for_contract(self, issue: BrokerProtectionIssue) -> str | None:
-        strategies = self.local.strategies_by_contract.get(issue.contract) or []
+        strategies = (
+            local_strategies_by_contract(self.controller.sm).get(issue.contract) or []
+        )
         if len(strategies) == 1:
             return strategies[0]
 
@@ -783,67 +742,39 @@ class SyncCoordinator:
     def __init__(self, controller: Controller) -> None:
         """Initialize the coordinator for one controller sync run."""
         self.controller = controller
-        self.attempt = 0
-        self.broker: BrokerSnapshot | None = None
-        self.local: LocalSnapshot | None = None
-        self.order_findings: OrderFindings | None = None
-        self.order_recovery = OrderRecoveryResult()
-        self.position_findings = PositionFindings()
-        self.position_recovery = PositionRecoveryResult()
-        self.bracket_result = BracketSyncResult()
 
     async def run(self) -> bool:
-        """Run sync until it completes, aborts, or fails to converge."""
+        """Run one sync pass against current broker and local state."""
         log.debug("--- Sync ---")
 
-        for attempt in range(1, self.controller.sync_max_attempts + 1):
-            self.reset_attempt(attempt)
+        if not self.verify_broker_connection():
+            return False
+        if not await self.verify_broker_state():
+            return False
 
-            if not self.verify_broker_connection():
-                return False
-            if not await self.capture_broker_state():
-                return False
+        order_recovery = await self.apply_order_recovery()
+        await self.wait_after_broker_change(
+            "order recovery", order_recovery.changed_broker
+        )
 
-            self.capture_local_state()
-            self.compare_orders()
-            await self.apply_order_recovery()
-            if await self.should_resync("order recovery"):
-                continue
-
-            self.compare_positions()
-            self.apply_position_recovery()
-            if await self.should_resync("position recovery"):
-                continue
-
-            if not self.verify_position_sync():
-                return False
-            if self.has_unresolved_unknown_orders():
-                return self.complete()
-
-            self.apply_bracket_sync()
-            if self.bracket_result.blocked_reason:
-                self.block_trading(self.bracket_result.blocked_reason)
-                return False
-            if self.bracket_result.terminal_action:
-                return self.complete()
-            if await self.should_resync("bracket recovery"):
-                continue
-
+        position_findings = self.compare_positions()
+        self.apply_position_recovery(position_findings, order_recovery)
+        if not self.verify_position_sync():
+            return False
+        if self.has_unresolved_unknown_orders(order_recovery):
             return self.complete()
 
-        return self.fail_to_converge()
+        bracket_result = self.apply_bracket_sync()
+        if bracket_result.blocked_reason:
+            self.block_trading(bracket_result.blocked_reason)
+            return False
+        if bracket_result.terminal_action:
+            return self.complete()
 
-    def reset_attempt(self, attempt: int) -> None:
-        """Reset per-attempt state before acquiring fresh snapshots."""
-        self.attempt = attempt
-        self.broker = None
-        self.local = None
-        self.order_findings = None
-        self.order_recovery = OrderRecoveryResult()
-        self.position_findings = PositionFindings()
-        self.position_recovery = PositionRecoveryResult()
-        self.bracket_result = BracketSyncResult()
-        log.debug(f"Sync attempt {attempt}/{self.controller.sync_max_attempts}")
+        await self.wait_after_broker_change(
+            "bracket recovery", bracket_result.changed_broker
+        )
+        return self.complete()
 
     def verify_broker_connection(self) -> bool:
         """Return False and disable trading if broker is disconnected."""
@@ -854,43 +785,34 @@ class SyncCoordinator:
         self.block_trading("broker not connected")
         return False
 
-    async def capture_broker_state(self) -> bool:
-        """Capture and validate broker state for this attempt."""
+    async def verify_broker_state(self) -> bool:
+        """Return False and disable trading if broker state is not trustworthy."""
         try:
-            self.broker = await capture_broker_snapshot(
+            await verify_broker_position_source(
                 self.controller.ib,
                 self.controller.broker_request_timeout,
             )
             return True
-        except BrokerSnapshotError as exc:
+        except BrokerStateError as exc:
             self.block_trading(exc.reason)
             return False
 
-    def capture_local_state(self) -> None:
-        """Capture local state-machine records for this attempt."""
-        self.local = capture_local_snapshot(self.controller.sm)
-
-    def compare_orders(self) -> None:
-        """Compare local order records with broker open/session state."""
-        assert self.local is not None
-        assert self.broker is not None
-        self.order_findings = compare_order_state(self.local, self.broker)
-
-    async def apply_order_recovery(self) -> None:
+    async def apply_order_recovery(self) -> OrderRecoveryResult:
         """Apply order recovery and relink broker trades to local records."""
-        assert self.order_findings is not None
-        assert self.broker is not None
         self.controller.release_hold()
-        self.order_recovery = await OrderSyncApplier(
+        findings = compare_order_state(self.controller.sm, self.controller.ib)
+        return await OrderSyncApplier(
             self.controller.ib,
             self.controller.sm,
             self.controller,
             self.controller.cancel_unknown_trades,
-        ).apply(self.order_findings, self.broker)
+        ).apply(findings)
 
-    def has_unresolved_unknown_orders(self) -> bool:
+    def has_unresolved_unknown_orders(
+        self, order_recovery: OrderRecoveryResult
+    ) -> bool:
         """Return True when unknown broker orders remain active."""
-        if not self.order_recovery.has_unresolved_unknown_orders:
+        if not order_recovery.has_unresolved_unknown_orders:
             return False
 
         log.error(
@@ -899,72 +821,50 @@ class SyncCoordinator:
         )
         return True
 
-    def compare_positions(self) -> None:
+    def compare_positions(self) -> PositionFindings:
         """Compare local strategy positions with broker positions."""
-        assert self.local is not None
-        assert self.broker is not None
-        self.position_findings = compare_position_state(self.local, self.broker)
+        return compare_position_state(self.controller.sm, self.controller.ib)
 
-    def apply_position_recovery(self) -> None:
+    def apply_position_recovery(
+        self,
+        position_findings: PositionFindings,
+        order_recovery: OrderRecoveryResult,
+    ) -> PositionRecoveryResult:
         """Correct local position records to match broker positions."""
-        assert self.broker is not None
-        self.position_recovery = apply_position_recovery(
+        return apply_position_recovery(
             self.controller.sm,
-            self.broker,
-            self.position_findings,
-            self.order_recovery,
+            self.controller.ib,
+            position_findings,
+            order_recovery,
         )
 
     def verify_position_sync(self) -> bool:
-        """Verify local positions still match the current broker snapshot."""
-        assert self.broker is not None
-        final_local = capture_local_snapshot(self.controller.sm)
-        recheck = compare_position_state(final_local, self.broker)
+        """Verify local positions match current broker positions."""
+        recheck = compare_position_state(self.controller.sm, self.controller.ib)
         if not recheck.errors:
-            self.local = final_local
             return True
 
         self.block_trading("local state does not match broker state")
         return False
 
-    def apply_bracket_sync(self) -> None:
+    def apply_bracket_sync(self) -> BracketSyncResult:
         """Check local bracket records and broker stop-loss protection."""
-        assert self.local is not None
-        assert self.broker is not None
-        self.bracket_result = BracketSyncer(
+        return BracketSyncer(
             self.controller,
-            self.local,
-            self.broker,
             self.controller.missing_brackets,
         ).run()
 
-    async def should_resync(self, reason: str) -> bool:
-        """Return True when recovery changed state and snapshots should refresh."""
-        if not self.changed_local and not self.changed_broker:
-            return False
+    async def wait_after_broker_change(self, reason: str, changed_broker: bool) -> None:
+        """Wait after broker-affecting remedies before later broker queries."""
+        if not changed_broker:
+            return
 
-        log.error(f"Sync {reason} changed state; will resync with fresh snapshots.")
+        log.error(f"Sync {reason} changed broker state; waiting for broker update.")
         await asyncio.sleep(self.controller.sync_resync_delay)
-        return True
-
-    @property
-    def changed_local(self) -> bool:
-        """Return True when this attempt changed local state."""
-        return self.order_recovery.changed_local or self.position_recovery.changed_local
-
-    @property
-    def changed_broker(self) -> bool:
-        """Return True when this attempt changed broker state."""
-        return self.order_recovery.changed_broker or self.bracket_result.changed_broker
 
     def block_trading(self, reason: str) -> None:
         """Disable future trading from one sync-owned decision point."""
         self.controller.disable_trading(reason)
-
-    def fail_to_converge(self) -> bool:
-        """Block trading when repeated recovery prevents a stable sync."""
-        self.block_trading("sync did not converge")
-        return False
 
     def complete(self) -> bool:
         """Log successful sync completion."""

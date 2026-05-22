@@ -53,7 +53,6 @@ class Controller(Atom):
     execution_verification_delay: int = 0
     execution_verification_max_retries: int = 5
     broker_request_timeout: int = 10
-    sync_max_attempts: int = 3
     sync_resync_delay: float = 1
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"

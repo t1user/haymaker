@@ -1,5 +1,4 @@
 import asyncio
-import datetime as dt
 import random
 from copy import deepcopy
 from itertools import count
@@ -12,11 +11,9 @@ from haymaker.controller.controller import Controller, ControllerError
 from haymaker.controller.sync_coordinator import (
     BracketSyncer,
     BracketSyncResult,
-    BrokerSnapshot,
     OrderFindings,
     OrderRecoveryResult,
     OrderSyncApplier,
-    capture_local_snapshot,
 )
 from haymaker.state_machine import OrderInfo
 from haymaker.trader import Trader
@@ -42,20 +39,19 @@ def trades_and_positions():
     return trades, positions
 
 
-def make_broker_snapshot(
+def set_broker_state(
+    controller: Controller,
+    monkeypatch: pytest.MonkeyPatch,
     positions: tuple[ibi.Position, ...] = (),
     open_trades: tuple[ibi.Trade, ...] = (),
     trades: tuple[ibi.Trade, ...] = (),
     fills: tuple[ibi.Fill, ...] = (),
-) -> BrokerSnapshot:
-    """Create a broker snapshot for focused controller tests."""
-    return BrokerSnapshot(
-        positions=positions,
-        open_trades=open_trades,
-        trades=trades,
-        fills=fills,
-        captured_at=dt.datetime.now(tz=dt.timezone.utc),
-    )
+) -> None:
+    """Set direct broker query results for focused controller tests."""
+    monkeypatch.setattr(controller.ib, "positions", lambda: list(positions))
+    monkeypatch.setattr(controller.ib, "openTrades", lambda: list(open_trades))
+    monkeypatch.setattr(controller.ib, "trades", lambda: list(trades))
+    monkeypatch.setattr(controller.ib, "fills", lambda: list(fills))
 
 
 # @pytest.fixture()
@@ -178,12 +174,12 @@ async def test_sync_timeout_disables_trading(controller, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sync_disconnected_does_not_capture_broker_state(controller, monkeypatch):
+async def test_sync_disconnected_does_not_query_broker_state(controller, monkeypatch):
     def fail_position_read():
-        raise AssertionError("broker snapshot should not be captured")
+        raise AssertionError("broker state should not be queried")
 
     async def fail_requested_positions():
-        raise AssertionError("broker snapshot should not be captured")
+        raise AssertionError("broker state should not be queried")
 
     monkeypatch.setattr(controller.ib, "isConnected", lambda: False)
     monkeypatch.setattr(controller.ib, "positions", fail_position_read)
@@ -272,7 +268,6 @@ def test_from_config_loads_controller_sync_options(Atom):
         top_config={
             "controller": {
                 "broker_request_timeout": 3,
-                "sync_max_attempts": 2,
                 "sync_resync_delay": 0,
                 "cancel_unknown_trades": True,
                 "missing_brackets": "warn",
@@ -281,7 +276,6 @@ def test_from_config_loads_controller_sync_options(Atom):
     )
 
     assert controller.broker_request_timeout == 3
-    assert controller.sync_max_attempts == 2
     assert controller.sync_resync_delay == 0
     assert controller.cancel_unknown_trades
     assert controller.missing_brackets == "warn"
@@ -328,19 +322,21 @@ def test_unknown_broker_orders_can_be_left_active_by_config(
 
 
 @pytest.mark.asyncio
-async def test_order_sync_applier_returns_fresh_actions_per_report(controller, trade):
+async def test_order_sync_applier_returns_fresh_actions_per_report(
+    controller, trade, monkeypatch
+):
     applier = OrderSyncApplier(controller.ib, controller.sm, controller, False)
     controller.sm.order[trade.order.orderId] = OrderInfo(
         "coolstrategy", "OPEN", trade, {}
     )
+    set_broker_state(controller, monkeypatch)
 
     order_info = controller.sm.order[trade.order.orderId]
     first_actions = await applier.apply(
         OrderFindings(missing_active_orders=(order_info,)),
-        make_broker_snapshot(),
     )
 
-    second_actions = await applier.apply(OrderFindings(), make_broker_snapshot())
+    second_actions = await applier.apply(OrderFindings())
 
     assert [oi.trade for oi in first_actions.faulty_orders] == [trade]
     assert second_actions.faulty_orders == []
@@ -427,7 +423,9 @@ def test_bracket_sync_does_not_close_protected_broker_position(
         action="SELL", totalQuantity=1, orderType="TRAIL"
     )
     protective_trade.orderStatus = ibi.OrderStatus(status="Submitted")
-    snapshot = make_broker_snapshot(
+    set_broker_state(
+        controller,
+        monkeypatch,
         positions=(broker_position,),
         open_trades=(protective_trade,),
     )
@@ -448,8 +446,7 @@ def test_bracket_sync_does_not_close_protected_broker_position(
         ),
     )
 
-    local = capture_local_snapshot(controller.sm)
-    result = BracketSyncer(controller, local, snapshot, "remove").run()
+    result = BracketSyncer(controller, "remove").run()
 
     assert not result.changed_broker
     assert placed_orders == []
@@ -471,7 +468,9 @@ def test_bracket_sync_take_profit_does_not_protect_broker_position(
     take_profit = deepcopy(trade)
     take_profit.order = ibi.Order(action="SELL", totalQuantity=3, orderType="LMT")
     take_profit.orderStatus = ibi.OrderStatus(status="Submitted")
-    snapshot = make_broker_snapshot(
+    set_broker_state(
+        controller,
+        monkeypatch,
         positions=(broker_position,),
         open_trades=(take_profit,),
     )
@@ -486,12 +485,7 @@ def test_bracket_sync_take_profit_does_not_protect_broker_position(
         or trade,
     )
 
-    result = BracketSyncer(
-        controller,
-        capture_local_snapshot(controller.sm),
-        snapshot,
-        "remove",
-    ).run()
+    result = BracketSyncer(controller, "remove").run()
 
     assert result.terminal_action
     assert result.closed_positions
@@ -499,7 +493,9 @@ def test_bracket_sync_take_profit_does_not_protect_broker_position(
     assert placed_orders[0][2].totalQuantity == 3
 
 
-def test_bracket_sync_blocks_ambiguous_broker_position_close(controller, trade):
+def test_bracket_sync_blocks_ambiguous_broker_position_close(
+    controller, trade, monkeypatch
+):
     first = controller.sm.strategy["first"]
     first.position = 1
     first.active_contract = trade.contract
@@ -512,14 +508,9 @@ def test_bracket_sync_blocks_ambiguous_broker_position_close(controller, trade):
         position=1,
         avgCost=1,
     )
-    snapshot = make_broker_snapshot(positions=(broker_position,))
+    set_broker_state(controller, monkeypatch, positions=(broker_position,))
 
-    result = BracketSyncer(
-        controller,
-        capture_local_snapshot(controller.sm),
-        snapshot,
-        "remove",
-    ).run()
+    result = BracketSyncer(controller, "remove").run()
 
     assert result.blocked_reason
     assert not result.closed_positions
@@ -537,15 +528,10 @@ def test_bracket_sync_blocks_when_close_order_is_not_submitted(
         position=1,
         avgCost=1,
     )
-    snapshot = make_broker_snapshot(positions=(broker_position,))
+    set_broker_state(controller, monkeypatch, positions=(broker_position,))
     monkeypatch.setattr(controller, "trade", lambda *args: None)
 
-    result = BracketSyncer(
-        controller,
-        capture_local_snapshot(controller.sm),
-        snapshot,
-        "remove",
-    ).run()
+    result = BracketSyncer(controller, "remove").run()
 
     assert result.blocked_reason
     assert not result.closed_positions
