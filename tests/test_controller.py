@@ -158,11 +158,17 @@ def test_register_position_skips_already_accounted_execution(controller, trade):
 
 @pytest.mark.asyncio
 async def test_sync_timeout_disables_trading(controller, monkeypatch):
+    disabled_reasons = []
+
     async def pending_positions():
         await asyncio.sleep(1)
         return []
 
     controller.broker_request_timeout = 0.01
+    controller.sync_resync_delay = 0
+    monkeypatch.setattr(
+        controller, "disable_trading", lambda reason: disabled_reasons.append(reason)
+    )
     monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
     monkeypatch.setattr(controller.ib, "positions", lambda: [])
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", pending_positions)
@@ -170,29 +176,42 @@ async def test_sync_timeout_disables_trading(controller, monkeypatch):
     result = await controller.sync()
 
     assert not result
-    assert controller._trading_disabled
+    assert disabled_reasons == ["broker position request timed out after 0.01s"]
 
 
 @pytest.mark.asyncio
 async def test_sync_disconnected_does_not_query_broker_state(controller, monkeypatch):
+    connection_attempts = 0
+    disabled_reasons = []
+
+    def disconnected():
+        nonlocal connection_attempts
+        connection_attempts += 1
+        return False
+
     def fail_position_read():
         raise AssertionError("broker state should not be queried")
 
     async def fail_requested_positions():
         raise AssertionError("broker state should not be queried")
 
-    monkeypatch.setattr(controller.ib, "isConnected", lambda: False)
+    controller.sync_resync_delay = 0
+    monkeypatch.setattr(
+        controller, "disable_trading", lambda reason: disabled_reasons.append(reason)
+    )
+    monkeypatch.setattr(controller.ib, "isConnected", disconnected)
     monkeypatch.setattr(controller.ib, "positions", fail_position_read)
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", fail_requested_positions)
 
     result = await controller.sync()
 
     assert not result
-    assert controller._trading_disabled
+    assert connection_attempts == controller.sync_max_attempts
+    assert disabled_reasons == ["broker not connected"]
 
 
 @pytest.mark.asyncio
-async def test_sync_coordinator_reports_broken_state_without_disabling_trading(
+async def test_sync_coordinator_returns_false_for_disconnected_broker(
     controller, monkeypatch
 ):
     def fail_position_read():
@@ -205,7 +224,28 @@ async def test_sync_coordinator_reports_broken_state_without_disabling_trading(
     result = await coordinator.run()
 
     assert not result
-    assert coordinator.broken_state_reason == "broker not connected"
+    assert coordinator.broken_state_reason is None
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_coordinator_returns_false_for_broker_state_timeout(
+    controller, monkeypatch
+):
+    async def pending_positions():
+        await asyncio.sleep(1)
+        return []
+
+    controller.broker_request_timeout = 0.01
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", pending_positions)
+
+    coordinator = SyncCoordinator(controller)
+    result = await coordinator.run()
+
+    assert not result
+    assert coordinator.broken_state_reason is None
     assert not controller._trading_disabled
 
 
@@ -223,6 +263,7 @@ async def test_broker_position_source_disagreement_disables_trading(
     async def requested_positions():
         return []
 
+    controller.sync_resync_delay = 0
     monkeypatch.setattr(controller.ib, "positions", lambda: [position])
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
 

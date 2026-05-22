@@ -37,7 +37,7 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/app.py`: application watchdog, connection probe, restart lifecycle, futures-roll schedule, and top-level `App.run()`.
 - `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
-- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync validates broker position freshness, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
+- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/state_machine.py`: persisted strategy and order state, rejection tracking, active positions, and locks.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.
@@ -90,7 +90,7 @@ The research package is intentionally separate from live execution. It works dir
 
 1. User strategy code builds `Atom` pipelines and starts `App.run()`.
 2. `App` starts the IB watchdog and waits for a successful historical-data probe.
-3. `Controller.run()` reads or initializes state, then `Controller.sync()` runs a bounded retry loop around a sync coordinator. Each coordinator pass validates broker position freshness, relinks current `ibi.Trade` objects to local records, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after any recovery action so `Controller.sync()` can retry the checks or disable trading for broken broker/local state.
+3. `Controller.run()` reads or initializes state, then `Controller.sync()` runs a bounded retry loop around a sync coordinator. Each coordinator pass first checks broker connection and validates broker position freshness, relinks current `ibi.Trade` objects to local records, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after broker verification failures or recovery actions so `Controller.sync()` can retry the checks before disabling trading.
 4. `Jobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
 5. Streamers emit market data into strategy blocks.
 6. Blocks add strategy fields and emit dictionaries.
@@ -216,7 +216,7 @@ dataloader -f settings.yaml
 - `upsample()` must preserve the rule that lower-frequency values become available when the grouped bar completes. `position` must not be upsampled.
 - `stop_loss()` treats `blip` as generated events and shifts internally, while `position` is already executable state. `distance` and `scheduled_close` Series must match the dataframe index exactly.
 - Python and Numba implementations in the stop engine and backtester engine must stay behaviorally identical.
-- Controller sync and reconciliation touches live broker state, state-machine records, blotter output, and order cancellation/close logic. Sync correction actions should only run after broker position sources agree; if broker position validation fails, the coordinator reports broken state and `Controller.sync()` disables trading before recovery or correction actions are attempted. Later sync checks query broker/local state directly, and missing-bracket emergency closes are based on broker position size/direction, not local strategy position size.
+- Controller sync and reconciliation touches live broker state, state-machine records, blotter output, and order cancellation/close logic. Sync correction actions should only run after broker position sources agree; if broker connection or broker position validation fails, the coordinator returns a retryable failed pass and `Controller.sync()` retries before disabling trading for non-convergence. Later sync checks query broker/local state directly, and missing-bracket emergency closes are based on broker position size/direction, not local strategy position size.
 - Futures rolling changes active contracts, next-contract selection, and strategy state; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.
 - Config files can instantiate Python objects through YAML tags; operational config must be treated as trusted and reviewed.

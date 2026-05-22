@@ -2,8 +2,9 @@
 
 Sync starts by checking the broker connection and validating that
 ``ib.positions()`` agrees with ``await ib.reqPositionsAsync()``.  If either
-check fails, the pass reports broken state to :meth:`Controller.sync` before
-any recovery or correction action is attempted.
+check fails, the pass returns ``False`` without attempting recovery or
+correction actions; :meth:`Controller.sync` owns retrying and deciding whether
+repeated failures should disable trading.
 
 After broker validation, each step reads current state directly from
 ``controller.ib`` or ``controller.sm`` instead of using stored broker/local
@@ -19,7 +20,7 @@ snapshots.  The ordered flow is:
 
 The coordinator does not disable trading and does not retry.  Any recovery
 action returns ``False`` so :meth:`Controller.sync` can start a fresh pass from
-current broker/local state.  Broken state is reported through
+current broker/local state.  Non-retryable unsafe state is reported through
 ``broken_state_reason``.
 """
 
@@ -37,7 +38,7 @@ import ib_insync as ibi
 from haymaker import misc
 from haymaker.state_machine import OrderInfo, StateMachine
 
-from .sync_brackets import BracketSyncResult, BracketSyncer
+from .sync_brackets import BracketSyncer
 
 if TYPE_CHECKING:
     from .controller import Controller
@@ -484,14 +485,17 @@ class SyncCoordinator:
 
     ``run()`` returns ``True`` only when the current pass completed cleanly.
     It returns ``False`` after any recovery action so the caller can retry from
-    fresh broker/local reads.  Terminal safety failures set
-    ``broken_state_reason``; :class:`Controller` owns the decision to disable
-    trading.
+    fresh broker/local reads.  Retryable broker connection and broker-state
+    verification failures also return ``False`` without setting
+    ``broken_state_reason`` and store the reason in ``retry_reason``.  Terminal
+    safety failures set ``broken_state_reason``; :class:`Controller` owns the
+    decision to disable trading.
     """
 
     def __init__(self, controller: Controller) -> None:
         """Initialize the coordinator for one controller sync run."""
         self.controller = controller
+        self.retry_reason: str | None = None
         self.broken_state_reason: str | None = None
 
     async def run(self) -> bool:
@@ -505,53 +509,62 @@ class SyncCoordinator:
         """
         log.debug("--- Sync ---")
 
-        if not self.verify_broker_connection():
+        if not self.controller.ib.isConnected():
+            log.debug("No connection. Abandoning sync.")
+            self.retry_reason = "broker not connected"
             return False
-        if not await self.verify_broker_state():
+
+        try:
+            await verify_broker_position_source(
+                self.controller.ib,
+                self.controller.broker_request_timeout,
+            )
+        except BrokerStateError as exc:
+            log.error(f"Broker state verification failed: {exc.reason}")
+            self.retry_reason = exc.reason
             return False
 
         order_recovery = await self.apply_order_recovery()
         if order_recovery.changed_local or order_recovery.changed_broker:
             return False
 
-        position_findings = self.compare_positions()
-        position_recovery = self.apply_position_recovery(
-            position_findings, order_recovery
+        position_findings = compare_position_state(
+            self.controller.sm, self.controller.ib
+        )
+        position_recovery = apply_position_recovery(
+            self.controller.sm,
+            self.controller.ib,
+            position_findings,
+            order_recovery,
         )
         if position_recovery.changed_local:
             return False
 
-        if not self.verify_position_sync():
-            return False
-        if self.has_unresolved_unknown_orders(order_recovery):
-            return self.complete()
+        position_recheck = compare_position_state(
+            self.controller.sm, self.controller.ib
+        )
+        if position_recheck.errors:
+            return self.fail("local state does not match broker state")
 
-        bracket_result = self.apply_bracket_sync()
+        if order_recovery.has_unresolved_unknown_orders:
+            log.error(
+                "Unknown broker orders remain active; "
+                "skipping position-protection correction trades."
+            )
+            log.debug("--- Sync completed ---")
+            return True
+
+        bracket_result = BracketSyncer(
+            self.controller,
+            self.controller.missing_brackets,
+        ).run()
         if bracket_result.blocked_reason:
             return self.fail(bracket_result.blocked_reason)
         if bracket_result.changed_broker:
             return False
 
-        return self.complete()
-
-    def verify_broker_connection(self) -> bool:
-        """Return False and report broken state if broker is disconnected."""
-        if self.controller.ib.isConnected():
-            return True
-
-        log.debug("No connection. Abandoning sync.")
-        return self.fail("broker not connected")
-
-    async def verify_broker_state(self) -> bool:
-        """Return False and report broken state if broker state is not trustworthy."""
-        try:
-            await verify_broker_position_source(
-                self.controller.ib,
-                self.controller.broker_request_timeout,
-            )
-            return True
-        except BrokerStateError as exc:
-            return self.fail(exc.reason)
+        log.debug("--- Sync completed ---")
+        return True
 
     async def apply_order_recovery(self) -> OrderRecoveryResult:
         """Apply order recovery and relink broker trades to local records."""
@@ -564,63 +577,7 @@ class SyncCoordinator:
             self.controller.cancel_unknown_trades,
         ).apply(findings)
 
-    def has_unresolved_unknown_orders(
-        self, order_recovery: OrderRecoveryResult
-    ) -> bool:
-        """Return True when unknown broker orders remain active."""
-        if not order_recovery.has_unresolved_unknown_orders:
-            return False
-
-        log.error(
-            "Unknown broker orders remain active; "
-            "skipping position-protection correction trades."
-        )
-        return True
-
-    def compare_positions(self) -> PositionFindings:
-        """Compare local strategy positions with broker positions."""
-        return compare_position_state(self.controller.sm, self.controller.ib)
-
-    def apply_position_recovery(
-        self,
-        position_findings: PositionFindings,
-        order_recovery: OrderRecoveryResult,
-    ) -> PositionRecoveryResult:
-        """Correct local position records to match broker positions."""
-        return apply_position_recovery(
-            self.controller.sm,
-            self.controller.ib,
-            position_findings,
-            order_recovery,
-        )
-
-    def verify_position_sync(self) -> bool:
-        """Verify local positions match current broker positions."""
-        recheck = compare_position_state(self.controller.sm, self.controller.ib)
-        if not recheck.errors:
-            return True
-
-        return self.fail("local state does not match broker state")
-
-    def apply_bracket_sync(self) -> BracketSyncResult:
-        """Check bracket policy after order and position reconciliation.
-
-        Bracket handling runs only after broker state has been validated and
-        local position records have been reconciled.  The bracket module owns
-        the policy details for ``controller.missing_brackets``; the coordinator
-        only interprets the returned result.
-        """
-        return BracketSyncer(
-            self.controller,
-            self.controller.missing_brackets,
-        ).run()
-
     def fail(self, reason: str) -> bool:
         """Record broken state and return ``False`` to the controller."""
         self.broken_state_reason = reason
         return False
-
-    def complete(self) -> bool:
-        """Log successful sync completion."""
-        log.debug("--- Sync completed ---")
-        return True

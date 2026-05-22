@@ -250,9 +250,11 @@ class Controller(Atom):
         ``SyncCoordinator`` performs one pass and never disables trading.  A
         ``False`` result with ``broken_state_reason`` means broker/local state
         is unsafe and trading must be disabled immediately.  A ``False`` result
-        without a reason means a recovery action changed local or broker state,
-        so the controller waits and retries from fresh broker/local reads.
+        without a reason means broker state could not be verified or a recovery
+        action changed local or broker state, so the controller waits and
+        retries from fresh broker/local reads.
         """
+        last_retry_reason: str | None = None
         for attempt in range(1, self.sync_max_attempts + 1):
             log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
             coordinator = SyncCoordinator(self)
@@ -263,11 +265,14 @@ class Controller(Atom):
                 self.disable_trading(coordinator.broken_state_reason)
                 return False
 
+            if coordinator.retry_reason:
+                last_retry_reason = coordinator.retry_reason
+
             if attempt < self.sync_max_attempts:
-                log.error("Sync changed state; will retry checks.")
+                log.error("Sync did not complete; will retry checks.")
                 await asyncio.sleep(self.sync_resync_delay)
 
-        self.disable_trading("sync did not converge")
+        self.disable_trading(last_retry_reason or "sync did not converge")
         return False
 
     def onStart(self, data, *args) -> None:
