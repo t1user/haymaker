@@ -19,7 +19,7 @@ from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
 from .sync_brackets import MissingBracketsPolicy
-from .sync_coordinator import SyncCoordinator
+from .sync_coordinator import SyncBrokenStateError, SyncCoordinator
 from .terminator import Terminator
 
 if TYPE_CHECKING:
@@ -248,31 +248,26 @@ class Controller(Atom):
         """Run sync passes until state is clean, broken, or non-convergent.
 
         ``SyncCoordinator`` performs one pass and never disables trading.  A
-        ``False`` result with ``broken_state_reason`` means broker/local state
-        is unsafe and trading must be disabled immediately.  A ``False`` result
-        without a reason means broker state could not be verified or a recovery
+        ``False`` result means broker state could not be verified or a recovery
         action changed local or broker state, so the controller waits and
-        retries from fresh broker/local reads.
+        retries from fresh broker/local reads.  ``SyncBrokenStateError`` means
+        broker/local state is unsafe and trading must be disabled immediately.
         """
-        last_retry_reason: str | None = None
         for attempt in range(1, self.sync_max_attempts + 1):
             log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
             coordinator = SyncCoordinator(self)
-            if await coordinator.run():
-                return True
-
-            if coordinator.broken_state_reason:
-                self.disable_trading(coordinator.broken_state_reason)
+            try:
+                if await coordinator.run():
+                    return True
+            except SyncBrokenStateError as exc:
+                self.disable_trading(str(exc))
                 return False
-
-            if coordinator.retry_reason:
-                last_retry_reason = coordinator.retry_reason
 
             if attempt < self.sync_max_attempts:
                 log.error("Sync did not complete; will retry checks.")
                 await asyncio.sleep(self.sync_resync_delay)
 
-        self.disable_trading(last_retry_reason or "sync did not converge")
+        self.disable_trading("sync did not converge")
         return False
 
     def onStart(self, data, *args) -> None:

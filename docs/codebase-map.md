@@ -90,7 +90,7 @@ The research package is intentionally separate from live execution. It works dir
 
 1. User strategy code builds `Atom` pipelines and starts `App.run()`.
 2. `App` starts the IB watchdog and waits for a successful historical-data probe.
-3. `Controller.run()` reads or initializes state, then `Controller.sync()` runs a bounded retry loop around a sync coordinator. Each coordinator pass first checks broker connection and validates broker position freshness, relinks current `ibi.Trade` objects to local records, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after broker verification failures or recovery actions so `Controller.sync()` can retry the checks before disabling trading.
+3. `Controller.run()` reads or initializes state, then `Controller.sync()` runs a bounded retry loop around a sync coordinator. Each coordinator pass first checks broker connection and validates broker position freshness, relinks current `ibi.Trade` objects to local records, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after broker verification failures or recovery actions so `Controller.sync()` can retry the checks before disabling trading. Non-retryable unsafe states raise `SyncBrokenStateError`, which `Controller.sync()` catches to disable trading immediately.
 4. `Jobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
 5. Streamers emit market data into strategy blocks.
 6. Blocks add strategy fields and emit dictionaries.

@@ -20,8 +20,8 @@ snapshots.  The ordered flow is:
 
 The coordinator does not disable trading and does not retry.  Any recovery
 action returns ``False`` so :meth:`Controller.sync` can start a fresh pass from
-current broker/local state.  Non-retryable unsafe state is reported through
-``broken_state_reason``.
+current broker/local state.  Non-retryable unsafe state raises
+``SyncBrokenStateError``.
 """
 
 from __future__ import annotations
@@ -128,6 +128,10 @@ class BrokerStateError(Exception):
         """Initialize the exception with a human-readable failure reason."""
         super().__init__(reason)
         self.reason = reason
+
+
+class SyncBrokenStateError(Exception):
+    """Raised when sync detects unsafe state that must stop trading."""
 
 
 async def verify_broker_position_source(ib: ibi.IB, timeout: float) -> None:
@@ -486,32 +490,31 @@ class SyncCoordinator:
     ``run()`` returns ``True`` only when the current pass completed cleanly.
     It returns ``False`` after any recovery action so the caller can retry from
     fresh broker/local reads.  Retryable broker connection and broker-state
-    verification failures also return ``False`` without setting
-    ``broken_state_reason`` and store the reason in ``retry_reason``.  Terminal
-    safety failures set ``broken_state_reason``; :class:`Controller` owns the
-    decision to disable trading.
+    verification failures also return ``False``.  Terminal safety failures
+    raise ``SyncBrokenStateError``; :class:`Controller` owns the decision to
+    disable trading.
     """
 
     def __init__(self, controller: Controller) -> None:
         """Initialize the coordinator for one controller sync run."""
         self.controller = controller
-        self.retry_reason: str | None = None
-        self.broken_state_reason: str | None = None
 
     async def run(self) -> bool:
         """Run one sync pass against current broker and local state.
 
         Returns:
             ``True`` when sync completed without recovery actions or terminal
-            safety failures.  ``False`` means the controller should either
-            retry the sync or disable trading when ``broken_state_reason`` is
-            populated.
+            safety failures.  ``False`` means the controller should retry the
+            sync from fresh broker/local reads.
+
+        Raises:
+            SyncBrokenStateError: Raised for unsafe state that should stop
+                trading immediately.
         """
         log.debug("--- Sync ---")
 
         if not self.controller.ib.isConnected():
             log.debug("No connection. Abandoning sync.")
-            self.retry_reason = "broker not connected"
             return False
 
         try:
@@ -521,7 +524,6 @@ class SyncCoordinator:
             )
         except BrokerStateError as exc:
             log.error(f"Broker state verification failed: {exc.reason}")
-            self.retry_reason = exc.reason
             return False
 
         order_recovery = await self.apply_order_recovery()
@@ -544,7 +546,7 @@ class SyncCoordinator:
             self.controller.sm, self.controller.ib
         )
         if position_recheck.errors:
-            return self.fail("local state does not match broker state")
+            raise SyncBrokenStateError("local state does not match broker state")
 
         if order_recovery.has_unresolved_unknown_orders:
             log.error(
@@ -559,7 +561,7 @@ class SyncCoordinator:
             self.controller.missing_brackets,
         ).run()
         if bracket_result.blocked_reason:
-            return self.fail(bracket_result.blocked_reason)
+            raise SyncBrokenStateError(bracket_result.blocked_reason)
         if bracket_result.changed_broker:
             return False
 
@@ -576,8 +578,3 @@ class SyncCoordinator:
             self.controller,
             self.controller.cancel_unknown_trades,
         ).apply(findings)
-
-    def fail(self, reason: str) -> bool:
-        """Record broken state and return ``False`` to the controller."""
-        self.broken_state_reason = reason
-        return False

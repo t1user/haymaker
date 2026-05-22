@@ -13,6 +13,7 @@ from haymaker.controller.sync_coordinator import (
     OrderFindings,
     OrderRecoveryResult,
     OrderSyncApplier,
+    SyncBrokenStateError,
     SyncCoordinator,
 )
 from haymaker.state_machine import OrderInfo
@@ -176,7 +177,7 @@ async def test_sync_timeout_disables_trading(controller, monkeypatch):
     result = await controller.sync()
 
     assert not result
-    assert disabled_reasons == ["broker position request timed out after 0.01s"]
+    assert disabled_reasons == ["sync did not converge"]
 
 
 @pytest.mark.asyncio
@@ -207,7 +208,7 @@ async def test_sync_disconnected_does_not_query_broker_state(controller, monkeyp
 
     assert not result
     assert connection_attempts == controller.sync_max_attempts
-    assert disabled_reasons == ["broker not connected"]
+    assert disabled_reasons == ["sync did not converge"]
 
 
 @pytest.mark.asyncio
@@ -224,7 +225,6 @@ async def test_sync_coordinator_returns_false_for_disconnected_broker(
     result = await coordinator.run()
 
     assert not result
-    assert coordinator.broken_state_reason is None
     assert not controller._trading_disabled
 
 
@@ -245,7 +245,6 @@ async def test_sync_coordinator_returns_false_for_broker_state_timeout(
     result = await coordinator.run()
 
     assert not result
-    assert coordinator.broken_state_reason is None
     assert not controller._trading_disabled
 
 
@@ -491,8 +490,30 @@ async def test_sync_coordinator_returns_false_after_order_recovery(
     result = await coordinator.run()
 
     assert not result
-    assert coordinator.broken_state_reason is None
     assert controller.sm.order[old_trade.order.orderId].trade is broker_trade
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_coordinator_raises_for_broken_state(controller, monkeypatch):
+    async def requested_positions():
+        return []
+
+    def blocked_bracket_sync(self):
+        return BracketSyncResult(blocked_reason="broken bracket state")
+
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(controller.ib, "openTrades", lambda: [])
+    monkeypatch.setattr(controller.ib, "trades", lambda: [])
+    monkeypatch.setattr(controller.ib, "fills", lambda: [])
+    monkeypatch.setattr(BracketSyncer, "run", blocked_bracket_sync)
+
+    coordinator = SyncCoordinator(controller)
+
+    with pytest.raises(SyncBrokenStateError, match="broken bracket state"):
+        await coordinator.run()
     assert not controller._trading_disabled
 
 
