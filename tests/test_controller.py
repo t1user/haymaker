@@ -8,9 +8,8 @@ import pytest
 from helpers import wait_for_condition
 
 from haymaker.controller.controller import Controller, ControllerError
+from haymaker.controller.sync_brackets import BracketSyncResult, BracketSyncer
 from haymaker.controller.sync_coordinator import (
-    BracketSyncer,
-    BracketSyncResult,
     OrderFindings,
     OrderRecoveryResult,
     OrderSyncApplier,

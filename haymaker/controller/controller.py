@@ -18,7 +18,8 @@ from haymaker.state_machine import OrderInfo, Strategy
 from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
-from .sync_coordinator import MissingBracketsPolicy, SyncCoordinator
+from .sync_brackets import MissingBracketsPolicy
+from .sync_coordinator import SyncCoordinator
 from .terminator import Terminator
 
 if TYPE_CHECKING:

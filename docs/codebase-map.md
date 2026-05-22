@@ -37,7 +37,7 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/app.py`: application watchdog, connection probe, restart lifecycle, futures-roll schedule, and top-level `App.run()`.
 - `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
-- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync validates broker position freshness, then queries broker/local state directly for order, position, and bracket/protection checks while the coordinator owns trading-disable decisions.
+- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync validates broker position freshness, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and the coordinator owns trading-disable decisions.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/state_machine.py`: persisted strategy and order state, rejection tracking, active positions, and locks.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.
