@@ -28,10 +28,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Self
+from abc import ABC, abstractmethod
 
 import ib_insync as ibi
-
 from haymaker.state_machine import OrderInfo, StateMachine, Strategy
 
 if TYPE_CHECKING:
@@ -42,8 +42,21 @@ log = logging.getLogger(__name__)
 MissingBracketsPolicy = Literal["ignore", "warn", "remove"]
 
 
+class BracketSyncError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
-class BrokerProtectionIssue:
+class BracketIssue:
+    """Missing bracket information for one strategy."""
+
+    strategy: Strategy
+    existing_orders: tuple[OrderInfo, ...]
+    expected_bracket_count: int
+
+
+@dataclass(frozen=True)
+class ProtectionIssue:
     """Broker position that lacks enough opposite-side stop-loss protection."""
 
     contract: ibi.Contract
@@ -60,219 +73,196 @@ class BrokerProtectionIssue:
         return abs(self.broker_position)
 
 
-@dataclass(frozen=True)
-class BracketIssue:
-    """Missing bracket information for one strategy."""
-
-    strategy: Strategy
-    existing_orders: tuple[OrderInfo, ...]
-    expected_bracket_count: int
-
-
-@dataclass(frozen=True)
-class BracketFindings:
-    """Read-only order/position bracket findings."""
-
-    obsolete_orders: tuple[tuple[str, OrderInfo], ...] = ()
-    missing_brackets: tuple[BracketIssue, ...] = ()
-
-    @property
-    def has_findings(self) -> bool:
-        """Return True when any bracket discrepancy was found."""
-        return bool(self.obsolete_orders or self.missing_brackets)
-
-
-@dataclass(frozen=True)
-class BrokerProtectionFindings:
-    """Broker positions that are not protected by stop-loss orders."""
-
-    exposed_positions: tuple[BrokerProtectionIssue, ...] = ()
-
-    @property
-    def has_findings(self) -> bool:
-        """Return True when any broker position lacks stop-loss protection."""
-        return bool(self.exposed_positions)
-
-
 @dataclass
-class BracketSyncResult:
-    """Actions taken by bracket synchronization."""
+class BracketSync:
+    controller: Controller
+    missing_brackets: list[BracketIssue] = field(default_factory=list)
+    obsolete_brackets: list[tuple[str, OrderInfo]] = field(default_factory=list)
+    exposed_positions: list[ProtectionIssue] = field(default_factory=list)
 
-    cancelled_obsolete_orders: list[OrderInfo] = field(default_factory=list)
-    closed_positions: list[BrokerProtectionIssue] = field(default_factory=list)
-    blocked_reason: str | None = None
+    _sm: StateMachine = field(init=False, repr=False)
+    _ib: ibi.IB = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self._sm = self.controller.sm
+        self._ib = self.controller.ib
+
+        self.compare_bracket_records()
+        self.check_stop_protection()
 
     @property
-    def changed_broker(self) -> bool:
-        """Return True when bracket sync sent broker-affecting requests."""
-        return bool(self.cancelled_obsolete_orders or self.closed_positions)
-
-    @property
-    def terminal_action(self) -> bool:
-        """Return True when sync should stop after a broker action."""
-        return bool(self.closed_positions)
-
-
-def active_orders_for_strategy(
-    sm: StateMachine, strategy_name: str
-) -> tuple[OrderInfo, ...]:
-    """Return current active order records for a strategy."""
-    return tuple(
-        order_info
-        for order_info in sm.order.values()
-        if order_info.active and order_info.strategy == strategy_name
-    )
-
-
-def broker_positions_by_contract(ib: ibi.IB) -> dict[ibi.Contract, float]:
-    """Return current broker positions keyed by contract."""
-    return {position.contract: position.position for position in ib.positions()}
-
-
-def broker_open_trades_for_contract(
-    ib: ibi.IB, contract: ibi.Contract
-) -> list[ibi.Trade]:
-    """Return current active broker trades for ``contract``."""
-    return [trade for trade in ib.openTrades() if trade.contract == contract]
-
-
-def broker_position_is_protected(
-    ib: ibi.IB, contract: ibi.Contract, broker_position: float
-) -> bool:
-    """Return True if broker currently has enough opposite-side stop protection."""
-    protective_action = "SELL" if broker_position > 0 else "BUY"
-    protective_order_types = {
-        "STP",
-        "STP LMT",
-        "TRAIL",
-        "TRAIL LIMIT",
-        "TRAILLIT",
-        "TRAIL LIT",
-        "TRAILLMT",
-        "TRAIL LMT",
-    }
-    protective_quantity = sum(
-        trade.order.totalQuantity
-        for trade in broker_open_trades_for_contract(ib, contract)
-        if (
-            trade.isActive()
-            and trade.order.action == protective_action
-            and trade.order.orderType in protective_order_types
+    def has_issues(self) -> bool:
+        return any(
+            (self.missing_brackets, self.obsolete_brackets, self.exposed_positions)
         )
-    )
-    return protective_quantity >= abs(broker_position)
 
+    @property
+    def local_records_issue(self) -> bool:
+        return any((self.missing_brackets, self.obsolete_brackets))
 
-def local_strategies_by_contract(sm: StateMachine) -> dict[ibi.Contract, list[str]]:
-    """Return current strategy names grouped by active contract."""
-    return dict(sm.strategy.strategies_by_contract())
+    def compare_bracket_records(self) -> None:
+        """Compare local positions with local bracket/order records."""
 
-
-def compare_bracket_records(sm: StateMachine) -> BracketFindings:
-    """Compare local positions with local bracket/order records."""
-    obsolete_orders: list[tuple[str, OrderInfo]] = []
-    missing_brackets: list[BracketIssue] = []
-
-    for strategy_str, strategy in sm.strategy.items():
-        order_infos = active_orders_for_strategy(sm, strategy.strategy)
-        if strategy.position == 0:
-            obsolete_orders.extend(
-                (strategy_str, order_info)
-                for order_info in order_infos
-                if order_info.action != "OPEN" and order_info.active
-            )
-        else:
-            params = strategy.get("params")
-            if params:
-                brackets = [
-                    bracket
-                    for bracket_name in ("stop-loss", "take-profit")
-                    if (bracket := params.get(bracket_name))
-                ]
-                existing_orders = tuple(
-                    order_info
-                    for order_info in order_infos
-                    if order_info.action in ("STOP-LOSS", "TAKE-PROFIT")
-                    and order_info.active
+        for strategy_str, strategy in self._sm.strategy.items():
+            order_infos = self._sm.orders_for_strategy(strategy_str)
+            # Find stop/take-profit/close orders for a strategy that
+            # has no position
+            if strategy.position == 0:
+                self.obsolete_brackets.extend(
+                    self._find_obsolete_brackets(strategy_str, order_infos)
                 )
-                if len(brackets) != len(existing_orders):
-                    missing_brackets.append(
-                        BracketIssue(
-                            strategy=strategy,
-                            existing_orders=existing_orders,
-                            expected_bracket_count=len(brackets),
-                        )
-                    )
+            elif bracket_issue := self._find_missing_brackets(strategy, order_infos):
+                self.missing_brackets.append(bracket_issue)
 
-    return BracketFindings(
-        obsolete_orders=tuple(obsolete_orders),
-        missing_brackets=tuple(missing_brackets),
-    )
+    def _find_obsolete_brackets(
+        self, strategy_str: str, order_infos: list[OrderInfo]
+    ) -> list[tuple[str, OrderInfo]]:
+        """Find stop/take-profit/close orders for a strategy that has no position."""
+        return [
+            (strategy_str, order_info)
+            for order_info in order_infos
+            # there is no position and we're not trying to open a new one
+            if order_info.action != "OPEN" and order_info.active
+        ]
 
+    def _find_missing_brackets(
+        self, strategy: Strategy, order_infos: list[OrderInfo]
+    ) -> BracketIssue | None:
+        params = strategy.get("params")
+        if params:
+            brackets = [
+                bracket
+                for bracket_name in ("stop-loss", "take-profit")
+                if (bracket := params.get(bracket_name))
+            ]
+            existing_orders = tuple(
+                order_info
+                for order_info in order_infos
+                if order_info.action in ("STOP-LOSS", "TAKE-PROFIT")
+                and order_info.active
+            )
+            if len(brackets) != len(existing_orders):
+                return BracketIssue(
+                    strategy=strategy,
+                    existing_orders=existing_orders,
+                    expected_bracket_count=len(brackets),
+                )
 
-def compare_broker_protection(ib: ibi.IB) -> BrokerProtectionFindings:
-    """Find broker positions that lack active stop-loss protection."""
-    exposed_positions = [
-        BrokerProtectionIssue(
-            contract=contract,
-            broker_position=position,
+    def check_stop_protection(self) -> None:
+        """Find broker positions that lack active stop-loss protection."""
+        self.exposed_positions = [
+            ProtectionIssue(contract=contract, broker_position=position)
+            for contract, position in self._positions_by_contract().items()
+            if position and not self._position_is_protected(contract, position)
+        ]
+
+    def _positions_by_contract(self) -> dict[ibi.Contract, float]:
+        return {
+            position.contract: position.position for position in self._ib.positions()
+        }
+
+    def _trades_for_contract(self, contract: ibi.Contract) -> list[ibi.Trade]:
+        """Return current active broker trades for ``contract``."""
+        return [trade for trade in self._ib.openTrades() if trade.contract == contract]
+
+    def _position_is_protected(
+        self, contract: ibi.Contract, broker_position: float
+    ) -> bool:
+        """Return True if broker currently has enough opposite-side stop protection."""
+        protective_action = "SELL" if broker_position > 0 else "BUY"
+        protective_order_types = {"STP", "STP LMT", "TRAIL"}
+        protective_quantity = sum(
+            trade.order.totalQuantity
+            for trade in self._trades_for_contract(contract)
+            if (
+                trade.isActive()
+                and trade.order.action == protective_action
+                and trade.order.orderType in protective_order_types
+            )
         )
-        for contract, position in broker_positions_by_contract(ib).items()
-        if position and not broker_position_is_protected(ib, contract, position)
-    ]
-    return BrokerProtectionFindings(exposed_positions=tuple(exposed_positions))
+        return protective_quantity >= abs(broker_position)
 
 
-class BracketSyncer:
-    """Check bracket records and broker stop-loss protection.
+class BracketSyncAction(ABC):
 
-    The syncer applies ``missing_brackets`` as a global system policy.  It
-    never creates replacement brackets.  In ``remove`` mode it only removes
-    stale bracket orders and flattens broker exposure that lacks stop-loss
-    protection, because continuing to trade an unprotected broker position is
-    more dangerous than leaving local records untouched.
-    """
-
-    def __init__(
-        self,
-        controller: Controller,
-        missing_brackets: MissingBracketsPolicy,
-    ) -> None:
-        """Initialize bracket synchronization for one controller sync run."""
+    def __init__(self, controller: Controller) -> None:
+        self.bracket_sync = BracketSync(controller)
         self.controller = controller
-        self.missing_brackets = missing_brackets
 
-    def run(self) -> BracketSyncResult:
-        """Apply configured bracket/protection checks and remedies.
+        self.sync()
 
-        Returns:
-            A result describing broker-affecting actions and any condition
-            that should block the broader sync from continuing normally.
+    @abstractmethod
+    def sync(self) -> None: ...
+
+    @classmethod
+    def from_policy(cls, policy: MissingBracketsPolicy, controller: Controller) -> Self:
+        try:
+            return {
+                "ignore": IgnoreBracketSyncAction,
+                "warn": WarnBracketSyncAction,
+                "remove": RemoveBracketSyncAction,
+            }[policy](controller)
+        except KeyError:
+            raise ValueError(
+                f"MissingBracketsPolicy must be one of "
+                f"'ignore', 'warn', 'remove', not {policy}"
+            )
+
+    def close_exposed_positions(self) -> None:
         """
-        result = BracketSyncResult()
-        if self.missing_brackets == "ignore":
-            return result
+        Submit emergency closes for unprotected positions.
+        CURRENTLY NOT IN USE.
+        Might be used in future revisions.
+        """
+        for issue in self.bracket_sync.exposed_positions:
+            log.error(
+                f"Closing position without stop-loss protection: "
+                f"{issue.contract.localSymbol or issue.contract.symbol or issue.contract} "
+                f"{issue.close_action} {issue.close_quantity} "
+            )
+            self.controller.trader.trade(
+                issue.contract,
+                ibi.MarketOrder(issue.close_action, issue.close_quantity),
+            )
 
-        bracket_findings = compare_bracket_records(self.controller.sm)
-        protection_findings = compare_broker_protection(self.controller.ib)
-        self.report_bracket_record_findings(bracket_findings)
-        self.report_broker_protection_findings(protection_findings)
+    def close_positions_without_brackets(self):
+        """
+        Close positions for strategies that in local records are
+        reporting brackets but those brackets don't exist in broker
+        records. Basically, we're reporting that we have a bracket,
+        but we don't.
 
-        if self.missing_brackets == "remove":
-            self.cancel_obsolete_orders(bracket_findings, result)
-            self.close_exposed_positions(protection_findings, result)
+        """
+        for strategy_str in self.bracket_sync.missing_brackets:
+            strategy = self.controller.sm.strategy[strategy_str]
+            log.error(
+                f"Closing positions for strategy with missing bracket: "
+                f"{strategy.strategy}"
+            )
+            self.controller.close_positions_for_strategy(
+                strategy.strategy, "MISSING BRACKET EMERGENCY CLOSE"
+            )
 
-        return result
+    def cancel_obsolete_brackets(self) -> None:
+        """Cancel active bracket orders for strategies without a position."""
+        for strategy_str, order_info in self.bracket_sync.obsolete_brackets:
+            order_id = order_info.trade.order.orderId
+            log.error(
+                f"Cancelling obsolete order: "
+                f"{strategy_str, order_info.action, order_id}"
+            )
+            self.controller.trader.cancel(order_info.trade)
+            # result.cancelled_obsolete_orders.append(order_info)
 
-    def report_bracket_record_findings(self, findings: BracketFindings) -> None:
+    def report_bracket_record_findings(self) -> None:
         """Log local bracket record mismatches."""
-        for strategy_str, order_info in findings.obsolete_orders:
+        for strategy_str, order_info in self.bracket_sync.obsolete_brackets:
             order_id = order_info.trade.order.orderId
             log.error(
                 f"Obsolete order for " f"{strategy_str}: {order_info.action, order_id}"
             )
 
-        for issue in findings.missing_brackets:
+        for issue in self.bracket_sync.missing_brackets:
             strategy = issue.strategy
             log.error(
                 f"Bracket error for {strategy.strategy}, "
@@ -281,74 +271,36 @@ class BracketSyncer:
                 f"we should have: {issue.expected_bracket_count} orders."
             )
 
-    def report_broker_protection_findings(
-        self, findings: BrokerProtectionFindings
-    ) -> None:
+    def report_broker_protection_findings(self) -> None:
         """Log broker positions that lack stop-loss protection."""
-        for issue in findings.exposed_positions:
+        for issue in self.bracket_sync.exposed_positions:
             log.error(
-                f"Broker position lacks stop-loss protection: "
+                f"Existing position lacks stop-loss protection: "
                 f"{issue.contract.localSymbol} {issue.broker_position}"
             )
 
-    def cancel_obsolete_orders(
-        self, findings: BracketFindings, result: BracketSyncResult
-    ) -> None:
-        """Cancel active bracket orders for strategies without a position."""
-        for strategy_str, order_info in findings.obsolete_orders:
-            order_id = order_info.trade.order.orderId
-            log.error(
-                f"Cancelling obsolete order: "
-                f"{strategy_str, order_info.action, order_id}"
-            )
-            self.controller.trader.cancel(order_info.trade)
-            result.cancelled_obsolete_orders.append(order_info)
 
-    def close_exposed_positions(
-        self, findings: BrokerProtectionFindings, result: BracketSyncResult
-    ) -> None:
-        """Submit emergency closes for attributable unprotected broker positions.
+class IgnoreBracketSyncAction(BracketSyncAction):
 
-        A close is submitted only when exactly one local strategy maps to the
-        exposed broker contract.  Ambiguous attribution is reported through
-        ``result.blocked_reason`` so the controller can disable trading
-        rather than guess which strategy should receive the closing trade.
-        """
-        for issue in findings.exposed_positions:
-            strategy = self.strategy_for_contract(issue)
-            if strategy is None:
-                result.blocked_reason = (
-                    "cannot attribute unprotected broker position to one strategy"
-                )
-                continue
-            self.controller.lock_new_positions()
-            log.error(
-                f"Closing broker position without stop-loss protection: "
-                f"{strategy} {issue.close_action} {issue.close_quantity} "
-                f"{issue.contract.localSymbol}"
-            )
-            trade = self.controller.trade(
-                strategy,
-                issue.contract,
-                ibi.MarketOrder(issue.close_action, issue.close_quantity),
-                "MISSING BRACKET EMERGENCY CLOSE",
-                self.controller.sm.strategy[strategy],
-            )
-            if trade:
-                result.closed_positions.append(issue)
-            else:
-                result.blocked_reason = "failed to submit missing-bracket close order"
+    def __init__(self, *args):
+        pass
 
-    def strategy_for_contract(self, issue: BrokerProtectionIssue) -> str | None:
-        """Return the single local strategy owning an exposed broker contract."""
-        strategies = (
-            local_strategies_by_contract(self.controller.sm).get(issue.contract) or []
-        )
-        if len(strategies) == 1:
-            return strategies[0]
+    def sync(self) -> None:
+        pass
 
-        log.critical(
-            f"Cannot close unprotected broker position for "
-            f"{issue.contract.localSymbol}: {strategies=}."
-        )
-        return None
+
+class WarnBracketSyncAction(BracketSyncAction):
+
+    def sync(self) -> None:
+        self.report_bracket_record_findings()
+        self.report_broker_protection_findings()
+
+
+class RemoveBracketSyncAction(BracketSyncAction):
+
+    def sync(self) -> None:
+        self.close_positions_without_brackets()
+        self.cancel_obsolete_brackets()
+        self.report_broker_protection_findings()
+        if self.bracket_sync.local_records_issue:
+            raise BracketSyncError()

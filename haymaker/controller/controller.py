@@ -253,6 +253,8 @@ class Controller(Atom):
         retries from fresh broker/local reads.  ``SyncBrokenStateError`` means
         broker/local state is unsafe and trading must be disabled immediately.
         """
+        log.debug("--- Sync ---")
+        self.release_hold()
         for attempt in range(1, self.sync_max_attempts + 1):
             log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
             coordinator = SyncCoordinator(self)
@@ -268,6 +270,7 @@ class Controller(Atom):
                 await asyncio.sleep(self.sync_resync_delay)
 
         self.disable_trading("sync did not converge")
+        log.debug("--- Sync completed ---")
         return False
 
     def onStart(self, data, *args) -> None:
