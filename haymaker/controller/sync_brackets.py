@@ -311,7 +311,7 @@ class BracketSyncer:
 
         A close is submitted only when exactly one local strategy maps to the
         exposed broker contract.  Ambiguous attribution is reported through
-        ``result.blocked_reason`` so the coordinator can disable trading
+        ``result.blocked_reason`` so the controller can disable trading
         rather than guess which strategy should receive the closing trade.
         """
         for issue in findings.exposed_positions:

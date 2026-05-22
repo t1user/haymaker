@@ -54,6 +54,7 @@ class Controller(Atom):
     execution_verification_delay: int = 0
     execution_verification_max_retries: int = 5
     broker_request_timeout: int = 10
+    sync_max_attempts: int = 3
     sync_resync_delay: float = 1
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
@@ -244,7 +245,30 @@ class Controller(Atom):
         roller.roll()
 
     async def sync(self, *args) -> bool:
-        return await SyncCoordinator(self).run()
+        """Run sync passes until state is clean, broken, or non-convergent.
+
+        ``SyncCoordinator`` performs one pass and never disables trading.  A
+        ``False`` result with ``broken_state_reason`` means broker/local state
+        is unsafe and trading must be disabled immediately.  A ``False`` result
+        without a reason means a recovery action changed local or broker state,
+        so the controller waits and retries from fresh broker/local reads.
+        """
+        for attempt in range(1, self.sync_max_attempts + 1):
+            log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
+            coordinator = SyncCoordinator(self)
+            if await coordinator.run():
+                return True
+
+            if coordinator.broken_state_reason:
+                self.disable_trading(coordinator.broken_state_reason)
+                return False
+
+            if attempt < self.sync_max_attempts:
+                log.error("Sync changed state; will retry checks.")
+                await asyncio.sleep(self.sync_resync_delay)
+
+        self.disable_trading("sync did not converge")
+        return False
 
     def onStart(self, data, *args) -> None:
         # prevent superclass from setting attributes here

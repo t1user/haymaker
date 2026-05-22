@@ -13,6 +13,7 @@ from haymaker.controller.sync_coordinator import (
     OrderFindings,
     OrderRecoveryResult,
     OrderSyncApplier,
+    SyncCoordinator,
 )
 from haymaker.state_machine import OrderInfo
 from haymaker.trader import Trader
@@ -191,6 +192,24 @@ async def test_sync_disconnected_does_not_query_broker_state(controller, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_sync_coordinator_reports_broken_state_without_disabling_trading(
+    controller, monkeypatch
+):
+    def fail_position_read():
+        raise AssertionError("broker state should not be queried")
+
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: False)
+    monkeypatch.setattr(controller.ib, "positions", fail_position_read)
+
+    coordinator = SyncCoordinator(controller)
+    result = await coordinator.run()
+
+    assert not result
+    assert coordinator.broken_state_reason == "broker not connected"
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
 async def test_broker_position_source_disagreement_disables_trading(
     controller, trade, monkeypatch
 ):
@@ -267,6 +286,7 @@ def test_from_config_loads_controller_sync_options(Atom):
         top_config={
             "controller": {
                 "broker_request_timeout": 3,
+                "sync_max_attempts": 2,
                 "sync_resync_delay": 0,
                 "cancel_unknown_trades": True,
                 "missing_brackets": "warn",
@@ -275,6 +295,7 @@ def test_from_config_loads_controller_sync_options(Atom):
     )
 
     assert controller.broker_request_timeout == 3
+    assert controller.sync_max_attempts == 2
     assert controller.sync_resync_delay == 0
     assert controller.cancel_unknown_trades
     assert controller.missing_brackets == "warn"
@@ -401,6 +422,66 @@ async def test_open_trade_refresh_does_not_skip_correction_trades(
 
     assert result
     assert reconciled
+
+
+@pytest.mark.asyncio
+async def test_sync_coordinator_returns_false_after_order_recovery(
+    controller, trade, monkeypatch
+):
+    old_trade = deepcopy(trade)
+    old_trade.orderStatus = ibi.OrderStatus(status="Submitted", filled=0, remaining=1)
+    old_trade.fills = []
+    broker_trade = deepcopy(old_trade)
+    controller.sm.order[old_trade.order.orderId] = OrderInfo(
+        "coolstrategy", "OPEN", old_trade, {}
+    )
+
+    async def requested_positions():
+        return []
+
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(controller.ib, "openTrades", lambda: [broker_trade])
+    monkeypatch.setattr(controller.ib, "trades", lambda: [])
+    monkeypatch.setattr(controller.ib, "fills", lambda: [])
+
+    coordinator = SyncCoordinator(controller)
+    result = await coordinator.run()
+
+    assert not result
+    assert coordinator.broken_state_reason is None
+    assert controller.sm.order[old_trade.order.orderId].trade is broker_trade
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_disables_trading_when_recovery_does_not_converge(
+    controller, trade, monkeypatch
+):
+    old_trade = deepcopy(trade)
+    old_trade.orderStatus = ibi.OrderStatus(status="Submitted", filled=0, remaining=1)
+    old_trade.fills = []
+    controller.sm.order[old_trade.order.orderId] = OrderInfo(
+        "coolstrategy", "OPEN", old_trade, {}
+    )
+    controller.sync_max_attempts = 2
+    controller.sync_resync_delay = 0
+
+    async def requested_positions():
+        return []
+
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(controller.ib, "openTrades", lambda: [deepcopy(old_trade)])
+    monkeypatch.setattr(controller.ib, "trades", lambda: [])
+    monkeypatch.setattr(controller.ib, "fills", lambda: [])
+
+    result = await controller.sync()
+
+    assert not result
+    assert controller._trading_disabled
 
 
 def test_bracket_sync_does_not_close_protected_broker_position(

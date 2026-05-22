@@ -1,9 +1,9 @@
-"""Controller sync orchestration for broker and local state.
+"""Single-pass controller sync checks for broker and local state.
 
 Sync starts by checking the broker connection and validating that
 ``ib.positions()`` agrees with ``await ib.reqPositionsAsync()``.  If either
-check fails, trading is disabled before any recovery or correction action is
-attempted.
+check fails, the pass reports broken state to :meth:`Controller.sync` before
+any recovery or correction action is attempted.
 
 After broker validation, each step reads current state directly from
 ``controller.ib`` or ``controller.sm`` instead of using stored broker/local
@@ -17,8 +17,10 @@ snapshots.  The ordered flow is:
 4. Delegate bracket-record and broker stop-loss protection handling to
    :mod:`haymaker.controller.sync_brackets`.
 
-Broker-affecting remedies wait for ``controller.sync_resync_delay`` before
-later broker queries, but sync no longer restarts from a captured snapshot.
+The coordinator does not disable trading and does not retry.  Any recovery
+action returns ``False`` so :meth:`Controller.sync` can start a fresh pass from
+current broker/local state.  Broken state is reported through
+``broken_state_reason``.
 """
 
 from __future__ import annotations
@@ -478,24 +480,28 @@ def apply_position_recovery(
 
 
 class SyncCoordinator:
-    """Coordinate broker/local sync phases and trading-disable decisions.
+    """Run one broker/local sync pass and report the outcome.
 
-    The coordinator is the only object in the sync path that disables trading.
-    Helper functions and bracket handling return findings or result objects;
-    this class decides whether those results are terminal for the running
-    system.
+    ``run()`` returns ``True`` only when the current pass completed cleanly.
+    It returns ``False`` after any recovery action so the caller can retry from
+    fresh broker/local reads.  Terminal safety failures set
+    ``broken_state_reason``; :class:`Controller` owns the decision to disable
+    trading.
     """
 
     def __init__(self, controller: Controller) -> None:
         """Initialize the coordinator for one controller sync run."""
         self.controller = controller
+        self.broken_state_reason: str | None = None
 
     async def run(self) -> bool:
         """Run one sync pass against current broker and local state.
 
         Returns:
-            ``True`` when sync completed without a terminal safety failure,
-            otherwise ``False`` after disabling trading.
+            ``True`` when sync completed without recovery actions or terminal
+            safety failures.  ``False`` means the controller should either
+            retry the sync or disable trading when ``broken_state_reason`` is
+            populated.
         """
         log.debug("--- Sync ---")
 
@@ -505,12 +511,16 @@ class SyncCoordinator:
             return False
 
         order_recovery = await self.apply_order_recovery()
-        await self.wait_after_broker_change(
-            "order recovery", order_recovery.changed_broker
-        )
+        if order_recovery.changed_local or order_recovery.changed_broker:
+            return False
 
         position_findings = self.compare_positions()
-        self.apply_position_recovery(position_findings, order_recovery)
+        position_recovery = self.apply_position_recovery(
+            position_findings, order_recovery
+        )
+        if position_recovery.changed_local:
+            return False
+
         if not self.verify_position_sync():
             return False
         if self.has_unresolved_unknown_orders(order_recovery):
@@ -518,27 +528,22 @@ class SyncCoordinator:
 
         bracket_result = self.apply_bracket_sync()
         if bracket_result.blocked_reason:
-            self.block_trading(bracket_result.blocked_reason)
+            return self.fail(bracket_result.blocked_reason)
+        if bracket_result.changed_broker:
             return False
-        if bracket_result.terminal_action:
-            return self.complete()
 
-        await self.wait_after_broker_change(
-            "bracket recovery", bracket_result.changed_broker
-        )
         return self.complete()
 
     def verify_broker_connection(self) -> bool:
-        """Return False and disable trading if broker is disconnected."""
+        """Return False and report broken state if broker is disconnected."""
         if self.controller.ib.isConnected():
             return True
 
         log.debug("No connection. Abandoning sync.")
-        self.block_trading("broker not connected")
-        return False
+        return self.fail("broker not connected")
 
     async def verify_broker_state(self) -> bool:
-        """Return False and disable trading if broker state is not trustworthy."""
+        """Return False and report broken state if broker state is not trustworthy."""
         try:
             await verify_broker_position_source(
                 self.controller.ib,
@@ -546,8 +551,7 @@ class SyncCoordinator:
             )
             return True
         except BrokerStateError as exc:
-            self.block_trading(exc.reason)
-            return False
+            return self.fail(exc.reason)
 
     async def apply_order_recovery(self) -> OrderRecoveryResult:
         """Apply order recovery and relink broker trades to local records."""
@@ -596,8 +600,7 @@ class SyncCoordinator:
         if not recheck.errors:
             return True
 
-        self.block_trading("local state does not match broker state")
-        return False
+        return self.fail("local state does not match broker state")
 
     def apply_bracket_sync(self) -> BracketSyncResult:
         """Check bracket policy after order and position reconciliation.
@@ -612,17 +615,10 @@ class SyncCoordinator:
             self.controller.missing_brackets,
         ).run()
 
-    async def wait_after_broker_change(self, reason: str, changed_broker: bool) -> None:
-        """Wait after broker-affecting remedies before later broker queries."""
-        if not changed_broker:
-            return
-
-        log.error(f"Sync {reason} changed broker state; waiting for broker update.")
-        await asyncio.sleep(self.controller.sync_resync_delay)
-
-    def block_trading(self, reason: str) -> None:
-        """Disable future trading from one sync-owned decision point."""
-        self.controller.disable_trading(reason)
+    def fail(self, reason: str) -> bool:
+        """Record broken state and return ``False`` to the controller."""
+        self.broken_state_reason = reason
+        return False
 
     def complete(self) -> bool:
         """Log successful sync completion."""

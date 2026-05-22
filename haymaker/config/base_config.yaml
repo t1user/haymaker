@@ -42,7 +42,8 @@ controller:
   execution_verification_delay: 15 # in seconds
   execution_verification_max_retries: 5
   broker_request_timeout: 10 # seconds to wait for broker sync requests
-  sync_resync_delay: 1 # seconds to wait after broker-affecting sync corrections
+  sync_max_attempts: 3
+  sync_resync_delay: 1 # seconds to wait before retrying sync after corrections
   cancel_unknown_trades: False # broker-reported active orders not known to local state
   missing_brackets: "ignore" # one of: "remove", "warn", "ignore"
 
