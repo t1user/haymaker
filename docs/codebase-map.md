@@ -97,7 +97,7 @@ The research package is intentionally separate from live execution. It works dir
 7. Signal processors create `action`, `target_position`, and existing-position context.
 8. Portfolio sizing adds `amount`.
 9. Execution models create IB orders and call `Controller.trade()`.
-10. Controller registers orders, reconciles broker events, updates the state machine, and sends blotter records when enabled; sync failures disable further outbound trading. The global `controller.missing_brackets` option controls bracket/protection handling: `ignore` skips bracket checks, `warn` logs local bracket-record mismatches and broker positions without stop-loss protection, and `remove` also cancels obsolete bracket/closing orders and closes attributable unprotected broker positions.
+10. Controller registers orders, reconciles broker events, updates the state machine, and sends blotter records when enabled; sync failures disable further outbound trading. The global `controller.missing_brackets` option controls bracket/protection handling: `ignore` skips bracket checks, `warn` logs local bracket-record mismatches and broker positions without stop-loss protection, and `remove` also cancels obsolete bracket/closing orders and closes local strategy positions whose expected local bracket records are missing.
 
 ### Dataloader Flow
 
@@ -216,7 +216,7 @@ dataloader -f settings.yaml
 - `upsample()` must preserve the rule that lower-frequency values become available when the grouped bar completes. `position` must not be upsampled.
 - `stop_loss()` treats `blip` as generated events and shifts internally, while `position` is already executable state. `distance` and `scheduled_close` Series must match the dataframe index exactly.
 - Python and Numba implementations in the stop engine and backtester engine must stay behaviorally identical.
-- Controller sync and reconciliation touches live broker state, state-machine records, blotter output, and order cancellation/close logic. Sync correction actions should only run after broker position sources agree; if broker connection or broker position validation fails, the coordinator returns a retryable failed pass and `Controller.sync()` retries before disabling trading for non-convergence. Later sync checks query broker/local state directly, and missing-bracket emergency closes are based on broker position size/direction, not local strategy position size.
+- Controller sync and reconciliation touches live broker state, state-machine records, blotter output, and order cancellation/close logic. Sync correction actions should only run after broker position sources agree; if broker connection or broker position validation fails, the coordinator returns a retryable failed pass and `Controller.sync()` retries before disabling trading for non-convergence. Later sync checks query broker/local state directly; broker stop-loss exposure is reported by bracket sync, while missing-local-bracket emergency closes are based on the affected local strategy position.
 - Futures rolling changes active contracts, next-contract selection, and strategy state; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.
 - Config files can instantiate Python objects through YAML tags; operational config must be treated as trusted and reviewed.

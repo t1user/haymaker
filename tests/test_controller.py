@@ -8,11 +8,12 @@ import pytest
 from helpers import wait_for_condition
 
 from haymaker.controller.controller import Controller, ControllerError
-from haymaker.controller.sync_brackets import BracketSyncResult, BracketSyncer
+from haymaker.controller.sync_brackets import (
+    BracketSync,
+    BracketSyncAction,
+    BracketSyncError,
+)
 from haymaker.controller.sync_coordinator import (
-    OrderFindings,
-    OrderRecoveryResult,
-    OrderSyncApplier,
     SyncBrokenStateError,
     SyncCoordinator,
 )
@@ -296,27 +297,32 @@ def test_disabled_trading_does_not_register_order(controller, trade, monkeypatch
     assert list(controller.sm.order.values()) == []
 
 
-def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
+@pytest.mark.asyncio
+async def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
     controller, trade, monkeypatch
 ):
     cancelled = []
 
+    async def requested_positions():
+        return []
+
     def fake_cancel(received_trade):
         cancelled.append(received_trade)
+        return received_trade
 
+    controller.cancel_unknown_trades = True
     monkeypatch.setattr(controller, "cancel", fake_cancel)
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(controller.ib, "openTrades", lambda: [trade])
+    monkeypatch.setattr(controller.ib, "trades", lambda: [])
+    monkeypatch.setattr(controller.ib, "fills", lambda: [])
 
-    result = OrderRecoveryResult(unknown_broker_trades=[trade])
+    result = await SyncCoordinator(controller).run()
 
-    OrderSyncApplier(
-        controller.ib,
-        controller.sm,
-        controller,
-        True,
-    ).handle_unknown_broker_orders(result)
-
+    assert not result
     assert cancelled == [trade]
-    assert result.cancelled_unknown_trades == [trade]
     assert not controller._trading_disabled
 
 
@@ -357,62 +363,49 @@ def test_from_config_rejects_invalid_missing_brackets_value(Atom):
         )
 
 
-def test_unknown_broker_orders_can_be_left_active_by_config(
+@pytest.mark.asyncio
+async def test_unknown_broker_orders_can_be_left_active_by_config(
     controller, trade, monkeypatch
 ):
     cancelled = []
+    bracket_checked = []
+
+    async def requested_positions():
+        return []
 
     def fake_cancel(received_trade):
         cancelled.append(received_trade)
 
     monkeypatch.setattr(controller, "cancel", fake_cancel)
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(controller.ib, "openTrades", lambda: [trade])
+    monkeypatch.setattr(controller.ib, "trades", lambda: [])
+    monkeypatch.setattr(controller.ib, "fills", lambda: [])
+    monkeypatch.setattr(
+        BracketSyncAction,
+        "from_policy",
+        staticmethod(lambda policy, controller: bracket_checked.append(policy)),
+    )
+    controller.cancel_unknown_trades = False
 
-    result = OrderRecoveryResult(unknown_broker_trades=[trade])
+    result = await SyncCoordinator(controller).run()
 
-    OrderSyncApplier(
-        controller.ib,
-        controller.sm,
-        controller,
-        False,
-    ).handle_unknown_broker_orders(result)
-
+    assert result
     assert cancelled == []
-    assert result.cancelled_unknown_trades == []
+    assert bracket_checked == []
     assert not controller._trading_disabled
-
-
-@pytest.mark.asyncio
-async def test_order_sync_applier_returns_fresh_actions_per_report(
-    controller, trade, monkeypatch
-):
-    applier = OrderSyncApplier(controller.ib, controller.sm, controller, False)
-    controller.sm.order[trade.order.orderId] = OrderInfo(
-        "coolstrategy", "OPEN", trade, {}
-    )
-    set_broker_state(controller, monkeypatch)
-
-    order_info = controller.sm.order[trade.order.orderId]
-    first_actions = await applier.apply(
-        OrderFindings(missing_active_orders=(order_info,)),
-    )
-
-    second_actions = await applier.apply(OrderFindings())
-
-    assert [oi.trade for oi in first_actions.faulty_orders] == [trade]
-    assert second_actions.faulty_orders == []
 
 
 @pytest.mark.asyncio
 async def test_unknown_broker_orders_skip_correction_trades(
     controller, trade, monkeypatch
 ):
-    reconciled = []
+    bracket_checked = []
 
     async def requested_positions():
         return []
-
-    def fail_bracket_run(self):
-        raise AssertionError("bracket sync should not run with unknown broker orders")
 
     monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
     monkeypatch.setattr(controller.ib, "positions", lambda: [])
@@ -420,13 +413,17 @@ async def test_unknown_broker_orders_skip_correction_trades(
     monkeypatch.setattr(controller.ib, "openTrades", lambda: [trade])
     monkeypatch.setattr(controller.ib, "trades", lambda: [])
     monkeypatch.setattr(controller.ib, "fills", lambda: [])
-    monkeypatch.setattr(BracketSyncer, "run", fail_bracket_run)
+    monkeypatch.setattr(
+        BracketSyncAction,
+        "from_policy",
+        staticmethod(lambda policy, controller: bracket_checked.append(policy)),
+    )
     controller.cancel_unknown_trades = False
 
     result = await controller.sync()
 
     assert result
-    assert reconciled == []
+    assert bracket_checked == []
 
 
 @pytest.mark.asyncio
@@ -445,9 +442,8 @@ async def test_open_trade_refresh_does_not_skip_correction_trades(
     async def requested_positions():
         return []
 
-    def fake_bracket_run(self):
-        reconciled.append(self)
-        return BracketSyncResult()
+    def fake_bracket_sync(policy, received_controller):
+        reconciled.append((policy, received_controller))
 
     controller.sync_resync_delay = 0
     monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
@@ -456,16 +452,21 @@ async def test_open_trade_refresh_does_not_skip_correction_trades(
     monkeypatch.setattr(controller.ib, "openTrades", lambda: [broker_trade])
     monkeypatch.setattr(controller.ib, "trades", lambda: [])
     monkeypatch.setattr(controller.ib, "fills", lambda: [])
-    monkeypatch.setattr(BracketSyncer, "run", fake_bracket_run)
+    monkeypatch.setattr(
+        BracketSyncAction,
+        "from_policy",
+        staticmethod(fake_bracket_sync),
+    )
 
     result = await controller.sync()
 
     assert result
-    assert reconciled
+    assert controller.sm.order[old_trade.order.orderId].trade is broker_trade
+    assert reconciled == [(controller.missing_brackets, controller)]
 
 
 @pytest.mark.asyncio
-async def test_sync_coordinator_returns_false_after_order_recovery(
+async def test_sync_coordinator_relinks_open_trade_and_completes(
     controller, trade, monkeypatch
 ):
     old_trade = deepcopy(trade)
@@ -485,40 +486,23 @@ async def test_sync_coordinator_returns_false_after_order_recovery(
     monkeypatch.setattr(controller.ib, "openTrades", lambda: [broker_trade])
     monkeypatch.setattr(controller.ib, "trades", lambda: [])
     monkeypatch.setattr(controller.ib, "fills", lambda: [])
+    bracket_checked = []
+    monkeypatch.setattr(
+        BracketSyncAction,
+        "from_policy",
+        staticmethod(lambda policy, controller: bracket_checked.append(policy)),
+    )
 
-    coordinator = SyncCoordinator(controller)
-    result = await coordinator.run()
+    result = await SyncCoordinator(controller).run()
 
-    assert not result
+    assert result
     assert controller.sm.order[old_trade.order.orderId].trade is broker_trade
+    assert bracket_checked == [controller.missing_brackets]
     assert not controller._trading_disabled
 
 
 @pytest.mark.asyncio
-async def test_sync_coordinator_raises_for_broken_state(controller, monkeypatch):
-    async def requested_positions():
-        return []
-
-    def blocked_bracket_sync(self):
-        return BracketSyncResult(blocked_reason="broken bracket state")
-
-    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
-    monkeypatch.setattr(controller.ib, "positions", lambda: [])
-    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
-    monkeypatch.setattr(controller.ib, "openTrades", lambda: [])
-    monkeypatch.setattr(controller.ib, "trades", lambda: [])
-    monkeypatch.setattr(controller.ib, "fills", lambda: [])
-    monkeypatch.setattr(BracketSyncer, "run", blocked_bracket_sync)
-
-    coordinator = SyncCoordinator(controller)
-
-    with pytest.raises(SyncBrokenStateError, match="broken bracket state"):
-        await coordinator.run()
-    assert not controller._trading_disabled
-
-
-@pytest.mark.asyncio
-async def test_sync_disables_trading_when_recovery_does_not_converge(
+async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
     controller, trade, monkeypatch
 ):
     old_trade = deepcopy(trade)
@@ -527,33 +511,83 @@ async def test_sync_disables_trading_when_recovery_does_not_converge(
     controller.sm.order[old_trade.order.orderId] = OrderInfo(
         "coolstrategy", "OPEN", old_trade, {}
     )
-    controller.sync_max_attempts = 2
-    controller.sync_resync_delay = 0
 
     async def requested_positions():
         return []
 
+    def fail_bracket_sync(policy, controller):
+        raise AssertionError("bracket sync should not run after order recovery")
+
     monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
     monkeypatch.setattr(controller.ib, "positions", lambda: [])
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
-    monkeypatch.setattr(controller.ib, "openTrades", lambda: [deepcopy(old_trade)])
+    monkeypatch.setattr(controller.ib, "openTrades", lambda: [])
     monkeypatch.setattr(controller.ib, "trades", lambda: [])
     monkeypatch.setattr(controller.ib, "fills", lambda: [])
+    monkeypatch.setattr(
+        BracketSyncAction,
+        "from_policy",
+        staticmethod(fail_bracket_sync),
+    )
+
+    result = await SyncCoordinator(controller).run()
+
+    assert not result
+    assert old_trade.order.orderId not in controller.sm.order
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_coordinator_raises_for_broken_state(controller, monkeypatch):
+    async def requested_positions():
+        return []
+
+    def blocked_bracket_sync(policy, controller):
+        raise BracketSyncError("broken bracket state")
+
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(controller.ib, "openTrades", lambda: [])
+    monkeypatch.setattr(controller.ib, "trades", lambda: [])
+    monkeypatch.setattr(controller.ib, "fills", lambda: [])
+    monkeypatch.setattr(
+        BracketSyncAction,
+        "from_policy",
+        staticmethod(blocked_bracket_sync),
+    )
+
+    coordinator = SyncCoordinator(controller)
+
+    with pytest.raises(SyncBrokenStateError, match="bracket sync failed"):
+        await coordinator.run()
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_disables_trading_when_recovery_does_not_converge(
+    controller, monkeypatch
+):
+    attempts = []
+    controller.sync_max_attempts = 2
+    controller.sync_resync_delay = 0
+
+    async def retryable_sync_failure(self):
+        attempts.append(self)
+        return False
+
+    monkeypatch.setattr(SyncCoordinator, "run", retryable_sync_failure)
 
     result = await controller.sync()
 
     assert not result
+    assert len(attempts) == controller.sync_max_attempts
     assert controller._trading_disabled
 
 
-def test_bracket_sync_does_not_close_protected_broker_position(
+def test_bracket_sync_does_not_report_protected_broker_position(
     controller, trade, monkeypatch
 ):
-    strategy = controller.sm.strategy["coolstrategy"]
-    strategy.position = 1
-    strategy.active_contract = trade.contract
-    strategy.params = {"stop-loss": {"amount": 1}}
-
     broker_position = ibi.Position(
         account="DU123",
         contract=trade.contract,
@@ -571,36 +605,15 @@ def test_bracket_sync_does_not_close_protected_broker_position(
         positions=(broker_position,),
         open_trades=(protective_trade,),
     )
-    placed_orders = []
 
-    def fail_live_position_read(contract):
-        raise AssertionError("live broker position should not be read")
+    result = BracketSync(controller)
 
-    monkeypatch.setattr(
-        controller.trader, "position_for_contract", fail_live_position_read
-    )
-    monkeypatch.setattr(controller.trader, "trade", lambda contract, order: trade)
-    monkeypatch.setattr(
-        controller,
-        "register_order",
-        lambda strategy_name, action, trade, params: placed_orders.append(
-            (strategy_name, action, trade, params)
-        ),
-    )
-
-    result = BracketSyncer(controller, "remove").run()
-
-    assert not result.changed_broker
-    assert placed_orders == []
+    assert result.exposed_positions == []
 
 
 def test_bracket_sync_take_profit_does_not_protect_broker_position(
     controller, trade, monkeypatch
 ):
-    strategy = controller.sm.strategy["coolstrategy"]
-    strategy.position = 1
-    strategy.active_contract = trade.contract
-
     broker_position = ibi.Position(
         account="DU123",
         contract=trade.contract,
@@ -616,67 +629,78 @@ def test_bracket_sync_take_profit_does_not_protect_broker_position(
         positions=(broker_position,),
         open_trades=(take_profit,),
     )
-    placed_orders = []
 
-    monkeypatch.setattr(
-        controller,
-        "trade",
-        lambda strategy_name, contract, order, action, params: placed_orders.append(
-            (strategy_name, contract, order, action, params)
-        )
-        or trade,
-    )
+    result = BracketSync(controller)
 
-    result = BracketSyncer(controller, "remove").run()
-
-    assert result.terminal_action
-    assert result.closed_positions
-    assert placed_orders[0][2].action == "SELL"
-    assert placed_orders[0][2].totalQuantity == 3
+    assert len(result.exposed_positions) == 1
+    assert result.exposed_positions[0].contract == trade.contract
+    assert result.exposed_positions[0].broker_position == 3
 
 
-def test_bracket_sync_blocks_ambiguous_broker_position_close(
-    controller, trade, monkeypatch
+def test_ignore_bracket_policy_does_not_query_broker_or_local_records(
+    controller, monkeypatch
 ):
-    first = controller.sm.strategy["first"]
-    first.position = 1
-    first.active_contract = trade.contract
-    second = controller.sm.strategy["second"]
-    second.position = -1
-    second.active_contract = trade.contract
-    broker_position = ibi.Position(
-        account="DU123",
-        contract=trade.contract,
-        position=1,
-        avgCost=1,
-    )
-    set_broker_state(controller, monkeypatch, positions=(broker_position,))
+    def fail_broker_read():
+        raise AssertionError("ignore policy should not read broker state")
 
-    result = BracketSyncer(controller, "remove").run()
+    monkeypatch.setattr(controller.ib, "positions", fail_broker_read)
 
-    assert result.blocked_reason
-    assert not result.closed_positions
+    result = BracketSyncAction.from_policy("ignore", controller)
+
+    assert result.__class__.__name__ == "IgnoreBracketSyncAction"
 
 
-def test_bracket_sync_blocks_when_close_order_is_not_submitted(
+def test_remove_bracket_policy_closes_strategy_with_missing_local_bracket(
     controller, trade, monkeypatch
 ):
     strategy = controller.sm.strategy["coolstrategy"]
     strategy.position = 1
     strategy.active_contract = trade.contract
-    broker_position = ibi.Position(
-        account="DU123",
-        contract=trade.contract,
-        position=1,
-        avgCost=1,
+    strategy.params = {"stop-loss": {"amount": 1}}
+    closed = []
+    set_broker_state(controller, monkeypatch)
+
+    monkeypatch.setattr(
+        controller,
+        "close_positions_for_strategy",
+        lambda strategy_name, action: closed.append((strategy_name, action)),
     )
-    set_broker_state(controller, monkeypatch, positions=(broker_position,))
-    monkeypatch.setattr(controller, "trade", lambda *args: None)
 
-    result = BracketSyncer(controller, "remove").run()
+    with pytest.raises(BracketSyncError):
+        BracketSyncAction.from_policy("remove", controller)
 
-    assert result.blocked_reason
-    assert not result.closed_positions
+    assert closed == [("coolstrategy", "MISSING BRACKET EMERGENCY CLOSE")]
+
+
+def test_remove_bracket_policy_cancels_obsolete_local_bracket(
+    controller, trade, monkeypatch
+):
+    controller.sm.strategy["coolstrategy"].position = 0
+    obsolete_trade = deepcopy(trade)
+    obsolete_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=0,
+        remaining=1,
+    )
+    controller.sm.order[obsolete_trade.order.orderId] = OrderInfo(
+        "coolstrategy",
+        "STOP-LOSS",
+        obsolete_trade,
+        {},
+    )
+    cancelled = []
+    set_broker_state(controller, monkeypatch)
+
+    monkeypatch.setattr(
+        controller.trader,
+        "cancel",
+        lambda received_trade: cancelled.append(received_trade),
+    )
+
+    with pytest.raises(BracketSyncError):
+        BracketSyncAction.from_policy("remove", controller)
+
+    assert cancelled == [obsolete_trade]
 
 
 # def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):

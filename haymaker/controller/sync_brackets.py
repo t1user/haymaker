@@ -14,22 +14,20 @@ Policy values:
         orders or cancellations.
     ``remove``:
         Perform the same checks as ``warn``, cancel obsolete local bracket
-        orders, and submit emergency close orders for broker positions that
-        can be attributed to exactly one local strategy and lack stop-loss
-        protection.
+        orders, and close local strategy positions when local records say a
+        bracket should exist but no active local bracket order is present.
 
 The broker protection decision is based on direct broker state queried during
-sync.  Local state is used only to identify obsolete local bracket orders and
-to attribute an exposed broker contract to one strategy before submitting an
-emergency close.
+sync.  Local state is used to identify obsolete local bracket orders and local
+strategy positions whose recorded bracket orders are missing.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Self
-from abc import ABC, abstractmethod
 
 import ib_insync as ibi
 from haymaker.state_machine import OrderInfo, StateMachine, Strategy
@@ -43,7 +41,7 @@ MissingBracketsPolicy = Literal["ignore", "warn", "remove"]
 
 
 class BracketSyncError(Exception):
-    pass
+    """Raised when bracket synchronization leaves state that must stop trading."""
 
 
 @dataclass(frozen=True)
@@ -75,6 +73,8 @@ class ProtectionIssue:
 
 @dataclass
 class BracketSync:
+    """Collect local bracket-record issues and broker stop-protection issues."""
+
     controller: Controller
     missing_brackets: list[BracketIssue] = field(default_factory=list)
     obsolete_brackets: list[tuple[str, OrderInfo]] = field(default_factory=list)
@@ -83,7 +83,8 @@ class BracketSync:
     _sm: StateMachine = field(init=False, repr=False)
     _ib: ibi.IB = field(init=False, repr=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Read current local and broker state for bracket checks."""
         self._sm = self.controller.sm
         self._ib = self.controller.ib
 
@@ -92,12 +93,14 @@ class BracketSync:
 
     @property
     def has_issues(self) -> bool:
+        """Return True when any local bracket or broker protection issue exists."""
         return any(
             (self.missing_brackets, self.obsolete_brackets, self.exposed_positions)
         )
 
     @property
     def local_records_issue(self) -> bool:
+        """Return True when local strategy and bracket-order records disagree."""
         return any((self.missing_brackets, self.obsolete_brackets))
 
     def compare_bracket_records(self) -> None:
@@ -128,6 +131,7 @@ class BracketSync:
     def _find_missing_brackets(
         self, strategy: Strategy, order_infos: list[OrderInfo]
     ) -> BracketIssue | None:
+        """Find missing local bracket orders for a strategy with a position."""
         params = strategy.get("params")
         if params:
             brackets = [
@@ -157,6 +161,7 @@ class BracketSync:
         ]
 
     def _positions_by_contract(self) -> dict[ibi.Contract, float]:
+        """Return current broker positions keyed by contract."""
         return {
             position.contract: position.position for position in self._ib.positions()
         }
@@ -184,8 +189,10 @@ class BracketSync:
 
 
 class BracketSyncAction(ABC):
+    """Apply the configured bracket policy to the current sync pass."""
 
     def __init__(self, controller: Controller) -> None:
+        """Collect bracket state and apply the concrete policy."""
         self.bracket_sync = BracketSync(controller)
         self.controller = controller
 
@@ -196,6 +203,7 @@ class BracketSyncAction(ABC):
 
     @classmethod
     def from_policy(cls, policy: MissingBracketsPolicy, controller: Controller) -> Self:
+        """Create and run the action class for ``policy``."""
         try:
             return {
                 "ignore": IgnoreBracketSyncAction,
@@ -225,16 +233,15 @@ class BracketSyncAction(ABC):
                 ibi.MarketOrder(issue.close_action, issue.close_quantity),
             )
 
-    def close_positions_without_brackets(self):
+    def close_positions_without_brackets(self) -> None:
         """
-        Close positions for strategies that in local records are
-        reporting brackets but those brackets don't exist in broker
-        records. Basically, we're reporting that we have a bracket,
-        but we don't.
+        Close local strategy positions whose recorded brackets are missing.
 
+        This handles local records saying a strategy should have a bracket,
+        while active local bracket order records are not present.
         """
-        for strategy_str in self.bracket_sync.missing_brackets:
-            strategy = self.controller.sm.strategy[strategy_str]
+        for issue in self.bracket_sync.missing_brackets:
+            strategy = issue.strategy
             log.error(
                 f"Closing positions for strategy with missing bracket: "
                 f"{strategy.strategy}"
@@ -281,24 +288,31 @@ class BracketSyncAction(ABC):
 
 
 class IgnoreBracketSyncAction(BracketSyncAction):
+    """Skip all bracket and broker-protection checks."""
 
-    def __init__(self, *args):
+    def __init__(self, *args) -> None:
+        """Do not collect or act on bracket state for the ``ignore`` policy."""
         pass
 
     def sync(self) -> None:
+        """No-op for the ``ignore`` policy."""
         pass
 
 
 class WarnBracketSyncAction(BracketSyncAction):
+    """Log bracket and broker-protection findings without changing state."""
 
     def sync(self) -> None:
+        """Report findings without sending cancellation or close orders."""
         self.report_bracket_record_findings()
         self.report_broker_protection_findings()
 
 
 class RemoveBracketSyncAction(BracketSyncAction):
+    """Apply local bracket remedies and stop trading on remaining local issues."""
 
     def sync(self) -> None:
+        """Close missing-bracket strategy positions and cancel obsolete brackets."""
         self.close_positions_without_brackets()
         self.cancel_obsolete_brackets()
         self.report_broker_protection_findings()

@@ -34,8 +34,8 @@ import ib_insync as ibi
 
 from haymaker import misc
 from haymaker.state_machine import OrderInfo
+from .sync_brackets import BracketSyncAction, BracketSyncError
 from .sync_routines import OrderSync, PositionSync
-from .sync_brackets import BracketSyncAction
 
 if TYPE_CHECKING:
     from .controller import Controller
@@ -44,7 +44,7 @@ log = logging.getLogger(__name__)
 
 
 class BrokerStateError(Exception):
-    """Raised when broker state cannot be queried safely."""
+    """Raised when broker state verification failed unexpectedly."""
 
     def __init__(self, reason: str) -> None:
         """Initialize the exception with a human-readable failure reason."""
@@ -57,7 +57,7 @@ class SyncBrokenStateError(Exception):
 
 
 class PositionsOutOfSync(Exception):
-    pass
+    """Raised when local positions cannot be reconciled to broker positions."""
 
 
 class SyncCoordinator:
@@ -93,27 +93,65 @@ class SyncCoordinator:
             log.debug("No connection. Abandoning sync.")
             return False
 
-        if not await verify_broker_position_source(
-            self.controller.ib,
-            self.controller.broker_request_timeout,
-        ):
+        try:
+            broker_state_verified = await verify_broker_position_source(
+                self.controller.ib,
+                self.controller.broker_request_timeout,
+            )
+        except BrokerStateError as exc:
+            log.error(f"Broker state verification failed: {exc.reason}")
+            return False
+        if not broker_state_verified:
             return False
 
         order_sync = OrderSync(self.controller.ib, self.controller.sm)
+
         if order_sync.done:
             self.handle_done_trades(order_sync.done)
             await asyncio.sleep(0)
         if order_sync.errors:
             self.handle_error_trades(order_sync.errors)
             await asyncio.sleep(0)
+        if order_sync.unknown:
+            if self.handle_unknown_trades(order_sync.unknown):
+                return False
+            return True
+        if order_sync.done or order_sync.errors:
+            return False
 
         position_sync = PositionSync(self.controller.ib, self.controller.sm)
         if position_sync.errors:
-            self.handle_error_positions(position_sync.errors)
+            try:
+                self.handle_error_positions(position_sync.errors)
+            except PositionsOutOfSync as exc:
+                raise SyncBrokenStateError(
+                    "local state does not match broker state"
+                ) from exc
             return False
 
-        BracketSyncAction.from_policy(self.controller.missing_brackets, self.controller)
+        try:
+            BracketSyncAction.from_policy(
+                self.controller.missing_brackets,
+                self.controller,
+            )
+        except BracketSyncError as exc:
+            raise SyncBrokenStateError("bracket sync failed") from exc
 
+        return True
+
+    def handle_unknown_trades(self, trades: list[ibi.Trade]) -> bool:
+        """Cancel unknown broker trades when configured and report if broker changed."""
+        log.critical(f"Unknown broker orders during sync: {trades}.")
+        if not self.controller.cancel_unknown_trades:
+            log.critical(
+                "Unknown broker orders left active because "
+                "cancel_unknown_trades is False."
+            )
+            return False
+
+        for trade in trades:
+            log.debug(f"Cancelling unknown broker order: {trade.order.orderId}")
+            self.controller.cancel(trade)
         return True
 
     def handle_done_trades(self, trades: list[ibi.Trade]) -> None:
@@ -143,7 +181,7 @@ class SyncCoordinator:
         """
         for trade in trades:
             log.error(
-                f"Will delete record for trade that IB doesn't known about: "
+                f"Will delete record for trade that IB doesn't know about: "
                 f"{trade.order.orderId}"
             )
             self._faulty_trades.append(self.controller.sm._orders[trade.order.orderId])
@@ -196,7 +234,13 @@ class SyncCoordinator:
 
 
 async def verify_broker_position_source(ib: ibi.IB, timeout: float) -> bool:
-    """Verify that synchronous and requested broker positions agree."""
+    """
+    Return True when synchronous and requested broker positions agree.
+
+    Practically, if there's an unreported ib_gateway issue,
+    ``reqPositionAsync`` typically freezes, which is a sign that we
+    cannot rely on information received from broker.
+    """
     positions = tuple(ib.positions())
     try:
         requested_positions = tuple(
