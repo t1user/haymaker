@@ -256,21 +256,22 @@ class Controller(Atom):
         log.debug("--- Sync ---")
         self.release_hold()
         for attempt in range(1, self.sync_max_attempts + 1):
-            log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
+            if attempt > 1:
+                log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
             coordinator = SyncCoordinator(self)
             try:
                 if await coordinator.run():
+                    log.debug("--- Sync completed ---")
                     return True
             except SyncBrokenStateError as exc:
                 self.disable_trading(str(exc))
                 return False
 
             if attempt < self.sync_max_attempts:
-                log.error("Sync did not complete; will retry checks.")
+                log.debug("Sync did not complete; will retry checks.")
                 await asyncio.sleep(self.sync_resync_delay)
 
         self.disable_trading("sync did not converge")
-        log.debug("--- Sync completed ---")
         return False
 
     def onStart(self, data, *args) -> None:

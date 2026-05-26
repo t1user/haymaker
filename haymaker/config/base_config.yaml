@@ -36,7 +36,7 @@ controller:
   log_order_events: False
   # interval at which sync will be performed
   sync_frequency: 900 # 15min
-  health_check_frequency: 0 # in seconds
+  health_check_frequency: 0 # in secs, check database connection
   # delay in sec after which controller will verify if transaction was executed correctly;
   # zero or comment-out for no verification
   execution_verification_delay: 15 # in seconds
