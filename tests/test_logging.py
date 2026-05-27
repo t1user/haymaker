@@ -9,6 +9,38 @@ from haymaker.logging import setup_asyncio_logger
 from haymaker.logging.setup import TelegramHandler
 
 
+class _TelegramResponse:
+    def __init__(self, status, reason, body):
+        self.status = status
+        self.reason = reason
+        self._body = body
+
+    def read(self):
+        return self._body
+
+
+class _TelegramConnection:
+    def __init__(self, response):
+        self.response = response
+        self.sent_data = b""
+
+    def putrequest(self, method, url):
+        self.method = method
+        self.url = url
+
+    def putheader(self, header, value):
+        pass
+
+    def endheaders(self):
+        pass
+
+    def send(self, data):
+        self.sent_data = data
+
+    def getresponse(self):
+        return self.response
+
+
 def test_telegram_handler_sends_plain_text_without_parse_mode():
     handler = TelegramHandler(
         host="api.telegram.org",
@@ -31,6 +63,39 @@ def test_telegram_handler_sends_plain_text_without_parse_mode():
     assert "parse_mode" not in mapped
     assert "WARNING" in mapped["text"]
     assert "<built-in function add>" in mapped["text"]
+
+
+def test_telegram_handler_reports_rejected_delivery(capsys, monkeypatch):
+    handler = TelegramHandler(
+        host="api.telegram.org",
+        url="/bot-token/sendMessage",
+        chat_id=123,
+    )
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(message)s"))
+    response = _TelegramResponse(
+        status=400,
+        reason="Bad Request",
+        body=b'{"ok":false,"description":"bad html"}',
+    )
+    connection = _TelegramConnection(response)
+    monkeypatch.setattr(handler, "getConnection", lambda host, secure: connection)
+    record = logging.LogRecord(
+        "haymaker.aggregators",
+        logging.WARNING,
+        "/tmp/aggregators.py",
+        227,
+        "operator: %s",
+        ("<built-in function add>",),
+        None,
+    )
+
+    handler.emit(record)
+
+    err = capsys.readouterr().err
+    assert "Telegram log delivery failed: 400 Bad Request" in err
+    assert "bad html" in err
+    assert b"chat_id=123" in connection.sent_data
+    assert b"parse_mode" not in connection.sent_data
 
 
 @pytest.mark.asyncio

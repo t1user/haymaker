@@ -50,6 +50,45 @@ class TelegramHandler(logging.handlers.HTTPHandler):
             "text": self.format(record),
         }
 
+    def emit(self, record):
+        """Send a record to Telegram and report rejected deliveries."""
+        try:
+            import base64
+            import urllib.parse
+
+            host = self.host
+            h = self.getConnection(host, self.secure)
+            url = self.url
+            data = urllib.parse.urlencode(self.mapLogRecord(record))
+            if self.method == "GET":
+                sep = "&" if "?" in url else "?"
+                url = f"{url}{sep}{data}"
+
+            h.putrequest(self.method, url)
+            i = host.find(":")
+            if i >= 0:
+                host = host[:i]
+            if self.method == "POST":
+                h.putheader("Content-type", "application/x-www-form-urlencoded")
+                h.putheader("Content-length", str(len(data)))
+            if self.credentials:
+                s = ("%s:%s" % self.credentials).encode("utf-8")
+                s = "Basic " + base64.b64encode(s).strip().decode("ascii")
+                h.putheader("Authorization", s)
+            h.endheaders()
+            if self.method == "POST":
+                h.send(data.encode("utf-8"))
+
+            response = h.getresponse()
+            if response.status >= 400:
+                body = response.read().decode("utf-8", errors="replace")
+                sys.stderr.write(
+                    "Telegram log delivery failed: "
+                    f"{response.status} {response.reason}: {body}\n"
+                )
+        except Exception:
+            self.handleError(record)
+
 
 class UTCFormatter(logging.Formatter):
     converter = time.gmtime  # type: ignore[assignment]
