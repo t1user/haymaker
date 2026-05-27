@@ -2,12 +2,14 @@ import asyncio
 import random
 from copy import deepcopy
 from itertools import count
+from types import SimpleNamespace
 
 import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
 from haymaker.controller.controller import Controller, ControllerError
+from haymaker.controller.future_roller import FutureRoller
 from haymaker.controller.sync_brackets import (
     BracketSync,
     BracketSyncAction,
@@ -179,6 +181,31 @@ async def test_sync_timeout_disables_trading(controller, monkeypatch):
 
     assert not result
     assert disabled_reasons == ["sync did not converge"]
+
+
+@pytest.mark.asyncio
+async def test_run_stops_before_sync_when_state_store_read_fails(
+    controller, monkeypatch
+):
+    sync_called = False
+
+    async def fail_read_from_store():
+        raise RuntimeError("state store read failed")
+
+    async def sync():
+        nonlocal sync_called
+        sync_called = True
+        return True
+
+    controller.cold_start = False
+    monkeypatch.setattr(controller.sm, "read_from_store", fail_read_from_store)
+    monkeypatch.setattr(controller, "sync", sync)
+
+    result = await controller.run()
+
+    assert not result
+    assert not sync_called
+    assert controller._trading_disabled
 
 
 @pytest.mark.asyncio
@@ -701,6 +728,61 @@ def test_remove_bracket_policy_cancels_obsolete_local_bracket(
         BracketSyncAction.from_policy("remove", controller)
 
     assert cancelled == [obsolete_trade]
+
+
+def test_future_roll_replacement_order_preserves_order_info_params():
+    cancelled_trade = ibi.Trade(
+        contract=ibi.Future(symbol="MBT", exchange="CMECRYPTO", localSymbol="MBTM6"),
+        order=ibi.Order(
+            orderId=73806,
+            permId=123,
+            action="SELL",
+            totalQuantity=1,
+            orderType="TRAIL",
+            auxPrice=120.0,
+            trailStopPrice=101000.0,
+        ),
+    )
+    original_params = {
+        "position_id": "MBT-position-1",
+        "sl_points": 200.0,
+        "min_tick": 5.0,
+        "trail_multiple": 3.0,
+    }
+    oi = OrderInfo("dt_fast_MBT", "STOP-LOSS", cancelled_trade, original_params)
+    new_contract = ibi.Future(symbol="MBT", exchange="CMECRYPTO", localSymbol="MBTU6")
+    captured = {}
+
+    def trade(strategy_str, contract, order, action, params):
+        captured.update(
+            {
+                "strategy_str": strategy_str,
+                "contract": contract,
+                "order": order,
+                "action": action,
+                "params": params,
+            }
+        )
+        return ibi.Trade(contract=contract, order=order)
+
+    roller = object.__new__(FutureRoller)
+    roller.controller = SimpleNamespace(trade=trade)
+
+    roller.issue_new_order(
+        cancelled_trade,
+        oi,
+        new_contract,
+        "dt_fast_MBT",
+        None,
+        fill_price=250.0,
+    )
+
+    assert captured["params"] == original_params
+    assert captured["params"] is not original_params
+    assert captured["params"]["position_id"] == "MBT-position-1"
+    assert captured["order"].trailStopPrice == 101250.0
+    assert captured["order"].orderId == 0
+    assert captured["order"].permId == 0
 
 
 # def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):

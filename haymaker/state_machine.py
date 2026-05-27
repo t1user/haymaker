@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from collections import UserDict, defaultdict
 from collections.abc import Generator, Iterator
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, TypeVar
 
 import eventkit as ev  # type: ignore
@@ -111,11 +111,13 @@ class OrderInfo:
             trade=trade,
         )
 
-    @staticmethod
-    def _clear_keys(data: dict[str, Any]) -> dict[str, Any]:
-        data.pop("active", None)
-        data.pop("priority", None)
-        return data
+    @classmethod
+    def _clear_keys(cls, data: dict[str, Any]) -> dict[str, Any]:
+        clear_data = dict(data)
+        clear_data.pop("active", None)
+        clear_data.pop("priority", None)
+        valid_fields = {field.name for field in fields(cls)}
+        return {key: value for key, value in clear_data.items() if key in valid_fields}
 
 
 T = TypeVar("T")

@@ -91,7 +91,12 @@ class Controller(Atom):
         if health_check_observables is None:
             health_check_observables = []
 
-        config = top_config.get("controller") or {}
+        valid_fields = {field.name for field in fields(cls)}
+        config = {
+            k: v
+            for k, v in top_config.get("controller", {}).items()
+            if k in valid_fields
+        } or {}
 
         field_names = [field.name for field in fields(cls)]
         for param in config:
@@ -215,6 +220,8 @@ class Controller(Atom):
                 self.cold_start = True
             except Exception as e:
                 log.exception(e)
+                self.disable_trading("state store read failed")
+                return False
 
         sync_ok = await self.sync()
         if not sync_ok:

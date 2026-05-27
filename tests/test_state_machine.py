@@ -64,6 +64,24 @@ def test_OrderInfo_decodes_old_record_without_accounted_exec_ids():
     assert order_info.accounted_exec_ids == []
 
 
+def test_OrderInfo_decodes_record_with_unknown_fields():
+    trade = ibi.Trade()
+    order_info = OrderInfo.from_dict(
+        {
+            "strategy": "coolstrategy",
+            "action": "OPEN",
+            "trade": trade,
+            "params": {},
+            "active": True,
+            "priority": 0,
+            "newer_schema_field": "ignored",
+        }
+    )
+
+    assert order_info.strategy == "coolstrategy"
+    assert not hasattr(order_info, "newer_schema_field")
+
+
 def test_OrderInfo_encode_includes_accounted_exec_ids():
     trade = ibi.Trade(order=ibi.Order(orderId=1))
     order_info = OrderInfo(
