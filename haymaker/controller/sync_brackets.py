@@ -24,12 +24,13 @@ strategy positions whose recorded bracket orders are missing.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import logging
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Self
 
 import ib_insync as ibi
+
 from haymaker.state_machine import OrderInfo, StateMachine, Strategy
 
 if TYPE_CHECKING:
@@ -175,7 +176,7 @@ class BracketSync:
     ) -> bool:
         """Return True if broker currently has enough opposite-side stop protection."""
         protective_action = "SELL" if broker_position > 0 else "BUY"
-        protective_order_types = {"STP", "STP LMT", "TRAIL"}
+        protective_order_types = {"STP", "STP LMT", "TRAIL", "FIX PEGGED"}
         protective_quantity = sum(
             trade.order.totalQuantity
             for trade in self._trades_for_contract(contract)
