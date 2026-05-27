@@ -546,7 +546,7 @@ class FutureRoller:
 
         new_order = ibi.Order(**order_kwarg_dict)
         new_trade = self.controller.trade(
-            strategy_str, new_contract, new_order, oi.action, order_kwarg_dict
+            strategy_str, new_contract, new_order, oi.action, dict(oi.params or {})
         )
         assert new_trade
         log.debug(
