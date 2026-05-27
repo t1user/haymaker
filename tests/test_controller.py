@@ -374,12 +374,19 @@ def test_from_config_loads_controller_sync_options(Atom):
     assert controller.missing_brackets == "warn"
 
 
-def test_from_config_rejects_unknown_controller_config(Atom):
-    with pytest.raises(ControllerError, match="Wrong parameter: invalid"):
-        Controller.from_config(
-            Trader(Atom.ib),
-            top_config={"controller": {"invalid": True}},
-        )
+def test_from_config_ignores_unknown_controller_config(Atom):
+    controller = Controller.from_config(
+        Trader(Atom.ib),
+        top_config={
+            "controller": {
+                "invalid": True,
+                "broker_request_timeout": 3,
+            }
+        },
+    )
+
+    assert controller.broker_request_timeout == 3
+    assert not hasattr(controller, "invalid")
 
 
 def test_from_config_rejects_invalid_missing_brackets_value(Atom):
