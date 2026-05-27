@@ -1,10 +1,36 @@
 import asyncio
+import logging
 from unittest.mock import Mock
 
 import eventkit as ev  # type: ignore
 import pytest
 
 from haymaker.logging import setup_asyncio_logger
+from haymaker.logging.setup import TelegramHandler
+
+
+def test_telegram_handler_sends_plain_text_without_parse_mode():
+    handler = TelegramHandler(
+        host="api.telegram.org",
+        url="/bot-token/sendMessage",
+        chat_id=123,
+    )
+    handler.setFormatter(logging.Formatter("%(levelname)s\n\n%(message)s"))
+    record = logging.LogRecord(
+        "haymaker.aggregators",
+        logging.WARNING,
+        "/tmp/aggregators.py",
+        227,
+        "operator: %s",
+        ("<built-in function add>",),
+        None,
+    )
+
+    mapped = handler.mapLogRecord(record)
+
+    assert "parse_mode" not in mapped
+    assert "WARNING" in mapped["text"]
+    assert "<built-in function add>" in mapped["text"]
 
 
 @pytest.mark.asyncio

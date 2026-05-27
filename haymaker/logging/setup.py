@@ -48,7 +48,6 @@ class TelegramHandler(logging.handlers.HTTPHandler):
         return {
             "chat_id": self.chat_id,
             "text": self.format(record),
-            "parse_mode": "HTML",
         }
 
 
