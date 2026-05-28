@@ -235,24 +235,23 @@ async def test_sync_disconnected_does_not_query_broker_state(controller, monkeyp
     result = await controller.sync()
 
     assert not result
-    assert connection_attempts == controller.sync_max_attempts
-    assert disabled_reasons == ["sync did not converge"]
+    assert connection_attempts == 1
+    assert disabled_reasons == []
 
 
 @pytest.mark.asyncio
-async def test_sync_coordinator_returns_false_for_disconnected_broker(
-    controller, monkeypatch
-):
+async def test_sync_disconnected_does_not_release_hold(controller, monkeypatch):
     def fail_position_read():
         raise AssertionError("broker state should not be queried")
 
+    controller.set_hold()
     monkeypatch.setattr(controller.ib, "isConnected", lambda: False)
     monkeypatch.setattr(controller.ib, "positions", fail_position_read)
 
-    coordinator = SyncCoordinator(controller)
-    result = await coordinator.run()
+    result = await controller.sync()
 
     assert not result
+    assert controller._hold
     assert not controller._trading_disabled
 
 
@@ -291,6 +290,7 @@ async def test_broker_position_source_disagreement_disables_trading(
         return []
 
     controller.sync_resync_delay = 0
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
     monkeypatch.setattr(controller.ib, "positions", lambda: [position])
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
 
@@ -605,6 +605,7 @@ async def test_sync_disables_trading_when_recovery_does_not_converge(
     attempts = []
     controller.sync_max_attempts = 2
     controller.sync_resync_delay = 0
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
 
     async def retryable_sync_failure(self):
         attempts.append(self)

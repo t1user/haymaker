@@ -260,6 +260,11 @@ class Controller(Atom):
         retries from fresh broker/local reads.  ``SyncBrokenStateError`` means
         broker/local state is unsafe and trading must be disabled immediately.
         """
+
+        if not self.ib.isConnected():
+            log.debug("No connection. Skipping sync.")
+            return False
+
         log.debug("--- Sync ---")
         self.release_hold()
         for attempt in range(1, self.sync_max_attempts + 1):

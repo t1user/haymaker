@@ -1,10 +1,10 @@
 """Single-pass controller sync checks for broker and local state.
 
-Sync starts by checking the broker connection and validating that
-``ib.positions()`` agrees with ``await ib.reqPositionsAsync()``.  If either
-check fails, the pass returns ``False`` without attempting recovery or
-correction actions; :meth:`Controller.sync` owns retrying and deciding whether
-repeated failures should disable trading.
+Sync starts by validating that ``ib.positions()`` agrees with
+``await ib.reqPositionsAsync()``.  If broker state verification fails, the pass
+returns ``False`` without attempting recovery or correction actions;
+:meth:`Controller.sync` owns checking the connection, retrying, and deciding
+whether repeated failures should disable trading.
 
 After broker validation, each step reads current state directly from
 ``controller.ib`` or ``controller.sm`` instead of using stored broker/local
@@ -34,6 +34,7 @@ import ib_insync as ibi
 
 from haymaker import misc
 from haymaker.state_machine import OrderInfo
+
 from .sync_brackets import BracketSyncAction, BracketSyncError
 from .sync_routines import OrderSync, PositionSync
 
@@ -88,10 +89,6 @@ class SyncCoordinator:
             SyncBrokenStateError: Raised for unsafe state that should stop
                 trading immediately.
         """
-
-        if not self.controller.ib.isConnected():
-            log.debug("No connection. Abandoning sync.")
-            return False
 
         try:
             broker_state_verified = await verify_broker_position_source(

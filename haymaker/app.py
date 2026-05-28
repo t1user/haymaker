@@ -194,7 +194,7 @@ class App:
         try:
             controller_started = await CONTROLLER.run()
             if not controller_started:
-                log.critical("Controller did not start; jobs will not be started.")
+                log.debug("Controller did not start; jobs will not be started.")
                 return
             await self.jobs()
         except ConnectionError as ce:
