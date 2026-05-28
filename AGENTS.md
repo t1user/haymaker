@@ -75,6 +75,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   research tools.
 - Live trading, controller sync, futures rolling, and order reconciliation are
   high-risk areas. Keep changes especially narrow and well verified there.
+- IB/TWS connection outages, especially around a broker's daily restart period,
+  are expected and should normally be recoverable. Do not treat a connection
+  outage alone as an unsafe broker/local state; emergency trading disablement
+  should be reserved for failed recovery, unreconciled state, or confirmed
+  order/position safety issues.
 - Configuration is primarily YAML-driven. Do not change real local `.env` files
   or credential files.
 - See `docs/codebase-map.md` for the current repository map.
