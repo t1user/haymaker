@@ -229,6 +229,10 @@ class FuturesStitcher:
             )
         if not output:
             raise NoDataError("No suitable data in provided source.")
+        if output[-1].df.empty:
+            # if there's not data in the last df, we can still use all
+            # previous data
+            del output[-1]
         return output
 
     @cached_property
@@ -455,7 +459,10 @@ class FuturesStitcher:
                 f"next first point: {new_df.index[0] if not new_df.empty else 'empty'} "
                 f"sync index: {sync_index}"
             )
-        return inner.loc[:sync_index].index[-1]  # type: ignore
+        try:
+            return inner.loc[:sync_index].index[-1]  # type: ignore
+        except IndexError:
+            return inner.index[-1]
 
     def inspect(self) -> pd.DataFrame | None:
         """
