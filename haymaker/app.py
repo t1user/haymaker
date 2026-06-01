@@ -57,14 +57,14 @@ class App:
     ib: ibi.IB = IB
     jobs: Jobs = JOBS
     ibc: IBC = field(default_factory=FakeIBC)
-    host: str = CONFIG.get("host") or "127.0.0.1"
-    port: int = CONFIG.get("port") or 4002
-    clientId: int = CONFIG.get("cliendId") or 0
-    appStartupTime: float = CONFIG.get("appStartupTime") or 0
-    appTimeout: float = CONFIG.get("appTimeout") or 20
-    retryDelay: float = CONFIG.get("retryDelay") or 2
+    host: str = CONFIG.get("host", "127.0.0.1")
+    port: int = CONFIG.get("port", 4002)
+    clientId: int = CONFIG.get("clientId", 0)
+    appStartupTime: float = CONFIG.get("appStartupTime", 0)
+    appTimeout: float = CONFIG.get("appTimeout", 20)
+    retryDelay: float = CONFIG.get("retryDelay", 2)
     probeContract: ibi.Contract = CONFIG.get("probeContract") or ibi.Forex("EURUSD")
-    probeTimeout: float = CONFIG.get("probeTimeout") or 4
+    probeTimeout: float = CONFIG.get("probeTimeout", 4)
     no_future_roll_strategies: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -77,6 +77,7 @@ class App:
         self.watchdog = ibi.Watchdog(
             self.ibc,  # type: ignore
             self.ib,
+            host=self.host,
             port=self.port,
             clientId=self.clientId,
             appStartupTime=self.appStartupTime,

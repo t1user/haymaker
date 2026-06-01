@@ -248,7 +248,7 @@ class Controller(Atom):
         This method is scheduled to run once a day in :class:`.app.App`
         """
         log.info(f"Running roll on controller object: {id(self)}")
-        roller = FutureRoller(self)
+        roller = FutureRoller(self, self.no_future_roll_strategies)
         roller.roll()
 
     async def sync(self, *args) -> bool:
