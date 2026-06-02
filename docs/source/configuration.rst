@@ -18,6 +18,27 @@ Sensible starting configurations are defined in default configuration files loca
 
 - For the Dataloader Module: https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml 
 
+Connection Recovery
+===================
+
+Live execution and the dataloader use a shared socket connection supervisor.
+It reconnects to the configured TWS or IB Gateway API endpoint but does not
+start, stop, or restart the gateway process.
+
+For live execution, ``app.auto_recovery_grace_period`` controls how long
+Haymaker waits after broker messages such as ``1100`` or ``2110`` before
+requesting a restart cycle. ``app.recovery_warning_after`` and
+``app.recovery_warning_interval`` control delayed-recovery warning messages.
+
+Contract details are refreshed during successful live startup. The
+``app.contract_refresh_max_age`` and ``app.contract_refresh_check_interval``
+settings ensure that normal socket recovery cannot leave futures selectors
+unchanged indefinitely.
+
+The top-level ``ignore_errors`` setting lists noisy broker message codes that
+should be omitted from normal logs. It does not suppress supervisor actions or
+the optional raw ``broker.log`` audit trail.
+
 
 User-Provided Configuration File
 ================================

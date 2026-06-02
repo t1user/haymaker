@@ -1,5 +1,5 @@
 """
-This module connects all `ib_insync` and `watchdog` events to logger:
+This module connects all `ib_insync` events to logger:
 `broker`.  Basically, it logs all broker messages.
 """
 

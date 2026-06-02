@@ -58,6 +58,7 @@ class Controller(Atom):
     sync_resync_delay: float = 1
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
+    ignore_errors: tuple[int, ...] | list[int] = field(default_factory=tuple)
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
@@ -119,6 +120,7 @@ class Controller(Atom):
             trader=trader,
             blotter=blotter,
             health_check_observables=health_check_observables,
+            ignore_errors=top_config.get("ignore_errors", ()),
             **config,
             **top_kwargs,
         )
@@ -138,7 +140,7 @@ class Controller(Atom):
 
         # this is for logging
         self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
-        self.ib.errorEvent.connect(self.log_err, self._log_event_error)
+        self.ib.errorEvent.connect(self.onBrokerMessage, self._log_event_error)
 
         self.set_hold()
 
@@ -761,46 +763,30 @@ class Controller(Atom):
             f"orderId: {trade.order.orderId}, permId: {trade.order.permId} "
         )
 
-    def log_err(
+    def onBrokerMessage(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
-        # Connected to ib.errorEvent
+        """Log broker messages with order context when it is available."""
 
-        if errorCode < 400:
-            # reqId is most likely orderId
-            # order rejected is errorCode = 201
-            # order cancelled is errorCode = 202
-            # 421: Error validating request.-'bN' : cause - Missing order exchange
-            order_info = self.sm.order.get(reqId)
-            if order_info:
-                strategy, action, trade, *_ = order_info
-                strategy_str = strategy
-                order = trade.order
-            else:
-                strategy, action, trade, order = "", "", "", ""
-                strategy_str = ""
+        order_info = self.sm.order.get(reqId)
+        if order_info:
+            strategy, action, trade, *_ = order_info
+            strategy_str = strategy
+            order = trade.order
+        else:
+            strategy, action, order = "", "", ""
+            strategy_str = ""
 
-            if errorCode == 202 and ("YOUR ORDER IS NOT ACCEPTED" not in errorString):
-                log.info(
-                    f"{errorString} code={errorCode} {contract=} "
-                    f"{strategy} | {action} | {order}"
-                )
-            elif errorCode == 201:
-                log.critical(
-                    f"ORDER REJECTED: {errorString} {errorCode=} {contract=}, "
-                    f"{strategy} | {action} | {order}"
-                )
-                self.sm.register_rejected_order(strategy_str)
-            elif errorCode in (321, 322, 323):
-                log.info(f"{errorString} {errorCode=}")
-            elif errorCode == 165:
-                log.debug(f"{errorString} {errorCode}")
-
-            else:
-                log.error(
-                    f"Error {errorCode}: {errorString} {contract}, "
-                    f"{strategy} | {action} | {order}"
-                )
+        context = f"{contract=}, {strategy} | {action} | {order}"
+        if errorCode == 201:
+            log.critical(f"ORDER REJECTED: {errorString} {errorCode=}, {context}")
+            self.sm.register_rejected_order(strategy_str)
+        elif errorCode == 202 and "YOUR ORDER IS NOT ACCEPTED" in errorString:
+            log.error(f"ORDER NOT ACCEPTED: {errorString} {errorCode=}, {context}")
+        elif errorCode in self.ignore_errors:
+            return
+        else:
+            log.debug(f"Broker message {errorCode}: {errorString} {context}")
 
     async def execute_stops_and_close_positions(self) -> None:
         await Terminator(self).run()

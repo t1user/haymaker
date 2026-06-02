@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-05-19.
+Last updated: 2026-06-01.
 
 ## High-Level Purpose
 
@@ -24,7 +24,7 @@ Runtime singletons are assembled in `haymaker/manager.py`:
 - `CONTROLLER`: broker/state reconciliation and order gateway,
 - `JOBS`: startup data acquisition plus streamer execution.
 
-`haymaker/app.py` wraps those singletons in an `ib_insync.Watchdog`, probes broker connectivity after gateway connection, schedules futures rolls, and starts the controller and jobs.
+`haymaker/app.py` wraps those singletons in a Haymaker-owned connection supervisor, schedules futures rolls and contract-refresh checks, and starts the controller and jobs after the supervisor verifies broker connectivity.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames to a configured datastore.
 
@@ -35,7 +35,8 @@ The research package is intentionally separate from live execution. It works dir
 ### Live Execution Core
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
-- `haymaker/app.py`: application watchdog, connection probe, restart lifecycle, futures-roll schedule, and top-level `App.run()`.
+- `haymaker/app.py`: live application startup hooks, daily contract-refresh checks, futures-roll schedule, and top-level `App.run()`.
+- `haymaker/supervisor.py`: shared IB socket connection lifecycle, broker auto-recovery grace period, probes, restart coalescing, and delayed-recovery warnings. It does not manage the gateway process.
 - `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
 - `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
@@ -62,7 +63,7 @@ The research package is intentionally separate from live execution. It works dir
 ### Dataloader
 
 - `haymaker/dataloader/dataloader.py`: `dataloader` console-script entrypoint, producer/worker queue, download task orchestration, and store writes.
-- `haymaker/dataloader/connect.py`: IB connection modes: `watchdog`, `reconnect`, and `wait`.
+- `haymaker/dataloader/connect.py`: dataloader adapter for shared IB connection supervision, with `reconnect` and `wait` modes.
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
 - `haymaker/dataloader/scheduling.py`: task generation for backfill, updates, and optional gap filling.
@@ -89,9 +90,9 @@ The research package is intentionally separate from live execution. It works dir
 ### Live Execution Flow
 
 1. User strategy code builds `Atom` pipelines and starts `App.run()`.
-2. `App` starts the IB watchdog and waits for a successful historical-data probe.
+2. `App` starts the shared connection supervisor, which connects the socket and waits for a successful historical-data probe.
 3. `Controller.run()` reads or initializes state, then `Controller.sync()` runs a bounded retry loop around a sync coordinator. Each coordinator pass first checks broker connection and validates broker position freshness, relinks current `ibi.Trade` objects to local records, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after broker verification failures or recovery actions so `Controller.sync()` can retry the checks before disabling trading. Non-retryable unsafe states raise `SyncBrokenStateError`, which `Controller.sync()` catches to disable trading immediately.
-4. `Jobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
+4. `Jobs` downloads contract details, updates the contract registry, records the successful refresh time, logs restart state, resets timeouts, and runs all registered streamers.
 5. Streamers emit market data into strategy blocks.
 6. Blocks add strategy fields and emit dictionaries.
 7. Signal processors create `action`, `target_position`, and existing-position context.
@@ -119,7 +120,7 @@ The research package is intentionally separate from live execution. It works dir
 ## External Integrations
 
 - Interactive Brokers TWS/Gateway through `ib_insync`.
-- `ib_insync.Watchdog` / `IBC` for live app restarts and optional dataloader watchdog mode.
+- Haymaker-owned `ConnectionSupervisor` for live and dataloader IB socket recovery. TWS or IB Gateway process management is external.
 - MongoDB through `pymongo`.
 - Arctic through `arctic` for dataframe time-series storage.
 - pandas, NumPy, and Numba for dataframe research and kernels.
@@ -223,13 +224,10 @@ dataloader -f settings.yaml
 
 ## AGENTS.md Notes
 
-There is no repo-root `AGENTS.md` file in this checkout. The active guidance for this run came from the user-provided repo instructions, and there is a scoped `haymaker/research/AGENTS.md` for timing-sensitive research code.
-
-Useful repo-root additions, if a root `AGENTS.md` is created later:
-
-- Keep the current minimal-change and no-commit rules.
-- Add a pointer to `haymaker/research/AGENTS.md` before editing research code.
-- Document the standard focused checks: `python -m pytest tests/test_research`, mypy/flake8 for research changes, and full `python -m pytest` for broader runtime changes.
-- Warn that importing `haymaker.app` sets up logging and runtime singletons, so tests should import lower-level modules where possible.
+The repo-root `AGENTS.md` contains the project-wide development rules. There is
+also a scoped `haymaker/research/AGENTS.md` for timing-sensitive research code.
+The root guidance records the standard focused checks, warns against importing
+`haymaker.app` in focused tests, and identifies
+`haymaker.supervisor.ConnectionSupervisor` as the owner of IB socket recovery.
 
 Dashboard is experimental and should not be looked at.

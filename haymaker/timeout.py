@@ -5,10 +5,9 @@ import itertools
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import ClassVar, Self
+from typing import Callable, ClassVar, Self
 
 import eventkit as ev  # type: ignore
-import ib_insync as ibi
 
 from haymaker.base import Atom
 from haymaker.config import CONFIG as config
@@ -51,7 +50,7 @@ class Timeout:
     """
 
     instances: ClassVar[list["Timeout"]] = []
-    ib: ClassVar[ibi.IB]
+    restart_handler: ClassVar[Callable[[str], None] | None] = None
 
     event: ev.Event
     time: float = TIMEOUT_TIME
@@ -63,8 +62,10 @@ class Timeout:
     _sleep_taks: asyncio.Task | None = field(repr=False, default=None)
 
     @classmethod
-    def set_ib(cls, ib: ibi.IB):
-        cls.ib = ib
+    def set_restart_handler(cls, handler: Callable[[str], None]) -> None:
+        """Set the callback used when a stale streamer requests a restart."""
+
+        cls.restart_handler = handler
 
     @classmethod
     def from_atom(
@@ -162,8 +163,12 @@ class Timeout:
         if self.debug:
             log.error(f"{self!s} triggered. Possibly system reset needed.")
         else:
-            log.debug(f"Stale streamer {self!s} will disconnect ib...")
-            self.ib.disconnect()
+            log.debug(f"Stale streamer {self!s} will request restart.")
+            restart_handler = type(self).restart_handler
+            if restart_handler is None:
+                log.error("Cannot restart: no timeout restart handler configured.")
+                return
+            restart_handler(f"stale streamer: {self!s}")
 
     def _set_timeout(self, event: ev.Event) -> None:
         self._timeout = event.timeout(self.time)

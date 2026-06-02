@@ -80,6 +80,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   outage alone as an unsafe broker/local state; emergency trading disablement
   should be reserved for failed recovery, unreconciled state, or confirmed
   order/position safety issues.
+- `haymaker.supervisor.ConnectionSupervisor` owns IB socket recovery for live
+  trading and dataloader runs. It does not manage or restart the gateway
+  process. Route new restart triggers through its `request_restart()` method.
 - Configuration is primarily YAML-driven. Do not change real local `.env` files
   or credential files.
 - See `docs/codebase-map.md` for the current repository map.

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 from copy import deepcopy
 from itertools import count
@@ -357,6 +358,7 @@ def test_from_config_loads_controller_sync_options(Atom):
     controller = Controller.from_config(
         Trader(Atom.ib),
         top_config={
+            "ignore_errors": [202, 321],
             "controller": {
                 "broker_request_timeout": 3,
                 "sync_max_attempts": 2,
@@ -372,6 +374,44 @@ def test_from_config_loads_controller_sync_options(Atom):
     assert controller.sync_resync_delay == 0
     assert controller.cancel_unknown_trades
     assert controller.missing_brackets == "warn"
+    assert controller.ignore_errors == [202, 321]
+
+
+def test_routine_order_cancellation_is_logged_at_debug(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    controller.onBrokerMessage(123, 202, "Order cancelled", ibi.Contract())
+
+    assert "Broker message 202: Order cancelled" in caplog.text
+
+
+def test_ignored_broker_message_is_not_logged(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+    controller.ignore_errors = [202]
+
+    controller.onBrokerMessage(123, 202, "Order cancelled", ibi.Contract())
+
+    assert "Order cancelled" not in caplog.text
+
+
+def test_ignored_order_cancellation_does_not_hide_failed_order(controller, caplog):
+    caplog.set_level(logging.ERROR)
+    controller.ignore_errors = [202]
+
+    controller.onBrokerMessage(123, 202, "YOUR ORDER IS NOT ACCEPTED", ibi.Contract())
+
+    assert "ORDER NOT ACCEPTED" in caplog.text
+
+
+def test_order_rejection_is_visible_and_registered(controller, caplog, monkeypatch):
+    rejected = []
+    caplog.set_level(logging.CRITICAL)
+    monkeypatch.setattr(controller.sm, "register_rejected_order", rejected.append)
+
+    controller.onBrokerMessage(123, 201, "Rejected", ibi.Contract())
+
+    assert "ORDER REJECTED" in caplog.text
+    assert rejected == [""]
 
 
 def test_from_config_ignores_unknown_controller_config(Atom):

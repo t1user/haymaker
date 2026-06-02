@@ -17,6 +17,7 @@ from haymaker.timeout import Timeout as _Timeout
 def Timeout():
     yield _Timeout
     _Timeout.instances = []
+    _Timeout.restart_handler = None
 
 
 def test_all_timouts_stored(Timeout):
@@ -80,6 +81,16 @@ def test_timeout_with_no_name_gets_a_number(Timeout):
     t1 = Timeout(ev.Event(), 0.2)
     assert str(t0).startswith("Timeout <0.1s> for <0>  event id:")
     assert str(t1).startswith("Timeout <0.2s> for <1>  event id:")
+
+
+def test_stale_streamer_requests_restart(Timeout):
+    reasons = []
+    Timeout.set_restart_handler(reasons.append)
+    timeout = Timeout(ev.Event(), time=0, name="stale", debug=False)
+
+    timeout.triggered_action()
+
+    assert reasons == [f"stale streamer: {timeout!s}"]
 
 
 # ###########################################

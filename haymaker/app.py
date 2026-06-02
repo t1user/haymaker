@@ -1,9 +1,6 @@
-import asyncio
 import datetime
 import logging
-from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Protocol, cast
 from zoneinfo import ZoneInfo
 
 import eventkit as ev  # type: ignore
@@ -12,6 +9,7 @@ import ib_insync as ibi
 from .config import CONFIG as config
 from .handlers import IBHandlers
 from .logging import setup_logging
+from .supervisor import ConnectionSupervisor
 
 # Don't change the order here!
 # You want manager namespace to be logged,
@@ -21,6 +19,7 @@ from .logging import setup_logging
 setup_logging(config.get("logging_config"))
 
 from .manager import CONTROLLER, IB, JOBS, Jobs  # noqa: E402
+from .timeout import Timeout  # noqa: E402
 
 ibi.util.patchAsyncio()
 
@@ -33,68 +32,56 @@ if config.get("log_broker"):
     broker_logger = IBHandlers(IB)
 
 
-class IBC(Protocol):
-    async def startAsync(self) -> None: ...
-
-    async def terminateAsync(self) -> None: ...
-
-
-@dataclass
-class FakeIBC(IBC):
-    restart_time: int = cast(int, CONFIG.get("restart_time"))
-
-    async def startAsync(self) -> None:
-        pass
-
-    async def terminateAsync(self) -> None:
-        CONTROLLER.set_hold()
-        log.debug(f"Pausing {self.restart_time} secs before restart...")
-        await asyncio.sleep(self.restart_time)
-
-
 @dataclass
 class App:
     ib: ibi.IB = IB
     jobs: Jobs = JOBS
-    ibc: IBC = field(default_factory=FakeIBC)
     host: str = CONFIG.get("host", "127.0.0.1")
     port: int = CONFIG.get("port", 4002)
     clientId: int = CONFIG.get("clientId", 0)
-    appStartupTime: float = CONFIG.get("appStartupTime", 0)
+    connectTimeout: float = CONFIG.get("connectTimeout", 2)
+    restart_time: float = CONFIG.get("restart_time", 30)
     appTimeout: float = CONFIG.get("appTimeout", 20)
     retryDelay: float = CONFIG.get("retryDelay", 2)
     probeContract: ibi.Contract = CONFIG.get("probeContract") or ibi.Forex("EURUSD")
     probeTimeout: float = CONFIG.get("probeTimeout", 4)
+    auto_recovery_grace_period: float = CONFIG.get("auto_recovery_grace_period", 120)
+    recovery_warning_after: float = CONFIG.get("recovery_warning_after", 300)
+    recovery_warning_interval: float = CONFIG.get("recovery_warning_interval", 900)
+    contract_refresh_max_age: float = CONFIG.get("contract_refresh_max_age", 86400)
+    contract_refresh_check_interval: float = CONFIG.get(
+        "contract_refresh_check_interval", 900
+    )
     no_future_roll_strategies: list[str] = field(default_factory=list)
+    supervisor: ConnectionSupervisor = field(init=False, repr=False)
+    _contract_refresh_timer: ev.Timer | None = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
-        # IB events
-        self.ib.errorEvent += self.onErr
-        self.ib.connectedEvent += self.onConnected
-        self.ib.disconnectedEvent += self.onDisconnected
         ibi.util.globalErrorEvent += self.onGlobalErr
 
-        self.watchdog = ibi.Watchdog(
-            self.ibc,  # type: ignore
-            self.ib,
+        self.supervisor = ConnectionSupervisor(
+            ib=self.ib,
+            on_connected=self._run,
+            on_restarting=self.onRestarting,
             host=self.host,
             port=self.port,
-            clientId=self.clientId,
-            appStartupTime=self.appStartupTime,
-            appTimeout=self.appTimeout,
-            retryDelay=self.retryDelay,
-            probeContract=self.probeContract,
-            probeTimeout=self.probeTimeout,
+            client_id=self.clientId,
+            connect_timeout=self.connectTimeout,
+            restart_delay=self.restart_time,
+            retry_delay=self.retryDelay,
+            app_timeout=self.appTimeout,
+            probe_contract=self.probeContract,
+            probe_timeout=self.probeTimeout,
+            auto_recovery_grace_period=self.auto_recovery_grace_period,
+            recovery_warning_after=self.recovery_warning_after,
+            recovery_warning_interval=self.recovery_warning_interval,
         )
-        # Watchdog events
-        self.watchdog.startingEvent += self.onStarting
-        self.watchdog.startedEvent += self.onStarted
-        self.watchdog.stoppingEvent += self.onStopping
-        self.watchdog.stoppedEvent += self.onStopped
-        self.watchdog.softTimeoutEvent += self.onSoftTimeout
-        self.watchdog.hardTimeoutEvent += self.onHardTimeout
+        Timeout.set_restart_handler(self.supervisor.request_restart)
 
         self.schedule_future_roll()
+        self.schedule_contract_refresh_check()
 
         log.debug(f"App initiated: {self}")
 
@@ -109,88 +96,39 @@ class App:
         scheduler += CONTROLLER.roll_futures
         log.debug(f"Future roll scheduled for {rt} {rt.tzinfo.key}")  # type: ignore
 
-    def onErr(  # don't want word 'error' in logs, unless it's a real error
-        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
-    ) -> None:
-        if errorCode in config.get("ignore_errors", []):
-            return
-        elif "URGENT" in errorString or len(errorString) > 100:
-            log.error(f"{errorString} {reqId=} code={errorCode} {contract=}")
-        else:
-            log.debug(f"{errorString} {reqId=} code={errorCode} {contract=}")
+    def schedule_contract_refresh_check(self) -> None:
+        """Schedule checks that ensure contract metadata is refreshed daily."""
+
+        if self.contract_refresh_check_interval:
+            self._contract_refresh_timer = ev.Timer(
+                self.contract_refresh_check_interval
+            )
+            self._contract_refresh_timer += self.ensure_contract_refresh
+
+    def ensure_contract_refresh(self, *args) -> None:
+        """Request a restart when the last contract refresh is too old."""
+
+        if self.jobs.contract_refresh_is_overdue(self.contract_refresh_max_age):
+            self.supervisor.request_restart("contract metadata refresh overdue")
 
     def onGlobalErr(self, *args, **kwargs):
         log.debug(f"Global err: {args} {kwargs}")
 
-    def onStarting(self, watchdog: ibi.Watchdog) -> None:
-        log.debug("# # # # # # # # # ( R E ) S T A R T... # # # # # # # # # ")
+    def onRestarting(self, reason: str) -> None:
+        """Put the controller on hold when an actual restart begins."""
 
-    def onStarted(self, *args) -> None:
-        log.debug("Watchdog started...")
-
-    def onStopping(self, *args) -> None:
-        log.debug("Watchdog stopping")
-
-    def onStopped(self, *args) -> None:
-        log.debug("Watchdog stopped...")
-        debug_string = " | ".join(
-            [
-                (
-                    task.get_name()
-                    if not task.get_name().startswith("Task-")
-                    else str(task.get_coro())
-                )
-                for task in asyncio.all_tasks()
-            ]
-        )
-        log.debug(f"tasks: {debug_string}")
-
-    def onSoftTimeout(self, watchdog: ibi.Watchdog) -> None:
-        log.debug("Soft timeout event.")
-
-    def onHardTimeout(self, watchdog: ibi.Watchdog) -> None:
-        log.debug("Hard timeout event.")
-
-    def onConnected(self, *args) -> None:
-        log.debug("IB Connected")
-
-    def onDisconnected(self, *args) -> None:
-        log.debug(f"IB Disconnected {args}")
-
-    def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
-        log.error(f"Event error {event.name()}: {exception}", exc_info=True)
-
-    async def connection_probe(self) -> bool:
-        probe = self.ib.reqHistoricalDataAsync(
-            self.probeContract, "", "30 S", "5 secs", "MIDPOINT", False
-        )
-        bars = None
-        with suppress(asyncio.TimeoutError):
-            bars = await asyncio.wait_for(probe, self.probeTimeout)
-        if bars:
-            return True
-        else:
-            return False
+        CONTROLLER.set_hold()
+        log.debug(f"Restarting application: {reason}")
 
     def run(self) -> None:
         # this is the main entry point into strategy
-        self.watchdog.startedEvent.connect(self._run, error=self._log_event_error)
-        log.debug("initializing watchdog...")
-        self.watchdog.start()
-        log.debug("watchdog initialized")
+        log.debug("Initializing connection supervisor.")
+        self.supervisor.start()
         self.ib.run()
 
-    async def _run(self, *args) -> None:
-        # watchdog connects when api has connection with IB gateway
-        # but does IB gateway have connection to IB?
-        # whatever documentation tells us,
-        # no way to know other than actually probe it
-        while not await self.connection_probe():
-            log.debug("Connection probe failed. Holding...")
-            if not self.ib.isConnected():
-                log.debug("IB not connected, breaking out of probe loop.")
-                return
-            await asyncio.sleep(5)
+    async def _run(self) -> None:
+        """Run application startup after the supervisor verifies connectivity."""
+
         log.debug("Probe successful. Will run controller...")
         try:
             controller_started = await CONTROLLER.run()

@@ -22,13 +22,18 @@ app:
   host: 127.0.0.1
   port: 4002
   clientId: 0 # do not change
-  appStartupTime: 0
+  connectTimeout: 2
   appTimeout: 20
   retryDelay: 2
   probeContract:
     !!python/object/apply:ib_insync.Forex
     - EURUSD
   probeTimeout: 4
+  auto_recovery_grace_period: 120
+  recovery_warning_after: 300
+  recovery_warning_interval: 900
+  contract_refresh_max_age: 86400
+  contract_refresh_check_interval: 900
   future_roll_time: [10, 0]   # time when future rolls are executed, must be a list [hour, minute]
   future_roll_timezone: "America/New_York" # must be a string acceptable by ZoneInfo
   

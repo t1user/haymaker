@@ -1,172 +1,118 @@
-import random
-import sys
-from logging import getLogger
-from typing import Callable, Generator, Literal, TypeAlias
+"""Dataloader connection lifecycle management."""
 
-from ib_insync import IB, Contract, util
-from ib_insync.ibcontroller import IBC, Watchdog
+from __future__ import annotations
+
+import asyncio
+import random
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from logging import getLogger
+from typing import Literal, TypeAlias
+
+from ib_insync import IB, util
+
+from haymaker.config import CONFIG
+from haymaker.supervisor import ConnectionSupervisor, SupervisorState
 
 log = getLogger(__name__)
 
+Mode: TypeAlias = Literal["reconnect", "wait"]
 
-class IBHandlers:
-    def __init__(self, ib: IB, func: Callable, cleanup: Callable | None = None) -> None:
-        self.ib = ib
-        self.func = func
-        self.cleanup = cleanup
-        self.ib.connectedEvent += self.onConnected
-        self.ib.errorEvent += self.onErr
-        self.ib.client.apiError += self.onApiError
-        self.ib.disconnectedEvent += self.onDisconnected
 
-    def _id(self) -> Generator[int, None, None]:
-        while True:
-            yield random.randint(60, 90)
+@dataclass
+class DataloaderConnection:
+    """Run dataloader work under the shared IB connection supervisor.
 
-    @property
-    def clientId(self) -> int:
-        return next(self._id())
+    Args:
+        ib: Interactive Brokers client used by the dataloader.
+        func: Async dataloader workload to run after connection.
+        cleanup: Optional callback used to release work after disconnection.
+        run_mode: Re-run work after reconnect, or wait for in-place recovery.
+    """
 
-    def onApiError(self, *args) -> None:
-        log.error(f"API error: {args}")
+    ib: IB
+    func: Callable
+    cleanup: Callable | None = None
+    run_mode: Mode = "reconnect"
+    supervisor: ConnectionSupervisor = field(init=False)
+    _started: bool = field(default=False, init=False)
+    _work_task: asyncio.Task | None = field(default=None, init=False)
 
-    def onConnected(self, *args) -> None:
-        log.info("Connected!")
+    def __post_init__(self) -> None:
+        client_id = CONFIG.get("clientId") or random.randint(60, 90)
+        self.supervisor = ConnectionSupervisor(
+            ib=self.ib,
+            on_connected=self.on_connected,
+            on_restarting=self.on_restarting,
+            host=CONFIG.get("host", "localhost"),
+            port=CONFIG.get("port", 4002),
+            client_id=client_id,
+            connect_timeout=CONFIG.get("connectTimeout", 2),
+            restart_delay=CONFIG.get("restart_time", 60),
+            retry_delay=CONFIG.get("retryDelay", 60),
+            app_timeout=0,
+            probe_on_connect=False,
+            auto_recovery_grace_period=CONFIG.get("auto_recovery_grace_period", 120),
+            recovery_warning_after=CONFIG.get("recovery_warning_after", 300),
+            recovery_warning_interval=CONFIG.get("recovery_warning_interval", 900),
+        )
 
-    def onDisconnected(self, *args) -> None:
-        log.debug("Disconnected!")
+    async def on_connected(self) -> None:
+        """Start or resume dataloader work after connection."""
 
-    def onErr(
-        self, reqId: int, errorCode: int, errorString: str, contract: Contract
-    ) -> None:
-        try:
-            what = contract.localSymbol
-        except AttributeError:
-            what = str(contract)
-        if errorCode in (2106, 2107):
+        if self.run_mode == "wait" and self._started:
+            log.debug("Reconnected. Waiting for IB to resume sending data.")
             return
-        elif "pacing violation" in errorString:
-            pass
-        else:
-            log.warning(f"IB warning: {errorCode} {errorString} for: {what}")
 
+        if self._work_task and not self._work_task.done():
+            log.debug("Dataloader work is still active after reconnection.")
+            return
 
-class StartWatchdog(IBHandlers):
-    def __init__(self, ib: IB, func: Callable, cleanup: Callable | None) -> None:
-        log.debug("Initializing watchdog")
-        ibc = IBC(
-            twsVersion=1023,
-            gateway=True,
-            tradingMode="paper",
-        )
-        watchdog = Watchdog(
-            ibc,
-            ib,
-            port=4002,
-            clientId=self.clientId,
-        )
-        log.debug("Attaching handlers...")
-        IBHandlers.__init__(self, ib, func)
-        watchdog.startedEvent += self.onStarted
-        log.debug("Initializing watchdog...")
-        watchdog.start()
-        log.debug("Watchdog started.")
-        ib.run()
-        log.debug("ib run.")
+        self._started = True
+        log.debug(f"Running {self.func}.")
+        self._work_task = asyncio.create_task(self._run_work(), name="dataloader-work")
 
-    def onStarted(self, *args):
-        log.debug(f"Starting: {args}")
-        util.run(self.func())
+    async def _run_work(self) -> None:
+        """Run one dataloader workload and stop after normal completion."""
 
-    def onDisconnected(self):
-        pass
-
-
-class StartReconnect(IBHandlers):
-    def __init__(self, ib: IB, func: Callable, cleanup: Callable | None) -> None:
-        IBHandlers.__init__(self, ib, func, cleanup)
-        self.host = "localhost"
-        self.port = 4002  # this is for paper account
-        self.connect()
-
-    def onConnected(self):
-        """Fire-up dataloding function."""
-        log.info("Connected!")
-        log.debug(f"running {self.func}")
         try:
-            util.run(self.func())
-        except (KeyboardInterrupt, SystemExit):
-            self.ib.disconnect()
-            sys.exit()
-        except Exception as e:
-            log.exception(f"ignoring schedule exception: {e}")
+            await self.func()
+        except (asyncio.CancelledError, ConnectionError):
+            log.debug("Dataloader work interrupted during connection recovery.")
+        except Exception as exc:
+            log.exception(f"Dataloader work failed: {exc}")
+        finally:
+            if self.supervisor.state != SupervisorState.RESTARTING:
+                self.supervisor.stop()
 
-    def onDisconnected(self, *args) -> None:
-        log.debug("Disconnected!")
-        try:
-            if self.cleanup:
-                log.debug("Will cleanup.")
-                self.cleanup()
+    def on_restarting(self, reason: str) -> None:
+        """Release current work before reconnecting when configured to rerun."""
 
-        except Exception as e:
-            log.debug(f"exception caught: {e}")
-        util.sleep(60)
-        log.debug("will attempt reconnection")
-        self.connect()
+        log.debug(f"Restarting dataloader connection: {reason}")
+        if self.run_mode == "reconnect" and self.cleanup:
+            self.cleanup()
 
-    def connect(self) -> None:
-        """Establish conection while not using watchdog."""
-        log.debug("About to establish connection.")
-        failed_attempts = 0
-        while not self.ib.isConnected():
-            try:
-                log.debug("Connecting....")
-                self.ib.connect(self.host, self.port, self.clientId)
-                log.debug("Pausing 60 secs before reconnection attempt.")
-                util.sleep(60)
-            except Exception as e:
-                log.debug(f"Connection error: {e}")
-                failed_attempts += 1
-                if failed_attempts > 10:
-                    log.error("Reconnection attempt failed afer 10 retries.")
-                    break
-        log.debug("Getting out of connect.")
+    def run(self) -> None:
+        """Run until the dataloader workload finishes."""
 
-
-class StartWait(StartReconnect):
-    """
-    After disconnection wait for IB to resolve the issue by itself.
-    """
-
-    def __init__(self, ib: IB, func: Callable, cleanup: Callable | None):
-        self._started = False
-        super().__init__(ib, func, cleanup)
-
-    def onConnected(self):
-        if not self._started:
-            super().onConnected()
-        else:
-            log.debug(
-                "Reconnected. Waiting for IB to resuming sending data "
-                "(use different `run_mode` setting if this doesn't work). "
-            )
-
-    def onDisconnected(self, *args):
-        log.debug("Disconnected!")
-
-
-Mode: TypeAlias = Literal["watchdog", "reconnect", "wait"]
+        util.run(self.supervisor.run())
 
 
 def connection(
-    ib, func: Callable, cleanup: Callable | None = None, run_mode: Mode = "reconnect"
-):
-    log.debug(f"Running in {run_mode}")
-    if run_mode == "watchdog":
-        return StartWatchdog(ib, func, cleanup)
-    elif run_mode == "reconnect":
-        return StartReconnect(ib, func, cleanup)
-    elif run_mode == "wait":
-        return StartWait(ib, func, cleanup)
-    else:
-        raise ValueError(f"Unknown mode: {run_mode}")
+    ib: IB,
+    func: Callable,
+    cleanup: Callable | None = None,
+    run_mode: Mode = "reconnect",
+) -> DataloaderConnection:
+    """Run dataloader work with shared connection supervision."""
+
+    if run_mode not in ("reconnect", "wait"):
+        raise ValueError(
+            f"Unknown mode: {run_mode}. The gateway-managing watchdog mode "
+            "is no longer supported."
+        )
+
+    log.debug(f"Running in {run_mode} mode.")
+    dataloader_connection = DataloaderConnection(ib, func, cleanup, run_mode)
+    dataloader_connection.run()
+    return dataloader_connection
