@@ -103,7 +103,7 @@ class App:
             self._contract_refresh_timer = ev.Timer(
                 self.contract_refresh_check_interval
             )
-            self._contract_refresh_timer += self.ensure_contract_refresh
+            self._contract_refresh_timer += self.ensure_contract_refresh  # type: ignore
 
     def ensure_contract_refresh(self, *args) -> None:
         """Request a restart when the last contract refresh is too old."""

@@ -403,6 +403,34 @@ def test_ignored_order_cancellation_does_not_hide_failed_order(controller, caplo
     assert "ORDER NOT ACCEPTED" in caplog.text
 
 
+def test_unknown_low_code_broker_message_is_visible(controller, caplog):
+    caplog.set_level(logging.ERROR)
+
+    controller.onBrokerMessage(
+        123, 347, "Short sale slot validation failed", ibi.Contract()
+    )
+
+    assert "Broker message 347: Short sale slot validation failed" in caplog.text
+
+
+def test_known_request_validation_messages_remain_debug(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    controller.onBrokerMessage(123, 321, "Server validation message", ibi.Contract())
+
+    assert "Broker message 321: Server validation message" in caplog.text
+    assert caplog.records[-1].levelno == logging.DEBUG
+
+
+def test_unknown_high_code_broker_message_remains_debug(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    controller.onBrokerMessage(123, 500, "Client side message", ibi.Contract())
+
+    assert "Broker message 500: Client side message" in caplog.text
+    assert caplog.records[-1].levelno == logging.DEBUG
+
+
 def test_order_rejection_is_visible_and_registered(controller, caplog, monkeypatch):
     rejected = []
     caplog.set_level(logging.CRITICAL)

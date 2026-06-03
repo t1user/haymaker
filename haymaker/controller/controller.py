@@ -785,6 +785,10 @@ class Controller(Atom):
             log.error(f"ORDER NOT ACCEPTED: {errorString} {errorCode=}, {context}")
         elif errorCode in self.ignore_errors:
             return
+        elif errorCode in (165, 321, 322, 323):
+            log.debug(f"Broker message {errorCode}: {errorString} {context}")
+        elif errorCode < 400:
+            log.error(f"Broker message {errorCode}: {errorString} {context}")
         else:
             log.debug(f"Broker message {errorCode}: {errorString} {context}")
 
