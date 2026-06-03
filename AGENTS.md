@@ -46,6 +46,19 @@
 - Use `black` for formatting.
 - Add docstrings for new functions and classes.
 
+# Naming
+
+- Event handlers connected directly to `eventkit.Event` or `ib_insync` events
+  should use camelCase callback names.
+- For `ib_insync` events, prefer direct correspondence with the event name:
+  `orderStatusEvent` -> `onOrderStatusEvent`,
+  `timeoutEvent` -> `onTimeoutEvent`.
+- Exception: handlers for `ib.errorEvent` should be named `onErrEvent`, not
+  `onErrorEvent`, because IB uses this event for many informational broker
+  messages that are not real errors, and callback names can surface in logs.
+- Internal lifecycle hooks, injected callbacks, helpers, and ordinary methods
+  should use standard Python snake_case.
+
 # Validation
 
 - Run the narrowest meaningful test command for the changed area first.

@@ -3,14 +3,12 @@ import asyncio
 import pytest
 
 from haymaker.dataloader import connect
-from haymaker.supervisor import SupervisorState
 
 
 class FakeSupervisor:
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
+    def __init__(self, *args):
+        self.args = args
         self.stopped = False
-        self.state = SupervisorState.CONNECTED
 
     async def run(self):
         pass
@@ -32,11 +30,10 @@ async def test_reconnect_mode_runs_work_and_stops_supervisor(supervisor):
         runs.append("run")
 
     connection = connect.DataloaderConnection(object(), run_work)
-    await connection.on_connected()
-    await asyncio.sleep(0)
+    await connection.runtime.start()
 
     assert runs == ["run"]
-    assert connection.supervisor.stopped
+    assert connection.runtime.stop_on_completion
 
 
 @pytest.mark.asyncio
@@ -49,35 +46,56 @@ async def test_wait_mode_leaves_existing_work_running_after_reconnect(supervisor
         await release.wait()
 
     connection = connect.DataloaderConnection(object(), run_work, run_mode="wait")
-    await connection.on_connected()
+    first_start = asyncio.create_task(connection.runtime.start())
     await asyncio.sleep(0)
-    await connection.on_connected()
+    second_start = asyncio.create_task(connection.runtime.start())
+    await asyncio.sleep(0)
 
     assert runs == ["run"]
     release.set()
+    await asyncio.gather(first_start, second_start)
+
+
+@pytest.mark.asyncio
+async def test_reconnect_mode_runs_cleanup_before_restart(supervisor):
+    release = asyncio.Event()
+    cleanups = []
+
+    async def run_work():
+        await release.wait()
+
+    connection = connect.DataloaderConnection(
+        object(), run_work, lambda: cleanups.append("cleanup")
+    )
+    run_task = asyncio.create_task(connection.runtime.start())
     await asyncio.sleep(0)
 
-
-def test_reconnect_mode_runs_cleanup_before_restart(supervisor):
-    cleanups = []
-    connection = connect.DataloaderConnection(
-        object(), lambda: None, lambda: cleanups.append("cleanup")
-    )
-
-    connection.on_restarting("socket disconnected")
+    await connection.runtime.stop("socket disconnected")
 
     assert cleanups == ["cleanup"]
+    release.set()
+    await run_task
 
 
-def test_wait_mode_does_not_run_cleanup_before_restart(supervisor):
+@pytest.mark.asyncio
+async def test_wait_mode_does_not_run_cleanup_before_restart(supervisor):
+    release = asyncio.Event()
     cleanups = []
-    connection = connect.DataloaderConnection(
-        object(), lambda: None, lambda: cleanups.append("cleanup"), run_mode="wait"
-    )
 
-    connection.on_restarting("socket disconnected")
+    async def run_work():
+        await release.wait()
+
+    connection = connect.DataloaderConnection(
+        object(), run_work, lambda: cleanups.append("cleanup"), run_mode="wait"
+    )
+    run_task = asyncio.create_task(connection.runtime.start())
+    await asyncio.sleep(0)
+
+    await connection.runtime.stop("socket disconnected")
 
     assert cleanups == []
+    release.set()
+    await run_task
 
 
 def test_watchdog_mode_is_rejected():

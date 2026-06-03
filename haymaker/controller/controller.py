@@ -140,7 +140,9 @@ class Controller(Atom):
 
         # this is for logging
         self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
-        self.ib.errorEvent.connect(self.onBrokerMessage, self._log_event_error)
+        # IB calls this errorEvent, but most payloads are broker messages, not
+        # actionable application errors. Keep "error" out of callback logs.
+        self.ib.errorEvent.connect(self.onErrEvent, self._log_event_error)
 
         self.set_hold()
 
@@ -763,7 +765,7 @@ class Controller(Atom):
             f"orderId: {trade.order.orderId}, permId: {trade.order.permId} "
         )
 
-    def onBrokerMessage(
+    def onErrEvent(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
         """Log broker messages with order context when it is available."""

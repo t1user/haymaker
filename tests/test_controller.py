@@ -380,7 +380,7 @@ def test_from_config_loads_controller_sync_options(Atom):
 def test_routine_order_cancellation_is_logged_at_debug(controller, caplog):
     caplog.set_level(logging.DEBUG)
 
-    controller.onBrokerMessage(123, 202, "Order cancelled", ibi.Contract())
+    controller.onErrEvent(123, 202, "Order cancelled", ibi.Contract())
 
     assert "Broker message 202: Order cancelled" in caplog.text
 
@@ -389,7 +389,7 @@ def test_ignored_broker_message_is_not_logged(controller, caplog):
     caplog.set_level(logging.DEBUG)
     controller.ignore_errors = [202]
 
-    controller.onBrokerMessage(123, 202, "Order cancelled", ibi.Contract())
+    controller.onErrEvent(123, 202, "Order cancelled", ibi.Contract())
 
     assert "Order cancelled" not in caplog.text
 
@@ -398,7 +398,7 @@ def test_ignored_order_cancellation_does_not_hide_failed_order(controller, caplo
     caplog.set_level(logging.ERROR)
     controller.ignore_errors = [202]
 
-    controller.onBrokerMessage(123, 202, "YOUR ORDER IS NOT ACCEPTED", ibi.Contract())
+    controller.onErrEvent(123, 202, "YOUR ORDER IS NOT ACCEPTED", ibi.Contract())
 
     assert "ORDER NOT ACCEPTED" in caplog.text
 
@@ -406,9 +406,7 @@ def test_ignored_order_cancellation_does_not_hide_failed_order(controller, caplo
 def test_unknown_low_code_broker_message_is_visible(controller, caplog):
     caplog.set_level(logging.ERROR)
 
-    controller.onBrokerMessage(
-        123, 347, "Short sale slot validation failed", ibi.Contract()
-    )
+    controller.onErrEvent(123, 347, "Short sale slot validation failed", ibi.Contract())
 
     assert "Broker message 347: Short sale slot validation failed" in caplog.text
 
@@ -416,7 +414,7 @@ def test_unknown_low_code_broker_message_is_visible(controller, caplog):
 def test_known_request_validation_messages_remain_debug(controller, caplog):
     caplog.set_level(logging.DEBUG)
 
-    controller.onBrokerMessage(123, 321, "Server validation message", ibi.Contract())
+    controller.onErrEvent(123, 321, "Server validation message", ibi.Contract())
 
     assert "Broker message 321: Server validation message" in caplog.text
     assert caplog.records[-1].levelno == logging.DEBUG
@@ -425,7 +423,7 @@ def test_known_request_validation_messages_remain_debug(controller, caplog):
 def test_unknown_high_code_broker_message_remains_debug(controller, caplog):
     caplog.set_level(logging.DEBUG)
 
-    controller.onBrokerMessage(123, 500, "Client side message", ibi.Contract())
+    controller.onErrEvent(123, 500, "Client side message", ibi.Contract())
 
     assert "Broker message 500: Client side message" in caplog.text
     assert caplog.records[-1].levelno == logging.DEBUG
@@ -436,7 +434,7 @@ def test_order_rejection_is_visible_and_registered(controller, caplog, monkeypat
     caplog.set_level(logging.CRITICAL)
     monkeypatch.setattr(controller.sm, "register_rejected_order", rejected.append)
 
-    controller.onBrokerMessage(123, 201, "Rejected", ibi.Contract())
+    controller.onErrEvent(123, 201, "Rejected", ibi.Contract())
 
     assert "ORDER REJECTED" in caplog.text
     assert rejected == [""]
