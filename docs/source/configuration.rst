@@ -24,6 +24,8 @@ Connection Recovery
 Live execution and the dataloader use a shared socket connection supervisor.
 It reconnects to the configured TWS or IB Gateway API endpoint but does not
 start, stop, or restart the gateway process.
+Each connection cycle verifies broker usability with a short historical-data
+probe before starting the supervised workload.
 
 For live execution, ``app.auto_recovery_grace_period`` controls how long
 Haymaker waits after broker messages such as ``1100`` or ``2110`` before

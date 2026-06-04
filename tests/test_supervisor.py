@@ -148,8 +148,28 @@ async def test_restart_cycle_reconnects_and_runs_workload_again(fake_ib):
     supervisor.stop()
     await runner
     assert fake_ib.connect_count == 2
+    assert fake_ib.probe_count == 2
     assert fake_ib.disconnect_count == 2
     assert "test restart" in workload.stops
+
+
+@pytest.mark.asyncio
+async def test_dataloader_settings_probe_before_workload(fake_ib):
+    workload = FakeWorkload()
+    supervisor = ConnectionSupervisor(
+        fake_ib,
+        workload,
+        ConnectionSettings.from_dataloader_config(
+            {"restart_time": 0, "retryDelay": 0}, client_id=77
+        ),
+    )
+
+    runner = asyncio.create_task(supervisor.run())
+    assert await wait_for_condition(lambda: workload.starts == ["started"])
+
+    supervisor.stop()
+    await runner
+    assert fake_ib.probe_count == 1
 
 
 @pytest.mark.asyncio

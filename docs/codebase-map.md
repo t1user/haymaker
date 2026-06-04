@@ -104,11 +104,12 @@ The research package is intentionally separate from live execution. It works dir
 ### Dataloader Flow
 
 1. `dataloader` loads config, creates an `ib_insync.IB` client, and runs a dataloader runtime under the shared connection supervisor.
-2. Contract source data is expanded into IB contracts.
-3. Writers inspect the target store and schedule backfill, update, and optional gap-fill download containers.
-4. A producer submits work to an asyncio queue.
-5. Workers call IB historical-data requests under pacer restrictions.
-6. Downloaded chunks are normalized, concatenated with stored data, cleaned, and written through the configured datastore.
+2. The supervisor connects the socket and waits for a successful historical-data probe before starting dataloader work.
+3. Contract source data is expanded into IB contracts.
+4. Writers inspect the target store and schedule backfill, update, and optional gap-fill download containers.
+5. A producer submits work to an asyncio queue.
+6. Workers call IB historical-data requests under pacer restrictions.
+7. Downloaded chunks are normalized, concatenated with stored data, cleaned, and written through the configured datastore.
 
 ### Research Flow
 

@@ -7,8 +7,8 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol
 from time import monotonic
+from typing import Any, Protocol
 
 import ib_insync as ibi
 
@@ -52,13 +52,12 @@ class ConnectionSettings:
     app_timeout: float = 20
     probe_contract: ibi.Contract = field(default_factory=lambda: ibi.Forex("EURUSD"))
     probe_timeout: float = 4
-    probe_on_connect: bool = True
     auto_recovery_grace_period: float = 120
     recovery_warning_after: float = 300
     recovery_warning_interval: float = 900
 
     @classmethod
-    def from_live_config(cls, config: Mapping[str, Any]) -> "ConnectionSettings":
+    def from_live_config(cls, config: Mapping[str, Any]) -> ConnectionSettings:
         """Create live-trading connection settings from Haymaker config."""
 
         app_config = config.get("app") or {}
@@ -82,7 +81,7 @@ class ConnectionSettings:
     @classmethod
     def from_dataloader_config(
         cls, config: Mapping[str, Any], client_id: int
-    ) -> "ConnectionSettings":
+    ) -> ConnectionSettings:
         """Create dataloader connection settings from Haymaker config."""
 
         return cls(
@@ -93,7 +92,6 @@ class ConnectionSettings:
             restart_delay=config.get("restart_time", 60),
             retry_delay=config.get("retryDelay", 60),
             app_timeout=0,
-            probe_on_connect=False,
             auto_recovery_grace_period=config.get("auto_recovery_grace_period", 120),
             recovery_warning_after=config.get("recovery_warning_after", 300),
             recovery_warning_interval=config.get("recovery_warning_interval", 900),
@@ -256,9 +254,8 @@ class ConnectionSupervisor:
         if not await self._connect():
             return False
 
-        if self.settings.probe_on_connect:
-            self._transition_to(SupervisorState.PROBING)
-            await self._wait_until_probe_succeeds()
+        self._transition_to(SupervisorState.PROBING)
+        await self._wait_until_probe_succeeds()
 
         if not self._running or not self.ib.isConnected():
             return False
