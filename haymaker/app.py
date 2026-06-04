@@ -55,7 +55,6 @@ class LiveRuntime:
     _contract_refresh_timer: ev.Timer | None = field(
         default=None, init=False, repr=False
     )
-    _scheduled: bool = field(default=False, init=False, repr=False)
 
     @classmethod
     def from_config(cls, top_config: Mapping[str, Any]) -> "LiveRuntime":
@@ -84,7 +83,7 @@ class LiveRuntime:
     async def start(self) -> None:
         """Start controller and strategy jobs after connectivity is verified."""
 
-        self.start_scheduled_tasks()
+        self._start_scheduled_tasks()
         log.debug("Probe successful. Will run controller...")
         try:
             controller_started = await self.controller.run()
@@ -104,27 +103,35 @@ class LiveRuntime:
         """Put controller on hold and stop scheduled runtime checks."""
 
         self.controller.set_hold()
-        self.stop_scheduled_tasks()
+        self._stop_scheduled_tasks()
         log.debug(f"Stopping live runtime: {reason}")
 
-    def start_scheduled_tasks(self) -> None:
+    def _start_scheduled_tasks(self) -> None:
         """Start scheduled live-runtime checks for the current cycle."""
 
-        if not self._scheduled:
-            self.schedule_future_roll()
-            self.schedule_contract_refresh_restart()
-            self._scheduled = True
+        if self._has_scheduled_tasks():
+            log.warning("Replacing already scheduled live-runtime tasks.")
+            self._stop_scheduled_tasks()
+        self.schedule_future_roll()
+        self.schedule_contract_refresh_restart()
 
-    def stop_scheduled_tasks(self) -> None:
+    def _stop_scheduled_tasks(self) -> None:
         """Stop scheduled live-runtime checks for the current cycle."""
 
-        if self._future_roll_timer:
+        if self._future_roll_timer is not None:
             self._future_roll_timer.set_done()
             self._future_roll_timer = None
-        if self._contract_refresh_timer:
+        if self._contract_refresh_timer is not None:
             self._contract_refresh_timer.set_done()
             self._contract_refresh_timer = None
-        self._scheduled = False
+
+    def _has_scheduled_tasks(self) -> bool:
+        """Return whether runtime timer handles are currently active."""
+
+        return (
+            self._future_roll_timer is not None
+            or self._contract_refresh_timer is not None
+        )
 
     def schedule_future_roll(self) -> None:
         """Schedule daily futures rolls while live runtime is active."""
