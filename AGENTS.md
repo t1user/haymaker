@@ -94,8 +94,22 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   should be reserved for failed recovery, unreconciled state, or confirmed
   order/position safety issues.
 - `haymaker.supervisor.ConnectionSupervisor` owns IB socket recovery for live
-  trading and dataloader runs. It does not manage or restart the gateway
+  trading and managed dataloader runs. It does not manage or restart the gateway
   process. Route new restart triggers through its `request_restart()` method.
+  Future app/supervisor architecture decisions should leave room for attached
+  dataloader mode, where dataloader work borrows an externally managed `IB`
+  connection and has no right to restart or disconnect it; see
+  `docs/dataloader-connection-modes-plan.md`.
+  Future dataloader design should treat `managed` and `attached` as the only
+  connection modes. Legacy `reconnect`/`wait` behavior is a managed-mode recovery
+  concern handled by supervisor decisions such as broker data-maintained vs
+  data-lost messages, not a separate attached-mode policy.
+- Graceful shutdown is not currently a broad architecture priority. Terminal
+  `Ctrl-C` has historically been acceptable. Before service-manager deployment,
+  prefer minimal signal hardening for `SIGINT`/`SIGTERM`: request supervisor stop,
+  allow normal runtime cleanup to unwind, and drain critical async save queues
+  with a short timeout. Do not introduce a broad shutdown framework unless a
+  concrete cleanup need is identified.
 - Configuration is primarily YAML-driven. Do not change real local `.env` files
   or credential files.
 - See `docs/codebase-map.md` for the current repository map.

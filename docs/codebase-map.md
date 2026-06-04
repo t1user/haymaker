@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-06-03.
+Last updated: 2026-06-04.
 
 ## High-Level Purpose
 
@@ -24,7 +24,7 @@ Runtime singletons are assembled in `haymaker/manager.py`:
 - `CONTROLLER`: broker/state reconciliation and order gateway,
 - `JOBS`: startup data acquisition plus streamer execution.
 
-`haymaker/app.py` bootstraps live execution: it sets up logging, imports the runtime singletons, builds a `LiveRuntime`, and runs that workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns futures-roll scheduling, the fixed daily contract-refresh restart timer, controller startup, and streamer jobs for each connection cycle.
+`haymaker/app.py` bootstraps live execution: it sets up logging, imports the runtime singletons, builds a live `App` composition from config, and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns futures-roll scheduling, the fixed daily contract-refresh restart timer, controller startup, and streamer jobs for each connection cycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames to a configured datastore.
 
