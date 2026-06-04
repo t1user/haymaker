@@ -49,8 +49,8 @@ Add a `haymaker` console script that:
 5. Creates and runs the Haymaker application after loading succeeds.
 
 The external strategy file should stop creating and running `App` itself. Data
-that currently has to be passed to `App`, such as `no_future_roll_strategies`,
-should move into configuration.
+that is strategy-owned, such as `no_future_roll_strategies`, should stay with
+the strategy module and be passed to the app/runtime by the loader.
 
 ## Configuration Compatibility
 

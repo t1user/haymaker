@@ -30,10 +30,9 @@ Haymaker waits after broker messages such as ``1100`` or ``2110`` before
 requesting a restart cycle. ``app.recovery_warning_after`` and
 ``app.recovery_warning_interval`` control delayed-recovery warning messages.
 
-Contract details are refreshed during successful live startup. The
-``app.contract_refresh_max_age`` and ``app.contract_refresh_check_interval``
-settings ensure that normal socket recovery cannot leave futures selectors
-unchanged indefinitely.
+Contract details are refreshed during successful live startup. Live runtime
+also schedules a fixed daily restart request so normal socket recovery cannot
+leave futures selectors unchanged indefinitely.
 
 The top-level ``ignore_errors`` setting lists noisy broker message codes that
 should be omitted from normal logs. It does not suppress supervisor actions or

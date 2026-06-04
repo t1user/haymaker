@@ -5,7 +5,6 @@ import logging
 from collections import defaultdict
 from copy import copy
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Final, Self
 
 import ib_insync as ibi
@@ -18,7 +17,6 @@ from .controller import Controller
 from .databases import HEALTH_CHECK_OBSERVABLES
 from .state_machine import StateMachine
 from .streamers import Streamer
-from .supervisor import contract_refresh_is_overdue
 from .timeout import Timeout
 from .trader import Trader
 
@@ -42,7 +40,6 @@ class InitData:
 
     ib: ibi.IB
     contract_registry: ContractRegistry
-    last_contract_refresh_at: datetime | None = None
 
     async def __call__(self) -> Self:
         log.debug(
@@ -57,7 +54,6 @@ class InitData:
         details = await self.acquire_contract_details(blueprints)
         log.debug(f"Acquired details for {len(details)} contracts.")
         self.contract_registry.reset_data(details)
-        self.last_contract_refresh_at = datetime.now(tz=timezone.utc)
         log.debug(
             f"Active contracts: {self.contract_registry.active_contracts_for_logs()}"
         )
@@ -102,15 +98,6 @@ class Jobs:
     def __init__(self, init_data: InitData):
         self.init_data = init_data
         self.streamers = Streamer.instances
-
-    def contract_refresh_is_overdue(
-        self, max_age: float, now: datetime | None = None
-    ) -> bool:
-        """Return whether successful contract initialization is too old."""
-
-        return contract_refresh_is_overdue(
-            self.init_data.last_contract_refresh_at, max_age, now
-        )
 
     def _handle_error(self, task: asyncio.Task):
         try:

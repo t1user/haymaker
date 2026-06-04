@@ -3,7 +3,7 @@ import datetime
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from zoneinfo import ZoneInfo
 
 import eventkit as ev  # type: ignore
@@ -31,8 +31,6 @@ ibi.util.patchAsyncio()
 
 log = logging.getLogger(__name__)
 
-CONFIG = config.get("app") or {}
-
 
 if config.get("log_broker"):
     broker_logger = IBHandlers(IB)
@@ -42,30 +40,46 @@ if config.get("log_broker"):
 class LiveRuntime:
     """Run live controller and streamer work for one supervisor cycle."""
 
-    ib: ibi.IB = IB
+    CONTRACT_REFRESH_INTERVAL: ClassVar[int] = 24 * 60 * 60
+
     jobs: Jobs = JOBS
     controller: "Controller" = CONTROLLER
-    app_config: Mapping[str, Any] = field(default_factory=lambda: CONFIG)
-    contract_refresh_max_age: float = CONFIG.get("contract_refresh_max_age", 86400)
-    contract_refresh_check_interval: float = CONFIG.get(
-        "contract_refresh_check_interval", 900
-    )
+    future_roll_time: tuple[int, int] = (10, 0)
+    future_roll_timezone: str = "America/New_York"
     no_future_roll_strategies: list[str] = field(default_factory=list)
     request_restart: Callable[[str], None] | None = field(
         default=None, init=False, repr=False
     )
-    stop_on_completion: bool = False
+    stop_supervisor_on_completion: bool = False
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
     _contract_refresh_timer: ev.Timer | None = field(
         default=None, init=False, repr=False
     )
     _scheduled: bool = field(default=False, init=False, repr=False)
 
+    @classmethod
+    def from_config(cls, top_config: Mapping[str, Any]) -> "LiveRuntime":
+        """Create live runtime settings from Haymaker config."""
+
+        app_config = top_config.get("app") or {}
+        roll_hour, roll_minute = app_config.get("future_roll_time", [10, 0])
+        return cls(
+            future_roll_time=(roll_hour, roll_minute),
+            future_roll_timezone=app_config.get(
+                "future_roll_timezone", "America/New_York"
+            ),
+        )
+
     def set_restart_handler(self, request_restart: Callable[[str], None]) -> None:
-        """Set the restart callback used by timeout and contract freshness checks."""
+        """Set the restart callback used by timeout and daily refresh timers."""
 
         self.request_restart = request_restart
         Timeout.set_restart_handler(request_restart)
+
+    def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
+        """Set strategy names that should be excluded from futures rolls."""
+
+        self.no_future_roll_strategies = strategies
 
     async def start(self) -> None:
         """Start controller and strategy jobs after connectivity is verified."""
@@ -98,7 +112,7 @@ class LiveRuntime:
 
         if not self._scheduled:
             self.schedule_future_roll()
-            self.schedule_contract_refresh_check()
+            self.schedule_contract_refresh_restart()
             self._scheduled = True
 
     def stop_scheduled_tasks(self) -> None:
@@ -115,10 +129,8 @@ class LiveRuntime:
     def schedule_future_roll(self) -> None:
         """Schedule daily futures rolls while live runtime is active."""
 
-        roll_hour, roll_minute = self.app_config.get("future_roll_time", [10, 0])
-        roll_timezone = ZoneInfo(
-            self.app_config.get("future_roll_timezone", "America/New_York")
-        )
+        roll_hour, roll_minute = self.future_roll_time
+        roll_timezone = ZoneInfo(self.future_roll_timezone)
         rt = datetime.time(hour=roll_hour, minute=roll_minute, tzinfo=roll_timezone)
         self.controller.set_no_future_roll_strategies(self.no_future_roll_strategies)
         self._future_roll_timer = ev.Event.timerange(
@@ -127,28 +139,25 @@ class LiveRuntime:
         self._future_roll_timer += self.controller.roll_futures
         log.debug(f"Future roll scheduled for {rt} {rt.tzinfo.key}")  # type: ignore
 
-    def schedule_contract_refresh_check(self) -> None:
-        """Schedule checks that ensure contract metadata is refreshed daily."""
+    def schedule_contract_refresh_restart(self) -> None:
+        """Schedule a daily restart so contract metadata is refreshed."""
 
-        if self.contract_refresh_check_interval:
-            self._contract_refresh_timer = ev.Timer(
-                self.contract_refresh_check_interval
-            )
-            self._contract_refresh_timer += self.ensure_contract_refresh  # type: ignore
+        self._contract_refresh_timer = ev.Timer(self.CONTRACT_REFRESH_INTERVAL, count=1)
+        self._contract_refresh_timer += self.request_contract_refresh_restart  # type: ignore
 
-    def ensure_contract_refresh(self, *args) -> None:
-        """Request a restart when the last contract refresh is too old."""
+    def request_contract_refresh_restart(self, *args) -> None:
+        """Request a restart after the fixed contract-refresh interval elapses."""
 
-        if self.request_restart and self.jobs.contract_refresh_is_overdue(
-            self.contract_refresh_max_age
-        ):
-            self.request_restart("contract metadata refresh overdue")
+        if self.request_restart:
+            self.request_restart("daily contract metadata refresh")
 
 
 @dataclass
 class App:
     ib: ibi.IB = IB
-    runtime: LiveRuntime = field(default_factory=LiveRuntime)
+    runtime: LiveRuntime = field(
+        default_factory=lambda: LiveRuntime.from_config(config)
+    )
     settings: ConnectionSettings = field(
         default_factory=lambda: ConnectionSettings.from_live_config(config)
     )
@@ -158,7 +167,7 @@ class App:
     def __post_init__(self) -> None:
         ibi.util.globalErrorEvent += self.onGlobalErrEvent
         if self.no_future_roll_strategies:
-            self.runtime.no_future_roll_strategies = self.no_future_roll_strategies
+            self.runtime.set_no_future_roll_strategies(self.no_future_roll_strategies)
         self.supervisor = ConnectionSupervisor(self.ib, self.runtime, self.settings)
         self.runtime.set_restart_handler(self.supervisor.request_restart)
         log.debug(f"App initiated: {self}")

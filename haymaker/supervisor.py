@@ -6,7 +6,6 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Protocol
 from time import monotonic
@@ -14,20 +13,6 @@ from time import monotonic
 import ib_insync as ibi
 
 log = logging.getLogger(__name__)
-
-
-def contract_refresh_is_overdue(
-    last_refresh: datetime | None,
-    max_age: float,
-    now: datetime | None = None,
-) -> bool:
-    """Return whether successful contract initialization is too old."""
-
-    if last_refresh is None:
-        return False
-
-    now = now or datetime.now(tz=timezone.utc)
-    return now - last_refresh > timedelta(seconds=max_age)
 
 
 class SupervisorState(str, Enum):
@@ -45,7 +30,7 @@ class SupervisorState(str, Enum):
 class SupervisorWorkload(Protocol):
     """Workload run by :class:`ConnectionSupervisor` after IB is usable."""
 
-    stop_on_completion: bool
+    stop_supervisor_on_completion: bool
 
     async def start(self) -> None:
         """Start or resume work after a usable IB connection is available."""
@@ -312,7 +297,7 @@ class ConnectionSupervisor:
             if self._workload_task in done:
                 self._consume_workload_result()
                 self._workload_task = None
-                if self.workload.stop_on_completion:
+                if self.workload.stop_supervisor_on_completion:
                     self._running = False
                     return "workload completed"
                 log.debug("Connection workload completed; waiting for restart.")

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
 
 import ib_insync as ibi
 import pytest
@@ -12,7 +11,6 @@ from haymaker.supervisor import (
     ConnectionSettings,
     ConnectionSupervisor,
     SupervisorState,
-    contract_refresh_is_overdue,
 )
 
 
@@ -58,7 +56,7 @@ def fake_ib():
 
 
 class FakeWorkload:
-    stop_on_completion = False
+    stop_supervisor_on_completion = False
 
     def __init__(self):
         self.starts = []
@@ -196,11 +194,3 @@ def test_delayed_recovery_warning_is_throttled(
     supervisor._warn_if_recovery_delayed()
 
     assert caplog.text.count("IB connection recovery is still pending.") == 1
-
-
-def test_contract_refresh_age_is_checked_without_broker_request():
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
-
-    assert contract_refresh_is_overdue(now - timedelta(hours=25), 24 * 60 * 60, now)
-    assert not contract_refresh_is_overdue(now - timedelta(hours=23), 24 * 60 * 60, now)
-    assert not contract_refresh_is_overdue(None, 24 * 60 * 60, now)

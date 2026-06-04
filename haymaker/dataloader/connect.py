@@ -32,7 +32,7 @@ class DataloaderRuntime:
     func: Callable
     cleanup: Callable | None = None
     run_mode: Mode = "reconnect"
-    stop_on_completion: bool = True
+    stop_supervisor_on_completion: bool = True
     _started: bool = field(default=False, init=False)
     _work_task: asyncio.Task | None = field(default=None, init=False)
 
