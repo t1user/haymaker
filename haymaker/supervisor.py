@@ -57,41 +57,26 @@ class ConnectionSettings:
     recovery_warning_interval: float = 900
 
     @classmethod
-    def from_live_config(cls, config: Mapping[str, Any]) -> ConnectionSettings:
-        """Create live-trading connection settings from Haymaker config."""
-
-        app_config = config.get("app") or {}
-        return cls(
-            host=app_config.get("host", "127.0.0.1"),
-            port=app_config.get("port", 4002),
-            client_id=app_config.get("clientId", 0),
-            connect_timeout=app_config.get("connectTimeout", 2),
-            restart_delay=app_config.get("restart_time", 30),
-            retry_delay=app_config.get("retryDelay", 2),
-            app_timeout=app_config.get("appTimeout", 20),
-            probe_contract=app_config.get("probeContract") or ibi.Forex("EURUSD"),
-            probe_timeout=app_config.get("probeTimeout", 4),
-            auto_recovery_grace_period=app_config.get(
-                "auto_recovery_grace_period", 120
-            ),
-            recovery_warning_after=app_config.get("recovery_warning_after", 300),
-            recovery_warning_interval=app_config.get("recovery_warning_interval", 900),
-        )
-
-    @classmethod
-    def from_dataloader_config(
+    def from_config(
         cls, config: Mapping[str, Any], client_id: int
     ) -> ConnectionSettings:
-        """Create dataloader connection settings from Haymaker config."""
+        """Create connection settings from a flat config mapping.
+
+        Args:
+            config: Mapping with connection keys directly available.
+            client_id: IB API client ID chosen by the caller.
+        """
 
         return cls(
-            host=config.get("host", "localhost"),
+            host=config.get("host", "127.0.0.1"),
             port=config.get("port", 4002),
             client_id=client_id,
             connect_timeout=config.get("connectTimeout", 2),
-            restart_delay=config.get("restart_time", 60),
-            retry_delay=config.get("retryDelay", 60),
-            app_timeout=0,
+            restart_delay=config.get("restart_time", 30),
+            retry_delay=config.get("retryDelay", 2),
+            app_timeout=config.get("appTimeout", 20),
+            probe_contract=config.get("probeContract") or ibi.Forex("EURUSD"),
+            probe_timeout=config.get("probeTimeout", 4),
             auto_recovery_grace_period=config.get("auto_recovery_grace_period", 120),
             recovery_warning_after=config.get("recovery_warning_after", 300),
             recovery_warning_interval=config.get("recovery_warning_interval", 900),

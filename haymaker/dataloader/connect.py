@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from logging import getLogger
@@ -104,12 +103,12 @@ class DataloaderConnection:
     supervisor: ConnectionSupervisor = field(init=False)
 
     def __post_init__(self) -> None:
-        client_id = CONFIG.get("clientId") or random.randint(60, 90)
+        client_id = 51
         self.runtime = DataloaderRuntime(self.func, self.cleanup, self.run_mode)
         self.supervisor = ConnectionSupervisor(
             self.ib,
             self.runtime,
-            ConnectionSettings.from_dataloader_config(CONFIG, client_id),
+            ConnectionSettings.from_config(CONFIG, client_id),
         )
 
     def run(self) -> None:

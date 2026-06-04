@@ -21,7 +21,6 @@ app:
   restart_time: 30 # after disconnection, time to wait before reconnection attempt
   host: 127.0.0.1
   port: 4002
-  clientId: 0 # do not change
   connectTimeout: 2
   appTimeout: 20
   retryDelay: 2

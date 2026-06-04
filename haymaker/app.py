@@ -166,7 +166,9 @@ class App:
         default_factory=lambda: LiveRuntime.from_config(config)
     )
     settings: ConnectionSettings = field(
-        default_factory=lambda: ConnectionSettings.from_live_config(config)
+        default_factory=lambda: ConnectionSettings.from_config(
+            config.get("app") or {}, 0
+        )
     )
     no_future_roll_strategies: list[str] = field(default_factory=list)
     supervisor: ConnectionSupervisor = field(init=False, repr=False)

@@ -130,6 +130,50 @@ def test_duplicate_restart_requests_are_coalesced(fake_ib):
     supervisor.stop()
 
 
+def test_connection_settings_from_config_uses_flat_mapping_and_explicit_client_id():
+    settings = ConnectionSettings.from_config(
+        {
+            "host": "gateway",
+            "port": 4001,
+            "clientId": 999,
+            "connectTimeout": 3,
+            "restart_time": 5,
+            "retryDelay": 7,
+            "appTimeout": 11,
+            "probeTimeout": 13,
+            "auto_recovery_grace_period": 17,
+            "recovery_warning_after": 19,
+            "recovery_warning_interval": 23,
+        },
+        client_id=42,
+    )
+
+    assert settings.host == "gateway"
+    assert settings.port == 4001
+    assert settings.client_id == 42
+    assert settings.connect_timeout == 3
+    assert settings.restart_delay == 5
+    assert settings.retry_delay == 7
+    assert settings.app_timeout == 11
+    assert settings.probe_timeout == 13
+    assert settings.auto_recovery_grace_period == 17
+    assert settings.recovery_warning_after == 19
+    assert settings.recovery_warning_interval == 23
+
+
+def test_connection_settings_from_config_uses_live_defaults():
+    settings = ConnectionSettings.from_config({}, client_id=51)
+
+    assert settings.host == "127.0.0.1"
+    assert settings.port == 4002
+    assert settings.client_id == 51
+    assert settings.connect_timeout == 2
+    assert settings.restart_delay == 30
+    assert settings.retry_delay == 2
+    assert settings.app_timeout == 20
+    assert settings.probe_timeout == 4
+
+
 @pytest.mark.asyncio
 async def test_restart_cycle_reconnects_and_runs_workload_again(fake_ib):
     workload = FakeWorkload()
@@ -159,9 +203,7 @@ async def test_dataloader_settings_probe_before_workload(fake_ib):
     supervisor = ConnectionSupervisor(
         fake_ib,
         workload,
-        ConnectionSettings.from_dataloader_config(
-            {"restart_time": 0, "retryDelay": 0}, client_id=77
-        ),
+        ConnectionSettings.from_config({"restart_time": 0, "retryDelay": 0}, 77),
     )
 
     runner = asyncio.create_task(supervisor.run())
