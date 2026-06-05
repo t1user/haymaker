@@ -174,16 +174,10 @@ class App:
     supervisor: ConnectionSupervisor = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        ibi.util.globalErrorEvent += self.onGlobalErrEvent
         self.runtime.set_no_future_roll_strategies(self.no_future_roll_strategies)
         self.supervisor = ConnectionSupervisor(self.ib, self.runtime, self.settings)
         self.runtime.set_restart_handler(self.supervisor.request_restart)
         log.debug(f"App initiated: {self}")
-
-    def onGlobalErrEvent(self, *args, **kwargs):
-        """Log ib_insync global errors without making them operational errors."""
-
-        log.debug(f"Global err: {args} {kwargs}")
 
     def run(self) -> None:
         # this is the main entry point into strategy
