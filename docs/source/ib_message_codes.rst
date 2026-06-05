@@ -102,4 +102,7 @@ Operational Rule of Thumb
 
 Use ``timeoutEvent`` and probes as the first active health checks. Recent broker
 messages decide whether a failed health check should wait for broker recovery or
-request a reconnect/rebuild immediately.
+request a reconnect/rebuild immediately. Once Haymaker is already waiting for
+broker recovery, ``updateEvent`` is a useful hint that traffic has resumed and
+should trigger a recovery probe; failed recovery probes should keep the original
+grace timer intact.

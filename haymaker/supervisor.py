@@ -173,6 +173,7 @@ class ConnectionSupervisor:
         self.ib.errorEvent += self.onErrEvent
         self.ib.disconnectedEvent += self.onDisconnectedEvent
         self.ib.timeoutEvent += self.onTimeoutEvent
+        self.ib.updateEvent += self.onUpdateEvent
 
     def start(self) -> asyncio.Task[None]:
         """Start the supervisor in the current event loop."""
@@ -281,18 +282,18 @@ class ConnectionSupervisor:
         if self.state != SupervisorState.CONNECTED:
             return
 
-        if self._probe_task is not None and not self._probe_task.done():
-            return
-
         broker_message = self._latest_recoverable_broker_message()
         if broker_message:
             self._wait_for_broker_auto_recovery(broker_message)
             return
 
-        self._probe_task = asyncio.create_task(
-            self._probe_after_timeout(idle_period),
-            name="connection-supervisor-probe",
-        )
+        self._request_probe(f"No IB traffic for {idle_period}s")
+
+    def onUpdateEvent(self) -> None:
+        """Probe broker recovery when IB traffic resumes during degraded state."""
+
+        if self._running and self.state == SupervisorState.WAITING_FOR_BROKER:
+            self._request_probe("IB traffic resumed while waiting for broker recovery")
 
     async def _connect_and_verify(self) -> bool:
         self._transition_to(SupervisorState.CONNECTING)
@@ -417,19 +418,45 @@ class ConnectionSupervisor:
             self._warn_if_recovery_delayed()
             await asyncio.sleep(5)
 
-    async def _probe_after_timeout(self, idle_period: float) -> None:
-        log.debug(f"No IB traffic for {idle_period}s. Probing connection.")
-        if await self._probe():
-            log.debug("Connection probe succeeded.")
-            self._mark_connected()
-            if self.settings.app_timeout:
-                self.ib.setTimeout(self.settings.app_timeout)
-        else:
-            broker_message = self._latest_recoverable_broker_message()
-            if broker_message:
-                self._wait_for_broker_auto_recovery(broker_message)
-                return
-            self.request_restart("connection probe failed")
+    def _request_probe(self, reason: str) -> None:
+        if self._probe_task is not None and not self._probe_task.done():
+            return
+
+        self._probe_task = asyncio.create_task(
+            self._run_probe(reason),
+            name="connection-supervisor-probe",
+        )
+
+    async def _run_probe(self, reason: str) -> None:
+        current_task = asyncio.current_task()
+        log.debug(f"{reason}. Probing connection.")
+        try:
+            if await self._probe():
+                self._handle_successful_probe()
+            else:
+                self._handle_failed_probe()
+        finally:
+            if self._probe_task is current_task:
+                self._probe_task = None
+
+    def _handle_successful_probe(self) -> None:
+        log.debug("Connection probe succeeded.")
+        self._mark_connected()
+        if self.settings.app_timeout:
+            self.ib.setTimeout(self.settings.app_timeout)
+
+    def _handle_failed_probe(self) -> None:
+        if self.state == SupervisorState.WAITING_FOR_BROKER:
+            log.debug("Connection probe failed; continuing to wait for broker.")
+            self._warn_if_recovery_delayed()
+            return
+
+        broker_message = self._latest_recoverable_broker_message()
+        if broker_message:
+            self._wait_for_broker_auto_recovery(broker_message)
+            return
+
+        self.request_restart("connection probe failed")
 
     async def _probe(self) -> bool:
         try:

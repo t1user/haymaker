@@ -52,6 +52,7 @@
   should use camelCase callback names.
 - For `ib_insync` events, prefer direct correspondence with the event name:
   `orderStatusEvent` -> `onOrderStatusEvent`,
+  `updateEvent` -> `onUpdateEvent`,
   `timeoutEvent` -> `onTimeoutEvent`.
 - Exception: handlers for `ib.errorEvent` should be named `onErrEvent`, not
   `onErrorEvent`, because IB uses this event for many informational broker
@@ -104,9 +105,10 @@ BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fa
   trading and managed dataloader runs. It does not manage or restart the gateway
   process. Route new restart triggers through its `request_restart()` method.
   Broker messages are recovery context, not automatic restart triggers:
-  `timeoutEvent` and connection probes are the first active health checks, and
-  recent broker-degraded messages decide whether to wait for automatic broker
-  recovery or request a reconnect/rebuild.
+  `timeoutEvent` and connection probes are the first active health checks,
+  `updateEvent` may probe recovery while already broker-degraded, and recent
+  broker-degraded messages decide whether to wait for automatic broker recovery
+  or request a reconnect/rebuild.
   Future app/supervisor architecture decisions should leave room for attached
   dataloader mode, where dataloader work borrows an externally managed `IB`
   connection and has no right to restart or disconnect it; see
@@ -115,6 +117,10 @@ BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fa
   connection modes. Legacy `reconnect`/`wait` behavior is a managed-mode recovery
   concern handled by supervisor decisions such as broker data-maintained vs
   data-lost messages, not a separate attached-mode policy.
+- After the current app/supervisor architecture work settles, reconsider
+  whether `app.recovery_warning_after` and `app.recovery_warning_interval`
+  should remain user-facing config. They look like internal notification
+  throttling details rather than trading/deployment policy.
 - Graceful shutdown is not currently a broad architecture priority. Terminal
   `Ctrl-C` has historically been acceptable. Before service-manager deployment,
   prefer minimal signal hardening for `SIGINT`/`SIGTERM`: request supervisor stop,

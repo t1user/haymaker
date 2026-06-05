@@ -19,6 +19,7 @@ class FakeIB:
         self.errorEvent = ibi.Event()
         self.disconnectedEvent = ibi.Event()
         self.timeoutEvent = ibi.Event()
+        self.updateEvent = ibi.Event()
         self.connected = False
         self.connect_count = 0
         self.disconnect_count = 0
@@ -279,6 +280,86 @@ async def test_timeout_does_not_probe_while_waiting_for_broker(supervisor, fake_
     supervisor.state = SupervisorState.WAITING_FOR_BROKER
 
     supervisor.onTimeoutEvent(20)
+    await asyncio.sleep(0)
+
+    assert fake_ib.probe_count == 0
+    supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_update_event_probes_waiting_for_broker_and_marks_connected(
+    supervisor, fake_ib
+):
+    supervisor._running = True
+    fake_ib.connected = True
+    supervisor.state = SupervisorState.WAITING_FOR_BROKER
+
+    supervisor.onUpdateEvent()
+    assert await wait_for_condition(
+        lambda: supervisor.state == SupervisorState.CONNECTED
+    )
+
+    assert fake_ib.probe_count == 1
+    assert fake_ib.timeouts == [supervisor.settings.app_timeout]
+    supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_failed_update_event_probe_keeps_waiting_for_broker(
+    supervisor, fake_ib
+):
+    supervisor._running = True
+    fake_ib.connected = True
+    fake_ib.probe_result = []
+    supervisor.state = SupervisorState.WAITING_FOR_BROKER
+
+    supervisor.onUpdateEvent()
+    assert await wait_for_condition(lambda: fake_ib.probe_count == 1)
+
+    assert supervisor.state == SupervisorState.WAITING_FOR_BROKER
+    assert not supervisor._restart_requested.is_set()
+    supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_update_event_does_not_start_duplicate_probe(
+    supervisor, fake_ib, monkeypatch: pytest.MonkeyPatch
+):
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    calls = 0
+    supervisor._running = True
+    fake_ib.connected = True
+    supervisor.state = SupervisorState.WAITING_FOR_BROKER
+
+    async def slow_probe():
+        nonlocal calls
+        calls += 1
+        probe_started.set()
+        await release_probe.wait()
+        return True
+
+    monkeypatch.setattr(supervisor, "_probe", slow_probe)
+
+    supervisor.onUpdateEvent()
+    await probe_started.wait()
+    supervisor.onUpdateEvent()
+
+    assert calls == 1
+
+    release_probe.set()
+    assert await wait_for_condition(
+        lambda: supervisor.state == SupervisorState.CONNECTED
+    )
+    supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_update_event_ignores_non_degraded_state(supervisor, fake_ib):
+    supervisor._running = True
+    supervisor.state = SupervisorState.CONNECTED
+
+    supervisor.onUpdateEvent()
     await asyncio.sleep(0)
 
     assert fake_ib.probe_count == 0

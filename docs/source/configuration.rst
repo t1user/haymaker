@@ -32,10 +32,13 @@ the IB client has received no traffic for ``app.appTimeout`` seconds. Haymaker
 then checks recent broker messages such as ``1100``, ``2110``, ``2103``,
 ``2105``, ``2157``, or ``10182``. If those messages suggest broker-side
 degradation, ``app.auto_recovery_grace_period`` controls how long Haymaker
-waits before requesting a restart cycle. Without recent broker-degraded
-context, Haymaker probes the connection and requests a restart if the probe
-fails. ``app.recovery_warning_after`` and ``app.recovery_warning_interval``
-control delayed-recovery warning messages.
+waits before requesting a restart cycle. While Haymaker is waiting for broker
+auto-recovery, ``updateEvent`` can trigger a probe when IB traffic resumes; a
+successful probe clears the degraded state, and a failed probe keeps waiting
+without resetting the grace timer. Without recent broker-degraded context,
+Haymaker probes the connection and requests a restart if the probe fails.
+``app.recovery_warning_after`` and ``app.recovery_warning_interval`` control
+delayed-recovery warning messages.
 
 See :doc:`ib_message_codes` for the broker message codes most relevant to
 connection recovery and logging.
