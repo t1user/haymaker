@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,8 +24,37 @@ class SupervisorState(str, Enum):
     PROBING = "probing"
     CONNECTED = "connected"
     WAITING_FOR_BROKER = "waiting_for_broker"
-    RESTARTING = "restarting"
+    STARTING = "starting"
     STOPPING = "stopping"
+
+
+ALLOWED_SUPERVISOR_TRANSITIONS: Mapping[SupervisorState, frozenset[SupervisorState]] = {
+    SupervisorState.STOPPED: frozenset({SupervisorState.CONNECTING}),
+    SupervisorState.CONNECTING: frozenset(
+        {SupervisorState.PROBING, SupervisorState.STOPPING}
+    ),
+    SupervisorState.PROBING: frozenset(
+        {SupervisorState.CONNECTED, SupervisorState.STOPPING}
+    ),
+    SupervisorState.CONNECTED: frozenset(
+        {
+            SupervisorState.WAITING_FOR_BROKER,
+            SupervisorState.STARTING,
+            SupervisorState.STOPPING,
+        }
+    ),
+    SupervisorState.WAITING_FOR_BROKER: frozenset(
+        {
+            SupervisorState.CONNECTED,
+            SupervisorState.STARTING,
+            SupervisorState.STOPPING,
+        }
+    ),
+    SupervisorState.STARTING: frozenset(
+        {SupervisorState.CONNECTING, SupervisorState.STOPPING}
+    ),
+    SupervisorState.STOPPING: frozenset({SupervisorState.STOPPED}),
+}
 
 
 class SupervisorWorkload(Protocol):
@@ -37,6 +67,15 @@ class SupervisorWorkload(Protocol):
 
     async def stop(self, reason: str) -> None:
         """Release work before the supervisor disconnects or exits."""
+
+
+@dataclass(frozen=True)
+class BrokerMessage:
+    """Recent IB broker status message used for recovery decisions."""
+
+    code: int
+    message: str
+    received_at: float
 
 
 @dataclass(frozen=True)
@@ -117,10 +156,16 @@ class ConnectionSupervisor:
     )
     _recovery_started_at: float | None = field(default=None, init=False, repr=False)
     _last_warning_at: float | None = field(default=None, init=False, repr=False)
+    _recent_broker_messages: deque[BrokerMessage] = field(
+        default_factory=deque, init=False, repr=False
+    )
 
-    AUTO_RECOVERY_CODES = frozenset({1100, 2110})
+    RECOVERABLE_BROKER_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
+    SOCKET_RESET_CODE = 1300
     DATA_LOST_CODE = 1101
     DATA_MAINTAINED_CODE = 1102
+    RECENT_BROKER_MESSAGE_TTL = 300
+    RECENT_BROKER_MESSAGE_LIMIT = 20
 
     def __post_init__(self) -> None:
         # IB calls this errorEvent, but most payloads are broker messages, not
@@ -169,7 +214,8 @@ class ConnectionSupervisor:
         """Stop reconnecting and disconnect the IB socket."""
 
         self._running = False
-        self._transition_to(SupervisorState.STOPPING)
+        if self.state != SupervisorState.STOPPED:
+            self._transition_to(SupervisorState.STOPPING)
         self._restart_requested.set()
         self._cancel_auto_recovery_wait()
         self._cancel_probe()
@@ -183,7 +229,7 @@ class ConnectionSupervisor:
             return
 
         if self.state in {
-            SupervisorState.RESTARTING,
+            SupervisorState.STARTING,
             SupervisorState.STOPPING,
         }:
             log.debug(f"Restart already in progress; additional reason: {reason}")
@@ -206,12 +252,13 @@ class ConnectionSupervisor:
     ) -> None:
         """Translate selected broker messages into lifecycle actions."""
 
-        if code in self.AUTO_RECOVERY_CODES:
-            self._wait_for_broker_auto_recovery(code)
-        elif code == self.DATA_LOST_CODE:
+        self._remember_broker_message(code, message)
+        if code == self.DATA_LOST_CODE:
             self.request_restart(
                 f"broker connectivity restored with data lost ({code})"
             )
+        elif code == self.SOCKET_RESET_CODE:
+            self.request_restart(f"broker reset API socket port ({code})")
         elif code == self.DATA_MAINTAINED_CODE:
             self._mark_connected()
 
@@ -224,15 +271,28 @@ class ConnectionSupervisor:
     def onTimeoutEvent(self, idle_period: float) -> None:
         """Probe an otherwise idle connection before requesting a restart."""
 
-        if (
-            self._running
-            and self.state == SupervisorState.CONNECTED
-            and (self._probe_task is None or self._probe_task.done())
-        ):
-            self._probe_task = asyncio.create_task(
-                self._probe_after_timeout(idle_period),
-                name="connection-supervisor-probe",
-            )
+        if not self._running:
+            return
+
+        if self.state == SupervisorState.WAITING_FOR_BROKER:
+            self._warn_if_recovery_delayed()
+            return
+
+        if self.state != SupervisorState.CONNECTED:
+            return
+
+        if self._probe_task is not None and not self._probe_task.done():
+            return
+
+        broker_message = self._latest_recoverable_broker_message()
+        if broker_message:
+            self._wait_for_broker_auto_recovery(broker_message)
+            return
+
+        self._probe_task = asyncio.create_task(
+            self._probe_after_timeout(idle_period),
+            name="connection-supervisor-probe",
+        )
 
     async def _connect_and_verify(self) -> bool:
         self._transition_to(SupervisorState.CONNECTING)
@@ -320,8 +380,8 @@ class ConnectionSupervisor:
         self._workload_task = None
 
     async def _prepare_restart(self, reason: str) -> None:
-        self._transition_to(SupervisorState.RESTARTING)
-        log.debug(f"Restarting connection: {reason}")
+        self._transition_to(SupervisorState.STARTING)
+        log.debug(f"Starting connection: {reason}")
         self._cancel_auto_recovery_wait()
         self._cancel_probe()
         self._disconnect()
@@ -361,9 +421,14 @@ class ConnectionSupervisor:
         log.debug(f"No IB traffic for {idle_period}s. Probing connection.")
         if await self._probe():
             log.debug("Connection probe succeeded.")
+            self._mark_connected()
             if self.settings.app_timeout:
                 self.ib.setTimeout(self.settings.app_timeout)
         else:
+            broker_message = self._latest_recoverable_broker_message()
+            if broker_message:
+                self._wait_for_broker_auto_recovery(broker_message)
+                return
             self.request_restart("connection probe failed")
 
     async def _probe(self) -> bool:
@@ -377,7 +442,7 @@ class ConnectionSupervisor:
             return False
         return bool(bars)
 
-    def _wait_for_broker_auto_recovery(self, code: int) -> None:
+    def _wait_for_broker_auto_recovery(self, broker_message: BrokerMessage) -> None:
         if not self._running or self._restart_requested.is_set():
             return
 
@@ -388,20 +453,51 @@ class ConnectionSupervisor:
         self._auto_recovery_handle = loop.call_later(
             self.settings.auto_recovery_grace_period,
             self.request_restart,
-            f"broker auto-recovery timed out after message {code}",
+            f"broker auto-recovery timed out after message {broker_message.code}",
         )
         log.debug(
-            f"Broker message {code}; waiting "
+            f"Recent broker message {broker_message.code}; waiting "
             f"{self.settings.auto_recovery_grace_period}s "
             "for automatic recovery."
         )
 
     def _mark_connected(self) -> None:
         self._cancel_auto_recovery_wait()
+        self._recent_broker_messages.clear()
         self._recovery_started_at = None
         self._last_warning_at = None
-        if not self._restart_requested.is_set():
+        if (
+            self._running
+            and not self._restart_requested.is_set()
+            and self.state
+            in {
+                SupervisorState.PROBING,
+                SupervisorState.CONNECTED,
+                SupervisorState.WAITING_FOR_BROKER,
+            }
+        ):
             self._transition_to(SupervisorState.CONNECTED)
+
+    def _remember_broker_message(self, code: int, message: str) -> None:
+        self._recent_broker_messages.append(BrokerMessage(code, message, monotonic()))
+        self._discard_stale_broker_messages()
+        while len(self._recent_broker_messages) > self.RECENT_BROKER_MESSAGE_LIMIT:
+            self._recent_broker_messages.popleft()
+
+    def _latest_recoverable_broker_message(self) -> BrokerMessage | None:
+        self._discard_stale_broker_messages()
+        for broker_message in reversed(self._recent_broker_messages):
+            if broker_message.code in self.RECOVERABLE_BROKER_CODES:
+                return broker_message
+        return None
+
+    def _discard_stale_broker_messages(self) -> None:
+        cutoff = monotonic() - self.RECENT_BROKER_MESSAGE_TTL
+        while (
+            self._recent_broker_messages
+            and self._recent_broker_messages[0].received_at < cutoff
+        ):
+            self._recent_broker_messages.popleft()
 
     def _disconnect(self) -> None:
         if self.ib.isConnected():
@@ -441,4 +537,13 @@ class ConnectionSupervisor:
             self._last_warning_at = now
 
     def _transition_to(self, state: SupervisorState) -> None:
+        if state == self.state:
+            return
+
+        allowed_states = ALLOWED_SUPERVISOR_TRANSITIONS[self.state]
+        if state not in allowed_states:
+            raise RuntimeError(
+                "Invalid supervisor state transition: "
+                f"{self.state.value} -> {state.value}"
+            )
         self.state = state

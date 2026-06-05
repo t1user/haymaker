@@ -81,6 +81,13 @@ python -m mypy haymaker/research tests/test_research
 python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E501
 ```
 
+- In Codex sandbox runs, prefer a `/tmp` Black cache to avoid hangs caused by
+  restricted access to the normal user cache:
+
+```bash
+BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fast --target-version py312 --workers 1 <paths>
+```
+
 # Project Notes
 
 - This is an Interactive Brokers trading framework built around `ib_insync`,
@@ -96,6 +103,10 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - `haymaker.supervisor.ConnectionSupervisor` owns IB socket recovery for live
   trading and managed dataloader runs. It does not manage or restart the gateway
   process. Route new restart triggers through its `request_restart()` method.
+  Broker messages are recovery context, not automatic restart triggers:
+  `timeoutEvent` and connection probes are the first active health checks, and
+  recent broker-degraded messages decide whether to wait for automatic broker
+  recovery or request a reconnect/rebuild.
   Future app/supervisor architecture decisions should leave room for attached
   dataloader mode, where dataloader work borrows an externally managed `IB`
   connection and has no right to restart or disconnect it; see

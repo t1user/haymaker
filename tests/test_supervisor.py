@@ -85,8 +85,14 @@ def supervisor(fake_ib):
 @pytest.mark.asyncio
 async def test_waits_for_broker_auto_recovery_without_restarting(supervisor):
     supervisor._running = True
+    supervisor.state = SupervisorState.CONNECTED
 
     supervisor.onErrEvent(-1, 1100, "Connectivity lost", ibi.Contract())
+
+    assert supervisor.state == SupervisorState.CONNECTED
+    assert not supervisor._restart_requested.is_set()
+
+    supervisor.onTimeoutEvent(20)
 
     assert supervisor.state == SupervisorState.WAITING_FOR_BROKER
     assert not supervisor._restart_requested.is_set()
@@ -102,8 +108,12 @@ async def test_waits_for_broker_auto_recovery_without_restarting(supervisor):
 @pytest.mark.asyncio
 async def test_requests_restart_after_auto_recovery_grace_period(supervisor):
     supervisor._running = True
+    supervisor.state = SupervisorState.CONNECTED
 
     supervisor.onErrEvent(-1, 2110, "Connectivity broken", ibi.Contract())
+    assert not supervisor._restart_requested.is_set()
+
+    supervisor.onTimeoutEvent(20)
     assert await wait_for_condition(lambda: supervisor._restart_requested.is_set())
 
     assert supervisor.state == SupervisorState.WAITING_FOR_BROKER
@@ -116,6 +126,55 @@ def test_data_lost_message_requests_restart(supervisor):
     supervisor.onErrEvent(-1, 1101, "Data lost", ibi.Contract())
 
     assert supervisor._restart_requested.is_set()
+    supervisor.stop()
+
+
+def test_socket_reset_message_requests_restart(supervisor):
+    supervisor._running = True
+
+    supervisor.onErrEvent(-1, 1300, "Socket port has been reset", ibi.Contract())
+
+    assert supervisor._restart_requested.is_set()
+    supervisor.stop()
+
+
+def test_valid_supervisor_transition_updates_state(supervisor):
+    supervisor._transition_to(SupervisorState.CONNECTING)
+
+    assert supervisor.state == SupervisorState.CONNECTING
+
+
+def test_invalid_supervisor_transition_raises(supervisor):
+    supervisor.state = SupervisorState.CONNECTED
+
+    with pytest.raises(
+        RuntimeError,
+        match="Invalid supervisor state transition: connected -> connecting",
+    ):
+        supervisor._transition_to(SupervisorState.CONNECTING)
+
+
+def test_stop_keeps_stopped_supervisor_stopped(supervisor):
+    supervisor.stop()
+
+    assert supervisor.state == SupervisorState.STOPPED
+
+
+def test_stopped_supervisor_cannot_transition_to_stopping(supervisor):
+    with pytest.raises(
+        RuntimeError,
+        match="Invalid supervisor state transition: stopped -> stopping",
+    ):
+        supervisor._transition_to(SupervisorState.STOPPING)
+
+
+def test_data_maintained_message_does_not_skip_startup_probe(supervisor):
+    supervisor._running = True
+    supervisor.state = SupervisorState.CONNECTING
+
+    supervisor.onErrEvent(-1, 1102, "Connectivity restored", ibi.Contract())
+
+    assert supervisor.state == SupervisorState.CONNECTING
     supervisor.stop()
 
 
@@ -237,6 +296,34 @@ async def test_failed_timeout_probe_requests_restart(supervisor, fake_ib):
     assert await wait_for_condition(lambda: supervisor._restart_requested.is_set())
 
     assert supervisor.state == SupervisorState.CONNECTED
+    supervisor.stop()
+
+
+@pytest.mark.asyncio
+async def test_failed_timeout_probe_waits_with_recent_broker_message(
+    supervisor, monkeypatch: pytest.MonkeyPatch
+):
+    supervisor._running = True
+    supervisor.state = SupervisorState.CONNECTED
+    supervisor.settings = replace(supervisor.settings, auto_recovery_grace_period=60)
+
+    async def failed_probe_with_broker_message():
+        supervisor.onErrEvent(
+            -1,
+            10182,
+            "Failed to request live updates (disconnected)",
+            ibi.Contract(),
+        )
+        return False
+
+    monkeypatch.setattr(supervisor, "_probe", failed_probe_with_broker_message)
+
+    supervisor.onTimeoutEvent(20)
+    assert await wait_for_condition(
+        lambda: supervisor.state == SupervisorState.WAITING_FOR_BROKER
+    )
+
+    assert not supervisor._restart_requested.is_set()
     supervisor.stop()
 
 

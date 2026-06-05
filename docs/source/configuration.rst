@@ -27,10 +27,18 @@ start, stop, or restart the gateway process.
 Each connection cycle verifies broker usability with a short historical-data
 probe before starting the supervised workload.
 
-For live execution, ``app.auto_recovery_grace_period`` controls how long
-Haymaker waits after broker messages such as ``1100`` or ``2110`` before
-requesting a restart cycle. ``app.recovery_warning_after`` and
-``app.recovery_warning_interval`` control delayed-recovery warning messages.
+For live execution, ``timeoutEvent`` is the first active health signal after
+the IB client has received no traffic for ``app.appTimeout`` seconds. Haymaker
+then checks recent broker messages such as ``1100``, ``2110``, ``2103``,
+``2105``, ``2157``, or ``10182``. If those messages suggest broker-side
+degradation, ``app.auto_recovery_grace_period`` controls how long Haymaker
+waits before requesting a restart cycle. Without recent broker-degraded
+context, Haymaker probes the connection and requests a restart if the probe
+fails. ``app.recovery_warning_after`` and ``app.recovery_warning_interval``
+control delayed-recovery warning messages.
+
+See :doc:`ib_message_codes` for the broker message codes most relevant to
+connection recovery and logging.
 
 Contract details are refreshed during successful live startup. Live runtime
 also schedules a fixed daily restart request so normal socket recovery cannot

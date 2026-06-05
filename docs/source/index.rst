@@ -12,6 +12,7 @@ Haymaker Documentation
    installation
    configuration
    logging
+   ib_message_codes
    execution
    dataloader
    research/index

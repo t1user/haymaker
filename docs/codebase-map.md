@@ -122,7 +122,10 @@ The research package is intentionally separate from live execution. It works dir
 ## External Integrations
 
 - Interactive Brokers TWS/Gateway through `ib_insync`.
-- Haymaker-owned `ConnectionSupervisor` for live and dataloader IB socket recovery. TWS or IB Gateway process management is external.
+- Haymaker-owned `ConnectionSupervisor` for live and dataloader IB socket
+  recovery. TWS or IB Gateway process management is external. Broker messages
+  are recorded as recovery context; `timeoutEvent` and probes decide whether to
+  wait for broker auto-recovery or request a reconnect/rebuild.
 - MongoDB through `pymongo`.
 - Arctic through `arctic` for dataframe time-series storage.
 - pandas, NumPy, and Numba for dataframe research and kernels.
@@ -231,5 +234,7 @@ also a scoped `haymaker/research/AGENTS.md` for timing-sensitive research code.
 The root guidance records the standard focused checks, warns against importing
 `haymaker.app` in focused tests, and identifies
 `haymaker.supervisor.ConnectionSupervisor` as the owner of IB socket recovery.
+It also records the timeout/probe-first recovery rule and points runtime work
+away from treating broker messages as direct restart triggers.
 
 Dashboard is experimental and should not be looked at.
