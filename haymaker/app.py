@@ -83,13 +83,15 @@ class LiveRuntime:
     async def start(self) -> None:
         """Start controller and strategy jobs after connectivity is verified."""
 
-        self._start_scheduled_tasks()
         log.debug("Probe successful. Will run controller...")
+        started_scheduled_tasks = False
         try:
             controller_started = await self.controller.run()
             if not controller_started:
                 log.debug("Controller did not start; jobs will not be started.")
                 return
+            self._start_scheduled_tasks()
+            started_scheduled_tasks = True
             await self.jobs()
         except asyncio.CancelledError:
             log.debug("Live runtime task cancelled.")
@@ -98,6 +100,9 @@ class LiveRuntime:
             log.info(f"Connection fault: {ce}")
         except Exception as e:
             log.exception(e)
+        finally:
+            if started_scheduled_tasks:
+                self._stop_scheduled_tasks()
 
     async def stop(self, reason: str) -> None:
         """Put controller on hold and stop scheduled runtime checks."""

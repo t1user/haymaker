@@ -24,7 +24,7 @@ class SupervisorState(str, Enum):
     PROBING = "probing"
     CONNECTED = "connected"
     WAITING_FOR_BROKER = "waiting_for_broker"
-    STARTING = "starting"
+    RESTARTING = "restarting"
     STOPPING = "stopping"
 
 
@@ -34,23 +34,27 @@ ALLOWED_SUPERVISOR_TRANSITIONS: Mapping[SupervisorState, frozenset[SupervisorSta
         {SupervisorState.PROBING, SupervisorState.STOPPING}
     ),
     SupervisorState.PROBING: frozenset(
-        {SupervisorState.CONNECTED, SupervisorState.STOPPING}
+        {
+            SupervisorState.CONNECTED,
+            SupervisorState.RESTARTING,
+            SupervisorState.STOPPING,
+        }
     ),
     SupervisorState.CONNECTED: frozenset(
         {
             SupervisorState.WAITING_FOR_BROKER,
-            SupervisorState.STARTING,
+            SupervisorState.RESTARTING,
             SupervisorState.STOPPING,
         }
     ),
     SupervisorState.WAITING_FOR_BROKER: frozenset(
         {
             SupervisorState.CONNECTED,
-            SupervisorState.STARTING,
+            SupervisorState.RESTARTING,
             SupervisorState.STOPPING,
         }
     ),
-    SupervisorState.STARTING: frozenset(
+    SupervisorState.RESTARTING: frozenset(
         {SupervisorState.CONNECTING, SupervisorState.STOPPING}
     ),
     SupervisorState.STOPPING: frozenset({SupervisorState.STOPPED}),
@@ -66,7 +70,7 @@ class SupervisorWorkload(Protocol):
         """Start or resume work after a usable IB connection is available."""
 
     async def stop(self, reason: str) -> None:
-        """Release work before the supervisor disconnects or exits."""
+        """Release active work before the supervisor reconnects or exits."""
 
 
 @dataclass(frozen=True)
@@ -128,11 +132,22 @@ class ConnectionSettings:
 
 @dataclass
 class ConnectionSupervisor:
-    """Maintain an IB socket connection and restart workloads when needed.
+    """Maintain an owned IB socket connection around one workload.
+
+    ``run()`` is the only execution entry point. It connects the configured
+    ``ib_insync.IB`` client, verifies broker usability with a probe, starts the
+    workload, performs requested reconnect cycles, and owns final cleanup.
+    ``stop()`` is a synchronous request for the active ``run()`` loop to exit; it
+    does not disconnect the socket or await workload cleanup itself.
+    ``request_restart()`` coalesces reconnect requests for the active ``run()``
+    loop.
 
     The supervisor deliberately does not manage the TWS or IB Gateway process.
-    It reconnects the API client and runs one explicit workload task for each
-    usable connection cycle.
+    It is only for sockets owned by Haymaker, such as live trading and managed
+    dataloader runs. Attached dataloader work should not use this class because
+    it must not connect, disconnect, or request restarts on a borrowed socket.
+    A workload is stopped only when an active workload task is interrupted for a
+    restart or shutdown; a workload that completes normally owns its own cleanup.
 
     Args:
         ib: Shared Interactive Brokers client.
@@ -145,7 +160,6 @@ class ConnectionSupervisor:
     settings: ConnectionSettings = field(default_factory=ConnectionSettings)
     state: SupervisorState = field(default=SupervisorState.STOPPED, init=False)
     _running: bool = field(default=False, init=False, repr=False)
-    _runner: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _restart_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
@@ -179,14 +193,6 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
-    def start(self) -> asyncio.Task[None]:
-        """Start the supervisor in the current event loop."""
-
-        if self._runner is None or self._runner.done():
-            self._runner = asyncio.ensure_future(self.run())
-            self._runner.set_name("connection-supervisor")
-        return self._runner
-
     async def run(self) -> None:
         """Run connection and restart cycles until explicitly stopped."""
 
@@ -201,19 +207,31 @@ class ConnectionSupervisor:
                 if not await self._connect_and_verify():
                     break
 
+                if self._restart_requested.is_set():
+                    reason = self._consume_restart_reason()
+                    if self._running:
+                        await self._prepare_restart(reason)
+                    continue
+
                 self._start_workload()
                 reason = await self._wait_for_restart_or_completion()
-                await self._stop_workload(reason)
+                if self._workload_task is not None:
+                    await self._stop_workload(reason)
                 if self._running:
                     await self._prepare_restart(reason)
         finally:
             self._running = False
-            if self.state != SupervisorState.STOPPED:
+            if self.state not in {
+                SupervisorState.STOPPED,
+                SupervisorState.STOPPING,
+            }:
                 self._transition_to(SupervisorState.STOPPING)
             self._cancel_connection_recovery()
-            await self._stop_workload("supervisor stopped")
+            if self._workload_task is not None:
+                await self._stop_workload("supervisor stopped")
             self._disconnect()
-            self._transition_to(SupervisorState.STOPPED)
+            if self.state != SupervisorState.STOPPED:
+                self._transition_to(SupervisorState.STOPPED)
 
     def stop(self) -> None:
         """Request supervisor shutdown.
@@ -221,12 +239,15 @@ class ConnectionSupervisor:
         The run loop performs awaited workload cleanup and marks STOPPED.
         """
 
-        if self.state == SupervisorState.STOPPED:
+        if not self._running and self.state == SupervisorState.STOPPED:
             return
         self._running = False
-        self._transition_to(SupervisorState.STOPPING)
+        if self.state not in {
+            SupervisorState.STOPPED,
+            SupervisorState.STOPPING,
+        }:
+            self._transition_to(SupervisorState.STOPPING)
         self._restart_requested.set()
-        self._cancel_connection_recovery()
 
     def _cancel_connection_recovery(self) -> None:
         """Cancel pending recovery/probe work for a connection cycle."""
@@ -242,7 +263,7 @@ class ConnectionSupervisor:
             return
 
         if self.state in {
-            SupervisorState.STARTING,
+            SupervisorState.RESTARTING,
             SupervisorState.STOPPING,
         }:
             log.debug(f"Restart already in progress; additional reason: {reason}")
@@ -315,7 +336,13 @@ class ConnectionSupervisor:
         self._transition_to(SupervisorState.PROBING)
         await self._wait_until_probe_succeeds()
 
-        if not self._running or not self.ib.isConnected():
+        if not self._running:
+            return False
+
+        if self._restart_requested.is_set():
+            return True
+
+        if not self.ib.isConnected():
             return False
 
         self._mark_connected()
@@ -383,8 +410,13 @@ class ConnectionSupervisor:
 
     async def _stop_workload(self, reason: str) -> None:
         task = self._workload_task
+        if task is None:
+            return
+
         await self.workload.stop(reason)
-        if task and not task.done():
+        if task.done():
+            self._consume_workload_result()
+        else:
             task.cancel()
             try:
                 await task
@@ -393,8 +425,8 @@ class ConnectionSupervisor:
         self._workload_task = None
 
     async def _prepare_restart(self, reason: str) -> None:
-        self._transition_to(SupervisorState.STARTING)
-        log.debug(f"Starting connection: {reason}")
+        self._transition_to(SupervisorState.RESTARTING)
+        log.debug(f"Restarting connection: {reason}")
         self._cancel_connection_recovery()
         self._disconnect()
         await asyncio.sleep(self.settings.restart_delay)
@@ -423,6 +455,8 @@ class ConnectionSupervisor:
     async def _wait_until_probe_succeeds(self) -> None:
         while self._running and self.ib.isConnected():
             if await self._probe():
+                return
+            if self._restart_requested.is_set() or not self.ib.isConnected():
                 return
             log.debug("Connection probe failed. Waiting before retry.")
             self._start_recovery_clock()

@@ -182,6 +182,7 @@ def test_data_maintained_message_does_not_skip_startup_probe(supervisor):
 def test_duplicate_restart_requests_are_coalesced(fake_ib):
     supervisor = ConnectionSupervisor(fake_ib, FakeWorkload())
     supervisor._running = True
+    supervisor.state = SupervisorState.CONNECTED
 
     supervisor.request_restart("first")
     supervisor.request_restart("second")
@@ -270,7 +271,14 @@ def test_data_maintained_message_does_not_restart_during_startup(supervisor):
 
 @pytest.mark.asyncio
 async def test_restart_cycle_reconnects_and_runs_workload_again(fake_ib):
-    workload = FakeWorkload()
+    release = asyncio.Event()
+
+    class ActiveWorkload(FakeWorkload):
+        async def start(self):
+            self.starts.append("started")
+            await release.wait()
+
+    workload = ActiveWorkload()
 
     supervisor = ConnectionSupervisor(
         fake_ib,
@@ -292,6 +300,72 @@ async def test_restart_cycle_reconnects_and_runs_workload_again(fake_ib):
 
 
 @pytest.mark.asyncio
+async def test_restart_requested_during_probe_skips_workload_until_restart(
+    fake_ib, monkeypatch: pytest.MonkeyPatch
+):
+    workload = FakeWorkload()
+    supervisor = ConnectionSupervisor(
+        fake_ib,
+        workload,
+        ConnectionSettings(restart_delay=0, retry_delay=0),
+    )
+    probe_calls = 0
+
+    async def probe():
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            supervisor.request_restart("restart during startup probe")
+        return True
+
+    monkeypatch.setattr(supervisor, "_probe", probe)
+
+    runner = asyncio.create_task(supervisor.run())
+    assert await wait_for_condition(lambda: workload.starts == ["started"])
+
+    supervisor.stop()
+    await runner
+
+    assert fake_ib.connect_count == 2
+    assert probe_calls == 2
+    assert workload.starts == ["started"]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_probe_restarts_before_workload(
+    fake_ib, monkeypatch: pytest.MonkeyPatch
+):
+    workload = FakeWorkload()
+    supervisor = ConnectionSupervisor(
+        fake_ib,
+        workload,
+        ConnectionSettings(restart_delay=0, retry_delay=0),
+    )
+    probe_calls = 0
+
+    async def probe():
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            fake_ib.disconnect()
+            return False
+        return True
+
+    monkeypatch.setattr(supervisor, "_probe", probe)
+
+    runner = asyncio.create_task(supervisor.run())
+    assert await wait_for_condition(lambda: workload.starts == ["started"])
+
+    supervisor.stop()
+    await runner
+
+    assert fake_ib.connect_count == 2
+    assert fake_ib.disconnect_count == 2
+    assert probe_calls == 2
+    assert workload.starts == ["started"]
+
+
+@pytest.mark.asyncio
 async def test_dataloader_settings_probe_before_workload(fake_ib):
     workload = FakeWorkload()
     supervisor = ConnectionSupervisor(
@@ -309,11 +383,37 @@ async def test_dataloader_settings_probe_before_workload(fake_ib):
 
 
 @pytest.mark.asyncio
+async def test_completed_workload_stops_supervisor_without_duplicate_stop(fake_ib):
+    class CompletingWorkload(FakeWorkload):
+        stop_supervisor_on_completion = True
+
+    workload = CompletingWorkload()
+    supervisor = ConnectionSupervisor(
+        fake_ib,
+        workload,
+        ConnectionSettings(restart_delay=0, retry_delay=0),
+    )
+
+    await supervisor.run()
+
+    assert workload.starts == ["started"]
+    assert workload.stops == []
+    assert fake_ib.disconnect_count == 1
+    assert supervisor.state == SupervisorState.STOPPED
+
+
+@pytest.mark.asyncio
 async def test_stop_request_finishes_in_stopped_after_workload_cleanup(fake_ib):
+    release = asyncio.Event()
+
     class InspectingWorkload(FakeWorkload):
         def __init__(self):
             super().__init__()
             self.connected_during_stop = None
+
+        async def start(self):
+            self.starts.append("started")
+            await release.wait()
 
         async def stop(self, reason):
             self.connected_during_stop = fake_ib.isConnected()
@@ -334,6 +434,7 @@ async def test_stop_request_finishes_in_stopped_after_workload_cleanup(fake_ib):
     await runner
 
     assert workload.connected_during_stop is True
+    assert workload.stops == ["supervisor stopping"]
     assert fake_ib.disconnect_count == 1
     assert supervisor.state == SupervisorState.STOPPED
 
