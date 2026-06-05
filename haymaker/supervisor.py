@@ -94,6 +94,7 @@ class ConnectionSettings:
     auto_recovery_grace_period: float = 120
     recovery_warning_after: float = 300
     recovery_warning_interval: float = 900
+    restart_on_recovered_connection: bool = False
 
     @classmethod
     def from_config(
@@ -119,6 +120,9 @@ class ConnectionSettings:
             auto_recovery_grace_period=config.get("auto_recovery_grace_period", 120),
             recovery_warning_after=config.get("recovery_warning_after", 300),
             recovery_warning_interval=config.get("recovery_warning_interval", 900),
+            restart_on_recovered_connection=config.get(
+                "restart_on_recovered_connection", False
+            ),
         )
 
 
@@ -204,23 +208,31 @@ class ConnectionSupervisor:
                     await self._prepare_restart(reason)
         finally:
             self._running = False
-            self._transition_to(SupervisorState.STOPPING)
-            self._cancel_auto_recovery_wait()
-            self._cancel_probe()
+            if self.state != SupervisorState.STOPPED:
+                self._transition_to(SupervisorState.STOPPING)
+            self._cancel_connection_recovery()
             await self._stop_workload("supervisor stopped")
             self._disconnect()
             self._transition_to(SupervisorState.STOPPED)
 
     def stop(self) -> None:
-        """Stop reconnecting and disconnect the IB socket."""
+        """Request supervisor shutdown.
 
+        The run loop performs awaited workload cleanup and marks STOPPED.
+        """
+
+        if self.state == SupervisorState.STOPPED:
+            return
         self._running = False
-        if self.state != SupervisorState.STOPPED:
-            self._transition_to(SupervisorState.STOPPING)
+        self._transition_to(SupervisorState.STOPPING)
         self._restart_requested.set()
+        self._cancel_connection_recovery()
+
+    def _cancel_connection_recovery(self) -> None:
+        """Cancel pending recovery/probe work for a connection cycle."""
+
         self._cancel_auto_recovery_wait()
         self._cancel_probe()
-        self._disconnect()
 
     def request_restart(self, reason: str) -> None:
         """Request one restart cycle, coalescing concurrent requests."""
@@ -261,7 +273,7 @@ class ConnectionSupervisor:
         elif code == self.SOCKET_RESET_CODE:
             self.request_restart(f"broker reset API socket port ({code})")
         elif code == self.DATA_MAINTAINED_CODE:
-            self._mark_connected()
+            self._handle_data_maintained_message(code)
 
     def onDisconnectedEvent(self) -> None:
         """Restart after an unexpected API socket disconnection."""
@@ -383,8 +395,7 @@ class ConnectionSupervisor:
     async def _prepare_restart(self, reason: str) -> None:
         self._transition_to(SupervisorState.STARTING)
         log.debug(f"Starting connection: {reason}")
-        self._cancel_auto_recovery_wait()
-        self._cancel_probe()
+        self._cancel_connection_recovery()
         self._disconnect()
         await asyncio.sleep(self.settings.restart_delay)
 
@@ -457,6 +468,24 @@ class ConnectionSupervisor:
             return
 
         self.request_restart("connection probe failed")
+
+    def _handle_data_maintained_message(self, code: int) -> None:
+        if (
+            self.settings.restart_on_recovered_connection
+            and self._running
+            and self.state
+            in {
+                SupervisorState.CONNECTED,
+                SupervisorState.WAITING_FOR_BROKER,
+            }
+        ):
+            self._cancel_auto_recovery_wait()
+            self.request_restart(
+                f"broker connectivity restored with data maintained ({code})"
+            )
+            return
+
+        self._mark_connected()
 
     async def _probe(self) -> bool:
         try:

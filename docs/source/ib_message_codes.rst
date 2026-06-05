@@ -29,7 +29,8 @@ These codes are most relevant to Haymaker connection supervision.
      - Request restart/rebuild because subscriptions must be resubmitted.
    * - ``1102``
      - Connectivity restored, data maintained.
-     - Clear broker-degraded context; no rebuild required by this message alone.
+     - By default, clear broker-degraded context; if
+       ``restart_on_recovered_connection`` is enabled, request restart/rebuild.
    * - ``1300``
      - TWS socket port has been reset and the connection is being dropped.
      - Reconnect path is required; check the configured port if recovery fails.

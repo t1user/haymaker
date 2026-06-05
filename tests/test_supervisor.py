@@ -204,6 +204,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_explicit_client_i
             "auto_recovery_grace_period": 17,
             "recovery_warning_after": 19,
             "recovery_warning_interval": 23,
+            "restart_on_recovered_connection": True,
         },
         client_id=42,
     )
@@ -219,6 +220,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_explicit_client_i
     assert settings.auto_recovery_grace_period == 17
     assert settings.recovery_warning_after == 19
     assert settings.recovery_warning_interval == 23
+    assert settings.restart_on_recovered_connection is True
 
 
 def test_connection_settings_from_config_uses_live_defaults():
@@ -232,6 +234,38 @@ def test_connection_settings_from_config_uses_live_defaults():
     assert settings.retry_delay == 2
     assert settings.app_timeout == 20
     assert settings.probe_timeout == 4
+    assert settings.restart_on_recovered_connection is False
+
+
+def test_data_maintained_message_requests_restart_when_configured(supervisor):
+    supervisor.settings = replace(
+        supervisor.settings, restart_on_recovered_connection=True
+    )
+    supervisor._running = True
+    supervisor.state = SupervisorState.CONNECTED
+
+    supervisor.onErrEvent(-1, 1102, "Connectivity restored", ibi.Contract())
+
+    assert supervisor._restart_requested.is_set()
+    assert (
+        supervisor._pending_restart_reason
+        == "broker connectivity restored with data maintained (1102)"
+    )
+    supervisor.stop()
+
+
+def test_data_maintained_message_does_not_restart_during_startup(supervisor):
+    supervisor.settings = replace(
+        supervisor.settings, restart_on_recovered_connection=True
+    )
+    supervisor._running = True
+    supervisor.state = SupervisorState.CONNECTING
+
+    supervisor.onErrEvent(-1, 1102, "Connectivity restored", ibi.Contract())
+
+    assert not supervisor._restart_requested.is_set()
+    assert supervisor.state == SupervisorState.CONNECTING
+    supervisor.stop()
 
 
 @pytest.mark.asyncio
@@ -275,6 +309,36 @@ async def test_dataloader_settings_probe_before_workload(fake_ib):
 
 
 @pytest.mark.asyncio
+async def test_stop_request_finishes_in_stopped_after_workload_cleanup(fake_ib):
+    class InspectingWorkload(FakeWorkload):
+        def __init__(self):
+            super().__init__()
+            self.connected_during_stop = None
+
+        async def stop(self, reason):
+            self.connected_during_stop = fake_ib.isConnected()
+            await super().stop(reason)
+
+    workload = InspectingWorkload()
+    supervisor = ConnectionSupervisor(
+        fake_ib,
+        workload,
+        ConnectionSettings(restart_delay=0, retry_delay=0),
+    )
+    runner = asyncio.create_task(supervisor.run())
+    assert await wait_for_condition(lambda: workload.starts == ["started"])
+
+    supervisor.stop()
+    assert supervisor.state == SupervisorState.STOPPING
+
+    await runner
+
+    assert workload.connected_during_stop is True
+    assert fake_ib.disconnect_count == 1
+    assert supervisor.state == SupervisorState.STOPPED
+
+
+@pytest.mark.asyncio
 async def test_timeout_does_not_probe_while_waiting_for_broker(supervisor, fake_ib):
     supervisor._running = True
     supervisor.state = SupervisorState.WAITING_FOR_BROKER
@@ -305,9 +369,7 @@ async def test_update_event_probes_waiting_for_broker_and_marks_connected(
 
 
 @pytest.mark.asyncio
-async def test_failed_update_event_probe_keeps_waiting_for_broker(
-    supervisor, fake_ib
-):
+async def test_failed_update_event_probe_keeps_waiting_for_broker(supervisor, fake_ib):
     supervisor._running = True
     fake_ib.connected = True
     fake_ib.probe_result = []

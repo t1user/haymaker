@@ -7,6 +7,7 @@ run_mode: "reconnect"
 number_of_workers: 20
 fill_gaps: False
 auto_save_interval: 900 # in secs, zero=off
+restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
 pacer_restrictions:
   - !!python/tuple [5, 2] # [max requests, seconds]
   - !!python/tuple [60, 600]
