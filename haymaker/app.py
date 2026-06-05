@@ -161,6 +161,7 @@ class LiveRuntime:
 
 @dataclass
 class App:
+    no_future_roll_strategies: list[str] = field(default_factory=list)
     ib: ibi.IB = IB
     runtime: LiveRuntime = field(
         default_factory=lambda: LiveRuntime.from_config(config)
@@ -170,13 +171,11 @@ class App:
             config.get("app") or {}, 0
         )
     )
-    no_future_roll_strategies: list[str] = field(default_factory=list)
     supervisor: ConnectionSupervisor = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         ibi.util.globalErrorEvent += self.onGlobalErrEvent
-        if self.no_future_roll_strategies:
-            self.runtime.set_no_future_roll_strategies(self.no_future_roll_strategies)
+        self.runtime.set_no_future_roll_strategies(self.no_future_roll_strategies)
         self.supervisor = ConnectionSupervisor(self.ib, self.runtime, self.settings)
         self.runtime.set_restart_handler(self.supervisor.request_restart)
         log.debug(f"App initiated: {self}")
@@ -188,10 +187,5 @@ class App:
 
     def run(self) -> None:
         # this is the main entry point into strategy
-        self.ib.run(self.main())
-
-    async def main(self) -> None:
-        """Run the live application under the connection supervisor."""
-
         log.debug("Initializing connection supervisor.")
-        await self.supervisor.run()
+        self.ib.run(self.supervisor.run())
