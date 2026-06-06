@@ -48,10 +48,17 @@ class BrokerMessage:
 class ConnectionSettings:
     """Connection and recovery settings for :class:`ConnectionSupervisor`.
 
-    ``retry_delay`` is the only reconnect pacing knob. Restarting after a
-    timeout, socket reset, or data-loss message immediately re-enters the
-    connecting state; failed connection attempts wait for ``retry_delay`` before
-    trying again.
+    Attributes:
+        host: Hostname or IP address of the TWS/IB Gateway API endpoint.
+        port: Port number of the TWS/IB Gateway API endpoint.
+        client_id: IB API client ID used for this supervised socket.
+        connect_timeout: Seconds to wait for one socket connection attempt.
+        retry_delay: Seconds to wait between failed connection attempts.
+        app_timeout: Seconds of no IB traffic before running connection health checks.
+        probe_contract: Contract used for the small historical-data readiness probe.
+        probe_timeout: Seconds to wait for the readiness probe to complete.
+        auto_recovery_grace_period: Seconds to wait for broker-side recovery before reconnecting.
+        restart_on_recovered_connection: Whether to restart even after IB reports data was maintained.
     """
 
     host: str = "127.0.0.1"
