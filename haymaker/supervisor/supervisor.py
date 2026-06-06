@@ -6,18 +6,15 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Any, ClassVar, Protocol
+from typing import Any, Protocol
 
 import ib_insync as ibi
 
 from .states import (
     AbstractState,
     ConnectingState,
-    ProbingState,
-    RestartingState,
     StoppedError,
     StoppingState,
-    WaitingForBrokerState,
 )
 
 log = getLogger(__name__)
@@ -34,14 +31,6 @@ class SupervisorWorkload(Protocol):
 
     async def stop(self, reason: str) -> None:
         """Release active work before the supervisor reconnects or exits."""
-
-
-@dataclass(frozen=True)
-class TransitionRequest:
-    """State transition request selected by supervisor-owned priority rules."""
-
-    state: type[AbstractState]
-    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,15 +99,13 @@ class ConnectionSupervisor:
       state, and it re-raises unexpected supervisor failures after cleanup.
     - ``stop()`` is a request only. It wakes the run loop by setting the stop
       signal, but shutdown work remains owned by ``run()``.
-    - ``request_restart()`` queues a reconnect/rebuild transition that stops
-      active work, disconnects the owned socket, and reconnects immediately.
-      Failed connection attempts wait for ``settings.retry_delay`` before
-      retrying.
+    - ``request_restart()`` asks the active state to return a reconnect/rebuild
+      transition that stops active work, disconnects the owned socket, and
+      reconnects immediately. Failed connection attempts wait for
+      ``settings.retry_delay`` before retrying.
 
     The supervisor does not start, stop, or restart TWS/IB Gateway itself, and
     it does not know whether the workload is live trading or dataloader work.
-    ``request_transition()`` and ``take_requested_transition()`` are
-    state-machine support methods used by ``haymaker.supervisor.states``.
     Broker messages are categorized into restart requests, broker-recovery wait
     signals, or recovery hints; non-restart messages are interpreted
     immediately by the active state.
@@ -134,20 +121,7 @@ class ConnectionSupervisor:
     _stop_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
-    _state_transition_requested: asyncio.Event = field(
-        default_factory=asyncio.Event, init=False, repr=False
-    )
-    _requested_transition: TransitionRequest | None = field(
-        default=None, init=False, repr=False
-    )
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
-
-    TRANSITION_PRIORITIES: ClassVar[Mapping[type[AbstractState], int]] = {
-        ProbingState: 10,
-        WaitingForBrokerState: 20,
-        RestartingState: 30,
-        StoppingState: 40,
-    }
 
     BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
     DATA_LOST_CODE = 1101
@@ -166,6 +140,12 @@ class ConnectionSupervisor:
         """Return the current supervisor state class."""
 
         return type(self._state)
+
+    @property
+    def stop_requested(self) -> bool:
+        """Return whether supervisor shutdown has been requested."""
+
+        return self._stop_requested.is_set()
 
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""
@@ -186,81 +166,50 @@ class ConnectionSupervisor:
             raise
 
     def _transition_to(
-        self, transition: type[AbstractState] | TransitionRequest
+        self, next_state: type[AbstractState] | AbstractState
     ) -> AbstractState:
         """Transition to a new state class and return the state instance."""
 
-        if isinstance(transition, TransitionRequest):
-            state = transition.state
-            reason = transition.reason
+        if isinstance(next_state, AbstractState):
+            state = type(next_state)
+            state_instance = next_state
         else:
-            state = transition
-            reason = ""
+            state = next_state
+            state_instance = state(self)
 
         if state != type(self._state):
             log.debug(
                 f"Supervisor transition: {type(self._state).__name__} -> "
                 f"{state.__name__}"
             )
-        self._state = state(self, reason)
+        self._state = state_instance
         return self._state
-
-    def request_transition(self, state: type[AbstractState], reason: str = "") -> None:
-        """Request a state-machine transition for the supervisor run loop."""
-
-        transition = TransitionRequest(state, reason)
-        if self._requested_transition is None or self._transition_priority(
-            state
-        ) > self._transition_priority(self._requested_transition.state):
-            log.debug(f"State transition requested: {state.__name__}")
-            self._requested_transition = transition
-        self._state_transition_requested.set()
-
-    def take_requested_transition(self) -> TransitionRequest | None:
-        """Return and clear the pending supervisor-selected transition."""
-
-        transition = self._requested_transition
-        self._requested_transition = None
-        self._state_transition_requested.clear()
-        return transition
-
-    def _transition_priority(self, state: type[AbstractState]) -> int:
-        """Return supervisor-owned priority for a requested transition."""
-
-        return self.TRANSITION_PRIORITIES.get(state, 0)
 
     def stop(self) -> None:
         """Request supervisor shutdown."""
 
+        self.mark_stop_requested()
+        self._state.request_stop()
+
+    def mark_stop_requested(self) -> None:
+        """Record supervisor shutdown intent."""
+
         self._stop_requested.set()
-        self.request_transition(StoppingState)
 
     def request_restart(self, reason: str = "") -> None:
         """Request a reconnect/rebuild cycle."""
 
-        if self._stop_requested.is_set():
+        if self.stop_requested:
             log.debug("Restart ignored because stop is already pending.")
-            return
-        if self._restart_pending_or_active():
-            log.debug("Restart already pending.")
             return
         restart_reason = reason or "restart requested"
         log.debug(f"Restart requested: {restart_reason}")
-        self.request_transition(RestartingState, restart_reason)
-
-    def _restart_pending_or_active(self) -> bool:
-        """Return whether a restart transition is already pending or active."""
-
-        return (
-            isinstance(self._state, RestartingState)
-            or self._requested_transition is not None
-            and self._requested_transition.state is RestartingState
-        )
+        self._state.request_restart(restart_reason)
 
     def onDisconnectedEvent(self) -> None:
         """Request restart after unexpected API socket disconnection."""
 
-        if not self._intentional_disconnect and not self._stop_requested.is_set():
+        if not self._intentional_disconnect and not self.stop_requested:
             self.request_restart("IB socket disconnected")
 
     def onTimeoutEvent(self, idle_period: float) -> None:

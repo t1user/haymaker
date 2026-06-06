@@ -197,6 +197,26 @@ async def test_duplicate_restart_requests_keep_first_reason() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_request_overrides_pending_restart() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    supervisor.request_restart("manual restart")
+    supervisor.stop()
+
+    await asyncio.wait_for(task, timeout=1)
+
+    assert supervisor.state is StoppedState
+    assert workload.stops == ["supervisor stopped"]
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 1
+
+
+@pytest.mark.asyncio
 async def test_unexpected_disconnect_restarts_workload() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
