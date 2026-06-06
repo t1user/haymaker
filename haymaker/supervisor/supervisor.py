@@ -133,14 +133,11 @@ class ConnectionSupervisor:
     _restart_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
-    _timeout_received: asyncio.Event = field(
+    _state_transition_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
-    _traffic_resumed: asyncio.Event = field(
-        default_factory=asyncio.Event, init=False, repr=False
-    )
-    _broker_recovered: asyncio.Event = field(
-        default_factory=asyncio.Event, init=False, repr=False
+    _requested_state: type[AbstractState] | None = field(
+        default=None, init=False, repr=False
     )
     _pending_restart_reason: str | None = field(default=None, init=False, repr=False)
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
@@ -197,6 +194,22 @@ class ConnectionSupervisor:
         self._state = state(self)
         return self._state
 
+    def request_state_transition(self, state: type[AbstractState]) -> None:
+        """Request a state-local transition for the supervisor run loop."""
+
+        if self._requested_state is None:
+            log.debug(f"State transition requested: {state.__name__}")
+            self._requested_state = state
+        self._state_transition_requested.set()
+
+    def consume_state_transition(self) -> type[AbstractState] | None:
+        """Return and clear a pending state-local transition request."""
+
+        state = self._requested_state
+        self._requested_state = None
+        self._state_transition_requested.clear()
+        return state
+
     def stop(self) -> None:
         """Request supervisor shutdown."""
 
@@ -227,15 +240,15 @@ class ConnectionSupervisor:
             self.request_restart("IB socket disconnected")
 
     def onTimeoutEvent(self, idle_period: float) -> None:
-        """Record an idle timeout for the connected state to evaluate."""
+        """Dispatch an idle timeout to the active supervisor state."""
 
         log.debug(f"No IB traffic for {idle_period}s.")
-        self._timeout_received.set()
+        self._state.on_timeout(idle_period)
 
     def onUpdateEvent(self) -> None:
-        """Record resumed IB traffic during broker-degraded recovery."""
+        """Dispatch resumed IB traffic to the active supervisor state."""
 
-        self._traffic_resumed.set()
+        self._state.on_update()
 
     def onErrEvent(
         self,
@@ -246,7 +259,7 @@ class ConnectionSupervisor:
     ) -> None:
         """Translate selected broker messages into supervisor signals."""
 
-        self._remember_broker_message(code, message)
+        broker_message = self._remember_broker_message(code, message)
         if code == self.DATA_LOST_CODE:
             self.request_restart(
                 f"broker connectivity restored with data lost ({code})"
@@ -260,7 +273,9 @@ class ConnectionSupervisor:
                 )
             else:
                 self.clear_broker_degraded_context()
-                self._broker_recovered.set()
+                self._state.on_broker_message(broker_message)
+        else:
+            self._state.on_broker_message(broker_message)
 
     async def connect(self) -> bool:
         """Connect the owned IB client, retrying until stopped."""
@@ -366,24 +381,19 @@ class ConnectionSupervisor:
         return None
 
     def clear_broker_degraded_context(self) -> None:
-        """Clear broker-degraded recovery context and related wake-up signals."""
+        """Clear broker-degraded recovery context."""
 
         self._recent_broker_messages.clear()
-        self.clear_recovery_signals()
 
-    def clear_recovery_signals(self) -> None:
-        """Clear broker-recovery wake-up signals without dropping message context."""
-
-        self._broker_recovered.clear()
-        self._traffic_resumed.clear()
-
-    def _remember_broker_message(self, code: int, message: str) -> None:
+    def _remember_broker_message(self, code: int, message: str) -> BrokerMessage:
         """Remember recent broker messages used to choose recovery behavior."""
 
-        self._recent_broker_messages.append(BrokerMessage(code, message, monotonic()))
+        broker_message = BrokerMessage(code, message, monotonic())
+        self._recent_broker_messages.append(broker_message)
         self._discard_stale_broker_messages()
         while len(self._recent_broker_messages) > self.RECENT_BROKER_MESSAGE_LIMIT:
             self._recent_broker_messages.popleft()
+        return broker_message
 
     def _discard_stale_broker_messages(self) -> None:
         """Drop broker messages that are too old to guide recovery."""

@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .supervisor import BrokerMessage
     from .supervisor import Supervisor
 
 
@@ -29,6 +30,26 @@ class AbstractState(ABC):
     @abstractmethod
     async def handle(self) -> type[AbstractState]:
         """Run state work and return the next state class."""
+
+    def on_timeout(self, idle_period: float) -> None:
+        """Handle an IB idle timeout while this state is active."""
+
+    def on_update(self) -> None:
+        """Handle resumed IB traffic while this state is active."""
+
+    def on_broker_message(self, message: BrokerMessage) -> None:
+        """Handle a broker message while this state is active."""
+
+    def _priority_transition(self) -> type[AbstractState] | None:
+        """Return the highest-priority pending transition, if any."""
+
+        if self.context._stop_requested.is_set():
+            return StoppingState
+
+        if self.context._restart_requested.is_set():
+            return RestartingState
+
+        return self.context.consume_state_transition()
 
     def __str__(self) -> str:
         return self.__class__.__name__.upper()
@@ -50,11 +71,8 @@ class ProbingState(AbstractState):
     """Verify that the broker connection is usable."""
 
     async def handle(self) -> type[AbstractState]:
-        if self.context._stop_requested.is_set():
-            return StoppingState
-
-        if self.context._restart_requested.is_set():
-            return RestartingState
+        if next_state := self._priority_transition():
+            return next_state
 
         if not self.ib.isConnected():
             return ConnectingState
@@ -65,8 +83,8 @@ class ProbingState(AbstractState):
                 return StartingWorkloadState
             return ConnectedState
 
-        if self.context._restart_requested.is_set():
-            return RestartingState
+        if next_state := self._priority_transition():
+            return next_state
 
         if not self.ib.isConnected():
             return ConnectingState
@@ -92,25 +110,24 @@ class ConnectedState(AbstractState):
         if self.settings.app_timeout:
             self.ib.setTimeout(self.settings.app_timeout)
 
-        self.context._timeout_received.clear()
         done = await self._wait_for_activity()
 
-        if self.context._stop_requested.is_set():
-            return StoppingState
-
-        if self.context._restart_requested.is_set():
-            return RestartingState
+        if next_state := self._priority_transition():
+            return next_state
 
         if self._workload_completed(done):
             self.context.consume_workload_result()
             return StoppingState
 
-        if self.context._timeout_received.is_set():
-            if self.context.recent_recoverable_broker_message():
-                return WaitingForBrokerState
-            return ProbingState
-
         return ConnectedState
+
+    def on_timeout(self, idle_period: float) -> None:
+        """Request a probe or broker wait after an IB idle timeout."""
+
+        if self.context.recent_recoverable_broker_message():
+            self.context.request_state_transition(WaitingForBrokerState)
+        else:
+            self.context.request_state_transition(ProbingState)
 
     async def _wait_for_activity(self) -> set[asyncio.Future[Any]]:
         """Wait until connected-state work needs supervisor attention."""
@@ -125,8 +142,8 @@ class ConnectedState(AbstractState):
                 name="connection-supervisor-restart-wait",
             ),
             asyncio.create_task(
-                self.context._timeout_received.wait(),
-                name="connection-supervisor-timeout-wait",
+                self.context._state_transition_requested.wait(),
+                name="connection-supervisor-state-transition-wait",
             ),
         }
         if self.context._workload_task is not None:
@@ -152,26 +169,27 @@ class WaitingForBrokerState(AbstractState):
     """Wait briefly for broker-side auto-recovery before rebuilding."""
 
     async def handle(self) -> type[AbstractState]:
-        self.context.clear_recovery_signals()
         done = await self._wait_for_recovery_signal()
 
-        if self.context._stop_requested.is_set():
-            return StoppingState
-
-        if self.context._restart_requested.is_set():
-            return RestartingState
+        if next_state := self._priority_transition():
+            return next_state
 
         if self._workload_completed(done):
             self.context.consume_workload_result()
             return StoppingState
 
-        if (
-            self.context._broker_recovered.is_set()
-            or self.context._traffic_resumed.is_set()
-        ):
-            return ProbingState
-
         return RestartingState
+
+    def on_update(self) -> None:
+        """Request a probe when IB traffic resumes during broker recovery."""
+
+        self.context.request_state_transition(ProbingState)
+
+    def on_broker_message(self, message: BrokerMessage) -> None:
+        """Request a probe when IB reports data-maintained recovery."""
+
+        if message.code == self.context.DATA_MAINTAINED_CODE:
+            self.context.request_state_transition(ProbingState)
 
     async def _wait_for_recovery_signal(self) -> set[asyncio.Future[Any]]:
         """Wait for broker recovery, timeout, restart, stop, or workload completion."""
@@ -186,12 +204,8 @@ class WaitingForBrokerState(AbstractState):
                 name="connection-supervisor-restart-wait",
             ),
             asyncio.create_task(
-                self.context._broker_recovered.wait(),
-                name="connection-supervisor-broker-recovered-wait",
-            ),
-            asyncio.create_task(
-                self.context._traffic_resumed.wait(),
-                name="connection-supervisor-traffic-resumed-wait",
+                self.context._state_transition_requested.wait(),
+                name="connection-supervisor-state-transition-wait",
             ),
             asyncio.create_task(
                 asyncio.sleep(self.settings.auto_recovery_grace_period),

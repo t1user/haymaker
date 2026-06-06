@@ -255,6 +255,25 @@ async def test_timeout_with_recent_broker_message_waits_for_recovery() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_event_is_ignored_while_connected() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+
+    fake_ib.updateEvent.emit()
+    await asyncio.sleep(0)
+
+    assert supervisor.state is ConnectedState
+    assert fake_ib.probe_count == 1
+    assert workload.starts == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
 async def test_data_maintained_message_resumes_without_restart_by_default() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
