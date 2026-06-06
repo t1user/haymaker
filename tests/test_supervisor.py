@@ -1,197 +1,344 @@
 import asyncio
-import logging
-from dataclasses import replace
+from typing import Any, cast
 
 import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-import haymaker.supervisor as supervisor_module
-from haymaker.supervisor import (
-    ConnectionSettings,
-    ConnectionSupervisor,
-    SupervisorState,
+from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
+from haymaker.supervisor.states import (
+    ConnectedState,
+    StoppedState,
+    WaitingForBrokerState,
 )
 
 
 class FakeIB:
-    def __init__(self):
+    """Small IB stand-in exposing the event surface used by ConnectionSupervisor."""
+
+    def __init__(self) -> None:
         self.errorEvent = ibi.Event()
         self.disconnectedEvent = ibi.Event()
         self.timeoutEvent = ibi.Event()
         self.updateEvent = ibi.Event()
         self.connected = False
-        self.connect_count = 0
+        self.connect_attempts = 0
         self.disconnect_count = 0
-        self.timeouts = []
-        self.probe_result = [object()]
+        self.fail_connect_attempts = 0
+        self.timeouts: list[float] = []
+        self.probe_results: list[list[object]] = [[object()]]
         self.probe_count = 0
 
-    async def connectAsync(self, *args, **kwargs):
-        self.connected = True
-        self.connect_count += 1
+    async def connectAsync(self, *args: object, **kwargs: object) -> None:
+        """Connect unless configured to fail this attempt."""
 
-    def disconnect(self):
+        self.connect_attempts += 1
+        if self.fail_connect_attempts:
+            self.fail_connect_attempts -= 1
+            raise ConnectionError("connection failed")
+        self.connected = True
+
+    def disconnect(self) -> None:
+        """Disconnect and emit the same event ib_insync emits."""
+
         if self.connected:
             self.connected = False
             self.disconnect_count += 1
             self.disconnectedEvent.emit()
 
-    def isConnected(self):
+    def isConnected(self) -> bool:
+        """Return whether the fake socket is connected."""
+
         return self.connected
 
-    def setTimeout(self, timeout):
+    def setTimeout(self, timeout: float) -> None:
+        """Record the configured idle timeout."""
+
         self.timeouts.append(timeout)
 
-    def reqHistoricalDataAsync(self, *args, **kwargs):
-        async def request():
+    def reqHistoricalDataAsync(self, *args: object, **kwargs: object) -> object:
+        """Return a probe coroutine."""
+
+        async def request() -> list[object]:
             self.probe_count += 1
-            return self.probe_result
+            if self.probe_results:
+                return self.probe_results.pop(0)
+            return [object()]
 
         return request()
 
 
-@pytest.fixture
-def fake_ib():
-    return FakeIB()
-
-
 class FakeWorkload:
-    stop_supervisor_on_completion = False
+    """Controllable workload used to observe supervisor lifecycle calls."""
 
-    def __init__(self):
-        self.starts = []
-        self.stops = []
+    def __init__(self, complete_immediately: bool = False) -> None:
+        self.complete_immediately = complete_immediately
+        self.starts = 0
+        self.stops: list[str] = []
+        self._release: asyncio.Event | None = None
 
-    async def start(self):
-        self.starts.append("started")
+    async def start(self) -> None:
+        """Run until stopped unless configured to complete immediately."""
 
-    async def stop(self, reason):
+        self.starts += 1
+        if self.complete_immediately:
+            return
+
+        self._release = asyncio.Event()
+        await self._release.wait()
+
+    async def stop(self, reason: str) -> None:
+        """Release the active workload and record the stop reason."""
+
         self.stops.append(reason)
+        if self._release is not None:
+            self._release.set()
 
 
-@pytest.fixture
-def supervisor(fake_ib):
+def make_supervisor(
+    fake_ib: FakeIB,
+    workload: FakeWorkload | None = None,
+    **settings: Any,
+) -> ConnectionSupervisor:
+    """Create a supervisor with fast deterministic test timings."""
+
     return ConnectionSupervisor(
-        fake_ib,
-        FakeWorkload(),
+        cast(ibi.IB, fake_ib),
+        workload or FakeWorkload(),
         ConnectionSettings(
-            restart_delay=0,
             retry_delay=0,
-            auto_recovery_grace_period=0.01,
+            app_timeout=20,
+            probe_timeout=0.01,
+            auto_recovery_grace_period=0.02,
+            **settings,
         ),
     )
 
 
-@pytest.mark.asyncio
-async def test_waits_for_broker_auto_recovery_without_restarting(supervisor):
-    supervisor._running = True
-    supervisor.state = SupervisorState.CONNECTED
+async def stop_and_wait(
+    supervisor: ConnectionSupervisor, task: asyncio.Task[None]
+) -> None:
+    """Request supervisor shutdown and wait for the run task to finish."""
 
-    supervisor.onErrEvent(-1, 1100, "Connectivity lost", ibi.Contract())
-
-    assert supervisor.state == SupervisorState.CONNECTED
-    assert not supervisor._restart_requested.is_set()
-
-    supervisor.onTimeoutEvent(20)
-
-    assert supervisor.state == SupervisorState.WAITING_FOR_BROKER
-    assert not supervisor._restart_requested.is_set()
-
-    supervisor.onErrEvent(-1, 1102, "Connectivity restored", ibi.Contract())
-    await asyncio.sleep(0.02)
-
-    assert supervisor.state == SupervisorState.CONNECTED
-    assert not supervisor._restart_requested.is_set()
     supervisor.stop()
+    await asyncio.wait_for(task, timeout=1)
 
 
 @pytest.mark.asyncio
-async def test_requests_restart_after_auto_recovery_grace_period(supervisor):
-    supervisor._running = True
-    supervisor.state = SupervisorState.CONNECTED
+async def test_run_connects_probes_and_starts_workload() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
 
-    supervisor.onErrEvent(-1, 2110, "Connectivity broken", ibi.Contract())
-    assert not supervisor._restart_requested.is_set()
+    task = asyncio.create_task(supervisor.run())
 
-    supervisor.onTimeoutEvent(20)
-    assert await wait_for_condition(lambda: supervisor._restart_requested.is_set())
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+    assert workload.starts == 1
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.probe_count == 1
+    assert fake_ib.timeouts == [20]
 
-    assert supervisor.state == SupervisorState.WAITING_FOR_BROKER
-    supervisor.stop()
+    await stop_and_wait(supervisor, task)
 
-
-def test_data_lost_message_requests_restart(supervisor):
-    supervisor._running = True
-
-    supervisor.onErrEvent(-1, 1101, "Data lost", ibi.Contract())
-
-    assert supervisor._restart_requested.is_set()
-    supervisor.stop()
+    assert supervisor.state is StoppedState
+    assert workload.stops == ["supervisor stopped"]
+    assert fake_ib.disconnect_count == 1
 
 
-def test_socket_reset_message_requests_restart(supervisor):
-    supervisor._running = True
+@pytest.mark.asyncio
+async def test_completed_workload_stops_supervisor() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload(complete_immediately=True)
+    supervisor = make_supervisor(fake_ib, workload)
 
-    supervisor.onErrEvent(-1, 1300, "Socket port has been reset", ibi.Contract())
+    await supervisor.run()
 
-    assert supervisor._restart_requested.is_set()
-    supervisor.stop()
-
-
-def test_valid_supervisor_transition_updates_state(supervisor):
-    supervisor._transition_to(SupervisorState.CONNECTING)
-
-    assert supervisor.state == SupervisorState.CONNECTING
-
-
-def test_invalid_supervisor_transition_raises(supervisor):
-    supervisor.state = SupervisorState.CONNECTED
-
-    with pytest.raises(
-        RuntimeError,
-        match="Invalid supervisor state transition: connected -> connecting",
-    ):
-        supervisor._transition_to(SupervisorState.CONNECTING)
+    assert supervisor.state is StoppedState
+    assert workload.starts == 1
+    assert workload.stops == []
+    assert fake_ib.disconnect_count == 1
 
 
-def test_stop_keeps_stopped_supervisor_stopped(supervisor):
-    supervisor.stop()
+@pytest.mark.asyncio
+async def test_restart_stops_workload_disconnects_and_reconnects() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
 
-    assert supervisor.state == SupervisorState.STOPPED
+    assert await wait_for_condition(lambda: workload.starts == 1)
 
+    supervisor.request_restart("manual restart")
 
-def test_stopped_supervisor_cannot_transition_to_stopping(supervisor):
-    with pytest.raises(
-        RuntimeError,
-        match="Invalid supervisor state transition: stopped -> stopping",
-    ):
-        supervisor._transition_to(SupervisorState.STOPPING)
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["manual restart"]
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
 
-
-def test_data_maintained_message_does_not_skip_startup_probe(supervisor):
-    supervisor._running = True
-    supervisor.state = SupervisorState.CONNECTING
-
-    supervisor.onErrEvent(-1, 1102, "Connectivity restored", ibi.Contract())
-
-    assert supervisor.state == SupervisorState.CONNECTING
-    supervisor.stop()
+    await stop_and_wait(supervisor, task)
 
 
-def test_duplicate_restart_requests_are_coalesced(fake_ib):
-    supervisor = ConnectionSupervisor(fake_ib, FakeWorkload())
-    supervisor._running = True
-    supervisor.state = SupervisorState.CONNECTED
+@pytest.mark.asyncio
+async def test_duplicate_restart_requests_keep_first_reason() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
 
-    supervisor.request_restart("first")
-    supervisor.request_restart("second")
+    assert await wait_for_condition(lambda: workload.starts == 1)
 
-    assert supervisor._pending_restart_reason == "first"
-    supervisor.stop()
+    supervisor.request_restart("first restart")
+    supervisor.request_restart("second restart")
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["first restart"]
+
+    await stop_and_wait(supervisor, task)
 
 
-def test_connection_settings_from_config_uses_flat_mapping_and_explicit_client_id():
+@pytest.mark.asyncio
+async def test_unexpected_disconnect_restarts_workload() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.disconnect()
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["IB socket disconnected"]
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_connect_retries_until_success() -> None:
+    fake_ib = FakeIB()
+    fake_ib.fail_connect_attempts = 2
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+    assert fake_ib.connect_attempts == 3
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_timeout_with_recent_broker_message_waits_for_recovery() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+    fake_ib.timeoutEvent.emit(20)
+
+    assert await wait_for_condition(lambda: supervisor.state is WaitingForBrokerState)
+    assert fake_ib.disconnect_count == 0
+    assert workload.starts == 1
+
+    fake_ib.updateEvent.emit()
+
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+    assert fake_ib.disconnect_count == 0
+    assert workload.starts == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_data_maintained_message_resumes_without_restart_by_default() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+    fake_ib.timeoutEvent.emit(20)
+    assert await wait_for_condition(lambda: supervisor.state is WaitingForBrokerState)
+
+    fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
+
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 0
+    assert workload.starts == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_data_maintained_message_restarts_when_configured() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib, workload, restart_on_recovered_connection=True
+    )
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == [
+        "broker connectivity restored with data maintained (1102)"
+    ]
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_data_lost_message_restarts_immediately() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(-1, 1101, "Data lost", ibi.Contract())
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["broker connectivity restored with data lost (1101)"]
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_socket_reset_message_restarts_immediately() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(-1, 1300, "Socket reset", ibi.Contract())
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["broker reset API socket port (1300)"]
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> None:
     settings = ConnectionSettings.from_config(
         {
             "host": "gateway",
@@ -214,376 +361,25 @@ def test_connection_settings_from_config_uses_flat_mapping_and_explicit_client_i
     assert settings.port == 4001
     assert settings.client_id == 42
     assert settings.connect_timeout == 3
-    assert settings.restart_delay == 5
     assert settings.retry_delay == 7
     assert settings.app_timeout == 11
     assert settings.probe_timeout == 13
     assert settings.auto_recovery_grace_period == 17
-    assert settings.recovery_warning_after == 19
-    assert settings.recovery_warning_interval == 23
     assert settings.restart_on_recovered_connection is True
+    assert not hasattr(settings, "restart_delay")
+    assert not hasattr(settings, "recovery_warning_after")
+    assert not hasattr(settings, "recovery_warning_interval")
 
 
-def test_connection_settings_from_config_uses_live_defaults():
+def test_connection_settings_from_config_uses_defaults() -> None:
     settings = ConnectionSettings.from_config({}, client_id=51)
 
     assert settings.host == "127.0.0.1"
     assert settings.port == 4002
     assert settings.client_id == 51
     assert settings.connect_timeout == 2
-    assert settings.restart_delay == 30
     assert settings.retry_delay == 2
     assert settings.app_timeout == 20
     assert settings.probe_timeout == 4
+    assert settings.auto_recovery_grace_period == 120
     assert settings.restart_on_recovered_connection is False
-
-
-def test_data_maintained_message_requests_restart_when_configured(supervisor):
-    supervisor.settings = replace(
-        supervisor.settings, restart_on_recovered_connection=True
-    )
-    supervisor._running = True
-    supervisor.state = SupervisorState.CONNECTED
-
-    supervisor.onErrEvent(-1, 1102, "Connectivity restored", ibi.Contract())
-
-    assert supervisor._restart_requested.is_set()
-    assert (
-        supervisor._pending_restart_reason
-        == "broker connectivity restored with data maintained (1102)"
-    )
-    supervisor.stop()
-
-
-def test_data_maintained_message_does_not_restart_during_startup(supervisor):
-    supervisor.settings = replace(
-        supervisor.settings, restart_on_recovered_connection=True
-    )
-    supervisor._running = True
-    supervisor.state = SupervisorState.CONNECTING
-
-    supervisor.onErrEvent(-1, 1102, "Connectivity restored", ibi.Contract())
-
-    assert not supervisor._restart_requested.is_set()
-    assert supervisor.state == SupervisorState.CONNECTING
-    supervisor.stop()
-
-
-@pytest.mark.asyncio
-async def test_restart_cycle_reconnects_and_runs_workload_again(fake_ib):
-    release = asyncio.Event()
-
-    class ActiveWorkload(FakeWorkload):
-        async def start(self):
-            self.starts.append("started")
-            await release.wait()
-
-    workload = ActiveWorkload()
-
-    supervisor = ConnectionSupervisor(
-        fake_ib,
-        workload,
-        ConnectionSettings(restart_delay=0, retry_delay=0),
-    )
-    runner = asyncio.create_task(supervisor.run())
-    assert await wait_for_condition(lambda: len(workload.starts) == 1)
-
-    supervisor.request_restart("test restart")
-    assert await wait_for_condition(lambda: len(workload.starts) == 2)
-
-    supervisor.stop()
-    await runner
-    assert fake_ib.connect_count == 2
-    assert fake_ib.probe_count == 2
-    assert fake_ib.disconnect_count == 2
-    assert "test restart" in workload.stops
-
-
-@pytest.mark.asyncio
-async def test_restart_requested_during_probe_skips_workload_until_restart(
-    fake_ib, monkeypatch: pytest.MonkeyPatch
-):
-    workload = FakeWorkload()
-    supervisor = ConnectionSupervisor(
-        fake_ib,
-        workload,
-        ConnectionSettings(restart_delay=0, retry_delay=0),
-    )
-    probe_calls = 0
-
-    async def probe():
-        nonlocal probe_calls
-        probe_calls += 1
-        if probe_calls == 1:
-            supervisor.request_restart("restart during startup probe")
-        return True
-
-    monkeypatch.setattr(supervisor, "_probe", probe)
-
-    runner = asyncio.create_task(supervisor.run())
-    assert await wait_for_condition(lambda: workload.starts == ["started"])
-
-    supervisor.stop()
-    await runner
-
-    assert fake_ib.connect_count == 2
-    assert probe_calls == 2
-    assert workload.starts == ["started"]
-
-
-@pytest.mark.asyncio
-async def test_disconnect_during_probe_restarts_before_workload(
-    fake_ib, monkeypatch: pytest.MonkeyPatch
-):
-    workload = FakeWorkload()
-    supervisor = ConnectionSupervisor(
-        fake_ib,
-        workload,
-        ConnectionSettings(restart_delay=0, retry_delay=0),
-    )
-    probe_calls = 0
-
-    async def probe():
-        nonlocal probe_calls
-        probe_calls += 1
-        if probe_calls == 1:
-            fake_ib.disconnect()
-            return False
-        return True
-
-    monkeypatch.setattr(supervisor, "_probe", probe)
-
-    runner = asyncio.create_task(supervisor.run())
-    assert await wait_for_condition(lambda: workload.starts == ["started"])
-
-    supervisor.stop()
-    await runner
-
-    assert fake_ib.connect_count == 2
-    assert fake_ib.disconnect_count == 2
-    assert probe_calls == 2
-    assert workload.starts == ["started"]
-
-
-@pytest.mark.asyncio
-async def test_dataloader_settings_probe_before_workload(fake_ib):
-    workload = FakeWorkload()
-    supervisor = ConnectionSupervisor(
-        fake_ib,
-        workload,
-        ConnectionSettings.from_config({"restart_time": 0, "retryDelay": 0}, 77),
-    )
-
-    runner = asyncio.create_task(supervisor.run())
-    assert await wait_for_condition(lambda: workload.starts == ["started"])
-
-    supervisor.stop()
-    await runner
-    assert fake_ib.probe_count == 1
-
-
-@pytest.mark.asyncio
-async def test_completed_workload_stops_supervisor_without_duplicate_stop(fake_ib):
-    class CompletingWorkload(FakeWorkload):
-        stop_supervisor_on_completion = True
-
-    workload = CompletingWorkload()
-    supervisor = ConnectionSupervisor(
-        fake_ib,
-        workload,
-        ConnectionSettings(restart_delay=0, retry_delay=0),
-    )
-
-    await supervisor.run()
-
-    assert workload.starts == ["started"]
-    assert workload.stops == []
-    assert fake_ib.disconnect_count == 1
-    assert supervisor.state == SupervisorState.STOPPED
-
-
-@pytest.mark.asyncio
-async def test_stop_request_finishes_in_stopped_after_workload_cleanup(fake_ib):
-    release = asyncio.Event()
-
-    class InspectingWorkload(FakeWorkload):
-        def __init__(self):
-            super().__init__()
-            self.connected_during_stop = None
-
-        async def start(self):
-            self.starts.append("started")
-            await release.wait()
-
-        async def stop(self, reason):
-            self.connected_during_stop = fake_ib.isConnected()
-            await super().stop(reason)
-
-    workload = InspectingWorkload()
-    supervisor = ConnectionSupervisor(
-        fake_ib,
-        workload,
-        ConnectionSettings(restart_delay=0, retry_delay=0),
-    )
-    runner = asyncio.create_task(supervisor.run())
-    assert await wait_for_condition(lambda: workload.starts == ["started"])
-
-    supervisor.stop()
-    assert supervisor.state == SupervisorState.STOPPING
-
-    await runner
-
-    assert workload.connected_during_stop is True
-    assert workload.stops == ["supervisor stopping"]
-    assert fake_ib.disconnect_count == 1
-    assert supervisor.state == SupervisorState.STOPPED
-
-
-@pytest.mark.asyncio
-async def test_timeout_does_not_probe_while_waiting_for_broker(supervisor, fake_ib):
-    supervisor._running = True
-    supervisor.state = SupervisorState.WAITING_FOR_BROKER
-
-    supervisor.onTimeoutEvent(20)
-    await asyncio.sleep(0)
-
-    assert fake_ib.probe_count == 0
-    supervisor.stop()
-
-
-@pytest.mark.asyncio
-async def test_update_event_probes_waiting_for_broker_and_marks_connected(
-    supervisor, fake_ib
-):
-    supervisor._running = True
-    fake_ib.connected = True
-    supervisor.state = SupervisorState.WAITING_FOR_BROKER
-
-    supervisor.onUpdateEvent()
-    assert await wait_for_condition(
-        lambda: supervisor.state == SupervisorState.CONNECTED
-    )
-
-    assert fake_ib.probe_count == 1
-    assert fake_ib.timeouts == [supervisor.settings.app_timeout]
-    supervisor.stop()
-
-
-@pytest.mark.asyncio
-async def test_failed_update_event_probe_keeps_waiting_for_broker(supervisor, fake_ib):
-    supervisor._running = True
-    fake_ib.connected = True
-    fake_ib.probe_result = []
-    supervisor.state = SupervisorState.WAITING_FOR_BROKER
-
-    supervisor.onUpdateEvent()
-    assert await wait_for_condition(lambda: fake_ib.probe_count == 1)
-
-    assert supervisor.state == SupervisorState.WAITING_FOR_BROKER
-    assert not supervisor._restart_requested.is_set()
-    supervisor.stop()
-
-
-@pytest.mark.asyncio
-async def test_update_event_does_not_start_duplicate_probe(
-    supervisor, fake_ib, monkeypatch: pytest.MonkeyPatch
-):
-    probe_started = asyncio.Event()
-    release_probe = asyncio.Event()
-    calls = 0
-    supervisor._running = True
-    fake_ib.connected = True
-    supervisor.state = SupervisorState.WAITING_FOR_BROKER
-
-    async def slow_probe():
-        nonlocal calls
-        calls += 1
-        probe_started.set()
-        await release_probe.wait()
-        return True
-
-    monkeypatch.setattr(supervisor, "_probe", slow_probe)
-
-    supervisor.onUpdateEvent()
-    await probe_started.wait()
-    supervisor.onUpdateEvent()
-
-    assert calls == 1
-
-    release_probe.set()
-    assert await wait_for_condition(
-        lambda: supervisor.state == SupervisorState.CONNECTED
-    )
-    supervisor.stop()
-
-
-@pytest.mark.asyncio
-async def test_update_event_ignores_non_degraded_state(supervisor, fake_ib):
-    supervisor._running = True
-    supervisor.state = SupervisorState.CONNECTED
-
-    supervisor.onUpdateEvent()
-    await asyncio.sleep(0)
-
-    assert fake_ib.probe_count == 0
-    supervisor.stop()
-
-
-@pytest.mark.asyncio
-async def test_failed_timeout_probe_requests_restart(supervisor, fake_ib):
-    supervisor._running = True
-    fake_ib.connected = True
-    fake_ib.probe_result = []
-    supervisor.state = SupervisorState.CONNECTED
-
-    supervisor.onTimeoutEvent(20)
-    assert await wait_for_condition(lambda: supervisor._restart_requested.is_set())
-
-    assert supervisor.state == SupervisorState.CONNECTED
-    supervisor.stop()
-
-
-@pytest.mark.asyncio
-async def test_failed_timeout_probe_waits_with_recent_broker_message(
-    supervisor, monkeypatch: pytest.MonkeyPatch
-):
-    supervisor._running = True
-    supervisor.state = SupervisorState.CONNECTED
-    supervisor.settings = replace(supervisor.settings, auto_recovery_grace_period=60)
-
-    async def failed_probe_with_broker_message():
-        supervisor.onErrEvent(
-            -1,
-            10182,
-            "Failed to request live updates (disconnected)",
-            ibi.Contract(),
-        )
-        return False
-
-    monkeypatch.setattr(supervisor, "_probe", failed_probe_with_broker_message)
-
-    supervisor.onTimeoutEvent(20)
-    assert await wait_for_condition(
-        lambda: supervisor.state == SupervisorState.WAITING_FOR_BROKER
-    )
-
-    assert not supervisor._restart_requested.is_set()
-    supervisor.stop()
-
-
-def test_delayed_recovery_warning_is_throttled(
-    supervisor, caplog, monkeypatch: pytest.MonkeyPatch
-):
-    caplog.set_level(logging.WARNING)
-    supervisor.settings = replace(
-        supervisor.settings,
-        recovery_warning_after=10,
-        recovery_warning_interval=20,
-    )
-    supervisor._recovery_started_at = 0
-
-    monkeypatch.setattr(supervisor_module, "monotonic", lambda: 11)
-    supervisor._warn_if_recovery_delayed()
-    supervisor._warn_if_recovery_delayed()
-
-    assert caplog.text.count("IB connection recovery is still pending.") == 1

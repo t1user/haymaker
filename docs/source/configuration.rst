@@ -37,6 +37,8 @@ auto-recovery, ``updateEvent`` can trigger a probe when IB traffic resumes; a
 successful probe clears the degraded state, and a failed probe keeps waiting
 without resetting the grace timer. Without recent broker-degraded context,
 Haymaker probes the connection and requests a restart if the probe fails.
+Restart cycles reconnect immediately; ``app.retryDelay`` controls the pause
+between failed connection attempts.
 When IB sends ``1102`` (connectivity restored, data maintained),
 ``app.restart_on_recovered_connection`` controls whether Haymaker requests an
 immediate restart cycle anyway. The default is ``False``: Haymaker treats
@@ -45,8 +47,6 @@ subscriptions. Set it to ``True`` to rebuild immediately after ``1102``.
 For the current managed dataloader configuration, the same setting is top-level
 ``restart_on_recovered_connection`` because dataloader connection settings are
 read from a flat mapping.
-``app.recovery_warning_after`` and ``app.recovery_warning_interval`` control
-delayed-recovery warning messages.
 
 See :doc:`ib_message_codes` for the broker message codes most relevant to
 connection recovery and logging.

@@ -50,7 +50,6 @@ class LiveRuntime:
     request_restart: Callable[[str], None] | None = field(
         default=None, init=False, repr=False
     )
-    stop_supervisor_on_completion: bool = False
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
     _contract_refresh_timer: ev.Timer | None = field(
         default=None, init=False, repr=False

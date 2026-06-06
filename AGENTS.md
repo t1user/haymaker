@@ -117,10 +117,6 @@ BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fa
   connection modes. Legacy `reconnect`/`wait` behavior is a managed-mode recovery
   concern handled by supervisor decisions such as broker data-maintained vs
   data-lost messages, not a separate attached-mode policy.
-- After the current app/supervisor architecture work settles, reconsider
-  whether `app.recovery_warning_after` and `app.recovery_warning_interval`
-  should remain user-facing config. They look like internal notification
-  throttling details rather than trading/deployment policy.
 - Graceful shutdown is not currently a broad architecture priority. Terminal
   `Ctrl-C` has historically been acceptable. Before service-manager deployment,
   prefer minimal signal hardening for `SIGINT`/`SIGTERM`: request supervisor stop,

@@ -33,7 +33,7 @@ async def test_reconnect_mode_runs_work_and_stops_supervisor(supervisor):
     await connection.runtime.start()
 
     assert runs == ["run"]
-    assert connection.runtime.stop_supervisor_on_completion
+    assert isinstance(connection.supervisor, FakeSupervisor)
 
 
 @pytest.mark.asyncio
