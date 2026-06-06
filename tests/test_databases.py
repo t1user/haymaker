@@ -5,6 +5,16 @@ import pytest
 from haymaker import databases
 
 
+def test_real_mongo_client_blocked_by_default():
+    """Verify unmarked tests fail fast instead of opening real MongoDB."""
+    databases.get_mongo_client.cache_clear()
+    try:
+        with pytest.raises(AssertionError, match="real MongoDB"):
+            databases.get_mongo_client()
+    finally:
+        databases.get_mongo_client.cache_clear()
+
+
 def test_get_mongo_client_uses_public_mongo_client_symbol(monkeypatch):
     """Verify that client construction goes through the public MongoClient import."""
     client = MagicMock()

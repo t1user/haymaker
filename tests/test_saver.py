@@ -13,6 +13,7 @@ import pymongo  # type: ignore
 import pytest
 from helpers import wait_for_condition
 
+import haymaker.saver as saver_module
 from haymaker.misc import default_path
 from haymaker.saver import (
     AbstractBaseFileSaver,
@@ -23,6 +24,7 @@ from haymaker.saver import (
     PickleSaver,
 )
 
+
 @pytest.fixture(autouse=True)
 def mock_default_path_globally(tmp_path, monkeypatch):
     """Mock default_path globally to a temp directory to protect user's real home folder."""
@@ -30,6 +32,32 @@ def mock_default_path_globally(tmp_path, monkeypatch):
     monkeypatch.setattr("haymaker.misc.default_path", lambda *args: temp_dir)
     monkeypatch.setattr("haymaker.saver.default_path", lambda *args: temp_dir)
     monkeypatch.setattr(f"{__name__}.default_path", lambda *args: temp_dir)
+
+
+class InlineSyncQueueRunner:
+    """Run queued save calls immediately for deterministic saver unit tests."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Accept the same constructor shape as SyncQueueRunner."""
+
+    def enqueue(self, fn, *args) -> None:
+        """Execute the queued callable inline."""
+        fn(*args)
+
+    async def close(self) -> None:
+        """Match SyncQueueRunner's async close API."""
+
+
+async def inline_make_async(fn, *args):
+    """Run synchronous reads inline behind AsyncSaveManager's async API."""
+    return fn(*args)
+
+
+@pytest.fixture(autouse=True)
+def inline_async_save_manager(monkeypatch):
+    """Avoid the asyncio threadpool bridge in saver unit tests."""
+    monkeypatch.setattr(saver_module, "SyncQueueRunner", InlineSyncQueueRunner)
+    monkeypatch.setattr(saver_module, "make_async", inline_make_async)
 
 
 ##############################################

@@ -10,6 +10,12 @@ import yaml
 from haymaker.config.config import ConfigMaps
 
 
+def test_pytest_does_not_inherit_live_config_overrides():
+    """Verify tests do not use local live config override files."""
+    assert "HAYMAKER_HAYMAKER_CONFIG_OVERRIDES" not in os.environ
+    assert "HAYMAKER_DATALOADER_CONFIG_OVERRIDES" not in os.environ
+
+
 @pytest.fixture
 def temp_yaml_file(tmp_path):
     """Creates a temporary YAML file for testing."""
