@@ -1,17 +1,23 @@
 """Connection supervisor states.
 
 The supervisor owns events, workload tasks, and socket cleanup. States only
-wait for relevant signals and return the next state class.
+wait for relevant signals and return the next state or transition request.
 """
 
 from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from logging import getLogger
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 if TYPE_CHECKING:
     from .supervisor import ConnectionSupervisor
+    from .supervisor import TransitionRequest
+
+StateResult: TypeAlias = "type[AbstractState] | TransitionRequest"
+
+log = getLogger(__name__)
 
 
 class StoppedError(Exception):
@@ -21,16 +27,15 @@ class StoppedError(Exception):
 class AbstractState(ABC):
     """Base class for connection supervisor states."""
 
-    transition_priority: int = 0
-
-    def __init__(self, context: ConnectionSupervisor) -> None:
+    def __init__(self, context: ConnectionSupervisor, reason: str = "") -> None:
         self.context = context
         self.settings = context.settings
         self.ib = context.ib
+        self.reason = reason
 
     @abstractmethod
-    async def handle(self) -> type[AbstractState]:
-        """Run state work and return the next state class."""
+    async def handle(self) -> StateResult:
+        """Run state work and return the next state or transition request."""
 
     def on_timeout(self, idle_period: float) -> None:
         """Handle an IB idle timeout while this state is active."""
@@ -41,14 +46,6 @@ class AbstractState(ABC):
     def on_broker_message(self, code: int, message: str) -> None:
         """Handle a broker message while this state is active."""
 
-    def _priority_transition(self) -> type[AbstractState] | None:
-        """Return the highest-priority pending transition, if any."""
-
-        if self.context._stop_requested.is_set():
-            return StoppingState
-
-        return self.context.consume_state_transition()
-
     def __str__(self) -> str:
         return self.__class__.__name__.upper()
 
@@ -56,30 +53,54 @@ class AbstractState(ABC):
 class ConnectingState(AbstractState):
     """Connect the owned IB client."""
 
-    async def handle(self) -> type[AbstractState]:
+    async def handle(self) -> StateResult:
+        if next_state := self.context.take_requested_transition():
+            return next_state
+
         if self.ib.isConnected():
             return ProbingState
 
-        if await self.context.connect():
+        if await self._connect():
+            if next_state := self.context.take_requested_transition():
+                return next_state
             return ProbingState
         return StoppingState
+
+    async def _connect(self) -> bool:
+        """Connect the owned IB client, retrying until stopped."""
+
+        while not self.context._stop_requested.is_set() and not self.ib.isConnected():
+            try:
+                log.debug(
+                    f"Connecting to IB at {self.settings.host}:{self.settings.port}."
+                )
+                await self.ib.connectAsync(
+                    self.settings.host,
+                    self.settings.port,
+                    clientId=self.settings.client_id,
+                    timeout=self.settings.connect_timeout,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.debug(f"IB connection attempt failed: {exc!r}")
+                await self.context.wait_or_stop(self.settings.retry_delay)
+        return self.ib.isConnected()
 
 
 class ProbingState(AbstractState):
     """Verify that the broker connection is usable."""
 
-    transition_priority = 10
-
-    async def handle(self) -> type[AbstractState]:
-        if next_state := self._priority_transition():
+    async def handle(self) -> StateResult:
+        if next_state := self.context.take_requested_transition():
             return next_state
 
         if not self.ib.isConnected():
             return ConnectingState
 
-        probe_succeeded = await self.context.probe()
+        probe_succeeded = await self._probe()
 
-        if next_state := self._priority_transition():
+        if next_state := self.context.take_requested_transition():
             return next_state
 
         if probe_succeeded:
@@ -92,17 +113,33 @@ class ProbingState(AbstractState):
 
         return RestartingState
 
+    async def _probe(self) -> bool:
+        """Return whether the broker accepted a small historical-data request."""
+
+        try:
+            probe = self.ib.reqHistoricalDataAsync(
+                self.settings.probe_contract, "", "30 S", "5 secs", "MIDPOINT", False
+            )
+            bars = await asyncio.wait_for(probe, self.settings.probe_timeout)
+        except (asyncio.TimeoutError, ConnectionError) as exc:
+            log.debug(f"Connection probe did not complete: {exc!r}")
+            return False
+        return bool(bars)
+
     def on_broker_message(self, code: int, message: str) -> None:
         """Wait for broker recovery if degradation is reported while probing."""
 
         if code in self.context.BROKER_WAIT_CODES:
-            self.context.request_state_transition(WaitingForBrokerState)
+            self.context.request_transition(WaitingForBrokerState)
 
 
 class StartingWorkloadState(AbstractState):
     """Start the supervised workload after a successful probe."""
 
-    async def handle(self) -> type[AbstractState]:
+    async def handle(self) -> StateResult:
+        if next_state := self.context.take_requested_transition():
+            return next_state
+
         self.context.start_workload()
         return ConnectedState
 
@@ -110,13 +147,13 @@ class StartingWorkloadState(AbstractState):
 class ConnectedState(AbstractState):
     """Wait for restart, timeout, stop, or workload completion."""
 
-    async def handle(self) -> type[AbstractState]:
+    async def handle(self) -> StateResult:
         if self.settings.app_timeout:
             self.ib.setTimeout(self.settings.app_timeout)
 
         done = await self._wait_for_activity()
 
-        if next_state := self._priority_transition():
+        if next_state := self.context.take_requested_transition():
             return next_state
 
         if self._workload_completed(done):
@@ -128,13 +165,13 @@ class ConnectedState(AbstractState):
     def on_timeout(self, idle_period: float) -> None:
         """Request a probe after an IB idle timeout."""
 
-        self.context.request_state_transition(ProbingState)
+        self.context.request_transition(ProbingState)
 
     def on_broker_message(self, code: int, message: str) -> None:
         """Wait for broker recovery when degradation is reported."""
 
         if code in self.context.BROKER_WAIT_CODES:
-            self.context.request_state_transition(WaitingForBrokerState)
+            self.context.request_transition(WaitingForBrokerState)
 
     async def _wait_for_activity(self) -> set[asyncio.Future[Any]]:
         """Wait until connected-state work needs supervisor attention."""
@@ -171,12 +208,10 @@ class ConnectedState(AbstractState):
 class WaitingForBrokerState(AbstractState):
     """Wait briefly for broker-side auto-recovery before rebuilding."""
 
-    transition_priority = 20
-
-    async def handle(self) -> type[AbstractState]:
+    async def handle(self) -> StateResult:
         done = await self._wait_for_recovery_signal()
 
-        if next_state := self._priority_transition():
+        if next_state := self.context.take_requested_transition():
             return next_state
 
         if self._workload_completed(done):
@@ -188,13 +223,13 @@ class WaitingForBrokerState(AbstractState):
     def on_update(self) -> None:
         """Request a probe when IB traffic resumes during broker recovery."""
 
-        self.context.request_state_transition(ProbingState)
+        self.context.request_transition(ProbingState)
 
     def on_broker_message(self, code: int, message: str) -> None:
         """Request a probe when IB reports data-maintained recovery."""
 
         if code == self.context.DATA_MAINTAINED_CODE:
-            self.context.request_state_transition(ProbingState)
+            self.context.request_transition(ProbingState)
 
     async def _wait_for_recovery_signal(self) -> set[asyncio.Future[Any]]:
         """Wait for broker recovery, timeout, restart, stop, or workload completion."""
@@ -235,11 +270,8 @@ class WaitingForBrokerState(AbstractState):
 class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
-    transition_priority = 30
-
-    async def handle(self) -> type[AbstractState]:
-        reason = self.context._take_restart_reason()
-        await self.context.stop_workload(reason)
+    async def handle(self) -> StateResult:
+        await self.context.stop_workload(self.reason or "restart requested")
         self.context.disconnect()
         return ConnectingState
 
@@ -247,7 +279,7 @@ class RestartingState(AbstractState):
 class StoppingState(AbstractState):
     """Final cleanup for supervisor shutdown."""
 
-    async def handle(self) -> type[AbstractState]:
+    async def handle(self) -> StateResult:
         self.context._stop_requested.set()
         await self.context.stop_workload("supervisor stopped")
         self.context.disconnect()
@@ -257,5 +289,5 @@ class StoppingState(AbstractState):
 class StoppedState(AbstractState):
     """Terminal stopped state."""
 
-    async def handle(self) -> type[AbstractState]:
+    async def handle(self) -> StateResult:
         raise StoppedError
