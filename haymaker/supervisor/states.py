@@ -11,7 +11,6 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .supervisor import BrokerMessage
     from .supervisor import Supervisor
 
 
@@ -21,6 +20,8 @@ class StoppedError(Exception):
 
 class AbstractState(ABC):
     """Base class for connection supervisor states."""
+
+    transition_priority: int = 0
 
     def __init__(self, context: Supervisor) -> None:
         self.context = context
@@ -37,7 +38,7 @@ class AbstractState(ABC):
     def on_update(self) -> None:
         """Handle resumed IB traffic while this state is active."""
 
-    def on_broker_message(self, message: BrokerMessage) -> None:
+    def on_broker_message(self, code: int, message: str) -> None:
         """Handle a broker message while this state is active."""
 
     def _priority_transition(self) -> type[AbstractState] | None:
@@ -70,6 +71,8 @@ class ConnectingState(AbstractState):
 class ProbingState(AbstractState):
     """Verify that the broker connection is usable."""
 
+    transition_priority = 10
+
     async def handle(self) -> type[AbstractState]:
         if next_state := self._priority_transition():
             return next_state
@@ -77,22 +80,26 @@ class ProbingState(AbstractState):
         if not self.ib.isConnected():
             return ConnectingState
 
-        if await self.context.probe():
-            self.context.clear_broker_degraded_context()
-            if self.context._workload_task is None:
-                return StartingWorkloadState
-            return ConnectedState
+        probe_succeeded = await self.context.probe()
 
         if next_state := self._priority_transition():
             return next_state
 
+        if probe_succeeded:
+            if self.context._workload_task is None:
+                return StartingWorkloadState
+            return ConnectedState
+
         if not self.ib.isConnected():
             return ConnectingState
 
-        if self.context.recent_recoverable_broker_message():
-            return WaitingForBrokerState
-
         return RestartingState
+
+    def on_broker_message(self, code: int, message: str) -> None:
+        """Wait for broker recovery if degradation is reported while probing."""
+
+        if code in self.context.BROKER_WAIT_CODES:
+            self.context.request_state_transition(WaitingForBrokerState)
 
 
 class StartingWorkloadState(AbstractState):
@@ -122,12 +129,15 @@ class ConnectedState(AbstractState):
         return ConnectedState
 
     def on_timeout(self, idle_period: float) -> None:
-        """Request a probe or broker wait after an IB idle timeout."""
+        """Request a probe after an IB idle timeout."""
 
-        if self.context.recent_recoverable_broker_message():
+        self.context.request_state_transition(ProbingState)
+
+    def on_broker_message(self, code: int, message: str) -> None:
+        """Wait for broker recovery when degradation is reported."""
+
+        if code in self.context.BROKER_WAIT_CODES:
             self.context.request_state_transition(WaitingForBrokerState)
-        else:
-            self.context.request_state_transition(ProbingState)
 
     async def _wait_for_activity(self) -> set[asyncio.Future[Any]]:
         """Wait until connected-state work needs supervisor attention."""
@@ -168,6 +178,8 @@ class ConnectedState(AbstractState):
 class WaitingForBrokerState(AbstractState):
     """Wait briefly for broker-side auto-recovery before rebuilding."""
 
+    transition_priority = 20
+
     async def handle(self) -> type[AbstractState]:
         done = await self._wait_for_recovery_signal()
 
@@ -185,10 +197,10 @@ class WaitingForBrokerState(AbstractState):
 
         self.context.request_state_transition(ProbingState)
 
-    def on_broker_message(self, message: BrokerMessage) -> None:
+    def on_broker_message(self, code: int, message: str) -> None:
         """Request a probe when IB reports data-maintained recovery."""
 
-        if message.code == self.context.DATA_MAINTAINED_CODE:
+        if code == self.context.DATA_MAINTAINED_CODE:
             self.context.request_state_transition(ProbingState)
 
     async def _wait_for_recovery_signal(self) -> set[asyncio.Future[Any]]:

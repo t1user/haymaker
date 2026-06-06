@@ -27,16 +27,15 @@ start, stop, or restart the gateway process.
 Each connection cycle verifies broker usability with a short historical-data
 probe before starting the supervised workload.
 
-For live execution, ``timeoutEvent`` is the first active health signal after
-the IB client has received no traffic for ``app.appTimeout`` seconds. Haymaker
-then checks recent broker messages such as ``1100``, ``2110``, ``2103``,
-``2105``, ``2157``, or ``10182``. If those messages suggest broker-side
-degradation, ``app.auto_recovery_grace_period`` controls how long Haymaker
-waits before requesting a restart cycle. While Haymaker is waiting for broker
-auto-recovery, ``updateEvent`` can trigger a probe when IB traffic resumes; a
-successful probe clears the degraded state, and a failed probe keeps waiting
-without resetting the grace timer. Without recent broker-degraded context,
-Haymaker probes the connection and requests a restart if the probe fails.
+For live execution, ``timeoutEvent`` is the active health signal after the IB
+client has received no traffic for ``app.appTimeout`` seconds. Haymaker probes
+the connection and requests a restart if the probe fails. Broker-degraded
+messages such as ``1100``, ``2110``, ``2103``, ``2105``, ``2157``, or
+``10182`` move Haymaker into a broker auto-recovery wait immediately while
+connected. ``app.auto_recovery_grace_period`` controls how long Haymaker waits
+there before requesting a restart cycle. While Haymaker is waiting for broker
+auto-recovery, ``updateEvent`` or ``1102`` can trigger a probe when IB traffic
+resumes; a failed probe keeps waiting without resetting the grace timer.
 Restart cycles reconnect immediately; ``app.retryDelay`` controls the pause
 between failed connection attempts.
 When IB sends ``1102`` (connectivity restored, data maintained),

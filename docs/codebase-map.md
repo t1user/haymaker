@@ -125,11 +125,12 @@ The research package is intentionally separate from live execution. It works dir
 
 - Interactive Brokers TWS/Gateway through `ib_insync`.
 - Haymaker-owned `ConnectionSupervisor` for live and dataloader IB socket
-  recovery. TWS or IB Gateway process management is external. Broker messages
-  are recorded as recovery context; `timeoutEvent` and probes decide whether to
-  wait for broker auto-recovery or request a reconnect/rebuild, while
-  `updateEvent` can trigger a recovery probe when traffic resumes during a
-  broker-degraded wait.
+  recovery. TWS or IB Gateway process management is external. Broker message
+  codes are categorized into restart requests, broker-wait signals, and recovery
+  hints; broker-wait signals move the supervisor into broker recovery wait while
+  connected, while `timeoutEvent` and probes remain active health checks.
+  `updateEvent` or `1102` can trigger a recovery probe when traffic resumes
+  during a broker-degraded wait.
 - MongoDB through `pymongo`.
 - Arctic through `arctic` for dataframe time-series storage.
 - pandas, NumPy, and Numba for dataframe research and kernels.
@@ -239,8 +240,8 @@ The root guidance records the standard focused checks, warns against importing
 `haymaker.app` in focused tests, and identifies
 `haymaker.supervisor.ConnectionSupervisor` as the owner of IB socket recovery.
 It also records the timeout/probe-first recovery rule and points runtime work
-away from treating broker messages as direct restart triggers. During
-broker-degraded waits, `updateEvent` is only a hint to probe recovery; failed
-probes should not reset the recovery grace timer.
+away from treating every broker message as a direct restart trigger. During
+broker-degraded waits, `updateEvent` and `1102` are only hints to probe
+recovery; failed probes should not reset the recovery grace timer.
 
 Dashboard is experimental and should not be looked at.

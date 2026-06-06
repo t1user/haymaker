@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import getLogger
-from time import monotonic
 from typing import Any, Protocol
 
 import ib_insync as ibi
@@ -33,15 +31,6 @@ class SupervisorWorkload(Protocol):
 
     async def stop(self, reason: str) -> None:
         """Release active work before the supervisor reconnects or exits."""
-
-
-@dataclass(frozen=True)
-class BrokerMessage:
-    """Recent IB broker status message used for recovery decisions."""
-
-    code: int
-    message: str
-    received_at: float
 
 
 @dataclass(frozen=True)
@@ -116,8 +105,9 @@ class ConnectionSupervisor:
 
     The supervisor does not start, stop, or restart TWS/IB Gateway itself, and
     it does not know whether the workload is live trading or dataloader work.
-    Broker messages provide recovery context; timeout and probe results decide
-    whether to wait for broker auto-recovery or rebuild the socket/workload.
+    Broker messages are categorized into restart requests, broker-recovery wait
+    signals, or recovery hints; non-restart messages are interpreted
+    immediately by the active state.
     """
 
     ib: ibi.IB
@@ -141,16 +131,11 @@ class ConnectionSupervisor:
     )
     _pending_restart_reason: str | None = field(default=None, init=False, repr=False)
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
-    _recent_broker_messages: deque[BrokerMessage] = field(
-        default_factory=deque, init=False, repr=False
-    )
 
-    RECOVERABLE_BROKER_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
+    BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
     DATA_LOST_CODE = 1101
     DATA_MAINTAINED_CODE = 1102
     SOCKET_RESET_CODE = 1300
-    RECENT_BROKER_MESSAGE_TTL = 300
-    RECENT_BROKER_MESSAGE_LIMIT = 20
 
     def __post_init__(self) -> None:
         self._state = INITIAL_STATE(self)
@@ -197,7 +182,10 @@ class ConnectionSupervisor:
     def request_state_transition(self, state: type[AbstractState]) -> None:
         """Request a state-local transition for the supervisor run loop."""
 
-        if self._requested_state is None:
+        if (
+            self._requested_state is None
+            or state.transition_priority > self._requested_state.transition_priority
+        ):
             log.debug(f"State transition requested: {state.__name__}")
             self._requested_state = state
         self._state_transition_requested.set()
@@ -259,7 +247,6 @@ class ConnectionSupervisor:
     ) -> None:
         """Translate selected broker messages into supervisor signals."""
 
-        broker_message = self._remember_broker_message(code, message)
         if code == self.DATA_LOST_CODE:
             self.request_restart(
                 f"broker connectivity restored with data lost ({code})"
@@ -272,10 +259,9 @@ class ConnectionSupervisor:
                     f"broker connectivity restored with data maintained ({code})"
                 )
             else:
-                self.clear_broker_degraded_context()
-                self._state.on_broker_message(broker_message)
+                self._state.on_broker_message(code, message)
         else:
-            self._state.on_broker_message(broker_message)
+            self._state.on_broker_message(code, message)
 
     async def connect(self) -> bool:
         """Connect the owned IB client, retrying until stopped."""
@@ -370,40 +356,6 @@ class ConnectionSupervisor:
         except asyncio.TimeoutError:
             return False
         return True
-
-    def recent_recoverable_broker_message(self) -> BrokerMessage | None:
-        """Return the latest recent broker-degraded message, if any."""
-
-        self._discard_stale_broker_messages()
-        for broker_message in reversed(self._recent_broker_messages):
-            if broker_message.code in self.RECOVERABLE_BROKER_CODES:
-                return broker_message
-        return None
-
-    def clear_broker_degraded_context(self) -> None:
-        """Clear broker-degraded recovery context."""
-
-        self._recent_broker_messages.clear()
-
-    def _remember_broker_message(self, code: int, message: str) -> BrokerMessage:
-        """Remember recent broker messages used to choose recovery behavior."""
-
-        broker_message = BrokerMessage(code, message, monotonic())
-        self._recent_broker_messages.append(broker_message)
-        self._discard_stale_broker_messages()
-        while len(self._recent_broker_messages) > self.RECENT_BROKER_MESSAGE_LIMIT:
-            self._recent_broker_messages.popleft()
-        return broker_message
-
-    def _discard_stale_broker_messages(self) -> None:
-        """Drop broker messages that are too old to guide recovery."""
-
-        cutoff = monotonic() - self.RECENT_BROKER_MESSAGE_TTL
-        while (
-            self._recent_broker_messages
-            and self._recent_broker_messages[0].received_at < cutoff
-        ):
-            self._recent_broker_messages.popleft()
 
     async def _cleanup(self) -> None:
         """Run terminal cleanup and leave the supervisor in the stopped state."""

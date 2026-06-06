@@ -23,26 +23,26 @@ These codes are most relevant to Haymaker connection supervision.
      - Haymaker recovery interpretation
    * - ``1100``
      - Connectivity between IB and TWS/Gateway has been lost.
-     - Recoverable broker-degraded context. Wait after timeout before restart.
+     - Enter broker auto-recovery wait while connected.
    * - ``1101``
      - Connectivity restored, data lost.
      - Request restart/rebuild because subscriptions must be resubmitted.
    * - ``1102``
      - Connectivity restored, data maintained.
-     - By default, clear broker-degraded context; if
+     - During broker auto-recovery wait, trigger a recovery probe; if
        ``restart_on_recovered_connection`` is enabled, request restart/rebuild.
    * - ``1300``
      - TWS socket port has been reset and the connection is being dropped.
      - Reconnect path is required; check the configured port if recovery fails.
    * - ``2103``
      - Market data farm is disconnected.
-     - Recoverable data-farm degradation; use as recent context on timeout.
+     - Enter broker auto-recovery wait while connected.
    * - ``2104``
      - Market data farm connection is OK.
      - Informational recovery/startup message.
    * - ``2105``
      - Historical data farm is disconnected.
-     - Recoverable HMDS degradation; use as recent context on timeout.
+     - Enter broker auto-recovery wait while connected.
    * - ``2106``
      - Historical data farm is connected.
      - Informational recovery/startup message.
@@ -55,20 +55,19 @@ These codes are most relevant to Haymaker connection supervision.
    * - ``2110``
      - TWS/Gateway connection to IB servers is broken and should restore
        automatically.
-     - Strong recoverable broker-degraded context. Wait after timeout.
+     - Enter broker auto-recovery wait while connected.
    * - ``2119``
      - Market data farm is connecting.
      - Recovery progress, not proof that all subscriptions are active.
    * - ``2157``
      - Security definition data farm connection is broken.
-     - Recoverable sec-def degradation; relevant to contract-detail requests.
+     - Enter broker auto-recovery wait while connected.
    * - ``2158``
      - Security definition data farm connection is OK.
      - Informational recovery/startup message.
    * - ``10182``
      - Failed to request live updates because IB reports disconnected state.
-     - Strong request-level degradation; use as recent context on timeout/probe
-       failure.
+     - Enter broker auto-recovery wait while connected.
 
 Order and Request Messages
 --------------------------
@@ -101,9 +100,9 @@ These commonly affect logging and user attention rather than socket recovery.
 Operational Rule of Thumb
 -------------------------
 
-Use ``timeoutEvent`` and probes as the first active health checks. Recent broker
-messages decide whether a failed health check should wait for broker recovery or
-request a reconnect/rebuild immediately. Once Haymaker is already waiting for
-broker recovery, ``updateEvent`` is a useful hint that traffic has resumed and
-should trigger a recovery probe; failed recovery probes should keep the original
-grace timer intact.
+Use ``timeoutEvent`` and probes as active health checks. Broker-degraded message
+codes enter broker auto-recovery wait immediately while connected, and
+``updateEvent`` or ``1102`` is a useful hint that traffic has resumed and should
+trigger a recovery probe. Failed recovery probes should keep the original grace
+timer intact. A successful probe only proves current connectivity; stale
+subscriptions may still be detected later by streamer timeouts.

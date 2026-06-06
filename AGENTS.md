@@ -104,11 +104,10 @@ BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fa
 - `haymaker.supervisor.ConnectionSupervisor` owns IB socket recovery for live
   trading and managed dataloader runs. It does not manage or restart the gateway
   process. Route new restart triggers through its `request_restart()` method.
-  Broker messages are recovery context, not automatic restart triggers:
-  `timeoutEvent` and connection probes are the first active health checks,
-  `updateEvent` may probe recovery while already broker-degraded, and recent
-  broker-degraded messages decide whether to wait for automatic broker recovery
-  or request a reconnect/rebuild.
+  Broker messages are categorized as restart requests, broker-wait signals, or
+  recovery hints: broker-wait signals move the supervisor into broker recovery
+  wait while connected, `timeoutEvent` and probes remain active health checks,
+  and `updateEvent` or `1102` may probe recovery while already waiting.
   Future app/supervisor architecture decisions should leave room for attached
   dataloader mode, where dataloader work borrows an externally managed `IB`
   connection and has no right to restart or disconnect it; see

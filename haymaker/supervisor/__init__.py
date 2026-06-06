@@ -1,7 +1,6 @@
 """Connection supervisor implementation package."""
 
 from .supervisor import (
-    BrokerMessage,
     ConnectionSettings,
     ConnectionSupervisor,
     Supervisor,
@@ -9,7 +8,6 @@ from .supervisor import (
 )
 
 __all__ = [
-    "BrokerMessage",
     "ConnectionSettings",
     "ConnectionSupervisor",
     "Supervisor",

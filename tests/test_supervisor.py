@@ -230,7 +230,7 @@ async def test_connect_retries_until_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeout_with_recent_broker_message_waits_for_recovery() -> None:
+async def test_broker_wait_message_enters_waiting_for_broker() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload)
@@ -239,7 +239,6 @@ async def test_timeout_with_recent_broker_message_waits_for_recovery() -> None:
     assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
 
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
-    fake_ib.timeoutEvent.emit(20)
 
     assert await wait_for_condition(lambda: supervisor.state is WaitingForBrokerState)
     assert fake_ib.disconnect_count == 0
@@ -248,6 +247,45 @@ async def test_timeout_with_recent_broker_message_waits_for_recovery() -> None:
     fake_ib.updateEvent.emit()
 
     assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+    assert fake_ib.disconnect_count == 0
+    assert workload.starts == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_timeout_probes_connection_without_broker_wait_message() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+
+    fake_ib.timeoutEvent.emit(20)
+
+    assert await wait_for_condition(lambda: fake_ib.probe_count == 2)
+    assert supervisor.state is ConnectedState
+    assert fake_ib.disconnect_count == 0
+    assert workload.starts == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_broker_wait_message_overrides_pending_timeout_probe() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+
+    fake_ib.timeoutEvent.emit(20)
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+
+    assert await wait_for_condition(lambda: supervisor.state is WaitingForBrokerState)
+    assert fake_ib.probe_count == 1
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
 
@@ -283,7 +321,6 @@ async def test_data_maintained_message_resumes_without_restart_by_default() -> N
     assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
 
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
-    fake_ib.timeoutEvent.emit(20)
     assert await wait_for_condition(lambda: supervisor.state is WaitingForBrokerState)
 
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
