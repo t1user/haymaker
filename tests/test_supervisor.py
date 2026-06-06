@@ -293,6 +293,26 @@ async def test_broker_wait_message_overrides_pending_timeout_probe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_restart_request_overrides_pending_broker_wait() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: supervisor.state is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+    supervisor.request_restart("manual restart")
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["manual restart"]
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
 async def test_update_event_is_ignored_while_connected() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()

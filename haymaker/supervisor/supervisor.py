@@ -13,6 +13,7 @@ import ib_insync as ibi
 from .states import (
     AbstractState,
     ConnectingState,
+    RestartingState,
     StoppedError,
     StoppingState,
 )
@@ -99,9 +100,10 @@ class ConnectionSupervisor:
       state, and it re-raises unexpected supervisor failures after cleanup.
     - ``stop()`` is a request only. It wakes the run loop by setting the stop
       signal, but shutdown work remains owned by ``run()``.
-    - ``request_restart()`` asks the run loop to stop active work, disconnect the
-      owned socket, and reconnect immediately. Failed connection attempts wait
-      for ``settings.retry_delay`` before retrying.
+    - ``request_restart()`` queues a reconnect/rebuild transition that stops
+      active work, disconnects the owned socket, and reconnects immediately.
+      Failed connection attempts wait for ``settings.retry_delay`` before
+      retrying.
 
     The supervisor does not start, stop, or restart TWS/IB Gateway itself, and
     it does not know whether the workload is live trading or dataloader work.
@@ -118,9 +120,6 @@ class ConnectionSupervisor:
         init=False, default=None, repr=False
     )
     _stop_requested: asyncio.Event = field(
-        default_factory=asyncio.Event, init=False, repr=False
-    )
-    _restart_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
     _state_transition_requested: asyncio.Event = field(
@@ -206,19 +205,18 @@ class ConnectionSupervisor:
     def request_restart(self, reason: str = "") -> None:
         """Request a reconnect/rebuild cycle."""
 
-        if self._restart_requested.is_set():
+        if self._pending_restart_reason is not None:
             log.debug(f"Restart already pending: {self._pending_restart_reason}")
             return
         self._pending_restart_reason = reason or "restart requested"
         log.debug(f"Restart requested: {self._pending_restart_reason}")
-        self._restart_requested.set()
+        self.request_state_transition(RestartingState)
 
-    def consume_restart_reason(self) -> str:
+    def _take_restart_reason(self) -> str:
         """Return and clear the pending restart reason."""
 
         reason = self._pending_restart_reason or "restart requested"
         self._pending_restart_reason = None
-        self._restart_requested.clear()
         return reason
 
     def onDisconnectedEvent(self) -> None:
@@ -362,6 +360,3 @@ class ConnectionSupervisor:
 
         next_state = await self.transition_to(StoppingState).handle()
         self.transition_to(next_state)
-
-
-Supervisor = ConnectionSupervisor

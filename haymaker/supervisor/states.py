@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .supervisor import Supervisor
+    from .supervisor import ConnectionSupervisor
 
 
 class StoppedError(Exception):
@@ -23,7 +23,7 @@ class AbstractState(ABC):
 
     transition_priority: int = 0
 
-    def __init__(self, context: Supervisor) -> None:
+    def __init__(self, context: ConnectionSupervisor) -> None:
         self.context = context
         self.settings = context.settings
         self.ib = context.ib
@@ -46,9 +46,6 @@ class AbstractState(ABC):
 
         if self.context._stop_requested.is_set():
             return StoppingState
-
-        if self.context._restart_requested.is_set():
-            return RestartingState
 
         return self.context.consume_state_transition()
 
@@ -148,10 +145,6 @@ class ConnectedState(AbstractState):
                 name="connection-supervisor-stop-wait",
             ),
             asyncio.create_task(
-                self.context._restart_requested.wait(),
-                name="connection-supervisor-restart-wait",
-            ),
-            asyncio.create_task(
                 self.context._state_transition_requested.wait(),
                 name="connection-supervisor-state-transition-wait",
             ),
@@ -212,10 +205,6 @@ class WaitingForBrokerState(AbstractState):
                 name="connection-supervisor-stop-wait",
             ),
             asyncio.create_task(
-                self.context._restart_requested.wait(),
-                name="connection-supervisor-restart-wait",
-            ),
-            asyncio.create_task(
                 self.context._state_transition_requested.wait(),
                 name="connection-supervisor-state-transition-wait",
             ),
@@ -246,8 +235,10 @@ class WaitingForBrokerState(AbstractState):
 class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
+    transition_priority = 30
+
     async def handle(self) -> type[AbstractState]:
-        reason = self.context.consume_restart_reason()
+        reason = self.context._take_restart_reason()
         await self.context.stop_workload(reason)
         self.context.disconnect()
         return ConnectingState
