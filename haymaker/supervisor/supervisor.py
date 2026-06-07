@@ -165,24 +165,15 @@ class ConnectionSupervisor:
             await self._cleanup()
             raise
 
-    def _transition_to(
-        self, next_state: type[AbstractState] | AbstractState
-    ) -> AbstractState:
+    def _transition_to(self, next_state: type[AbstractState]) -> AbstractState:
         """Transition to a new state class and return the state instance."""
 
-        if isinstance(next_state, AbstractState):
-            state = type(next_state)
-            state_instance = next_state
-        else:
-            state = next_state
-            state_instance = state(self)
-
-        if state != type(self._state):
+        if next_state != type(self._state):
             log.debug(
                 f"Supervisor transition: {type(self._state).__name__} -> "
-                f"{state.__name__}"
+                f"{next_state.__name__}"
             )
-        self._state = state_instance
+        self._state = next_state(self)
         return self._state
 
     def stop(self) -> None:
@@ -204,7 +195,7 @@ class ConnectionSupervisor:
             return
         restart_reason = reason or "restart requested"
         log.debug(f"Restart requested: {restart_reason}")
-        self._state.request_restart(restart_reason)
+        self._state.request_restart()
 
     def onDisconnectedEvent(self) -> None:
         """Request restart after unexpected API socket disconnection."""

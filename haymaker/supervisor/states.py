@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 if TYPE_CHECKING:
     from .supervisor import ConnectionSupervisor
 
-StateResult: TypeAlias = "type[AbstractState] | AbstractState"
+StateResult: TypeAlias = "type[AbstractState]"
 
 log = getLogger(__name__)
 
@@ -26,13 +26,12 @@ class StoppedError(Exception):
 class AbstractState(ABC):
     """Base class for connection supervisor states."""
 
-    def __init__(self, context: ConnectionSupervisor, reason: str = "") -> None:
+    def __init__(self, context: ConnectionSupervisor) -> None:
         self.context = context
         self.settings = context.settings
         self.ib = context.ib
-        self.reason = reason
         self.wakeup = asyncio.Event()
-        self._restart_reason: str | None = None
+        self._restart_requested = False
 
     @abstractmethod
     async def handle(self) -> StateResult:
@@ -52,11 +51,10 @@ class AbstractState(ABC):
 
         self.wakeup.set()
 
-    def request_restart(self, reason: str) -> None:
+    def request_restart(self) -> None:
         """Request a restart transition from this state."""
 
-        if self._restart_reason is None:
-            self._restart_reason = reason
+        self._restart_requested = True
         self.wakeup.set()
 
     def requested_lifecycle_state(self) -> StateResult | None:
@@ -65,8 +63,8 @@ class AbstractState(ABC):
         if self.context.stop_requested:
             return StoppingState
 
-        if self._restart_reason is not None:
-            return RestartingState(self.context, self._restart_reason)
+        if self._restart_requested:
+            return RestartingState
 
         return None
 
@@ -115,8 +113,8 @@ class ConnectingState(AbstractState):
 class ProbingState(AbstractState):
     """Verify that the broker connection is usable."""
 
-    def __init__(self, context: ConnectionSupervisor, reason: str = "") -> None:
-        super().__init__(context, reason)
+    def __init__(self, context: ConnectionSupervisor) -> None:
+        super().__init__(context)
         self._broker_wait_requested = False
 
     async def handle(self) -> StateResult:
@@ -182,8 +180,8 @@ class StartingWorkloadState(AbstractState):
 class ConnectedState(AbstractState):
     """Wait for restart, timeout, stop, or workload completion."""
 
-    def __init__(self, context: ConnectionSupervisor, reason: str = "") -> None:
-        super().__init__(context, reason)
+    def __init__(self, context: ConnectionSupervisor) -> None:
+        super().__init__(context)
         self._timeout_requested = False
         self._broker_wait_requested = False
 
@@ -252,8 +250,8 @@ class ConnectedState(AbstractState):
 class WaitingForBrokerState(AbstractState):
     """Wait briefly for broker-side auto-recovery before rebuilding."""
 
-    def __init__(self, context: ConnectionSupervisor, reason: str = "") -> None:
-        super().__init__(context, reason)
+    def __init__(self, context: ConnectionSupervisor) -> None:
+        super().__init__(context)
         self._probe_requested = False
 
     async def handle(self) -> StateResult:
@@ -320,7 +318,7 @@ class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
     async def handle(self) -> StateResult:
-        await self.context.stop_workload(self.reason or "restart requested")
+        await self.context.stop_workload("restart requested")
         self.context.disconnect()
         return ConnectingState
 

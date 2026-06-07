@@ -171,7 +171,7 @@ async def test_restart_stops_workload_disconnects_and_reconnects() -> None:
     supervisor.request_restart("manual restart")
 
     assert await wait_for_condition(lambda: workload.starts == 2)
-    assert workload.stops == ["manual restart"]
+    assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 2
     assert fake_ib.disconnect_count == 1
 
@@ -179,7 +179,7 @@ async def test_restart_stops_workload_disconnects_and_reconnects() -> None:
 
 
 @pytest.mark.asyncio
-async def test_duplicate_restart_requests_keep_first_reason() -> None:
+async def test_duplicate_restart_requests_coalesce() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload)
@@ -191,7 +191,7 @@ async def test_duplicate_restart_requests_keep_first_reason() -> None:
     supervisor.request_restart("second restart")
 
     assert await wait_for_condition(lambda: workload.starts == 2)
-    assert workload.stops == ["first restart"]
+    assert workload.stops == ["restart requested"]
 
     await stop_and_wait(supervisor, task)
 
@@ -228,7 +228,7 @@ async def test_unexpected_disconnect_restarts_workload() -> None:
     fake_ib.disconnect()
 
     assert await wait_for_condition(lambda: workload.starts == 2)
-    assert workload.stops == ["IB socket disconnected"]
+    assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 2
     assert fake_ib.disconnect_count == 1
 
@@ -325,7 +325,7 @@ async def test_restart_request_overrides_pending_broker_wait() -> None:
     supervisor.request_restart("manual restart")
 
     assert await wait_for_condition(lambda: workload.starts == 2)
-    assert workload.stops == ["manual restart"]
+    assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 2
     assert fake_ib.disconnect_count == 1
 
@@ -387,9 +387,7 @@ async def test_data_maintained_message_restarts_when_configured() -> None:
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
 
     assert await wait_for_condition(lambda: workload.starts == 2)
-    assert workload.stops == [
-        "broker connectivity restored with data maintained (1102)"
-    ]
+    assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 2
     assert fake_ib.disconnect_count == 1
 
@@ -408,7 +406,7 @@ async def test_data_lost_message_restarts_immediately() -> None:
     fake_ib.errorEvent.emit(-1, 1101, "Data lost", ibi.Contract())
 
     assert await wait_for_condition(lambda: workload.starts == 2)
-    assert workload.stops == ["broker connectivity restored with data lost (1101)"]
+    assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 2
     assert fake_ib.disconnect_count == 1
 
@@ -427,7 +425,7 @@ async def test_socket_reset_message_restarts_immediately() -> None:
     fake_ib.errorEvent.emit(-1, 1300, "Socket reset", ibi.Contract())
 
     assert await wait_for_condition(lambda: workload.starts == 2)
-    assert workload.stops == ["broker reset API socket port (1300)"]
+    assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 2
     assert fake_ib.disconnect_count == 1
 
