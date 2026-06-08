@@ -92,23 +92,26 @@ class ConnectionSettings:
 class ConnectionSupervisor:
     """Run one workload under an owned IB socket connection.
 
-    Public callers use a deliberately small lifecycle interface:
+    Public api:
 
-    - ``run()`` owns connection setup, workload execution, restart cycles, and
-      final cleanup. It returns only after the supervisor reaches the stopped
-      state, and it re-raises unexpected supervisor failures after cleanup.
-    - ``stop()`` is a request only. It wakes the run loop by setting the stop
-      signal, but shutdown work remains owned by ``run()``.
-    - ``request_restart()`` asks the active state to return a reconnect/rebuild
-      transition that stops active work, disconnects the owned socket, and
-      reconnects immediately. Failed connection attempts wait for
-      ``settings.retry_delay`` before retrying.
+        - ``run()`` start connection and run managed workload; owns
+          connection setup, workload execution, restart cycles, and
+          final cleanup. It returns only after the supervisor reaches
+          the stopped state, and it re-raises unexpected supervisor
+          failures after cleanup.
 
-    The supervisor does not start, stop, or restart TWS/IB Gateway itself, and
-    it does not know whether the workload is live trading or dataloader work.
-    Broker messages are categorized into restart requests, broker-recovery wait
-    signals, or recovery hints; non-restart messages are interpreted
-    immediately by the active state.
+        - ``stop()`` sent a shutdown request.
+
+        - ``request_restart()`` asks the active state to return a
+          reconnect/rebuild transition that stops active work,
+          disconnects the owned socket, and reconnects immediately.
+
+    The supervisor does not start, stop, or restart TWS/IB Gateway
+    itself, and it does not know whether the workload is live trading
+    or dataloader work. Broker messages are categorized into restart
+    requests, broker-recovery wait signals, or recovery hints;
+    non-restart messages are interpreted immediately by the active
+    state.
     """
 
     ib: ibi.IB
@@ -134,12 +137,6 @@ class ConnectionSupervisor:
         self.ib.disconnectedEvent += self.onDisconnectedEvent
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
-
-    @property
-    def state(self) -> type[AbstractState]:
-        """Return the current supervisor state class."""
-
-        return type(self._state)
 
     @property
     def stop_requested(self) -> bool:
