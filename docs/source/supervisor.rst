@@ -88,11 +88,12 @@ State Transition Chart
    :alt: ConnectionSupervisor state transition chart
    :align: center
 
-The chart shows ordinary startup, broker recovery, restart/rebuild, and
-shutdown transitions. Arrow labels name the condition that causes each
-transition. The purple stop paths are representative rather than exhaustive;
-``stop()`` can interrupt any active state. The broker-code lists are kept in
-the prose around the chart so the picture stays readable.
+The chart shows the regular lifecycle flow as solid green arrows, with
+alternative recovery and shutdown paths shown as dashed blue, red, and purple
+arrows. Arrow labels name the condition that causes each transition. The purple
+stop paths are representative rather than exhaustive; ``stop()`` can interrupt
+any active state. The broker-code lists are kept in the prose around the chart
+so the picture stays readable.
 
 Priority Rules
 ==============
