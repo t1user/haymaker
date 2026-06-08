@@ -13,7 +13,9 @@ import ib_insync as ibi
 from .states import (
     AbstractState,
     ConnectingState,
+    RestartingState,
     StoppedError,
+    StoppedState,
     StoppingState,
 )
 
@@ -102,9 +104,10 @@ class ConnectionSupervisor:
 
         - ``stop()`` sent a shutdown request.
 
-        - ``request_restart()`` asks the active state to return a
-          reconnect/rebuild transition that stops active work,
-          disconnects the owned socket, and reconnects immediately.
+        - ``request_restart()`` asks the supervisor to interrupt the
+          active state and run a reconnect/rebuild transition that
+          stops active work, disconnects the owned socket, and
+          reconnects immediately.
 
     The supervisor does not start, stop, or restart TWS/IB Gateway
     itself, and it does not know whether the workload is live trading
@@ -124,6 +127,11 @@ class ConnectionSupervisor:
     _stop_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
+    _restart_requested: asyncio.Event = field(
+        default_factory=asyncio.Event, init=False, repr=False
+    )
+    # True while the supervisor closes its own socket, so disconnectedEvent is
+    # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
 
     BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
@@ -149,7 +157,7 @@ class ConnectionSupervisor:
 
         try:
             while True:
-                transition = await self._state.handle()
+                transition = await self._run_state()
                 self._transition_to(transition)
         except StoppedError:
             return
@@ -161,6 +169,79 @@ class ConnectionSupervisor:
             log.exception("Connection supervisor failed; stopping.")
             await self._cleanup()
             raise
+
+    async def _run_state(self) -> type[AbstractState]:
+        """Run the current state, interrupting ordinary work for lifecycle events."""
+
+        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+            return await self._state.handle()
+
+        return await self._run_interruptible_state()
+
+    async def _run_interruptible_state(self) -> type[AbstractState]:
+        """Race state work against supervisor-owned stop and restart requests."""
+
+        state_task = asyncio.create_task(
+            self._state.handle(),
+            name="connection-supervisor-state",
+        )
+        stop_task = asyncio.create_task(
+            self._stop_requested.wait(),
+            name="connection-supervisor-stop-request",
+        )
+        restart_task = asyncio.create_task(
+            self._restart_requested.wait(),
+            name="connection-supervisor-restart-request",
+        )
+        waiter_tasks = {stop_task, restart_task}
+
+        try:
+            await asyncio.wait(
+                {state_task, *waiter_tasks},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            await self._cancel_state_task(state_task)
+            raise
+        finally:
+            for task in waiter_tasks:
+                task.cancel()
+            await asyncio.gather(*waiter_tasks, return_exceptions=True)
+
+        if self.stop_requested:
+            self._restart_requested.clear()
+            await self._cancel_state_task(state_task)
+            return StoppingState
+
+        if self._restart_requested.is_set():
+            self._restart_requested.clear()
+            await self._cancel_state_task(state_task)
+            return RestartingState
+
+        return state_task.result()
+
+    async def _cancel_state_task(
+        self, state_task: asyncio.Task[type[AbstractState]]
+    ) -> None:
+        """Cancel active state work after a supervisor lifecycle interruption."""
+
+        if state_task.done():
+            try:
+                state_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.debug(
+                    "Interrupted state task failed while being cancelled.",
+                    exc_info=True,
+                )
+            return
+
+        state_task.cancel()
+        try:
+            await state_task
+        except asyncio.CancelledError:
+            pass
 
     def _transition_to(self, next_state: type[AbstractState]) -> AbstractState:
         """Transition to a new state class and return the state instance."""
@@ -177,7 +258,6 @@ class ConnectionSupervisor:
         """Request supervisor shutdown."""
 
         self.mark_stop_requested()
-        self._state.request_stop()
 
     def mark_stop_requested(self) -> None:
         """Record supervisor shutdown intent."""
@@ -190,9 +270,12 @@ class ConnectionSupervisor:
         if self.stop_requested:
             log.debug("Restart ignored because stop is already pending.")
             return
+        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+            log.debug("Restart ignored because lifecycle cleanup is already active.")
+            return
         restart_reason = reason or "restart requested"
         log.debug(f"Restart requested: {restart_reason}")
-        self._state.request_restart()
+        self._restart_requested.set()
 
     def onDisconnectedEvent(self) -> None:
         """Request restart after unexpected API socket disconnection."""
@@ -278,7 +361,7 @@ class ConnectionSupervisor:
         self._workload_task = None
 
     def disconnect(self) -> None:
-        """Disconnect the owned IB client without treating it as unexpected."""
+        """Disconnect the owned IB socket without triggering restart handling."""
 
         if self.ib.isConnected():
             self._intentional_disconnect = True
@@ -286,15 +369,6 @@ class ConnectionSupervisor:
                 self.ib.disconnect()
             finally:
                 self._intentional_disconnect = False
-
-    async def wait_or_stop(self, delay: float) -> bool:
-        """Wait for ``delay`` seconds or return early when shutdown is requested."""
-
-        try:
-            await asyncio.wait_for(self._stop_requested.wait(), delay)
-        except asyncio.TimeoutError:
-            return False
-        return True
 
     async def _cleanup(self) -> None:
         """Run terminal cleanup and leave the supervisor in the stopped state."""

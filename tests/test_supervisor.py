@@ -28,6 +28,7 @@ class FakeIB:
         self.fail_connect_attempts = 0
         self.timeouts: list[float] = []
         self.probe_results: list[list[object]] = [[object()]]
+        self.probe_delays: list[float] = []
         self.probe_count = 0
 
     async def connectAsync(self, *args: object, **kwargs: object) -> None:
@@ -62,6 +63,8 @@ class FakeIB:
 
         async def request() -> list[object]:
             self.probe_count += 1
+            if self.probe_delays:
+                await asyncio.sleep(self.probe_delays.pop(0))
             if self.probe_results:
                 return self.probe_results.pop(0)
             return [object()]
@@ -103,16 +106,17 @@ def make_supervisor(
 ) -> ConnectionSupervisor:
     """Create a supervisor with fast deterministic test timings."""
 
+    default_settings: dict[str, Any] = {
+        "retry_delay": 0,
+        "app_timeout": 20,
+        "probe_timeout": 0.01,
+        "auto_recovery_grace_period": 0.02,
+    }
+    default_settings.update(settings)
     return ConnectionSupervisor(
         cast(ibi.IB, fake_ib),
         workload or FakeWorkload(),
-        ConnectionSettings(
-            retry_delay=0,
-            app_timeout=20,
-            probe_timeout=0.01,
-            auto_recovery_grace_period=0.02,
-            **settings,
-        ),
+        ConnectionSettings(**default_settings),
     )
 
 
@@ -257,6 +261,44 @@ async def test_connect_retries_until_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_interrupts_connect_retry_wait() -> None:
+    fake_ib = FakeIB()
+    fake_ib.fail_connect_attempts = 100
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, retry_delay=60)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: fake_ib.connect_attempts == 1)
+
+    supervisor.stop()
+
+    await asyncio.wait_for(task, timeout=1)
+
+    assert current_state(supervisor) is StoppedState
+    assert fake_ib.connect_attempts == 1
+    assert workload.starts == 0
+
+
+@pytest.mark.asyncio
+async def test_restart_interrupts_in_flight_probe() -> None:
+    fake_ib = FakeIB()
+    fake_ib.probe_delays = [60]
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: fake_ib.probe_count == 1)
+
+    supervisor.request_restart("probe interrupted")
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
 async def test_broker_wait_message_enters_waiting_for_broker() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
@@ -294,7 +336,7 @@ async def test_timeout_probes_connection_without_broker_wait_message() -> None:
     fake_ib.timeoutEvent.emit(20)
 
     assert await wait_for_condition(lambda: fake_ib.probe_count == 2)
-    assert current_state(supervisor) is ConnectedState
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
 
