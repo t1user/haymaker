@@ -179,7 +179,7 @@ class ConnectionSupervisor:
         return await self._run_interruptible_state()
 
     async def _run_interruptible_state(self) -> type[AbstractState]:
-        """Race state work against supervisor-owned stop and restart requests."""
+        """Race state work against supervisor-owned lifecycle events."""
 
         state_task = asyncio.create_task(
             self._state.handle(),
@@ -194,11 +194,14 @@ class ConnectionSupervisor:
             name="connection-supervisor-restart-request",
         )
         waiter_tasks = {stop_task, restart_task}
+        wait_tasks: set[asyncio.Future[Any]] = {state_task, *waiter_tasks}
+        workload_task = self._workload_task
+        if workload_task is not None:
+            wait_tasks.add(workload_task)
 
         try:
-            await asyncio.wait(
-                {state_task, *waiter_tasks},
-                return_when=asyncio.FIRST_COMPLETED,
+            done, _ = await asyncio.wait(
+                wait_tasks, return_when=asyncio.FIRST_COMPLETED
             )
         except BaseException:
             await self._cancel_state_task(state_task)
@@ -217,6 +220,16 @@ class ConnectionSupervisor:
             self._restart_requested.clear()
             await self._cancel_state_task(state_task)
             return RestartingState
+
+        if state_task in done and (
+            state_task.cancelled() or state_task.exception() is not None
+        ):
+            return state_task.result()
+
+        if workload_task is not None and workload_task in done:
+            await self._cancel_state_task(state_task)
+            await self._cleanup_workload()
+            return StoppingState
 
         return state_task.result()
 
@@ -322,15 +335,16 @@ class ConnectionSupervisor:
                 self.workload.start(), name="connection-supervisor-workload"
             )
 
-    async def stop_workload(self, reason: str = "") -> None:
-        """Stop and cancel the active workload task when one exists."""
+    async def _cleanup_workload(self, reason: str = "") -> None:
+        """Stop active workload or collect its completed result."""
 
         task = self._workload_task
         if task is None:
             return
 
         if task.done():
-            self.consume_workload_result()
+            self._log_workload_result(task)
+            self._workload_task = None
             return
 
         await self.workload.stop(reason)
@@ -341,19 +355,15 @@ class ConnectionSupervisor:
             pass
         self._workload_task = None
 
-    def consume_workload_result(self) -> None:
-        """Log workload failure and clear a completed workload task."""
-
-        if self._workload_task is None:
-            return
+    def _log_workload_result(self, task: asyncio.Task[None]) -> None:
+        """Log failure from a completed workload task."""
 
         try:
-            self._workload_task.result()
+            task.result()
         except asyncio.CancelledError:
             log.debug("Connection workload task cancelled.")
         except Exception:
             log.exception("Connection workload task failed.")
-        self._workload_task = None
 
     def disconnect(self) -> None:
         """Disconnect the owned IB socket without triggering restart handling."""

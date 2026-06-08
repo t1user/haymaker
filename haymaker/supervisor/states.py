@@ -49,11 +49,9 @@ class AbstractState(ABC):
     async def wait_for_wakeup_or(
         self,
         *awaitables: Awaitable[Any] | asyncio.Future[Any],
-        preserve_pending: set[asyncio.Future[Any]] | None = None,
     ) -> set[asyncio.Future[Any]]:
         """Wait until this state is woken or one supplied awaitable completes."""
 
-        preserve_pending = preserve_pending or set()
         tasks: set[asyncio.Future[Any]] = {
             asyncio.create_task(
                 self.wakeup.wait(),
@@ -68,10 +66,9 @@ class AbstractState(ABC):
                 tasks.add(asyncio.ensure_future(awaitable))
 
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        waiters = [task for task in pending if task not in preserve_pending]
-        for task in waiters:
+        for task in pending:
             task.cancel()
-        await asyncio.gather(*waiters, return_exceptions=True)
+        await asyncio.gather(*pending, return_exceptions=True)
         return done
 
     def __str__(self) -> str:
@@ -189,7 +186,7 @@ class ConnectedState(AbstractState):
         if self.settings.app_timeout:
             self.ib.setTimeout(self.settings.app_timeout)
 
-        done = await self._wait_for_activity()
+        await self.wait_for_wakeup_or()
 
         if self._broker_wait_requested:
             return WaitingForBrokerState
@@ -197,16 +194,12 @@ class ConnectedState(AbstractState):
         if self._timeout_registered:
             return ProbingState
 
-        if self._workload_completed(done):
-            self.context.consume_workload_result()
-            return StoppingState
-
         return ConnectedState
 
     def on_timeout(self, idle_period: float) -> None:
         """Request a probe after an IB idle timeout."""
 
-        self._timeout_registred = True
+        self._timeout_registered = True
         self.wakeup.set()
 
     def on_broker_message(self, code: int, message: str) -> None:
@@ -215,26 +208,6 @@ class ConnectedState(AbstractState):
         if code in self.context.BROKER_WAIT_CODES:
             self._broker_wait_requested = True
             self.wakeup.set()
-
-    async def _wait_for_activity(self) -> set[asyncio.Future[Any]]:
-        """Wait until connected-state work needs supervisor attention."""
-
-        workload_tasks: set[asyncio.Future[Any]] = set()
-        if self.context._workload_task is not None:
-            workload_tasks.add(self.context._workload_task)
-
-        return await self.wait_for_wakeup_or(
-            *workload_tasks,
-            preserve_pending=workload_tasks,
-        )
-
-    def _workload_completed(self, done: set[asyncio.Future[Any]]) -> bool:
-        """Return whether the supervised workload task finished."""
-
-        return (
-            self.context._workload_task is not None
-            and self.context._workload_task in done
-        )
 
 
 class WaitingForBrokerState(AbstractState):
@@ -245,14 +218,12 @@ class WaitingForBrokerState(AbstractState):
         self._probe_requested = False
 
     async def handle(self) -> StateResult:
-        done = await self._wait_for_recovery_signal()
+        await self.wait_for_wakeup_or(
+            asyncio.sleep(self.settings.auto_recovery_grace_period)
+        )
 
         if self._probe_requested:
             return ProbingState
-
-        if self._workload_completed(done):
-            self.context.consume_workload_result()
-            return StoppingState
 
         return RestartingState
 
@@ -269,33 +240,12 @@ class WaitingForBrokerState(AbstractState):
             self._probe_requested = True
             self.wakeup.set()
 
-    async def _wait_for_recovery_signal(self) -> set[asyncio.Future[Any]]:
-        """Wait for broker recovery, timeout, or workload completion."""
-
-        workload_tasks: set[asyncio.Future[Any]] = set()
-        if self.context._workload_task is not None:
-            workload_tasks.add(self.context._workload_task)
-
-        return await self.wait_for_wakeup_or(
-            asyncio.sleep(self.settings.auto_recovery_grace_period),
-            *workload_tasks,
-            preserve_pending=workload_tasks,
-        )
-
-    def _workload_completed(self, done: set[asyncio.Future[Any]]) -> bool:
-        """Return whether the supervised workload task finished while waiting."""
-
-        return (
-            self.context._workload_task is not None
-            and self.context._workload_task in done
-        )
-
 
 class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
     async def handle(self) -> StateResult:
-        await self.context.stop_workload("restart requested")
+        await self.context._cleanup_workload("restart requested")
         self.context.disconnect()
         return ConnectingState
 
@@ -305,7 +255,7 @@ class StoppingState(AbstractState):
 
     async def handle(self) -> StateResult:
         self.context.stop()
-        await self.context.stop_workload("supervisor stopped")
+        await self.context._cleanup_workload("supervisor stopped")
         self.context.disconnect()
         return StoppedState
 
