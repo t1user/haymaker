@@ -24,6 +24,10 @@
 - Avoid importing `haymaker.app` in tests unless explicitly needed. It sets up
   logging and imports runtime singletons; prefer lower-level modules for
   focused tests.
+- When asked to review logs, check `docs/log-review-guidance.md` first. If the
+  requested review is not supervisor-related, use that file only for general
+  review discipline and focus on the specific component or behavior the user
+  asked about.
 - Create docstrings for any new functions/classes/methods
 - Use google-style, sphinx compatible docstrings
 - If changing user-relevant behaviour, scan existing documentation and update any sections relevant to this newly changed behaviour
