@@ -158,6 +158,7 @@ class ConnectionSupervisor:
         try:
             while True:
                 transition = await self._run_state()
+                transition = self._prioritize_transition(transition)
                 self._transition_to(transition)
         except StoppedError:
             return
@@ -211,15 +212,10 @@ class ConnectionSupervisor:
                 task.cancel()
             await asyncio.gather(*waiter_tasks, return_exceptions=True)
 
-        if self._stop_requested.is_set():
-            self._restart_requested.clear()
+        lifecycle_transition = self._pending_lifecycle_transition()
+        if lifecycle_transition is not None:
             await self._cancel_state_task(state_task)
-            return StoppingState
-
-        if self._restart_requested.is_set():
-            self._restart_requested.clear()
-            await self._cancel_state_task(state_task)
-            return RestartingState
+            return lifecycle_transition
 
         if state_task in done and (
             state_task.cancelled() or state_task.exception() is not None
@@ -232,6 +228,30 @@ class ConnectionSupervisor:
             return StoppingState
 
         return state_task.result()
+
+    def _prioritize_transition(
+        self, proposed: type[AbstractState]
+    ) -> type[AbstractState]:
+        """Return pending lifecycle transition if it should override proposed."""
+
+        return self._pending_lifecycle_transition() or proposed
+
+    def _pending_lifecycle_transition(self) -> type[AbstractState] | None:
+        """Return a pending stop or restart transition in supervisor priority order."""
+
+        if self._stop_requested.is_set() and not isinstance(
+            self._state, (StoppingState, StoppedState)
+        ):
+            self._restart_requested.clear()
+            return StoppingState
+
+        if self._restart_requested.is_set() and not isinstance(
+            self._state, (RestartingState, StoppingState, StoppedState)
+        ):
+            self._restart_requested.clear()
+            return RestartingState
+
+        return None
 
     async def _cancel_state_task(
         self, state_task: asyncio.Task[type[AbstractState]]

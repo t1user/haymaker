@@ -79,6 +79,8 @@ class FakeWorkload:
         self.complete_immediately = complete_immediately
         self.starts = 0
         self.stops: list[str] = []
+        self.stop_started: asyncio.Event | None = None
+        self.release_stop: asyncio.Event | None = None
         self._release: asyncio.Event | None = None
 
     async def start(self) -> None:
@@ -95,6 +97,10 @@ class FakeWorkload:
         """Release the active workload and record the stop reason."""
 
         self.stops.append(reason)
+        if self.stop_started is not None:
+            self.stop_started.set()
+        if self.release_stop is not None:
+            await self.release_stop.wait()
         if self._release is not None:
             self._release.set()
 
@@ -223,6 +229,30 @@ async def test_stop_request_overrides_pending_restart() -> None:
 
     assert current_state(supervisor) is StoppedState
     assert workload.stops == ["supervisor stopped"]
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_during_restart_cleanup_prevents_reconnect() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    workload.stop_started = asyncio.Event()
+    workload.release_stop = asyncio.Event()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    supervisor.request_restart("manual restart")
+    await asyncio.wait_for(workload.stop_started.wait(), timeout=1)
+    supervisor.stop()
+    workload.release_stop.set()
+
+    await asyncio.wait_for(task, timeout=1)
+
+    assert current_state(supervisor) is StoppedState
+    assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 1
     assert fake_ib.disconnect_count == 1
 
