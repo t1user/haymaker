@@ -208,7 +208,7 @@ class ConnectionSupervisor:
                 task.cancel()
             await asyncio.gather(*waiter_tasks, return_exceptions=True)
 
-        if self.stop_requested:
+        if self._stop_requested.is_set():
             self._restart_requested.clear()
             await self._cancel_state_task(state_task)
             return StoppingState
@@ -255,12 +255,7 @@ class ConnectionSupervisor:
         return self._state
 
     def stop(self) -> None:
-        """Request supervisor shutdown."""
-
-        self.mark_stop_requested()
-
-    def mark_stop_requested(self) -> None:
-        """Record supervisor shutdown intent."""
+        """Request supervisor shutdown. Record supervisor shutdown intent."""
 
         self._stop_requested.set()
 
@@ -280,7 +275,7 @@ class ConnectionSupervisor:
     def onDisconnectedEvent(self) -> None:
         """Request restart after unexpected API socket disconnection."""
 
-        if not self._intentional_disconnect and not self.stop_requested:
+        if not self._intentional_disconnect and not self._stop_requested.is_set():
             self.request_restart("IB socket disconnected")
 
     def onTimeoutEvent(self, idle_period: float) -> None:
