@@ -182,7 +182,7 @@ class ConnectedState(AbstractState):
 
     def __init__(self, context: ConnectionSupervisor) -> None:
         super().__init__(context)
-        self._timeout_requested = False
+        self._timeout_registered = False
         self._broker_wait_requested = False
 
     async def handle(self) -> StateResult:
@@ -194,7 +194,7 @@ class ConnectedState(AbstractState):
         if self._broker_wait_requested:
             return WaitingForBrokerState
 
-        if self._timeout_requested:
+        if self._timeout_registered:
             return ProbingState
 
         if self._workload_completed(done):
@@ -206,7 +206,7 @@ class ConnectedState(AbstractState):
     def on_timeout(self, idle_period: float) -> None:
         """Request a probe after an IB idle timeout."""
 
-        self._timeout_requested = True
+        self._timeout_registred = True
         self.wakeup.set()
 
     def on_broker_message(self, code: int, message: str) -> None:
