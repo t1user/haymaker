@@ -60,10 +60,7 @@ class AbstractState(ABC):
         }
 
         for awaitable in awaitables:
-            if asyncio.isfuture(awaitable):
-                tasks.add(awaitable)
-            else:
-                tasks.add(asyncio.ensure_future(awaitable))
+            tasks.add(asyncio.ensure_future(awaitable))
 
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
@@ -116,8 +113,6 @@ class ProbingState(AbstractState):
         self._broker_wait_requested = False
 
     async def handle(self) -> StateResult:
-        if self._broker_wait_requested:
-            return WaitingForBrokerState
 
         if not self.ib.isConnected():
             return ConnectingState
@@ -139,9 +134,6 @@ class ProbingState(AbstractState):
             if self.context._workload_task is None:
                 return StartingWorkloadState
             return ConnectedState
-
-        if not self.ib.isConnected():
-            return ConnectingState
 
         return RestartingState
 
@@ -175,7 +167,7 @@ class StartingWorkloadState(AbstractState):
 
 
 class ConnectedState(AbstractState):
-    """Wait for timeout, broker degradation, or workload completion."""
+    """Wait for timeout or broker degradation."""
 
     def __init__(self, context: ConnectionSupervisor) -> None:
         super().__init__(context)
