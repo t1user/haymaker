@@ -21,9 +21,10 @@ Sensible starting configurations are defined in default configuration files loca
 Connection Recovery
 ===================
 
-Live execution and the dataloader use a shared socket connection supervisor.
-It reconnects to the configured TWS or IB Gateway API endpoint but does not
-start, stop, or restart the gateway process.
+Live execution and the current managed dataloader path use the same socket
+connection supervisor package, with separate supervisor instances for separately
+owned sockets. The supervisor reconnects to the configured TWS or IB Gateway API
+endpoint but does not start, stop, or restart the gateway process.
 Each connection cycle verifies broker usability with a short historical-data
 probe before starting the supervised workload.
 

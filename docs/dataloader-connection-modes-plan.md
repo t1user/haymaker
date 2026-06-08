@@ -55,7 +55,7 @@ Managed mode is the standalone dataloader path.
 - Recovery behavior that used to be called `reconnect` or `wait` should be
   represented by supervisor decisions, especially whether broker recovery
   maintained or lost data.
-- The dataloader can stop its supervisor when the workload finishes.
+- Normal dataloader workload completion should let the supervisor stop itself.
 
 ### Attached
 

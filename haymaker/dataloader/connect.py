@@ -85,7 +85,7 @@ class DataloaderRuntime:
 
 @dataclass
 class DataloaderConnection:
-    """Run dataloader work under the shared IB connection supervisor.
+    """Run dataloader work under an owned managed IB connection supervisor.
 
     Args:
         ib: Interactive Brokers client used by the dataloader.

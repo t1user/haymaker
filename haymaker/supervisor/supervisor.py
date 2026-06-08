@@ -94,20 +94,27 @@ class ConnectionSettings:
 class ConnectionSupervisor:
     """Run one workload under an owned IB socket connection.
 
-    Public api:
+    Public API:
 
-        - ``run()`` start connection and run managed workload; owns
+        - ``run()`` starts connection and runs managed workload; it owns
           connection setup, workload execution, restart cycles, and
           final cleanup. It returns only after the supervisor reaches
           the stopped state, and it re-raises unexpected supervisor
           failures after cleanup.
 
-        - ``stop()`` sent a shutdown request.
+        - ``stop()`` sends a shutdown request; ``run()`` performs cleanup.
 
         - ``request_restart()`` asks the supervisor to interrupt the
           active state and run a reconnect/rebuild transition that
           stops active work, disconnects the owned socket, and
           reconnects immediately.
+
+    State-facing helpers such as ``start_workload()``,
+    ``cleanup_workload()``, ``has_workload``, and ``disconnect()`` are
+    part of the supervisor/state contract, not the external lifecycle
+    API. Use one supervisor for one owned IB socket. Attached
+    dataloader work should run without a supervisor because it must not
+    connect, disconnect, or restart an externally owned socket.
 
     The supervisor does not start, stop, or restart TWS/IB Gateway
     itself, and it does not know whether the workload is live trading
@@ -146,19 +153,15 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
-    @property
-    def stop_requested(self) -> bool:
-        """Return whether supervisor shutdown has been requested."""
-
-        return self._stop_requested.is_set()
-
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""
 
         try:
             while True:
                 transition = await self._run_state()
-                transition = self._prioritize_transition(transition)
+                lifecycle_transition = self._pending_lifecycle_transition()
+                if lifecycle_transition is not None:
+                    transition = lifecycle_transition
                 self._transition_to(transition)
         except StoppedError:
             return
@@ -224,17 +227,10 @@ class ConnectionSupervisor:
 
         if workload_task is not None and workload_task in done:
             await self._cancel_state_task(state_task)
-            await self._cleanup_workload()
+            await self.cleanup_workload()
             return StoppingState
 
         return state_task.result()
-
-    def _prioritize_transition(
-        self, proposed: type[AbstractState]
-    ) -> type[AbstractState]:
-        """Return pending lifecycle transition if it should override proposed."""
-
-        return self._pending_lifecycle_transition() or proposed
 
     def _pending_lifecycle_transition(self) -> type[AbstractState] | None:
         """Return a pending stop or restart transition in supervisor priority order."""
@@ -288,14 +284,14 @@ class ConnectionSupervisor:
         return self._state
 
     def stop(self) -> None:
-        """Request supervisor shutdown. Record supervisor shutdown intent."""
+        """Request supervisor shutdown; the run loop performs cleanup."""
 
         self._stop_requested.set()
 
     def request_restart(self, reason: str = "") -> None:
         """Request a reconnect/rebuild cycle."""
 
-        if self.stop_requested:
+        if self._stop_requested.is_set():
             log.debug("Restart ignored because stop is already pending.")
             return
         if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
@@ -355,7 +351,13 @@ class ConnectionSupervisor:
                 self.workload.start(), name="connection-supervisor-workload"
             )
 
-    async def _cleanup_workload(self, reason: str = "") -> None:
+    @property
+    def has_workload(self) -> bool:
+        """Return whether the supervisor currently tracks a workload task."""
+
+        return self._workload_task is not None
+
+    async def cleanup_workload(self, reason: str = "") -> None:
         """Stop active workload or collect its completed result."""
 
         task = self._workload_task

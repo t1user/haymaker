@@ -36,9 +36,10 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/app.py`: live application bootstrap, top-level `App.run()`, and `LiveRuntime`, which owns live workload startup/cleanup, the fixed daily contract-refresh restart timer, and futures-roll scheduling.
-- `haymaker/supervisor/`: shared IB socket supervisor package. It owns workload task
-  lifecycle, broker auto-recovery waits, probes, restart coalescing, and
-  reconnect retry pacing. It does not manage the gateway process.
+- `haymaker/supervisor/`: IB socket supervisor package for owned managed
+  connections. It owns workload task lifecycle, broker auto-recovery waits,
+  probes, restart coalescing, and reconnect retry pacing. It does not manage
+  the gateway process.
 - `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
 - `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
@@ -124,11 +125,12 @@ The research package is intentionally separate from live execution. It works dir
 ## External Integrations
 
 - Interactive Brokers TWS/Gateway through `ib_insync`.
-- Haymaker-owned `ConnectionSupervisor` for live and dataloader IB socket
-  recovery. TWS or IB Gateway process management is external. Broker message
-  codes are categorized into restart requests, broker-wait signals, and recovery
-  hints; broker-wait signals move the supervisor into broker recovery wait while
-  connected, while `timeoutEvent` and probes remain active health checks.
+- Haymaker-owned `ConnectionSupervisor` instances for live and current managed
+  dataloader IB socket recovery. TWS or IB Gateway process management is
+  external. Broker message codes are categorized into restart requests,
+  broker-wait signals, and recovery hints; broker-wait signals move the
+  supervisor into broker recovery wait while connected, while `timeoutEvent` and
+  probes remain active health checks.
   `updateEvent` or `1102` can trigger a recovery probe when traffic resumes
   during a broker-degraded wait.
 - MongoDB through `pymongo`.

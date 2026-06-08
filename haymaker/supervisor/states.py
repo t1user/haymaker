@@ -50,23 +50,24 @@ class AbstractState(ABC):
         self,
         *awaitables: Awaitable[Any] | asyncio.Future[Any],
     ) -> set[asyncio.Future[Any]]:
-        """Wait until this state is woken or one supplied awaitable completes."""
+        """Wait until this state is woken or supplied awaitables complete."""
 
-        tasks: set[asyncio.Future[Any]] = {
-            asyncio.create_task(
-                self.wakeup.wait(),
-                name="connection-supervisor-state-wakeup",
-            ),
+        wakeup_task = asyncio.create_task(
+            self.wakeup.wait(),
+            name="connection-supervisor-state-wakeup",
+        )
+        supplied_tasks: set[asyncio.Future[Any]] = {
+            asyncio.ensure_future(awaitable) for awaitable in awaitables
         }
-
-        for awaitable in awaitables:
-            tasks.add(asyncio.ensure_future(awaitable))
+        tasks: set[asyncio.Future[Any]] = {wakeup_task, *supplied_tasks}
 
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
-        return done
+        if wakeup_task in done:
+            wakeup_task.result()
+        return done & supplied_tasks
 
     def __str__(self) -> str:
         return self.__class__.__name__.upper()
@@ -113,7 +114,6 @@ class ProbingState(AbstractState):
         self._broker_wait_requested = False
 
     async def handle(self) -> StateResult:
-
         if not self.ib.isConnected():
             return ConnectingState
 
@@ -131,7 +131,7 @@ class ProbingState(AbstractState):
         probe_succeeded = probe_task.result()
 
         if probe_succeeded:
-            if self.context._workload_task is None:
+            if not self.context.has_workload:
                 return StartingWorkloadState
             return ConnectedState
 
@@ -237,7 +237,7 @@ class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
     async def handle(self) -> StateResult:
-        await self.context._cleanup_workload("restart requested")
+        await self.context.cleanup_workload("restart requested")
         self.context.disconnect()
         return ConnectingState
 
@@ -247,7 +247,7 @@ class StoppingState(AbstractState):
 
     async def handle(self) -> StateResult:
         self.context.stop()
-        await self.context._cleanup_workload("supervisor stopped")
+        await self.context.cleanup_workload("supervisor stopped")
         self.context.disconnect()
         return StoppedState
 

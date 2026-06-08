@@ -7,9 +7,10 @@ Interactive Brokers imposes strict throttling on historical data downloads.While
 Connection Recovery
 ===================
 
-The dataloader uses the same Interactive Brokers socket connection supervisor
-as live execution. The supervisor reconnects the API client but does not manage
-or restart the TWS or IB Gateway process.
+The current managed dataloader path uses the same Interactive Brokers socket
+connection supervisor package as live execution, but with its own supervisor
+instance and owned socket. The supervisor reconnects the API client but does not
+manage or restart the TWS or IB Gateway process.
 
 The ``run_mode`` configuration option accepts:
 
