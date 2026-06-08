@@ -50,6 +50,8 @@ read from a flat mapping.
 
 See :doc:`ib_message_codes` for the broker message codes most relevant to
 connection recovery and logging.
+See :doc:`supervisor` for the supervisor lifecycle, workload contract, and state
+transition chart.
 
 Contract details are refreshed during successful live startup. Live runtime
 also schedules a fixed daily restart request so normal socket recovery cannot

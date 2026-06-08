@@ -12,6 +12,7 @@ Haymaker Documentation
    installation
    configuration
    logging
+   supervisor
    ib_message_codes
    execution
    dataloader

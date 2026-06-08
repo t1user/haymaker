@@ -122,6 +122,10 @@ class ConnectionSupervisor:
     requests, broker-recovery wait signals, or recovery hints;
     non-restart messages are interpreted immediately by the active
     state.
+
+    States return their proposed next state, but supervisor-owned
+    lifecycle requests keep final priority: stop overrides restart, and
+    restart is ignored once restart or shutdown cleanup is active.
     """
 
     ib: ibi.IB
