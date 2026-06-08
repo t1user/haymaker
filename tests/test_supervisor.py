@@ -352,13 +352,16 @@ async def test_broker_wait_message_overrides_pending_timeout_probe() -> None:
 
     assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
 
+    fake_ib.probe_delays = [60]
     fake_ib.timeoutEvent.emit(20)
+    assert await wait_for_condition(lambda: fake_ib.probe_count == 2)
+
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
 
     assert await wait_for_condition(
         lambda: current_state(supervisor) is WaitingForBrokerState
     )
-    assert fake_ib.probe_count == 1
+    assert fake_ib.probe_count == 2
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
 

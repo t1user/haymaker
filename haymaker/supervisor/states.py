@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, TypeAlias
 
@@ -44,6 +45,34 @@ class AbstractState(ABC):
 
     def on_broker_message(self, code: int, message: str) -> None:
         """Handle a broker message while this state is active."""
+
+    async def wait_for_wakeup_or(
+        self,
+        *awaitables: Awaitable[Any] | asyncio.Future[Any],
+        preserve_pending: set[asyncio.Future[Any]] | None = None,
+    ) -> set[asyncio.Future[Any]]:
+        """Wait until this state is woken or one supplied awaitable completes."""
+
+        preserve_pending = preserve_pending or set()
+        tasks: set[asyncio.Future[Any]] = {
+            asyncio.create_task(
+                self.wakeup.wait(),
+                name="connection-supervisor-state-wakeup",
+            ),
+        }
+
+        for awaitable in awaitables:
+            if asyncio.isfuture(awaitable):
+                tasks.add(awaitable)
+            else:
+                tasks.add(asyncio.ensure_future(awaitable))
+
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        waiters = [task for task in pending if task not in preserve_pending]
+        for task in waiters:
+            task.cancel()
+        await asyncio.gather(*waiters, return_exceptions=True)
+        return done
 
     def __str__(self) -> str:
         return self.__class__.__name__.upper()
@@ -96,10 +125,18 @@ class ProbingState(AbstractState):
         if not self.ib.isConnected():
             return ConnectingState
 
-        probe_succeeded = await self._probe()
+        probe_task = asyncio.create_task(
+            self._probe(), name="connection-supervisor-probe"
+        )
+        done = await self.wait_for_wakeup_or(probe_task)
 
         if self._broker_wait_requested:
             return WaitingForBrokerState
+
+        if probe_task not in done:
+            return ProbingState
+
+        probe_succeeded = probe_task.result()
 
         if probe_succeeded:
             if self.context._workload_task is None:
@@ -182,21 +219,14 @@ class ConnectedState(AbstractState):
     async def _wait_for_activity(self) -> set[asyncio.Future[Any]]:
         """Wait until connected-state work needs supervisor attention."""
 
-        tasks: set[asyncio.Future[Any]] = {
-            asyncio.create_task(
-                self.wakeup.wait(),
-                name="connection-supervisor-state-wakeup",
-            ),
-        }
+        workload_tasks: set[asyncio.Future[Any]] = set()
         if self.context._workload_task is not None:
-            tasks.add(self.context._workload_task)
+            workload_tasks.add(self.context._workload_task)
 
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        waiters = [task for task in pending if task is not self.context._workload_task]
-        for task in waiters:
-            task.cancel()
-        await asyncio.gather(*waiters, return_exceptions=True)
-        return done
+        return await self.wait_for_wakeup_or(
+            *workload_tasks,
+            preserve_pending=workload_tasks,
+        )
 
     def _workload_completed(self, done: set[asyncio.Future[Any]]) -> bool:
         """Return whether the supervised workload task finished."""
@@ -242,25 +272,15 @@ class WaitingForBrokerState(AbstractState):
     async def _wait_for_recovery_signal(self) -> set[asyncio.Future[Any]]:
         """Wait for broker recovery, timeout, or workload completion."""
 
-        tasks: set[asyncio.Future[Any]] = {
-            asyncio.create_task(
-                self.wakeup.wait(),
-                name="connection-supervisor-state-wakeup",
-            ),
-            asyncio.create_task(
-                asyncio.sleep(self.settings.auto_recovery_grace_period),
-                name="connection-supervisor-auto-recovery-wait",
-            ),
-        }
+        workload_tasks: set[asyncio.Future[Any]] = set()
         if self.context._workload_task is not None:
-            tasks.add(self.context._workload_task)
+            workload_tasks.add(self.context._workload_task)
 
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        waiters = [task for task in pending if task is not self.context._workload_task]
-        for task in waiters:
-            task.cancel()
-        await asyncio.gather(*waiters, return_exceptions=True)
-        return done
+        return await self.wait_for_wakeup_or(
+            asyncio.sleep(self.settings.auto_recovery_grace_period),
+            *workload_tasks,
+            preserve_pending=workload_tasks,
+        )
 
     def _workload_completed(self, done: set[asyncio.Future[Any]]) -> bool:
         """Return whether the supervised workload task finished while waiting."""
