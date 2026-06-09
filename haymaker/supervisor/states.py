@@ -61,7 +61,16 @@ class AbstractState(ABC):
         }
         tasks: set[asyncio.Future[Any]] = {wakeup_task, *supplied_tasks}
 
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        try:
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)

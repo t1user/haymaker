@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any, Protocol
@@ -34,6 +33,44 @@ class SupervisorWorkload(Protocol):
 
     async def stop(self, reason: str) -> None:
         """Release active work before the supervisor reconnects or exits."""
+
+
+class RequestWaiters:
+    """Own per-race request waiter tasks for supervisor lifecycle events."""
+
+    def __init__(self, events: Mapping[str, asyncio.Event]) -> None:
+        """Create waiters for the supplied lifecycle events.
+
+        Args:
+            events: Mapping from task-name suffix to the event to wait for.
+        """
+
+        self._events = events
+        self.tasks: set[asyncio.Task[bool]] = set()
+
+    async def __aenter__(self) -> set[asyncio.Task[bool]]:
+        """Create event waiter tasks for the current supervisor race."""
+
+        self.tasks = {
+            asyncio.create_task(
+                event.wait(),
+                name=f"connection-supervisor-{name}-request",
+            )
+            for name, event in self._events.items()
+        }
+        return self.tasks
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        """Cancel any request waiters that did not win the race."""
+
+        for task in self.tasks:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
 
 
 @dataclass(frozen=True)
@@ -158,36 +195,28 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
-    @staticmethod
-    def _create_task(event: asyncio.Event) -> asyncio.Task[bool]:
-        return asyncio.create_task(event.wait(), name="connection-supervisor-request")
+    def _request_waiters(self) -> RequestWaiters:
+        """Return request waiters enabled for the active supervisor state."""
 
-    @contextmanager
-    def _request_handler(self) -> Generator[set[asyncio.Task], Any, Any]:
-        try:
-            output = {}
+        if isinstance(self._state, RestartingState):
+            return RequestWaiters({"stop": self._stop_requested})
 
-            if isinstance(self._state, RestartingState):
-                output = {self._stop_requested}
-            elif isinstance(self._state, (StoppingState, StoppedState)):
-                output = set()
-            else:
-                output = {self._stop_requested, self._restart_requested}
+        if isinstance(self._state, (StoppingState, StoppedState)):
+            return RequestWaiters({})
 
-            yield {self._create_task(item) for item in output}
-
-        except Exception as e:
-            log.exception(e)
-            raise
-        finally:
-            # so tell me smartass codex what kind of cleanup you see here
+        return RequestWaiters(
+            {
+                "stop": self._stop_requested,
+                "restart": self._restart_requested,
+            }
+        )
 
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""
 
         try:
             while True:
-                with self._request_handler() as request_waiters:
+                async with self._request_waiters() as request_waiters:
                     transition = await self._run_state(request_waiters)
                 self._transition_to(transition)
         except StoppedError:
@@ -211,7 +240,7 @@ class ConnectionSupervisor:
             name="connection-supervisor-state",
         )
         wait_tasks: set[asyncio.Future[Any]] = {state_task, *waiter_tasks}
-        workload_task = self._workload_task
+        workload_task = self._workload_completion_task()
         if workload_task is not None:
             wait_tasks.add(workload_task)
 
@@ -222,10 +251,6 @@ class ConnectionSupervisor:
         except BaseException:
             await self._cancel_state_task(state_task)
             raise
-        finally:
-            for task in waiter_tasks:
-                task.cancel()
-            await asyncio.gather(*waiter_tasks, return_exceptions=True)
 
         lifecycle_transition = self._pending_lifecycle_transition()
         if lifecycle_transition is not None:
@@ -243,6 +268,14 @@ class ConnectionSupervisor:
             return StoppingState
 
         return state_task.result()
+
+    def _workload_completion_task(self) -> asyncio.Task[None] | None:
+        """Return the workload task when it can independently stop supervision."""
+
+        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+            return None
+
+        return self._workload_task
 
     def _pending_lifecycle_transition(self) -> type[AbstractState] | None:
         """Return a pending stop or restart transition in supervisor priority order."""
