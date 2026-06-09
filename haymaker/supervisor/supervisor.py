@@ -321,8 +321,8 @@ class ConnectionSupervisor:
         if self._stop_requested.is_set():
             log.debug("Restart ignored because stop is already pending.")
             return
-        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
-            log.debug("Restart ignored because lifecycle cleanup is already active.")
+        if not self._state.interrupt_on_restart:
+            log.debug("Restart ignored because active state cannot be restarted.")
             return
         restart_reason = reason or "restart requested"
         log.debug(f"Restart requested: {restart_reason}")

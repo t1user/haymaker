@@ -9,7 +9,9 @@ from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
 from haymaker.supervisor.states import (
     AbstractState,
     ConnectedState,
+    RestartingState,
     StoppedState,
+    StoppingState,
     WaitingForBrokerState,
 )
 
@@ -105,6 +107,26 @@ class FakeWorkload:
             self._release.set()
 
 
+class RestartAfterHandleState(AbstractState):
+    """State that requests restart before returning a normal transition."""
+
+    async def handle(self) -> type[AbstractState]:
+        """Request restart during state handling."""
+
+        self.context.request_restart("late restart")
+        return ConnectedState
+
+
+class StopAfterHandleState(AbstractState):
+    """State that requests stop before returning a normal transition."""
+
+    async def handle(self) -> type[AbstractState]:
+        """Request stop during state handling."""
+
+        self.context.stop()
+        return ConnectedState
+
+
 def make_supervisor(
     fake_ib: FakeIB,
     workload: FakeWorkload | None = None,
@@ -150,10 +172,10 @@ async def test_run_connects_probes_and_starts_workload() -> None:
     task = asyncio.create_task(supervisor.run())
 
     assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+    assert await wait_for_condition(lambda: fake_ib.timeouts == [20])
     assert workload.starts == 1
     assert fake_ib.connect_attempts == 1
     assert fake_ib.probe_count == 1
-    assert fake_ib.timeouts == [20]
 
     await stop_and_wait(supervisor, task)
 
@@ -214,6 +236,29 @@ async def test_duplicate_restart_requests_coalesce() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pending_restart_overrides_state_transition() -> None:
+    fake_ib = FakeIB()
+    supervisor = make_supervisor(fake_ib)
+    supervisor._state = RestartAfterHandleState(supervisor)
+
+    transition = await supervisor._run_state()
+
+    assert transition is RestartingState
+    assert not supervisor._restart_requested.is_set()
+
+
+@pytest.mark.asyncio
+async def test_pending_stop_overrides_state_transition() -> None:
+    fake_ib = FakeIB()
+    supervisor = make_supervisor(fake_ib)
+    supervisor._state = StopAfterHandleState(supervisor)
+
+    transition = await supervisor._run_state()
+
+    assert transition is StoppingState
+
+
+@pytest.mark.asyncio
 async def test_stop_request_overrides_pending_restart() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
@@ -246,6 +291,8 @@ async def test_stop_during_restart_cleanup_prevents_reconnect() -> None:
 
     supervisor.request_restart("manual restart")
     await asyncio.wait_for(workload.stop_started.wait(), timeout=1)
+    supervisor.request_restart("ignored during restart cleanup")
+    assert not supervisor._restart_requested.is_set()
     supervisor.stop()
 
     await asyncio.sleep(0.05)

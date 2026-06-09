@@ -92,8 +92,9 @@ The chart shows the regular lifecycle flow as solid green arrows, with
 alternative recovery and shutdown paths shown as dashed blue, red, and purple
 arrows. Arrow labels name the condition that causes each transition. The purple
 stop paths are representative rather than exhaustive; ``stop()`` can interrupt
-any active state. The broker-code lists are kept in the prose around the chart
-so the picture stays readable.
+active states except restart cleanup, where it is applied after cleanup
+finishes. The broker-code lists are kept in the prose around the chart so the
+picture stays readable.
 
 Priority Rules
 ==============
