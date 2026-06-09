@@ -99,8 +99,8 @@ Priority Rules
 ==============
 
 ``stop()`` has the highest priority. If a stop request arrives while restart
-cleanup is running, the supervisor finishes that cleanup and goes to
-``Stopping`` instead of reconnecting.
+cleanup is running, the supervisor finishes that cleanup without cancelling it
+and goes to ``Stopping`` instead of reconnecting.
 
 Restart requests coalesce. Multiple restart requests before the rebuild cycle
 are handled as one restart, and restart requests are ignored once

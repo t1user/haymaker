@@ -288,7 +288,11 @@ class ConnectionSupervisor:
         async with self._state_race() as race:
             transition = await race.wait()
 
-        if self._restart_requested.is_set() and not issubclass(
+        if self._stop_requested.is_set() and not issubclass(
+            transition, (StoppingState, StoppedState)
+        ):
+            transition = StoppingState
+        elif self._restart_requested.is_set() and not issubclass(
             transition, (StoppingState, StoppedState)
         ):
             transition = RestartingState

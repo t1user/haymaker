@@ -247,6 +247,12 @@ async def test_stop_during_restart_cleanup_prevents_reconnect() -> None:
     supervisor.request_restart("manual restart")
     await asyncio.wait_for(workload.stop_started.wait(), timeout=1)
     supervisor.stop()
+
+    await asyncio.sleep(0.05)
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.disconnect_count == 0
+    assert not task.done()
+
     workload.release_stop.set()
 
     await asyncio.wait_for(task, timeout=1)
