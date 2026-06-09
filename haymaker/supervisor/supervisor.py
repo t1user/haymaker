@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import ib_insync as ibi
 
@@ -35,30 +35,52 @@ class SupervisorWorkload(Protocol):
         """Release active work before the supervisor reconnects or exits."""
 
 
-class RequestWaiters:
-    """Own per-race request waiter tasks for supervisor lifecycle events."""
+@dataclass(frozen=True)
+class RaceResult:
+    """Result of racing one supervisor state against interrupt sources."""
 
-    def __init__(self, events: Mapping[str, asyncio.Event]) -> None:
-        """Create waiters for the supplied lifecycle events.
+    kind: Literal["state", "stop", "restart", "workload"]
+    transition: type[AbstractState] | None = None
+
+
+class SupervisorRace:
+    """Own per-state race tasks and classify the winning interrupt source."""
+
+    def __init__(
+        self,
+        state: AbstractState,
+        requests: Mapping[str, asyncio.Event],
+        workload_task: asyncio.Task[None] | None,
+    ) -> None:
+        """Configure the active supervisor race.
 
         Args:
-            events: Mapping from task-name suffix to the event to wait for.
+            state: State whose handler is being run.
+            requests: Lifecycle request events enabled for this state.
+            workload_task: Workload task when completion can stop supervision.
         """
 
-        self._events = events
-        self.tasks: set[asyncio.Task[bool]] = set()
+        self._state = state
+        self._requests = requests
+        self._workload_task = workload_task
+        self._state_task: asyncio.Task[type[AbstractState]] | None = None
+        self._request_tasks: dict[str, asyncio.Task[bool]] = {}
 
-    async def __aenter__(self) -> set[asyncio.Task[bool]]:
-        """Create event waiter tasks for the current supervisor race."""
+    async def __aenter__(self) -> SupervisorRace:
+        """Create tasks participating in the current supervisor race."""
 
-        self.tasks = {
-            asyncio.create_task(
+        self._state_task = asyncio.create_task(
+            self._state.handle(),
+            name="connection-supervisor-state",
+        )
+        self._request_tasks = {
+            name: asyncio.create_task(
                 event.wait(),
                 name=f"connection-supervisor-{name}-request",
             )
-            for name, event in self._events.items()
+            for name, event in self._requests.items()
         }
-        return self.tasks
+        return self
 
     async def __aexit__(
         self,
@@ -66,11 +88,47 @@ class RequestWaiters:
         exc: BaseException | None,
         traceback: object | None,
     ) -> None:
-        """Cancel any request waiters that did not win the race."""
+        """Cancel tasks that did not win the race."""
 
-        for task in self.tasks:
+        tasks: list[asyncio.Task[Any]] = [*self._request_tasks.values()]
+        if self._state_task is not None:
+            tasks.append(self._state_task)
+
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def wait(self) -> RaceResult:
+        """Wait for the first active task and return the winning source."""
+
+        if self._state_task is None:
+            raise RuntimeError("SupervisorRace must be entered before waiting.")
+
+        tasks: set[asyncio.Future[Any]] = {
+            self._state_task,
+            *self._request_tasks.values(),
+        }
+        if self._workload_task is not None:
+            tasks.add(self._workload_task)
+
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+        if self._request_tasks.get("stop") in done:
+            return RaceResult("stop")
+
+        if self._request_tasks.get("restart") in done:
+            return RaceResult("restart")
+
+        if self._state_task in done and (
+            self._state_task.cancelled()
+            or self._state_task.exception() is not None
+        ):
+            return RaceResult("state", self._state_task.result())
+
+        if self._workload_task is not None and self._workload_task in done:
+            return RaceResult("workload")
+
+        return RaceResult("state", self._state_task.result())
 
 
 @dataclass(frozen=True)
@@ -195,20 +253,22 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
-    def _request_waiters(self) -> RequestWaiters:
-        """Return request waiters enabled for the active supervisor state."""
+    def _state_race(self) -> SupervisorRace:
+        """Return the race configuration enabled for the active state."""
 
         if isinstance(self._state, RestartingState):
-            return RequestWaiters({"stop": self._stop_requested})
+            return SupervisorRace(self._state, {"stop": self._stop_requested}, None)
 
         if isinstance(self._state, (StoppingState, StoppedState)):
-            return RequestWaiters({})
+            return SupervisorRace(self._state, {}, None)
 
-        return RequestWaiters(
+        return SupervisorRace(
+            self._state,
             {
                 "stop": self._stop_requested,
                 "restart": self._restart_requested,
-            }
+            },
+            self._workload_task,
         )
 
     async def run(self) -> None:
@@ -216,8 +276,7 @@ class ConnectionSupervisor:
 
         try:
             while True:
-                async with self._request_waiters() as request_waiters:
-                    transition = await self._run_state(request_waiters)
+                transition = await self._run_state()
                 self._transition_to(transition)
         except StoppedError:
             return
@@ -230,92 +289,27 @@ class ConnectionSupervisor:
             await self._cleanup()
             raise
 
-    async def _run_state(
-        self, waiter_tasks: set[asyncio.Task[bool]]
-    ) -> type[AbstractState]:
+    async def _run_state(self) -> type[AbstractState]:
         """Race state work against supervisor-owned lifecycle events."""
 
-        state_task = asyncio.create_task(
-            self._state.handle(),
-            name="connection-supervisor-state",
-        )
-        wait_tasks: set[asyncio.Future[Any]] = {state_task, *waiter_tasks}
-        workload_task = self._workload_completion_task()
-        if workload_task is not None:
-            wait_tasks.add(workload_task)
+        async with self._state_race() as race:
+            result = await race.wait()
 
-        try:
-            done, _ = await asyncio.wait(
-                wait_tasks, return_when=asyncio.FIRST_COMPLETED
-            )
-        except BaseException:
-            await self._cancel_state_task(state_task)
-            raise
-
-        lifecycle_transition = self._pending_lifecycle_transition()
-        if lifecycle_transition is not None:
-            await self._cancel_state_task(state_task)
-            return lifecycle_transition
-
-        if state_task in done and (
-            state_task.cancelled() or state_task.exception() is not None
-        ):
-            return state_task.result()
-
-        if workload_task is not None and workload_task in done:
-            await self._cancel_state_task(state_task)
-            await self.cleanup_workload()
-            return StoppingState
-
-        return state_task.result()
-
-    def _workload_completion_task(self) -> asyncio.Task[None] | None:
-        """Return the workload task when it can independently stop supervision."""
-
-        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
-            return None
-
-        return self._workload_task
-
-    def _pending_lifecycle_transition(self) -> type[AbstractState] | None:
-        """Return a pending stop or restart transition in supervisor priority order."""
-
-        if self._stop_requested.is_set() and not isinstance(
-            self._state, (StoppingState, StoppedState)
-        ):
+        if result.kind == "stop":
             self._restart_requested.clear()
             return StoppingState
 
-        if self._restart_requested.is_set() and not isinstance(
-            self._state, (RestartingState, StoppingState, StoppedState)
-        ):
+        if result.kind == "restart":
             self._restart_requested.clear()
             return RestartingState
 
-        return None
+        if result.kind == "workload":
+            await self.cleanup_workload()
+            return StoppingState
 
-    async def _cancel_state_task(
-        self, state_task: asyncio.Task[type[AbstractState]]
-    ) -> None:
-        """Cancel active state work after a supervisor lifecycle interruption."""
-
-        if state_task.done():
-            try:
-                state_task.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                log.debug(
-                    "Interrupted state task failed while being cancelled.",
-                    exc_info=True,
-                )
-            return
-
-        state_task.cancel()
-        try:
-            await state_task
-        except asyncio.CancelledError:
-            pass
+        if result.transition is None:
+            raise RuntimeError("State race result did not include a transition.")
+        return result.transition
 
     def _transition_to(self, next_state: type[AbstractState]) -> AbstractState:
         """Transition to a new state class and return the state instance."""
