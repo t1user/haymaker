@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any, Protocol
@@ -157,15 +158,37 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
+    @staticmethod
+    def _create_task(event: asyncio.Event) -> asyncio.Task[bool]:
+        return asyncio.create_task(event.wait(), name="connection-supervisor-request")
+
+    @contextmanager
+    def _request_handler(self) -> Generator[set[asyncio.Task], Any, Any]:
+        try:
+            output = {}
+
+            if isinstance(self._state, RestartingState):
+                output = {self._stop_requested}
+            elif isinstance(self._state, (StoppingState, StoppedState)):
+                output = set()
+            else:
+                output = {self._stop_requested, self._restart_requested}
+
+            yield {self._create_task(item) for item in output}
+
+        except Exception as e:
+            log.exception(e)
+            raise
+        finally:
+            # so tell me smartass codex what kind of cleanup you see here
+
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""
 
         try:
             while True:
-                transition = await self._run_state()
-                lifecycle_transition = self._pending_lifecycle_transition()
-                if lifecycle_transition is not None:
-                    transition = lifecycle_transition
+                with self._request_handler() as request_waiters:
+                    transition = await self._run_state(request_waiters)
                 self._transition_to(transition)
         except StoppedError:
             return
@@ -178,30 +201,15 @@ class ConnectionSupervisor:
             await self._cleanup()
             raise
 
-    async def _run_state(self) -> type[AbstractState]:
-        """Run the current state, interrupting ordinary work for lifecycle events."""
-
-        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
-            return await self._state.handle()
-
-        return await self._run_interruptible_state()
-
-    async def _run_interruptible_state(self) -> type[AbstractState]:
+    async def _run_state(
+        self, waiter_tasks: set[asyncio.Task[bool]]
+    ) -> type[AbstractState]:
         """Race state work against supervisor-owned lifecycle events."""
 
         state_task = asyncio.create_task(
             self._state.handle(),
             name="connection-supervisor-state",
         )
-        stop_task = asyncio.create_task(
-            self._stop_requested.wait(),
-            name="connection-supervisor-stop-request",
-        )
-        restart_task = asyncio.create_task(
-            self._restart_requested.wait(),
-            name="connection-supervisor-restart-request",
-        )
-        waiter_tasks = {stop_task, restart_task}
         wait_tasks: set[asyncio.Future[Any]] = {state_task, *waiter_tasks}
         workload_task = self._workload_task
         if workload_task is not None:
