@@ -248,20 +248,21 @@ class ConnectionSupervisor:
     def _state_race(self) -> SupervisorRace:
         """Return the race configuration enabled for the active state."""
 
-        if isinstance(self._state, RestartingState):
-            return SupervisorRace(self._state, {"stop": self._stop_requested}, None)
+        requests = {}
+        if self._state.interrupt_on_stop:
+            requests["stop"] = self._stop_requested
+        if self._state.interrupt_on_restart:
+            requests["restart"] = self._restart_requested
 
-        if isinstance(self._state, (StoppingState, StoppedState)):
-            return SupervisorRace(self._state, {}, None)
+        return SupervisorRace(self._state, requests, self._external_workload_task())
 
-        return SupervisorRace(
-            self._state,
-            {
-                "stop": self._stop_requested,
-                "restart": self._restart_requested,
-            },
-            self._workload_task,
-        )
+    def _external_workload_task(self) -> asyncio.Task[None] | None:
+        """Return workload task only when completion is independent of cleanup."""
+
+        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+            return None
+
+        return self._workload_task
 
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""

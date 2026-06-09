@@ -27,6 +27,9 @@ class StoppedError(Exception):
 class AbstractState(ABC):
     """Base class for connection supervisor states."""
 
+    interrupt_on_stop = True
+    interrupt_on_restart = True
+
     def __init__(self, context: ConnectionSupervisor) -> None:
         self.context = context
         self.settings = context.settings
@@ -245,6 +248,8 @@ class WaitingForBrokerState(AbstractState):
 class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
+    interrupt_on_restart = False
+
     async def handle(self) -> StateResult:
         await self.context.cleanup_workload("restart requested")
         self.context.disconnect()
@@ -253,6 +258,9 @@ class RestartingState(AbstractState):
 
 class StoppingState(AbstractState):
     """Final cleanup for supervisor shutdown."""
+
+    interrupt_on_stop = False
+    interrupt_on_restart = False
 
     async def handle(self) -> StateResult:
         self.context.stop()
@@ -263,6 +271,9 @@ class StoppingState(AbstractState):
 
 class StoppedState(AbstractState):
     """Terminal stopped state."""
+
+    interrupt_on_stop = False
+    interrupt_on_restart = False
 
     async def handle(self) -> StateResult:
         raise StoppedError
