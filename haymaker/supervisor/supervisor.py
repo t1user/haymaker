@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 import ib_insync as ibi
 
@@ -33,14 +33,6 @@ class SupervisorWorkload(Protocol):
 
     async def stop(self, reason: str) -> None:
         """Release active work before the supervisor reconnects or exits."""
-
-
-@dataclass(frozen=True)
-class RaceResult:
-    """Result of racing one supervisor state against interrupt sources."""
-
-    kind: Literal["state", "stop", "restart", "workload"]
-    transition: type[AbstractState] | None = None
 
 
 class SupervisorRace:
@@ -98,8 +90,8 @@ class SupervisorRace:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def wait(self) -> RaceResult:
-        """Wait for the first active task and return the winning source."""
+    async def wait(self) -> type[AbstractState]:
+        """Wait for the first active task and return the proposed next state."""
 
         if self._state_task is None:
             raise RuntimeError("SupervisorRace must be entered before waiting.")
@@ -114,21 +106,21 @@ class SupervisorRace:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
         if self._request_tasks.get("stop") in done:
-            return RaceResult("stop")
+            return StoppingState
 
         if self._request_tasks.get("restart") in done:
-            return RaceResult("restart")
+            return RestartingState
 
         if self._state_task in done and (
             self._state_task.cancelled()
             or self._state_task.exception() is not None
         ):
-            return RaceResult("state", self._state_task.result())
+            return self._state_task.result()
 
         if self._workload_task is not None and self._workload_task in done:
-            return RaceResult("workload")
+            return StoppingState
 
-        return RaceResult("state", self._state_task.result())
+        return self._state_task.result()
 
 
 @dataclass(frozen=True)
@@ -293,23 +285,14 @@ class ConnectionSupervisor:
         """Race state work against supervisor-owned lifecycle events."""
 
         async with self._state_race() as race:
-            result = await race.wait()
+            transition = await race.wait()
 
-        if result.kind == "stop":
-            self._restart_requested.clear()
-            return StoppingState
-
-        if result.kind == "restart":
-            self._restart_requested.clear()
-            return RestartingState
-
-        if result.kind == "workload":
-            await self.cleanup_workload()
-            return StoppingState
-
-        if result.transition is None:
-            raise RuntimeError("State race result did not include a transition.")
-        return result.transition
+        if self._restart_requested.is_set() and not issubclass(
+            transition, (StoppingState, StoppedState)
+        ):
+            transition = RestartingState
+        self._restart_requested.clear()
+        return transition
 
     def _transition_to(self, next_state: type[AbstractState]) -> AbstractState:
         """Transition to a new state class and return the state instance."""
