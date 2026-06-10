@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
-import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import count
 from unittest.mock import patch
 
 import ib_insync as ibi
@@ -17,6 +17,8 @@ from haymaker.execution_models import (
     EventDrivenExecModel,
     OrderKey,
 )
+
+COUNTER = count().__next__
 
 
 def test_AbstraExecModel_is_abstract(controller: Controller):
@@ -133,7 +135,7 @@ def objects(Atom) -> tuple:
         """
 
         def trade(self, contract, order) -> ibi.Trade:
-            order.orderId = random.randint(1, 100)
+            order.orderId = COUNTER()
             trade_object = ibi.Trade(order=order, contract=contract)
             fill = ibi.Fill(
                 contract,
