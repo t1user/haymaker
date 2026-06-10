@@ -5,6 +5,21 @@ import pytest
 from haymaker import databases
 
 
+def test_real_mongo_client_blocked_by_default():
+    """Verify the global pytest guard blocks accidental real Mongo access.
+
+    Ordinary tests should see an immediate assertion with instructions to use
+    mocks, ``mongomock``, or ``@pytest.mark.mongo`` instead of attempting a
+    networked database connection.
+    """
+    databases.get_mongo_client.cache_clear()
+    try:
+        with pytest.raises(AssertionError, match="real MongoDB"):
+            databases.get_mongo_client()
+    finally:
+        databases.get_mongo_client.cache_clear()
+
+
 def test_get_mongo_client_uses_public_mongo_client_symbol(monkeypatch):
     """Verify that client construction goes through the public MongoClient import."""
     client = MagicMock()
