@@ -198,11 +198,11 @@ class ConnectionSettings:
     host: str = "127.0.0.1"
     port: int = 4002
     client_id: int = 0
-    connect_timeout: float = 2
-    retry_delay: float = 2
-    app_timeout: float = 20
+    connect_timeout: float = 15
+    retry_delay: float = 30
+    app_timeout: float = 90
     probe_contract: ibi.Contract = field(default_factory=lambda: ibi.Forex("EURUSD"))
-    probe_timeout: float = 4
+    probe_timeout: float = 15
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
 
@@ -328,7 +328,7 @@ class ConnectionSupervisor:
 
         if next_state != type(self._state):
             log.debug(
-                f"Supervisor transition: {type(self._state).__name__} -> "
+                f"{self.__class__.__name__}: {type(self._state).__name__} -> "
                 f"{next_state.__name__}"
             )
         self._state = next_state(self)

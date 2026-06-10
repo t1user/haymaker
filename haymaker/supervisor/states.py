@@ -255,7 +255,6 @@ class StoppingState(AbstractState):
     """Final cleanup for supervisor shutdown."""
 
     async def handle(self) -> StateResult:
-        self.context.stop()
         await self.context.cleanup_workload("supervisor stopped")
         self.context.disconnect()
         return StoppedState
