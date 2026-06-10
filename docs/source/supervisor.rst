@@ -66,6 +66,15 @@ work and return a proposed next state. The supervisor owns lifecycle priority:
 ``stop()`` wins over restart, and restart requests are ignored while restart or
 shutdown cleanup is already active.
 
+The run loop evaluates each state through a supervisor race. The race waits for
+the state's ``handle()`` task together with the lifecycle request events and
+workload task that are meaningful for the active state. This is needed because
+service interruptions are independent of normal state progress: broker messages,
+unexpected socket disconnects, explicit shutdown, and workload completion can
+arrive while a state is blocked in broker I/O, a retry sleep, or a state-local
+wait. The first completed task wakes the supervisor, then the race applies the
+central priority rules and returns the next state.
+
 Broker messages are grouped into three categories:
 
 * restart requests, such as ``1101`` and ``1300``;
@@ -84,7 +93,7 @@ detect stale subscriptions later.
 State Transition Chart
 ======================
 
-.. image:: _static/supervisor-state-transitions.svg
+.. image:: _static/_supervisor-state-transitions.svg
    :alt: ConnectionSupervisor state transition chart
    :align: center
 

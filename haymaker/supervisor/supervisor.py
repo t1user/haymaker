@@ -36,7 +36,19 @@ class SupervisorWorkload(Protocol):
 
 
 class SupervisorRace:
-    """Own per-state race tasks and choose the next supervisor state."""
+    """Race state work against service-interruption signals.
+
+    State handlers often wait on broker I/O, sleeps, or state-local wakeups, but
+    service interruptions arrive through independent signals: explicit stop
+    requests, restart requests from broker events, and workload completion. The
+    race gives those signals one centralized policy point instead of spreading
+    interruption checks across states and event handlers.
+
+    Each run creates a task for ``state.handle()`` plus the request waiters and
+    workload task that are meaningful for the active state. The first completed
+    task wins; request events are then prioritized over normal state completion,
+    with stop taking precedence over restart.
+    """
 
     def __init__(
         self,

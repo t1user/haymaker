@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-06-04.
+Last updated: 2026-06-10.
 
 ## High-Level Purpose
 
@@ -38,8 +38,9 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/app.py`: live application bootstrap, top-level `App.run()`, and `LiveRuntime`, which owns live workload startup/cleanup, the fixed daily contract-refresh restart timer, and futures-roll scheduling.
 - `haymaker/supervisor/`: IB socket supervisor package for owned managed
   connections. It owns workload task lifecycle, broker auto-recovery waits,
-  probes, restart coalescing, and reconnect retry pacing. It does not manage
-  the gateway process.
+  probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
+  each state through a race between state completion, lifecycle requests, and
+  workload completion. It does not manage the gateway process.
 - `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
 - `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
