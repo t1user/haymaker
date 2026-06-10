@@ -42,8 +42,8 @@ class LiveRuntime:
 
     CONTRACT_REFRESH_INTERVAL: ClassVar[int] = 24 * 60 * 60
 
-    jobs: Jobs = JOBS
-    controller: "Controller" = CONTROLLER
+    jobs: Jobs = field(default_factory=lambda: JOBS)
+    controller: "Controller" = field(default_factory=lambda: CONTROLLER)
     future_roll_time: tuple[int, int] = (10, 0)
     future_roll_timezone: str = "America/New_York"
     no_future_roll_strategies: list[str] = field(default_factory=list)
