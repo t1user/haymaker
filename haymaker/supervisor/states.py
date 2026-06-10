@@ -1,8 +1,7 @@
 """Connection supervisor states.
 
-The supervisor owns events, workload tasks, and socket cleanup. States wait for
-state-local signals, declare which lifecycle requests may interrupt them, and
-return the next state.
+The supervisor owns lifecycle events, workload tasks, and socket cleanup. States
+wait for state-local signals and return the next state.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 if TYPE_CHECKING:
     from .supervisor import ConnectionSupervisor
@@ -27,9 +26,6 @@ class StoppedError(Exception):
 
 class AbstractState(ABC):
     """Base class for connection supervisor states."""
-
-    interrupt_on_stop: ClassVar[bool] = True
-    interrupt_on_restart: ClassVar[bool] = True
 
     def __init__(self, context: ConnectionSupervisor) -> None:
         self.context = context
@@ -249,11 +245,6 @@ class WaitingForBrokerState(AbstractState):
 class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
-    # Do not cancel restart cleanup halfway through; a pending stop is applied
-    # after this state finishes so cleanup and disconnect remain single-pass.
-    interrupt_on_stop = False
-    interrupt_on_restart = False
-
     async def handle(self) -> StateResult:
         await self.context.cleanup_workload("restart requested")
         self.context.disconnect()
@@ -262,9 +253,6 @@ class RestartingState(AbstractState):
 
 class StoppingState(AbstractState):
     """Final cleanup for supervisor shutdown."""
-
-    interrupt_on_stop = False
-    interrupt_on_restart = False
 
     async def handle(self) -> StateResult:
         self.context.stop()
@@ -275,9 +263,6 @@ class StoppingState(AbstractState):
 
 class StoppedState(AbstractState):
     """Terminal stopped state."""
-
-    interrupt_on_stop = False
-    interrupt_on_restart = False
 
     async def handle(self) -> StateResult:
         raise StoppedError

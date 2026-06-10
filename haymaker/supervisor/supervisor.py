@@ -36,24 +36,27 @@ class SupervisorWorkload(Protocol):
 
 
 class SupervisorRace:
-    """Own per-state race tasks and classify the winning interrupt source."""
+    """Own per-state race tasks and choose the next supervisor state."""
 
     def __init__(
         self,
         state: AbstractState,
-        requests: Mapping[str, asyncio.Event],
+        stop_requested: asyncio.Event,
+        restart_requested: asyncio.Event,
         workload_task: asyncio.Task[None] | None,
     ) -> None:
         """Configure the active supervisor race.
 
         Args:
             state: State whose handler is being run.
-            requests: Lifecycle request events enabled for this state.
+            stop_requested: Supervisor shutdown signal.
+            restart_requested: Supervisor restart signal.
             workload_task: Workload task when completion can stop supervision.
         """
 
         self._state = state
-        self._requests = requests
+        self._stop_requested = stop_requested
+        self._restart_requested = restart_requested
         self._workload_task = workload_task
         self._state_task: asyncio.Task[type[AbstractState]] | None = None
         self._request_tasks: dict[str, asyncio.Task[bool]] = {}
@@ -66,11 +69,8 @@ class SupervisorRace:
             name="connection-supervisor-state",
         )
         self._request_tasks = {
-            name: asyncio.create_task(
-                event.wait(),
-                name=f"connection-supervisor-{name}-request",
-            )
-            for name, event in self._requests.items()
+            name: asyncio.create_task(event.wait(), name=f"{name}-request")
+            for name, event in self._active_requests().items()
         }
         return self
 
@@ -105,15 +105,12 @@ class SupervisorRace:
 
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
-        if self._request_tasks.get("stop") in done:
-            return StoppingState
-
-        if self._request_tasks.get("restart") in done:
-            return RestartingState
+        request_transition = self._request_transition()
+        if request_transition is not None:
+            return request_transition
 
         if self._state_task in done and (
-            self._state_task.cancelled()
-            or self._state_task.exception() is not None
+            self._state_task.cancelled() or self._state_task.exception() is not None
         ):
             return self._state_task.result()
 
@@ -121,6 +118,42 @@ class SupervisorRace:
             return StoppingState
 
         return self._state_task.result()
+
+    def _active_requests(self) -> dict[str, asyncio.Event]:
+        """Return lifecycle request events that may interrupt this race."""
+
+        if isinstance(self._state, RestartingState):
+            # Do not cancel restart cleanup halfway through; pending stop is
+            # applied after this state finishes so cleanup remains single-pass.
+            return {}
+
+        if isinstance(self._state, (StoppingState, StoppedState)):
+            return {}
+
+        return {
+            "connection-supervisor-stop": self._stop_requested,
+            "connection-supervisor-restart": self._restart_requested,
+        }
+
+    def _request_transition(self) -> type[AbstractState] | None:
+        """Return the highest-priority lifecycle request for this race."""
+
+        if self._stop_requested.is_set() and not isinstance(
+            self._state, (StoppingState, StoppedState)
+        ):
+            self._restart_requested.clear()
+            return StoppingState
+
+        if self._restart_requested.is_set() and not isinstance(
+            self._state, (RestartingState, StoppingState, StoppedState)
+        ):
+            self._restart_requested.clear()
+            return RestartingState
+
+        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+            self._restart_requested.clear()
+
+        return None
 
 
 @dataclass(frozen=True)
@@ -192,10 +225,9 @@ class ConnectionSupervisor:
 
         - ``stop()`` sends a shutdown request; ``run()`` performs cleanup.
 
-        - ``request_restart()`` asks the supervisor to interrupt the
-          active state and run a reconnect/rebuild transition that
-          stops active work, disconnects the owned socket, and
-          reconnects immediately.
+        - ``request_restart()`` records a reconnect/rebuild request.
+          The active supervisor race decides whether and when to
+          consume that request.
 
     State-facing helpers such as ``start_workload()``,
     ``cleanup_workload()``, ``has_workload``, and ``disconnect()`` are
@@ -248,13 +280,12 @@ class ConnectionSupervisor:
     def _state_race(self) -> SupervisorRace:
         """Return the race configuration enabled for the active state."""
 
-        requests = {}
-        if self._state.interrupt_on_stop:
-            requests["stop"] = self._stop_requested
-        if self._state.interrupt_on_restart:
-            requests["restart"] = self._restart_requested
-
-        return SupervisorRace(self._state, requests, self._external_workload_task())
+        return SupervisorRace(
+            self._state,
+            self._stop_requested,
+            self._restart_requested,
+            self._external_workload_task(),
+        )
 
     def _external_workload_task(self) -> asyncio.Task[None] | None:
         """Return workload task only when completion is independent of cleanup."""
@@ -286,18 +317,7 @@ class ConnectionSupervisor:
         """Race state work against supervisor-owned lifecycle events."""
 
         async with self._state_race() as race:
-            transition = await race.wait()
-
-        if self._stop_requested.is_set() and not issubclass(
-            transition, (StoppingState, StoppedState)
-        ):
-            transition = StoppingState
-        elif self._restart_requested.is_set() and not issubclass(
-            transition, (StoppingState, StoppedState)
-        ):
-            transition = RestartingState
-        self._restart_requested.clear()
-        return transition
+            return await race.wait()
 
     def _transition_to(self, next_state: type[AbstractState]) -> AbstractState:
         """Transition to a new state class and return the state instance."""
@@ -316,14 +336,8 @@ class ConnectionSupervisor:
         self._stop_requested.set()
 
     def request_restart(self, reason: str = "") -> None:
-        """Request a reconnect/rebuild cycle."""
+        """Record a reconnect/rebuild request."""
 
-        if self._stop_requested.is_set():
-            log.debug("Restart ignored because stop is already pending.")
-            return
-        if not self._state.interrupt_on_restart:
-            log.debug("Restart ignored because active state cannot be restarted.")
-            return
         restart_reason = reason or "restart requested"
         log.debug(f"Restart requested: {restart_reason}")
         self._restart_requested.set()
@@ -331,7 +345,7 @@ class ConnectionSupervisor:
     def onDisconnectedEvent(self) -> None:
         """Request restart after unexpected API socket disconnection."""
 
-        if not self._intentional_disconnect and not self._stop_requested.is_set():
+        if not self._intentional_disconnect:
             self.request_restart("IB socket disconnected")
 
     def onTimeoutEvent(self, idle_period: float) -> None:

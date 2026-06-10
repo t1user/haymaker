@@ -42,8 +42,8 @@ The public lifecycle API is intentionally small:
 * ``run()`` owns connection setup, workload execution, restarts, and cleanup.
 * ``stop()`` records a shutdown request. The running supervisor loop performs
   cleanup.
-* ``request_restart(reason)`` asks the supervisor to rebuild the owned socket
-  and workload.
+* ``request_restart(reason)`` records a restart request. The active supervisor
+  race decides whether and when to rebuild the owned socket and workload.
 
 Workload Contract
 =================

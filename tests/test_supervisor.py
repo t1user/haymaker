@@ -279,6 +279,22 @@ async def test_stop_request_overrides_pending_restart() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pending_stop_overrides_later_restart_request() -> None:
+    fake_ib = FakeIB()
+    supervisor = make_supervisor(fake_ib)
+    supervisor._state = ConnectedState(supervisor)
+
+    supervisor.stop()
+    supervisor.request_restart("restart after stop")
+    assert supervisor._restart_requested.is_set()
+
+    transition = await supervisor._run_state()
+
+    assert transition is StoppingState
+    assert not supervisor._restart_requested.is_set()
+
+
+@pytest.mark.asyncio
 async def test_stop_during_restart_cleanup_prevents_reconnect() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
@@ -292,7 +308,7 @@ async def test_stop_during_restart_cleanup_prevents_reconnect() -> None:
     supervisor.request_restart("manual restart")
     await asyncio.wait_for(workload.stop_started.wait(), timeout=1)
     supervisor.request_restart("ignored during restart cleanup")
-    assert not supervisor._restart_requested.is_set()
+    assert supervisor._restart_requested.is_set()
     supervisor.stop()
 
     await asyncio.sleep(0.05)
@@ -308,6 +324,7 @@ async def test_stop_during_restart_cleanup_prevents_reconnect() -> None:
     assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 1
     assert fake_ib.disconnect_count == 1
+    assert not supervisor._restart_requested.is_set()
 
 
 @pytest.mark.asyncio
