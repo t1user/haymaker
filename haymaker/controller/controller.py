@@ -661,6 +661,9 @@ class Controller(Atom):
 
     def close_positions_for_strategy(self, strategy: str, action: str) -> None:
         strategy_obj = self.sm.strategy[strategy]
+        if strategy_obj.position == 0:
+            log.error(f"Attempt to close zero position for {strategy}")
+            return
         direction = "BUY" if strategy_obj.position < 0 else "SELL"
         amount = abs(strategy_obj.position)
         order = ibi.MarketOrder(direction, amount)
