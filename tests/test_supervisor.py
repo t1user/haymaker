@@ -6,6 +6,7 @@ import pytest
 from helpers import wait_for_condition
 
 from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
+from haymaker.supervisor.supervisor import SupervisorRace
 from haymaker.supervisor.states import (
     AbstractState,
     ConnectedState,
@@ -163,6 +164,20 @@ def current_state(supervisor: ConnectionSupervisor) -> type[AbstractState]:
     return type(supervisor._state)
 
 
+async def run_supervisor_race(
+    supervisor: ConnectionSupervisor,
+) -> type[AbstractState]:
+    """Run one supervisor race for isolated transition assertions."""
+
+    async with SupervisorRace(
+        supervisor._state,
+        supervisor._stop_requested,
+        supervisor._restart_requested,
+        supervisor._workload_task,
+    ) as race:
+        return await race.wait()
+
+
 @pytest.mark.asyncio
 async def test_run_connects_probes_and_starts_workload() -> None:
     fake_ib = FakeIB()
@@ -241,7 +256,7 @@ async def test_pending_restart_overrides_state_transition() -> None:
     supervisor = make_supervisor(fake_ib)
     supervisor._state = RestartAfterHandleState(supervisor)
 
-    transition = await supervisor._run_state()
+    transition = await run_supervisor_race(supervisor)
 
     assert transition is RestartingState
     assert not supervisor._restart_requested.is_set()
@@ -253,7 +268,7 @@ async def test_pending_stop_overrides_state_transition() -> None:
     supervisor = make_supervisor(fake_ib)
     supervisor._state = StopAfterHandleState(supervisor)
 
-    transition = await supervisor._run_state()
+    transition = await run_supervisor_race(supervisor)
 
     assert transition is StoppingState
 
@@ -288,7 +303,7 @@ async def test_pending_stop_overrides_later_restart_request() -> None:
     supervisor.request_restart("restart after stop")
     assert supervisor._restart_requested.is_set()
 
-    transition = await supervisor._run_state()
+    transition = await run_supervisor_race(supervisor)
 
     assert transition is StoppingState
     assert not supervisor._restart_requested.is_set()

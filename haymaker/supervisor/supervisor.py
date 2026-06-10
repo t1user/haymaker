@@ -51,7 +51,8 @@ class SupervisorRace:
             state: State whose handler is being run.
             stop_requested: Supervisor shutdown signal.
             restart_requested: Supervisor restart signal.
-            workload_task: Workload task when completion can stop supervision.
+            workload_task: Current workload task. The race decides whether its
+                completion is an active signal for the current state.
         """
 
         self._state = state
@@ -100,8 +101,9 @@ class SupervisorRace:
             self._state_task,
             *self._request_tasks.values(),
         }
-        if self._workload_task is not None:
-            tasks.add(self._workload_task)
+        workload_task = self._active_workload_task()
+        if workload_task is not None:
+            tasks.add(workload_task)
 
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
@@ -114,7 +116,7 @@ class SupervisorRace:
         ):
             return self._state_task.result()
 
-        if self._workload_task is not None and self._workload_task in done:
+        if workload_task is not None and workload_task in done:
             return StoppingState
 
         return self._state_task.result()
@@ -134,6 +136,14 @@ class SupervisorRace:
             "connection-supervisor-stop": self._stop_requested,
             "connection-supervisor-restart": self._restart_requested,
         }
+
+    def _active_workload_task(self) -> asyncio.Task[None] | None:
+        """Return workload completion when it is an external race signal."""
+
+        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+            return None
+
+        return self._workload_task
 
     def _request_transition(self) -> type[AbstractState] | None:
         """Return the highest-priority lifecycle request for this race."""
@@ -277,30 +287,18 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
-    def _state_race(self) -> SupervisorRace:
-        """Return the race configuration enabled for the active state."""
-
-        return SupervisorRace(
-            self._state,
-            self._stop_requested,
-            self._restart_requested,
-            self._external_workload_task(),
-        )
-
-    def _external_workload_task(self) -> asyncio.Task[None] | None:
-        """Return workload task only when completion is independent of cleanup."""
-
-        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
-            return None
-
-        return self._workload_task
-
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""
 
         try:
             while True:
-                transition = await self._run_state()
+                async with SupervisorRace(
+                    self._state,
+                    self._stop_requested,
+                    self._restart_requested,
+                    self._workload_task,
+                ) as race:
+                    transition = await race.wait()
                 self._transition_to(transition)
         except StoppedError:
             return
@@ -312,12 +310,6 @@ class ConnectionSupervisor:
             log.exception("Connection supervisor failed; stopping.")
             await self._cleanup()
             raise
-
-    async def _run_state(self) -> type[AbstractState]:
-        """Race state work against supervisor-owned lifecycle events."""
-
-        async with self._state_race() as race:
-            return await race.wait()
 
     def _transition_to(self, next_state: type[AbstractState]) -> AbstractState:
         """Transition to a new state class and return the state instance."""
