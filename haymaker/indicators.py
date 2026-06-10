@@ -12,6 +12,28 @@ from .research.numba_tools import (
 )
 
 
+def ensure_df(func):
+    """
+    Decorator allowing signal producing functions to work with either
+    dataframe or series.
+    """
+
+    @wraps(func)
+    def verify(data, *args, **kwargs) -> pd.DataFrame:
+        if isinstance(data, pd.Series):
+            data = pd.DataFrame({"close": data})
+        elif isinstance(data, pd.DataFrame):
+            data = data.copy()
+        else:
+            raise TypeError(
+                f"Data must be either Series or DataFrame with column 'close'"
+                f" containing prices, not {type(data)}."
+            )
+        return func(data, *args, **kwargs)
+
+    return verify
+
+
 def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
     if not isinstance(df, pd.DataFrame):
         raise TypeError("df must be a pd.DataFrame")
@@ -807,22 +829,3 @@ def min_max_index(
         return np.sign(df["ind"])  # type: ignore
     else:
         return df["ind"]
-
-
-def ensure_df(func):
-    """Allow signal producing functions to work with either dataframe or series."""
-
-    @wraps(func)
-    def verify(data, *args, **kwargs) -> pd.DataFrame:
-        if isinstance(data, pd.Series):
-            data = pd.DataFrame({"close": data})
-        elif isinstance(data, pd.DataFrame):
-            data = data.copy()
-        else:
-            raise TypeError(
-                f"Data must be either Series or DataFrame with column 'close'"
-                f" containing prices, not {type(data)}."
-            )
-        return func(data, *args, **kwargs)
-
-    return verify
