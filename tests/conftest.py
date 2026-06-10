@@ -1,3 +1,17 @@
+"""Shared pytest fixtures and guards for hermetic test execution.
+
+This module does two test-harness jobs before the rest of the suite imports
+Haymaker code:
+
+1. Remove local config override env vars so pytest does not accidentally load
+   a developer's live trading configuration.
+2. Block real MongoDB/Arctic construction in ordinary tests so unit tests fail
+   fast instead of talking to external infrastructure.
+
+Tests that intentionally exercise a real Mongo or Arctic instance must opt in
+with ``@pytest.mark.mongo``.
+"""
+
 import datetime
 import logging
 import os
@@ -42,7 +56,16 @@ def clear_mongo_client_cache() -> None:
 
 @pytest.fixture(autouse=True)
 def block_real_mongo_access(monkeypatch, request):
-    """Fail fast if an unmarked test tries to open real Mongo-backed storage."""
+    """Fail fast if an unmarked test tries to open real Mongo-backed storage.
+
+    Usage:
+        - Do nothing for ordinary unit tests. The guard applies automatically.
+        - Use fakes, mocks, or ``mongomock`` when a test needs persistence
+          behavior without external infrastructure.
+        - Mark the test with ``@pytest.mark.mongo`` only when it is an explicit
+          integration test that should be allowed to construct real Mongo or
+          Arctic clients.
+    """
     if request.node.get_closest_marker("mongo"):
         yield
         return

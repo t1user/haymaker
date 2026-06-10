@@ -1,3 +1,11 @@
+"""Saver tests with deterministic async behavior for sandboxed unit runs.
+
+``AsyncSaveManager`` normally delegates work through queue and executor helpers.
+Those helpers are validated elsewhere; in this module we replace them with
+inline implementations so saver tests cover save/read semantics without relying
+on sandbox-sensitive threadpool wakeups.
+"""
+
 import csv
 import pickle
 import shutil
@@ -55,7 +63,14 @@ async def inline_make_async(fn, *args):
 
 @pytest.fixture(autouse=True)
 def inline_async_save_manager(monkeypatch):
-    """Avoid the asyncio threadpool bridge in saver unit tests."""
+    """Swap AsyncSaveManager's async bridge for inline, deterministic doubles.
+
+    Usage:
+        - Keep this fixture local to unit tests that only care about saver
+          behavior.
+        - Write separate integration tests if you need coverage of the real
+          queue/executor implementation.
+    """
     monkeypatch.setattr(saver_module, "SyncQueueRunner", InlineSyncQueueRunner)
     monkeypatch.setattr(saver_module, "make_async", inline_make_async)
 

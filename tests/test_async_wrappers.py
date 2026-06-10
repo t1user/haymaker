@@ -1,3 +1,12 @@
+"""Unit tests for async wrapper helpers under a sandbox-safe execution model.
+
+The production module bridges synchronous callables into asyncio with
+threadpool-backed helpers. That path is correct in production, but it is also
+the part that can hang in the Codex sandbox. These tests replace the bridge
+with inline implementations so they keep checking wrapper semantics without
+depending on sandbox thread wakeups.
+"""
+
 import asyncio
 import logging
 from collections.abc import Callable
@@ -41,7 +50,13 @@ async def inline_async_runner(func, *args):
 
 @pytest.fixture(autouse=True)
 def inline_async_wrappers(monkeypatch):
-    """Avoid the asyncio threadpool bridge in async wrapper unit tests."""
+    """Replace threadpool-backed helpers with inline test doubles.
+
+    The fixture is autouse because every test in this module is about wrapper
+    behavior, not the executor implementation. Integration coverage for the
+    real threadpool path should live in separate tests that intentionally opt
+    into that environment dependency.
+    """
     monkeypatch.setattr(async_wrappers, "_async_runner", inline_async_runner)
     monkeypatch.setattr(async_wrappers, "_queue", InlineQueue())
 

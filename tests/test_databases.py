@@ -6,7 +6,12 @@ from haymaker import databases
 
 
 def test_real_mongo_client_blocked_by_default():
-    """Verify unmarked tests fail fast instead of opening real MongoDB."""
+    """Verify the global pytest guard blocks accidental real Mongo access.
+
+    Ordinary tests should see an immediate assertion with instructions to use
+    mocks, ``mongomock``, or ``@pytest.mark.mongo`` instead of attempting a
+    networked database connection.
+    """
     databases.get_mongo_client.cache_clear()
     try:
         with pytest.raises(AssertionError, match="real MongoDB"):

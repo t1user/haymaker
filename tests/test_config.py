@@ -11,7 +11,11 @@ from haymaker.config.config import ConfigMaps
 
 
 def test_pytest_does_not_inherit_live_config_overrides():
-    """Verify tests do not use local live config override files."""
+    """Verify pytest starts from repo/test config instead of local overrides.
+
+    This protects the suite from inheriting a developer's live-trading config
+    through ``HAYMAKER_*_CONFIG_OVERRIDES`` during import-time config loading.
+    """
     assert "HAYMAKER_HAYMAKER_CONFIG_OVERRIDES" not in os.environ
     assert "HAYMAKER_DATALOADER_CONFIG_OVERRIDES" not in os.environ
 
