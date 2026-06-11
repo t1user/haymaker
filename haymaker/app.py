@@ -186,4 +186,4 @@ class App:
     def run(self) -> None:
         # this is the main entry point into strategy
         log.debug("Initializing connection supervisor.")
-        self.supervisor.run()
+        self.supervisor.run_blocking()

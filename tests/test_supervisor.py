@@ -644,9 +644,9 @@ def test_connection_settings_from_config_uses_defaults() -> None:
     assert settings.host == "127.0.0.1"
     assert settings.port == 4002
     assert settings.client_id == 51
-    assert settings.connect_timeout == 2
-    assert settings.retry_delay == 2
-    assert settings.app_timeout == 20
-    assert settings.probe_timeout == 4
+    assert settings.connect_timeout == 15
+    assert settings.retry_delay == 30
+    assert settings.app_timeout == 90
+    assert settings.probe_timeout == 15
     assert settings.auto_recovery_grace_period == 120
     assert settings.restart_on_recovered_connection is False

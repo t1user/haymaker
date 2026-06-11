@@ -274,7 +274,9 @@ class ConnectionSupervisor:
     workload: SupervisorWorkload
     settings: ConnectionSettings = field(default_factory=ConnectionSettings)
     _state: AbstractState = field(init=False)
-    _workload_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _workload_task: asyncio.Task[None] | None = field(
+        init=False, default=None, repr=False
+    )
     _stop_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
@@ -297,10 +299,12 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
-    def run(self) -> None:
-        asyncio.run(self._run())
+    def run_blocking(self) -> None:
+        """Run the supervisor from a synchronous top-level entrypoint."""
 
-    async def _run(self) -> None:
+        asyncio.run(self.run())
+
+    async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""
 
         try:

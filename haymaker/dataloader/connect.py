@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Literal, TypeAlias
 
-from ib_insync import IB, util
+from ib_insync import IB
 
 from haymaker.config import CONFIG
 from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
@@ -113,7 +113,7 @@ class DataloaderConnection:
     def run(self) -> None:
         """Run until the dataloader workload finishes."""
 
-        util.run(self.supervisor.run())
+        self.supervisor.run_blocking()
 
 
 def connection(
