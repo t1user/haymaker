@@ -13,7 +13,7 @@ from logging import getLogger
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 if TYPE_CHECKING:
-    from .supervisor import ConnectionSupervisor
+    from .supervisor_old import ConnectionSupervisor
 
 StateResult: TypeAlias = "type[AbstractState]"
 
