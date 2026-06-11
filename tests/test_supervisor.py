@@ -20,11 +20,12 @@ from haymaker.supervisor.states import (
 class FakeIB:
     """Small IB stand-in exposing the event surface used by ConnectionSupervisor."""
 
-    def __init__(self) -> None:
+    def __init__(self, emit_global_disconnect_error: bool = False) -> None:
         self.errorEvent = ibi.Event()
         self.disconnectedEvent = ibi.Event()
         self.timeoutEvent = ibi.Event()
         self.updateEvent = ibi.Event()
+        self.emit_global_disconnect_error = emit_global_disconnect_error
         self.connected = False
         self.connect_attempts = 0
         self.disconnect_count = 0
@@ -49,6 +50,8 @@ class FakeIB:
         if self.connected:
             self.connected = False
             self.disconnect_count += 1
+            if self.emit_global_disconnect_error:
+                ibi.util.globalErrorEvent.emit(ConnectionError("Socket disconnect"))
             self.disconnectedEvent.emit()
 
     def isConnected(self) -> bool:
@@ -359,6 +362,32 @@ async def test_unexpected_disconnect_restarts_workload() -> None:
     assert fake_ib.disconnect_count == 1
 
     await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_global_socket_disconnect_error_does_not_stop_supervisor() -> None:
+    fake_ib = FakeIB(emit_global_disconnect_error=True)
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+    previous_global_error = ibi.util.globalErrorEvent._value
+
+    try:
+        assert await wait_for_condition(lambda: workload.starts == 1)
+
+        fake_ib.disconnect()
+
+        assert await wait_for_condition(lambda: workload.starts == 2)
+        assert not task.done()
+        assert workload.stops == ["restart requested"]
+        assert fake_ib.connect_attempts == 2
+        assert fake_ib.disconnect_count == 1
+    finally:
+        if not task.done():
+            await stop_and_wait(supervisor, task)
+        else:
+            task.exception()
+        ibi.util.globalErrorEvent._value = previous_global_error
 
 
 @pytest.mark.asyncio

@@ -84,7 +84,10 @@ The research package is intentionally separate from live execution. It works dir
 
 ## Entry Points
 
-- Live strategy scripts import and instantiate `haymaker.app.App`, then call `App().run()`. `App.run()` runs an explicit top-level supervisor coroutine through `ib_insync`'s event-loop helper.
+- Live strategy scripts import and instantiate `haymaker.app.App`, then call
+  `App().run()`. `App.run()` runs the top-level supervisor coroutine directly
+  through `asyncio.run()` so `ib_insync` global socket errors remain inside the
+  supervisor recovery path.
 - `dataloader` console script maps to `haymaker.dataloader.dataloader:start`.
 - Research code usually imports from `haymaker.research`, `haymaker.research.stop`, or `haymaker.research.backtester`.
 - Sphinx docs are built from `docs/source` with `make html` from the `docs/` directory.

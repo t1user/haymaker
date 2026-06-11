@@ -299,11 +299,6 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
-    def run_blocking(self) -> None:
-        """Run the supervisor from a synchronous top-level entrypoint."""
-
-        asyncio.run(self.run())
-
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""
 

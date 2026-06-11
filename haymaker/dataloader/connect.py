@@ -113,7 +113,7 @@ class DataloaderConnection:
     def run(self) -> None:
         """Run until the dataloader workload finishes."""
 
-        self.supervisor.run_blocking()
+        asyncio.run(self.supervisor.run())
 
 
 def connection(
