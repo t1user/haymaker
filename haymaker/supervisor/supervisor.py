@@ -112,17 +112,15 @@ class Supervisor:
     async def run(self):
         while True:
             try:
-                if self.stop_requested.is_set():
-                    break
                 self.restart_requested.clear()
 
-                self.run_taks = asyncio.create_task(
+                self.run_task = asyncio.create_task(
                     self._run_onion(), name="Supervisor-run-task"
                 )
                 if self.run_task is not None:
                     await self.run_task
 
-                if self.stop_requested:
+                if self.stop_requested.is_set():
                     log.debug("Workload completed. Exiting.")
                     return
 
@@ -154,9 +152,6 @@ class Supervisor:
         self.restart_requested.set()
 
     def onDisconnectedEvent(self, *args) -> None:
-        log.debug("Disconnected...")
-
-    def onGlobalErrEvent(self, *args):
         if self.run_task is not None:
             self.run_task.cancel()
 
@@ -204,18 +199,25 @@ class Connection(OnionLayer):
 
 class Watcher(OnionLayer):
 
-    _issue_manager_task: asyncio.Task[None] | None = None
+    _connection_issue_manager: ConnectionIssueManager | None
+    _connection_issue_manager_task: asyncio.Task[None] | None = None
 
     async def __aenter__(self) -> Self:
-        self._issue_manager_task = asyncio.create_task(
-            ConnectionIssueManager(self.ct).run()
+        self._connection_issue_manager = ConnectionIssueManager(self.ct)
+        self._connecton_issue_manager_task = asyncio.create_task(
+            self._connection_issue_manager.run()
         )
         return self
 
     async def __aexit__(self, *args):
-        if self._issue_manager_task is not None and not self._issue_manager_task.done():
-            self._issue_manager_task.cancel()
-        self._issue_manager_task = None
+        if (
+            self._connection_issue_manager_task is not None
+            and not self._connection_issue_manager_task.done()
+        ):
+            self._connection_issue_manager_task.cancel()
+        self._connection_issue_manager_task = None
+        if self._connection_issue_manager is not None:
+            del self._connection_issue_manager
 
 
 class Workload(OnionLayer):
@@ -277,7 +279,7 @@ class Waiter(OnionLayer):
 
     def _should_wait(self) -> bool:
         assert self.ct.workload_task is not None
-        return any(
+        return not any(
             (
                 self.ct.restart_requested.is_set(),
                 self.ct.stop_requested.is_set(),
@@ -317,7 +319,9 @@ class ConnectionIssueManager:
                 else:
                     self.restart(f"Broker re-connected, restarting due to policy")
 
-    def onErrEvent(self, code: int, message: str) -> None:
+    def onErrEvent(
+        self, reqId: int, code: int, message: str, contract: ibi.Contract
+    ) -> None:
         if code in self.ct.BROKER_WAIT_CODES:
             self._broker_wait_requested = True
             self.wakeup.set()
@@ -330,9 +334,10 @@ class ConnectionIssueManager:
         self.wakeup.set()
 
     async def wait_for_broker(self):
+        waiting_object = BrokerWaiter(self.ct)
         try:
             await asyncio.wait_for(
-                BrokerWaiter(self.ct).wait(),
+                waiting_object.wait(),
                 self.ct.settings.auto_recovery_grace_period,
             )
         except asyncio.TimeoutError:
@@ -341,6 +346,8 @@ class ConnectionIssueManager:
                 f"{self.ct.settings.auto_recovery_grace_period}s "
                 f"expired without re-establishing connection."
             )
+        finally:
+            del waiting_object
 
     async def probe(self) -> None:
         if not await self._probe():
@@ -362,6 +369,10 @@ class ConnectionIssueManager:
     def restart(self, reason: str = "") -> None:
         self.ct.request_restart(reason)
 
+    def __del__(self) -> None:
+        self.ct.ib.errorEvent += self.onErrEvent
+        self.ct.ib.timeoutEvent += self.onTimeoutEvent
+
 
 class BrokerWaiter:
 
@@ -376,3 +387,6 @@ class BrokerWaiter:
 
     async def wait(self) -> None:
         await self.connection_restored_event.wait()
+
+    def __del__(self):
+        self.ct.ib.errorEvent -= self.onErrEvent
