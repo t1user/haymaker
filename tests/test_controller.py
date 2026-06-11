@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 from copy import deepcopy
 from itertools import count
@@ -322,6 +323,32 @@ def test_disabled_trading_does_not_register_order(controller, trade, monkeypatch
     assert result is None
     assert not called
     assert list(controller.sm.order.values()) == []
+
+
+def test_close_positions_for_strategy_logs_filled_event(
+    controller, trade, monkeypatch, caplog
+):
+    strategy = controller.sm.strategy["coolstrategy"]
+    strategy.position = 1
+    strategy.active_contract = trade.contract
+    close_trade = ibi.Trade(
+        contract=trade.contract,
+        order=ibi.MarketOrder("SELL", 1),
+    )
+
+    def fake_trade(strategy_str, contract, order, action, params):
+        return close_trade
+
+    monkeypatch.setattr(controller, "trade", fake_trade)
+
+    with caplog.at_level(logging.DEBUG, logger="haymaker.controller.controller"):
+        controller.close_positions_for_strategy("coolstrategy", "test close")
+        close_trade.filledEvent.emit(close_trade)
+
+    assert (
+        f"Position for: coolstrategy closed; reason: test close SELL 1 "
+        f"{trade.contract.localSymbol}" in caplog.text
+    )
 
 
 @pytest.mark.asyncio

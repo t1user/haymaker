@@ -671,13 +671,11 @@ class Controller(Atom):
             strategy, strategy_obj.active_contract, order, action, strategy_obj
         )
         if trade_object:
-            trade_object.filledEvent += partial(
-                log.debug,
-                (
-                    f"Position for: {strategy} closed; reason: {action} "
-                    f"{direction} {amount} {strategy_obj.active_contract.localSymbol}"
-                ),
+            close_message = (
+                f"Position for: {strategy} closed; reason: {action} "
+                f"{direction} {amount} {strategy_obj.active_contract.localSymbol}"
             )
+            trade_object.filledEvent += lambda trade: log.debug(close_message)
 
     def disable_trading(self, reason: str) -> None:
         """Disable future outbound orders from normal controller flow."""
