@@ -210,7 +210,7 @@ class Controller(Atom):
         log.debug("Running controller...")
         self.set_hold()
         if self.nuke:
-            self.run_nuke()
+            await self.run_nuke()
 
         if self.cold_start:
             log.debug("Starting cold... (state NOT read from db)")
@@ -813,11 +813,11 @@ class Controller(Atom):
     def clear_records(self):
         self.sm.clear_strategies()
 
-    def close_positions(self) -> None:
+    async def close_positions(self) -> None:
         positions: list[ibi.Position] = self.ib.positions()
         log.debug(f"closing positions: {positions}")
         for position in positions:
-            self.ib.qualifyContracts(position.contract)
+            await self.ib.qualifyContractsAsync(position.contract)
             self.ib.placeOrder(
                 position.contract,
                 ibi.MarketOrder(
@@ -825,7 +825,7 @@ class Controller(Atom):
                 ),
             )
 
-    def run_nuke(self) -> None:
+    async def run_nuke(self) -> None:
         """
         Cancel all open orders, close existing positions and prevent
         any further trading.  Response to a critical error or request
@@ -834,7 +834,7 @@ class Controller(Atom):
         ---> Currently not in use. <---
         """
         self.ib.reqGlobalCancel()
-        self.close_positions()
+        await self.close_positions()
         self.disable_trading("self nuke requested")
 
         log.critical("Self nuked!!!!! No more trades will be executed until restart.")

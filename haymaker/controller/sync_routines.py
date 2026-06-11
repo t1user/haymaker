@@ -145,9 +145,9 @@ class OrderSync:
             )
             return trade
 
-    def verify(self) -> Self:
+    async def verify(self) -> Self:
         # This is dead code now; use or delete
-        completed_trades = self.ib.reqCompletedOrders(True)
+        completed_trades = await self.ib.reqCompletedOrdersAsync(True)
         completed_trades_list = [trade.order.permId for trade in completed_trades]
         my_orders = [oi.permId for oi in self.sm._orders.values()]
         self._issues = [
