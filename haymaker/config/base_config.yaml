@@ -27,6 +27,7 @@ app:
     !!python/object/apply:ib_insync.Forex
     - EURUSD
   probeTimeout: 15
+  connection_lost_retry_delay: 90
   auto_recovery_grace_period: 120
   restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
   future_roll_time: [10, 0]   # time when future rolls are executed, must be a list [hour, minute]
