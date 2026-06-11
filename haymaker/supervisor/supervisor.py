@@ -191,7 +191,6 @@ class ConnectionSettings:
         app_timeout: Seconds of no IB traffic before running connection health checks.
         probe_contract: Contract used for the small historical-data readiness probe.
         probe_timeout: Seconds to wait for the readiness probe to complete.
-        connection_lost_retry_delay: Seconds to wait after lost connection before reconnecting
         auto_recovery_grace_period: Seconds to wait for broker-side recovery before reconnecting.
         restart_on_recovered_connection: Whether to restart even after IB reports data was maintained.
     """
@@ -204,7 +203,6 @@ class ConnectionSettings:
     app_timeout: float = 90
     probe_contract: ibi.Contract = field(default_factory=lambda: ibi.Forex("EURUSD"))
     probe_timeout: float = 15
-    connection_lost_retry_delay: float = 90
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
 
@@ -228,7 +226,6 @@ class ConnectionSettings:
             app_timeout=config.get("appTimeout", 90),
             probe_contract=config.get("probeContract") or ibi.Forex("EURUSD"),
             probe_timeout=config.get("probeTimeout", 15),
-            connection_lost_retry_delay=config.get("connection_lost_retry_delay", 90),
             auto_recovery_grace_period=config.get("auto_recovery_grace_period", 120),
             restart_on_recovered_connection=config.get(
                 "restart_on_recovered_connection", False
@@ -350,11 +347,10 @@ class ConnectionSupervisor:
         log.debug(f"Restart requested: {restart_reason}")
         self._restart_requested.set()
 
-    async def onDisconnectedEvent(self) -> None:
+    def onDisconnectedEvent(self) -> None:
         """Request restart after unexpected API socket disconnection."""
 
         if not self._intentional_disconnect:
-            await asyncio.sleep(self.settings.connection_lost_retry_delay)
             self.request_restart("IB socket disconnected")
 
     def onTimeoutEvent(self, idle_period: float) -> None:
