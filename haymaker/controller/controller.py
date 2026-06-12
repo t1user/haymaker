@@ -56,6 +56,7 @@ class Controller(Atom):
     broker_request_timeout: int = 10
     sync_max_attempts: int = 3
     sync_resync_delay: float = 1
+    startup_delay: float = 0
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
     health_check_observables: list[list[Callable[[], bool]]] = field(
@@ -222,6 +223,10 @@ class Controller(Atom):
                 log.exception(e)
                 self.disable_trading("state store read failed")
                 return False
+
+        if self.startup_delay:
+            log.debug(f"Startup delay before sync: {self.startup_delay}s")
+            await asyncio.sleep(self.startup_delay)
 
         sync_ok = await self.sync()
         if not sync_ok:
@@ -484,43 +489,42 @@ class Controller(Atom):
 
         await asyncio.sleep(1)
         order_info = self.sm.save_order_status(trade)
+        if not order_info:
+            if trade.order.totalQuantity == 0:
+                log.warning(f"empty CommissionReportEvent emit for trade: {trade}")
+            else:
+                log.error(
+                    f"Commission report for unknown trade: {trade.order.orderId} "
+                    f"{trade.contract.localSymbol}; no blotter entry created."
+                )
+            return
+
         log.debug(
             f"Saving order {trade.order.orderId} to blotter: {order_info.strategy}"
         )
 
-        if order_info:
-            try:
-                strategy, action, _, params, _ = order_info
-                position_id = params["position_id"]
+        try:
+            strategy, action, _, params, _ = order_info
+            position_id = params["position_id"]
 
-                kwargs = {
-                    "strategy": strategy,
-                    "action": action,
-                    "position_id": position_id,
-                    "params": ibi.util.tree(params),
-                }
-                # optionally set by execution model
-                if arrival_price := params.get("arrival_price"):
-                    kwargs.update(
-                        {
-                            "price_time": arrival_price["time"],
-                            "bid": arrival_price["bid"],
-                            "ask": arrival_price["ask"],
-                        }
-                    )
-            except Exception as e:
-                log.error(f"Error while trying to create blotter entry: {e}")
-                kwargs = {}
-
-        elif trade.order.totalQuantity == 0:
-            log.warning(f"empty CommissionReportEvent emit for trade: {trade}")
-            return
-        else:
-            log.error(
-                f"Commission report for unknown trade: {trade.order.orderId} "
-                f"{trade.contract.localSymbol}"
-            )
-            return
+            kwargs = {
+                "strategy": strategy,
+                "action": action,
+                "position_id": position_id,
+                "params": ibi.util.tree(params),
+            }
+            # optionally set by execution model
+            if arrival_price := params.get("arrival_price"):
+                kwargs.update(
+                    {
+                        "price_time": arrival_price["time"],
+                        "bid": arrival_price["bid"],
+                        "ask": arrival_price["ask"],
+                    }
+                )
+        except Exception as e:
+            log.error(f"Error while trying to create blotter entry: {e}")
+            kwargs = {}
 
         assert self.blotter is not None
         try:

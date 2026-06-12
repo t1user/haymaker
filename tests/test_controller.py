@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import random
 from copy import deepcopy
@@ -210,6 +211,56 @@ async def test_run_stops_before_sync_when_state_store_read_fails(
 
 
 @pytest.mark.asyncio
+async def test_run_waits_startup_delay_before_sync(controller, monkeypatch):
+    calls = []
+
+    async def sleep(delay):
+        calls.append(("sleep", delay))
+
+    async def sync():
+        calls.append(("sync", None))
+        return True
+
+    controller.startup_delay = 2
+    monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
+    monkeypatch.setattr(controller, "sync", sync)
+
+    result = await controller.run()
+
+    assert result
+    assert calls == [("sleep", 2), ("sync", None)]
+
+
+@pytest.mark.asyncio
+async def test_commission_report_skips_unknown_zero_order_id(
+    controller, monkeypatch, caplog
+):
+    async def sleep(delay):
+        return None
+
+    trade = ibi.Trade(
+        contract=ibi.Future(symbol="RTY", localSymbol="RTYM6"),
+        order=ibi.Order(orderId=0, totalQuantity=1),
+    )
+    report = ibi.CommissionReport(execId="exec-1")
+    fill = ibi.Fill(
+        contract=trade.contract,
+        execution=ibi.Execution(execId="exec-1"),
+        commissionReport=report,
+        time=datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    controller.release_hold()
+    monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
+    caplog.set_level(logging.ERROR)
+
+    await controller.onCommissionReport(trade, fill, report)
+
+    assert 0 not in controller.sm.order
+    assert "Commission report for unknown trade: 0 RTYM6" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_sync_disconnected_does_not_query_broker_state(controller, monkeypatch):
     connection_attempts = 0
     disabled_reasons = []
@@ -388,6 +439,7 @@ def test_from_config_loads_controller_sync_options(Atom):
                 "broker_request_timeout": 3,
                 "sync_max_attempts": 2,
                 "sync_resync_delay": 0,
+                "startup_delay": 2,
                 "cancel_unknown_trades": True,
                 "missing_brackets": "warn",
             },
@@ -397,6 +449,7 @@ def test_from_config_loads_controller_sync_options(Atom):
     assert controller.broker_request_timeout == 3
     assert controller.sync_max_attempts == 2
     assert controller.sync_resync_delay == 0
+    assert controller.startup_delay == 2
     assert controller.cancel_unknown_trades
     assert controller.missing_brackets == "warn"
 

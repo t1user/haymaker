@@ -28,6 +28,10 @@ ORDER_COLLECTION_NAME = CONFIG.get("order_collection_name", "orders")
 MAX_REJECTED_ORDERS = CONFIG.get("max_rejected_orders", 3)
 
 
+class UnknownZeroOrderIdError(ValueError):
+    """Raised when an unknown broker trade still has placeholder orderId 0."""
+
+
 @dataclass
 class OrderInfo:
     strategy: str
@@ -104,6 +108,10 @@ class OrderInfo:
 
     @classmethod
     def from_trade(cls, trade: ibi.Trade) -> OrderInfo:
+        if trade.order.orderId == 0:
+            raise UnknownZeroOrderIdError(
+                "Cannot create unknown OrderInfo for trade with orderId 0."
+            )
         log.error(f"Creating unknown strategy for trade: {trade}")
         return cls(
             strategy="UNKNOWN",
@@ -501,12 +509,16 @@ class StateMachine:
         log.debug("Will read data from store...")
         await asyncio.gather(self._strategies.read(), self._orders.read())
 
-    def save_order_status(self, trade: ibi.Trade) -> OrderInfo:
+    def save_order_status(self, trade: ibi.Trade) -> OrderInfo | None:
 
         # if orderId is zero, trade object has to be replaced
         order_info = self._orders.get(trade.order.orderId)
         if not order_info:
-            order_info = OrderInfo.from_trade(trade)
+            try:
+                order_info = OrderInfo.from_trade(trade)
+            except UnknownZeroOrderIdError as e:
+                log.error(f"{e} Trade skipped: {trade}")
+                return None
         try:
             self.save_order(order_info)
         except Exception as e:
