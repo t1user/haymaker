@@ -734,6 +734,40 @@ def test_remove_bracket_policy_closes_strategy_with_missing_local_bracket(
     assert closed == [("coolstrategy", "MISSING BRACKET EMERGENCY CLOSE")]
 
 
+def test_remove_bracket_policy_defers_missing_bracket_with_active_open_order(
+    controller, trade, monkeypatch
+):
+    strategy = controller.sm.strategy["coolstrategy"]
+    strategy.position = 1
+    strategy.active_contract = trade.contract
+    strategy.params = {"stop-loss": {"amount": 1}}
+    active_open_trade = deepcopy(trade)
+    active_open_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=1,
+        remaining=2,
+    )
+    controller.sm.order[active_open_trade.order.orderId] = OrderInfo(
+        "coolstrategy",
+        "OPEN",
+        active_open_trade,
+        {},
+    )
+    closed = []
+    set_broker_state(controller, monkeypatch)
+
+    monkeypatch.setattr(
+        controller,
+        "close_positions_for_strategy",
+        lambda strategy_name, action: closed.append((strategy_name, action)),
+    )
+
+    result = BracketSyncAction.from_policy("remove", controller)
+
+    assert result.bracket_sync.missing_brackets == []
+    assert closed == []
+
+
 def test_remove_bracket_policy_cancels_obsolete_local_bracket(
     controller, trade, monkeypatch
 ):
@@ -763,6 +797,83 @@ def test_remove_bracket_policy_cancels_obsolete_local_bracket(
         BracketSyncAction.from_policy("remove", controller)
 
     assert cancelled == [obsolete_trade]
+
+
+def test_find_obsolete_brackets_ignores_active_close_orders(trade):
+    bracket_sync = BracketSync.__new__(BracketSync)
+    active_close_trade = deepcopy(trade)
+    active_close_trade.order.orderId = trade.order.orderId + 1
+    active_close_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=1,
+        remaining=2,
+    )
+    obsolete_trade = deepcopy(trade)
+    obsolete_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=0,
+        remaining=1,
+    )
+    obsolete_order_info = OrderInfo(
+        "coolstrategy",
+        "STOP-LOSS",
+        obsolete_trade,
+        {},
+    )
+
+    result = bracket_sync._find_obsolete_brackets(
+        "coolstrategy",
+        [
+            OrderInfo("coolstrategy", "CLOSE", active_close_trade, {}),
+            obsolete_order_info,
+        ],
+    )
+
+    assert result == [("coolstrategy", obsolete_order_info)]
+
+
+def test_remove_bracket_policy_defers_obsolete_bracket_with_active_close_order(
+    controller, trade, monkeypatch
+):
+    controller.sm.strategy["coolstrategy"].position = 0
+    active_close_trade = deepcopy(trade)
+    active_close_trade.order.orderId = trade.order.orderId + 1
+    active_close_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=1,
+        remaining=2,
+    )
+    obsolete_trade = deepcopy(trade)
+    obsolete_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=0,
+        remaining=1,
+    )
+    controller.sm.order[active_close_trade.order.orderId] = OrderInfo(
+        "coolstrategy",
+        "CLOSE",
+        active_close_trade,
+        {},
+    )
+    controller.sm.order[obsolete_trade.order.orderId] = OrderInfo(
+        "coolstrategy",
+        "STOP-LOSS",
+        obsolete_trade,
+        {},
+    )
+    cancelled = []
+    set_broker_state(controller, monkeypatch)
+
+    monkeypatch.setattr(
+        controller.trader,
+        "cancel",
+        lambda received_trade: cancelled.append(received_trade),
+    )
+
+    result = BracketSyncAction.from_policy("remove", controller)
+
+    assert result.bracket_sync.obsolete_brackets == []
+    assert cancelled == []
 
 
 def test_future_roll_replacement_order_preserves_order_info_params():

@@ -112,11 +112,37 @@ class BracketSync:
             # Find stop/take-profit/close orders for a strategy that
             # has no position
             if strategy.position == 0:
-                self.obsolete_brackets.extend(
-                    self._find_obsolete_brackets(strategy_str, order_infos)
+                if self._has_active_exit_order(order_infos):
+                    log.warning(
+                        "Skipping obsolete-bracket check for %s while "
+                        "exit order is active.",
+                        strategy_str,
+                    )
+                else:
+                    self.obsolete_brackets.extend(
+                        self._find_obsolete_brackets(strategy_str, order_infos)
+                    )
+            elif self._has_active_entry_order(order_infos):
+                log.warning(
+                    "Skipping missing-bracket check for %s while entry order is active.",
+                    strategy_str,
                 )
             elif bracket_issue := self._find_missing_brackets(strategy, order_infos):
                 self.missing_brackets.append(bracket_issue)
+
+    def _has_active_entry_order(self, order_infos: list[OrderInfo]) -> bool:
+        """Return True when an entry order may still be filling."""
+        return any(
+            order_info.action == "OPEN" and order_info.active
+            for order_info in order_infos
+        )
+
+    def _has_active_exit_order(self, order_infos: list[OrderInfo]) -> bool:
+        """Return True when an exit order may still be resolving."""
+        return any(
+            order_info.action == "CLOSE" and order_info.active
+            for order_info in order_infos
+        )
 
     def _find_obsolete_brackets(
         self, strategy_str: str, order_infos: list[OrderInfo]
@@ -126,7 +152,7 @@ class BracketSync:
             (strategy_str, order_info)
             for order_info in order_infos
             # there is no position and we're not trying to open a new one
-            if order_info.action != "OPEN" and order_info.active
+            if order_info.action not in ("OPEN", "CLOSE") and order_info.active
         ]
 
     def _find_missing_brackets(
