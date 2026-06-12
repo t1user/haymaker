@@ -50,7 +50,7 @@ class Timeout:
     """
 
     instances: ClassVar[list["Timeout"]] = []
-    restart_handler: ClassVar[Callable[[str], None] | None] = None
+    restart_handler: ClassVar[Callable[[str], bool | None] | None] = None
 
     event: ev.Event
     time: float = TIMEOUT_TIME
@@ -62,7 +62,7 @@ class Timeout:
     _sleep_taks: asyncio.Task | None = field(repr=False, default=None)
 
     @classmethod
-    def set_restart_handler(cls, handler: Callable[[str], None]) -> None:
+    def set_restart_handler(cls, handler: Callable[[str], bool | None]) -> None:
         """Set the callback used when a stale streamer requests a restart."""
 
         cls.restart_handler = handler

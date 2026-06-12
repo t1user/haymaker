@@ -47,7 +47,7 @@ class LiveRuntime:
     future_roll_time: tuple[int, int] = (10, 0)
     future_roll_timezone: str = "America/New_York"
     no_future_roll_strategies: list[str] = field(default_factory=list)
-    request_restart: Callable[[str], None] | None = field(
+    request_restart: Callable[[str], bool | None] | None = field(
         default=None, init=False, repr=False
     )
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
@@ -68,7 +68,9 @@ class LiveRuntime:
             ),
         )
 
-    def set_restart_handler(self, request_restart: Callable[[str], None]) -> None:
+    def set_restart_handler(
+        self, request_restart: Callable[[str], bool | None]
+    ) -> None:
         """Set the restart callback used by timeout and daily refresh timers."""
 
         self.request_restart = request_restart

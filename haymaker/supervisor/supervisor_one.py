@@ -193,6 +193,9 @@ class ConnectionSupervisor:
 
 
 class OnionLayer(ABC):
+    # supervisor_one assumes one active supervisor instance per process; these
+    # module-local layers share that active context instead of carrying it through
+    # every context-manager constructor.
     ct: ConnectionSupervisor
 
     @classmethod
@@ -425,6 +428,7 @@ class ConnectionIssueManager:
                     self.restart(
                         f"Broker re-connected, restarting due to policy {data_maintained=}"
                     )
+                    break
 
     def clear_flags(self) -> None:
         """Clear broker recovery flags after one broker-wait episode."""
