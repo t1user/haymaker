@@ -270,7 +270,7 @@ class Controller(Atom):
             return False
 
         log.debug("--- Sync ---")
-        self.release_hold()
+
         for attempt in range(1, self.sync_max_attempts + 1):
             if attempt > 1:
                 log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
