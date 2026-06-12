@@ -197,3 +197,47 @@ async def test_watcher_handlers_are_detached_after_each_cycle() -> None:
 
     assert len(fake_ib.errorEvent) == 0
     assert len(fake_ib.timeoutEvent) == 0
+
+
+@pytest.mark.asyncio
+async def test_broker_data_maintained_continues_without_restart() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 2)
+
+    fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
+
+    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 1)
+    assert workload.starts == 1
+    assert workload.stops == []
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 0
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_broker_wait_timeout_restarts_without_recovered_policy_fallthrough() -> (
+    None
+):
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, auto_recovery_grace_period=0.01)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
+
+    await stop_and_wait(supervisor, task)

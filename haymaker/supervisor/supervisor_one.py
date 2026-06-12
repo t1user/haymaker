@@ -384,48 +384,71 @@ class ConnectionIssueManager:
             self.wakeup.clear()
 
             if self._broker_wait_requested:
-                await self.wait_for_broker()
-                self._broker_wait_requested = False
+                log.debug(
+                    "Entering broker recovery wait for "
+                    f"{self.ct.settings.auto_recovery_grace_period}s."
+                )
+                broker_recovered = await self.wait_for_broker()
+                data_maintained = self._data_maintained
+                self.clear_flags()
+                if not broker_recovered:
+                    self.restart(
+                        f"Broker grace period of "
+                        f"{self.ct.settings.auto_recovery_grace_period}s "
+                        f"expired without re-establishing connection."
+                    )
+                    break
                 if (
-                    self._data_maintained
+                    data_maintained
                     and not self.ct.settings.restart_on_recovered_connection
                 ):
+                    log.debug("Broker re-connected with data maintained, no restart.")
                     continue
                 else:
-                    self.restart(f"Broker re-connected, restarting due to policy")
+                    self.restart(
+                        f"Broker re-connected, restarting due to policy {data_maintained=}"
+                    )
+
+    def clear_flags(self) -> None:
+        """Clear broker recovery flags after one broker-wait episode."""
+
+        self._broker_wait_requested = False
+        self._data_maintained = False
 
     def onErrEvent(
         self, reqId: int, code: int, message: str, contract: ibi.Contract
     ) -> None:
         if code in self.ct.BROKER_WAIT_CODES:
+            log.debug(f"Broker recovery wait requested by code {code}: {message}")
             self._broker_wait_requested = True
             self.wakeup.set()
         if code == self.ct.SOCKET_RESET_CODE:
             # this is meant to test live behaviour and change if necessary
             log.debug("Socket reset code received.")
         if code == self.ct.DATA_MAINTAINED_CODE:
+            log.debug(f"Broker reports data maintained after recovery: {message}")
             self._data_maintained = True
         if code == self.ct.DATA_LOST_CODE:
+            log.debug(f"Broker reports data lost after recovery: {message}")
             self._data_maintained = False
 
     def onTimeoutEvent(self, idle_period: float) -> None:
         self.wakeup.set()
 
-    async def wait_for_broker(self):
+    async def wait_for_broker(self) -> bool:
         waiting_object = BrokerWaiter(self.ct)
+        broker_recovered = False
         try:
             await asyncio.wait_for(
                 waiting_object.wait(),
                 self.ct.settings.auto_recovery_grace_period,
             )
+            broker_recovered = True
         except asyncio.TimeoutError:
-            self.restart(
-                f"Broker grace period of "
-                f"{self.ct.settings.auto_recovery_grace_period}s "
-                f"expired without re-establishing connection."
-            )
+            pass
         finally:
             waiting_object.close()
+        return broker_recovered
 
     async def probe(self) -> None:
         if not await self._probe():
