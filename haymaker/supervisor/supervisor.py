@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-from abc import ABC
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Any, Protocol, Self
+from typing import Any, Protocol
 
 import ib_insync as ibi
 
+from .states import (
+    AbstractState,
+    ConnectingState,
+    RestartingState,
+    StoppedError,
+    StoppedState,
+    StoppingState,
+)
+
 log = getLogger(__name__)
+
+
+INITIAL_STATE = ConnectingState
 
 
 class SupervisorWorkload(Protocol):
@@ -22,6 +33,149 @@ class SupervisorWorkload(Protocol):
 
     async def stop(self, reason: str) -> None:
         """Release active work before the supervisor reconnects or exits."""
+
+
+class SupervisorRace:
+    """Race state work against service-interruption signals.
+
+    State handlers often wait on broker I/O, sleeps, or state-local wakeups, but
+    service interruptions arrive through independent signals: explicit stop
+    requests, restart requests from broker events, and workload completion. The
+    race gives those signals one centralized policy point instead of spreading
+    interruption checks across states and event handlers.
+
+    Each run creates a task for ``state.handle()`` plus the request waiters and
+    workload task that are meaningful for the active state. The first completed
+    task wins; request events are then prioritized over normal state completion,
+    with stop taking precedence over restart.
+    """
+
+    def __init__(
+        self,
+        state: AbstractState,
+        stop_requested: asyncio.Event,
+        restart_requested: asyncio.Event,
+        workload_task: asyncio.Task[None] | None,
+    ) -> None:
+        """Configure the active supervisor race.
+
+        Args:
+            state: State whose handler is being run.
+            stop_requested: Supervisor shutdown signal.
+            restart_requested: Supervisor restart signal.
+            workload_task: Current workload task. The race decides whether its
+                completion is an active signal for the current state.
+        """
+
+        self._state = state
+        self._stop_requested = stop_requested
+        self._restart_requested = restart_requested
+        self._workload_task = workload_task
+        self._state_task: asyncio.Task[type[AbstractState]] | None = None
+        self._request_tasks: dict[str, asyncio.Task[bool]] = {}
+
+    async def __aenter__(self) -> SupervisorRace:
+        """Create tasks participating in the current supervisor race."""
+
+        self._state_task = asyncio.create_task(
+            self._state.handle(),
+            name="connection-supervisor-state",
+        )
+        self._request_tasks = {
+            name: asyncio.create_task(event.wait(), name=f"{name}-request")
+            for name, event in self._active_requests().items()
+        }
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        """Cancel tasks that did not win the race."""
+
+        tasks: list[asyncio.Task[Any]] = [*self._request_tasks.values()]
+        if self._state_task is not None:
+            tasks.append(self._state_task)
+
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def wait(self) -> type[AbstractState]:
+        """Wait for the first active task and return the proposed next state."""
+
+        if self._state_task is None:
+            raise RuntimeError("SupervisorRace must be entered before waiting.")
+
+        tasks: set[asyncio.Future[Any]] = {
+            self._state_task,
+            *self._request_tasks.values(),
+        }
+        workload_task = self._active_workload_task()
+        if workload_task is not None:
+            tasks.add(workload_task)
+
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+        request_transition = self._request_transition()
+        if request_transition is not None:
+            return request_transition
+
+        if self._state_task in done and (
+            self._state_task.cancelled() or self._state_task.exception() is not None
+        ):
+            return self._state_task.result()
+
+        if workload_task is not None and workload_task in done:
+            return StoppingState
+
+        return self._state_task.result()
+
+    def _active_requests(self) -> dict[str, asyncio.Event]:
+        """Return lifecycle request events that may interrupt this race."""
+
+        if isinstance(self._state, RestartingState):
+            # Do not cancel restart cleanup halfway through; pending stop is
+            # applied after this state finishes so cleanup remains single-pass.
+            return {}
+
+        if isinstance(self._state, (StoppingState, StoppedState)):
+            return {}
+
+        return {
+            "connection-supervisor-stop": self._stop_requested,
+            "connection-supervisor-restart": self._restart_requested,
+        }
+
+    def _active_workload_task(self) -> asyncio.Task[None] | None:
+        """Return workload completion when it is an external race signal."""
+
+        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+            return None
+
+        return self._workload_task
+
+    def _request_transition(self) -> type[AbstractState] | None:
+        """Return the highest-priority lifecycle request for this race."""
+
+        if self._stop_requested.is_set() and not isinstance(
+            self._state, (StoppingState, StoppedState)
+        ):
+            self._restart_requested.clear()
+            return StoppingState
+
+        if self._restart_requested.is_set() and not isinstance(
+            self._state, (RestartingState, StoppingState, StoppedState)
+        ):
+            self._restart_requested.clear()
+            return RestartingState
+
+        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+            self._restart_requested.clear()
+
+        return None
 
 
 @dataclass(frozen=True)
@@ -37,7 +191,6 @@ class ConnectionSettings:
         app_timeout: Seconds of no IB traffic before running connection health checks.
         probe_contract: Contract used for the small historical-data readiness probe.
         probe_timeout: Seconds to wait for the readiness probe to complete.
-        connection_lost_retry_delay: Seconds to wait after lost connection before reconnecting
         auto_recovery_grace_period: Seconds to wait for broker-side recovery before reconnecting.
         restart_on_recovered_connection: Whether to restart even after IB reports data was maintained.
     """
@@ -50,7 +203,6 @@ class ConnectionSettings:
     app_timeout: float = 90
     probe_contract: ibi.Contract = field(default_factory=lambda: ibi.Forex("EURUSD"))
     probe_timeout: float = 15
-    connection_lost_retry_delay: float = 90
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
 
@@ -74,7 +226,6 @@ class ConnectionSettings:
             app_timeout=config.get("appTimeout", 90),
             probe_contract=config.get("probeContract") or ibi.Forex("EURUSD"),
             probe_timeout=config.get("probeTimeout", 15),
-            connection_lost_retry_delay=config.get("connection_lost_retry", 90),
             auto_recovery_grace_period=config.get("auto_recovery_grace_period", 120),
             restart_on_recovered_connection=config.get(
                 "restart_on_recovered_connection", False
@@ -83,16 +234,53 @@ class ConnectionSettings:
 
 
 @dataclass
-class Supervisor:
+class ConnectionSupervisor:
+    """Run one workload under an owned IB socket connection.
+
+    Public API:
+
+        - ``run()`` starts connection and runs managed workload; it owns
+          connection setup, workload execution, restart cycles, and
+          final cleanup. It returns only after the supervisor reaches
+          the stopped state, and it re-raises unexpected supervisor
+          failures after cleanup.
+
+        - ``stop()`` sends a shutdown request; ``run()`` performs cleanup.
+
+        - ``request_restart()`` records a reconnect/rebuild request.
+          The active supervisor race decides whether and when to
+          consume that request.
+
+    State-facing helpers such as ``start_workload()``,
+    ``cleanup_workload()``, ``has_workload``, and ``disconnect()`` are
+    part of the supervisor/state contract, not the external lifecycle
+    API. Use one supervisor for one owned IB socket. Attached
+    dataloader work should run without a supervisor because it must not
+    connect, disconnect, or restart an externally owned socket.
+
+    The supervisor does not start, stop, or restart TWS/IB Gateway
+    itself, and it does not know whether the workload is live trading
+    or dataloader work. Broker messages are categorized into restart
+    requests, broker-recovery wait signals, or recovery hints;
+    non-restart messages are interpreted immediately by the active
+    state.
+
+    States return their proposed next state, but supervisor-owned
+    lifecycle requests keep final priority: stop overrides restart, and
+    restart is ignored once restart or shutdown cleanup is active.
+    """
+
     ib: ibi.IB
     workload: SupervisorWorkload
     settings: ConnectionSettings = field(default_factory=ConnectionSettings)
-    workload_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    run_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    stop_requested: asyncio.Event = field(
+    _state: AbstractState = field(init=False)
+    _workload_task: asyncio.Task[None] | None = field(
+        init=False, default=None, repr=False
+    )
+    _stop_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
-    restart_requested: asyncio.Event = field(
+    _restart_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
     # True while the supervisor closes its own socket, so disconnectedEvent is
@@ -103,143 +291,121 @@ class Supervisor:
     DATA_LOST_CODE = 1101
     DATA_MAINTAINED_CODE = 1102
     SOCKET_RESET_CODE = 1300
-    CONNECTION_RESTORED_CODES = frozenset({DATA_MAINTAINED_CODE, DATA_LOST_CODE})
 
     def __post_init__(self) -> None:
-        OnionLayer.set_context(self)
+        self._state = INITIAL_STATE(self)
+        self.ib.errorEvent += self.onErrEvent
         self.ib.disconnectedEvent += self.onDisconnectedEvent
+        self.ib.timeoutEvent += self.onTimeoutEvent
+        self.ib.updateEvent += self.onUpdateEvent
 
-    async def run(self):
-        while True:
-            try:
-                self.restart_requested.clear()
+    async def run(self) -> None:
+        """Run connection, workload, restart, and shutdown states."""
 
-                self.run_task = asyncio.create_task(
-                    self._run_onion(), name="Supervisor-run-task"
-                )
-                if self.run_task is not None:
-                    await self.run_task
+        try:
+            while True:
+                async with SupervisorRace(
+                    self._state,
+                    self._stop_requested,
+                    self._restart_requested,
+                    self._workload_task,
+                ) as race:
+                    transition = await race.wait()
+                self._transition_to(transition)
+        except StoppedError:
+            return
+        except asyncio.CancelledError:
+            self.stop()
+            await self._cleanup()
+            raise
+        except Exception:
+            log.exception("Connection supervisor failed; stopping.")
+            await self._cleanup()
+            raise
 
-                if self.stop_requested.is_set():
-                    log.debug("Workload completed. Exiting.")
-                    return
+    def _transition_to(self, next_state: type[AbstractState]) -> AbstractState:
+        """Transition to a new state class and return the state instance."""
 
-            except (ConnectionError, asyncio.CancelledError):
-                delay = self.settings.connection_lost_retry_delay
-                log.debug(f"Connection lost... will retry in {delay}")
-                await asyncio.sleep(delay)
-            except Exception as e:
-                log.exception(e)
-                break
-
-    async def _run_onion(self):
-        async with Connection():
-            async with Watcher():
-                async with Workload():
-                    async with Waiter() as waiter:
-                        await waiter.wait()
+        if next_state != type(self._state):
+            log.debug(
+                f"{self.__class__.__name__}: {type(self._state).__name__} -> "
+                f"{next_state.__name__}"
+            )
+        self._state = next_state(self)
+        return self._state
 
     def stop(self) -> None:
         """Request supervisor shutdown; the run loop performs cleanup."""
-        log.debug("Stop requested")
-        self.stop_requested.set()
+
+        self._stop_requested.set()
 
     def request_restart(self, reason: str = "") -> None:
         """Record a reconnect/rebuild request."""
 
         restart_reason = reason or "restart requested"
         log.debug(f"Restart requested: {restart_reason}")
-        self.restart_requested.set()
+        self._restart_requested.set()
 
-    def onDisconnectedEvent(self, *args) -> None:
-        if self.run_task is not None:
-            self.run_task.cancel()
+    def onDisconnectedEvent(self) -> None:
+        """Request restart after unexpected API socket disconnection."""
 
+        if not self._intentional_disconnect:
+            self.request_restart("IB socket disconnected")
 
-class OnionLayer(ABC):
-    ct: Supervisor
+    def onTimeoutEvent(self, idle_period: float) -> None:
+        """Dispatch an idle timeout to the active supervisor state."""
 
-    @classmethod
-    def set_context(cls, context: Supervisor) -> None:
-        cls.ct = context
+        log.debug(f"No IB traffic for {idle_period}s.")
+        self._state.on_timeout(idle_period)
 
-    async def __aenter__(self) -> Self:
-        return self
+    def onUpdateEvent(self) -> None:
+        """Dispatch resumed IB traffic to the active supervisor state."""
 
-    async def __aexit__(
+        self._state.on_update()
+
+    def onErrEvent(
         self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: object | None,
+        req_id: int,
+        code: int,
+        message: str,
+        contract: ibi.Contract,
     ) -> None:
-        pass
+        """Translate selected broker messages into supervisor signals."""
 
-
-class Connection(OnionLayer):
-
-    async def __aenter__(self) -> Self:
-        while not self.ct.ib.isConnected():
-            try:
-                log.debug(
-                    f"Connecting to IB at {self.ct.settings.host}:{self.ct.settings.port}."
+        if code == self.DATA_LOST_CODE:
+            self.request_restart(
+                f"broker connectivity restored with data lost ({code})"
+            )
+        elif code == self.SOCKET_RESET_CODE:
+            self.request_restart(f"broker reset API socket port ({code})")
+        elif code == self.DATA_MAINTAINED_CODE:
+            if self.settings.restart_on_recovered_connection:
+                self.request_restart(
+                    f"broker connectivity restored with data maintained ({code})"
                 )
-                await self.ct.ib.connectAsync(
-                    self.ct.settings.host,
-                    self.ct.settings.port,
-                    clientId=self.ct.settings.client_id,
-                    timeout=self.ct.settings.connect_timeout,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                log.debug(f"IB connection attempt failed: {exc!r}")
-                await asyncio.sleep(self.ct.settings.retry_delay)
-        return self
+            else:
+                self._state.on_broker_message(code, message)
+        else:
+            self._state.on_broker_message(code, message)
 
-
-class Watcher(OnionLayer):
-
-    _connection_issue_manager: ConnectionIssueManager | None
-    _connection_issue_manager_task: asyncio.Task[None] | None = None
-
-    async def __aenter__(self) -> Self:
-        self._connection_issue_manager = ConnectionIssueManager(self.ct)
-        self._connecton_issue_manager_task = asyncio.create_task(
-            self._connection_issue_manager.run()
-        )
-        return self
-
-    async def __aexit__(self, *args):
-        if (
-            self._connection_issue_manager_task is not None
-            and not self._connection_issue_manager_task.done()
-        ):
-            self._connection_issue_manager_task.cancel()
-        self._connection_issue_manager_task = None
-        if self._connection_issue_manager is not None:
-            del self._connection_issue_manager
-
-
-class Workload(OnionLayer):
-
-    async def __aenter__(self) -> Self:
+    def start_workload(self) -> None:
         """Start the supervised workload as a tracked task."""
 
-        if self.ct.workload_task is None or self.ct.workload_task.done():
-            self.ct.workload_task = asyncio.create_task(
-                self.ct.workload.start(), name="connection-supervisor-workload"
+        if self._workload_task is None or self._workload_task.done():
+            self._workload_task = asyncio.create_task(
+                self.workload.start(), name="connection-supervisor-workload"
             )
-        return self
 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: object | None,
-    ) -> None:
+    @property
+    def has_workload(self) -> bool:
+        """Return whether the supervisor currently tracks a workload task."""
+
+        return self._workload_task is not None
+
+    async def cleanup_workload(self, reason: str = "") -> None:
         """Stop active workload or collect its completed result."""
 
-        task = self.ct.workload_task
+        task = self._workload_task
         if task is None:
             return
 
@@ -248,16 +414,15 @@ class Workload(OnionLayer):
             self._workload_task = None
             return
 
-        await self.ct.workload.stop(f"{exc_type} - {exc}")
+        await self.workload.stop(reason)
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
-        self.ct.workload_task = None
+        self._workload_task = None
 
-    @staticmethod
-    def _log_workload_result(task: asyncio.Task[None]) -> None:
+    def _log_workload_result(self, task: asyncio.Task[None]) -> None:
         """Log failure from a completed workload task."""
 
         try:
@@ -267,126 +432,18 @@ class Workload(OnionLayer):
         except Exception:
             log.exception("Connection workload task failed.")
 
+    def disconnect(self) -> None:
+        """Disconnect the owned IB socket without triggering restart handling."""
 
-class Waiter(OnionLayer):
+        if self.ib.isConnected():
+            self._intentional_disconnect = True
+            try:
+                self.ib.disconnect()
+            finally:
+                self._intentional_disconnect = False
 
-    async def __aenter__(self) -> Self:
-        return self
+    async def _cleanup(self) -> None:
+        """Run terminal cleanup and leave the supervisor in the stopped state."""
 
-    async def wait(self) -> None:
-        while self._should_wait():
-            await asyncio.sleep(0)
-
-    def _should_wait(self) -> bool:
-        assert self.ct.workload_task is not None
-        return not any(
-            (
-                self.ct.restart_requested.is_set(),
-                self.ct.stop_requested.is_set(),
-                self.ct.workload_task.done(),
-            )
-        )
-
-
-class ConnectionIssueManager:
-
-    def __init__(self, ct: Supervisor) -> None:
-        self.ct = ct
-        ct.ib.errorEvent += self.onErrEvent
-        ct.ib.timeoutEvent += self.onTimeoutEvent
-        self.wakeup = asyncio.Event()
-        self._broker_wait_requested = False
-        self._data_maintained = False
-
-    def set_timeout(self):
-        if self.ct.settings.app_timeout:
-            self.ct.ib.setTimeout(self.ct.settings.app_timeout)
-
-    async def run(self):
-        while True:
-            await self.probe()
-            self.set_timeout()
-            await self.wakeup.wait()
-
-            if self._broker_wait_requested:
-                await self.wait_for_broker()
-                self._broker_wait_requested = False
-                if (
-                    self._data_maintained
-                    and not self.ct.settings.restart_on_recovered_connection
-                ):
-                    continue
-                else:
-                    self.restart(f"Broker re-connected, restarting due to policy")
-
-    def onErrEvent(
-        self, reqId: int, code: int, message: str, contract: ibi.Contract
-    ) -> None:
-        if code in self.ct.BROKER_WAIT_CODES:
-            self._broker_wait_requested = True
-            self.wakeup.set()
-        if code == self.ct.DATA_MAINTAINED_CODE:
-            self._data_maintained = True
-        if code == self.ct.DATA_LOST_CODE:
-            self._data_maintained = False
-
-    def onTimeoutEvent(self, idle_period: float) -> None:
-        self.wakeup.set()
-
-    async def wait_for_broker(self):
-        waiting_object = BrokerWaiter(self.ct)
-        try:
-            await asyncio.wait_for(
-                waiting_object.wait(),
-                self.ct.settings.auto_recovery_grace_period,
-            )
-        except asyncio.TimeoutError:
-            self.restart(
-                f"Broker grace period of "
-                f"{self.ct.settings.auto_recovery_grace_period}s "
-                f"expired without re-establishing connection."
-            )
-        finally:
-            del waiting_object
-
-    async def probe(self) -> None:
-        if not await self._probe():
-            self.restart("Connection probe failed.")
-
-    async def _probe(self) -> bool:
-        """Return whether the broker accepted a small historical-data request."""
-
-        try:
-            probe = self.ct.ib.reqHistoricalDataAsync(
-                self.ct.settings.probe_contract, "", "30 S", "5 secs", "MIDPOINT", False
-            )
-            bars = await asyncio.wait_for(probe, self.ct.settings.probe_timeout)
-        except (asyncio.TimeoutError, ConnectionError) as exc:
-            log.debug(f"Connection probe did not complete: {exc!r}")
-            return False
-        return bool(bars)
-
-    def restart(self, reason: str = "") -> None:
-        self.ct.request_restart(reason)
-
-    def __del__(self) -> None:
-        self.ct.ib.errorEvent += self.onErrEvent
-        self.ct.ib.timeoutEvent += self.onTimeoutEvent
-
-
-class BrokerWaiter:
-
-    def __init__(self, ct: Supervisor) -> None:
-        self.ct = ct
-        self.connection_restored_event = asyncio.Event()
-        ct.ib.errorEvent += self.onErrEvent
-
-    def onErrEvent(self, code: int, message: str) -> None:
-        if code in self.ct.CONNECTION_RESTORED_CODES:
-            self.connection_restored_event.set()
-
-    async def wait(self) -> None:
-        await self.connection_restored_event.wait()
-
-    def __del__(self):
-        self.ct.ib.errorEvent -= self.onErrEvent
+        next_state = await self._transition_to(StoppingState).handle()
+        self._transition_to(next_state)
