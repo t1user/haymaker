@@ -6,12 +6,21 @@ import asyncio
 from abc import ABC
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from logging import getLogger
 from typing import Any, Protocol, Self
 
 import ib_insync as ibi
 
 log = getLogger(__name__)
+
+
+class CycleOutcome(Enum):
+    """Result from one supervisor onion cycle."""
+
+    RESTART = auto()
+    STOP = auto()
+    WORKLOAD_DONE = auto()
 
 
 class SupervisorWorkload(Protocol):
@@ -88,7 +97,7 @@ class ConnectionSupervisor:
     workload: SupervisorWorkload
     settings: ConnectionSettings = field(default_factory=ConnectionSettings)
     workload_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    onion_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    onion_task: asyncio.Task[CycleOutcome] | None = field(default=None, repr=False)
     stop_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
@@ -100,6 +109,7 @@ class ConnectionSupervisor:
     # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
     _resets_blocked: bool = field(default=False, init=False, repr=False)
+    _delay_next_restart: bool = field(default=False, init=False, repr=False)
 
     BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
     DATA_LOST_CODE = 1101
@@ -116,15 +126,21 @@ class ConnectionSupervisor:
             try:
                 self.restart_requested.clear()
 
-                self.onion_task = asyncio.create_task(
+                onion_task = asyncio.create_task(
                     self._run_onion(), name="ConnectionSupervisor-onion-task"
                 )
-                if self.onion_task is not None:
-                    await asyncio.shield(self.onion_task)
-
-                if self.stop_requested.is_set():
-                    log.debug("Workload completed. Exiting.")
+                self.onion_task = onion_task
+                # Do not let external cancellation cancel the onion before stop()
+                # marks shutdown intent; run() handles that cancellation path below.
+                outcome = await asyncio.shield(onion_task)
+                if outcome in (CycleOutcome.STOP, CycleOutcome.WORKLOAD_DONE):
+                    log.debug(f"Supervisor cycle finished with {outcome.name}.")
                     return
+                if outcome is CycleOutcome.RESTART and self._delay_next_restart:
+                    self._delay_next_restart = False
+                    await self._wait_before_reconnect()
+                    if self.stop_requested.is_set():
+                        break
 
             except (ConnectionError, asyncio.CancelledError) as exc:
                 if self.stop_requested.is_set():
@@ -145,12 +161,12 @@ class ConnectionSupervisor:
                 log.exception(e)
                 break
 
-    async def _run_onion(self):
+    async def _run_onion(self) -> CycleOutcome:
         async with Connection():
             async with Watcher():
                 async with Workload():
                     async with Waiter() as waiter:
-                        await waiter.wait()
+                        return await waiter.wait()
 
     def stop(self) -> None:
         """Request supervisor shutdown; the run loop performs cleanup."""
@@ -186,9 +202,9 @@ class ConnectionSupervisor:
         self._workload_completed = True
 
     def onDisconnectedEvent(self, *args) -> None:
-        if not self._intentional_disconnect and self.onion_task is not None:
+        if not self._intentional_disconnect:
             if self.request_restart("IB socket disconnected"):
-                self.onion_task.cancel()
+                self._delay_next_restart = True
 
     async def _wait_before_reconnect(self) -> None:
         """Wait before reconnecting after connection loss or restart cancellation."""
@@ -388,17 +404,24 @@ class Waiter(OnionLayer):
         if self.ct.workload_task.done():
             self.ct.set_workload_completed()
 
-    async def wait(self) -> None:
+    async def wait(self) -> CycleOutcome:
         assert self.ct.workload_task is not None
         assert self._event_waiters is not None
         waiting_tasks = (
             *self._event_waiters,
             self.ct.workload_task,
         )
-        await asyncio.wait(
+        done, _ = await asyncio.wait(
             waiting_tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
+        if self.ct.stop_requested.is_set():
+            return CycleOutcome.STOP
+        if self.ct.restart_requested.is_set():
+            return CycleOutcome.RESTART
+        if self.ct.workload_task in done:
+            return CycleOutcome.WORKLOAD_DONE
+        return CycleOutcome.RESTART
 
 
 class ConnectionIssueManager:
