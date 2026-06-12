@@ -96,6 +96,9 @@ class ConnectionSupervisor:
         default_factory=asyncio.Event, init=False, repr=False
     )
     _workload_completed: bool = False
+    # True while the supervisor closes its own socket, so disconnectedEvent is
+    # not classified as an unexpected outage.
+    _intentional_disconnect: bool = field(default=False, init=False, repr=False)
 
     BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
     DATA_LOST_CODE = 1101
@@ -127,7 +130,9 @@ class ConnectionSupervisor:
                     break
                 delay = self.settings.connection_lost_retry_delay
                 log.debug(f"Connection lost... will retry in {delay}")
-                await asyncio.sleep(delay)
+                await self._sleep_until_stop(delay)
+                if self.stop_requested.is_set():
+                    break
             except Exception as e:
                 log.exception(e)
                 break
@@ -157,8 +162,17 @@ class ConnectionSupervisor:
         self._workload_completed = True
 
     def onDisconnectedEvent(self, *args) -> None:
-        if self.run_task is not None:
+        if not self._intentional_disconnect and self.run_task is not None:
+            self.request_restart("IB socket disconnected")
             self.run_task.cancel()
+
+    async def _sleep_until_stop(self, delay: float) -> None:
+        """Sleep for retry delay, returning early when shutdown is requested."""
+
+        try:
+            await asyncio.wait_for(self.stop_requested.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
 
 
 class OnionLayer(ABC):
@@ -207,7 +221,12 @@ class Connection(OnionLayer):
         exc: BaseException | None,
         traceback: object | None,
     ) -> None:
-        self.ct.ib.disconnect()
+        if self.ct.ib.isConnected():
+            self.ct._intentional_disconnect = True
+            try:
+                self.ct.ib.disconnect()
+            finally:
+                self.ct._intentional_disconnect = False
 
 
 class Watcher(OnionLayer):
@@ -265,13 +284,28 @@ class Workload(OnionLayer):
             self.ct.workload_task = None
             return
 
-        await self.ct.workload.stop(f"{exc_type} - {exc}")
+        await self.ct.workload.stop(self._stop_reason(exc_type, exc))
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
         self.ct.workload_task = None
+
+    def _stop_reason(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+    ) -> str:
+        """Return the lifecycle reason reported to workload cleanup."""
+
+        if self.ct.stop_requested.is_set():
+            return "supervisor stopped"
+        if self.ct.restart_requested.is_set():
+            return "restart requested"
+        if exc_type is not None:
+            return f"{exc_type.__name__}: {exc}"
+        return "supervisor stopped"
 
     @staticmethod
     def _log_workload_result(task: asyncio.Task[None]) -> None:
@@ -286,35 +320,9 @@ class Workload(OnionLayer):
 
 
 class Waiter(OnionLayer):
-    _event_waiters: tuple[asyncio.Task] | None = None
+    _event_waiters: tuple[asyncio.Task[bool], asyncio.Task[bool]] | None = None
 
     async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: object | None,
-    ) -> None:
-        self.event_waiters = None
-        assert self.ct.workload_task
-        if self.ct.workload_task.done():
-            self.ct.set_workload_completed()
-
-    async def wait(self) -> None:
-        assert self.ct.workload_task is not None
-        waiting_tasks = (
-            *self.event_waiters,
-            self.ct.workload_task,
-        )
-        await asyncio.wait(
-            waiting_tasks,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-    @property
-    def event_waiters(self) -> tuple[asyncio.Task]:
         self._event_waiters = (
             asyncio.create_task(
                 self.ct.restart_requested.wait(),
@@ -324,12 +332,34 @@ class Waiter(OnionLayer):
                 self.ct.stop_requested.wait(), name="supervisor-stop-requested-waiter"
             ),
         )
-        assert self._event_waiters is not None
-        return self._event_waiters
+        return self
 
-    @event_waiters.setter
-    def event_waiters(self, value) -> None:
-        self._event_waiters = value
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        if self._event_waiters is not None:
+            for task in self._event_waiters:
+                task.cancel()
+            await asyncio.gather(*self._event_waiters, return_exceptions=True)
+        self._event_waiters = None
+        assert self.ct.workload_task
+        if self.ct.workload_task.done():
+            self.ct.set_workload_completed()
+
+    async def wait(self) -> None:
+        assert self.ct.workload_task is not None
+        assert self._event_waiters is not None
+        waiting_tasks = (
+            *self._event_waiters,
+            self.ct.workload_task,
+        )
+        await asyncio.wait(
+            waiting_tasks,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
 
 class ConnectionIssueManager:
