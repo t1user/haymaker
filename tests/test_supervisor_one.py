@@ -19,6 +19,7 @@ class FakeIB:
         self.connect_attempts = 0
         self.disconnect_count = 0
         self.fail_connect_attempts = 0
+        self.cancel_connect_attempts = 0
         self.timeouts: list[float] = []
         self.probe_count = 0
         self.probe_results: list[list[object]] = [[object()]]
@@ -27,6 +28,9 @@ class FakeIB:
         """Connect unless configured to fail this attempt."""
 
         self.connect_attempts += 1
+        if self.cancel_connect_attempts:
+            self.cancel_connect_attempts -= 1
+            raise asyncio.CancelledError
         if self.fail_connect_attempts:
             self.fail_connect_attempts -= 1
             raise ConnectionError("connection failed")
@@ -175,6 +179,41 @@ async def test_stop_interrupts_connection_lost_retry_sleep() -> None:
 
     assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_connection_cancelled_error_retries_without_stopping() -> None:
+    fake_ib = FakeIB()
+    fake_ib.cancel_connect_attempts = 1
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, connection_lost_retry_delay=0)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    assert fake_ib.connect_attempts == 2
+    assert not task.done()
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_external_run_cancellation_propagates_after_cleanup() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert workload.stops == ["supervisor stopped"]
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 1
 
 
 @pytest.mark.asyncio

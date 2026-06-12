@@ -88,7 +88,7 @@ class ConnectionSupervisor:
     workload: SupervisorWorkload
     settings: ConnectionSettings = field(default_factory=ConnectionSettings)
     workload_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    run_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    onion_task: asyncio.Task[None] | None = field(default=None, repr=False)
     stop_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
@@ -116,22 +116,29 @@ class ConnectionSupervisor:
             try:
                 self.restart_requested.clear()
 
-                self.run_task = asyncio.create_task(
-                    self._run_onion(), name="ConnectionSupervisor-run-task"
+                self.onion_task = asyncio.create_task(
+                    self._run_onion(), name="ConnectionSupervisor-onion-task"
                 )
-                if self.run_task is not None:
-                    await self.run_task
+                if self.onion_task is not None:
+                    await asyncio.shield(self.onion_task)
 
                 if self.stop_requested.is_set():
                     log.debug("Workload completed. Exiting.")
                     return
 
-            except (ConnectionError, asyncio.CancelledError):
+            except (ConnectionError, asyncio.CancelledError) as exc:
                 if self.stop_requested.is_set():
                     break
-                delay = self.settings.connection_lost_retry_delay
-                log.debug(f"Connection lost... will retry in {delay}")
-                await self._sleep_until_stop(delay)
+                if isinstance(exc, asyncio.CancelledError) and self._onion_running():
+                    self.stop()
+                    if self.onion_task is not None:
+                        try:
+                            await self.onion_task
+                        except asyncio.CancelledError:
+                            pass
+                    raise
+                self.restart_requested.clear()
+                await self._wait_before_reconnect()
                 if self.stop_requested.is_set():
                     break
             except Exception as e:
@@ -149,8 +156,8 @@ class ConnectionSupervisor:
         """Request supervisor shutdown; the run loop performs cleanup."""
         log.debug("Stop requested")
         self.stop_requested.set()
-        if self.run_task is not None:
-            self.run_task.cancel()
+        if self.onion_task is not None:
+            self.onion_task.cancel()
 
     def request_restart(self, reason: str = "") -> bool:
         """Record a reconnect/rebuild request."""
@@ -179,9 +186,21 @@ class ConnectionSupervisor:
         self._workload_completed = True
 
     def onDisconnectedEvent(self, *args) -> None:
-        if not self._intentional_disconnect and self.run_task is not None:
+        if not self._intentional_disconnect and self.onion_task is not None:
             if self.request_restart("IB socket disconnected"):
-                self.run_task.cancel()
+                self.onion_task.cancel()
+
+    async def _wait_before_reconnect(self) -> None:
+        """Wait before reconnecting after connection loss or restart cancellation."""
+
+        delay = self.settings.connection_lost_retry_delay
+        log.debug(f"Connection lost... will retry in {delay}")
+        await self._sleep_until_stop(delay)
+
+    def _onion_running(self) -> bool:
+        """Return whether the active onion task is still running."""
+
+        return self.onion_task is not None and not self.onion_task.done()
 
     async def _sleep_until_stop(self, delay: float) -> None:
         """Sleep for retry delay, returning early when shutdown is requested."""
