@@ -99,6 +99,7 @@ class ConnectionSupervisor:
     # True while the supervisor closes its own socket, so disconnectedEvent is
     # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
+    _resets_blocked: bool = field(default=False, init=False, repr=False)
 
     BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
     DATA_LOST_CODE = 1101
@@ -151,20 +152,36 @@ class ConnectionSupervisor:
         if self.run_task is not None:
             self.run_task.cancel()
 
-    def request_restart(self, reason: str = "") -> None:
+    def request_restart(self, reason: str = "") -> bool:
         """Record a reconnect/rebuild request."""
 
         restart_reason = reason or "restart requested"
+        if self._resets_blocked:
+            log.debug(
+                f"Restart request blocked during broker recovery: {restart_reason}"
+            )
+            return False
         log.debug(f"Restart requested: {restart_reason}")
         self.restart_requested.set()
+        return True
+
+    def block_resets_set(self) -> None:
+        """Block restart requests while broker recovery owns the lifecycle decision."""
+
+        self._resets_blocked = True
+
+    def block_resets_clear(self) -> None:
+        """Allow restart requests after broker recovery wait has finished."""
+
+        self._resets_blocked = False
 
     def set_workload_completed(self) -> None:
         self._workload_completed = True
 
     def onDisconnectedEvent(self, *args) -> None:
         if not self._intentional_disconnect and self.run_task is not None:
-            self.request_restart("IB socket disconnected")
-            self.run_task.cancel()
+            if self.request_restart("IB socket disconnected"):
+                self.run_task.cancel()
 
     async def _sleep_until_stop(self, delay: float) -> None:
         """Sleep for retry delay, returning early when shutdown is requested."""
@@ -414,6 +431,7 @@ class ConnectionIssueManager:
 
         self._broker_wait_requested = False
         self._data_maintained = False
+        self.ct.block_resets_clear()
 
     def onErrEvent(
         self, reqId: int, code: int, message: str, contract: ibi.Contract
@@ -421,6 +439,7 @@ class ConnectionIssueManager:
         if code in self.ct.BROKER_WAIT_CODES:
             log.debug(f"Broker recovery wait requested by code {code}: {message}")
             self._broker_wait_requested = True
+            self.ct.block_resets_set()
             self.wakeup.set()
         if code == self.ct.SOCKET_RESET_CODE:
             # this is meant to test live behaviour and change if necessary
@@ -468,9 +487,11 @@ class ConnectionIssueManager:
         return bool(bars)
 
     def restart(self, reason: str = "") -> None:
+        self.ct.block_resets_clear()
         self.ct.request_restart(reason)
 
     def close(self) -> None:
+        self.ct.block_resets_clear()
         self.ct.ib.errorEvent -= self.onErrEvent
         self.ct.ib.timeoutEvent -= self.onTimeoutEvent
 

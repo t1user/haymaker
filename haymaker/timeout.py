@@ -168,7 +168,9 @@ class Timeout:
             if restart_handler is None:
                 log.error("Cannot restart: no timeout restart handler configured.")
                 return
-            restart_handler(f"stale streamer: {self!s}")
+            restart_accepted = restart_handler(f"stale streamer: {self!s}")
+            if restart_accepted is False:
+                self._set_timeout(self.event)
 
     def _set_timeout(self, event: ev.Event) -> None:
         self._timeout = event.timeout(self.time)
