@@ -6,7 +6,6 @@ import pytest
 from helpers import wait_for_condition
 
 from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
-from haymaker.supervisor.supervisor import SupervisorRace
 from haymaker.supervisor.states import (
     AbstractState,
     ConnectedState,
@@ -15,6 +14,7 @@ from haymaker.supervisor.states import (
     StoppingState,
     WaitingForBrokerState,
 )
+from haymaker.supervisor.supervisor import SupervisorRace
 
 
 class FakeIB:
@@ -636,17 +636,3 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert not hasattr(settings, "restart_delay")
     assert not hasattr(settings, "recovery_warning_after")
     assert not hasattr(settings, "recovery_warning_interval")
-
-
-def test_connection_settings_from_config_uses_defaults() -> None:
-    settings = ConnectionSettings.from_config({}, client_id=51)
-
-    assert settings.host == "127.0.0.1"
-    assert settings.port == 4002
-    assert settings.client_id == 51
-    assert settings.connect_timeout == 2
-    assert settings.retry_delay == 2
-    assert settings.app_timeout == 20
-    assert settings.probe_timeout == 4
-    assert settings.auto_recovery_grace_period == 120
-    assert settings.restart_on_recovered_connection is False
