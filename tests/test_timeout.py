@@ -93,6 +93,24 @@ def test_stale_streamer_requests_restart(Timeout):
     assert reasons == [f"stale streamer: {timeout!s}"]
 
 
+def test_stale_streamer_rearms_timeout_when_restart_is_blocked(Timeout):
+    reasons = []
+
+    def blocked_restart(reason: str) -> bool:
+        reasons.append(reason)
+        return False
+
+    Timeout.set_restart_handler(blocked_restart)
+    timeout = Timeout(ev.Event(), time=0.1, name="stale", debug=False)
+    original_timeout = timeout._timeout
+    expected_reason = f"stale streamer: {timeout!s}"
+
+    timeout.triggered_action()
+
+    assert reasons == [expected_reason]
+    assert timeout._timeout is not original_timeout
+
+
 # ###########################################
 # Below created by claude
 # ###########################################
