@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from haymaker.config import CONFIG
 
@@ -27,7 +27,9 @@ def _configured_supervisor_mode(config: Mapping[str, Any]) -> SupervisorMode:
     return mode
 
 
-if _configured_supervisor_mode(CONFIG) == "onion":
+if TYPE_CHECKING:
+    from .supervisor import ConnectionSupervisor
+elif _configured_supervisor_mode(CONFIG) == "onion":
     from .supervisor_one import ConnectionSupervisor
 else:
     from .supervisor import ConnectionSupervisor
