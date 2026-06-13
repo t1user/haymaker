@@ -28,6 +28,12 @@ endpoint but does not start, stop, or restart the gateway process.
 Each connection cycle verifies broker usability with a short historical-data
 probe before starting the supervised workload.
 
+``app.supervisor`` selects the live supervisor implementation. ``state`` is the
+default state-machine implementation; ``onion`` selects the alternative layered
+implementation. For the current managed dataloader configuration, the equivalent
+setting is top-level ``supervisor`` because dataloader connection settings are
+read from a flat mapping.
+
 For live execution, ``timeoutEvent`` is the active health signal after the IB
 client has received no traffic for ``app.appTimeout`` seconds. Haymaker probes
 the connection and requests a restart if the probe fails. Broker-degraded

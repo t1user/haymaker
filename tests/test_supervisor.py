@@ -645,6 +645,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
             "retryDelay": 7,
             "appTimeout": 11,
             "probeTimeout": 13,
+            "connection_lost_retry": 15,
             "auto_recovery_grace_period": 17,
             "recovery_warning_after": 19,
             "recovery_warning_interval": 23,
@@ -660,6 +661,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert settings.retry_delay == 7
     assert settings.app_timeout == 11
     assert settings.probe_timeout == 13
+    assert settings.connection_lost_retry_delay == 15
     assert settings.auto_recovery_grace_period == 17
     assert settings.restart_on_recovered_connection is True
     assert not hasattr(settings, "restart_delay")
@@ -677,5 +679,14 @@ def test_connection_settings_from_config_uses_defaults() -> None:
     assert settings.retry_delay == 30
     assert settings.app_timeout == 90
     assert settings.probe_timeout == 15
+    assert settings.connection_lost_retry_delay == 90
     assert settings.auto_recovery_grace_period == 120
     assert settings.restart_on_recovered_connection is False
+
+
+def test_request_restart_returns_true_when_state_supervisor_accepts_request() -> None:
+    fake_ib = FakeIB()
+    supervisor = make_supervisor(fake_ib)
+
+    assert supervisor.request_restart("manual restart") is True
+    assert supervisor._restart_requested.is_set()

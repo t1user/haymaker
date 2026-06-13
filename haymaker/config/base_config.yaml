@@ -18,6 +18,7 @@ log_broker: False # if additional logger with all broker messages should be crea
 
 
 app:
+  supervisor: state # one of: state, onion
   host: 127.0.0.1
   port: 4002
   connectTimeout: 15

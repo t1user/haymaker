@@ -125,6 +125,7 @@ Configuration Notes
 
 Important recovery settings are documented in :doc:`configuration`, including:
 
+* ``supervisor``: implementation selector, ``state`` or ``onion``;
 * ``connectTimeout``: one socket connection attempt timeout;
 * ``retryDelay``: pause between failed connection attempts;
 * ``appTimeout``: idle period before ``timeoutEvent`` probes;
