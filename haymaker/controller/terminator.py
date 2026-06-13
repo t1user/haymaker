@@ -64,7 +64,7 @@ class Terminator:
             log.debug("All orders should be cancelled now.")
             log.debug(f"Opend trades: {self.controller.ib.openTrades()}")
             log.debug("Will run close positions.")
-            self.controller.close_positions()
+            await self.controller.close_positions()
         # neccessary to make sure order cancelletions completed
         await asyncio.sleep(1)
         if self.verify_zero():

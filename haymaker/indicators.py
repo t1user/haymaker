@@ -1,16 +1,37 @@
-from functools import partial
+from functools import partial, wraps
 from typing import Callable, Literal
 
 import numpy as np
 import pandas as pd
 
-from .research.decorators import ensure_df
 from .research.numba_tools import (
     _blip_to_signal_converter,
     _in_out_blip_unifier,
     rolling_min_max_index,
     swing,
 )
+
+
+def ensure_df(func):
+    """
+    Decorator allowing signal producing functions to work with either
+    dataframe or series.
+    """
+
+    @wraps(func)
+    def verify(data, *args, **kwargs) -> pd.DataFrame:
+        if isinstance(data, pd.Series):
+            data = pd.DataFrame({"close": data})
+        elif isinstance(data, pd.DataFrame):
+            data = data.copy()
+        else:
+            raise TypeError(
+                f"Data must be either Series or DataFrame with column 'close'"
+                f" containing prices, not {type(data)}."
+            )
+        return func(data, *args, **kwargs)
+
+    return verify
 
 
 def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:

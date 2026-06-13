@@ -56,6 +56,7 @@ class Controller(Atom):
     broker_request_timeout: int = 10
     sync_max_attempts: int = 3
     sync_resync_delay: float = 1
+    startup_delay: float = 0
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
     ignore_errors: tuple[int, ...] | list[int] = field(default_factory=tuple)
@@ -213,7 +214,7 @@ class Controller(Atom):
         log.debug("Running controller...")
         self.set_hold()
         if self.nuke:
-            self.run_nuke()
+            await self.run_nuke()
 
         if self.cold_start:
             log.debug("Starting cold... (state NOT read from db)")
@@ -226,6 +227,10 @@ class Controller(Atom):
                 log.exception(e)
                 self.disable_trading("state store read failed")
                 return False
+
+        if self.startup_delay:
+            log.debug(f"Startup delay before sync: {self.startup_delay}s")
+            await asyncio.sleep(self.startup_delay)
 
         sync_ok = await self.sync()
         if not sync_ok:
@@ -488,43 +493,42 @@ class Controller(Atom):
 
         await asyncio.sleep(1)
         order_info = self.sm.save_order_status(trade)
+        if not order_info:
+            if trade.order.totalQuantity == 0:
+                log.warning(f"empty CommissionReportEvent emit for trade: {trade}")
+            else:
+                log.error(
+                    f"Commission report for unknown trade: {trade.order.orderId} "
+                    f"{trade.contract.localSymbol}; no blotter entry created."
+                )
+            return
+
         log.debug(
             f"Saving order {trade.order.orderId} to blotter: {order_info.strategy}"
         )
 
-        if order_info:
-            try:
-                strategy, action, _, params, _ = order_info
-                position_id = params["position_id"]
+        try:
+            strategy, action, _, params, _ = order_info
+            position_id = params["position_id"]
 
-                kwargs = {
-                    "strategy": strategy,
-                    "action": action,
-                    "position_id": position_id,
-                    "params": ibi.util.tree(params),
-                }
-                # optionally set by execution model
-                if arrival_price := params.get("arrival_price"):
-                    kwargs.update(
-                        {
-                            "price_time": arrival_price["time"],
-                            "bid": arrival_price["bid"],
-                            "ask": arrival_price["ask"],
-                        }
-                    )
-            except Exception as e:
-                log.error(f"Error while trying to create blotter entry: {e}")
-                kwargs = {}
-
-        elif trade.order.totalQuantity == 0:
-            log.warning(f"empty CommissionReportEvent emit for trade: {trade}")
-            return
-        else:
-            log.error(
-                f"Commission report for unknown trade: {trade.order.orderId} "
-                f"{trade.contract.localSymbol}"
-            )
-            return
+            kwargs = {
+                "strategy": strategy,
+                "action": action,
+                "position_id": position_id,
+                "params": ibi.util.tree(params),
+            }
+            # optionally set by execution model
+            if arrival_price := params.get("arrival_price"):
+                kwargs.update(
+                    {
+                        "price_time": arrival_price["time"],
+                        "bid": arrival_price["bid"],
+                        "ask": arrival_price["ask"],
+                    }
+                )
+        except Exception as e:
+            log.error(f"Error while trying to create blotter entry: {e}")
+            kwargs = {}
 
         assert self.blotter is not None
         try:
@@ -665,6 +669,9 @@ class Controller(Atom):
 
     def close_positions_for_strategy(self, strategy: str, action: str) -> None:
         strategy_obj = self.sm.strategy[strategy]
+        if strategy_obj.position == 0:
+            log.error(f"Attempt to close zero position for {strategy}")
+            return
         direction = "BUY" if strategy_obj.position < 0 else "SELL"
         amount = abs(strategy_obj.position)
         order = ibi.MarketOrder(direction, amount)
@@ -672,13 +679,11 @@ class Controller(Atom):
             strategy, strategy_obj.active_contract, order, action, strategy_obj
         )
         if trade_object:
-            trade_object.filledEvent += partial(
-                log.debug,
-                (
-                    f"Position for: {strategy} closed; reason: {action} "
-                    f"{direction} {amount} {strategy_obj.active_contract.localSymbol}"
-                ),
+            close_message = (
+                f"Position for: {strategy} closed; reason: {action} "
+                f"{direction} {amount} {strategy_obj.active_contract.localSymbol}"
             )
+            trade_object.filledEvent += lambda trade: log.debug(close_message)
 
     def disable_trading(self, reason: str) -> None:
         """Disable future outbound orders from normal controller flow."""
@@ -800,11 +805,11 @@ class Controller(Atom):
     def clear_records(self):
         self.sm.clear_strategies()
 
-    def close_positions(self) -> None:
+    async def close_positions(self) -> None:
         positions: list[ibi.Position] = self.ib.positions()
         log.debug(f"closing positions: {positions}")
         for position in positions:
-            self.ib.qualifyContracts(position.contract)
+            await self.ib.qualifyContractsAsync(position.contract)
             self.ib.placeOrder(
                 position.contract,
                 ibi.MarketOrder(
@@ -812,7 +817,7 @@ class Controller(Atom):
                 ),
             )
 
-    def run_nuke(self) -> None:
+    async def run_nuke(self) -> None:
         """
         Cancel all open orders, close existing positions and prevent
         any further trading.  Response to a critical error or request
@@ -821,7 +826,7 @@ class Controller(Atom):
         ---> Currently not in use. <---
         """
         self.ib.reqGlobalCancel()
-        self.close_positions()
+        await self.close_positions()
         self.disable_trading("self nuke requested")
 
         log.critical("Self nuked!!!!! No more trades will be executed until restart.")

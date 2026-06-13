@@ -42,10 +42,10 @@ class IBHandlers:
         self.ib = ib
         self.portfolio_items: Dict[str, Tuple[float, float, float]] = {}
 
-    def onConnected(self):
+    async def onConnected(self):
         self.log.info("Connection established")
         self.account = self.ib.client.getAccounts()[0]
-        self.ib.accountSummary()
+        await self.ib.accountSummaryAsync()
         self.ib.reqPnL(self.account)
 
     def onDisconnected(self):

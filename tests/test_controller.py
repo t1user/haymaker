@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import random
 from copy import deepcopy
@@ -210,6 +211,56 @@ async def test_run_stops_before_sync_when_state_store_read_fails(
 
 
 @pytest.mark.asyncio
+async def test_run_waits_startup_delay_before_sync(controller, monkeypatch):
+    calls = []
+
+    async def sleep(delay):
+        calls.append(("sleep", delay))
+
+    async def sync():
+        calls.append(("sync", None))
+        return True
+
+    controller.startup_delay = 2
+    monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
+    monkeypatch.setattr(controller, "sync", sync)
+
+    result = await controller.run()
+
+    assert result
+    assert calls == [("sleep", 2), ("sync", None)]
+
+
+@pytest.mark.asyncio
+async def test_commission_report_skips_unknown_zero_order_id(
+    controller, monkeypatch, caplog
+):
+    async def sleep(delay):
+        return None
+
+    trade = ibi.Trade(
+        contract=ibi.Future(symbol="RTY", localSymbol="RTYM6"),
+        order=ibi.Order(orderId=0, totalQuantity=1),
+    )
+    report = ibi.CommissionReport(execId="exec-1")
+    fill = ibi.Fill(
+        contract=trade.contract,
+        execution=ibi.Execution(execId="exec-1"),
+        commissionReport=report,
+        time=datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    controller.release_hold()
+    monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
+    caplog.set_level(logging.ERROR)
+
+    await controller.onCommissionReport(trade, fill, report)
+
+    assert 0 not in controller.sm.order
+    assert "Commission report for unknown trade: 0 RTYM6" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_sync_disconnected_does_not_query_broker_state(controller, monkeypatch):
     connection_attempts = 0
     disabled_reasons = []
@@ -325,6 +376,32 @@ def test_disabled_trading_does_not_register_order(controller, trade, monkeypatch
     assert list(controller.sm.order.values()) == []
 
 
+def test_close_positions_for_strategy_logs_filled_event(
+    controller, trade, monkeypatch, caplog
+):
+    strategy = controller.sm.strategy["coolstrategy"]
+    strategy.position = 1
+    strategy.active_contract = trade.contract
+    close_trade = ibi.Trade(
+        contract=trade.contract,
+        order=ibi.MarketOrder("SELL", 1),
+    )
+
+    def fake_trade(strategy_str, contract, order, action, params):
+        return close_trade
+
+    monkeypatch.setattr(controller, "trade", fake_trade)
+
+    with caplog.at_level(logging.DEBUG, logger="haymaker.controller.controller"):
+        controller.close_positions_for_strategy("coolstrategy", "test close")
+        close_trade.filledEvent.emit(close_trade)
+
+    assert (
+        f"Position for: coolstrategy closed; reason: test close SELL 1 "
+        f"{trade.contract.localSymbol}" in caplog.text
+    )
+
+
 @pytest.mark.asyncio
 async def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
     controller, trade, monkeypatch
@@ -363,6 +440,7 @@ def test_from_config_loads_controller_sync_options(Atom):
                 "broker_request_timeout": 3,
                 "sync_max_attempts": 2,
                 "sync_resync_delay": 0,
+                "startup_delay": 2,
                 "cancel_unknown_trades": True,
                 "missing_brackets": "warn",
             },
@@ -372,6 +450,7 @@ def test_from_config_loads_controller_sync_options(Atom):
     assert controller.broker_request_timeout == 3
     assert controller.sync_max_attempts == 2
     assert controller.sync_resync_delay == 0
+    assert controller.startup_delay == 2
     assert controller.cancel_unknown_trades
     assert controller.missing_brackets == "warn"
     assert controller.ignore_errors == [202, 321]
@@ -773,6 +852,40 @@ def test_remove_bracket_policy_closes_strategy_with_missing_local_bracket(
     assert closed == [("coolstrategy", "MISSING BRACKET EMERGENCY CLOSE")]
 
 
+def test_remove_bracket_policy_defers_missing_bracket_with_active_open_order(
+    controller, trade, monkeypatch
+):
+    strategy = controller.sm.strategy["coolstrategy"]
+    strategy.position = 1
+    strategy.active_contract = trade.contract
+    strategy.params = {"stop-loss": {"amount": 1}}
+    active_open_trade = deepcopy(trade)
+    active_open_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=1,
+        remaining=2,
+    )
+    controller.sm.order[active_open_trade.order.orderId] = OrderInfo(
+        "coolstrategy",
+        "OPEN",
+        active_open_trade,
+        {},
+    )
+    closed = []
+    set_broker_state(controller, monkeypatch)
+
+    monkeypatch.setattr(
+        controller,
+        "close_positions_for_strategy",
+        lambda strategy_name, action: closed.append((strategy_name, action)),
+    )
+
+    result = BracketSyncAction.from_policy("remove", controller)
+
+    assert result.bracket_sync.missing_brackets == []
+    assert closed == []
+
+
 def test_remove_bracket_policy_cancels_obsolete_local_bracket(
     controller, trade, monkeypatch
 ):
@@ -802,6 +915,83 @@ def test_remove_bracket_policy_cancels_obsolete_local_bracket(
         BracketSyncAction.from_policy("remove", controller)
 
     assert cancelled == [obsolete_trade]
+
+
+def test_find_obsolete_brackets_ignores_active_close_orders(trade):
+    bracket_sync = BracketSync.__new__(BracketSync)
+    active_close_trade = deepcopy(trade)
+    active_close_trade.order.orderId = trade.order.orderId + 1
+    active_close_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=1,
+        remaining=2,
+    )
+    obsolete_trade = deepcopy(trade)
+    obsolete_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=0,
+        remaining=1,
+    )
+    obsolete_order_info = OrderInfo(
+        "coolstrategy",
+        "STOP-LOSS",
+        obsolete_trade,
+        {},
+    )
+
+    result = bracket_sync._find_obsolete_brackets(
+        "coolstrategy",
+        [
+            OrderInfo("coolstrategy", "CLOSE", active_close_trade, {}),
+            obsolete_order_info,
+        ],
+    )
+
+    assert result == [("coolstrategy", obsolete_order_info)]
+
+
+def test_remove_bracket_policy_defers_obsolete_bracket_with_active_close_order(
+    controller, trade, monkeypatch
+):
+    controller.sm.strategy["coolstrategy"].position = 0
+    active_close_trade = deepcopy(trade)
+    active_close_trade.order.orderId = trade.order.orderId + 1
+    active_close_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=1,
+        remaining=2,
+    )
+    obsolete_trade = deepcopy(trade)
+    obsolete_trade.orderStatus = ibi.OrderStatus(
+        status="Submitted",
+        filled=0,
+        remaining=1,
+    )
+    controller.sm.order[active_close_trade.order.orderId] = OrderInfo(
+        "coolstrategy",
+        "CLOSE",
+        active_close_trade,
+        {},
+    )
+    controller.sm.order[obsolete_trade.order.orderId] = OrderInfo(
+        "coolstrategy",
+        "STOP-LOSS",
+        obsolete_trade,
+        {},
+    )
+    cancelled = []
+    set_broker_state(controller, monkeypatch)
+
+    monkeypatch.setattr(
+        controller.trader,
+        "cancel",
+        lambda received_trade: cancelled.append(received_trade),
+    )
+
+    result = BracketSyncAction.from_policy("remove", controller)
+
+    assert result.bracket_sync.obsolete_brackets == []
+    assert cancelled == []
 
 
 def test_future_roll_replacement_order_preserves_order_info_params():

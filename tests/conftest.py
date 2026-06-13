@@ -1,6 +1,26 @@
+"""Shared pytest fixtures and guards for hermetic test execution.
+
+This module does two test-harness jobs before the rest of the suite imports
+Haymaker code:
+
+1. Remove local config override env vars so pytest does not accidentally load
+   a developer's live trading configuration.
+2. Block real MongoDB/Arctic construction in ordinary tests so unit tests fail
+   fast instead of talking to external infrastructure.
+
+Tests that intentionally exercise a real Mongo or Arctic instance must opt in
+with ``@pytest.mark.mongo``.
+"""
+
 import datetime
 import logging
+import os
 from typing import Any
+
+# Tests must not inherit local live-trading config. Keep this before importing
+# haymaker modules because config is resolved at import time.
+os.environ.pop("HAYMAKER_HAYMAKER_CONFIG_OVERRIDES", None)
+os.environ.pop("HAYMAKER_DATALOADER_CONFIG_OVERRIDES", None)
 
 import ib_insync as ibi
 import pytest
@@ -15,6 +35,65 @@ from haymaker.streamers import Streamer as ActualStreamer
 from haymaker.trader import Trader
 
 log = logging.getLogger(__name__)
+
+
+def pytest_configure(config):
+    """Register custom markers used by the test suite."""
+    config.addinivalue_line(
+        "markers",
+        "mongo: test intentionally opens a real MongoDB or Arctic connection",
+    )
+
+
+def clear_mongo_client_cache() -> None:
+    """Clear cached Mongo clients when the current object supports it."""
+    from haymaker import databases
+
+    cache_clear = getattr(databases.get_mongo_client, "cache_clear", None)
+    if cache_clear is not None:
+        cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def block_real_mongo_access(monkeypatch, request):
+    """Fail fast if an unmarked test tries to open real Mongo-backed storage.
+
+    Usage:
+        - Do nothing for ordinary unit tests. The guard applies automatically.
+        - Use fakes, mocks, or ``mongomock`` when a test needs persistence
+          behavior without external infrastructure.
+        - Mark the test with ``@pytest.mark.mongo`` only when it is an explicit
+          integration test that should be allowed to construct real Mongo or
+          Arctic clients.
+    """
+    if request.node.get_closest_marker("mongo"):
+        yield
+        return
+
+    from haymaker import databases
+    from haymaker.datastore import datastore as datastore_module
+
+    def forbidden_mongo_client(*args, **kwargs):
+        """Raise when a test tries to create a real PyMongo client."""
+        raise AssertionError(
+            "Tests must not open a real MongoDB connection. "
+            "Use mocks/mongomock or mark the test with @pytest.mark.mongo."
+        )
+
+    class ForbiddenArctic:
+        """Raise when a test tries to create a real Arctic store."""
+
+        def __init__(self, *args, **kwargs):
+            raise AssertionError(
+                "Tests must not open a real Arctic/Mongo store. "
+                "Use a fake datastore or mark the test with @pytest.mark.mongo."
+            )
+
+    clear_mongo_client_cache()
+    monkeypatch.setattr(databases, "MongoClient", forbidden_mongo_client)
+    monkeypatch.setattr(datastore_module, "Arctic", ForbiddenArctic)
+    yield
+    clear_mongo_client_cache()
 
 
 class FakeMongoSaver(AbstractBaseSaver):

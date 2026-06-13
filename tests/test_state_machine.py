@@ -11,6 +11,7 @@ from haymaker.state_machine import (
     StateMachine,
     Strategy,
     StrategyContainer,
+    UnknownZeroOrderIdError,
 )
 
 strategy_defaults: dict[str, Any] = {
@@ -89,6 +90,20 @@ def test_OrderInfo_encode_includes_accounted_exec_ids():
     )
 
     assert order_info.encode()["accounted_exec_ids"] == ["exec-1"]
+
+
+def test_OrderInfo_from_trade_rejects_zero_order_id():
+    trade = ibi.Trade(order=ibi.Order(orderId=0))
+
+    with pytest.raises(UnknownZeroOrderIdError):
+        OrderInfo.from_trade(trade)
+
+
+def test_save_order_status_skips_unknown_zero_order_id(state_machine):
+    trade = ibi.Trade(order=ibi.Order(orderId=0))
+
+    assert state_machine.save_order_status(trade) is None
+    assert 0 not in state_machine.order
 
 
 def test_OrderInfo_not_active():

@@ -60,6 +60,13 @@ class AbstractBaseBlock(Atom, ABC):
         params.update(**kwargs)
         return params
 
+    def __str__(self) -> str:
+        return (
+            f"{self.__class__.__name__}"
+            f"<{self.strategy} "
+            f"{self.contract.localSymbol or self.contract.symbol}>"
+        )
+
 
 @dataclass
 class AbstractDfBlock(AbstractBaseBlock):
