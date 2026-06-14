@@ -198,22 +198,42 @@ async def test_connection_cancelled_error_retries_without_stopping() -> None:
 
 
 @pytest.mark.asyncio
-async def test_external_run_cancellation_propagates_after_cleanup() -> None:
+async def test_unexpected_run_cancellation_restarts_after_cleanup() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
-    supervisor = make_supervisor(fake_ib, workload)
+    supervisor = make_supervisor(fake_ib, workload, connection_lost_retry_delay=0)
     task = asyncio.create_task(supervisor.run())
 
     assert await wait_for_condition(lambda: workload.starts == 1)
 
     task.cancel()
 
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert workload.stops == ["supervisor stopped"]
-    assert fake_ib.connect_attempts == 1
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.connect_attempts == 2
     assert fake_ib.disconnect_count == 1
+    assert not task.done()
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_unexpected_recovery_cap_stops_supervisor() -> None:
+    fake_ib = FakeIB()
+    fake_ib.cancel_connect_attempts = 2
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib,
+        workload,
+        connection_lost_retry_delay=0,
+        max_recoveries=1,
+    )
+
+    await asyncio.wait_for(supervisor.run(), timeout=1)
+
+    assert fake_ib.connect_attempts == 2
+    assert workload.starts == 0
+    assert supervisor.stop_requested.is_set()
 
 
 @pytest.mark.asyncio

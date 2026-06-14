@@ -132,5 +132,6 @@ Important recovery settings are documented in :doc:`configuration`, including:
 * ``probeTimeout``: readiness probe timeout;
 * ``auto_recovery_grace_period``: broker wait duration before restart;
 * ``restart_on_recovered_connection``: whether ``1102`` forces rebuild.
+* ``max_recoveries``: consecutive unexpected cycle recoveries before stopping.
 
 Use :doc:`ib_message_codes` when reviewing broker-code behavior in logs.

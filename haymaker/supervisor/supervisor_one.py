@@ -55,6 +55,7 @@ class ConnectionSupervisor:
         self.ib.disconnectedEvent += self.onDisconnectedEvent
 
     async def run(self):
+        recoveries = 0
         while not self._workload_completed:
             try:
                 self.restart_requested.clear()
@@ -62,12 +63,13 @@ class ConnectionSupervisor:
                 self.onion_task = asyncio.create_task(
                     self._run_onion(), name="ConnectionSupervisor-onion-task"
                 )
-                # Do not let external cancellation cancel the onion before stop()
-                # marks shutdown intent; run() handles that cancellation path below.
+                # Do not let external cancellation decide onion cleanup; run()
+                # classifies the interruption and owns the recovery policy.
                 outcome = await asyncio.shield(self.onion_task)
                 if outcome in (CycleOutcome.STOP, CycleOutcome.WORKLOAD_DONE):
                     log.debug(f"Supervisor cycle finished with {outcome.name}.")
                     return
+                recoveries = 0
                 if outcome is CycleOutcome.RESTART and self._delay_next_restart:
                     self._delay_next_restart = False
                     if await self.wait_before_reconnect(
@@ -75,19 +77,13 @@ class ConnectionSupervisor:
                     ):
                         break
 
-            except (ConnectionError, asyncio.CancelledError) as exc:
+            except (asyncio.CancelledError, Exception) as exc:
+                # asyncio.CancelledError is not an Exception!
                 if self.stop_requested.is_set():
                     break
-                self.stop()
-                if self.onion_task is not None and not self.onion_task.done():
-                    try:
-                        await self.onion_task
-                    except asyncio.CancelledError:
-                        pass
-                self.restart_requested.clear()
-            except Exception as e:
-                log.exception(e)
-                break
+                recoveries += 1
+                if await self.recover_from_unexpected_error(exc, recoveries):
+                    break
 
     async def _run_onion(self) -> CycleOutcome:
         async with Connection():
@@ -95,6 +91,46 @@ class ConnectionSupervisor:
                 async with Workload():
                     async with Waiter() as waiter:
                         return await waiter.wait()
+
+    async def recover_from_unexpected_error(
+        self, exc: BaseException, recovery_count: int
+    ) -> bool:
+        """
+        Clean up after an unexpected cycle failure.
+
+        Return True when the supervisor should stop instead of attempting
+        another recovery cycle.
+        """
+
+        if recovery_count > self.settings.max_recoveries:
+            log.exception(
+                "Maximum supervisor recoveries exceeded; stopping.",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            self.stop()
+            await self.cleanup_onion()
+            return True
+
+        log.exception(
+            "Unexpected supervisor cycle failure; restarting.",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        self.restart_requested.set()
+        await self.cleanup_onion()
+        self.restart_requested.clear()
+        return await self.wait_before_reconnect(
+            self.settings.connection_lost_retry_delay
+        )
+
+    async def cleanup_onion(self) -> None:
+        """Cancel and collect the current onion task when it is still running."""
+
+        if self.onion_task is not None and not self.onion_task.done():
+            self.onion_task.cancel()
+            try:
+                await self.onion_task
+            except asyncio.CancelledError:
+                pass
 
     def stop(self) -> None:
         """Request supervisor shutdown; the run loop performs cleanup."""
