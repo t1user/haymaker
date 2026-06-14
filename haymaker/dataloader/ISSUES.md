@@ -6,13 +6,13 @@ stable and mark items off as they are addressed.
 ## Issues
 
 - [x] `DL-001`: Restart cleanup can leave old workers/tasks alive.
-- [ ] `DL-002`: `run_mode = reconnect|wait` mixes workload policy with
+- [x] `DL-002`: `run_mode = reconnect|wait` mixes workload policy with
   connection ownership.
 - [ ] `DL-003`: Request retry/readiness is inconsistent across producer,
   contract selector, headstamp, and workers.
 - [x] `DL-004`: Workload exceptions are swallowed and may look like clean
   completion.
-- [x] `DL-005`: Global mutable runtime state blocks safe restart, attached, and
+- [x] `DL-005`: Global mutable runtime state blocks safe restart and
   concurrent use.
 - [x] `DL-006`: `Manager.store` is ignored.
 - [ ] `DL-007`: Store/date helpers have brittle one-row and stale-cache
@@ -28,8 +28,8 @@ stable and mark items off as they are addressed.
   `haymaker/datastore/collection_namer.py`.
 - [ ] `DL-014`: Review dataloader/datastore coupling and define the narrow store
   interface dataloader should depend on.
-- [ ] `DL-015`: Define attached-mode pacing policy, likely a configurable
-  fraction of normal historical-data allowance.
+- [ ] `DL-015`: Define live-trading impact of dataloader pacing and any
+  reduced allowance for future optional non-supervised modes.
 - [x] `DL-016`: Make managed restart resume in-memory discovered work instead of
   rerunning discovery after every supervisor restart.
 - [ ] `DL-017`: Define process-stop semantics explicitly: no separate checkpoint
@@ -64,8 +64,8 @@ stable and mark items off as they are addressed.
 
 ## Refactor Plan
 
-1. **Connect Managed Dataloader To Supervisor Correctly**
-   - Managed mode owns its own `IB` socket through `ConnectionSupervisor`.
+1. **Connect Dataloader To Supervisor Correctly**
+   - Dataloader owns its own `IB` socket through `ConnectionSupervisor`.
    - Supervisor restarts socket/workload, but dataloader does not rediscover
      everything on every supervisor restart.
    - Discovery runs once per process/session unless explicitly refreshed.
@@ -83,17 +83,19 @@ stable and mark items off as they are addressed.
    - Make restart/resume testable.
    - Covers `DL-005`; supports `DL-001` and `DL-010`.
 
-3. **Define Attached Mode As Opportunistic**
-   - Borrow an already connected externally managed `IB`.
-   - Never call `connectAsync()`, `disconnect()`, or `request_restart()`.
-   - Do not attempt supervisor-style readiness detection.
-   - Abort or fail cleanly on connection loss or unrecoverable request failure.
-   - Intended for short/manual downloads, not long backfills during live trading.
-   - Covers the attached side of `DL-002`.
+3. **Normalize Supervised-Only Connection Model**
+   - Dataloader always owns its own `IB` socket and runs it under
+     `ConnectionSupervisor`.
+   - Remove legacy `run_mode` configuration and code paths.
+   - Use dataloader client ID `1` by default so it is distinct from the live
+     runtime's expected `clientId=0`.
+   - Do not retry alternate client IDs automatically; duplicate client ID is a
+     connection configuration failure.
+   - Covers the remaining active part of `DL-002`.
 
 4. **Unify Request Retry And Failure Semantics**
    - Define retryable broker/request errors.
-   - Define connection-loss behavior in managed and attached modes.
+   - Define supervised connection-loss behavior.
    - Define when to pause, retry, abort, or propagate failure.
    - Remove silent broad exception loops.
    - Covers `DL-003` and `DL-004`.
@@ -101,7 +103,8 @@ stable and mark items off as they are addressed.
 5. **Review And Fix Pacing Compliance**
    - Reconcile max concurrent historical requests, request-rate limits,
      identical request cooldown, and `BID_ASK` counting with current IB docs.
-   - Define live-trading impact and attached-mode pacing fraction.
+   - Define live-trading impact and any reduced allowance for future optional
+     non-supervised modes.
    - Covers `DL-008`, `DL-011`, and `DL-015`.
 
 6. **Clean Store And Collection Naming Boundary**
@@ -138,3 +141,11 @@ stable and mark items off as they are addressed.
    - Update dataloader docs, codebase map if architecture changes, and stale
      async audit notes.
    - Covers `DL-009` plus test gaps across the plan.
+
+10. **Optional Future Connection Modes**
+   - After the core dataloader refactor is complete, reconsider whether a
+     gateway-managing Watchdog/IBC runner is useful for paper-account,
+     multi-day downloads.
+   - Keep attached/borrowed-IB mode out of active scope unless a real
+     same-interpreter caller appears.
+   - Do not implement before pacing and retry semantics are settled.

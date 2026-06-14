@@ -67,7 +67,8 @@ The research package is intentionally separate from live execution. It works dir
 ### Dataloader
 
 - `haymaker/dataloader/dataloader.py`: `dataloader` console-script entrypoint, producer/worker queue, download task orchestration, and store writes.
-- `haymaker/dataloader/connect.py`: dataloader adapter for shared IB connection supervision, with `reconnect` and `wait` modes.
+- `haymaker/dataloader/connect.py`: dataloader adapter for supervised IB
+  connection ownership, using dataloader client ID `1` by default.
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
 - `haymaker/dataloader/scheduling.py`: task generation for backfill, updates, and optional gap filling.

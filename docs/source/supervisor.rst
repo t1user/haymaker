@@ -4,14 +4,15 @@ Connection Supervisor
 
 ``haymaker.supervisor.ConnectionSupervisor`` runs one workload under one
 Haymaker-owned Interactive Brokers API socket. It is used by live execution and
-by the current managed dataloader path. It reconnects the IB API client and
+by the dataloader's supervised connection path. It reconnects the IB API client and
 rebuilds the supervised workload when recovery requires a rebuild, but it does
 not start, stop, or restart TWS or IB Gateway.
 
-Use a supervisor only when Haymaker owns the socket lifecycle. Attached
-dataloader work should not create a supervisor, because attached work borrows an
-externally managed ``IB`` connection and must not connect, disconnect, or
-restart it.
+Use a supervisor only when Haymaker owns the socket lifecycle. The current
+dataloader model is supervised-only: the dataloader creates its own ``IB``
+client and uses a client ID distinct from the live runtime. Any future
+Watchdog/IBC gateway-management runner should be a separate dataloader runner,
+not a feature inside ``ConnectionSupervisor``.
 
 Using the Supervisor
 ====================

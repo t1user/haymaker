@@ -23,7 +23,7 @@ def supervisor(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reconnect_mode_runs_work_and_stops_supervisor(supervisor):
+async def test_supervised_connection_runs_work_and_stops_supervisor(supervisor):
     runs = []
 
     async def run_work():
@@ -63,7 +63,7 @@ async def test_restart_resumes_by_starting_same_workload_again(supervisor):
 
 
 @pytest.mark.asyncio
-async def test_reconnect_mode_runs_cleanup_before_restart(supervisor):
+async def test_supervised_connection_runs_cleanup_before_restart(supervisor):
     release = asyncio.Event()
     cleanups = []
 
@@ -94,6 +94,21 @@ async def test_workload_failure_propagates(supervisor):
         await connection.runtime.start()
 
 
-def test_watchdog_mode_is_rejected():
-    with pytest.raises(ValueError, match="watchdog mode"):
-        connect.connection(object(), lambda: None, run_mode="watchdog")
+def test_supervised_connection_uses_default_dataloader_client_id(
+    supervisor, monkeypatch
+):
+    monkeypatch.delitem(connect.CONFIG.maps[0], "dataloader_client_id", raising=False)
+
+    connection = connect.DataloaderConnection(object(), lambda: None)
+
+    assert connection.supervisor.args[2].client_id == 1
+
+
+def test_supervised_connection_uses_configured_dataloader_client_id(
+    supervisor, monkeypatch
+):
+    monkeypatch.setitem(connect.CONFIG.maps[0], "dataloader_client_id", 7)
+
+    connection = connect.DataloaderConnection(object(), lambda: None)
+
+    assert connection.supervisor.args[2].client_id == 7

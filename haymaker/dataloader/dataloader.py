@@ -18,7 +18,7 @@ from haymaker.logging import setup_logging
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
-from .connect import Mode, connection
+from .connect import connection
 from .contract_selectors import ContractSelector
 from .pacer import PacingViolationError, RequestPacing
 from .scheduling import task_factory, task_factory_with_gaps
@@ -43,7 +43,6 @@ FILL_GAPS: bool = CONFIG.get("fill_gaps", True)
 AUTO_SAVE_INTERVAL: int = CONFIG.get("auto_save_interval", 0)
 NUMBER_OF_WORKERS: int = CONFIG.get("number_of_workers", 20)
 STORE: AbstractBaseStore = CONFIG["datastore"]
-RUN_MODE: Mode = CONFIG.get("run_mode", "reconnect")
 SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
 PACER_RESTRICTIONS: bool = CONFIG["pacer_restrictions"]
@@ -603,7 +602,7 @@ def start():
     asyncio.get_event_loop().set_debug(True)
     log.debug("Will start...")
 
-    connection(ib, session.run, session.cancel_tasks, RUN_MODE)
+    connection(ib, session.run, session.cancel_tasks)
 
     log.info("script finished, about to disconnect")
     ib.disconnect()

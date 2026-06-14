@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Literal, TypeAlias
 
 from ib_insync import IB
 
@@ -15,7 +14,8 @@ from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
 
 log = getLogger(__name__)
 
-Mode: TypeAlias = Literal["reconnect", "wait"]
+DATALOADER_CLIENT_ID = "dataloader_client_id"
+DEFAULT_DATALOADER_CLIENT_ID = 1
 
 
 @dataclass
@@ -25,12 +25,10 @@ class DataloaderRuntime:
     Args:
         func: Async dataloader workload to run after connection.
         cleanup: Optional callback used to release active work before restart.
-        run_mode: Legacy mode value retained for configuration compatibility.
     """
 
     func: Callable[[], Awaitable[None]]
     cleanup: Callable | None = None
-    run_mode: Mode = "reconnect"
     _work_task: asyncio.Task | None = field(default=None, init=False)
 
     async def start(self) -> None:
@@ -77,25 +75,23 @@ class DataloaderRuntime:
 
 @dataclass
 class DataloaderConnection:
-    """Run dataloader work under an owned managed IB connection supervisor.
+    """Run dataloader work under an owned supervised IB connection.
 
     Args:
         ib: Interactive Brokers client used by the dataloader.
         func: Async dataloader workload to run after connection.
         cleanup: Optional callback used to release work after disconnection.
-        run_mode: Re-run work after reconnect, or wait for in-place recovery.
     """
 
     ib: IB
     func: Callable
     cleanup: Callable | None = None
-    run_mode: Mode = "reconnect"
     runtime: DataloaderRuntime = field(init=False)
     supervisor: ConnectionSupervisor = field(init=False)
 
     def __post_init__(self) -> None:
-        client_id = 51
-        self.runtime = DataloaderRuntime(self.func, self.cleanup, self.run_mode)
+        client_id = CONFIG.get(DATALOADER_CLIENT_ID, DEFAULT_DATALOADER_CLIENT_ID)
+        self.runtime = DataloaderRuntime(self.func, self.cleanup)
         self.supervisor = ConnectionSupervisor(
             self.ib,
             self.runtime,
@@ -112,17 +108,10 @@ def connection(
     ib: IB,
     func: Callable,
     cleanup: Callable | None = None,
-    run_mode: Mode = "reconnect",
 ) -> DataloaderConnection:
-    """Run dataloader work with shared connection supervision."""
+    """Run dataloader work under the connection supervisor."""
 
-    if run_mode not in ("reconnect", "wait"):
-        raise ValueError(
-            f"Unknown mode: {run_mode}. The gateway-managing watchdog mode "
-            "is no longer supported."
-        )
-
-    log.debug(f"Running in {run_mode} mode.")
-    dataloader_connection = DataloaderConnection(ib, func, cleanup, run_mode)
+    log.debug("Running dataloader under supervised connection.")
+    dataloader_connection = DataloaderConnection(ib, func, cleanup)
     dataloader_connection.run()
     return dataloader_connection

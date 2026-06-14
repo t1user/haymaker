@@ -29,7 +29,7 @@ def dataloader_module(monkeypatch):
         "auto_save_interval": 0,
         "number_of_workers": 2,
         "datastore": FakeStore(),
-        "run_mode": "reconnect",
+        "dataloader_client_id": 1,
         "source": "contracts.csv",
         "pacer_no_restriction": False,
         "pacer_restrictions": [(5, 2)],
