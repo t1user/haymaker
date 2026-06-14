@@ -3,7 +3,7 @@ barSize: &barSize 30 secs
 wts: &wts TRADES
 max_bars: 100_000 # max number of bars pulled in one request
 max_period: 120 # max duration of downloaded data in days
-dataloader_client_id: 1 # keep distinct from live runtime clientId=0
+clientId: 1 # keep distinct from live runtime clientId=0
 supervisor: state # one of: state, onion
 number_of_workers: 20
 fill_gaps: False
@@ -14,6 +14,7 @@ pacer_restrictions:
   - !!python/tuple [5, 2] # [max requests, seconds]
   - !!python/tuple [60, 600]
 pacer_no_restriction: False # toggle to quickly switch off pacer (will ignore previous item)
+pacer_allowance_fraction: 1.0 # future pacing scale for sharing IB allowance
 
 # ---- futures config ----
 # contfuture, fullchain, current, exact, current_and_expired, current_and_contfuture

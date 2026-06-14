@@ -29,10 +29,11 @@ def dataloader_module(monkeypatch):
         "auto_save_interval": 0,
         "number_of_workers": 2,
         "datastore": FakeStore(),
-        "dataloader_client_id": 1,
+        "clientId": 1,
         "source": "contracts.csv",
         "pacer_no_restriction": False,
         "pacer_restrictions": [(5, 2)],
+        "pacer_allowance_fraction": 1.0,
         "max_period": 120,
     }
     for key, value in config_values.items():
@@ -75,9 +76,7 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
     monkeypatch.setattr(dataloader.DataloaderSession, "producer", fake_producer)
     monkeypatch.setattr(dataloader.DataloaderSession, "worker", fake_worker)
 
-    task = asyncio.create_task(
-        dataloader.DataloaderSession(object(), number_of_workers=2).run()
-    )
+    task = asyncio.create_task(dataloader.DataloaderSession(object()).run())
     await asyncio.wait_for(workers_started.wait(), timeout=1)
 
     task.cancel()
@@ -98,8 +97,8 @@ def test_sessions_own_separate_pacing_state(dataloader_module):
 
     first.pacing.registry.data.add(contract)
 
-    assert first.pacing.verify(contract)
     assert not second.pacing.verify(contract)
+    assert first.pacing.verify(contract)
     assert first.pacing.limiter.restrictions[0].holder is not (
         second.pacing.limiter.restrictions[0].holder
     )
@@ -127,6 +126,7 @@ async def test_session_producer_requeues_active_writers_before_new_discovery(
     new_writer = FakeWriter("new")
     manager = SimpleNamespace(
         ib=None,
+        settings=dataloader.SETTINGS,
         active_writers=[active_writer],
         new_writer_generator=new_writers(),
         pacing=dataloader.request_pacing_factory(),
@@ -138,3 +138,32 @@ async def test_session_producer_requeues_active_writers_before_new_discovery(
 
     assert queue.get_nowait() is active_writer
     assert queue.get_nowait() is new_writer
+
+
+def test_dataloader_settings_validates_pacer_allowance_fraction(
+    dataloader_module,
+):
+    """Pacing scale is config-owned even though pacer application is later work."""
+
+    settings = dataloader_module.DataloaderSettings.from_config(
+        {
+            "barSize": "30 secs",
+            "wts": "TRADES",
+            "datastore": object(),
+            "source": "contracts.csv",
+            "pacer_allowance_fraction": 0.5,
+        }
+    )
+
+    assert settings.pacer_allowance_fraction == 0.5
+
+    with pytest.raises(ValueError, match="pacer_allowance_fraction"):
+        dataloader_module.DataloaderSettings.from_config(
+            {
+                "barSize": "30 secs",
+                "wts": "TRADES",
+                "datastore": object(),
+                "source": "contracts.csv",
+                "pacer_allowance_fraction": 0,
+            }
+        )

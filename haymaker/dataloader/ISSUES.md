@@ -103,8 +103,9 @@ stable and mark items off as they are addressed.
 5. **Review And Fix Pacing Compliance**
    - Reconcile max concurrent historical requests, request-rate limits,
      identical request cooldown, and `BID_ASK` counting with current IB docs.
-   - Define live-trading impact and any reduced allowance for future optional
-     non-supervised modes.
+   - Apply configured `pacer_allowance_fraction` when building pacing limits so
+     supervised dataloader runs can voluntarily reserve part of the IB allowance
+     for live trading or other sessions.
    - Covers `DL-008`, `DL-011`, and `DL-015`.
 
 6. **Clean Store And Collection Naming Boundary**

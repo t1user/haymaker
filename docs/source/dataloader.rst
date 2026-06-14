@@ -14,6 +14,7 @@ or restart the TWS or IB Gateway process.
 See :doc:`supervisor` for the supervisor lifecycle and state transition chart.
 
 The dataloader client ID defaults to ``1`` so it is distinct from the live
-runtime's expected ``clientId=0``. Override ``dataloader_client_id`` only when
-another process already uses that ID. A duplicate client ID is treated as a
+runtime's expected ``clientId=0``. Override ``clientId`` in the dataloader
+config only when another process already uses that ID. A duplicate client ID is
+treated as a
 connection configuration failure.

@@ -112,7 +112,10 @@ class PacingViolationRegistry:
     pacing violation within last second
     """
 
-    data: set[ibi.Contract] = set()
+    def __init__(self) -> None:
+        """Initialize an empty pacing-violation registry."""
+
+        self.data: set[ibi.Contract] = set()
 
     def register(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract

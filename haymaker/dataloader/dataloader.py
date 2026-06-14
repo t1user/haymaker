@@ -5,7 +5,6 @@ import functools
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from functools import partial
 from typing import AsyncGenerator, Optional, TypedDict
 
 import ib_insync as ibi
@@ -13,15 +12,14 @@ import pandas as pd
 from tqdm import tqdm
 
 from haymaker.config import CONFIG
-from haymaker.datastore import AbstractBaseStore
 from haymaker.logging import setup_logging
-from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
 from .connect import connection
 from .contract_selectors import ContractSelector
 from .pacer import PacingViolationError, RequestPacing
 from .scheduling import task_factory, task_factory_with_gaps
+from .settings import DataloaderSettings
 from .store_wrapper import StoreWrapper
 from .task_logger import create_task
 
@@ -35,38 +33,22 @@ setup_logging(CONFIG.get("logging_config"))
 
 log = logging.getLogger(__name__)
 
-
-BARSIZE: str = bar_size_validator(CONFIG["barSize"])
-WTS: str = wts_validator(CONFIG["wts"])
-MAX_BARS: int = CONFIG.get("max_bars", 50000)
-FILL_GAPS: bool = CONFIG.get("fill_gaps", True)
-AUTO_SAVE_INTERVAL: int = CONFIG.get("auto_save_interval", 0)
-NUMBER_OF_WORKERS: int = CONFIG.get("number_of_workers", 20)
-STORE: AbstractBaseStore = CONFIG["datastore"]
-SOURCE: str = CONFIG["source"]
-PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
-PACER_RESTRICTIONS: bool = CONFIG["pacer_restrictions"]
-MAX_PERIOD = CONFIG.get("max_period", 30)
-
-norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
-NOW: date | datetime = norm(datetime.now(timezone.utc))
+SETTINGS = DataloaderSettings.from_config(CONFIG)
+NOW: date | datetime = SETTINGS.normalize_datetime(datetime.now(timezone.utc))
 
 log.debug(
-    f"settings: {BARSIZE=}, {WTS=}, {MAX_BARS=}, {FILL_GAPS=}, "
-    f"{AUTO_SAVE_INTERVAL=}, {NUMBER_OF_WORKERS=}, {STORE=}, {NOW=}, "
-    f"{MAX_PERIOD=}"
+    f"settings: {SETTINGS.bar_size=}, {SETTINGS.wts=}, {SETTINGS.max_bars=}, "
+    f"{SETTINGS.fill_gaps=}, {SETTINGS.auto_save_interval=}, "
+    f"{SETTINGS.number_of_workers=}, {SETTINGS.store=}, {NOW=}, "
+    f"{SETTINGS.max_period=}, "
+    f"{SETTINGS.pacer_allowance_fraction=}"
 )
 
 
 def request_pacing_factory() -> RequestPacing:
     """Create request pacing configured from dataloader settings."""
 
-    return RequestPacing(
-        BARSIZE,
-        WTS,
-        restrictions=list(PACER_RESTRICTIONS),
-        no_restriction=PACER_NO_RESTRICTION,
-    )
+    return SETTINGS.create_pacing()
 
 
 class Params(TypedDict):
@@ -75,9 +57,9 @@ class Params(TypedDict):
     durationStr: str
 
 
-def pulse_factory(interval: float = AUTO_SAVE_INTERVAL) -> ibi.Event | None:
-    if asi := AUTO_SAVE_INTERVAL:
-        return ibi.Event().timerange(asi, None, asi)
+def pulse_factory(interval: float) -> ibi.Event | None:
+    if interval:
+        return ibi.Event().timerange(interval, None, interval)
     return None
 
 
@@ -112,12 +94,12 @@ class DataWriter:
 
     contract: ibi.Contract
     store: StoreWrapper = field(repr=False)
+    settings: DataloaderSettings = field(repr=False)
     queue: list[DownloadContainer] = field(default_factory=list, repr=False)
-    _pulse: ibi.Event | None = field(
-        default_factory=pulse_factory, repr=False, init=False
-    )
+    _pulse: ibi.Event | None = field(default=None, repr=False, init=False)
 
     def __post_init__(self) -> None:
+        self._pulse = pulse_factory(self.settings.auto_save_interval)
         if self._pulse:
             self._pulse += self._onPulse
         log.debug(f"{self!r} initialized.")
@@ -199,7 +181,9 @@ class DataWriter:
     def duration(self) -> str:
         assert self.next_date is not None
         delta = self.next_date - self._container.from_date
-        return helpers.timedelta_and_barSize_to_duration_str(delta, BARSIZE, MAX_BARS)
+        return helpers.timedelta_and_barSize_to_duration_str(
+            delta, self.settings.bar_size, self.settings.max_bars
+        )
 
     def __str__(self) -> str:
         return f"<Writer: {self.contract.localSymbol}>"
@@ -297,18 +281,22 @@ class DownloadContainer:
 @dataclass
 class Manager:
     ib: ibi.IB
-    pacing: RequestPacing = field(default_factory=request_pacing_factory)
-    store: AbstractBaseStore = STORE
+    settings: DataloaderSettings = field(default_factory=lambda: SETTINGS)
+    pacing: RequestPacing | None = None
     active_writers: list[DataWriter] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
     new_writer_generator: AsyncGenerator[DataWriter, None] = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.pacing is None:
+            self.pacing = self.settings.create_pacing()
         self.new_writer_generator = self._writer_generator()
 
     @functools.cached_property
     def sources(self) -> list[dict]:
-        return pd.read_csv(SOURCE, keep_default_na=False).to_dict("records")
+        return pd.read_csv(self.settings.source, keep_default_na=False).to_dict(
+            "records"
+        )
 
     async def contracts(self) -> AsyncGenerator[ibi.Contract, None]:
         with tqdm(self.sources, desc="Sources") as source_pbar:
@@ -334,7 +322,7 @@ class Manager:
     def tasks(
         self, store: StoreWrapper, start: datetime | date
     ) -> list[DownloadContainer]:
-        if FILL_GAPS:
+        if self.settings.fill_gaps:
             tasklist = task_factory_with_gaps(store, start)
         else:
             tasklist = task_factory(store, start)
@@ -345,16 +333,18 @@ class Manager:
             if contract in self._initiated_contracts:
                 continue
             self._initiated_contracts.append(contract)
-            store = StoreWrapper(contract, self.store, NOW)
+            store = StoreWrapper(contract, self.settings.store, NOW)
             last_bar_date = min(
                 datetime.fromisoformat(contract.lastTradeDateOrContractMonth).replace(
                     tzinfo=timezone.utc
                 ),
                 NOW,
             )
-            start = max(headstamp, last_bar_date - timedelta(days=MAX_PERIOD))
+            start = max(
+                headstamp, last_bar_date - timedelta(days=self.settings.max_period)
+            )
             tasks = self.tasks(store, start)
-            new_writer = DataWriter(contract, store, tasks)
+            new_writer = DataWriter(contract, store, self.settings, tasks)
             if new_writer.is_done():
                 log.debug(f"Skipping {new_writer!s} - no need to download data.")
                 continue
@@ -369,9 +359,13 @@ class Manager:
         headTimeStamp = None
         while not headTimeStamp:
             try:
+                assert self.pacing is not None
                 async with self.pacing:
                     headTimeStamp = await self.ib.reqHeadTimeStampAsync(
-                        contract, whatToShow=WTS, useRTH=False, formatDate=2
+                        contract,
+                        whatToShow=self.settings.wts,
+                        useRTH=False,
+                        formatDate=2,
                     )
                 # it was a pacing violation
                 if (not headTimeStamp) and self.pacing.verify(contract):
@@ -393,19 +387,19 @@ class Manager:
             except Exception:
                 continue
 
-        hs = norm(headTimeStamp)
+        hs = self.settings.normalize_datetime(headTimeStamp)
         log.debug(f"Headstamp for: {contract.localSymbol}: {hs}")
         return hs
 
 
-def validate_age(writer: DataWriter) -> bool:
+def validate_age(writer: DataWriter, settings: DataloaderSettings) -> bool:
     """
     IB doesn't permit to request data for bars < 30secs older than 6
     months.  Trying to push it here with 30secs.
 
     THIS IS NOT NECCESSARY???, MERGE IT WITH EARLIES POINT DETERMINATION.
     """
-    if helpers.duration_in_secs(BARSIZE) < 30 and writer.next_date:
+    if helpers.duration_in_secs(settings.bar_size) < 30 and writer.next_date:
         assert isinstance(writer.next_date, datetime)
         # TODO: not sure if correct or necessary
         if (NOW - writer.next_date).days > 180:
@@ -418,30 +412,33 @@ class DataloaderSession:
     """Own one dataloader runtime session and its restartable execution state."""
 
     ib: ibi.IB
+    settings: DataloaderSettings = field(default_factory=lambda: SETTINGS)
     manager: Manager | None = None
-    number_of_workers: int = NUMBER_OF_WORKERS
     queue: asyncio.Queue[DataWriter] | None = field(default=None, init=False)
     workers: list[asyncio.Task] = field(default_factory=list, init=False)
     producer_task: asyncio.Task | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.manager is None:
-            self.manager = Manager(self.ib)
+            self.manager = Manager(self.ib, settings=self.settings)
         else:
             self.manager.ib = self.ib
+            if not hasattr(self.manager, "settings"):
+                self.manager.settings = self.settings
 
     @property
     def pacing(self) -> RequestPacing:
         """Return the pacing state used by this session."""
 
         assert self.manager is not None
+        assert self.manager.pacing is not None
         return self.manager.pacing
 
     async def run(self) -> None:
         """Run producer and workers until all queued download work is finished."""
 
         log.debug("Initializing dataloader session.")
-        self.queue = asyncio.LifoQueue(maxsize=int(self.number_of_workers / 4))
+        self.queue = asyncio.LifoQueue(maxsize=int(self.settings.number_of_workers / 4))
         self.workers = [
             create_task(
                 self.worker(f"worker_{i}", self.queue),
@@ -449,7 +446,7 @@ class DataloaderSession:
                 message="asyncio error",
                 message_args=(f"worker {i}",),
             )
-            for i in range(self.number_of_workers)
+            for i in range(self.settings.number_of_workers)
         ]
         self.producer_task = create_task(
             self.producer(self.queue),
@@ -506,8 +503,8 @@ class DataloaderSession:
                         )
                         chunk = await self.ib.reqHistoricalDataAsync(
                             **writer.params,
-                            barSizeSetting=BARSIZE,
-                            whatToShow=WTS,
+                            barSizeSetting=self.settings.bar_size,
+                            whatToShow=self.settings.wts,
                             useRTH=False,
                             formatDate=2,
                             timeout=0,
@@ -533,7 +530,7 @@ class DataloaderSession:
                     log.debug(f"{writer!s} rescheduled.")
 
                 if writer.next_date:
-                    if not validate_age(writer):
+                    if not validate_age(writer, self.settings):
                         await writer.save_chunk(None)
                         log.debug(f"{writer!s} dropped on age validation.")
                         break

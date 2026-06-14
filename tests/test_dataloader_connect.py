@@ -94,20 +94,16 @@ async def test_workload_failure_propagates(supervisor):
         await connection.runtime.start()
 
 
-def test_supervised_connection_uses_default_dataloader_client_id(
-    supervisor, monkeypatch
-):
-    monkeypatch.delitem(connect.CONFIG.maps[0], "dataloader_client_id", raising=False)
+def test_supervised_connection_uses_default_client_id(supervisor, monkeypatch):
+    monkeypatch.delitem(connect.CONFIG.maps[0], "clientId", raising=False)
 
     connection = connect.DataloaderConnection(object(), lambda: None)
 
     assert connection.supervisor.args[2].client_id == 1
 
 
-def test_supervised_connection_uses_configured_dataloader_client_id(
-    supervisor, monkeypatch
-):
-    monkeypatch.setitem(connect.CONFIG.maps[0], "dataloader_client_id", 7)
+def test_supervised_connection_uses_configured_client_id(supervisor, monkeypatch):
+    monkeypatch.setitem(connect.CONFIG.maps[0], "clientId", 7)
 
     connection = connect.DataloaderConnection(object(), lambda: None)
 

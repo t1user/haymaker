@@ -14,8 +14,7 @@ from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
 
 log = getLogger(__name__)
 
-DATALOADER_CLIENT_ID = "dataloader_client_id"
-DEFAULT_DATALOADER_CLIENT_ID = 1
+DEFAULT_CLIENT_ID = 1
 
 
 @dataclass
@@ -90,7 +89,7 @@ class DataloaderConnection:
     supervisor: ConnectionSupervisor = field(init=False)
 
     def __post_init__(self) -> None:
-        client_id = CONFIG.get(DATALOADER_CLIENT_ID, DEFAULT_DATALOADER_CLIENT_ID)
+        client_id = CONFIG.get("clientId", DEFAULT_CLIENT_ID)
         self.runtime = DataloaderRuntime(self.func, self.cleanup)
         self.supervisor = ConnectionSupervisor(
             self.ib,
