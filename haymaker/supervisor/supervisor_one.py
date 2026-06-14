@@ -59,37 +59,32 @@ class ConnectionSupervisor:
             try:
                 self.restart_requested.clear()
 
-                onion_task = asyncio.create_task(
+                self.onion_task = asyncio.create_task(
                     self._run_onion(), name="ConnectionSupervisor-onion-task"
                 )
-                self.onion_task = onion_task
                 # Do not let external cancellation cancel the onion before stop()
                 # marks shutdown intent; run() handles that cancellation path below.
-                outcome = await asyncio.shield(onion_task)
+                outcome = await asyncio.shield(self.onion_task)
                 if outcome in (CycleOutcome.STOP, CycleOutcome.WORKLOAD_DONE):
                     log.debug(f"Supervisor cycle finished with {outcome.name}.")
                     return
                 if outcome is CycleOutcome.RESTART and self._delay_next_restart:
                     self._delay_next_restart = False
-                    await self._wait_before_reconnect()
-                    if self.stop_requested.is_set():
+                    if await self.wait_before_reconnect(
+                        self.settings.connection_lost_retry_delay
+                    ):
                         break
 
             except (ConnectionError, asyncio.CancelledError) as exc:
                 if self.stop_requested.is_set():
                     break
-                if isinstance(exc, asyncio.CancelledError) and self._onion_running():
-                    self.stop()
-                    if self.onion_task is not None:
-                        try:
-                            await self.onion_task
-                        except asyncio.CancelledError:
-                            pass
-                    raise
+                self.stop()
+                if self.onion_task is not None and not self.onion_task.done():
+                    try:
+                        await self.onion_task
+                    except asyncio.CancelledError:
+                        pass
                 self.restart_requested.clear()
-                await self._wait_before_reconnect()
-                if self.stop_requested.is_set():
-                    break
             except Exception as e:
                 log.exception(e)
                 break
@@ -139,25 +134,23 @@ class ConnectionSupervisor:
             if self.request_restart("IB socket disconnected"):
                 self._delay_next_restart = True
 
-    async def _wait_before_reconnect(self) -> None:
-        """Wait before reconnecting after connection loss or restart cancellation."""
+    async def wait_before_reconnect(self, delay: float) -> bool:
+        """
+        Wait before reconnecting for ``delay`` seconds, while watching
+        for stop request. Return True immediately if stop request
+        registered, False otherwise.
+        """
 
-        delay = self.settings.connection_lost_retry_delay
-        log.debug(f"Connection lost... will retry in {delay}")
-        await self._sleep_until_stop(delay)
-
-    def _onion_running(self) -> bool:
-        """Return whether the active onion task is still running."""
-
-        return self.onion_task is not None and not self.onion_task.done()
-
-    async def _sleep_until_stop(self, delay: float) -> None:
-        """Sleep for retry delay, returning early when shutdown is requested."""
-
+        log.debug(f"Will try reconnection in {delay}s")
         try:
             await asyncio.wait_for(self.stop_requested.wait(), timeout=delay)
         except asyncio.TimeoutError:
             pass
+
+        if self.stop_requested.is_set():
+            return True
+        else:
+            return False
 
 
 class OnionLayer(ABC):
@@ -200,7 +193,8 @@ class Connection(OnionLayer):
                 raise
             except Exception as exc:
                 log.debug(f"IB connection attempt failed: {exc!r}")
-                await asyncio.sleep(self.ct.settings.retry_delay)
+                if await self.ct.wait_before_reconnect(self.ct.settings.retry_delay):
+                    raise asyncio.CancelledError()
         return self
 
     async def __aexit__(

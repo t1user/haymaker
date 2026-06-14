@@ -188,4 +188,4 @@ class App:
     def run(self) -> None:
         # this is the main entry point into strategy
         log.debug("Initializing connection supervisor.")
-        self.ib.run(self.supervisor.run())
+        asyncio.run(self.supervisor.run())
