@@ -1,5 +1,5 @@
 import logging
-from abc import ABC, abstractproperty
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
 from functools import cached_property
@@ -22,10 +22,12 @@ class TaskFactory(ABC):
     store: StoreWrapper
     head: Union[date, datetime]  # HeadTimeStamp earliest point for which IB has data
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def from_date(self) -> Union[date, datetime, None]: ...
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def to_date(self) -> Union[date, datetime, None]: ...
 
     def dates(self) -> Optional[Dates]:
