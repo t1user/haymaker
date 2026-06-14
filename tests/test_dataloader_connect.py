@@ -37,7 +37,7 @@ async def test_reconnect_mode_runs_work_and_stops_supervisor(supervisor):
 
 
 @pytest.mark.asyncio
-async def test_wait_mode_leaves_existing_work_running_after_reconnect(supervisor):
+async def test_restart_resumes_by_starting_same_workload_again(supervisor):
     release = asyncio.Event()
     runs = []
 
@@ -45,15 +45,21 @@ async def test_wait_mode_leaves_existing_work_running_after_reconnect(supervisor
         runs.append("run")
         await release.wait()
 
-    connection = connect.DataloaderConnection(object(), run_work, run_mode="wait")
+    connection = connect.DataloaderConnection(object(), run_work)
     first_start = asyncio.create_task(connection.runtime.start())
-    await asyncio.sleep(0)
-    second_start = asyncio.create_task(connection.runtime.start())
-    await asyncio.sleep(0)
+    while runs != ["run"]:
+        await asyncio.sleep(0)
+    await connection.runtime.stop("socket disconnected")
+    await first_start
 
-    assert runs == ["run"]
+    release = asyncio.Event()
+    second_start = asyncio.create_task(connection.runtime.start())
+    while runs != ["run", "run"]:
+        await asyncio.sleep(0)
+
+    assert runs == ["run", "run"]
     release.set()
-    await asyncio.gather(first_start, second_start)
+    await second_start
 
 
 @pytest.mark.asyncio
@@ -78,24 +84,14 @@ async def test_reconnect_mode_runs_cleanup_before_restart(supervisor):
 
 
 @pytest.mark.asyncio
-async def test_wait_mode_does_not_run_cleanup_before_restart(supervisor):
-    release = asyncio.Event()
-    cleanups = []
-
+async def test_workload_failure_propagates(supervisor):
     async def run_work():
-        await release.wait()
+        raise RuntimeError("broken workload")
 
-    connection = connect.DataloaderConnection(
-        object(), run_work, lambda: cleanups.append("cleanup"), run_mode="wait"
-    )
-    run_task = asyncio.create_task(connection.runtime.start())
-    await asyncio.sleep(0)
+    connection = connect.DataloaderConnection(object(), run_work)
 
-    await connection.runtime.stop("socket disconnected")
-
-    assert cleanups == []
-    release.set()
-    await run_task
+    with pytest.raises(RuntimeError, match="broken workload"):
+        await connection.runtime.start()
 
 
 def test_watchdog_mode_is_rejected():

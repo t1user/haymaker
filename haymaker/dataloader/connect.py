@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Literal, TypeAlias
@@ -24,25 +24,21 @@ class DataloaderRuntime:
 
     Args:
         func: Async dataloader workload to run after connection.
-        cleanup: Optional callback used to release work after disconnection.
-        run_mode: Re-run work after reconnect, or wait for in-place recovery.
+        cleanup: Optional callback used to release active work before restart.
+        run_mode: Legacy mode value retained for configuration compatibility.
     """
 
-    func: Callable
+    func: Callable[[], Awaitable[None]]
     cleanup: Callable | None = None
     run_mode: Mode = "reconnect"
-    _started: bool = field(default=False, init=False)
     _work_task: asyncio.Task | None = field(default=None, init=False)
 
     async def start(self) -> None:
         """Start or resume dataloader work after connection."""
 
-        if self.run_mode == "wait" and self._started:
-            log.debug("Reconnected. Waiting for IB to resume sending data.")
-        elif self._work_task and not self._work_task.done():
+        if self._work_task and not self._work_task.done():
             log.debug("Dataloader work is still active after reconnection.")
         else:
-            self._started = True
             log.debug(f"Running {self.func}.")
             self._work_task = asyncio.create_task(
                 self._run_work(), name="dataloader-work"
@@ -50,10 +46,7 @@ class DataloaderRuntime:
 
         if self._work_task:
             try:
-                if self.run_mode == "wait":
-                    await asyncio.shield(self._work_task)
-                else:
-                    await self._work_task
+                await self._work_task
             except asyncio.CancelledError:
                 log.debug("Dataloader work interrupted during connection recovery.")
 
@@ -62,20 +55,19 @@ class DataloaderRuntime:
 
         try:
             await self.func()
-        except (asyncio.CancelledError, ConnectionError):
+        except asyncio.CancelledError:
             log.debug("Dataloader work interrupted during connection recovery.")
-        except Exception as exc:
-            log.exception(f"Dataloader work failed: {exc}")
+            raise
 
     async def stop(self, reason: str) -> None:
         """Release current work before reconnecting when configured to rerun."""
 
         log.debug(f"Restarting dataloader connection: {reason}")
         has_active_work = self._work_task is not None and not self._work_task.done()
-        if self.run_mode == "reconnect" and self.cleanup and has_active_work:
+        if self.cleanup and has_active_work:
             self.cleanup()
 
-        if self.run_mode == "reconnect" and self._work_task and has_active_work:
+        if self._work_task and has_active_work:
             self._work_task.cancel()
             try:
                 await self._work_task

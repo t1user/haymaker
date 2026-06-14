@@ -497,7 +497,6 @@ OBJECTS = QueueMemo()
 
 
 async def main(manager: Manager, ib: ibi.IB) -> None:
-
     log.debug("Initializing main.")
 
     queue: asyncio.Queue[DataWriter] = asyncio.LifoQueue(
@@ -523,20 +522,35 @@ async def main(manager: Manager, ib: ibi.IB) -> None:
 
     OBJECTS.update(workers, producer_task, queue)
 
-    # wait for producer to finish
-    await producer_task
+    try:
+        # wait for producer to finish
+        await producer_task
 
-    # wait for queue to empty
-    await queue.join()
-
-    # cancel workers because they run an infinite loop
-    for task in workers:
-        task.cancel()
-
-    # wait for workers to cancel
-    await asyncio.gather(*workers)
+        # wait for queue to empty
+        await queue.join()
+    finally:
+        await cancel_execution(producer_task, workers, queue)
 
     log.debug("Main done!")
+
+
+async def cancel_execution(
+    producer_task: asyncio.Task | None,
+    workers: list[asyncio.Task],
+    queue: asyncio.Queue | None,
+) -> None:
+    """Cancel active dataloader execution tasks and drain queued work."""
+
+    tasks = [task for task in [producer_task, *workers] if task is not None]
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+
+    if queue is not None:
+        shutdown_queue(queue)
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def shutdown_queue(queue: asyncio.Queue) -> None:
@@ -551,12 +565,10 @@ def shutdown_queue(queue: asyncio.Queue) -> None:
 
 def cancel_tasks():
     log.debug("Will cancel tasks.")
-    # after producer is cancelled and queue shutdown
-    # main should release queue.join()
-    # and proceed to cancelling workers
-    # so no need to cancel workers explicitly here
-    OBJECTS.producer.cancel()
-    shutdown_queue(OBJECTS.queue)
+    if OBJECTS.producer and not OBJECTS.producer.done():
+        OBJECTS.producer.cancel()
+    if OBJECTS.queue:
+        shutdown_queue(OBJECTS.queue)
     log.debug("Tasks cancelled.")
 
 
