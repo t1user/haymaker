@@ -20,7 +20,7 @@ from haymaker.validators import bar_size_validator, wts_validator
 from . import helpers
 from .connect import Mode, connection
 from .contract_selectors import ContractSelector
-from .pacer import PacingViolationError, PacingViolationRegistry, pacer
+from .pacer import PacingViolationError, RequestPacing
 from .scheduling import task_factory, task_factory_with_gaps
 from .store_wrapper import StoreWrapper
 from .task_logger import create_task
@@ -57,6 +57,17 @@ log.debug(
     f"{AUTO_SAVE_INTERVAL=}, {NUMBER_OF_WORKERS=}, {STORE=}, {NOW=}, "
     f"{MAX_PERIOD=}"
 )
+
+
+def request_pacing_factory() -> RequestPacing:
+    """Create request pacing configured from dataloader settings."""
+
+    return RequestPacing(
+        BARSIZE,
+        WTS,
+        restrictions=list(PACER_RESTRICTIONS),
+        no_restriction=PACER_NO_RESTRICTION,
+    )
 
 
 class Params(TypedDict):
@@ -287,6 +298,7 @@ class DownloadContainer:
 @dataclass
 class Manager:
     ib: ibi.IB
+    pacing: RequestPacing = field(default_factory=request_pacing_factory)
     store: AbstractBaseStore = STORE
     active_writers: list[DataWriter] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
@@ -300,10 +312,9 @@ class Manager:
         return pd.read_csv(SOURCE, keep_default_na=False).to_dict("records")
 
     async def contracts(self) -> AsyncGenerator[ibi.Contract, None]:
-        ContractSelector.set_ib(self.ib)
         with tqdm(self.sources, desc="Sources") as source_pbar:
             for s in source_pbar:
-                contract_selector = ContractSelector.from_kwargs(**s)
+                contract_selector = ContractSelector.from_kwargs(ib=self.ib, **s)
                 with tqdm(
                     desc=f"Contracts_{s.get('symbol')}", leave=False, total=None
                 ) as contract_pbar:
@@ -335,7 +346,7 @@ class Manager:
             if contract in self._initiated_contracts:
                 continue
             self._initiated_contracts.append(contract)
-            store = StoreWrapper(contract, STORE, NOW)
+            store = StoreWrapper(contract, self.store, NOW)
             last_bar_date = min(
                 datetime.fromisoformat(contract.lastTradeDateOrContractMonth).replace(
                     tzinfo=timezone.utc
@@ -359,12 +370,12 @@ class Manager:
         headTimeStamp = None
         while not headTimeStamp:
             try:
-                async with PACER:
+                async with self.pacing:
                     headTimeStamp = await self.ib.reqHeadTimeStampAsync(
                         contract, whatToShow=WTS, useRTH=False, formatDate=2
                     )
                 # it was a pacing violation
-                if (not headTimeStamp) and PCR.verify(contract):
+                if (not headTimeStamp) and self.pacing.verify(contract):
                     raise PacingViolationError(
                         "Headstamp pacing violation ignored, job will be rescheduled."
                     )
@@ -403,135 +414,156 @@ def validate_age(writer: DataWriter) -> bool:
     return True
 
 
-async def producer(manager: Manager, queue: asyncio.Queue) -> None:
-    log.debug("Initializing PRODUCER")
-    if manager.active_writers:
-        log.debug("Will start queuing writers, which are already initialized.")
-    for writer in manager.active_writers:
-        if not writer.is_done():
-            await queue.put(writer)
-            log.debug(f"Active writer {writer} added to queue.")
+@dataclass
+class DataloaderSession:
+    """Own one dataloader runtime session and its restartable execution state."""
 
-    log.debug("Will start queing new writers.")
-    while True:
+    ib: ibi.IB
+    manager: Manager | None = None
+    number_of_workers: int = NUMBER_OF_WORKERS
+    queue: asyncio.Queue[DataWriter] | None = field(default=None, init=False)
+    workers: list[asyncio.Task] = field(default_factory=list, init=False)
+    producer_task: asyncio.Task | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        if self.manager is None:
+            self.manager = Manager(self.ib)
+        else:
+            self.manager.ib = self.ib
+
+    @property
+    def pacing(self) -> RequestPacing:
+        """Return the pacing state used by this session."""
+
+        assert self.manager is not None
+        return self.manager.pacing
+
+    async def run(self) -> None:
+        """Run producer and workers until all queued download work is finished."""
+
+        log.debug("Initializing dataloader session.")
+        self.queue = asyncio.LifoQueue(maxsize=int(self.number_of_workers / 4))
+        self.workers = [
+            create_task(
+                self.worker(f"worker_{i}", self.queue),
+                logger=log,
+                message="asyncio error",
+                message_args=(f"worker {i}",),
+            )
+            for i in range(self.number_of_workers)
+        ]
+        self.producer_task = create_task(
+            self.producer(self.queue),
+            logger=log,
+            message="asyncio error",
+            message_args=("producer",),
+        )
+
         try:
-            new_writer = await anext(manager.new_writer_generator)
-            await queue.put(new_writer)
-            log.debug(f"New writer {new_writer} added to queue.")
-        except StopAsyncIteration:
-            log.debug("No more writers!")
-            break
+            await self.producer_task
+            await self.queue.join()
+        finally:
+            await self.cancel_execution()
 
-    log.debug("Producer done!")
+        log.debug("Dataloader session run done!")
 
+    async def producer(self, queue: asyncio.Queue) -> None:
+        """Queue unfinished active writers and then discover new writers."""
 
-async def worker(name: str, queue: asyncio.Queue, ib: ibi.IB) -> None:
-    log.debug(f"Initializing {name.upper()}")
-    while True:
+        assert self.manager is not None
+        log.debug("Initializing PRODUCER")
+        if self.manager.active_writers:
+            log.debug("Will start queuing writers, which are already initialized.")
+        for writer in self.manager.active_writers:
+            if not writer.is_done():
+                await queue.put(writer)
+                log.debug(f"Active writer {writer} added to queue.")
 
-        writer = await queue.get()
-
+        log.debug("Will start queing new writers.")
         while True:
             try:
-                async with PACER:
-                    log.debug(
-                        f"{name} loading {writer!s} ending: {writer.next_date} "
-                        f"duration: {writer.params['durationStr']}"
-                    )
-                    chunk = await ib.reqHistoricalDataAsync(
-                        **writer.params,
-                        barSizeSetting=BARSIZE,
-                        whatToShow=WTS,
-                        useRTH=False,
-                        formatDate=2,
-                        timeout=0,
-                    )
-
-                if (not chunk) and PCR.verify(writer.contract):
-                    # if pacing violation just happened, empty (or None) chunk doesn't
-                    # mean there is no data; need to reschedule with same parameters
-                    raise PacingViolationError(
-                        "This error is being ignored, job will be rescheduled."
-                    )
-                # below will not run if error above, so
-                # `writer.next_date` will still hold the same date,
-                # i.e. the same chunk will be rescheduled
-                await writer.save_chunk(chunk)
-            except ConnectionError:
-                while not ib.isConnected():
-                    await asyncio.sleep(5)
-            except Exception as e:
-                log.exception(e)
-                # prevent same request sooner than after 60 secs
-                await asyncio.sleep(60)
-                log.debug(f"{writer!s} rescheduled.")
-
-            if writer.next_date:
-                if not validate_age(writer):
-                    await writer.save_chunk(None)
-                    log.debug(f"{writer!s} dropped on age validation.")
-                    break
-            else:
-                log.info(f"{writer!s} done!")
+                new_writer = await anext(self.manager.new_writer_generator)
+                await queue.put(new_writer)
+                log.debug(f"New writer {new_writer} added to queue.")
+            except StopAsyncIteration:
+                log.debug("No more writers!")
                 break
 
-        queue.task_done()
+        log.debug("Producer done!")
 
+    async def worker(self, name: str, queue: asyncio.Queue) -> None:
+        """Download historical data chunks for queued writers."""
 
-@dataclass
-class QueueMemo:
-    workers: list[asyncio.Task] = field(default_factory=list)
-    producer: asyncio.Task | None = None
-    queue: asyncio.Queue | None = None
+        log.debug(f"Initializing {name.upper()}")
+        while True:
+            writer = await queue.get()
 
-    def update(
-        self, workers: list[asyncio.Task], producer: asyncio.Task, queue: asyncio.Queue
-    ) -> None:
-        log.debug("Updating workers, producer and queue.")
-        self.workers = workers
-        self.producer = producer
-        self.queue = queue
+            while True:
+                try:
+                    async with self.pacing:
+                        log.debug(
+                            f"{name} loading {writer!s} ending: {writer.next_date} "
+                            f"duration: {writer.params['durationStr']}"
+                        )
+                        chunk = await self.ib.reqHistoricalDataAsync(
+                            **writer.params,
+                            barSizeSetting=BARSIZE,
+                            whatToShow=WTS,
+                            useRTH=False,
+                            formatDate=2,
+                            timeout=0,
+                        )
 
+                    if (not chunk) and self.pacing.verify(writer.contract):
+                        # if pacing violation just happened, empty (or None) chunk
+                        # doesn't mean there is no data; reschedule same params
+                        raise PacingViolationError(
+                            "This error is being ignored, job will be rescheduled."
+                        )
+                    # below will not run if error above, so
+                    # `writer.next_date` will still hold the same date,
+                    # i.e. the same chunk will be rescheduled
+                    await writer.save_chunk(chunk)
+                except ConnectionError:
+                    while not self.ib.isConnected():
+                        await asyncio.sleep(5)
+                except Exception as e:
+                    log.exception(e)
+                    # prevent same request sooner than after 60 secs
+                    await asyncio.sleep(60)
+                    log.debug(f"{writer!s} rescheduled.")
 
-OBJECTS = QueueMemo()
+                if writer.next_date:
+                    if not validate_age(writer):
+                        await writer.save_chunk(None)
+                        log.debug(f"{writer!s} dropped on age validation.")
+                        break
+                else:
+                    log.info(f"{writer!s} done!")
+                    break
+
+            queue.task_done()
+
+    def cancel_tasks(self) -> None:
+        """Request cancellation of active producer/worker tasks."""
+
+        log.debug("Will cancel dataloader session tasks.")
+        if self.producer_task and not self.producer_task.done():
+            self.producer_task.cancel()
+        if self.queue:
+            shutdown_queue(self.queue)
+        log.debug("Dataloader session tasks cancelled.")
+
+    async def cancel_execution(self) -> None:
+        """Cancel active dataloader execution tasks and drain queued work."""
+
+        await cancel_execution(self.producer_task, self.workers, self.queue)
 
 
 async def main(manager: Manager, ib: ibi.IB) -> None:
-    log.debug("Initializing main.")
+    """Run a dataloader session for compatibility with older call sites."""
 
-    queue: asyncio.Queue[DataWriter] = asyncio.LifoQueue(
-        maxsize=int(NUMBER_OF_WORKERS / 4)
-    )
-
-    workers: list[asyncio.Task] = [
-        create_task(
-            worker(f"worker_{i}", queue, ib),
-            logger=log,
-            message="asyncio error",
-            message_args=(f"worker {i}",),
-        )
-        for i in range(NUMBER_OF_WORKERS)
-    ]
-
-    producer_task: asyncio.Task[None] = create_task(
-        producer(manager, queue),
-        logger=log,
-        message="asyncio error",
-        message_args=("producer",),
-    )
-
-    OBJECTS.update(workers, producer_task, queue)
-
-    try:
-        # wait for producer to finish
-        await producer_task
-
-        # wait for queue to empty
-        await queue.join()
-    finally:
-        await cancel_execution(producer_task, workers, queue)
-
-    log.debug("Main done!")
+    await DataloaderSession(ib, manager=manager).run()
 
 
 async def cancel_execution(
@@ -563,34 +595,16 @@ def shutdown_queue(queue: asyncio.Queue) -> None:
     log.debug("Queue has been shutdown.")
 
 
-def cancel_tasks():
-    log.debug("Will cancel tasks.")
-    if OBJECTS.producer and not OBJECTS.producer.done():
-        OBJECTS.producer.cancel()
-    if OBJECTS.queue:
-        shutdown_queue(OBJECTS.queue)
-    log.debug("Tasks cancelled.")
-
-
 def start():
     ibi.util.patchAsyncio()
     ib = ibi.IB()
-    ib.errorEvent += PCR.onError
-    manager = Manager(ib)
+    session = DataloaderSession(ib)
+    ib.errorEvent += session.pacing.onErrEvent
     asyncio.get_event_loop().set_debug(True)
     log.debug("Will start...")
 
-    connection(ib, partial(main, manager, ib), cancel_tasks, RUN_MODE)
+    connection(ib, session.run, session.cancel_tasks, RUN_MODE)
 
     log.info("script finished, about to disconnect")
     ib.disconnect()
     log.debug("disconnected")
-
-
-PACER = pacer(
-    BARSIZE,
-    WTS,
-    restrictions=[] if PACER_NO_RESTRICTION else PACER_RESTRICTIONS,  # type: ignore
-)
-log.debug(f"Pacer initialized: {PACER}")
-PCR = PacingViolationRegistry()

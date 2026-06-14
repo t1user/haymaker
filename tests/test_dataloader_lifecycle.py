@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,14 +54,14 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
     producer_cancelled = asyncio.Event()
     workers_started = asyncio.Event()
 
-    async def fake_producer(manager, queue):
+    async def fake_producer(self, queue):
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             producer_cancelled.set()
             raise
 
-    async def fake_worker(name, queue, ib):
+    async def fake_worker(self, name, queue):
         nonlocal started_workers, cancelled_workers
         started_workers += 1
         if started_workers == 2:
@@ -71,11 +72,12 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
             cancelled_workers += 1
             raise
 
-    monkeypatch.setattr(dataloader, "NUMBER_OF_WORKERS", 2)
-    monkeypatch.setattr(dataloader, "producer", fake_producer)
-    monkeypatch.setattr(dataloader, "worker", fake_worker)
+    monkeypatch.setattr(dataloader.DataloaderSession, "producer", fake_producer)
+    monkeypatch.setattr(dataloader.DataloaderSession, "worker", fake_worker)
 
-    task = asyncio.create_task(dataloader.main(object(), object()))
+    task = asyncio.create_task(
+        dataloader.DataloaderSession(object(), number_of_workers=2).run()
+    )
     await asyncio.wait_for(workers_started.wait(), timeout=1)
 
     task.cancel()
@@ -84,3 +86,55 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
 
     assert producer_cancelled.is_set()
     assert cancelled_workers == 2
+
+
+def test_sessions_own_separate_pacing_state(dataloader_module):
+    """Separate sessions should not share pacing violation or limiter state."""
+
+    dataloader = dataloader_module
+    first = dataloader.DataloaderSession(object())
+    second = dataloader.DataloaderSession(object())
+    contract = object()
+
+    first.pacing.registry.data.add(contract)
+
+    assert first.pacing.verify(contract)
+    assert not second.pacing.verify(contract)
+    assert first.pacing.limiter.restrictions[0].holder is not (
+        second.pacing.limiter.restrictions[0].holder
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_producer_requeues_active_writers_before_new_discovery(
+    dataloader_module,
+):
+    """Restarted sessions should resume active writers before new discovery."""
+
+    dataloader = dataloader_module
+
+    class FakeWriter:
+        def __init__(self, name):
+            self.name = name
+
+        def is_done(self):
+            return False
+
+    async def new_writers():
+        yield new_writer
+
+    active_writer = FakeWriter("active")
+    new_writer = FakeWriter("new")
+    manager = SimpleNamespace(
+        ib=None,
+        active_writers=[active_writer],
+        new_writer_generator=new_writers(),
+        pacing=dataloader.request_pacing_factory(),
+    )
+    session = dataloader.DataloaderSession(object(), manager=manager)
+    queue = asyncio.Queue()
+
+    await session.producer(queue)
+
+    assert queue.get_nowait() is active_writer
+    assert queue.get_nowait() is new_writer

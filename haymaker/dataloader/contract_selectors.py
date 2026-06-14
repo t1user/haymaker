@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import fields
 from datetime import date
-from typing import AsyncGenerator, Self, Type
+from typing import AsyncGenerator, Self
 
 import ib_insync as ibi
 
@@ -33,7 +33,6 @@ class ContractSelector:
     guaranteed to be qualified.
     """
 
-    ib: ibi.IB
     sec_types = {
         "STK",  # Stock
         "OPT",  # Option
@@ -54,33 +53,22 @@ class ContractSelector:
     contract_fields = {i.name for i in fields(ibi.Contract)}
 
     @classmethod
-    def set_ib(cls, ib: ibi.IB) -> Type[Self]:
-        cls.ib = ib
-        return cls
-
-    @classmethod
-    def from_kwargs(cls, **kwargs) -> Self:
+    def from_kwargs(cls, ib: ibi.IB, **kwargs) -> Self:
         secType = kwargs.get("secType")
         if secType not in cls.sec_types:
             raise TypeError(f"secType must be one of {cls.sec_types} not: {secType}")
         elif secType in {"FUT", "CONTFUT"}:
-            return cls.from_future_kwargs(**kwargs)
+            return cls.from_future_kwargs(ib=ib, **kwargs)
         # TODO: specific cases for other asset classes
         else:
-            return cls(**kwargs)
+            return cls(ib=ib, **kwargs)
 
     @classmethod
-    def from_future_kwargs(cls, **kwargs):
-        return FutureContractSelector.create(**kwargs)
+    def from_future_kwargs(cls, ib: ibi.IB, **kwargs):
+        return FutureContractSelector.create(ib=ib, **kwargs)
 
-    def __init__(self, **kwargs) -> None:
-        try:
-            self.ib
-        except AttributeError:
-            raise AttributeError(
-                f"ib attribute must be set on {self.__class__.__name__} "
-                f"before class is instantiated."
-            )
+    def __init__(self, ib: ibi.IB, **kwargs) -> None:
+        self.ib = ib
         self.kwargs = self.clean_fields(**kwargs)
 
     def clean_fields(self, **kwargs) -> dict:
@@ -111,12 +99,12 @@ class ContractSelector:
 
 class FutureContractSelector(ContractSelector):
 
-    def __init__(self, **kwargs):
+    def __init__(self, ib: ibi.IB, **kwargs):
         kwargs.update(includeExpired=True)
-        super().__init__(**kwargs)
+        super().__init__(ib=ib, **kwargs)
 
     @classmethod
-    def create(cls, **kwargs):
+    def create(cls, ib: ibi.IB, **kwargs):
         # in case of any ambiguities just go for contfuture
         klass = {
             "contfuture": ContfutureFutureContractSelector,
@@ -126,7 +114,7 @@ class FutureContractSelector(ContractSelector):
             "current_and_contfuture": CurrentContfutureFutureContractSelector,
             "current_and_expired": CurrentExpiredFutureContractSelector,
         }.get(FUTURES_SELECTOR, CurrentExpiredFutureContractSelector)
-        return klass(**kwargs)
+        return klass(ib=ib, **kwargs)
 
     @async_cached_property
     async def _fullchain(self) -> list[ibi.Contract]:
@@ -170,9 +158,9 @@ class FullchainFutureContractSelector(FutureContractSelector):
     spec = FUTURES_FULLCHAIN_SPEC
 
     @classmethod
-    def with_spec(cls, spec: str, **kwargs) -> Self:
+    def with_spec(cls, spec: str, ib: ibi.IB, **kwargs) -> Self:
         cls.spec = spec
-        return cls(**kwargs)
+        return cls(ib=ib, **kwargs)
 
     async def _objects(self) -> AsyncGenerator[ibi.Contract, None]:
 
@@ -214,10 +202,10 @@ class CurrentFutureContractSelector(FutureContractSelector):
 class CurrentContfutureFutureContractSelector(FutureContractSelector):
     """Current and ContFuture"""
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.current = CurrentFutureContractSelector(**kwargs)
-        self.contfuture = ContfutureFutureContractSelector(**kwargs)
+    def __init__(self, ib: ibi.IB, **kwargs) -> None:
+        super().__init__(ib=ib, **kwargs)
+        self.current = CurrentFutureContractSelector(ib=self.ib, **kwargs)
+        self.contfuture = ContfutureFutureContractSelector(ib=self.ib, **kwargs)
 
     async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
         for gen in (self.current, self.contfuture):
@@ -228,10 +216,12 @@ class CurrentContfutureFutureContractSelector(FutureContractSelector):
 class CurrentExpiredFutureContractSelector(FutureContractSelector):
     """Current and Expired"""
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.current = CurrentFutureContractSelector(**kwargs)
-        self.expired = FullchainFutureContractSelector.with_spec("expired", **kwargs)
+    def __init__(self, ib: ibi.IB, **kwargs) -> None:
+        super().__init__(ib=ib, **kwargs)
+        self.current = CurrentFutureContractSelector(ib=self.ib, **kwargs)
+        self.expired = FullchainFutureContractSelector.with_spec(
+            "expired", ib=self.ib, **kwargs
+        )
 
     async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
         for gen in (self.current, self.expired):

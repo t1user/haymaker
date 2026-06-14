@@ -3,8 +3,8 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from functools import partial
-from typing import ClassVar
+from types import TracebackType
+from typing import Self
 
 import ib_insync as ibi
 
@@ -15,12 +15,13 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class Restriction:
-    # hold record of requests that have been let through
-    # shared among all instances
-    holder: ClassVar[deque[datetime]] = deque(maxlen=100)
-    # actual restriction defined here as number of requests within seconds
+    """Restrict requests using a request timestamp holder owned by one pacer."""
+
     requests: int
     seconds: float
+    holder: deque[datetime] = field(
+        repr=False, default_factory=lambda: deque(maxlen=100)
+    )
 
     def check(self) -> float:
         """Return required sleep time in seconds."""
@@ -51,13 +52,13 @@ class NoRestriction(Restriction):
 class Pacer:
     """One object for all workers."""
 
-    restrictions: list[Restriction] = field(
-        default_factory=partial(list, NoRestriction())
-    )
+    restrictions: list[Restriction] = field(default_factory=list)
 
     async def __aenter__(self):
         # inner context ensures separate wait time for each worker
-        while time := max([restriction.check() for restriction in self.restrictions]):
+        while self.restrictions and (
+            time := max([restriction.check() for restriction in self.restrictions])
+        ):
             log.debug(
                 f"Will throtle: {round(time, 1)}s till "
                 f"{datetime.now() + timedelta(seconds=time)}"
@@ -66,7 +67,8 @@ class Pacer:
 
         # register request time right before making the request
         # request should be the next instruction out of this context
-        Restriction.holder.append(datetime.now(timezone.utc))
+        for restriction in self.restrictions:
+            restriction.holder.append(datetime.now(timezone.utc))
 
     async def __aexit__(self, *args):
         pass
@@ -94,7 +96,8 @@ def pacer(
                 (restriction[0], int(restriction[1] / 2))
                 for restriction in restrictions
             ]
-    return Pacer([Restriction(*res) for res in restrictions])
+    holder: deque[datetime] = deque(maxlen=100)
+    return Pacer([Restriction(*res, holder) for res in restrictions])
 
 
 class PacingViolationRegistry:
@@ -133,3 +136,49 @@ class PacingViolationRegistry:
 
 class PacingViolationError(Exception):
     pass
+
+
+@dataclass
+class RequestPacing:
+    """Own pacing limiter and pacing-violation state for one dataloader session."""
+
+    bar_size: str
+    wts: str
+    restrictions: list[tuple[int, float]] = field(default_factory=list)
+    no_restriction: bool = False
+    limiter: Pacer = field(init=False, repr=False)
+    registry: PacingViolationRegistry = field(
+        default_factory=PacingViolationRegistry, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        self.limiter = pacer(
+            self.bar_size,
+            self.wts,
+            restrictions=[] if self.no_restriction else self.restrictions,
+        )
+        log.debug(f"Pacer initialized: {self.limiter}")
+
+    async def __aenter__(self) -> Self:
+        await self.limiter.__aenter__()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.limiter.__aexit__(exc_type, exc, traceback)
+
+    def verify(self, contract: ibi.Contract) -> bool:
+        """Return whether the contract recently hit a pacing violation."""
+
+        return self.registry.verify(contract)
+
+    def onErrEvent(
+        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+    ) -> None:
+        """Handle ``ib.errorEvent`` updates relevant to pacing violations."""
+
+        self.registry.onError(reqId, errorCode, errorString, contract)

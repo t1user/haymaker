@@ -5,21 +5,21 @@ stable and mark items off as they are addressed.
 
 ## Issues
 
-- [ ] `DL-001`: Restart cleanup can leave old workers/tasks alive.
+- [x] `DL-001`: Restart cleanup can leave old workers/tasks alive.
 - [ ] `DL-002`: `run_mode = reconnect|wait` mixes workload policy with
   connection ownership.
 - [ ] `DL-003`: Request retry/readiness is inconsistent across producer,
   contract selector, headstamp, and workers.
-- [ ] `DL-004`: Workload exceptions are swallowed and may look like clean
+- [x] `DL-004`: Workload exceptions are swallowed and may look like clean
   completion.
-- [ ] `DL-005`: Global mutable runtime state blocks safe restart, attached, and
+- [x] `DL-005`: Global mutable runtime state blocks safe restart, attached, and
   concurrent use.
-- [ ] `DL-006`: `Manager.store` is ignored.
+- [x] `DL-006`: `Manager.store` is ignored.
 - [ ] `DL-007`: Store/date helpers have brittle one-row and stale-cache
   assumptions.
 - [ ] `DL-008`: `BID_ASK` pacing adjustment appears backwards.
 - [ ] `DL-009`: Docs are stale around dataloader connection implementation.
-- [ ] `DL-010`: Workload has two phases, but restart currently re-enters
+- [x] `DL-010`: Workload has two phases, but restart currently re-enters
   discovery instead of resuming known remaining work.
 - [ ] `DL-011`: Reconcile dataloader pacing limits with current Interactive
   Brokers documentation and verify compliance.
@@ -30,7 +30,7 @@ stable and mark items off as they are addressed.
   interface dataloader should depend on.
 - [ ] `DL-015`: Define attached-mode pacing policy, likely a configurable
   fraction of normal historical-data allowance.
-- [ ] `DL-016`: Make managed restart resume in-memory discovered work instead of
+- [x] `DL-016`: Make managed restart resume in-memory discovered work instead of
   rerunning discovery after every supervisor restart.
 - [ ] `DL-017`: Define process-stop semantics explicitly: no separate checkpoint
   state for now; restart from persisted datastore boundaries on next process
