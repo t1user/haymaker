@@ -389,32 +389,35 @@ class Manager:
         while not headTimeStamp:
             try:
                 assert self.pacing is not None
-                async with self.pacing:
-                    headTimeStamp = await self.ib.reqHeadTimeStampAsync(
+                headTimeStamp = await self.pacing.request(
+                    contract,
+                    lambda: self.ib.reqHeadTimeStampAsync(
                         contract,
                         whatToShow=self.wts,
                         useRTH=False,
                         formatDate=2,
-                    )
-                # it was a pacing violation
-                if (not headTimeStamp) and self.pacing.verify(contract):
-                    raise PacingViolationError(
-                        "Headstamp pacing violation ignored, job will be rescheduled."
-                    )
-                # no pacing violation but still no headstamp
-                if not headTimeStamp:
-                    five_years_ago = datetime.now(tz=timezone.utc) - timedelta(
-                        days=5 * 250
-                    )
-                    log.warning(
-                        (
-                            f"Unavailable headTimeStamp ({headTimeStamp}) for "
-                            f"{contract}. Will use {five_years_ago}"
-                        )
-                    )
-                    headTimeStamp = five_years_ago
-            except Exception:
+                    ),
+                )
+            except PacingViolationError:
+                log.warning(f"Headstamp pacing violation for {contract}; retrying.")
+                await asyncio.sleep(60)
                 continue
+            except ConnectionError:
+                log.warning(
+                    f"Connection lost while requesting headstamp for {contract}."
+                )
+                raise
+
+            # no pacing violation but still no headstamp
+            if not headTimeStamp:
+                five_years_ago = datetime.now(tz=timezone.utc) - timedelta(days=5 * 250)
+                log.warning(
+                    (
+                        f"Unavailable headTimeStamp ({headTimeStamp}) for "
+                        f"{contract}. Will use {five_years_ago}"
+                    )
+                )
+                headTimeStamp = five_years_ago
 
         hs = norm(headTimeStamp)
         log.debug(f"Headstamp for: {contract.localSymbol}: {hs}")
@@ -487,11 +490,34 @@ class DataloaderSession:
 
         try:
             await self.producer_task
-            await self.queue.join()
+            await self.wait_for_queue_or_worker_failure()
         finally:
             await self.cancel_execution()
 
         log.debug("Dataloader session run done!")
+
+    async def wait_for_queue_or_worker_failure(self) -> None:
+        """Wait until queued work is done or a worker raises an exception."""
+
+        assert self.queue is not None
+        queue_done = asyncio.create_task(
+            self.queue.join(), name="dataloader-queue-join"
+        )
+        try:
+            done, _ = await asyncio.wait(
+                [queue_done, *self.workers],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                if task.cancelled():
+                    continue
+                exception = task.exception()
+                if exception:
+                    raise exception
+        finally:
+            if not queue_done.done():
+                queue_done.cancel()
+                await asyncio.gather(queue_done, return_exceptions=True)
 
     async def producer(self, queue: asyncio.Queue) -> None:
         """Queue unfinished active writers and then discover new writers."""
@@ -524,51 +550,42 @@ class DataloaderSession:
         while True:
             writer = await queue.get()
 
-            while True:
-                try:
-                    async with self.pacing:
+            try:
+                while True:
+                    try:
                         log.debug(
                             f"{name} loading {writer!s} ending: {writer.next_date} "
                             f"duration: {writer.params['durationStr']}"
                         )
-                        chunk = await self.ib.reqHistoricalDataAsync(
-                            **writer.params,
-                            barSizeSetting=self.bar_size,
-                            whatToShow=self.wts,
-                            useRTH=False,
-                            formatDate=2,
-                            timeout=0,
+                        chunk = await self.pacing.request(
+                            writer.contract,
+                            lambda: self.ib.reqHistoricalDataAsync(
+                                **writer.params,
+                                barSizeSetting=self.bar_size,
+                                whatToShow=self.wts,
+                                useRTH=False,
+                                formatDate=2,
+                                timeout=0,
+                            ),
                         )
+                        await writer.save_chunk(chunk)
+                    except PacingViolationError:
+                        log.warning(f"{writer!s} hit pacing violation; rescheduled.")
+                        await asyncio.sleep(60)
+                    except ConnectionError:
+                        log.warning(f"Connection lost while loading {writer!s}.")
+                        raise
 
-                    if (not chunk) and self.pacing.verify(writer.contract):
-                        # if pacing violation just happened, empty (or None) chunk
-                        # doesn't mean there is no data; reschedule same params
-                        raise PacingViolationError(
-                            "This error is being ignored, job will be rescheduled."
-                        )
-                    # below will not run if error above, so
-                    # `writer.next_date` will still hold the same date,
-                    # i.e. the same chunk will be rescheduled
-                    await writer.save_chunk(chunk)
-                except ConnectionError:
-                    while not self.ib.isConnected():
-                        await asyncio.sleep(5)
-                except Exception as e:
-                    log.exception(e)
-                    # prevent same request sooner than after 60 secs
-                    await asyncio.sleep(60)
-                    log.debug(f"{writer!s} rescheduled.")
-
-                if writer.next_date:
-                    if not validate_age(writer):
-                        await writer.save_chunk(None)
-                        log.debug(f"{writer!s} dropped on age validation.")
+                    if writer.next_date:
+                        if not validate_age(writer):
+                            await writer.save_chunk(None)
+                            log.debug(f"{writer!s} dropped on age validation.")
+                            break
+                    else:
+                        log.info(f"{writer!s} done!")
                         break
-                else:
-                    log.info(f"{writer!s} done!")
-                    break
-
-            queue.task_done()
+            finally:
+                queue.task_done()
 
     def cancel_tasks(self) -> None:
         """Request cancellation of active producer/worker tasks."""

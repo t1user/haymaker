@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import sys
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -153,3 +154,183 @@ def test_dataloader_config_validates_pacer_allowance_fraction(
     sys.modules.pop("haymaker.dataloader.dataloader", None)
     with pytest.raises(ValueError, match="pacer_allowance_fraction"):
         importlib.import_module("haymaker.dataloader.dataloader")
+
+
+class FakeContract:
+    symbol = "ES"
+    localSymbol = "ESZ5"
+
+
+@pytest.mark.asyncio
+async def test_headstamp_unexpected_request_error_propagates(dataloader_module):
+    """Unexpected headstamp errors should not be swallowed in an infinite loop."""
+
+    dataloader = dataloader_module
+
+    class FakeIB:
+        async def reqHeadTimeStampAsync(self, *args, **kwargs):
+            raise RuntimeError("bad headstamp")
+
+    manager = dataloader.Manager(FakeIB())
+
+    with pytest.raises(RuntimeError, match="bad headstamp"):
+        await manager.headstamp(FakeContract())
+
+
+@pytest.mark.asyncio
+async def test_headstamp_retries_pacing_violation(monkeypatch, dataloader_module):
+    """Pacing violations should retry the same headstamp request."""
+
+    dataloader = dataloader_module
+    contract = FakeContract()
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(dataloader.asyncio, "sleep", fake_sleep)
+
+    class FakeIB:
+        def __init__(self):
+            self.requests = 0
+
+        async def reqHeadTimeStampAsync(self, *args, **kwargs):
+            self.requests += 1
+            if self.requests == 1:
+                manager.pacing.registry.data.add(contract)
+                return None
+            return datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    ib = FakeIB()
+    manager = dataloader.Manager(ib)
+
+    assert await manager.headstamp(contract) == datetime(
+        2025, 1, 1, tzinfo=timezone.utc
+    )
+    assert ib.requests == 2
+    assert sleeps == [60]
+
+
+@pytest.mark.asyncio
+async def test_worker_connection_loss_propagates(dataloader_module):
+    """Connection loss should leave the workload for supervisor recovery."""
+
+    dataloader = dataloader_module
+
+    class FakeIB:
+        async def reqHistoricalDataAsync(self, *args, **kwargs):
+            raise ConnectionError("socket down")
+
+    class FakeWriter:
+        contract = FakeContract()
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        saved = False
+
+        @property
+        def params(self):
+            return {
+                "contract": self.contract,
+                "endDateTime": self.next_date,
+                "durationStr": "1 D",
+            }
+
+        async def save_chunk(self, chunk):
+            self.saved = True
+
+        def __str__(self):
+            return "<FakeWriter>"
+
+    session = dataloader.DataloaderSession(FakeIB())
+    queue = asyncio.Queue()
+    writer = FakeWriter()
+    await queue.put(writer)
+
+    with pytest.raises(ConnectionError, match="socket down"):
+        await session.worker("worker", queue)
+
+    assert not writer.saved
+    await asyncio.wait_for(queue.join(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_session_wait_raises_worker_failure(dataloader_module):
+    """A failed worker should fail the dataloader workload."""
+
+    dataloader = dataloader_module
+
+    async def failing_worker():
+        raise ConnectionError("worker failed")
+
+    session = dataloader.DataloaderSession(object())
+    session.queue = asyncio.Queue()
+    await session.queue.put(object())
+    session.workers = [asyncio.create_task(failing_worker())]
+
+    with pytest.raises(ConnectionError, match="worker failed"):
+        await session.wait_for_queue_or_worker_failure()
+
+    session.queue.get_nowait()
+    session.queue.task_done()
+
+
+@pytest.mark.asyncio
+async def test_worker_pacing_violation_retries_same_writer(
+    monkeypatch, dataloader_module
+):
+    """Pacing retry should preserve writer state until a non-pacing result arrives."""
+
+    dataloader = dataloader_module
+    contract = FakeContract()
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(dataloader.asyncio, "sleep", fake_sleep)
+
+    class FakeWriter:
+        def __init__(self):
+            self.contract = contract
+            self.next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+            self.saved_chunks = []
+            self.bar_size = dataloader.BARSIZE
+
+        @property
+        def params(self):
+            return {
+                "contract": self.contract,
+                "endDateTime": self.next_date,
+                "durationStr": "1 D",
+            }
+
+        async def save_chunk(self, chunk):
+            self.saved_chunks.append(chunk)
+            self.next_date = None
+
+        def __str__(self):
+            return "<FakeWriter>"
+
+    class FakeIB:
+        def __init__(self):
+            self.requests = 0
+
+        async def reqHistoricalDataAsync(self, *args, **kwargs):
+            self.requests += 1
+            if self.requests == 1:
+                session.pacing.registry.data.add(contract)
+            return []
+
+    ib = FakeIB()
+    session = dataloader.DataloaderSession(ib)
+    queue = asyncio.Queue()
+    writer = FakeWriter()
+    await queue.put(writer)
+
+    task = asyncio.create_task(session.worker("worker", queue))
+    await asyncio.wait_for(queue.join(), timeout=1)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert ib.requests == 2
+    assert writer.saved_chunks == [[]]
+    assert sleeps == [60]

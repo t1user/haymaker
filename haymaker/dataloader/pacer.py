@@ -1,16 +1,18 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
-from typing import Self
+from typing import Self, TypeVar
 
 import ib_insync as ibi
 
 from .helpers import duration_in_secs
 
 log = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 @dataclass
@@ -138,7 +140,7 @@ class PacingViolationRegistry:
 
 
 class PacingViolationError(Exception):
-    pass
+    """Raised when IB reports a pacing violation for a just-finished request."""
 
 
 @dataclass
@@ -173,6 +175,19 @@ class RequestPacing:
         traceback: TracebackType | None,
     ) -> None:
         await self.limiter.__aexit__(exc_type, exc, traceback)
+
+    async def request(
+        self, contract: ibi.Contract, request: Callable[[], Awaitable[T]]
+    ) -> T:
+        """Run one broker request and raise when an empty result was pacing."""
+
+        async with self:
+            result = await request()
+        if not result and self.verify(contract):
+            raise PacingViolationError(
+                "Empty IB response matched a recent pacing violation."
+            )
+        return result
 
     def verify(self, contract: ibi.Contract) -> bool:
         """Return whether the contract recently hit a pacing violation."""

@@ -8,7 +8,7 @@ stable and mark items off as they are addressed.
 - [x] `DL-001`: Restart cleanup can leave old workers/tasks alive.
 - [x] `DL-002`: `run_mode = reconnect|wait` mixes workload policy with
   connection ownership.
-- [ ] `DL-003`: Request retry/readiness is inconsistent across producer,
+- [x] `DL-003`: Request retry/readiness is inconsistent across producer,
   contract selector, headstamp, and workers.
 - [x] `DL-004`: Workload exceptions are swallowed and may look like clean
   completion.
@@ -61,6 +61,11 @@ stable and mark items off as they are addressed.
   IB strings such as `20250330-17:00:00`, timezone is a string such as
   `US/Central`, and sessions include normal trading days, weekend
   gaps, holidays, and early closes.
+- [ ] `DL-020`: Define run-wide `now` snapshot semantics explicitly. Current
+  behavior uses a per-manager `now` snapshot for writer discovery but fresh
+  `current_session_now()` calls for age validation. If future behavior needs one
+  cutoff shared by every object in a dataloader run, move the snapshot to
+  `DataloaderSession` and pass it down.
 
 ## Refactor Plan
 
