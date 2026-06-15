@@ -126,7 +126,6 @@ async def test_session_producer_requeues_active_writers_before_new_discovery(
     new_writer = FakeWriter("new")
     manager = SimpleNamespace(
         ib=None,
-        settings=dataloader.SETTINGS,
         active_writers=[active_writer],
         new_writer_generator=new_writers(),
         pacing=dataloader.request_pacing_factory(),
@@ -140,30 +139,17 @@ async def test_session_producer_requeues_active_writers_before_new_discovery(
     assert queue.get_nowait() is new_writer
 
 
-def test_dataloader_settings_validates_pacer_allowance_fraction(
+def test_dataloader_config_validates_pacer_allowance_fraction(
+    monkeypatch,
     dataloader_module,
 ):
     """Pacing scale is config-owned even though pacer application is later work."""
 
-    settings = dataloader_module.DataloaderSettings.from_config(
-        {
-            "barSize": "30 secs",
-            "wts": "TRADES",
-            "datastore": object(),
-            "source": "contracts.csv",
-            "pacer_allowance_fraction": 0.5,
-        }
-    )
+    from haymaker.config import CONFIG
 
-    assert settings.pacer_allowance_fraction == 0.5
+    assert dataloader_module.PACER_ALLOWANCE_FRACTION == 1.0
 
+    monkeypatch.setitem(CONFIG.maps[0], "pacer_allowance_fraction", 0)
+    sys.modules.pop("haymaker.dataloader.dataloader", None)
     with pytest.raises(ValueError, match="pacer_allowance_fraction"):
-        dataloader_module.DataloaderSettings.from_config(
-            {
-                "barSize": "30 secs",
-                "wts": "TRADES",
-                "datastore": object(),
-                "source": "contracts.csv",
-                "pacer_allowance_fraction": 0,
-            }
-        )
+        importlib.import_module("haymaker.dataloader.dataloader")
