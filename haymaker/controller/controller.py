@@ -486,6 +486,10 @@ class Controller(Atom):
         # silence emission of all orders from session on startup
         if self._hold:
             return
+        if trade.order.orderId == 0:
+            log.debug(
+                f"Skipping blotter entry for orderId==0, permId: {trade.order.permId}"
+            )
 
         await asyncio.sleep(1)
         order_info = self.sm.save_order_status(trade)
