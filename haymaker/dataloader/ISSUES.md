@@ -17,18 +17,18 @@ stable and mark items off as they are addressed.
 - [x] `DL-006`: `Manager.store` is ignored.
 - [ ] `DL-007`: Store/date helpers have brittle one-row and stale-cache
   assumptions.
-- [ ] `DL-008`: `BID_ASK` pacing adjustment appears backwards.
+- [x] `DL-008`: `BID_ASK` pacing adjustment appears backwards.
 - [ ] `DL-009`: Docs are stale around dataloader connection implementation.
 - [x] `DL-010`: Workload has two phases, but restart currently re-enters
   discovery instead of resuming known remaining work.
-- [ ] `DL-011`: Reconcile dataloader pacing limits with current Interactive
+- [x] `DL-011`: Reconcile dataloader pacing limits with current Interactive
   Brokers documentation and verify compliance.
 - [ ] `DL-012`: Remove object construction from YAML config.
 - [ ] `DL-013`: Integrate dataloader collection naming with
   `haymaker/datastore/collection_namer.py`.
 - [ ] `DL-014`: Review dataloader/datastore coupling and define the narrow store
   interface dataloader should depend on.
-- [ ] `DL-015`: Define live-trading impact of dataloader pacing and any
+- [x] `DL-015`: Define live-trading impact of dataloader pacing and any
   reduced allowance for future optional non-supervised modes.
 - [x] `DL-016`: Make managed restart resume in-memory discovered work instead of
   rerunning discovery after every supervisor restart.
@@ -47,8 +47,9 @@ stable and mark items off as they are addressed.
   missing ranges that fall inside IB sessions where bars should
   exist. The IB schedule request should not live inside
   `TaskFactory`/`GapFillFactory`: it is an async broker call and must
-  run through the dataloader request layer under `PACER`, so schedule
-  requests are counted with the rest of broker usage. Preserve a
+  run through the dataloader request layer under session-scoped
+  `RequestPacing`, so schedule requests are counted with the rest of broker
+  usage. Preserve a
   narrow pure scheduling helper that can be tested from stored data
   plus a supplied historical schedule. The observed
   `ib.reqHistoricalScheduleAsync` return shape is like this: [
@@ -138,9 +139,9 @@ stable and mark items off as they are addressed.
 8. **Make Gap-Fill Scheduling Session-Aware**
    - Fetch IB historical schedules in the async dataloader request path, not in
      `TaskFactory`/`GapFillFactory`.
-   - Run `reqHistoricalScheduleAsync` under `PACER` so schedule lookups count
-     against broker usage and can share retry/failure policy with other
-     requests.
+   - Run `reqHistoricalScheduleAsync` under session-scoped `RequestPacing` so
+     schedule lookups count against broker usage and can share retry/failure
+     policy with other requests.
    - Filter detected datastore gaps to ranges that overlap scheduled sessions
      where data should exist.
    - Keep the core gap/schedule comparison as a pure helper that accepts stored

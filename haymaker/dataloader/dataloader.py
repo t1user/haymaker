@@ -1,3 +1,13 @@
+"""Asynchronous Interactive Brokers historical data downloader.
+
+The module is built around a producer/worker queue. A manager discovers the
+contracts and datastore ranges that need data, producers enqueue writer jobs,
+and workers download historical chunks through a session-scoped request pacer.
+Connection recovery is owned by the dataloader supervisor integration; request
+pacing, failure recording, and resume-in-memory state live in the dataloader
+session.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -25,12 +35,6 @@ from .scheduling import task_factory, task_factory_with_gaps
 from .store_wrapper import StoreWrapper
 from .task_logger import create_task
 
-"""
-Async queue implementation modelled (loosely) on example here:
-https://docs.python.org/3/library/asyncio-queue.html#examples
-and here:
-https://realpython.com/async-io-python/#using-a-queue
-"""
 setup_logging(CONFIG.get("logging_config"))
 
 log = logging.getLogger(__name__)
@@ -44,12 +48,11 @@ NUMBER_OF_WORKERS: int = CONFIG.get("number_of_workers", 20)
 STORE: AbstractBaseStore = CONFIG["datastore"]
 SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
-PACER_RESTRICTIONS: list[tuple[int, float]] = list(CONFIG.get("pacer_restrictions", []))
 PACER_ALLOWANCE_FRACTION: float = CONFIG.get("pacer_allowance_fraction", 1.0)
 MAX_PERIOD: int = CONFIG.get("max_period", 30)
 
-if not 0 < PACER_ALLOWANCE_FRACTION <= 1:
-    raise ValueError("pacer_allowance_fraction must be > 0 and <= 1")
+if PACER_ALLOWANCE_FRACTION <= 0:
+    raise ValueError("pacer_allowance_fraction must be greater than 0")
 
 norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
 
@@ -66,8 +69,8 @@ def request_pacing_factory() -> RequestPacing:
     return RequestPacing(
         BARSIZE,
         WTS,
-        restriction_specs=list(PACER_RESTRICTIONS),
         no_restriction=PACER_NO_RESTRICTION,
+        allowance_fraction=PACER_ALLOWANCE_FRACTION,
     )
 
 
@@ -372,14 +375,14 @@ class Manager:
     async def contracts(self) -> AsyncGenerator[ibi.Contract, None]:
         with tqdm(self.sources, desc="Sources") as source_pbar:
             for s in source_pbar:
-                contract_selector = ContractSelector.from_kwargs(ib=self.ib, **s)
+                assert self.pacing is not None
+                contract_selector = ContractSelector.from_kwargs(
+                    ib=self.ib, pacing=self.pacing, **s
+                )
                 with tqdm(
                     desc=f"Contracts_{s.get('symbol')}", leave=False, total=None
                 ) as contract_pbar:
                     async for contract in contract_selector.objects():
-                        # ContractSelector has been calling the api,
-                        # so to prevent pacing violation
-                        await asyncio.sleep(0.5)
                         yield contract
                         contract_pbar.update(1)
 
@@ -428,7 +431,7 @@ class Manager:
         headTimeStamp = None
         while not headTimeStamp:
             assert self.pacing is not None
-            headTimeStamp = await self.pacing.run(
+            headTimeStamp = await self.pacing.run_headstamp(
                 contract,
                 lambda: self.ib.reqHeadTimeStampAsync(
                     contract,
@@ -436,6 +439,9 @@ class Manager:
                     useRTH=False,
                     formatDate=2,
                 ),
+                whatToShow=self.wts,
+                useRTH=False,
+                formatDate=2,
             )
 
             # empty response after pacing retries means no headstamp is available
@@ -571,20 +577,27 @@ class DataloaderSession:
         """Download all currently queued chunks for one writer."""
 
         while True:
+            params = writer.params
             log.debug(
                 f"{name} loading {writer!s} ending: {writer.next_date} "
-                f"duration: {writer.params['durationStr']}"
+                f"duration: {params['durationStr']}"
             )
-            chunk = await self.pacing.run(
+            chunk = await self.pacing.run_historical(
                 writer.contract,
                 lambda: self.ib.reqHistoricalDataAsync(
-                    **writer.params,
+                    **params,
                     barSizeSetting=self.bar_size,
                     whatToShow=self.wts,
                     useRTH=False,
                     formatDate=2,
                     timeout=0,
                 ),
+                endDateTime=params["endDateTime"],
+                durationStr=params["durationStr"],
+                barSizeSetting=self.bar_size,
+                whatToShow=self.wts,
+                useRTH=False,
+                formatDate=2,
             )
             await writer.save_chunk(chunk)
 

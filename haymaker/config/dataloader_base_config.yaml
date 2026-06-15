@@ -10,11 +10,8 @@ fill_gaps: False
 auto_save_interval: 900 # in secs, zero=off
 restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
 max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
-pacer_restrictions:
-  - !!python/tuple [5, 2] # [max requests, seconds]
-  - !!python/tuple [60, 600]
-pacer_no_restriction: False # toggle to quickly switch off pacer (will ignore previous item)
-pacer_allowance_fraction: 1.0 # future pacing scale for sharing IB allowance
+pacer_no_restriction: False # toggle to quickly switch off client-side pacing
+pacer_allowance_fraction: 1.0 # scale client-side pacing capacity; may be below or above 1.0
 
 # ---- futures config ----
 # contfuture, fullchain, current, exact, current_and_expired, current_and_contfuture

@@ -33,7 +33,6 @@ def dataloader_module(monkeypatch):
         "clientId": 1,
         "source": "contracts.csv",
         "pacer_no_restriction": False,
-        "pacer_restrictions": [(5, 2)],
         "pacer_allowance_fraction": 1.0,
         "max_period": 120,
     }
@@ -96,12 +95,12 @@ def test_sessions_own_separate_pacing_state(dataloader_module):
     second = dataloader.DataloaderSession(object())
     contract = object()
 
-    first.pacing.registry.data.add(contract)
+    first.pacing.registry.register(1, 162, "pacing violation", contract)
 
     assert not second.pacing.verify(contract)
     assert first.pacing.verify(contract)
-    assert (
-        first.pacing.restrictions[0].holder is not second.pacing.restrictions[0].holder
+    assert first.pacing.historical.rules[0].history is not (
+        second.pacing.historical.rules[0].history
     )
 
 
@@ -144,11 +143,20 @@ def test_dataloader_config_validates_pacer_allowance_fraction(
     monkeypatch,
     dataloader_module,
 ):
-    """Pacing scale is config-owned even though pacer application is later work."""
+    """Pacing scale should come from config and allow values above one."""
 
     from haymaker.config import CONFIG
 
     assert dataloader_module.PACER_ALLOWANCE_FRACTION == 1.0
+
+    monkeypatch.setitem(CONFIG.maps[0], "pacer_allowance_fraction", 2)
+    sys.modules.pop("haymaker.dataloader.dataloader", None)
+    assert (
+        importlib.import_module(
+            "haymaker.dataloader.dataloader"
+        ).PACER_ALLOWANCE_FRACTION
+        == 2
+    )
 
     monkeypatch.setitem(CONFIG.maps[0], "pacer_allowance_fraction", 0)
     sys.modules.pop("haymaker.dataloader.dataloader", None)
@@ -191,12 +199,13 @@ async def test_headstamp_retries_pacing_violation(dataloader_module):
         async def reqHeadTimeStampAsync(self, *args, **kwargs):
             self.requests += 1
             if self.requests == 1:
-                manager.pacing.registry.data.add(contract)
+                manager.pacing.registry.register(1, 162, "pacing violation", contract)
                 return None
             return datetime(2025, 1, 1, tzinfo=timezone.utc)
 
     ib = FakeIB()
     manager = dataloader.Manager(ib)
+    manager.pacing.no_restriction = True
     manager.pacing.pacing_retry_delay = 0
 
     assert await manager.headstamp(contract) == datetime(
@@ -235,6 +244,7 @@ async def test_worker_connection_loss_is_recorded(dataloader_module):
             return "<FakeWriter>"
 
     session = dataloader.DataloaderSession(FakeIB())
+    session.pacing.no_restriction = True
     queue = asyncio.Queue()
     writer = FakeWriter()
     await queue.put(writer)
@@ -287,6 +297,7 @@ async def test_worker_failure_does_not_stop_next_writer(dataloader_module):
             return f"<FakeWriter {self.name}>"
 
     session = dataloader.DataloaderSession(FakeIB())
+    session.pacing.no_restriction = True
     queue = asyncio.Queue()
     failed_writer = FakeWriter("failed", fail=True)
     good_writer = FakeWriter("good")
@@ -343,11 +354,12 @@ async def test_worker_pacing_violation_retries_same_writer(
         async def reqHistoricalDataAsync(self, *args, **kwargs):
             self.requests += 1
             if self.requests == 1:
-                session.pacing.registry.data.add(contract)
+                session.pacing.registry.register(1, 162, "pacing violation", contract)
             return []
 
     ib = FakeIB()
     session = dataloader.DataloaderSession(ib)
+    session.pacing.no_restriction = True
     session.pacing.pacing_retry_delay = 0
     queue = asyncio.Queue()
     writer = FakeWriter()

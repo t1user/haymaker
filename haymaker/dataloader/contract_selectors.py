@@ -1,3 +1,12 @@
+"""Build dataloader contract streams from YAML contract specifications.
+
+Contract selectors translate config dictionaries into one or more
+``ib_insync.Contract`` objects for historical downloads. Selectors use the
+session-scoped :class:`haymaker.dataloader.pacer.RequestPacing` instance for
+contract-details lookups so qualification and futures-chain discovery share
+the same request pacing and cache as the rest of the dataloader run.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -9,6 +18,8 @@ import ib_insync as ibi
 
 from haymaker.config import CONFIG
 from haymaker.misc import async_cached_property
+
+from .pacer import RequestPacing
 
 log = logging.getLogger(__name__)
 
@@ -53,25 +64,34 @@ class ContractSelector:
     contract_fields = {i.name for i in fields(ibi.Contract)}
 
     @classmethod
-    def from_kwargs(cls, ib: ibi.IB, **kwargs) -> Self:
+    def from_kwargs(cls, ib: ibi.IB, pacing: RequestPacing, **kwargs) -> Self:
+        """Create the selector appropriate for a contract specification."""
+
         secType = kwargs.get("secType")
         if secType not in cls.sec_types:
             raise TypeError(f"secType must be one of {cls.sec_types} not: {secType}")
         elif secType in {"FUT", "CONTFUT"}:
-            return cls.from_future_kwargs(ib=ib, **kwargs)
+            return cls.from_future_kwargs(ib=ib, pacing=pacing, **kwargs)
         # TODO: specific cases for other asset classes
         else:
-            return cls(ib=ib, **kwargs)
+            return cls(ib=ib, pacing=pacing, **kwargs)
 
     @classmethod
-    def from_future_kwargs(cls, ib: ibi.IB, **kwargs):
-        return FutureContractSelector.create(ib=ib, **kwargs)
+    def from_future_kwargs(cls, ib: ibi.IB, pacing: RequestPacing, **kwargs):
+        """Create the configured futures selector."""
 
-    def __init__(self, ib: ibi.IB, **kwargs) -> None:
+        return FutureContractSelector.create(ib=ib, pacing=pacing, **kwargs)
+
+    def __init__(self, ib: ibi.IB, pacing: RequestPacing, **kwargs) -> None:
+        """Initialize a selector for one contract specification."""
+
         self.ib = ib
+        self.pacing = pacing
         self.kwargs = self.clean_fields(**kwargs)
 
     def clean_fields(self, **kwargs) -> dict:
+        """Remove keys that are not accepted by ``ib_insync.Contract``."""
+
         if diff := (set(kwargs.keys()) - self.contract_fields):
             for k in diff:
                 del kwargs[k]
@@ -82,6 +102,8 @@ class ContractSelector:
         return kwargs
 
     async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
+        """Yield contracts selected for historical download."""
+
         if hasattr(self, "_objects"):
             # this is present only in subclasses
             async for ob in self._objects():
@@ -89,22 +111,55 @@ class ContractSelector:
         else:
             contract = ibi.Contract.create(**self.kwargs)
             if contract.conId == 0:
-                await self.ib.qualifyContractsAsync(contract)
+                await self.qualify(contract)
             yield contract
 
+    async def contract_details(
+        self, contract: ibi.Contract
+    ) -> list[ibi.ContractDetails]:
+        """Return paced, cached contract details for a contract."""
+
+        return await self.pacing.run_contract_details(
+            contract,
+            lambda: self.ib.reqContractDetailsAsync(contract),
+        )
+
+    async def qualify(self, contract: ibi.Contract) -> ibi.Contract:
+        """Qualify a contract using cached contract details."""
+
+        details = await self.contract_details(contract)
+        if not details:
+            log.warning(f"Unknown contract: {contract}")
+            return contract
+        if len(details) > 1:
+            possibles = [detail.contract for detail in details]
+            log.warning(f"Ambiguous contract: {contract}, possibles are {possibles}")
+            return contract
+
+        qualified = details[0].contract
+        expiry = qualified.lastTradeDateOrContractMonth
+        if expiry:
+            qualified.lastTradeDateOrContractMonth = expiry.split()[0]
+        if contract.exchange == "SMART":
+            qualified.exchange = contract.exchange
+        ibi.util.dataclassUpdate(contract, qualified)
+        return contract
+
     def repr(self) -> str:
+        """Return a stable human-readable selector representation."""
+
         kwargs_str = ", ".join([f"{k}={v}" for k, v in self.kwargs.items()])
         return f"{self.__class__.__qualname__}({kwargs_str})"
 
 
 class FutureContractSelector(ContractSelector):
 
-    def __init__(self, ib: ibi.IB, **kwargs):
+    def __init__(self, ib: ibi.IB, pacing: RequestPacing, **kwargs):
         kwargs.update(includeExpired=True)
-        super().__init__(ib=ib, **kwargs)
+        super().__init__(ib=ib, pacing=pacing, **kwargs)
 
     @classmethod
-    def create(cls, ib: ibi.IB, **kwargs):
+    def create(cls, ib: ibi.IB, pacing: RequestPacing, **kwargs):
         # in case of any ambiguities just go for contfuture
         klass = {
             "contfuture": ContfutureFutureContractSelector,
@@ -114,13 +169,13 @@ class FutureContractSelector(ContractSelector):
             "current_and_contfuture": CurrentContfutureFutureContractSelector,
             "current_and_expired": CurrentExpiredFutureContractSelector,
         }.get(FUTURES_SELECTOR, CurrentExpiredFutureContractSelector)
-        return klass(ib=ib, **kwargs)
+        return klass(ib=ib, pacing=pacing, **kwargs)
 
     @async_cached_property
     async def _fullchain(self) -> list[ibi.Contract]:
         kwargs = self.kwargs.copy()
         kwargs["secType"] = "FUT"  # it might have been CONTFUT at this point
-        details = await self.ib.reqContractDetailsAsync(ibi.Contract.create(**kwargs))
+        details = await self.contract_details(ibi.Contract.create(**kwargs))
         return sorted(
             [c.contract for c in details if c.contract is not None],
             key=lambda x: x.lastTradeDateOrContractMonth,
@@ -136,7 +191,6 @@ class FutureContractSelector(ContractSelector):
         future_kwargs = ibi.util.dataclassNonDefaults(await self._contfuture)
         future_kwargs["secType"] = "FUT"
         new_contract = ibi.Contract.create(**future_kwargs)
-        # await self.ib.qualifyContractsAsync(new_contract)
         return new_contract
 
     @async_cached_property
@@ -144,7 +198,7 @@ class FutureContractSelector(ContractSelector):
         kwargs = self.kwargs.copy()
         kwargs["secType"] = "CONTFUT"
         contract = ibi.Contract.create(**kwargs)
-        await self.ib.qualifyContractsAsync(contract)
+        await self.qualify(contract)
         return contract
 
 
@@ -158,9 +212,9 @@ class FullchainFutureContractSelector(FutureContractSelector):
     spec = FUTURES_FULLCHAIN_SPEC
 
     @classmethod
-    def with_spec(cls, spec: str, ib: ibi.IB, **kwargs) -> Self:
+    def with_spec(cls, spec: str, ib: ibi.IB, pacing: RequestPacing, **kwargs) -> Self:
         cls.spec = spec
-        return cls(ib=ib, **kwargs)
+        return cls(ib=ib, pacing=pacing, **kwargs)
 
     async def _objects(self) -> AsyncGenerator[ibi.Contract, None]:
 
@@ -202,10 +256,14 @@ class CurrentFutureContractSelector(FutureContractSelector):
 class CurrentContfutureFutureContractSelector(FutureContractSelector):
     """Current and ContFuture"""
 
-    def __init__(self, ib: ibi.IB, **kwargs) -> None:
-        super().__init__(ib=ib, **kwargs)
-        self.current = CurrentFutureContractSelector(ib=self.ib, **kwargs)
-        self.contfuture = ContfutureFutureContractSelector(ib=self.ib, **kwargs)
+    def __init__(self, ib: ibi.IB, pacing: RequestPacing, **kwargs) -> None:
+        super().__init__(ib=ib, pacing=pacing, **kwargs)
+        self.current = CurrentFutureContractSelector(
+            ib=self.ib, pacing=self.pacing, **kwargs
+        )
+        self.contfuture = ContfutureFutureContractSelector(
+            ib=self.ib, pacing=self.pacing, **kwargs
+        )
 
     async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
         for gen in (self.current, self.contfuture):
@@ -216,11 +274,13 @@ class CurrentContfutureFutureContractSelector(FutureContractSelector):
 class CurrentExpiredFutureContractSelector(FutureContractSelector):
     """Current and Expired"""
 
-    def __init__(self, ib: ibi.IB, **kwargs) -> None:
-        super().__init__(ib=ib, **kwargs)
-        self.current = CurrentFutureContractSelector(ib=self.ib, **kwargs)
+    def __init__(self, ib: ibi.IB, pacing: RequestPacing, **kwargs) -> None:
+        super().__init__(ib=ib, pacing=pacing, **kwargs)
+        self.current = CurrentFutureContractSelector(
+            ib=self.ib, pacing=self.pacing, **kwargs
+        )
         self.expired = FullchainFutureContractSelector.with_spec(
-            "expired", ib=self.ib, **kwargs
+            "expired", ib=self.ib, pacing=self.pacing, **kwargs
         )
 
     async def objects(self) -> AsyncGenerator[ibi.Contract, None]:

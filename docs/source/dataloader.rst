@@ -2,7 +2,9 @@
 Dataloader Module
 *****************
 
-Interactive Brokers imposes strict throttling on historical data downloads.While IB is not designed for data collection, the Dataloader Module works within IB limitations to download available historical price and volume data.
+Interactive Brokers imposes strict throttling on historical data downloads.
+While IB is not designed for data collection, the Dataloader Module works
+within IB limitations to download available historical price and volume data.
 
 Connection Recovery
 ===================
@@ -18,3 +20,26 @@ runtime's expected ``clientId=0``. Override ``clientId`` in the dataloader
 config only when another process already uses that ID. A duplicate client ID is
 treated as a
 connection configuration failure.
+
+Request Pacing
+==============
+
+The dataloader keeps a client-side request pacer for IB historical-data,
+head-timestamp, historical-schedule, and contract-details requests. The pacer
+uses module-level limits that model current IBKR historical-data guidance and
+keeps retry handling for pacing violations out of worker code.
+
+Two dataloader config keys adjust that machinery:
+
+``pacer_allowance_fraction``
+   Multiplies the module-level client-side capacities. Values below ``1.0``
+   reserve more broker allowance for other IB clients; values above ``1.0``
+   deliberately make the local pacer more aggressive.
+
+``pacer_no_restriction``
+   Disables client-side pacing waits while keeping the same request-routing API.
+   Use this only when relying on Gateway/TWS pacing or for targeted testing.
+
+Contract selectors use paced ``reqContractDetailsAsync`` calls for
+qualification and futures-chain discovery. They cache details for the session
+so repeated selectors do not duplicate metadata requests.
