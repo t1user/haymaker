@@ -20,7 +20,7 @@ from haymaker.validators import bar_size_validator, wts_validator
 from . import helpers
 from .connect import connection
 from .contract_selectors import ContractSelector
-from .pacer import PacingViolationError, RequestPacing
+from .pacer import RequestPacing
 from .scheduling import task_factory, task_factory_with_gaps
 from .store_wrapper import StoreWrapper
 from .task_logger import create_task
@@ -66,7 +66,7 @@ def request_pacing_factory() -> RequestPacing:
     return RequestPacing(
         BARSIZE,
         WTS,
-        restrictions=list(PACER_RESTRICTIONS),
+        restriction_specs=list(PACER_RESTRICTIONS),
         no_restriction=PACER_NO_RESTRICTION,
     )
 
@@ -81,6 +81,46 @@ class Params(TypedDict):
     contract: ibi.Contract
     endDateTime: datetime | date | str
     durationStr: str
+
+
+@dataclass
+class DownloadFailure:
+    """Record one failed dataloader writer job."""
+
+    writer: DataWriter
+    error: BaseException
+    when: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class DownloadFailureRegistry:
+    """Collect failed writer jobs so the session can report them at completion."""
+
+    failures: list[DownloadFailure] = field(default_factory=list)
+
+    def record(self, writer: DataWriter, error: BaseException) -> None:
+        """Record one failed writer job."""
+
+        self.failures.append(DownloadFailure(writer, error))
+
+    def log_summary(self) -> None:
+        """Log a summary of failed writer jobs."""
+
+        if not self.failures:
+            log.info("Dataloader completed with no failed writer jobs.")
+            return
+
+        log.warning(
+            f"Dataloader completed with {len(self.failures)} failed writer jobs."
+        )
+        for failure in self.failures:
+            log.warning(
+                "%s failed at %s with %s: %s",
+                failure.writer,
+                failure.when.isoformat(),
+                type(failure.error).__name__,
+                failure.error,
+            )
 
 
 def pulse_factory(interval: float) -> ibi.Event | None:
@@ -387,28 +427,18 @@ class Manager:
     async def headstamp(self, contract: ibi.Contract) -> date | datetime:
         headTimeStamp = None
         while not headTimeStamp:
-            try:
-                assert self.pacing is not None
-                headTimeStamp = await self.pacing.request(
+            assert self.pacing is not None
+            headTimeStamp = await self.pacing.run(
+                contract,
+                lambda: self.ib.reqHeadTimeStampAsync(
                     contract,
-                    lambda: self.ib.reqHeadTimeStampAsync(
-                        contract,
-                        whatToShow=self.wts,
-                        useRTH=False,
-                        formatDate=2,
-                    ),
-                )
-            except PacingViolationError:
-                log.warning(f"Headstamp pacing violation for {contract}; retrying.")
-                await asyncio.sleep(60)
-                continue
-            except ConnectionError:
-                log.warning(
-                    f"Connection lost while requesting headstamp for {contract}."
-                )
-                raise
+                    whatToShow=self.wts,
+                    useRTH=False,
+                    formatDate=2,
+                ),
+            )
 
-            # no pacing violation but still no headstamp
+            # empty response after pacing retries means no headstamp is available
             if not headTimeStamp:
                 five_years_ago = datetime.now(tz=timezone.utc) - timedelta(days=5 * 250)
                 log.warning(
@@ -449,6 +479,7 @@ class DataloaderSession:
     number_of_workers: int = NUMBER_OF_WORKERS
     bar_size: str = BARSIZE
     wts: str = WTS
+    failures: DownloadFailureRegistry = field(default_factory=DownloadFailureRegistry)
     queue: asyncio.Queue[DataWriter] | None = field(default=None, init=False)
     workers: list[asyncio.Task] = field(default_factory=list, init=False)
     producer_task: asyncio.Task | None = field(default=None, init=False)
@@ -490,34 +521,10 @@ class DataloaderSession:
 
         try:
             await self.producer_task
-            await self.wait_for_queue_or_worker_failure()
+            await self.queue.join()
         finally:
             await self.cancel_execution()
-
-        log.debug("Dataloader session run done!")
-
-    async def wait_for_queue_or_worker_failure(self) -> None:
-        """Wait until queued work is done or a worker raises an exception."""
-
-        assert self.queue is not None
-        queue_done = asyncio.create_task(
-            self.queue.join(), name="dataloader-queue-join"
-        )
-        try:
-            done, _ = await asyncio.wait(
-                [queue_done, *self.workers],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in done:
-                if task.cancelled():
-                    continue
-                exception = task.exception()
-                if exception:
-                    raise exception
-        finally:
-            if not queue_done.done():
-                queue_done.cancel()
-                await asyncio.gather(queue_done, return_exceptions=True)
+            self.failures.log_summary()
 
     async def producer(self, queue: asyncio.Queue) -> None:
         """Queue unfinished active writers and then discover new writers."""
@@ -551,41 +558,44 @@ class DataloaderSession:
             writer = await queue.get()
 
             try:
-                while True:
-                    try:
-                        log.debug(
-                            f"{name} loading {writer!s} ending: {writer.next_date} "
-                            f"duration: {writer.params['durationStr']}"
-                        )
-                        chunk = await self.pacing.request(
-                            writer.contract,
-                            lambda: self.ib.reqHistoricalDataAsync(
-                                **writer.params,
-                                barSizeSetting=self.bar_size,
-                                whatToShow=self.wts,
-                                useRTH=False,
-                                formatDate=2,
-                                timeout=0,
-                            ),
-                        )
-                        await writer.save_chunk(chunk)
-                    except PacingViolationError:
-                        log.warning(f"{writer!s} hit pacing violation; rescheduled.")
-                        await asyncio.sleep(60)
-                    except ConnectionError:
-                        log.warning(f"Connection lost while loading {writer!s}.")
-                        raise
-
-                    if writer.next_date:
-                        if not validate_age(writer):
-                            await writer.save_chunk(None)
-                            log.debug(f"{writer!s} dropped on age validation.")
-                            break
-                    else:
-                        log.info(f"{writer!s} done!")
-                        break
+                await self.download_writer(name, writer)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.exception("%s failed while loading %s.", name, writer)
+                self.failures.record(writer, exc)
             finally:
                 queue.task_done()
+
+    async def download_writer(self, name: str, writer: DataWriter) -> None:
+        """Download all currently queued chunks for one writer."""
+
+        while True:
+            log.debug(
+                f"{name} loading {writer!s} ending: {writer.next_date} "
+                f"duration: {writer.params['durationStr']}"
+            )
+            chunk = await self.pacing.run(
+                writer.contract,
+                lambda: self.ib.reqHistoricalDataAsync(
+                    **writer.params,
+                    barSizeSetting=self.bar_size,
+                    whatToShow=self.wts,
+                    useRTH=False,
+                    formatDate=2,
+                    timeout=0,
+                ),
+            )
+            await writer.save_chunk(chunk)
+
+            if writer.next_date:
+                if not validate_age(writer):
+                    await writer.save_chunk(None)
+                    log.debug(f"{writer!s} dropped on age validation.")
+                    break
+            else:
+                log.info(f"{writer!s} done!")
+                break
 
     def cancel_tasks(self) -> None:
         """Request cancellation of active producer/worker tasks."""

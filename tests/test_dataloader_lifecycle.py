@@ -89,7 +89,7 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
 
 
 def test_sessions_own_separate_pacing_state(dataloader_module):
-    """Separate sessions should not share pacing violation or limiter state."""
+    """Separate sessions should not share pacing violation or restriction state."""
 
     dataloader = dataloader_module
     first = dataloader.DataloaderSession(object())
@@ -100,8 +100,8 @@ def test_sessions_own_separate_pacing_state(dataloader_module):
 
     assert not second.pacing.verify(contract)
     assert first.pacing.verify(contract)
-    assert first.pacing.limiter.restrictions[0].holder is not (
-        second.pacing.limiter.restrictions[0].holder
+    assert (
+        first.pacing.restrictions[0].holder is not second.pacing.restrictions[0].holder
     )
 
 
@@ -178,17 +178,11 @@ async def test_headstamp_unexpected_request_error_propagates(dataloader_module):
 
 
 @pytest.mark.asyncio
-async def test_headstamp_retries_pacing_violation(monkeypatch, dataloader_module):
+async def test_headstamp_retries_pacing_violation(dataloader_module):
     """Pacing violations should retry the same headstamp request."""
 
     dataloader = dataloader_module
     contract = FakeContract()
-    sleeps = []
-
-    async def fake_sleep(delay):
-        sleeps.append(delay)
-
-    monkeypatch.setattr(dataloader.asyncio, "sleep", fake_sleep)
 
     class FakeIB:
         def __init__(self):
@@ -203,17 +197,17 @@ async def test_headstamp_retries_pacing_violation(monkeypatch, dataloader_module
 
     ib = FakeIB()
     manager = dataloader.Manager(ib)
+    manager.pacing.pacing_retry_delay = 0
 
     assert await manager.headstamp(contract) == datetime(
         2025, 1, 1, tzinfo=timezone.utc
     )
     assert ib.requests == 2
-    assert sleeps == [60]
 
 
 @pytest.mark.asyncio
-async def test_worker_connection_loss_propagates(dataloader_module):
-    """Connection loss should leave the workload for supervisor recovery."""
+async def test_worker_connection_loss_is_recorded(dataloader_module):
+    """Connection loss should record the failed writer and keep the queue moving."""
 
     dataloader = dataloader_module
 
@@ -245,48 +239,80 @@ async def test_worker_connection_loss_propagates(dataloader_module):
     writer = FakeWriter()
     await queue.put(writer)
 
-    with pytest.raises(ConnectionError, match="socket down"):
-        await session.worker("worker", queue)
+    task = asyncio.create_task(session.worker("worker", queue))
+    await asyncio.wait_for(queue.join(), timeout=1)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
     assert not writer.saved
-    await asyncio.wait_for(queue.join(), timeout=1)
+    assert len(session.failures.failures) == 1
+    assert isinstance(session.failures.failures[0].error, ConnectionError)
 
 
 @pytest.mark.asyncio
-async def test_session_wait_raises_worker_failure(dataloader_module):
-    """A failed worker should fail the dataloader workload."""
+async def test_worker_failure_does_not_stop_next_writer(dataloader_module):
+    """A failed writer should be recorded without stopping the worker."""
 
     dataloader = dataloader_module
 
-    async def failing_worker():
-        raise ConnectionError("worker failed")
+    class FakeIB:
+        async def reqHistoricalDataAsync(self, *args, **kwargs):
+            return []
 
-    session = dataloader.DataloaderSession(object())
-    session.queue = asyncio.Queue()
-    await session.queue.put(object())
-    session.workers = [asyncio.create_task(failing_worker())]
+    class FakeWriter:
+        contract = FakeContract()
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        bar_size = dataloader.BARSIZE
 
-    with pytest.raises(ConnectionError, match="worker failed"):
-        await session.wait_for_queue_or_worker_failure()
+        def __init__(self, name, *, fail=False):
+            self.name = name
+            self.fail = fail
+            self.saved = False
 
-    session.queue.get_nowait()
-    session.queue.task_done()
+        @property
+        def params(self):
+            return {
+                "contract": self.contract,
+                "endDateTime": self.next_date,
+                "durationStr": "1 D",
+            }
+
+        async def save_chunk(self, chunk):
+            if self.fail:
+                raise RuntimeError("writer failed")
+            self.saved = True
+            self.next_date = None
+
+        def __str__(self):
+            return f"<FakeWriter {self.name}>"
+
+    session = dataloader.DataloaderSession(FakeIB())
+    queue = asyncio.Queue()
+    failed_writer = FakeWriter("failed", fail=True)
+    good_writer = FakeWriter("good")
+    await queue.put(failed_writer)
+    await queue.put(good_writer)
+
+    task = asyncio.create_task(session.worker("worker", queue))
+    await asyncio.wait_for(queue.join(), timeout=1)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert not failed_writer.saved
+    assert good_writer.saved
+    assert len(session.failures.failures) == 1
+    assert session.failures.failures[0].writer is failed_writer
+    assert isinstance(session.failures.failures[0].error, RuntimeError)
 
 
 @pytest.mark.asyncio
 async def test_worker_pacing_violation_retries_same_writer(
-    monkeypatch, dataloader_module
+    dataloader_module,
 ):
     """Pacing retry should preserve writer state until a non-pacing result arrives."""
 
     dataloader = dataloader_module
     contract = FakeContract()
-    sleeps = []
-
-    async def fake_sleep(delay):
-        sleeps.append(delay)
-
-    monkeypatch.setattr(dataloader.asyncio, "sleep", fake_sleep)
 
     class FakeWriter:
         def __init__(self):
@@ -322,6 +348,7 @@ async def test_worker_pacing_violation_retries_same_writer(
 
     ib = FakeIB()
     session = dataloader.DataloaderSession(ib)
+    session.pacing.pacing_retry_delay = 0
     queue = asyncio.Queue()
     writer = FakeWriter()
     await queue.put(writer)
@@ -333,4 +360,3 @@ async def test_worker_pacing_violation_retries_same_writer(
 
     assert ib.requests == 2
     assert writer.saved_chunks == [[]]
-    assert sleeps == [60]

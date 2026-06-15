@@ -17,7 +17,7 @@ T = TypeVar("T")
 
 @dataclass
 class Restriction:
-    """Restrict requests using a request timestamp holder owned by one pacer."""
+    """Restrict requests using a request timestamp holder owned by one session."""
 
     requests: int
     seconds: float
@@ -48,58 +48,6 @@ class NoRestriction(Restriction):
 
     def check(self) -> float:
         return 0.0
-
-
-@dataclass
-class Pacer:
-    """One object for all workers."""
-
-    restrictions: list[Restriction] = field(default_factory=list)
-
-    async def __aenter__(self):
-        # inner context ensures separate wait time for each worker
-        while self.restrictions and (
-            time := max([restriction.check() for restriction in self.restrictions])
-        ):
-            log.debug(
-                f"Will throtle: {round(time, 1)}s till "
-                f"{datetime.now() + timedelta(seconds=time)}"
-            )
-            await asyncio.sleep(time)
-
-        # register request time right before making the request
-        # request should be the next instruction out of this context
-        for restriction in self.restrictions:
-            restriction.holder.append(datetime.now(timezone.utc))
-
-    async def __aexit__(self, *args):
-        pass
-
-
-def pacer(
-    barSize,
-    wts,
-    *,
-    restrictions: list[tuple[int, float]] = [],
-    restriction_threshold: int = 30,  # barSize in secs above which restrictions apply
-) -> Pacer:
-    """
-    Factory function returning correct pacer preventing (or rather
-    limiting -:)) data pacing restrictions by Interactive Brokers.
-    """
-
-    if (not restrictions) or (duration_in_secs(barSize) > restriction_threshold):
-        return Pacer()
-
-    else:
-        # 'BID_ASK' requests counted as double by ib
-        if wts == "BID_ASK":
-            restrictions = [
-                (restriction[0], int(restriction[1] / 2))
-                for restriction in restrictions
-            ]
-    holder: deque[datetime] = deque(maxlen=100)
-    return Pacer([Restriction(*res, holder) for res in restrictions])
 
 
 class PacingViolationRegistry:
@@ -139,33 +87,41 @@ class PacingViolationRegistry:
             self.register(reqId, errorCode, errorString, contract)
 
 
-class PacingViolationError(Exception):
-    """Raised when IB reports a pacing violation for a just-finished request."""
-
-
 @dataclass
 class RequestPacing:
-    """Own pacing limiter and pacing-violation state for one dataloader session."""
+    """Own request pacing and pacing-violation state for one dataloader session."""
 
     bar_size: str
     wts: str
-    restrictions: list[tuple[int, float]] = field(default_factory=list)
+    restriction_specs: list[tuple[int, float]] = field(default_factory=list)
     no_restriction: bool = False
-    limiter: Pacer = field(init=False, repr=False)
+    pacing_retry_delay: float = 60
+    restriction_threshold: int = 30
+    restrictions: list[Restriction] = field(init=False, repr=False)
     registry: PacingViolationRegistry = field(
         default_factory=PacingViolationRegistry, repr=False
     )
 
     def __post_init__(self) -> None:
-        self.limiter = pacer(
-            self.bar_size,
-            self.wts,
-            restrictions=[] if self.no_restriction else self.restrictions,
-        )
-        log.debug(f"Pacer initialized: {self.limiter}")
+        self.restrictions = self._build_restrictions()
+        log.debug(f"Request pacing initialized: {self.restrictions}")
+
+    def _build_restrictions(self) -> list[Restriction]:
+        """Build rate-limit restrictions for this pacing session."""
+
+        specs = [] if self.no_restriction else self.restriction_specs
+        if (not specs) or (
+            duration_in_secs(self.bar_size) > self.restriction_threshold
+        ):
+            return []
+        if self.wts == "BID_ASK":
+            specs = [(requests, int(seconds / 2)) for requests, seconds in specs]
+        holder: deque[datetime] = deque(maxlen=100)
+        return [Restriction(*spec, holder) for spec in specs]
 
     async def __aenter__(self) -> Self:
-        await self.limiter.__aenter__()
+        await self.wait_for_slot()
+        self.register_request_time()
         return self
 
     async def __aexit__(
@@ -174,20 +130,39 @@ class RequestPacing:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        await self.limiter.__aexit__(exc_type, exc, traceback)
+        pass
 
-    async def request(
+    async def wait_for_slot(self) -> None:
+        """Wait until all configured request restrictions permit another request."""
+
+        while self.restrictions and (
+            wait_time := max([restriction.check() for restriction in self.restrictions])
+        ):
+            log.debug(
+                f"Will throtle: {round(wait_time, 1)}s till "
+                f"{datetime.now() + timedelta(seconds=wait_time)}"
+            )
+            await asyncio.sleep(wait_time)
+
+    def register_request_time(self) -> None:
+        """Record that a request is about to be sent to IB."""
+
+        for restriction in self.restrictions:
+            restriction.holder.append(datetime.now(timezone.utc))
+
+    async def run(
         self, contract: ibi.Contract, request: Callable[[], Awaitable[T]]
     ) -> T:
-        """Run one broker request and raise when an empty result was pacing."""
+        """Run one broker request, retrying pacing violations internally."""
 
-        async with self:
-            result = await request()
-        if not result and self.verify(contract):
-            raise PacingViolationError(
-                "Empty IB response matched a recent pacing violation."
-            )
-        return result
+        while True:
+            async with self:
+                result = await request()
+            if not result and self.verify(contract):
+                log.warning(f"Pacing violation for {contract}; retrying.")
+                await asyncio.sleep(self.pacing_retry_delay)
+                continue
+            return result
 
     def verify(self, contract: ibi.Contract) -> bool:
         """Return whether the contract recently hit a pacing violation."""

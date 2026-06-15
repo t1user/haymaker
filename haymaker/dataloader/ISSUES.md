@@ -66,6 +66,14 @@ stable and mark items off as they are addressed.
   `current_session_now()` calls for age validation. If future behavior needs one
   cutoff shared by every object in a dataloader run, move the snapshot to
   `DataloaderSession` and pass it down.
+- [ ] `DL-021`: Review legacy dataloader runtime objects for overly broad scope
+  or execution responsibilities. Pay special attention to whether manager,
+  writer, store wrapper, selector, and scheduler boundaries still match the
+  simplified queue/worker architecture.
+- [ ] `DL-022`: Classify recorded dataloader job failures as terminal or
+  retryable. Current behavior records failed writer jobs and lets workers keep
+  draining the queue; later policy should decide which failures deserve retries,
+  which should only be summarized, and which indicate process/session failure.
 
 ## Refactor Plan
 
