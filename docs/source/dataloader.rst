@@ -41,5 +41,6 @@ Two dataloader config keys adjust that machinery:
    Use this only when relying on Gateway/TWS pacing or for targeted testing.
 
 Contract selectors use paced ``reqContractDetailsAsync`` calls for
-qualification and futures-chain discovery. They cache details for the session
-so repeated selectors do not duplicate metadata requests.
+qualification and futures-chain discovery. The resolved contracts returned by
+IB are then used for historical requests so pacing follows ``ib_insync``
+contract hash semantics.

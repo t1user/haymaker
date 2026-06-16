@@ -128,7 +128,7 @@ async def test_session_producer_requeues_active_writers_before_new_discovery(
         ib=None,
         active_writers=[active_writer],
         new_writer_generator=new_writers(),
-        pacing=dataloader.request_pacing_factory(),
+        pacing=dataloader.request_pacing_factory(object()),
     )
     session = dataloader.DataloaderSession(object(), manager=manager)
     queue = asyncio.Queue()

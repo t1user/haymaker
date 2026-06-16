@@ -74,34 +74,6 @@ def scaled_capacity(limit: int, allowance_fraction: float, minimum: int = 1) -> 
     return max(minimum, int(limit * allowance_fraction))
 
 
-def contract_key(contract: ibi.Contract) -> tuple[object, ...]:
-    """Return a stable cache/pacing key for an IB contract.
-
-    Args:
-        contract: Contract supplied to an IB request.
-
-    Returns:
-        ``conId`` based key for qualified contracts, otherwise a tuple of stable
-        contract fields used before qualification.
-    """
-
-    con_id = getattr(contract, "conId", 0)
-    if con_id:
-        return ("conId", con_id)
-    return (
-        getattr(contract, "secType", ""),
-        getattr(contract, "symbol", ""),
-        getattr(contract, "exchange", ""),
-        getattr(contract, "primaryExchange", ""),
-        getattr(contract, "currency", ""),
-        getattr(contract, "lastTradeDateOrContractMonth", ""),
-        getattr(contract, "multiplier", ""),
-        getattr(contract, "localSymbol", ""),
-        getattr(contract, "tradingClass", ""),
-        getattr(contract, "includeExpired", False),
-    )
-
-
 @dataclass(frozen=True)
 class RequestProfile:
     """Pacing metadata for one IB request.
@@ -322,13 +294,15 @@ class PacingViolationRegistry:
         log.debug(
             f"Pacing violation registered for {getattr(contract, 'symbol', contract)}"
         )
-        self.data.add(contract_key(contract))
+        hash(contract)
+        self.data.add(contract)
 
     def verify(self, contract: ibi.Contract) -> bool:
         """Return whether a contract has a pending pacing violation marker."""
 
         try:
-            self.data.remove(contract_key(contract))
+            hash(contract)
+            self.data.remove(contract)
             return True
         except KeyError:
             return False
@@ -343,43 +317,11 @@ class PacingViolationRegistry:
 
 
 @dataclass
-class ContractDetailsCache:
-    """Cache contract-details responses for one dataloader session.
-
-    ``pending`` deduplicates concurrent requests for the same key. Once the
-    first request completes, ``data`` serves subsequent selector calls without
-    consuming another metadata pacing slot.
-    """
-
-    data: dict[Hashable, list[ibi.ContractDetails]] = field(default_factory=dict)
-    pending: dict[Hashable, asyncio.Task[list[ibi.ContractDetails]]] = field(
-        default_factory=dict
-    )
-
-    def key(self, contract: ibi.Contract) -> Hashable:
-        """Return the cache key for a contract-details request."""
-
-        return contract_key(contract)
-
-    def get(self, key: Hashable) -> list[ibi.ContractDetails] | None:
-        """Return cached details for a contract, if present."""
-
-        return self.data.get(key)
-
-    def set(
-        self, key: Hashable, details: list[ibi.ContractDetails]
-    ) -> list[ibi.ContractDetails]:
-        """Cache and return details for a contract."""
-
-        self.data[key] = details
-        return details
-
-
-@dataclass
 class RequestPacing:
     """Route and pace all IB requests made by one dataloader session.
 
     Args:
+        ib: IB client used for paced requests.
         bar_size: Configured historical bar size. Kept for session context and
             future request-family defaults.
         wts: Configured ``whatToShow`` value.
@@ -389,9 +331,9 @@ class RequestPacing:
         pacing_retry_delay: Delay before retrying when IB reports a pacing
             violation via ``errorEvent``.
         registry: Pacing violation registry bound to the session.
-        contract_details_cache: Contract-details cache bound to the session.
     """
 
+    ib: ibi.IB
     bar_size: str
     wts: str
     no_restriction: bool = False
@@ -399,9 +341,6 @@ class RequestPacing:
     pacing_retry_delay: float = DEFAULT_PACING_RETRY_DELAY
     registry: PacingViolationRegistry = field(
         default_factory=PacingViolationRegistry, repr=False
-    )
-    contract_details_cache: ContractDetailsCache = field(
-        default_factory=ContractDetailsCache, repr=False
     )
     historical: RequestBucket = field(init=False, repr=False)
     metadata: RequestBucket = field(init=False, repr=False)
@@ -445,10 +384,9 @@ class RequestPacing:
             scaled_capacity(METADATA_MAX_CONCURRENT, self.allowance_fraction),
         )
 
-    async def run_historical(
+    async def historical_data(
         self,
         contract: ibi.Contract,
-        request: Callable[[], Awaitable[T]],
         *,
         endDateTime: datetime | date | str,
         durationStr: str,
@@ -456,24 +394,39 @@ class RequestPacing:
         whatToShow: str,
         useRTH: bool,
         formatDate: int,
-    ) -> T:
+        keepUpToDate: bool = False,
+        chartOptions: list[ibi.TagValue] | None = None,
+        timeout: float = 0,
+    ) -> ibi.BarDataList:
         """Run a historical bar request under IB historical pacing rules.
 
         Args:
             contract: Contract used by the historical data request.
-            request: Zero-argument coroutine factory for
-                ``IB.reqHistoricalDataAsync``.
             endDateTime: Request end timestamp passed to IB.
             durationStr: Request duration passed to IB.
             barSizeSetting: Historical bar size passed to IB.
             whatToShow: Historical data type passed to IB.
             useRTH: Whether IB should restrict bars to regular trading hours.
             formatDate: IB date-format flag.
+            keepUpToDate: Must remain false for finite dataloader requests.
+            chartOptions: IB chart options. This should normally be empty.
+            timeout: IB request timeout in seconds.
 
         Returns:
-            The result returned by ``request``.
+            Historical bars returned by IB.
         """
 
+        if keepUpToDate:
+            raise ValueError("Dataloader historical requests must be finite.")
+        if getattr(contract, "secType", "") == "CONTFUT" and endDateTime not in (
+            "",
+            None,
+        ):
+            raise ValueError(
+                "Continuous futures historical requests require empty endDateTime."
+            )
+
+        options = chartOptions or []
         profile = self._historical_profile(
             RequestKind.HISTORICAL_DATA,
             contract,
@@ -483,33 +436,46 @@ class RequestPacing:
             whatToShow=whatToShow,
             useRTH=useRTH,
             formatDate=formatDate,
+            keepUpToDate=keepUpToDate,
+            chartOptions=options,
         )
         return await self._run_with_pacing_retry(
-            self.historical, profile, contract, request
+            self.historical,
+            profile,
+            contract,
+            lambda: self.ib.reqHistoricalDataAsync(
+                contract,
+                endDateTime,
+                durationStr,
+                barSizeSetting,
+                whatToShow,
+                useRTH,
+                formatDate,
+                keepUpToDate,
+                options,
+                timeout,
+            ),
         )
 
-    async def run_headstamp(
+    async def head_timestamp(
         self,
         contract: ibi.Contract,
-        request: Callable[[], Awaitable[T]],
         *,
         whatToShow: str,
         useRTH: bool,
         formatDate: int,
-    ) -> T:
+    ) -> datetime | None:
         """Run a head-timestamp request under IB historical pacing rules.
 
         Args:
             contract: Contract used by the head-timestamp request.
-            request: Zero-argument coroutine factory for
-                ``IB.reqHeadTimeStampAsync``.
             whatToShow: Historical data type passed to IB.
             useRTH: Whether IB should restrict the query to regular trading
                 hours.
             formatDate: IB date-format flag.
 
         Returns:
-            The result returned by ``request``.
+            Head timestamp returned by IB, or ``None`` when IB returns no value.
         """
 
         profile = self._historical_profile(
@@ -521,33 +487,40 @@ class RequestPacing:
             whatToShow=whatToShow,
             useRTH=useRTH,
             formatDate=formatDate,
+            keepUpToDate=False,
+            chartOptions=[],
         )
         return await self._run_with_pacing_retry(
-            self.historical, profile, contract, request
+            self.historical,
+            profile,
+            contract,
+            lambda: self.ib.reqHeadTimeStampAsync(
+                contract,
+                whatToShow=whatToShow,
+                useRTH=useRTH,
+                formatDate=formatDate,
+            ),
         )
 
-    async def run_schedule(
+    async def historical_schedule(
         self,
         contract: ibi.Contract,
-        request: Callable[[], Awaitable[T]],
         *,
         numDays: int,
         endDateTime: datetime | date | str,
         useRTH: bool,
-    ) -> T:
+    ) -> ibi.HistoricalSchedule:
         """Run a historical schedule request under IB historical pacing rules.
 
         Args:
             contract: Contract used by the schedule request.
-            request: Zero-argument coroutine factory for
-                ``IB.reqHistoricalScheduleAsync``.
             numDays: Number of schedule days requested.
             endDateTime: Schedule request end timestamp.
             useRTH: Whether IB should restrict the schedule to regular trading
                 hours.
 
         Returns:
-            The result returned by ``request``.
+            Historical schedule returned by IB.
         """
 
         profile = self._historical_profile(
@@ -559,39 +532,42 @@ class RequestPacing:
             whatToShow="SCHEDULE",
             useRTH=useRTH,
             formatDate=1,
+            keepUpToDate=False,
+            chartOptions=[],
         )
         return await self._run_with_pacing_retry(
-            self.historical, profile, contract, request
+            self.historical,
+            profile,
+            contract,
+            lambda: self.ib.reqHistoricalScheduleAsync(
+                contract,
+                numDays=numDays,
+                endDateTime=endDateTime,
+                useRTH=useRTH,
+            ),
         )
 
-    async def run_contract_details(
+    async def contract_details(
         self,
         contract: ibi.Contract,
-        request: Callable[[], Awaitable[list[ibi.ContractDetails]]],
     ) -> list[ibi.ContractDetails]:
-        """Run or reuse a contract-details request under metadata pacing rules."""
+        """Run a contract-details request under metadata pacing rules.
 
-        key = self.contract_details_cache.key(contract)
-        cached = self.contract_details_cache.get(key)
-        if cached is not None:
-            return cached
-        if key in self.contract_details_cache.pending:
-            return await self.contract_details_cache.pending[key]
+        Args:
+            contract: Possibly partial contract specification to resolve.
+
+        Returns:
+            Contract details returned by IB.
+        """
 
         profile = RequestProfile(
             RequestKind.CONTRACT_DETAILS,
-            same_key=key,
-            identical_key=(RequestKind.CONTRACT_DETAILS, key),
         )
-        task = asyncio.create_task(
-            self.metadata.run(profile, request, disabled=self.no_restriction)
+        return await self.metadata.run(
+            profile,
+            lambda: self.ib.reqContractDetailsAsync(contract),
+            disabled=self.no_restriction,
         )
-        self.contract_details_cache.pending[key] = task
-        try:
-            details = await task
-        finally:
-            self.contract_details_cache.pending.pop(key, None)
-        return self.contract_details_cache.set(key, details)
 
     async def _run_with_pacing_retry(
         self,
@@ -621,6 +597,8 @@ class RequestPacing:
         whatToShow: str,
         useRTH: bool,
         formatDate: int,
+        keepUpToDate: bool,
+        chartOptions: list[ibi.TagValue],
     ) -> RequestProfile:
         """Build pacing metadata for a historical-family request.
 
@@ -633,26 +611,30 @@ class RequestPacing:
             whatToShow: Historical data type.
             useRTH: Regular-trading-hours flag.
             formatDate: IB date-format flag.
+            keepUpToDate: Whether the request subscribes to updating bars.
+            chartOptions: IB chart options.
 
         Returns:
             A request profile that can be evaluated by the historical bucket.
         """
 
-        key = contract_key(contract)
+        hash(contract)
         weight = BID_ASK_WEIGHT if whatToShow == "BID_ASK" else 1
         return RequestProfile(
             kind,
             weight=weight,
-            same_key=(key, getattr(contract, "exchange", ""), whatToShow),
+            same_key=(contract, getattr(contract, "exchange", ""), whatToShow),
             identical_key=(
                 kind,
-                key,
+                contract,
                 endDateTime,
                 durationStr,
                 barSizeSetting,
                 whatToShow,
                 useRTH,
                 formatDate,
+                keepUpToDate,
+                tuple((option.tag, option.value) for option in chartOptions),
             ),
         )
 

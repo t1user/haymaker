@@ -63,10 +63,11 @@ log.debug(
 )
 
 
-def request_pacing_factory() -> RequestPacing:
+def request_pacing_factory(ib: ibi.IB) -> RequestPacing:
     """Create request pacing from dataloader config constants."""
 
     return RequestPacing(
+        ib,
         BARSIZE,
         WTS,
         no_restriction=PACER_NO_RESTRICTION,
@@ -365,7 +366,7 @@ class Manager:
 
     def __post_init__(self) -> None:
         if self.pacing is None:
-            self.pacing = request_pacing_factory()
+            self.pacing = request_pacing_factory(self.ib)
         self.new_writer_generator = self._writer_generator()
 
     @functools.cached_property
@@ -377,7 +378,7 @@ class Manager:
             for s in source_pbar:
                 assert self.pacing is not None
                 contract_selector = ContractSelector.from_kwargs(
-                    ib=self.ib, pacing=self.pacing, **s
+                    pacing=self.pacing, **s
                 )
                 with tqdm(
                     desc=f"Contracts_{s.get('symbol')}", leave=False, total=None
@@ -431,14 +432,8 @@ class Manager:
         headTimeStamp = None
         while not headTimeStamp:
             assert self.pacing is not None
-            headTimeStamp = await self.pacing.run_headstamp(
+            headTimeStamp = await self.pacing.head_timestamp(
                 contract,
-                lambda: self.ib.reqHeadTimeStampAsync(
-                    contract,
-                    whatToShow=self.wts,
-                    useRTH=False,
-                    formatDate=2,
-                ),
                 whatToShow=self.wts,
                 useRTH=False,
                 formatDate=2,
@@ -495,6 +490,8 @@ class DataloaderSession:
             self.manager = Manager(self.ib)
         else:
             self.manager.ib = self.ib
+            if self.manager.pacing is not None:
+                self.manager.pacing.ib = self.ib
 
     @property
     def pacing(self) -> RequestPacing:
@@ -582,18 +579,8 @@ class DataloaderSession:
                 f"{name} loading {writer!s} ending: {writer.next_date} "
                 f"duration: {params['durationStr']}"
             )
-            chunk = await self.pacing.run_historical(
-                writer.contract,
-                lambda: self.ib.reqHistoricalDataAsync(
-                    **params,
-                    barSizeSetting=self.bar_size,
-                    whatToShow=self.wts,
-                    useRTH=False,
-                    formatDate=2,
-                    timeout=0,
-                ),
-                endDateTime=params["endDateTime"],
-                durationStr=params["durationStr"],
+            chunk = await self.pacing.historical_data(
+                **params,
                 barSizeSetting=self.bar_size,
                 whatToShow=self.wts,
                 useRTH=False,
