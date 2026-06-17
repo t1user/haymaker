@@ -33,7 +33,7 @@ from .connect import connection
 from .contract_selectors import ContractSelector
 from .pacer import RequestPacing
 from .scheduling import task_factory, task_factory_with_gaps
-from .store_wrapper import StoreWrapper
+from .store_wrapper import AsyncStoreView, HistorySink
 from .task_logger import create_task
 
 setup_logging(CONFIG.get("logging_config"))
@@ -181,7 +181,7 @@ class DataWriter:
     """
 
     contract: ibi.Contract
-    store: StoreWrapper = field(repr=False)
+    sink: HistorySink = field(repr=False)
     queue: list[DownloadContainer] = field(default_factory=list, repr=False)
     bar_size: str = BARSIZE
     max_bars: int = MAX_BARS
@@ -224,7 +224,7 @@ class DataWriter:
         else:
             return None
 
-    async def save_chunk(self, data: ibi.BarDataList) -> None:
+    async def save_chunk(self, data: ibi.BarDataList | None) -> None:
         if data:
             log.info(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
             self._container.save_chunk(data)
@@ -245,11 +245,7 @@ class DataWriter:
         _data = self._container.flush_data()
 
         if _data is not None:
-            data = await self.store.read()
-            if data is None:
-                data = pd.DataFrame()
-            data = pd.concat([data, _data])
-            version = await self.store.write_async(self.contract, data)
+            version = await self.sink.write(_data)
             log.debug(
                 f"{self!s} written to store {_data.index[0]} - {_data.index[-1]} "
                 f"{version}"
@@ -419,7 +415,7 @@ class Manager:
             yield contract, headstamp
 
     def tasks(
-        self, store: StoreWrapper, start: datetime | date
+        self, store: AsyncStoreView, start: datetime | date
     ) -> list[DownloadContainer]:
         if self.fill_gaps:
             tasklist = task_factory_with_gaps(store, start)
@@ -432,16 +428,13 @@ class Manager:
             if contract in self._initiated_contracts:
                 continue
             self._initiated_contracts.append(contract)
-            store = await StoreWrapper.create(contract, self.get_store(), self.now)
-            last_bar_date = min(
-                datetime.fromisoformat(contract.lastTradeDateOrContractMonth).replace(
-                    tzinfo=timezone.utc
-                ),
-                self.now,
-            )
-            start = max(headstamp, last_bar_date - timedelta(days=self.max_period))
+            datastore = self.get_store()
+            store = await AsyncStoreView.create(contract, datastore, self.now)
+            sink = HistorySink(contract, datastore)
+            latest_available = store.expiry_or_now()
+            start = max(headstamp, latest_available - timedelta(days=self.max_period))
             tasks = self.tasks(store, start)
-            new_writer = DataWriter(contract, store, tasks)
+            new_writer = DataWriter(contract, sink, tasks)
             if new_writer.is_done():
                 log.debug(f"Skipping {new_writer!s} - no need to download data.")
                 continue

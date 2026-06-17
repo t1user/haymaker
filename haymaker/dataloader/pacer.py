@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from enum import StrEnum
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 import ib_insync as ibi
 
@@ -91,6 +91,18 @@ class RequestProfile:
     weight: int = 1
     same_key: Hashable | None = None
     identical_key: Hashable | None = None
+
+
+class PacingRule(Protocol):
+    """Protocol implemented by request pacing rules."""
+
+    def wait_time(self, profile: RequestProfile, now: datetime) -> float:
+        """Return seconds to wait before registering a request."""
+        ...
+
+    def register(self, profile: RequestProfile, now: datetime) -> None:
+        """Record that a request has been made."""
+        ...
 
 
 class RollingWindowRule:
@@ -222,7 +234,7 @@ class RequestBucket:
     bounded semaphore.
     """
 
-    def __init__(self, rules: list[object], max_concurrent: int) -> None:
+    def __init__(self, rules: list[PacingRule], max_concurrent: int) -> None:
         """Initialize the request bucket."""
 
         self.rules = rules

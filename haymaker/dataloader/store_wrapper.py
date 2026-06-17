@@ -1,4 +1,3 @@
-import functools
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from functools import wraps
@@ -11,8 +10,8 @@ from haymaker.datastore import AsyncAbstractBaseStore
 
 
 @dataclass
-class StoreWrapper:
-    """Async datastore view for one contract's currently persisted data."""
+class AsyncStoreView:
+    """Read-only async datastore view for one contract's persisted data."""
 
     contract: ibi.Contract
     store: AsyncAbstractBaseStore
@@ -25,7 +24,7 @@ class StoreWrapper:
         contract: ibi.Contract,
         store: AsyncAbstractBaseStore,
         now: Union[date, datetime],
-    ) -> "StoreWrapper":
+    ) -> "AsyncStoreView":
         """Create a wrapper and preload the existing dataframe once."""
 
         wrapper = cls(contract, store, now)
@@ -38,14 +37,7 @@ class StoreWrapper:
         self.data = await self.store.read(self.contract)
         return self.data
 
-    async def write_async(self, contract: ibi.Contract, data: pd.DataFrame) -> Any:
-        """Persist data through the async datastore and refresh local cache."""
-
-        version = await self.store.async_write(contract, data)
-        self.data = data
-        return version
-
-    @functools.cached_property
+    @property
     def from_date(self) -> datetime | None:
         """Earliest point in datastore"""
         if self.data is None or self.data.empty:
@@ -55,7 +47,7 @@ class StoreWrapper:
         # second point in the df to avoid 1 point gap
         return self.data.index[1]
 
-    @functools.cached_property
+    @property
     def to_date(self) -> datetime | None:
         """Latest point in datastore"""
         if self.data is None or self.data.empty:
@@ -74,16 +66,15 @@ class StoreWrapper:
 
         return wrapper
 
-    @functools.cached_property
+    @property
     @cast_expiry
     def expiry(self) -> datetime | None:  # this maybe an error
-        """Expiry date for expirable contracts or ''"""
+        """Return precise contract expiry when available."""
+
         e = self.contract.lastTradeDateOrContractMonth
-        return (
-            None
-            if not e
-            else datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
-        )
+        if not e or len(e) == 6:
+            return None
+        return datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
 
     def expiry_or_now(self):
         """
@@ -94,3 +85,27 @@ class StoreWrapper:
         disregarded.
         """
         return min(self.expiry, self.now) if self.expiry else self.now
+
+
+@dataclass
+class HistorySink:
+    """Persist downloaded historical chunks for one contract."""
+
+    contract: ibi.Contract
+    store: AsyncAbstractBaseStore
+
+    async def write(self, new_data: pd.DataFrame) -> Any:
+        """Merge downloaded data with stored history and rewrite the collection.
+
+        Args:
+            new_data: Newly downloaded bars indexed by bar timestamp.
+
+        Returns:
+            Datastore-specific write result.
+        """
+
+        existing = await self.store.read(self.contract)
+        if existing is None:
+            existing = pd.DataFrame()
+        data = pd.concat([existing, new_data])
+        return await self.store.async_write(self.contract, data)

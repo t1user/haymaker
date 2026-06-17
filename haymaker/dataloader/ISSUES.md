@@ -15,7 +15,7 @@ stable and mark items off as they are addressed.
 - [x] `DL-005`: Global mutable runtime state blocks safe restart and
   concurrent use.
 - [x] `DL-006`: `Manager.store` is ignored.
-- [ ] `DL-007`: Store/date helpers have brittle one-row and stale-cache
+- [x] `DL-007`: Store/date helpers have brittle one-row and stale-cache
   assumptions.
 - [x] `DL-008`: `BID_ASK` pacing adjustment appears backwards.
 - [ ] `DL-009`: Docs are stale around dataloader connection implementation.
@@ -24,9 +24,9 @@ stable and mark items off as they are addressed.
 - [x] `DL-011`: Reconcile dataloader pacing limits with current Interactive
   Brokers documentation and verify compliance.
 - [x] `DL-012`: Remove object construction from YAML config.
-- [ ] `DL-013`: Integrate dataloader collection naming with
+- [x] `DL-013`: Integrate dataloader collection naming with
   `haymaker/datastore/collection_namer.py`.
-- [ ] `DL-014`: Review dataloader/datastore coupling and define the narrow store
+- [x] `DL-014`: Review dataloader/datastore coupling and define the narrow store
   interface dataloader should depend on.
 - [x] `DL-015`: Define live-trading impact of dataloader pacing and any
   reduced allowance for future optional non-supervised modes.
@@ -70,7 +70,8 @@ stable and mark items off as they are addressed.
 - [ ] `DL-021`: Review legacy dataloader runtime objects for overly broad scope
   or execution responsibilities. Pay special attention to whether manager,
   writer, store wrapper, selector, and scheduler boundaries still match the
-  simplified queue/worker architecture.
+  simplified queue/worker architecture. Start from
+  `docs/dataloader-object-boundaries.md`.
 - [ ] `DL-022`: Classify recorded dataloader job failures as terminal or
   retryable. Current behavior records failed writer jobs and lets workers keep
   draining the queue; later policy should decide which failures deserve retries,
@@ -130,13 +131,22 @@ stable and mark items off as they are addressed.
    - Fix brittle store boundary assumptions.
    - Covers `DL-006`, `DL-007`, `DL-012`, `DL-013`, and `DL-014`.
 
-7. **Review Period Conversion Helpers**
+7. **Review Runtime Object Boundaries**
+   - Review whether manager, writer/download job, download container,
+     scheduling factories, `AsyncStoreView`, and `HistorySink` have the right
+     responsibilities.
+   - Decide whether to introduce a first-class `TaskPlanner` and whether
+     `DataWriter` should be renamed or narrowed further.
+   - Start from `docs/dataloader-object-boundaries.md`.
+   - Covers `DL-021`.
+
+8. **Review Period Conversion Helpers**
    - Review `haymaker.dataloader.helpers` duration and bar-size converters.
    - Confirm conversions match intended IB request behavior and project
      assumptions around sessions, days, weeks, months, and max bars.
    - Covers `DL-018`.
 
-8. **Make Gap-Fill Scheduling Session-Aware**
+9. **Make Gap-Fill Scheduling Session-Aware**
    - Fetch IB historical schedules in the async dataloader request path, not in
      `TaskFactory`/`GapFillFactory`.
    - Run `reqHistoricalScheduleAsync` under session-scoped `RequestPacing` so
@@ -151,13 +161,13 @@ stable and mark items off as they are addressed.
      consider combining with new dataloader implementation
    - Covers `DL-019`; depends on the request/session refactor shape.
 
-9. **Update Tests And Docs Around The New Model**
+10. **Update Tests And Docs Around The New Model**
    - Add focused regression coverage as each item is handled.
    - Update dataloader docs, codebase map if architecture changes, and stale
      async audit notes.
    - Covers `DL-009` plus test gaps across the plan.
 
-10. **Optional Future Connection Modes**
+11. **Optional Future Connection Modes**
    - After the core dataloader refactor is complete, reconsider whether a
      gateway-managing Watchdog/IBC runner is useful for paper-account,
      multi-day downloads.

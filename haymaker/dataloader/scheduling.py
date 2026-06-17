@@ -7,7 +7,7 @@ from typing import NamedTuple, Optional, Self, Union
 
 import pandas as pd
 
-from .store_wrapper import StoreWrapper
+from .store_wrapper import AsyncStoreView
 
 log = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class Dates(NamedTuple):
 
 @dataclass
 class TaskFactory(ABC):
-    store: StoreWrapper
+    store: AsyncStoreView
     head: Union[date, datetime]  # HeadTimeStamp earliest point for which IB has data
 
     @property
@@ -92,7 +92,7 @@ class GapFillFactory:
     __str__ = TaskFactory.__str__
 
     @classmethod
-    def gap_factory(cls, store: StoreWrapper) -> list[Self]:
+    def gap_factory(cls, store: AsyncStoreView) -> list[Self]:
         if (data := store.data) is None:
             return []
         data = data.copy()
@@ -123,7 +123,7 @@ class GapFillFactory:
         return [cls(*i) for i in items]
 
 
-def task_factory(store: StoreWrapper, head: Union[date, datetime]) -> list[Dates]:
+def task_factory(store: AsyncStoreView, head: Union[date, datetime]) -> list[Dates]:
     return [
         t
         for t in [
@@ -134,7 +134,7 @@ def task_factory(store: StoreWrapper, head: Union[date, datetime]) -> list[Dates
 
 
 def task_factory_with_gaps(
-    store: StoreWrapper, head: Union[date, datetime]
+    store: AsyncStoreView, head: Union[date, datetime]
 ) -> list[Dates]:
     return [
         *[g.dates() for g in GapFillFactory.gap_factory(store)],  # type: ignore

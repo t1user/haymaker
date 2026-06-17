@@ -6,8 +6,8 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 
-from haymaker.dataloader.store_wrapper import StoreWrapper
 from haymaker.dataloader.scheduling import task_factory
+from haymaker.dataloader.store_wrapper import AsyncStoreView, HistorySink
 
 
 @pytest.fixture
@@ -81,13 +81,13 @@ def store_index() -> pd.DatetimeIndex:
 
 
 @pytest.mark.asyncio
-async def test_store_wrapper_preloads_existing_data(contract, store_index):
-    """StoreWrapper should preload data through the async datastore API."""
+async def test_async_store_view_preloads_existing_data(contract, store_index):
+    """AsyncStoreView should preload data through the async datastore API."""
 
     data = pd.DataFrame({"close": [1, 2, 3]}, index=store_index)
     store = FakeAsyncStore(data)
 
-    wrapper = await StoreWrapper.create(contract, store, store_index[-1])
+    wrapper = await AsyncStoreView.create(contract, store, store_index[-1])
 
     assert store.reads == [contract]
     assert wrapper.from_date == store_index[1]
@@ -95,14 +95,16 @@ async def test_store_wrapper_preloads_existing_data(contract, store_index):
 
 
 @pytest.mark.asyncio
-async def test_store_wrapper_one_row_uses_single_timestamp_boundary(
+async def test_async_store_view_one_row_uses_single_timestamp_boundary(
     contract, store_index
 ):
     """One stored row should use that point as the stored-data boundary."""
 
     data = pd.DataFrame({"close": [1]}, index=store_index[:1])
 
-    wrapper = await StoreWrapper.create(contract, FakeAsyncStore(data), store_index[-1])
+    wrapper = await AsyncStoreView.create(
+        contract, FakeAsyncStore(data), store_index[-1]
+    )
 
     assert wrapper.from_date == store_index[0]
     assert wrapper.to_date == store_index[0]
@@ -115,7 +117,9 @@ async def test_task_factory_one_row_store_does_not_schedule_full_duplicate(
     """A one-row collection should schedule around the stored boundary."""
 
     data = pd.DataFrame({"close": [1]}, index=store_index[:1])
-    wrapper = await StoreWrapper.create(contract, FakeAsyncStore(data), store_index[-1])
+    wrapper = await AsyncStoreView.create(
+        contract, FakeAsyncStore(data), store_index[-1]
+    )
 
     tasks = task_factory(wrapper, store_index[0])
 
@@ -123,19 +127,63 @@ async def test_task_factory_one_row_store_does_not_schedule_full_duplicate(
 
 
 @pytest.mark.asyncio
-async def test_store_wrapper_writes_through_async_store(contract, store_index):
-    """StoreWrapper writes should use async_write and refresh cached data."""
+async def test_async_store_view_dates_update_after_reload(contract, store_index):
+    """Date boundaries should reflect the latest loaded store data."""
+
+    store = FakeAsyncStore(pd.DataFrame({"close": [1]}, index=store_index[:1]))
+    wrapper = await AsyncStoreView.create(contract, store, store_index[-1])
+    store.data = pd.DataFrame({"close": [1, 2, 3]}, index=store_index)
+
+    await wrapper.read()
+
+    assert wrapper.from_date == store_index[1]
+    assert wrapper.to_date == store_index[-1]
+
+
+@pytest.mark.asyncio
+async def test_async_store_view_ignores_month_only_expiry(store_index):
+    """Month-only contract months are not treated as precise expiry dates."""
+
+    contract = ibi.Contract(
+        secType="FUT",
+        localSymbol="ESM5",
+        lastTradeDateOrContractMonth="202506",
+    )
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), store_index[-1])
+
+    assert wrapper.expiry is None
+    assert wrapper.expiry_or_now() == store_index[-1]
+
+
+@pytest.mark.asyncio
+async def test_async_store_view_exact_expiry_caps_now(store_index):
+    """Exact expiry dates should cap the latest downloadable point."""
+
+    contract = ibi.Contract(
+        secType="FUT",
+        localSymbol="ESM5",
+        lastTradeDateOrContractMonth="20250102",
+    )
+    now = datetime(2025, 1, 3, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now)
+
+    assert wrapper.expiry_or_now() == datetime(2025, 1, 2, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_history_sink_concats_existing_data_and_writes(contract, store_index):
+    """HistorySink should preserve current full read, concat, write behavior."""
 
     initial = pd.DataFrame({"close": [1]}, index=store_index[:1])
     updated = pd.DataFrame({"close": [1, 2]}, index=store_index[:2])
     store = FakeAsyncStore(initial)
-    wrapper = await StoreWrapper.create(contract, store, store_index[-1])
+    sink = HistorySink(contract, store)
 
-    version = await wrapper.write_async(contract, updated)
+    version = await sink.write(updated.iloc[1:])
 
     assert version == "version"
-    assert store.writes == [(contract, updated)]
-    assert wrapper.data is updated
+    assert store.writes[0][0] is contract
+    pd.testing.assert_frame_equal(store.writes[0][1], updated)
 
 
 def test_create_dataloader_store_builds_async_arctic_store(
@@ -155,9 +203,7 @@ def test_create_dataloader_store_builds_async_arctic_store(
     monkeypatch.setattr(dataloader_module, "get_mongo_client", lambda: "mongo")
     monkeypatch.setattr(dataloader_module, "AsyncArcticStore", FakeAsyncArcticStore)
 
-    store = dataloader_module.create_dataloader_store(
-        wts="TRADES", bar_size="30 secs"
-    )
+    store = dataloader_module.create_dataloader_store(wts="TRADES", bar_size="30 secs")
 
     assert isinstance(store, FakeAsyncArcticStore)
     assert created == {"lib": "TRADES_30_secs", "host": "mongo"}

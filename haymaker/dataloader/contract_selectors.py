@@ -125,6 +125,9 @@ class ContractSelector:
             return contract
 
         qualified = details[0].contract
+        if qualified is None:
+            log.warning(f"Missing contract details for: {contract}")
+            return contract
         expiry = qualified.lastTradeDateOrContractMonth
         if expiry:
             qualified.lastTradeDateOrContractMonth = expiry.split()[0]

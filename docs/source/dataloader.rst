@@ -55,4 +55,5 @@ datastore module's default
 ``simple_collection_namer(contract)`` naming policy.
 
 The dataloader talks to the async datastore interface. Arctic still owns data
-cleaning and metadata updates when data is written.
+cleaning and metadata updates when data is written. The current target
+responsibility split is recorded in ``docs/dataloader-object-boundaries.md``.
