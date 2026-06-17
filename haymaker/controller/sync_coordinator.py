@@ -10,12 +10,14 @@ After broker validation, each step reads current state directly from
 ``controller.ib`` or ``controller.sm`` instead of using stored broker/local
 snapshots.  The ordered flow is:
 
-1. Relink broker ``ibi.Trade`` objects to local order records and back-report
+1. Verify that requested broker order/execution data agrees with
+   ``ib_insync``'s local order and fill registers.
+2. Relink broker ``ibi.Trade`` objects to local order records and back-report
    fills for orders that completed while the process was disconnected.
-2. Compare local aggregate strategy positions with broker positions and
+3. Compare local aggregate strategy positions with broker positions and
    correct local position records when the existing recovery rules allow it.
-3. Skip correction trades when unresolved unknown broker orders remain active.
-4. Delegate bracket-record and broker stop-loss protection handling to
+4. Skip correction trades when unresolved unknown broker orders remain active.
+5. Delegate bracket-record and broker stop-loss protection handling to
    :mod:`haymaker.controller.sync_brackets`.
 
 The coordinator does not disable trading and does not retry.  Any recovery
@@ -42,15 +44,6 @@ if TYPE_CHECKING:
     from .controller import Controller
 
 log = logging.getLogger(__name__)
-
-
-class BrokerStateError(Exception):
-    """Raised when broker state verification failed unexpectedly."""
-
-    def __init__(self, reason: str) -> None:
-        """Initialize the exception with a human-readable failure reason."""
-        super().__init__(reason)
-        self.reason = reason
 
 
 class SyncBrokenStateError(Exception):
@@ -90,15 +83,16 @@ class SyncCoordinator:
                 trading immediately.
         """
 
-        try:
-            broker_state_verified = await verify_broker_position_source(
-                self.controller.ib,
-                self.controller.broker_request_timeout,
-            )
-        except BrokerStateError as exc:
-            log.error(f"Broker state verification failed: {exc.reason}")
+        if not await verify_broker_position_source(
+            self.controller.ib,
+            self.controller.broker_request_timeout,
+        ):
             return False
-        if not broker_state_verified:
+
+        if not await verify_broker_order_source(
+            self.controller.ib,
+            self.controller.broker_request_timeout,
+        ):
             return False
 
         order_sync = OrderSync(self.controller.ib, self.controller.sm)
@@ -244,11 +238,11 @@ async def verify_broker_position_source(ib: ibi.IB, timeout: float) -> bool:
             await asyncio.wait_for(ib.reqPositionsAsync(), timeout)
         )
     except asyncio.TimeoutError:
-        log.debug(f"broker position request timed out after {timeout}s")
+        log.warning(f"broker position request timed out after {timeout}s")
         return False
     except Exception as exc:
-        reason = f"broker position request failed: {exc!r}"
-        raise BrokerStateError(reason) from exc
+        log.warning(f"broker position request failed: {exc!r}")
+        return False
 
     positions_dict = {
         position.contract.localSymbol: position.position for position in positions
@@ -267,3 +261,134 @@ async def verify_broker_position_source(ib: ibi.IB, timeout: float) -> bool:
     else:
         log.debug(f"broker positions: {positions_dict}")
     return True
+
+
+async def verify_broker_order_source(ib: ibi.IB, timeout: float) -> bool:
+    """Return True when requested broker order data agrees with IB registers."""
+
+    try:
+        # reqCompletedOrdersAsync and reqExecutionsAsync should
+        # trigger a refresh
+        completed_orders, requested_fills = await asyncio.gather(
+            asyncio.wait_for(ib.reqCompletedOrdersAsync(False), timeout),
+            asyncio.wait_for(ib.reqExecutionsAsync(), timeout),
+        )
+    except asyncio.TimeoutError:
+        log.warning(f"broker order request timed out after {timeout}s")
+        return False
+    except Exception as exc:
+        log.warning(f"broker order request failed: {exc!r}")
+        return False
+
+    open_trades = tuple(ib.openTrades())
+    known_trades = tuple(ib.trades())
+    known_fills = tuple(ib.fills())
+
+    if missing_exec_ids := _missing_requested_fills(requested_fills, known_fills):
+        log.warning(
+            "broker execution source disagrees with fill register: "
+            f"missing execIds={sorted(missing_exec_ids)}"
+        )
+        return False
+
+    if open_completed := _open_completed_order_keys(open_trades, completed_orders):
+        log.warning(
+            "broker completed-order source disagrees with open trades: "
+            f"completed orders still open={sorted(open_completed)}"
+        )
+        return False
+
+    if open_filled := _open_filled_trade_keys(open_trades, requested_fills):
+        log.warning(
+            "broker execution source disagrees with open trades: "
+            f"fully executed orders still open={sorted(open_filled)}"
+        )
+        return False
+
+    if detached_exec_ids := _detached_requested_fills(requested_fills, known_trades):
+        log.warning(
+            "broker execution source disagrees with trade register: "
+            f"detached execIds={sorted(detached_exec_ids)}"
+        )
+        return False
+
+    return True
+
+
+def _order_keys(order: ibi.Order) -> set[int]:
+    """Return stable non-zero order identifiers from an IB order."""
+    return {key for key in (order.orderId, order.permId) if key}
+
+
+def _trade_keys(trade: ibi.Trade) -> set[int]:
+    """Return stable non-zero order identifiers from an IB trade."""
+    return _order_keys(trade.order)
+
+
+def _execution_keys(execution: ibi.Execution) -> set[int]:
+    """Return stable non-zero order identifiers from an IB execution."""
+    return {key for key in (execution.orderId, execution.permId) if key}
+
+
+def _missing_requested_fills(
+    requested_fills: list[ibi.Fill],
+    known_fills: tuple[ibi.Fill, ...],
+) -> set[str]:
+    known_exec_ids = {fill.execution.execId for fill in known_fills}
+    return {
+        fill.execution.execId
+        for fill in requested_fills
+        if fill.execution.execId not in known_exec_ids
+    }
+
+
+def _open_completed_order_keys(
+    open_trades: tuple[ibi.Trade, ...],
+    completed_orders: list[ibi.Trade],
+) -> set[int]:
+    open_keys = set().union(*(_trade_keys(trade) for trade in open_trades), set())
+    completed_keys = set().union(
+        *(_trade_keys(trade) for trade in completed_orders),
+        set(),
+    )
+    return open_keys & completed_keys
+
+
+def _open_filled_trade_keys(
+    open_trades: tuple[ibi.Trade, ...],
+    requested_fills: list[ibi.Fill],
+) -> set[int]:
+    filled_keys: set[int] = set()
+    for trade in open_trades:
+        total_quantity = trade.order.totalQuantity
+        if not total_quantity:
+            continue
+        filled = sum(
+            fill.execution.shares
+            for fill in requested_fills
+            if _execution_keys(fill.execution) & _trade_keys(trade)
+        )
+        if filled >= total_quantity:
+            filled_keys.update(_trade_keys(trade))
+    return filled_keys
+
+
+def _detached_requested_fills(
+    requested_fills: list[ibi.Fill],
+    known_trades: tuple[ibi.Trade, ...],
+) -> set[str]:
+    trades_by_key = {key: trade for trade in known_trades for key in _trade_keys(trade)}
+    detached: set[str] = set()
+    for fill in requested_fills:
+        matching_trades = [
+            trades_by_key[key]
+            for key in _execution_keys(fill.execution)
+            if key in trades_by_key
+        ]
+        if matching_trades and not any(
+            known_fill.execution.execId == fill.execution.execId
+            for trade in matching_trades
+            for known_fill in trade.fills
+        ):
+            detached.add(fill.execution.execId)
+    return detached

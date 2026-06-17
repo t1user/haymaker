@@ -20,6 +20,7 @@ from haymaker.controller.sync_brackets import (
 from haymaker.controller.sync_coordinator import (
     SyncBrokenStateError,
     SyncCoordinator,
+    verify_broker_order_source,
 )
 from haymaker.state_machine import OrderInfo
 from haymaker.trader import Trader
@@ -58,6 +59,24 @@ def set_broker_state(
     monkeypatch.setattr(controller.ib, "openTrades", lambda: list(open_trades))
     monkeypatch.setattr(controller.ib, "trades", lambda: list(trades))
     monkeypatch.setattr(controller.ib, "fills", lambda: list(fills))
+
+
+@pytest.fixture(autouse=True)
+def default_broker_order_requests(request, monkeypatch):
+    """Default explicit broker order requests to empty for controller tests."""
+    if "controller" not in request.fixturenames:
+        return
+
+    controller = request.getfixturevalue("controller")
+
+    async def completed_orders(*args, **kwargs):
+        return []
+
+    async def executions(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(controller.ib, "reqCompletedOrdersAsync", completed_orders)
+    monkeypatch.setattr(controller.ib, "reqExecutionsAsync", executions)
 
 
 # @pytest.fixture()
@@ -350,6 +369,147 @@ async def test_broker_position_source_disagreement_disables_trading(
 
     assert not result
     assert controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_broker_order_source_accepts_consistent_registers(
+    controller, trade, monkeypatch
+):
+    fill = trade.fills[0]
+    completed_trade = deepcopy(trade)
+    completed_trade.orderStatus = ibi.OrderStatus(status="Filled")
+
+    async def completed_orders(*args, **kwargs):
+        return [completed_trade]
+
+    async def executions(*args, **kwargs):
+        return [fill]
+
+    set_broker_state(
+        controller,
+        monkeypatch,
+        trades=(completed_trade,),
+        fills=(fill,),
+    )
+    completed_trade.fills = [fill]
+    monkeypatch.setattr(controller.ib, "reqCompletedOrdersAsync", completed_orders)
+    monkeypatch.setattr(controller.ib, "reqExecutionsAsync", executions)
+
+    result = await verify_broker_order_source(controller.ib, timeout=1)
+
+    assert result
+
+
+@pytest.mark.asyncio
+async def test_broker_order_source_rejects_completed_order_still_open(
+    controller, trade, monkeypatch, caplog
+):
+    open_trade = deepcopy(trade)
+    open_trade.orderStatus = ibi.OrderStatus(status="Submitted", filled=0, remaining=1)
+    completed_trade = deepcopy(open_trade)
+    completed_trade.orderStatus = ibi.OrderStatus(
+        status="Filled", filled=1, remaining=0
+    )
+
+    async def completed_orders(*args, **kwargs):
+        return [completed_trade]
+
+    async def executions(*args, **kwargs):
+        return []
+
+    set_broker_state(
+        controller,
+        monkeypatch,
+        open_trades=(open_trade,),
+        trades=(open_trade,),
+    )
+    monkeypatch.setattr(controller.ib, "reqCompletedOrdersAsync", completed_orders)
+    monkeypatch.setattr(controller.ib, "reqExecutionsAsync", executions)
+
+    with caplog.at_level(
+        logging.WARNING, logger="haymaker.controller.sync_coordinator"
+    ):
+        result = await verify_broker_order_source(controller.ib, timeout=1)
+
+    assert not result
+    assert "completed-order source disagrees with open trades" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_broker_order_source_rejects_fully_executed_open_trade(
+    controller, trade, monkeypatch, caplog
+):
+    fill = trade.fills[0]
+    open_trade = deepcopy(trade)
+    open_trade.orderStatus = ibi.OrderStatus(status="Submitted", filled=0, remaining=1)
+    open_trade.fills = [fill]
+
+    async def completed_orders(*args, **kwargs):
+        return []
+
+    async def executions(*args, **kwargs):
+        return [fill]
+
+    set_broker_state(
+        controller,
+        monkeypatch,
+        open_trades=(open_trade,),
+        trades=(open_trade,),
+        fills=(fill,),
+    )
+    monkeypatch.setattr(controller.ib, "reqCompletedOrdersAsync", completed_orders)
+    monkeypatch.setattr(controller.ib, "reqExecutionsAsync", executions)
+
+    with caplog.at_level(
+        logging.WARNING, logger="haymaker.controller.sync_coordinator"
+    ):
+        result = await verify_broker_order_source(controller.ib, timeout=1)
+
+    assert not result
+    assert "execution source disagrees with open trades" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sync_coordinator_skips_local_sync_when_broker_orders_disagree(
+    controller, trade, monkeypatch
+):
+    open_trade = deepcopy(trade)
+    open_trade.orderStatus = ibi.OrderStatus(status="Submitted", filled=0, remaining=1)
+    completed_trade = deepcopy(open_trade)
+    completed_trade.orderStatus = ibi.OrderStatus(
+        status="Filled", filled=1, remaining=0
+    )
+
+    async def requested_positions():
+        return []
+
+    async def completed_orders(*args, **kwargs):
+        return [completed_trade]
+
+    async def executions(*args, **kwargs):
+        return []
+
+    def fail_order_sync(*args, **kwargs):
+        raise AssertionError("local order sync should not run")
+
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    set_broker_state(
+        controller,
+        monkeypatch,
+        open_trades=(open_trade,),
+        trades=(open_trade,),
+    )
+    monkeypatch.setattr(controller.ib, "reqCompletedOrdersAsync", completed_orders)
+    monkeypatch.setattr(controller.ib, "reqExecutionsAsync", executions)
+    monkeypatch.setattr(
+        "haymaker.controller.sync_coordinator.OrderSync", fail_order_sync
+    )
+
+    result = await SyncCoordinator(controller).run()
+
+    assert not result
+    assert not controller._trading_disabled
 
 
 def test_disabled_trading_does_not_register_order(controller, trade, monkeypatch):
