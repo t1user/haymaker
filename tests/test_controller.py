@@ -271,12 +271,12 @@ async def test_commission_report_skips_unknown_zero_order_id(
 
     controller.release_hold()
     monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
-    caplog.set_level(logging.ERROR)
+    caplog.set_level(logging.DEBUG)
 
     await controller.onCommissionReport(trade, fill, report)
 
     assert 0 not in controller.sm.order
-    assert "Commission report for unknown trade: 0 RTYM6" in caplog.text
+    assert "Skipping blotter entry for orderId==0, permId: 0" in caplog.text
 
 
 @pytest.mark.asyncio
