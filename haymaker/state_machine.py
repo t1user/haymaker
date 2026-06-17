@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
-from contextlib import contextmanager
 from collections import UserDict, defaultdict
 from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from typing import Any, TypeVar
@@ -517,7 +517,9 @@ class StateMachine:
             try:
                 order_info = OrderInfo.from_trade(trade)
             except UnknownZeroOrderIdError as e:
-                log.error(f"{e} Trade skipped: {trade}")
+                log.warning(
+                    f"{e} Trade skipped: {trade.order.orderId=} {trade.order.permId=}"
+                )
                 return None
         try:
             self.save_order(order_info)

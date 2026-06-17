@@ -490,12 +490,15 @@ class Controller(Atom):
             log.debug(
                 f"Skipping blotter entry for orderId==0, permId: {trade.order.permId}"
             )
+            return
 
         await asyncio.sleep(1)
         order_info = self.sm.save_order_status(trade)
         if not order_info:
             if trade.order.totalQuantity == 0:
-                log.warning(f"empty CommissionReportEvent emit for trade: {trade}")
+                log.warning(
+                    f"empty CommissionReportEvent emit for trade: {trade.order.orderId=} {trade.order.permId=}"
+                )
             else:
                 log.error(
                     f"Commission report for unknown trade: {trade.order.orderId} "
