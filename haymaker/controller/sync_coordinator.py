@@ -97,6 +97,7 @@ class SyncCoordinator:
 
         order_sync = OrderSync(self.controller.ib, self.controller.sm)
 
+        self.controller.release_hold()
         if order_sync.done:
             self.handle_done_trades(order_sync.done)
             await asyncio.sleep(0)

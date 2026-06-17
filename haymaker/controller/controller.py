@@ -56,7 +56,7 @@ class Controller(Atom):
     broker_request_timeout: int = 10
     sync_max_attempts: int = 3
     sync_resync_delay: float = 1
-    startup_delay: float = 0
+    startup_delay: float = 1
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
     health_check_observables: list[list[Callable[[], bool]]] = field(
@@ -227,6 +227,8 @@ class Controller(Atom):
         if self.startup_delay:
             log.debug(f"Startup delay before sync: {self.startup_delay}s")
             await asyncio.sleep(self.startup_delay)
+        else:
+            log.debug(f"No startup delay.")
 
         sync_ok = await self.sync()
         if not sync_ok:
@@ -271,7 +273,6 @@ class Controller(Atom):
             return False
 
         log.debug("--- Sync ---")
-        self.release_hold()
         for attempt in range(1, self.sync_max_attempts + 1):
             if attempt > 1:
                 log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
