@@ -60,12 +60,13 @@ async def test_current_future_selector_requalifies_after_changing_contfuture():
 
     class FakeIB:
         def __init__(self) -> None:
-            self.sec_types = []
+            self.sec_types: list[str] = []
 
         async def reqContractDetailsAsync(
             self, contract: ibi.Contract
         ) -> list[ibi.ContractDetails]:
             self.sec_types.append(contract.secType)
+            qualified: ibi.Contract
             if contract.secType == "CONTFUT":
                 qualified = ibi.ContFuture(
                     symbol="ES",
