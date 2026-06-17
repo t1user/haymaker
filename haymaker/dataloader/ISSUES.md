@@ -23,7 +23,7 @@ stable and mark items off as they are addressed.
   discovery instead of resuming known remaining work.
 - [x] `DL-011`: Reconcile dataloader pacing limits with current Interactive
   Brokers documentation and verify compliance.
-- [ ] `DL-012`: Remove object construction from YAML config.
+- [x] `DL-012`: Remove object construction from YAML config.
 - [ ] `DL-013`: Integrate dataloader collection naming with
   `haymaker/datastore/collection_namer.py`.
 - [ ] `DL-014`: Review dataloader/datastore coupling and define the narrow store

@@ -1,66 +1,65 @@
-import asyncio
 import functools
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from functools import wraps
-from typing import Callable, Union
+from typing import Any, Callable, Union
 
 import ib_insync as ibi
 import pandas as pd
 
-from haymaker.datastore import AbstractBaseStore
-from haymaker.misc import async_cached_property
+from haymaker.datastore import AsyncAbstractBaseStore
 
 
 @dataclass
 class StoreWrapper:
+    """Async datastore view for one contract's currently persisted data."""
+
     contract: ibi.Contract
-    store: AbstractBaseStore
+    store: AsyncAbstractBaseStore
     now: Union[date, datetime]
-    _loop: asyncio.AbstractEventLoop = field(
-        default_factory=asyncio.get_running_loop, repr=False
-    )
+    data: pd.DataFrame | None = field(default=None, init=False, repr=False)
 
-    async def data_async(self) -> pd.DataFrame | None:
-        """Available data in datastore for contract or None"""
-        return await self._loop.run_in_executor(None, self.store.read, self.contract)
+    @classmethod
+    async def create(
+        cls,
+        contract: ibi.Contract,
+        store: AsyncAbstractBaseStore,
+        now: Union[date, datetime],
+    ) -> "StoreWrapper":
+        """Create a wrapper and preload the existing dataframe once."""
 
-    async def write_async(self, contract: ibi.Contract, data: pd.DataFrame) -> str:
-        # save asynchronously to a synchronous store using executor
-        return await self._loop.run_in_executor(None, self.write, contract, data)
+        wrapper = cls(contract, store, now)
+        await wrapper.read()
+        return wrapper
 
-    @async_cached_property
-    async def from_date_async(self) -> datetime | None:
-        # not in use
-        data = await self.data_async()
-        if data is not None:
-            return data.index[1]
-        else:
-            return None
+    async def read(self) -> pd.DataFrame | None:
+        """Read and cache available datastore data for this contract."""
 
-    @async_cached_property
-    async def to_date_async(self) -> datetime | None:
-        # not in use
-        data = await self.data_async()
-        if data is not None:
-            return data.index[1]
-        else:
-            return None
+        self.data = await self.store.read(self.contract)
+        return self.data
 
-    @property
-    def data(self) -> pd.DataFrame | None:
-        """Available data in datastore for contract or None"""
-        return self.store.read(self.contract)
+    async def write_async(self, contract: ibi.Contract, data: pd.DataFrame) -> Any:
+        """Persist data through the async datastore and refresh local cache."""
+
+        version = await self.store.async_write(contract, data)
+        self.data = data
+        return version
 
     @functools.cached_property
     def from_date(self) -> datetime | None:
         """Earliest point in datastore"""
+        if self.data is None or self.data.empty:
+            return None
+        if len(self.data.index) == 1:
+            return self.data.index[0]
         # second point in the df to avoid 1 point gap
-        return self.data.index[1] if self.data is not None else None  # type: ignore
+        return self.data.index[1]
 
     @functools.cached_property
     def to_date(self) -> datetime | None:
         """Latest point in datastore"""
+        if self.data is None or self.data.empty:
+            return None
         date = self.data.index.max() if self.data is not None else None
         return date
 
@@ -69,7 +68,7 @@ class StoreWrapper:
         @wraps(func)
         def wrapper(self):
             d = func(self, *args, **kwargs)
-            if isinstance(self.now, datetime):
+            if d is not None and isinstance(self.now, datetime):
                 d = datetime(d.year, d.month, d.day).replace(tzinfo=timezone.utc)
             return d
 
@@ -95,7 +94,3 @@ class StoreWrapper:
         disregarded.
         """
         return min(self.expiry, self.now) if self.expiry else self.now
-
-    def __getattr__(self, attr):
-        # everything not defined delegate to the wrapped object
-        return getattr(self.store, attr)

@@ -14,13 +14,6 @@ def dataloader_module(monkeypatch):
     from haymaker.config import CONFIG
     import haymaker.logging as logging_package
 
-    class FakeStore:
-        def read(self, contract):
-            return None
-
-        def write(self, contract, data):
-            return "version"
-
     config_values = {
         "logging_config": None,
         "barSize": "30 secs",
@@ -29,7 +22,6 @@ def dataloader_module(monkeypatch):
         "fill_gaps": False,
         "auto_save_interval": 0,
         "number_of_workers": 2,
-        "datastore": FakeStore(),
         "clientId": 1,
         "source": "contracts.csv",
         "pacer_no_restriction": False,

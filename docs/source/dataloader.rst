@@ -44,3 +44,15 @@ Contract selectors use paced ``reqContractDetailsAsync`` calls for
 qualification and futures-chain discovery. The resolved contracts returned by
 IB are then used for historical requests so pacing follows ``ib_insync``
 contract hash semantics.
+
+Datastore
+=========
+
+The dataloader currently supports the Arctic datastore backend only. There is
+no datastore backend config key; the dataloader derives the Arctic library name
+from ``wts`` and ``barSize`` such as ``TRADES_30_secs``. Collections use the
+datastore module's default
+``simple_collection_namer(contract)`` naming policy.
+
+The dataloader talks to the async datastore interface. Arctic still owns data
+cleaning and metadata updates when data is written.

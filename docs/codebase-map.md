@@ -26,7 +26,7 @@ Runtime singletons are assembled in `haymaker/manager.py`:
 
 `haymaker/app.py` bootstraps live execution: it sets up logging, imports the runtime singletons, builds a live `App` composition from config, and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns futures-roll scheduling, the fixed daily contract-refresh restart timer, controller startup, and streamer jobs for each connection cycle.
 
-The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames to a configured datastore.
+The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. The current supported dataloader backend is Arctic, with the library name derived from `wts` and `barSize`.
 
 The research package is intentionally separate from live execution. It works directly with pandas dataframes and NumPy/Numba kernels to validate signal timing, stops, synthetic data, and performance without depending on live `Atom` pipelines.
 
@@ -72,7 +72,7 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
 - `haymaker/dataloader/scheduling.py`: task generation for backfill, updates, and optional gap filling.
-- `haymaker/dataloader/store_wrapper.py`: datastore access wrapper used by download writers.
+- `haymaker/dataloader/store_wrapper.py`: async datastore access wrapper used by download writers.
 
 ### Research and Backtesting
 
@@ -114,10 +114,10 @@ The research package is intentionally separate from live execution. It works dir
 1. `dataloader` loads config, creates an `ib_insync.IB` client, and runs a dataloader runtime under the shared connection supervisor.
 2. The supervisor connects the socket and waits for a successful historical-data probe before starting dataloader work.
 3. Contract source data is expanded into IB contracts.
-4. Writers inspect the target store and schedule backfill, update, and optional gap-fill download containers.
+4. Writers inspect the Arctic-backed async store and schedule backfill, update, and optional gap-fill download containers.
 5. A producer submits work to an asyncio queue.
 6. Workers call IB historical-data requests under pacer restrictions.
-7. Downloaded chunks are normalized, concatenated with stored data, cleaned, and written through the configured datastore.
+7. Downloaded chunks are normalized, concatenated with stored data, and written through the async datastore; Arctic owns final cleaning and metadata updates.
 
 ### Research Flow
 

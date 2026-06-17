@@ -23,7 +23,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from haymaker.config import CONFIG
-from haymaker.datastore import AbstractBaseStore
+from haymaker.databases import get_mongo_client
+from haymaker.datastore import AsyncAbstractBaseStore, AsyncArcticStore
 from haymaker.logging import setup_logging
 from haymaker.validators import bar_size_validator, wts_validator
 
@@ -45,7 +46,6 @@ MAX_BARS: int = CONFIG.get("max_bars", 50000)
 FILL_GAPS: bool = CONFIG.get("fill_gaps", True)
 AUTO_SAVE_INTERVAL: int = CONFIG.get("auto_save_interval", 0)
 NUMBER_OF_WORKERS: int = CONFIG.get("number_of_workers", 20)
-STORE: AbstractBaseStore = CONFIG["datastore"]
 SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
 PACER_ALLOWANCE_FRACTION: float = CONFIG.get("pacer_allowance_fraction", 1.0)
@@ -58,9 +58,27 @@ norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
 
 log.debug(
     f"settings: {BARSIZE=}, {WTS=}, {MAX_BARS=}, {FILL_GAPS=}, "
-    f"{AUTO_SAVE_INTERVAL=}, {NUMBER_OF_WORKERS=}, {STORE=}, "
-    f"{MAX_PERIOD=}, {PACER_ALLOWANCE_FRACTION=}"
+    f"{AUTO_SAVE_INTERVAL=}, {NUMBER_OF_WORKERS=}, {MAX_PERIOD=}, "
+    f"{PACER_ALLOWANCE_FRACTION=}"
 )
+
+
+def create_dataloader_store(
+    wts: str = WTS,
+    bar_size: str = BARSIZE,
+) -> AsyncAbstractBaseStore:
+    """Create the Arctic-backed async datastore used by dataloader writers.
+
+    Args:
+        wts: IB ``whatToShow`` value used to derive the Arctic library name.
+        bar_size: IB ``barSizeSetting`` value used to derive the library name.
+
+    Returns:
+        Async datastore instance for the configured historical data library.
+    """
+
+    lib = f"{wts_validator(wts)}_{bar_size_validator(bar_size)}".replace(" ", "_")
+    return AsyncArcticStore(lib=lib, host=get_mongo_client())
 
 
 def request_pacing_factory(ib: ibi.IB) -> RequestPacing:
@@ -227,7 +245,7 @@ class DataWriter:
         _data = self._container.flush_data()
 
         if _data is not None:
-            data = await self.store.data_async()
+            data = await self.store.read()
             if data is None:
                 data = pd.DataFrame()
             data = pd.concat([data, _data])
@@ -236,8 +254,7 @@ class DataWriter:
                 f"{self!s} written to store {_data.index[0]} - {_data.index[-1]} "
                 f"{version}"
             )
-            if version:
-                self._container.clear()
+            self._container.clear()
 
     @property
     def params(self) -> Params:
@@ -354,7 +371,7 @@ class DownloadContainer:
 class Manager:
     ib: ibi.IB
     pacing: RequestPacing | None = None
-    store: AbstractBaseStore = STORE
+    store: AsyncAbstractBaseStore | None = None
     source: str = SOURCE
     fill_gaps: bool = FILL_GAPS
     max_period: int = MAX_PERIOD
@@ -368,6 +385,13 @@ class Manager:
         if self.pacing is None:
             self.pacing = request_pacing_factory(self.ib)
         self.new_writer_generator = self._writer_generator()
+
+    def get_store(self) -> AsyncAbstractBaseStore:
+        """Return the session datastore, creating it lazily when needed."""
+
+        if self.store is None:
+            self.store = create_dataloader_store()
+        return self.store
 
     @functools.cached_property
     def sources(self) -> list[dict]:
@@ -408,7 +432,7 @@ class Manager:
             if contract in self._initiated_contracts:
                 continue
             self._initiated_contracts.append(contract)
-            store = StoreWrapper(contract, self.store, self.now)
+            store = await StoreWrapper.create(contract, self.get_store(), self.now)
             last_bar_date = min(
                 datetime.fromisoformat(contract.lastTradeDateOrContractMonth).replace(
                     tzinfo=timezone.utc

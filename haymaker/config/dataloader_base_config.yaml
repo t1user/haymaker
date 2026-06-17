@@ -22,13 +22,4 @@ futures_selector: "current_and_expired"
 futures_fullchain_spec: full #  full, active, expired; which contracts should be included in futures fullchain; relevant only if futureshow==fullchain;
 futures_current_index: 0 #  zero->current contfuture, positive index->future, negative->past; which contract is considered current; relevant only if futures_selector==current;
 # ---- end futures config ----
-
-# if the file is overriden, make sure that `wts` and `barSize` refer to the intended copy
-datastore:
-  !!python/object/apply:haymaker.datastore.ArcticStore
-  # joins previuosly defined aliases to create collection name
-  - !!python/object/apply:haymaker.dataloader.helpers.strjoin
-    - *wts
-    - _
-    - *barSize
 logging_config: "dataloader_logging_config.yaml"
