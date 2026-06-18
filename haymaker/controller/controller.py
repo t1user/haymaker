@@ -452,14 +452,17 @@ class Controller(Atom):
             return
 
         with self.sm.guard_execution(trade, fill) as accounted:
+            log_string = (
+                f"orderId: {trade.order.orderId} permId: "
+                f"{trade.order.permId} {fill.execution.side} "
+                f"{trade.order.orderType} "
+                f"for {strategy_str} --> position: {strategy.position} "
+            )
             if not accounted:
                 strategy.register_fill(fill)
-                log.debug(
-                    f"Registered position - orderId: {trade.order.orderId} permId: "
-                    f"{trade.order.permId} {fill.execution.side} "
-                    f"{trade.order.orderType} "
-                    f"for {strategy_str} --> position: {strategy.position} "
-                )
+                log.debug(f"Registered position - {log_string}")
+            else:
+                log.warning(f"Abandoned duplicated fill event - {log_string}")
 
     async def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """
