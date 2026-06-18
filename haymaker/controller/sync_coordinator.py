@@ -89,7 +89,7 @@ class SyncCoordinator:
         ):
             return False
 
-        if not await verify_broker_order_source(
+        if self.controller._hold and not await verify_broker_order_source(
             self.controller.ib,
             self.controller.broker_request_timeout,
         ):

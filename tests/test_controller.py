@@ -512,6 +512,31 @@ async def test_sync_coordinator_skips_local_sync_when_broker_orders_disagree(
     assert not controller._trading_disabled
 
 
+@pytest.mark.asyncio
+async def test_sync_coordinator_skips_broker_order_source_after_hold_release(
+    controller, monkeypatch
+):
+    async def requested_positions():
+        return []
+
+    async def completed_orders(*args, **kwargs):
+        raise AssertionError("completed orders should only be requested during hold")
+
+    async def executions(*args, **kwargs):
+        raise AssertionError("executions should only be requested during hold")
+
+    controller.release_hold()
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(controller.ib, "reqCompletedOrdersAsync", completed_orders)
+    monkeypatch.setattr(controller.ib, "reqExecutionsAsync", executions)
+    set_broker_state(controller, monkeypatch)
+
+    result = await SyncCoordinator(controller).run()
+
+    assert result
+
+
 def test_disabled_trading_does_not_register_order(controller, trade, monkeypatch):
     called = False
 
