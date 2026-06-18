@@ -434,9 +434,9 @@ class Controller(Atom):
         # this will create new order record if it doesn't already exist
         self.sm.save_order_status(trade)
 
-    def register_position(
-        self, strategy: Strategy, trade: ibi.Trade, fill: ibi.Fill
-    ) -> None:
+    def register_position(self, order_info: OrderInfo, fill: ibi.Fill) -> None:
+        strategy = self.sm.strategy[order_info.strategy]
+        trade = order_info.trade
         strategy_str = strategy.strategy
         if isinstance(trade.contract, ibi.Bag):
             log.debug(
@@ -451,32 +451,33 @@ class Controller(Atom):
             )
             return
 
-        with self.sm.guard_execution(trade, fill) as accounted:
-            log_string = (
-                f"orderId: {trade.order.orderId} permId: "
-                f"{trade.order.permId} {fill.execution.side} "
-                f"{trade.order.orderType} "
-                f"for {strategy_str} --> position: {strategy.position} "
-            )
-            if not accounted:
-                strategy.register_fill(fill)
-                log.debug(f"Registered position - {log_string}")
-            else:
-                log.warning(f"Abandoned duplicated fill event - {log_string}")
+        log_string = (
+            f"orderId: {trade.order.orderId} permId: "
+            f"{trade.order.permId} {fill.execution.side} "
+            f"{trade.order.orderType} "
+            f"for {strategy_str} --> position: {strategy.position} "
+        )
+        if order_info.execution_accounted(fill):
+            log.warning(f"Abandoned duplicated fill event - {log_string}")
+            return
+
+        strategy.register_fill(fill)
+        order_info.mark_execution(fill)
+        self.sm.save_order(order_info)
+        log.debug(f"Registered position - {log_string}")
 
     async def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """
-        Register position.
+        Get or create OrderInfo for ``trade`` and use it to register
+        position.
         """
-        strategy = (
-            # check if it's manual trade (id<0)
+        order_info = (
             self.assign_manual_trade(trade)
-            # find trade record
-            or self.sm.strategy_for_trade(trade)
-            # failing above try to assign
+            or self.sm.order.get(trade.order.orderId)
+            or self.match_by_permId(trade, fill)
             or self.assign_unknown_trade(trade)
         )
-        self.register_position(strategy, trade, fill)
+        self.register_position(order_info, fill)
 
     async def onCommissionReport(
         self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
@@ -607,6 +608,20 @@ class Controller(Atom):
         else:
             log.error(f"Wrong position for {contract} - {log_str_position}")
 
+    def match_by_permId(self, trade: ibi.Trade, fill: ibi.Fill) -> OrderInfo | None:
+        """Find an order record using the trade permanent id."""
+        order_info = self.sm.order_by_permId(trade.order.permId)
+        if order_info:
+            log.debug(
+                "Matched trade to existing order record: "
+                f"execId={fill.execution.execId} "
+                f"trade_orderId={trade.order.orderId} "
+                f"trade_permId={trade.order.permId} "
+                f"record_orderId={order_info.trade.order.orderId} "
+                f"record_permId={order_info.trade.order.permId}"
+            )
+        return order_info
+
     def _assign_trade(self, trade: ibi.Trade) -> Strategy | None:
 
         # assumed unknown trade is to close a position
@@ -720,19 +735,19 @@ class Controller(Atom):
         strategy["active_contract"] = trade.contract
         return strategy
 
-    def assign_manual_trade(self, trade: ibi.Trade) -> Strategy | None:
+    def assign_manual_trade(self, trade: ibi.Trade) -> OrderInfo | None:
 
         if trade.order.orderId >= 0:
             return None
 
         return self.assign_trade(trade, "manual")
 
-    def assign_unknown_trade(self, trade: ibi.Trade) -> Strategy:
+    def assign_unknown_trade(self, trade: ibi.Trade) -> OrderInfo:
         return self.assign_trade(trade, "unknown")
 
     def assign_trade(
         self, trade: ibi.Trade, trade_type: Literal["manual", "unknown"]
-    ) -> Strategy:
+    ) -> OrderInfo:
 
         strategy = self._assign_trade(trade) or self._make_strategy(trade, trade_type)
 
@@ -741,10 +756,22 @@ class Controller(Atom):
         else:
             log.critical(f"Unknown trade: {trade}")
 
-        # this will save strategy on OrderInfo
-        self.sm.update_strategy_on_order(trade.order.orderId, strategy.strategy)
-
-        return strategy
+        action = "MANUAL" if trade_type == "manual" else "UNKNOWN"
+        order_key = trade.order.orderId or trade.order.permId
+        if trade.order.orderId == 0:
+            log.error(
+                "Assigning zero-orderId trade to strategy using permId as "
+                f"local order key: orderId={trade.order.orderId} "
+                f"permId={trade.order.permId} strategy={strategy.strategy}"
+            )
+        order_info = self.sm.order.get(order_key) or OrderInfo(
+            strategy.strategy,
+            action,
+            trade,
+            {},
+        )
+        order_info.strategy = strategy.strategy
+        return self.sm.save_order(order_info)
 
     def log_order_status(self, trade: ibi.Trade) -> None:
         # Connected to ib.OrderStatusEvent

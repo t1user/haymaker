@@ -168,17 +168,66 @@ async def test_StateMachine_linked_to_ib_newOrderEvent(caplog, Atom):
 
 def test_register_position_skips_already_accounted_execution(controller, trade):
     strategy = controller.sm.strategy["coolstrategy"]
-    controller.sm.order[trade.order.orderId] = OrderInfo(
-        "coolstrategy", "OPEN", trade, {}
-    )
+    order_info = OrderInfo("coolstrategy", "OPEN", trade, {})
+    controller.sm.order[trade.order.orderId] = order_info
 
-    controller.register_position(strategy, trade, trade.fills[0])
-    controller.register_position(strategy, trade, trade.fills[0])
+    controller.register_position(order_info, trade.fills[0])
+    controller.register_position(order_info, trade.fills[0])
 
     assert strategy.position == 1
     assert controller.sm.order[trade.order.orderId].accounted_exec_ids == [
         trade.fills[0].execution.execId
     ]
+
+
+@pytest.mark.asyncio
+async def test_on_exec_details_matches_zero_order_trade_by_trade_perm_id(
+    controller, trade
+):
+    strategy = controller.sm.strategy["coolstrategy"]
+    order_info = OrderInfo("coolstrategy", "OPEN", trade, {})
+    controller.sm.save_order(order_info)
+    replayed_trade = deepcopy(trade)
+    replayed_trade.order.orderId = 0
+    replayed_trade.orderStatus.orderId = 0
+    fill = replayed_trade.fills[0]
+    fill.execution.orderId = 888001
+    fill.execution.permId = 999001
+
+    await controller.onExecDetailsEvent(replayed_trade, fill)
+    await controller.onExecDetailsEvent(replayed_trade, fill)
+
+    assert strategy.position == 1
+    assert controller.sm.order[trade.order.orderId] is order_info
+    assert order_info.accounted_exec_ids == [fill.execution.execId]
+    assert "unknown_ES" not in controller.sm.strategy
+
+
+@pytest.mark.asyncio
+async def test_on_exec_details_creates_unknown_record_for_unmatched_zero_order(
+    controller, trade, caplog
+):
+    replayed_trade = deepcopy(trade)
+    replayed_trade.order.orderId = 0
+    replayed_trade.order.permId = 999001
+    replayed_trade.orderStatus.orderId = 0
+    fill = replayed_trade.fills[0]
+    fill.execution.orderId = 888001
+    fill.execution.permId = 999001
+    fill.execution.execId = "zero-order-fill"
+
+    with caplog.at_level(logging.ERROR):
+        await controller.onExecDetailsEvent(replayed_trade, fill)
+        await controller.onExecDetailsEvent(replayed_trade, fill)
+
+    order_info = controller.sm.order[999001]
+    strategy = controller.sm.strategy["unknown_ES"]
+    assert order_info.trade is replayed_trade
+    assert order_info.trade.order.orderId == 0
+    assert order_info.strategy == "unknown_ES"
+    assert order_info.accounted_exec_ids == ["zero-order-fill"]
+    assert strategy.position == 1
+    assert "using permId as local order key" in caplog.text
 
 
 @pytest.mark.asyncio

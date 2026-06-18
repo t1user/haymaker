@@ -49,6 +49,13 @@ class OrderInfo:
         return self.trade.order.permId
 
     @property
+    def order_key(self) -> int:
+        """Return the local storage key for this order record, which
+        is ``orderId == 0`` if non-zero or ``permId`` otherwise.
+        """
+        return self.trade.order.orderId or self.trade.order.permId
+
+    @property
     def amount(self) -> float:
         return self.trade.order.totalQuantity * action_to_signal(
             self.trade.order.action
@@ -85,7 +92,7 @@ class OrderInfo:
 
     def encode(self) -> dict[str, Any]:
         return {
-            "orderId": self.trade.order.orderId,
+            "orderId": self.order_key,
             **{k: tree(v) for k, v in self.__dict__.items()},
             "active": self.active,
             "priority": self._priority(self.trade),
@@ -133,8 +140,7 @@ T = TypeVar("T")
 
 class OrderContainer(UserDict):
     """
-    Stores `OrderInfo` objects and allows to look them up by `orderId`
-    or `permId`.
+    Stores `OrderInfo` objects keyed by their local order key.
     """
 
     def __init__(
@@ -185,7 +191,7 @@ class OrderContainer(UserDict):
 
     def save(self, oi: OrderInfo) -> None:
         """Save data to database."""
-        self[oi.trade.order.orderId] = oi
+        self[oi.order_key] = oi
         self.saver.save(oi.encode())
 
     def delete(self, orderId: int) -> None:
@@ -614,8 +620,19 @@ class StateMachine:
             return self.strategy.get(oi.strategy)
         return None
 
+    def order_by_permId(self, perm_id: int) -> OrderInfo | None:
+        """Return the order record matching a broker permanent id."""
+        if not perm_id:
+            return None
+        for order_info in self.order.values():
+            if order_info.trade.order.permId == perm_id:
+                return order_info
+        return None
+
     def strategy_for_trade(self, trade: ibi.Trade) -> Strategy | None:
-        return self.strategy_for_order(trade.order.orderId)
+        if order_info := self.order.get(trade.order.orderId):
+            return self.strategy.get(order_info.strategy)
+        return None
 
     def orders_for_strategy(self, strategy: str) -> list[OrderInfo]:
         return list(self._orders.strategy(strategy))

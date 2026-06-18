@@ -92,6 +92,16 @@ def test_OrderInfo_encode_includes_accounted_exec_ids():
     assert order_info.encode()["accounted_exec_ids"] == ["exec-1"]
 
 
+def test_OrderInfo_uses_perm_id_as_key_for_zero_order_id():
+    trade = ibi.Trade(order=ibi.Order(orderId=0, permId=12345))
+    order_info = OrderInfo("coolstrategy", "OPEN", trade, {})
+
+    assert order_info.order_key == 12345
+    assert order_info.encode()["orderId"] == 12345
+    assert order_info.trade.order.orderId == 0
+    assert order_info.encode()["trade"]["Trade"]["order"]["Order"]["permId"] == 12345
+
+
 def test_OrderInfo_from_trade_rejects_zero_order_id():
     trade = ibi.Trade(order=ibi.Order(orderId=0))
 
@@ -205,6 +215,22 @@ def test_OrderContainer_get_order(order_saver):
     assert orders.get(1) == o1
 
 
+def test_OrderContainer_saves_zero_order_id_under_perm_id(order_saver):
+    orders = OrderContainer(order_saver, save_async=False)
+    trade = ibi.Trade(order=ibi.Order(orderId=0, permId=12345))
+    order_info = OrderInfo("coolstrategy", "OPEN", trade, {})
+
+    orders.save(order_info)
+
+    assert orders[12345] is order_info
+    assert 0 not in orders
+    saved_order = order_saver.store["orders"][12345]["trade"]["Trade"]["order"][
+        "Order"
+    ]
+    assert saved_order["permId"] == 12345
+    assert "orderId" not in saved_order
+
+
 def test_OrderContainer_get_order_default(order_saver):
     o1 = OrderInfo("coolstrategy", "OPEN", ibi.Trade(), None)
     o2 = OrderInfo("coolstrategy", "STOP", ibi.Trade(), None)
@@ -240,6 +266,16 @@ def test_state_machine_get_order(state_machine, order_saver):
     orders[3] = o3
     state_machine._orders = orders
     assert state_machine.order.get(1) == o1
+
+
+def test_state_machine_gets_order_by_permId(state_machine, order_saver):
+    trade = ibi.Trade(order=ibi.Order(orderId=1, permId=12345))
+    order_info = OrderInfo("coolstrategy", "OPEN", trade, {})
+    orders = OrderContainer(order_saver)
+    orders[1] = order_info
+    state_machine._orders = orders
+
+    assert state_machine.order_by_permId(12345) is order_info
 
 
 def test_state_machine_delete_order(state_machine, order_saver):
