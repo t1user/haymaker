@@ -6,7 +6,11 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 
-from haymaker.dataloader.scheduling import task_factory
+from haymaker.dataloader.scheduling import (
+    TaskPlanner,
+    task_factory,
+    task_factory_with_gaps,
+)
 from haymaker.dataloader.store_wrapper import AsyncStoreView, HistorySink
 
 
@@ -124,6 +128,55 @@ async def test_task_factory_one_row_store_does_not_schedule_full_duplicate(
     tasks = task_factory(wrapper, store_index[0])
 
     assert tasks == [(store_index[0], store_index[-1])]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_clamps_start_to_max_period(contract):
+    """TaskPlanner should own the run lookback clamp for download ranges."""
+
+    now = datetime(2025, 1, 10, tzinfo=timezone.utc)
+    headstamp = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now)
+
+    tasks = TaskPlanner(
+        wrapper,
+        headstamp,
+        max_period_days=3,
+        fill_gaps=False,
+    ).ranges()
+
+    assert tasks == [(datetime(2025, 1, 7, tzinfo=timezone.utc), now)]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_preserves_gap_factory_order(contract):
+    """TaskPlanner should preserve legacy gap-first scheduling behavior."""
+
+    index = pd.DatetimeIndex(
+        [
+            datetime(2025, 1, 1, tzinfo=timezone.utc),
+            datetime(2025, 1, 2, tzinfo=timezone.utc),
+            datetime(2025, 1, 5, tzinfo=timezone.utc),
+            datetime(2025, 1, 6, tzinfo=timezone.utc),
+            datetime(2025, 1, 9, tzinfo=timezone.utc),
+            datetime(2025, 1, 10, tzinfo=timezone.utc),
+            datetime(2025, 1, 13, tzinfo=timezone.utc),
+            datetime(2025, 1, 14, tzinfo=timezone.utc),
+        ]
+    )
+    data = pd.DataFrame({"close": range(len(index))}, index=index)
+    now = datetime(2025, 1, 15, tzinfo=timezone.utc)
+    headstamp = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(data), now)
+
+    tasks = TaskPlanner(
+        wrapper,
+        headstamp,
+        max_period_days=100,
+        fill_gaps=True,
+    ).ranges()
+
+    assert tasks == task_factory_with_gaps(wrapper, headstamp)
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import cached_property
 from typing import NamedTuple, Optional, Self, Union
 
@@ -88,8 +88,14 @@ class GapFillFactory:
     from_date: Union[date, datetime]
     to_date: Union[date, datetime]
 
-    dates = TaskFactory.dates
-    __str__ = TaskFactory.__str__
+    def dates(self) -> Optional[Dates]:
+        if self.from_date and self.to_date and (self.to_date > self.from_date):
+            return Dates(self.from_date, self.to_date)
+        else:
+            return None
+
+    def __str__(self) -> str:
+        return f"<{self.__class__.__name__} from: {self.from_date} to: {self.to_date}"
 
     @classmethod
     def gap_factory(cls, store: AsyncStoreView) -> list[Self]:
@@ -123,7 +129,51 @@ class GapFillFactory:
         return [cls(*i) for i in items]
 
 
+@dataclass
+class TaskPlanner:
+    """Plan historical download ranges for one contract store view.
+
+    Args:
+        store: Preloaded datastore view for the contract being planned.
+        head: Earliest available IB timestamp to consider.
+        max_period_days: Maximum lookback window for this planning run.
+        fill_gaps: Whether to include datastore gap-fill ranges before normal
+            backfill/update ranges.
+    """
+
+    store: AsyncStoreView
+    head: Union[date, datetime]
+    max_period_days: int
+    fill_gaps: bool = True
+
+    @property
+    def start(self) -> Union[date, datetime]:
+        """Return the clamped earliest point for this planning run."""
+
+        latest_available = self.store.expiry_or_now()
+        return max(self.head, latest_available - timedelta(days=self.max_period_days))
+
+    def ranges(self) -> list[Dates]:
+        """Return planned download ranges in worker execution order."""
+
+        if self.fill_gaps:
+            return task_factory_with_gaps(self.store, self.start)
+        return task_factory(self.store, self.start)
+
+
+def _gap_ranges(store: AsyncStoreView) -> list[Dates]:
+    """Return datastore gap-fill ranges inferred from the store view."""
+
+    return [
+        dates
+        for gap in GapFillFactory.gap_factory(store)
+        if (dates := gap.dates()) is not None
+    ]
+
+
 def task_factory(store: AsyncStoreView, head: Union[date, datetime]) -> list[Dates]:
+    """Return backfill and update ranges for compatibility callers."""
+
     return [
         t
         for t in [
@@ -136,7 +186,9 @@ def task_factory(store: AsyncStoreView, head: Union[date, datetime]) -> list[Dat
 def task_factory_with_gaps(
     store: AsyncStoreView, head: Union[date, datetime]
 ) -> list[Dates]:
+    """Return gap-fill, backfill, and update ranges for compatibility callers."""
+
     return [
-        *[g.dates() for g in GapFillFactory.gap_factory(store)],  # type: ignore
+        *_gap_ranges(store),
         *task_factory(store, head),
     ]

@@ -67,7 +67,7 @@ stable and mark items off as they are addressed.
   `current_session_now()` calls for age validation. If future behavior needs one
   cutoff shared by every object in a dataloader run, move the snapshot to
   `DataloaderSession` and pass it down.
-- [ ] `DL-021`: Review legacy dataloader runtime objects for overly broad scope
+- [x] `DL-021`: Review legacy dataloader runtime objects for overly broad scope
   or execution responsibilities. Pay special attention to whether manager,
   writer, store wrapper, selector, and scheduler boundaries still match the
   simplified queue/worker architecture. Start from

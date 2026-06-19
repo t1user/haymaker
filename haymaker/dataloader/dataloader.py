@@ -32,7 +32,7 @@ from . import helpers
 from .connect import connection
 from .contract_selectors import ContractSelector
 from .pacer import RequestPacing
-from .scheduling import task_factory, task_factory_with_gaps
+from .scheduling import TaskPlanner
 from .store_wrapper import AsyncStoreView, HistorySink
 from .task_logger import create_task
 
@@ -109,7 +109,7 @@ class Params(TypedDict):
 class DownloadFailure:
     """Record one failed dataloader writer job."""
 
-    writer: DataWriter
+    writer: DownloadJob
     error: BaseException
     when: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -120,7 +120,7 @@ class DownloadFailureRegistry:
 
     failures: list[DownloadFailure] = field(default_factory=list)
 
-    def record(self, writer: DataWriter, error: BaseException) -> None:
+    def record(self, writer: DownloadJob, error: BaseException) -> None:
         """Record one failed writer job."""
 
         self.failures.append(DownloadFailure(writer, error))
@@ -152,14 +152,15 @@ def pulse_factory(interval: float) -> ibi.Event | None:
 
 
 @dataclass
-class DataWriter:
+class DownloadJob:
     """
-    Keep track of all download tasks for one contract, provide exact
-    :meth:`ib.reqHistoricalData` params for every download task and
-    save data to store.
+    Keep track of planned downloads for one contract.
 
-    There are potentially 3 streams of data that writer might
-    schedule:
+    The job provides exact :meth:`ib.reqHistoricalData` params for each planned
+    range, buffers downloaded bars until they are handed to persistence, and
+    delegates writes to :class:`HistorySink`.
+
+    There are potentially 3 streams of data that a job might schedule:
 
     * backfill - data older than the oldest data point available in
     the store
@@ -178,6 +179,14 @@ class DataWriter:
     * `params`
 
     * `save_chunk`
+
+    Args:
+        contract: IB contract this job downloads.
+        sink: Persistence boundary for downloaded bars.
+        queue: Planned download ranges for this contract.
+        bar_size: IB bar size used to calculate request durations.
+        max_bars: Maximum bars allowed per request.
+        auto_save_interval: Optional interval for flushing buffered bars.
     """
 
     contract: ibi.Contract
@@ -271,13 +280,16 @@ class DataWriter:
         )
 
     def __str__(self) -> str:
-        return f"<Writer: {self.contract.localSymbol}>"
+        return f"<DownloadJob: {self.contract.localSymbol}>"
 
     def __repr__(self) -> str:
         return (
-            f"<Writer: {self.contract.localSymbol} "
+            f"<DownloadJob: {self.contract.localSymbol} "
             f"{[(str(i.from_date), str(i.to_date)) for i in self.queue]}>"
         )
+
+
+DataWriter = DownloadJob
 
 
 @dataclass
@@ -373,9 +385,9 @@ class Manager:
     max_period: int = MAX_PERIOD
     wts: str = WTS
     now: date | datetime = field(default_factory=current_session_now)
-    active_writers: list[DataWriter] = field(default_factory=list, repr=False)
+    active_writers: list[DownloadJob] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
-    new_writer_generator: AsyncGenerator[DataWriter, None] = field(init=False)
+    new_writer_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
 
     def __post_init__(self) -> None:
         if self.pacing is None:
@@ -415,15 +427,19 @@ class Manager:
             yield contract, headstamp
 
     def tasks(
-        self, store: AsyncStoreView, start: datetime | date
+        self, store: AsyncStoreView, headstamp: datetime | date
     ) -> list[DownloadContainer]:
-        if self.fill_gaps:
-            tasklist = task_factory_with_gaps(store, start)
-        else:
-            tasklist = task_factory(store, start)
-        return [DownloadContainer(*t) for t in tasklist]
+        """Return planned download containers for one contract store view."""
 
-    async def writers(self) -> AsyncGenerator[DataWriter, None]:
+        planner = TaskPlanner(
+            store,
+            headstamp,
+            max_period_days=self.max_period,
+            fill_gaps=self.fill_gaps,
+        )
+        return [DownloadContainer(*t) for t in planner.ranges()]
+
+    async def writers(self) -> AsyncGenerator[DownloadJob, None]:
         async for contract, headstamp in self.headstamps():
             if contract in self._initiated_contracts:
                 continue
@@ -431,16 +447,14 @@ class Manager:
             datastore = self.get_store()
             store = await AsyncStoreView.create(contract, datastore, self.now)
             sink = HistorySink(contract, datastore)
-            latest_available = store.expiry_or_now()
-            start = max(headstamp, latest_available - timedelta(days=self.max_period))
-            tasks = self.tasks(store, start)
-            new_writer = DataWriter(contract, sink, tasks)
+            tasks = self.tasks(store, headstamp)
+            new_writer = DownloadJob(contract, sink, tasks)
             if new_writer.is_done():
                 log.debug(f"Skipping {new_writer!s} - no need to download data.")
                 continue
             yield new_writer
 
-    async def _writer_generator(self) -> AsyncGenerator[DataWriter, None]:
+    async def _writer_generator(self) -> AsyncGenerator[DownloadJob, None]:
         async for new_writer in self.writers():
             self.active_writers.append(new_writer)
             yield new_writer
@@ -472,7 +486,7 @@ class Manager:
         return hs
 
 
-def validate_age(writer: DataWriter) -> bool:
+def validate_age(writer: DownloadJob) -> bool:
     """
     IB doesn't permit to request data for bars < 30secs older than 6
     months.  Trying to push it here with 30secs.
@@ -498,7 +512,7 @@ class DataloaderSession:
     bar_size: str = BARSIZE
     wts: str = WTS
     failures: DownloadFailureRegistry = field(default_factory=DownloadFailureRegistry)
-    queue: asyncio.Queue[DataWriter] | None = field(default=None, init=False)
+    queue: asyncio.Queue[DownloadJob] | None = field(default=None, init=False)
     workers: list[asyncio.Task] = field(default_factory=list, init=False)
     producer_task: asyncio.Task | None = field(default=None, init=False)
 
@@ -587,7 +601,7 @@ class DataloaderSession:
             finally:
                 queue.task_done()
 
-    async def download_writer(self, name: str, writer: DataWriter) -> None:
+    async def download_writer(self, name: str, writer: DownloadJob) -> None:
         """Download all currently queued chunks for one writer."""
 
         while True:

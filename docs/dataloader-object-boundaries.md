@@ -16,24 +16,24 @@ remain separate work.
 
 ### TaskPlanner
 
-- Should become the pure scheduling boundary.
+- Is the pure scheduling boundary.
 - Consumes an `AsyncStoreView`, a head timestamp, max-period policy, and gap
   policy.
-- Produces download ranges.
+- Owns the run lookback clamp and produces download ranges.
 - Later can consume IB historical schedules without putting broker calls inside
   pure scheduling code.
 
-The current `haymaker.dataloader.scheduling` factories fill this role only
-partially.
+The older `task_factory()` and `task_factory_with_gaps()` functions remain as
+compatibility wrappers around the same lower-level range logic.
 
-### DataWriter Or DownloadJob
+### DownloadJob
 
 - Owns one contract's planned ranges and request progression.
 - Produces request parameters for workers.
 - Buffers downloaded bars only until they are handed to persistence.
 - Does not read existing store state.
 
-The current `DataWriter` still owns request progression and buffering.
+`DataWriter` remains a compatibility alias for older imports.
 
 ### HistorySink
 
@@ -55,18 +55,18 @@ There is no dataloader datastore backend config while Arctic is the only
 supported backend. Arctic library naming is derived from `wts` and `barSize`.
 Collection naming uses the datastore default `simple_collection_namer`.
 
-## Deferred Review
+## Runtime Scope
 
-The next review should inspect whether the legacy objects still have the right
-scope:
+The current split is:
 
-- `Manager`
-- `DataWriter`
-- `DownloadContainer`
-- `haymaker.dataloader.scheduling` factories
-- `AsyncStoreView`
-- `HistorySink`
+- `Manager` owns source expansion, contract discovery, headstamp lookup, store
+  and sink construction, and active job tracking for restart/resume.
+- `TaskPlanner` owns pure scheduling and max-period clamping.
+- `DownloadJob` owns request progression for one contract.
+- `DownloadContainer` owns per-range buffering and missing-range progress.
+- `AsyncStoreView` owns read-only datastore boundaries for scheduling.
+- `HistorySink` owns persistence.
 
-The review should decide whether to introduce a first-class `TaskPlanner`,
-rename `DataWriter` to `DownloadJob`, and move persistence details fully out of
-the writer path.
+Deferred scheduling work should keep IB historical schedule requests outside
+`TaskPlanner`; those requests belong in the async request layer under
+session-scoped pacing before their result is supplied to pure scheduling code.

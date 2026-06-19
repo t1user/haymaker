@@ -71,7 +71,9 @@ The research package is intentionally separate from live execution. It works dir
   connection ownership, using dataloader client ID `1` by default.
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
-- `haymaker/dataloader/scheduling.py`: task generation for backfill, updates, and optional gap filling.
+- `haymaker/dataloader/scheduling.py`: `TaskPlanner` and lower-level range
+  factories for backfill, updates, max-period clamping, and optional gap
+  filling.
 - `haymaker/dataloader/store_wrapper.py`: `AsyncStoreView` for read-only
   scheduling boundaries and `HistorySink` for historical-data persistence.
 
@@ -115,7 +117,8 @@ The research package is intentionally separate from live execution. It works dir
 1. `dataloader` loads config, creates an `ib_insync.IB` client, and runs a dataloader runtime under the shared connection supervisor.
 2. The supervisor connects the socket and waits for a successful historical-data probe before starting dataloader work.
 3. Contract source data is expanded into IB contracts.
-4. The async store view inspects the Arctic-backed store and scheduling creates backfill, update, and optional gap-fill download containers.
+4. The async store view inspects the Arctic-backed store and `TaskPlanner`
+   creates backfill, update, and optional gap-fill download containers.
 5. A producer submits work to an asyncio queue.
 6. Workers call IB historical-data requests under pacer restrictions.
 7. Downloaded chunks are normalized, passed to `HistorySink`, concatenated with stored data, and written through the async datastore; Arctic owns final cleaning and metadata updates.
