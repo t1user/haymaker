@@ -208,7 +208,7 @@ async def test_headstamp_retries_pacing_violation(dataloader_module):
 
 @pytest.mark.asyncio
 async def test_worker_connection_loss_is_recorded(dataloader_module):
-    """Connection loss should record the failed writer and keep the queue moving."""
+    """Connection loss should record the failed job and keep the queue moving."""
 
     dataloader = dataloader_module
 
@@ -253,7 +253,7 @@ async def test_worker_connection_loss_is_recorded(dataloader_module):
 
 @pytest.mark.asyncio
 async def test_worker_failure_does_not_stop_next_writer(dataloader_module):
-    """A failed writer should be recorded without stopping the worker."""
+    """A failed job should be recorded without stopping the worker."""
 
     dataloader = dataloader_module
 

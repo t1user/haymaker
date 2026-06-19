@@ -1,7 +1,7 @@
 """Asynchronous Interactive Brokers historical data downloader.
 
 The module is built around a producer/worker queue. A manager discovers the
-contracts and datastore ranges that need data, producers enqueue writer jobs,
+contracts and datastore ranges that need data, producers enqueue download jobs,
 and workers download historical chunks through a session-scoped request pacer.
 Connection recovery is owned by the dataloader supervisor integration; request
 pacing, failure recording, and resume-in-memory state live in the dataloader
@@ -67,7 +67,7 @@ def create_dataloader_store(
     wts: str = WTS,
     bar_size: str = BARSIZE,
 ) -> AsyncAbstractBaseStore:
-    """Create the Arctic-backed async datastore used by dataloader writers.
+    """Create the Arctic-backed async datastore used by dataloader jobs.
 
     Args:
         wts: IB ``whatToShow`` value used to derive the Arctic library name.
@@ -107,7 +107,7 @@ class Params(TypedDict):
 
 @dataclass
 class DownloadFailure:
-    """Record one failed dataloader writer job."""
+    """Record one failed dataloader download job."""
 
     writer: DownloadJob
     error: BaseException
@@ -116,24 +116,24 @@ class DownloadFailure:
 
 @dataclass
 class DownloadFailureRegistry:
-    """Collect failed writer jobs so the session can report them at completion."""
+    """Collect failed download jobs so the session can report them at completion."""
 
     failures: list[DownloadFailure] = field(default_factory=list)
 
     def record(self, writer: DownloadJob, error: BaseException) -> None:
-        """Record one failed writer job."""
+        """Record one failed download job."""
 
         self.failures.append(DownloadFailure(writer, error))
 
     def log_summary(self) -> None:
-        """Log a summary of failed writer jobs."""
+        """Log a summary of failed download jobs."""
 
         if not self.failures:
-            log.info("Dataloader completed with no failed writer jobs.")
+            log.info("Dataloader completed with no failed download jobs.")
             return
 
         log.warning(
-            f"Dataloader completed with {len(self.failures)} failed writer jobs."
+            f"Dataloader completed with {len(self.failures)} failed download jobs."
         )
         for failure in self.failures:
             log.warning(
@@ -294,16 +294,14 @@ DataWriter = DownloadJob
 
 @dataclass
 class DownloadContainer:
-    """
-    Hold downloaded data before it is saved to datastore.
+    """Hold downloaded bars before they are saved to the datastore.
 
-    Object is initiated with desided from and to dates, for which data
-    is to to be loaded, subsequently it is used to store any data
-    before it's permanently saved.  It also keeps track of which data
-    is still missing.
+    Args:
+        from_date: Earliest point this range should cover.
+        to_date: Latest point this range should cover.
+        bars: Downloaded chunks buffered before persistence.
 
-
-    Methods:
+    Public methods/attributes:
 
     * next_date
 
@@ -487,11 +485,15 @@ class Manager:
 
 
 def validate_age(writer: DownloadJob) -> bool:
-    """
-    IB doesn't permit to request data for bars < 30secs older than 6
-    months.  Trying to push it here with 30secs.
+    """Return whether a job is still inside IB's sub-30-second age limit.
 
-    THIS IS NOT NECCESSARY???, MERGE IT WITH EARLIES POINT DETERMINATION.
+    IB does not allow requests for bars under 30 seconds older than six months.
+
+    Args:
+        writer: Download job being validated.
+
+    Returns:
+        ``True`` when the job can keep requesting data, otherwise ``False``.
     """
     if helpers.duration_in_secs(writer.bar_size) < 30 and writer.next_date:
         assert isinstance(writer.next_date, datetime)
@@ -572,7 +574,7 @@ class DataloaderSession:
                 await queue.put(writer)
                 log.debug(f"Active writer {writer} added to queue.")
 
-        log.debug("Will start queing new writers.")
+        log.debug("Will start queuing new writers.")
         while True:
             try:
                 new_writer = await anext(self.manager.new_writer_generator)

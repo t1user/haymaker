@@ -73,7 +73,7 @@ stable and mark items off as they are addressed.
   simplified queue/worker architecture. Start from
   `docs/dataloader-object-boundaries.md`.
 - [ ] `DL-022`: Classify recorded dataloader job failures as terminal or
-  retryable. Current behavior records failed writer jobs and lets workers keep
+  retryable. Current behavior records failed download jobs and lets workers keep
   draining the queue; later policy should decide which failures deserve retries,
   which should only be summarized, and which indicate process/session failure.
 
@@ -135,8 +135,10 @@ stable and mark items off as they are addressed.
    - Review whether manager, writer/download job, download container,
      scheduling factories, `AsyncStoreView`, and `HistorySink` have the right
      responsibilities.
-   - Decide whether to introduce a first-class `TaskPlanner` and whether
-     `DataWriter` should be renamed or narrowed further.
+   - First-class `TaskPlanner` now owns pure range planning and max-period
+     clamping.
+   - `DownloadJob` now names the request-progression object; `DataWriter`
+     remains as a compatibility alias.
    - Start from `docs/dataloader-object-boundaries.md`.
    - Covers `DL-021`.
 
