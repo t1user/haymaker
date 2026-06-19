@@ -33,8 +33,6 @@ compatibility wrappers around the same lower-level range logic.
 - Buffers downloaded bars only until they are handed to persistence.
 - Does not read existing store state.
 
-`DataWriter` remains a compatibility alias for older imports.
-
 ### HistorySink
 
 - Owns persistence for downloaded bars.
@@ -48,7 +46,7 @@ compatibility wrappers around the same lower-level range logic.
 The dataloader currently depends on `AsyncAbstractBaseStore` and the Arctic
 implementation behind it. Arctic remains responsible for final cleaning,
 metadata, duplicate removal, and monotonic sorting. The dataloader should not
-accept an arbitrary writer-like object unless it also defines where those data
+accept an arbitrary persistence object unless it also defines where those data
 cleanliness guarantees live.
 
 There is no dataloader datastore backend config while Arctic is the only

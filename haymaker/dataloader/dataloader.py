@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import AsyncGenerator, Optional, TypedDict
+from typing import AsyncGenerator, Optional, TypedDict, cast
 
 import ib_insync as ibi
 import pandas as pd
@@ -109,7 +109,7 @@ class Params(TypedDict):
 class DownloadFailure:
     """Record one failed dataloader download job."""
 
-    writer: DownloadJob
+    job: DownloadJob
     error: BaseException
     when: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -120,10 +120,10 @@ class DownloadFailureRegistry:
 
     failures: list[DownloadFailure] = field(default_factory=list)
 
-    def record(self, writer: DownloadJob, error: BaseException) -> None:
+    def record(self, job: DownloadJob, error: BaseException) -> None:
         """Record one failed download job."""
 
-        self.failures.append(DownloadFailure(writer, error))
+        self.failures.append(DownloadFailure(job, error))
 
     def log_summary(self) -> None:
         """Log a summary of failed download jobs."""
@@ -138,14 +138,14 @@ class DownloadFailureRegistry:
         for failure in self.failures:
             log.warning(
                 "%s failed at %s with %s: %s",
-                failure.writer,
+                failure.job,
                 failure.when.isoformat(),
                 type(failure.error).__name__,
                 failure.error,
             )
 
 
-def pulse_factory(interval: float) -> ibi.Event | None:
+def pulse_factory(interval: int) -> ibi.Event | None:
     if interval:
         return ibi.Event().timerange(interval, None, interval)
     return None
@@ -273,8 +273,12 @@ class DownloadJob:
 
     @property
     def duration(self) -> str:
-        assert self.next_date is not None
-        delta = self.next_date - self._container.from_date
+        next_date = self.next_date
+        assert next_date is not None
+        if isinstance(next_date, datetime):
+            delta = next_date - cast(datetime, self._container.from_date)
+        else:
+            delta = next_date - cast(date, self._container.from_date)
         return helpers.timedelta_and_barSize_to_duration_str(
             delta, self.bar_size, self.max_bars
         )
@@ -287,9 +291,6 @@ class DownloadJob:
             f"<DownloadJob: {self.contract.localSymbol} "
             f"{[(str(i.from_date), str(i.to_date)) for i in self.queue]}>"
         )
-
-
-DataWriter = DownloadJob
 
 
 @dataclass
@@ -383,14 +384,14 @@ class Manager:
     max_period: int = MAX_PERIOD
     wts: str = WTS
     now: date | datetime = field(default_factory=current_session_now)
-    active_writers: list[DownloadJob] = field(default_factory=list, repr=False)
+    active_jobs: list[DownloadJob] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
-    new_writer_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
+    new_job_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
 
     def __post_init__(self) -> None:
         if self.pacing is None:
             self.pacing = request_pacing_factory(self.ib)
-        self.new_writer_generator = self._writer_generator()
+        self.new_job_generator = self._job_generator()
 
     def get_store(self) -> AsyncAbstractBaseStore:
         """Return the session datastore, creating it lazily when needed."""
@@ -437,7 +438,7 @@ class Manager:
         )
         return [DownloadContainer(*t) for t in planner.ranges()]
 
-    async def writers(self) -> AsyncGenerator[DownloadJob, None]:
+    async def jobs(self) -> AsyncGenerator[DownloadJob, None]:
         async for contract, headstamp in self.headstamps():
             if contract in self._initiated_contracts:
                 continue
@@ -446,16 +447,16 @@ class Manager:
             store = await AsyncStoreView.create(contract, datastore, self.now)
             sink = HistorySink(contract, datastore)
             tasks = self.tasks(store, headstamp)
-            new_writer = DownloadJob(contract, sink, tasks)
-            if new_writer.is_done():
-                log.debug(f"Skipping {new_writer!s} - no need to download data.")
+            new_job = DownloadJob(contract, sink, tasks)
+            if new_job.is_done():
+                log.debug(f"Skipping {new_job!s} - no need to download data.")
                 continue
-            yield new_writer
+            yield new_job
 
-    async def _writer_generator(self) -> AsyncGenerator[DownloadJob, None]:
-        async for new_writer in self.writers():
-            self.active_writers.append(new_writer)
-            yield new_writer
+    async def _job_generator(self) -> AsyncGenerator[DownloadJob, None]:
+        async for new_job in self.jobs():
+            self.active_jobs.append(new_job)
+            yield new_job
 
     async def headstamp(self, contract: ibi.Contract) -> date | datetime:
         headTimeStamp = None
@@ -484,22 +485,22 @@ class Manager:
         return hs
 
 
-def validate_age(writer: DownloadJob) -> bool:
+def validate_age(job: DownloadJob) -> bool:
     """Return whether a job is still inside IB's sub-30-second age limit.
 
     IB does not allow requests for bars under 30 seconds older than six months.
 
     Args:
-        writer: Download job being validated.
+        job: Download job being validated.
 
     Returns:
         ``True`` when the job can keep requesting data, otherwise ``False``.
     """
-    if helpers.duration_in_secs(writer.bar_size) < 30 and writer.next_date:
-        assert isinstance(writer.next_date, datetime)
+    if helpers.duration_in_secs(job.bar_size) < 30 and job.next_date:
+        assert isinstance(job.next_date, datetime)
         # TODO: not sure if correct or necessary
         now = current_session_now()
-        if isinstance(now, datetime) and (now - writer.next_date).days > 180:
+        if isinstance(now, datetime) and (now - job.next_date).days > 180:
             return False
     return True
 
@@ -563,53 +564,53 @@ class DataloaderSession:
             self.failures.log_summary()
 
     async def producer(self, queue: asyncio.Queue) -> None:
-        """Queue unfinished active writers and then discover new writers."""
+        """Queue unfinished active jobs and then discover new jobs."""
 
         assert self.manager is not None
         log.debug("Initializing PRODUCER")
-        if self.manager.active_writers:
-            log.debug("Will start queuing writers, which are already initialized.")
-        for writer in self.manager.active_writers:
-            if not writer.is_done():
-                await queue.put(writer)
-                log.debug(f"Active writer {writer} added to queue.")
+        if self.manager.active_jobs:
+            log.debug("Will start queuing jobs, which are already initialized.")
+        for job in self.manager.active_jobs:
+            if not job.is_done():
+                await queue.put(job)
+                log.debug(f"Active job {job} added to queue.")
 
-        log.debug("Will start queuing new writers.")
+        log.debug("Will start queuing new jobs.")
         while True:
             try:
-                new_writer = await anext(self.manager.new_writer_generator)
-                await queue.put(new_writer)
-                log.debug(f"New writer {new_writer} added to queue.")
+                new_job = await anext(self.manager.new_job_generator)
+                await queue.put(new_job)
+                log.debug(f"New job {new_job} added to queue.")
             except StopAsyncIteration:
-                log.debug("No more writers!")
+                log.debug("No more jobs!")
                 break
 
         log.debug("Producer done!")
 
     async def worker(self, name: str, queue: asyncio.Queue) -> None:
-        """Download historical data chunks for queued writers."""
+        """Download historical data chunks for queued jobs."""
 
         log.debug(f"Initializing {name.upper()}")
         while True:
-            writer = await queue.get()
+            job = await queue.get()
 
             try:
-                await self.download_writer(name, writer)
+                await self.download_job(name, job)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.exception("%s failed while loading %s.", name, writer)
-                self.failures.record(writer, exc)
+                log.exception("%s failed while loading %s.", name, job)
+                self.failures.record(job, exc)
             finally:
                 queue.task_done()
 
-    async def download_writer(self, name: str, writer: DownloadJob) -> None:
-        """Download all currently queued chunks for one writer."""
+    async def download_job(self, name: str, job: DownloadJob) -> None:
+        """Download all currently queued chunks for one job."""
 
         while True:
-            params = writer.params
+            params = job.params
             log.debug(
-                f"{name} loading {writer!s} ending: {writer.next_date} "
+                f"{name} loading {job!s} ending: {job.next_date} "
                 f"duration: {params['durationStr']}"
             )
             chunk = await self.pacing.historical_data(
@@ -619,15 +620,15 @@ class DataloaderSession:
                 useRTH=False,
                 formatDate=2,
             )
-            await writer.save_chunk(chunk)
+            await job.save_chunk(chunk)
 
-            if writer.next_date:
-                if not validate_age(writer):
-                    await writer.save_chunk(None)
-                    log.debug(f"{writer!s} dropped on age validation.")
+            if job.next_date:
+                if not validate_age(job):
+                    await job.save_chunk(None)
+                    log.debug(f"{job!s} dropped on age validation.")
                     break
             else:
-                log.info(f"{writer!s} done!")
+                log.info(f"{job!s} done!")
                 break
 
     def cancel_tasks(self) -> None:

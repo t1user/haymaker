@@ -63,13 +63,13 @@ stable and mark items off as they are addressed.
   `US/Central`, and sessions include normal trading days, weekend
   gaps, holidays, and early closes.
 - [ ] `DL-020`: Define run-wide `now` snapshot semantics explicitly. Current
-  behavior uses a per-manager `now` snapshot for writer discovery but fresh
+  behavior uses a per-manager `now` snapshot for job discovery but fresh
   `current_session_now()` calls for age validation. If future behavior needs one
   cutoff shared by every object in a dataloader run, move the snapshot to
   `DataloaderSession` and pass it down.
 - [x] `DL-021`: Review legacy dataloader runtime objects for overly broad scope
   or execution responsibilities. Pay special attention to whether manager,
-  writer, store wrapper, selector, and scheduler boundaries still match the
+  job, store wrapper, selector, and scheduler boundaries still match the
   simplified queue/worker architecture. Start from
   `docs/dataloader-object-boundaries.md`.
 - [ ] `DL-022`: Classify recorded dataloader job failures as terminal or
@@ -91,7 +91,7 @@ stable and mark items off as they are addressed.
    - Covers `DL-001`, `DL-002`, `DL-010`, `DL-016`, and `DL-017`.
 
 2. **Create First-Class Dataloader Session**
-   - Own manager, queue, workers, active writers, pacer, pacing registry, and
+   - Own manager, queue, workers, active jobs, pacer, pacing registry, and
      cancellation state in one runtime object.
    - Remove or shrink `OBJECTS`, global `PACER`, global `PCR`, and class-level
      `ContractSelector.ib`.
@@ -132,13 +132,12 @@ stable and mark items off as they are addressed.
    - Covers `DL-006`, `DL-007`, `DL-012`, `DL-013`, and `DL-014`.
 
 7. **Review Runtime Object Boundaries**
-   - Review whether manager, writer/download job, download container,
+   - Review whether manager, download job, download container,
      scheduling factories, `AsyncStoreView`, and `HistorySink` have the right
      responsibilities.
    - First-class `TaskPlanner` now owns pure range planning and max-period
      clamping.
-   - `DownloadJob` now names the request-progression object; `DataWriter`
-     remains as a compatibility alias.
+   - `DownloadJob` now names the request-progression object.
    - Start from `docs/dataloader-object-boundaries.md`.
    - Covers `DL-021`.
 

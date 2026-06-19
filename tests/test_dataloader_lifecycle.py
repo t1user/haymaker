@@ -97,29 +97,29 @@ def test_sessions_own_separate_pacing_state(dataloader_module):
 
 
 @pytest.mark.asyncio
-async def test_session_producer_requeues_active_writers_before_new_discovery(
+async def test_session_producer_requeues_active_jobs_before_new_discovery(
     dataloader_module,
 ):
-    """Restarted sessions should resume active writers before new discovery."""
+    """Restarted sessions should resume active jobs before new discovery."""
 
     dataloader = dataloader_module
 
-    class FakeWriter:
+    class FakeJob:
         def __init__(self, name):
             self.name = name
 
         def is_done(self):
             return False
 
-    async def new_writers():
-        yield new_writer
+    async def new_jobs():
+        yield new_job
 
-    active_writer = FakeWriter("active")
-    new_writer = FakeWriter("new")
+    active_job = FakeJob("active")
+    new_job = FakeJob("new")
     manager = SimpleNamespace(
         ib=None,
-        active_writers=[active_writer],
-        new_writer_generator=new_writers(),
+        active_jobs=[active_job],
+        new_job_generator=new_jobs(),
         pacing=dataloader.request_pacing_factory(object()),
     )
     session = dataloader.DataloaderSession(object(), manager=manager)
@@ -127,8 +127,8 @@ async def test_session_producer_requeues_active_writers_before_new_discovery(
 
     await session.producer(queue)
 
-    assert queue.get_nowait() is active_writer
-    assert queue.get_nowait() is new_writer
+    assert queue.get_nowait() is active_job
+    assert queue.get_nowait() is new_job
 
 
 def test_dataloader_config_validates_pacer_allowance_fraction(
@@ -216,7 +216,7 @@ async def test_worker_connection_loss_is_recorded(dataloader_module):
         async def reqHistoricalDataAsync(self, *args, **kwargs):
             raise ConnectionError("socket down")
 
-    class FakeWriter:
+    class FakeJob:
         contract = FakeContract()
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
         saved = False
@@ -233,26 +233,26 @@ async def test_worker_connection_loss_is_recorded(dataloader_module):
             self.saved = True
 
         def __str__(self):
-            return "<FakeWriter>"
+            return "<FakeJob>"
 
     session = dataloader.DataloaderSession(FakeIB())
     session.pacing.no_restriction = True
     queue = asyncio.Queue()
-    writer = FakeWriter()
-    await queue.put(writer)
+    job = FakeJob()
+    await queue.put(job)
 
     task = asyncio.create_task(session.worker("worker", queue))
     await asyncio.wait_for(queue.join(), timeout=1)
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
 
-    assert not writer.saved
+    assert not job.saved
     assert len(session.failures.failures) == 1
     assert isinstance(session.failures.failures[0].error, ConnectionError)
 
 
 @pytest.mark.asyncio
-async def test_worker_failure_does_not_stop_next_writer(dataloader_module):
+async def test_worker_failure_does_not_stop_next_job(dataloader_module):
     """A failed job should be recorded without stopping the worker."""
 
     dataloader = dataloader_module
@@ -261,7 +261,7 @@ async def test_worker_failure_does_not_stop_next_writer(dataloader_module):
         async def reqHistoricalDataAsync(self, *args, **kwargs):
             return []
 
-    class FakeWriter:
+    class FakeJob:
         contract = FakeContract()
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
         bar_size = dataloader.BARSIZE
@@ -281,43 +281,43 @@ async def test_worker_failure_does_not_stop_next_writer(dataloader_module):
 
         async def save_chunk(self, chunk):
             if self.fail:
-                raise RuntimeError("writer failed")
+                raise RuntimeError("job failed")
             self.saved = True
             self.next_date = None
 
         def __str__(self):
-            return f"<FakeWriter {self.name}>"
+            return f"<FakeJob {self.name}>"
 
     session = dataloader.DataloaderSession(FakeIB())
     session.pacing.no_restriction = True
     queue = asyncio.Queue()
-    failed_writer = FakeWriter("failed", fail=True)
-    good_writer = FakeWriter("good")
-    await queue.put(failed_writer)
-    await queue.put(good_writer)
+    failed_job = FakeJob("failed", fail=True)
+    good_job = FakeJob("good")
+    await queue.put(failed_job)
+    await queue.put(good_job)
 
     task = asyncio.create_task(session.worker("worker", queue))
     await asyncio.wait_for(queue.join(), timeout=1)
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
 
-    assert not failed_writer.saved
-    assert good_writer.saved
+    assert not failed_job.saved
+    assert good_job.saved
     assert len(session.failures.failures) == 1
-    assert session.failures.failures[0].writer is failed_writer
+    assert session.failures.failures[0].job is failed_job
     assert isinstance(session.failures.failures[0].error, RuntimeError)
 
 
 @pytest.mark.asyncio
-async def test_worker_pacing_violation_retries_same_writer(
+async def test_worker_pacing_violation_retries_same_job(
     dataloader_module,
 ):
-    """Pacing retry should preserve writer state until a non-pacing result arrives."""
+    """Pacing retry should preserve job state until a non-pacing result arrives."""
 
     dataloader = dataloader_module
     contract = FakeContract()
 
-    class FakeWriter:
+    class FakeJob:
         def __init__(self):
             self.contract = contract
             self.next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
@@ -337,7 +337,7 @@ async def test_worker_pacing_violation_retries_same_writer(
             self.next_date = None
 
         def __str__(self):
-            return "<FakeWriter>"
+            return "<FakeJob>"
 
     class FakeIB:
         def __init__(self):
@@ -354,8 +354,8 @@ async def test_worker_pacing_violation_retries_same_writer(
     session.pacing.no_restriction = True
     session.pacing.pacing_retry_delay = 0
     queue = asyncio.Queue()
-    writer = FakeWriter()
-    await queue.put(writer)
+    job = FakeJob()
+    await queue.put(job)
 
     task = asyncio.create_task(session.worker("worker", queue))
     await asyncio.wait_for(queue.join(), timeout=1)
@@ -363,4 +363,4 @@ async def test_worker_pacing_violation_retries_same_writer(
     await asyncio.gather(task, return_exceptions=True)
 
     assert ib.requests == 2
-    assert writer.saved_chunks == [[]]
+    assert job.saved_chunks == [[]]
