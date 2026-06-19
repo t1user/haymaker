@@ -69,10 +69,11 @@ class OrderSync:
                     # while we were disconnected and report it as appropriate
                     self.inactive.append(oi.trade)
                 else:
-                    log.debug(f"Will prune order: {orderId}")
+                    # log.debug(f"Will prune order: {orderId}")
                     # this order is no longer of interest
                     # it's inactive in our records and inactive in IB
-                    self.sm.prune_order(orderId)  # <- CHANGING RECORDS
+                    # self.sm.prune_order(orderId)  # <- CHANGING RECORDS
+                    pass
         return self
 
     def handle_inactive_trades(self) -> Self:
