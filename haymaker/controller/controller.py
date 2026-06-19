@@ -72,6 +72,7 @@ class Controller(Atom):
     _health_check_triggers: list[str] = field(default_factory=list, repr=False)
     _new_position_lock: bool = False
     _trading_disabled: bool = False
+    _restart_on_failed_sync: bool = True
 
     @classmethod
     def from_config(
@@ -264,8 +265,11 @@ class Controller(Atom):
         ``SyncCoordinator`` performs one pass and never disables trading.  A
         ``False`` result means broker state could not be verified or a recovery
         action changed local or broker state, so the controller waits and
-        retries from fresh broker/local reads.  ``SyncBrokenStateError`` means
-        broker/local state is unsafe and trading must be disabled immediately.
+        retries from fresh broker/local reads.  A coordinator can request a
+        reconnect before corrective mutations; the next pass is then allowed to
+        correct state if the same mismatch persists.  ``SyncBrokenStateError``
+        means broker/local state is unsafe and trading must be disabled
+        immediately.
         """
 
         if not self.ib.isConnected():
@@ -276,9 +280,10 @@ class Controller(Atom):
         for attempt in range(1, self.sync_max_attempts + 1):
             if attempt > 1:
                 log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
-            coordinator = SyncCoordinator(self)
+            coordinator = SyncCoordinator(self, self._restart_on_failed_sync)
             try:
                 if await coordinator.run():
+                    self._restart_on_failed_sync = True
                     log.debug("--- Sync completed ---")
                     return True
             except SyncBrokenStateError as exc:
@@ -288,6 +293,9 @@ class Controller(Atom):
             if attempt < self.sync_max_attempts:
                 log.debug("Sync did not complete; will retry checks.")
                 await asyncio.sleep(self.sync_resync_delay)
+                if coordinator.request_restart:
+                    self._restart_on_failed_sync = False
+                    self.ib.disconnect()
 
         self.disable_trading("sync did not converge")
         return False

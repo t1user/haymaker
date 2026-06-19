@@ -10,20 +10,20 @@ After broker validation, each step reads current state directly from
 ``controller.ib`` or ``controller.sm`` instead of using stored broker/local
 snapshots.  The ordered flow is:
 
-1. During startup/reconnect hold, verify that requested completed broker
-   orders agree with ``ib_insync``'s local open-order register.
-2. Relink broker ``ibi.Trade`` objects to local order records and back-report
+1. Relink broker ``ibi.Trade`` objects to local order records and back-report
    fills for orders that completed while the process was disconnected.
-3. Compare local aggregate strategy positions with broker positions and
+2. Compare local aggregate strategy positions with broker positions and
    correct local position records when the existing recovery rules allow it.
-4. Skip correction trades when unresolved unknown broker orders remain active.
-5. Delegate bracket-record and broker stop-loss protection handling to
+3. Skip correction trades when unresolved unknown broker orders remain active.
+4. Delegate bracket-record and broker stop-loss protection handling to
    :mod:`haymaker.controller.sync_brackets`.
 
 The coordinator does not disable trading and does not retry.  Any recovery
 action returns ``False`` so :meth:`Controller.sync` can start a fresh pass from
-current broker/local state.  Non-retryable unsafe state raises
-``SyncBrokenStateError``.
+current broker/local state.  A caller can request a reconnect-before-correction
+mode so known-fill housekeeping runs first, but unresolved order or position
+errors only set ``request_restart`` instead of mutating broker/local state.
+Non-retryable unsafe state raises ``SyncBrokenStateError``.
 """
 
 from __future__ import annotations
@@ -62,13 +62,28 @@ class SyncCoordinator:
     fresh broker/local reads.  Retryable broker connection and broker-state
     verification failures also return ``False``.  Terminal safety failures
     raise ``SyncBrokenStateError``; :class:`Controller` owns the decision to
-    disable trading.
+    disable trading.  Known completed trades are back-reported before position
+    comparison even when corrective actions are gated behind a reconnect.
     """
 
-    def __init__(self, controller: Controller) -> None:
-        """Initialize the coordinator for one controller sync run."""
+    def __init__(
+        self, controller: Controller, restart_before_correction: bool = False
+    ) -> None:
+        """Initialize the coordinator for one controller sync run.
+
+        Args:
+            controller: Controller whose broker and local state should be
+                reconciled.
+            restart_before_correction: When ``True``, unresolved order or
+                position mismatches set ``request_restart`` and end the pass
+                before cancelling unknown orders, pruning local order records,
+                or changing strategy positions.  Trade-object refreshes and
+                known completed-fill back-reporting still run first.
+        """
         self.controller = controller
+        self.request_restart = False
         self._faulty_trades: list[OrderInfo] = []
+        self._restart_before_correction = restart_before_correction
 
     async def run(self) -> bool:
         """Run one sync pass against current broker and local state.
@@ -76,7 +91,9 @@ class SyncCoordinator:
         Returns:
             ``True`` when sync completed without recovery actions or terminal
             safety failures.  ``False`` means the controller should retry the
-            sync from fresh broker/local reads.
+            sync from fresh broker/local reads.  If ``request_restart`` is set
+            after ``False``, the caller should refresh the broker connection
+            before the next pass.
 
         Raises:
             SyncBrokenStateError: Raised for unsafe state that should stop
@@ -89,18 +106,25 @@ class SyncCoordinator:
         ):
             return False
 
-        if self.controller._hold and not await verify_broker_order_source(
-            self.controller.ib,
-            self.controller.broker_request_timeout,
-        ):
-            return False
-
         order_sync = OrderSync(self.controller.ib, self.controller.sm)
 
         self.controller.release_hold()
         if order_sync.done:
             self.handle_done_trades(order_sync.done)
             await asyncio.sleep(0)
+
+        position_sync = PositionSync(self.controller.ib, self.controller.sm)
+
+        if (
+            order_sync.is_error or position_sync.is_error
+        ) and self._restart_before_correction:
+            self.request_restart = True
+            return False
+
+        # these are corrective actions that will be taken only if they
+        # persist after a restart
+
+        # order fixes
         if order_sync.errors:
             self.handle_error_trades(order_sync.errors)
             await asyncio.sleep(0)
@@ -111,7 +135,7 @@ class SyncCoordinator:
         if order_sync.done or order_sync.errors:
             return False
 
-        position_sync = PositionSync(self.controller.ib, self.controller.sm)
+        # position fixes
         if position_sync.errors:
             try:
                 self.handle_error_positions(position_sync.errors)
@@ -262,52 +286,3 @@ async def verify_broker_position_source(ib: ibi.IB, timeout: float) -> bool:
     else:
         log.debug(f"broker positions: {positions_dict}")
     return True
-
-
-async def verify_broker_order_source(ib: ibi.IB, timeout: float) -> bool:
-    """Return True when requested broker order data agrees with IB registers."""
-
-    try:
-        completed_orders = await asyncio.wait_for(
-            ib.reqCompletedOrdersAsync(False),
-            timeout,
-        )
-    except asyncio.TimeoutError:
-        log.warning(f"broker order request timed out after {timeout}s")
-        return False
-    except Exception as exc:
-        log.warning(f"broker order request failed: {exc!r}")
-        return False
-
-    open_trades = tuple(ib.openTrades())
-
-    if open_completed := _open_completed_order_keys(open_trades, completed_orders):
-        log.warning(
-            "broker completed-order source disagrees with open trades: "
-            f"completed orders still open={sorted(open_completed)}"
-        )
-        return False
-
-    return True
-
-
-def _order_keys(order: ibi.Order) -> set[int]:
-    """Return stable non-zero order identifiers from an IB order."""
-    return {key for key in (order.orderId, order.permId) if key}
-
-
-def _trade_keys(trade: ibi.Trade) -> set[int]:
-    """Return stable non-zero order identifiers from an IB trade."""
-    return _order_keys(trade.order)
-
-
-def _open_completed_order_keys(
-    open_trades: tuple[ibi.Trade, ...],
-    completed_orders: list[ibi.Trade],
-) -> set[int]:
-    open_keys = set().union(*(_trade_keys(trade) for trade in open_trades), set())
-    completed_keys = set().union(
-        *(_trade_keys(trade) for trade in completed_orders),
-        set(),
-    )
-    return open_keys & completed_keys
