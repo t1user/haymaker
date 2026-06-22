@@ -2,12 +2,12 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from functools import cached_property
 from typing import NamedTuple, Optional, Self, Union
 
 import pandas as pd
 
 from .store_wrapper import AsyncStoreView
+from .time_policy import is_date_bar, normalize_point
 
 log = logging.getLogger(__name__)
 
@@ -30,9 +30,14 @@ class TaskFactory(ABC):
     @abstractmethod
     def to_date(self) -> Union[date, datetime, None]: ...
 
+    def __post_init__(self) -> None:
+        self.head = normalize_point(self.head, self.store.bar_size)
+
     def dates(self) -> Optional[Dates]:
-        if self.from_date and self.to_date and (self.to_date > self.from_date):
-            return Dates(self.from_date, self.to_date)
+        from_date = self.from_date
+        to_date = self.to_date
+        if from_date and to_date and (to_date > from_date):
+            return Dates(from_date, to_date)
         else:
             return None
 
@@ -47,7 +52,7 @@ class BackfillFactory(TaskFactory):
     def from_date(self) -> Union[date, datetime, None]:
         return self.head
 
-    @cached_property
+    @property
     def to_date(self) -> Union[date, datetime, None]:
         # data present in datastore
         if self.store.from_date:
@@ -69,12 +74,12 @@ class UpdateFactory(TaskFactory):
         # from last point available in datastore...
         return self.store.to_date
 
-    @cached_property
+    @property
     def to_date(self) -> Union[date, datetime, None]:
+        eon: date | datetime | None = None
         try:
-            if self.store.to_date and (
-                (eon := self.store.expiry_or_now()) > self.store.to_date
-            ):
+            eon = self.store.expiry_or_now()
+            if self.store.to_date and (eon > self.store.to_date):
                 return eon
             else:
                 return None
@@ -116,6 +121,8 @@ class GapFillFactory:
         out = out[1:]
         if len(out) == 0:
             return []
+        if is_date_bar(store.bar_size):
+            return cls.from_list(list(out[["start", "stop"]].itertuples(index=False)))
         out["start_time"] = out["start"].apply(lambda x: x.time())
         cutoff_time = out["start_time"].mode()[0]
         log.debug(f"inferred cutoff time: {cutoff_time}")
@@ -125,7 +132,9 @@ class GapFillFactory:
         )
 
     @classmethod
-    def from_list(cls, items: list[tuple[datetime, datetime]]) -> list[Self]:
+    def from_list(
+        cls, items: list[tuple[date | datetime, date | datetime]]
+    ) -> list[Self]:
         return [cls(*i) for i in items]
 
 
@@ -145,6 +154,9 @@ class TaskPlanner:
     head: Union[date, datetime]
     max_period_days: int
     fill_gaps: bool = True
+
+    def __post_init__(self) -> None:
+        self.head = normalize_point(self.head, self.store.bar_size)
 
     @property
     def start(self) -> Union[date, datetime]:

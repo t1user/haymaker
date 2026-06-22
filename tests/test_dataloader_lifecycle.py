@@ -1,7 +1,7 @@
 import asyncio
 import importlib
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -154,6 +154,56 @@ def test_dataloader_config_validates_pacer_allowance_fraction(
     sys.modules.pop("haymaker.dataloader.dataloader", None)
     with pytest.raises(ValueError, match="pacer_allowance_fraction"):
         importlib.import_module("haymaker.dataloader.dataloader")
+
+
+def test_download_container_rejects_mixed_intraday_points(dataloader_module):
+    """Intraday download ranges should fail before mixed-type comparisons."""
+
+    dataloader = dataloader_module
+
+    with pytest.raises(TypeError, match="Intraday bars require datetime"):
+        dataloader.DownloadContainer(
+            date(2025, 1, 1),
+            datetime(2025, 1, 2, tzinfo=timezone.utc),
+            bar_size="30 secs",
+        )
+
+
+def test_download_container_rejects_naive_intraday_datetime(dataloader_module):
+    """Intraday download ranges should never use naive datetimes."""
+
+    dataloader = dataloader_module
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        dataloader.DownloadContainer(
+            datetime(2025, 1, 1),
+            datetime(2025, 1, 2, tzinfo=timezone.utc),
+            bar_size="30 secs",
+        )
+
+
+def test_daily_download_job_uses_date_end_datetime(dataloader_module):
+    """Daily-like bars should pass date endDateTime values to IB."""
+
+    dataloader = dataloader_module
+
+    class FakeSink:
+        async def write(self, data):
+            return "version"
+
+    container = dataloader.DownloadContainer(
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        datetime(2025, 1, 5, tzinfo=timezone.utc),
+        bar_size="1 day",
+    )
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=FakeSink(),
+        queue=[container],
+        bar_size="1 day",
+    )
+
+    assert job.params["endDateTime"] == date(2025, 1, 5)
 
 
 class FakeContract:
@@ -364,3 +414,57 @@ async def test_worker_pacing_violation_retries_same_job(
 
     assert ib.requests == 2
     assert job.saved_chunks == [[]]
+
+
+@pytest.mark.asyncio
+async def test_worker_hardcodes_historical_format_date_two(dataloader_module):
+    """Dataloader workers should keep the UTC-aware formatDate=2 policy."""
+
+    dataloader = dataloader_module
+
+    class FakeIB:
+        def __init__(self):
+            self.kwargs = None
+
+        async def reqHistoricalDataAsync(self, *args, **kwargs):
+            self.kwargs = {
+                "endDateTime": args[1],
+                "durationStr": args[2],
+                "barSizeSetting": args[3],
+                "whatToShow": args[4],
+                "useRTH": args[5],
+                "formatDate": args[6],
+            }
+            return []
+
+    class FakeJob:
+        contract = FakeContract()
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        bar_size = dataloader.BARSIZE
+
+        @property
+        def params(self):
+            return {
+                "contract": self.contract,
+                "endDateTime": self.next_date,
+                "durationStr": "1 D",
+            }
+
+        async def save_chunk(self, chunk):
+            self.next_date = None
+
+        def __str__(self):
+            return "<FakeJob>"
+
+    ib = FakeIB()
+    session = dataloader.DataloaderSession(ib)
+    session.pacing.no_restriction = True
+    queue = asyncio.Queue()
+    await queue.put(FakeJob())
+
+    task = asyncio.create_task(session.worker("worker", queue))
+    await asyncio.wait_for(queue.join(), timeout=1)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert ib.kwargs["formatDate"] == 2

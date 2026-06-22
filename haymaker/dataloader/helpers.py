@@ -1,5 +1,7 @@
 from datetime import date, datetime, timedelta
 
+from .time_policy import normalize_point
+
 # source:
 # https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/#hist-bar-size
 valid_bar_sizes = {
@@ -27,6 +29,7 @@ def duration_in_secs(barSize: str) -> int:
         "hour": 3600,
         "day": 3600 * 23,
         "week": 3600 * 23 * 5,
+        "month": 3600 * 23 * 22,
     }
     return int(number) * multiplier[time]
 
@@ -127,14 +130,8 @@ def duration_to_timedelta(duration: str) -> timedelta:
     raise ValueError(f"Unknown duration string: {duration}")
 
 
-DAILY_STRINGS = ["1 day", "1 week", "1 month"]
-
-
 def datetime_normalizer(dt: datetime, barsize: str) -> datetime | date:
-    if barsize in DAILY_STRINGS:
-        return dt.date()
-    else:
-        return dt
+    return normalize_point(dt, barsize)
 
 
 def strjoin(*args: str):

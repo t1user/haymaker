@@ -8,6 +8,8 @@ import pandas as pd
 
 from haymaker.datastore import AsyncAbstractBaseStore
 
+from .time_policy import normalize_index, normalize_optional_point, normalize_point
+
 
 @dataclass
 class AsyncStoreView:
@@ -16,6 +18,7 @@ class AsyncStoreView:
     contract: ibi.Contract
     store: AsyncAbstractBaseStore
     now: Union[date, datetime]
+    bar_size: str = "30 secs"
     data: pd.DataFrame | None = field(default=None, init=False, repr=False)
 
     @classmethod
@@ -24,21 +27,26 @@ class AsyncStoreView:
         contract: ibi.Contract,
         store: AsyncAbstractBaseStore,
         now: Union[date, datetime],
+        bar_size: str = "30 secs",
     ) -> "AsyncStoreView":
         """Create a wrapper and preload the existing dataframe once."""
 
-        wrapper = cls(contract, store, now)
+        wrapper = cls(contract, store, normalize_point(now, bar_size), bar_size)
         await wrapper.read()
         return wrapper
 
     async def read(self) -> pd.DataFrame | None:
         """Read and cache available datastore data for this contract."""
 
-        self.data = await self.store.read(self.contract)
-        return self.data
+        data = await self.store.read(self.contract)
+        if data is not None and not data.empty:
+            data = data.copy()
+            data.index = normalize_index(data.index, self.bar_size)
+        self.data = data
+        return data
 
     @property
-    def from_date(self) -> datetime | None:
+    def from_date(self) -> date | datetime | None:
         """Earliest point in datastore"""
         if self.data is None or self.data.empty:
             return None
@@ -48,7 +56,7 @@ class AsyncStoreView:
         return self.data.index[1]
 
     @property
-    def to_date(self) -> datetime | None:
+    def to_date(self) -> date | datetime | None:
         """Latest point in datastore"""
         if self.data is None or self.data.empty:
             return None
@@ -60,15 +68,13 @@ class AsyncStoreView:
         @wraps(func)
         def wrapper(self):
             d = func(self, *args, **kwargs)
-            if d is not None and isinstance(self.now, datetime):
-                d = datetime(d.year, d.month, d.day).replace(tzinfo=timezone.utc)
-            return d
+            return normalize_optional_point(d, self.bar_size)
 
         return wrapper
 
     @property
     @cast_expiry
-    def expiry(self) -> datetime | None:  # this maybe an error
+    def expiry(self) -> date | datetime | None:
         """Return precise contract expiry when available."""
 
         e = self.contract.lastTradeDateOrContractMonth

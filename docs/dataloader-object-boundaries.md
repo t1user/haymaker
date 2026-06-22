@@ -12,7 +12,17 @@ remain separate work.
 - Owns an async datastore, one contract, and the run's `now` value.
 - Loads existing stored data once before scheduling.
 - Exposes `from_date`, `to_date`, and `expiry_or_now()` for scheduling.
+- Normalizes read-side scheduling boundaries according to the configured bar
+  size: intraday values are UTC-aware `datetime` objects, while `1 day`,
+  `1 week`, and `1 month` values are `date` objects.
 - Does not write downloaded data.
+
+### Time Policy
+
+- Keeps `ib.reqHistoricalData` and `ib.reqHeadTimeStamp` on `formatDate=2`.
+- Rejects naive intraday datetimes before scheduling.
+- Uses date-only scheduling points for daily, weekly, and monthly bars.
+- Does not expose alternative IB date formats in the current datastore path.
 
 ### TaskPlanner
 
@@ -63,6 +73,7 @@ The current split is:
 - `DownloadJob` owns request progression for one contract.
 - `DownloadContainer` owns per-range buffering and missing-range progress.
 - `AsyncStoreView` owns read-only datastore boundaries for scheduling.
+- Time policy owns date/datetime normalization before scheduling comparisons.
 - `HistorySink` owns persistence.
 
 Deferred scheduling work should keep IB historical schedule requests outside

@@ -15,7 +15,6 @@ import functools
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from functools import partial
 from typing import AsyncGenerator, Optional, TypedDict, cast
 
 import ib_insync as ibi
@@ -35,6 +34,7 @@ from .pacer import RequestPacing
 from .scheduling import TaskPlanner
 from .store_wrapper import AsyncStoreView, HistorySink
 from .task_logger import create_task
+from .time_policy import normalize_point
 
 setup_logging(CONFIG.get("logging_config"))
 
@@ -53,8 +53,6 @@ MAX_PERIOD: int = CONFIG.get("max_period", 30)
 
 if PACER_ALLOWANCE_FRACTION <= 0:
     raise ValueError("pacer_allowance_fraction must be greater than 0")
-
-norm = partial(helpers.datetime_normalizer, barsize=BARSIZE)
 
 log.debug(
     f"settings: {BARSIZE=}, {WTS=}, {MAX_BARS=}, {FILL_GAPS=}, "
@@ -96,7 +94,7 @@ def request_pacing_factory(ib: ibi.IB) -> RequestPacing:
 def current_session_now() -> date | datetime:
     """Return current time normalized for the configured bar size."""
 
-    return norm(datetime.now(timezone.utc))
+    return normalize_point(datetime.now(timezone.utc), BARSIZE)
 
 
 class Params(TypedDict):
@@ -316,10 +314,13 @@ class DownloadContainer:
 
     from_date: datetime | date
     to_date: datetime | date
+    bar_size: str = BARSIZE
     _next_date: datetime | date | None = field(init=False, repr=False)
     bars: list[ibi.BarDataList] = field(default_factory=list, repr=False)
 
     def __post_init__(self):
+        self.from_date = normalize_point(self.from_date, self.bar_size)
+        self.to_date = normalize_point(self.to_date, self.bar_size)
         assert (
             self.to_date > self.from_date
         ), f"{self.from_date=} is later than {self.to_date=}"
@@ -330,16 +331,19 @@ class DownloadContainer:
         return self._next_date
 
     @next_date.setter
-    def next_date(self, date: date | datetime | None) -> None:
-        if date is None:
+    def next_date(self, point: date | datetime | None) -> None:
+        if point is None:
             # failed to get data
             self._next_date = None
-        elif date <= self.from_date:
+            return
+
+        normalized = normalize_point(point, self.bar_size)
+        if normalized <= self.from_date:
             # got data, that's all we need
             self._next_date = None
         else:
             # got data, there's more to get
-            self._next_date = date
+            self._next_date = normalized
 
     def save_chunk(self, bars: Optional[ibi.BarDataList] | None) -> None:
         """
@@ -383,12 +387,14 @@ class Manager:
     fill_gaps: bool = FILL_GAPS
     max_period: int = MAX_PERIOD
     wts: str = WTS
+    bar_size: str = BARSIZE
     now: date | datetime = field(default_factory=current_session_now)
     active_jobs: list[DownloadJob] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
     new_job_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
 
     def __post_init__(self) -> None:
+        self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
             self.pacing = request_pacing_factory(self.ib)
         self.new_job_generator = self._job_generator()
@@ -436,7 +442,10 @@ class Manager:
             max_period_days=self.max_period,
             fill_gaps=self.fill_gaps,
         )
-        return [DownloadContainer(*t) for t in planner.ranges()]
+        return [
+            DownloadContainer(t.from_date, t.to_date, bar_size=self.bar_size)
+            for t in planner.ranges()
+        ]
 
     async def jobs(self) -> AsyncGenerator[DownloadJob, None]:
         async for contract, headstamp in self.headstamps():
@@ -444,7 +453,9 @@ class Manager:
                 continue
             self._initiated_contracts.append(contract)
             datastore = self.get_store()
-            store = await AsyncStoreView.create(contract, datastore, self.now)
+            store = await AsyncStoreView.create(
+                contract, datastore, self.now, self.bar_size
+            )
             sink = HistorySink(contract, datastore)
             tasks = self.tasks(store, headstamp)
             new_job = DownloadJob(contract, sink, tasks)
@@ -480,7 +491,7 @@ class Manager:
                 )
                 headTimeStamp = five_years_ago
 
-        hs = norm(headTimeStamp)
+        hs = normalize_point(headTimeStamp, self.bar_size)
         log.debug(f"Headstamp for: {contract.localSymbol}: {hs}")
         return hs
 

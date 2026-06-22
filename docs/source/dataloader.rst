@@ -57,3 +57,20 @@ datastore module's default
 The dataloader talks to the async datastore interface. Arctic still owns data
 cleaning and metadata updates when data is written. The current target
 responsibility split is recorded in ``docs/dataloader-object-boundaries.md``.
+
+Historical Date Policy
+======================
+
+The dataloader intentionally requests historical bars with Interactive Brokers
+``formatDate=2``. For intraday bars, ``ib_insync`` returns timezone-aware UTC
+``datetime`` values. For daily, weekly, and monthly bars, IB returns date-only
+values. The dataloader keeps that split as its scheduling and storage policy:
+
+* intraday ranges use UTC-aware ``datetime`` values;
+* ``1 day``, ``1 week``, and ``1 month`` ranges use ``date`` values;
+* naive intraday ``datetime`` values are rejected before scheduling.
+
+Do not configure ``formatDate`` per run in this dataloader path. Other IB date
+formats can depend on Gateway/TWS settings or instrument time zones and would
+need a separate datastore policy to avoid mixing incompatible indexes in one
+collection.

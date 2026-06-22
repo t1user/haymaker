@@ -76,6 +76,11 @@ stable and mark items off as they are addressed.
   retryable. Current behavior records failed download jobs and lets workers keep
   draining the queue; later policy should decide which failures deserve retries,
   which should only be summarized, and which indicate process/session failure.
+- [x] `DL-023`: Define dataloader historical date policy around
+  `formatDate=2`. Intraday scheduling now uses UTC-aware `datetime` values,
+  daily/weekly/monthly scheduling uses `date` values, naive intraday datetimes
+  are rejected before comparison, and alternative IB date formats remain out of
+  scope for the current datastore path.
 
 ## Refactor Plan
 
@@ -145,7 +150,9 @@ stable and mark items off as they are addressed.
    - Review `haymaker.dataloader.helpers` duration and bar-size converters.
    - Confirm conversions match intended IB request behavior and project
      assumptions around sessions, days, weeks, months, and max bars.
-   - Covers `DL-018`.
+   - Monthly bar-size duration support was added while defining the historical
+     date policy.
+   - Covers `DL-018`; partially addressed by `DL-023`.
 
 9. **Make Gap-Fill Scheduling Session-Aware**
    - Fetch IB historical schedules in the async dataloader request path, not in

@@ -1,6 +1,6 @@
 import importlib
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import ib_insync as ibi
 import pandas as pd
@@ -11,6 +11,7 @@ from haymaker.dataloader.scheduling import (
     task_factory,
     task_factory_with_gaps,
 )
+from haymaker.dataloader.helpers import duration_in_secs
 from haymaker.dataloader.store_wrapper import AsyncStoreView, HistorySink
 
 
@@ -221,6 +222,48 @@ async def test_async_store_view_exact_expiry_caps_now(store_index):
     wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now)
 
     assert wrapper.expiry_or_now() == datetime(2025, 1, 2, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_async_store_view_date_bar_normalizes_boundaries_to_dates(
+    contract, store_index
+):
+    """Daily-like bars should schedule with dates, not midnight datetimes."""
+
+    data = pd.DataFrame({"close": [1, 2, 3]}, index=store_index)
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(data),
+        datetime(2025, 1, 10, 12, tzinfo=timezone.utc),
+        "1 day",
+    )
+
+    assert wrapper.from_date == date(2025, 1, 2)
+    assert wrapper.to_date == date(2025, 1, 3)
+    assert wrapper.expiry_or_now() == date(2025, 1, 10)
+
+
+@pytest.mark.asyncio
+async def test_async_store_view_intraday_rejects_naive_datastore_index(contract):
+    """Intraday stored timestamps must be timezone-aware before scheduling."""
+
+    data = pd.DataFrame(
+        {"close": [1]},
+        index=pd.DatetimeIndex([datetime(2025, 1, 1)]),
+    )
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await AsyncStoreView.create(
+            contract,
+            FakeAsyncStore(data),
+            datetime(2025, 1, 2, tzinfo=timezone.utc),
+        )
+
+
+def test_month_bar_size_has_duration() -> None:
+    """Monthly bars are valid IB historical requests and need duration support."""
+
+    assert duration_in_secs("1 month") > duration_in_secs("1 week")
 
 
 @pytest.mark.asyncio

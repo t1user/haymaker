@@ -76,6 +76,9 @@ The research package is intentionally separate from live execution. It works dir
   filling.
 - `haymaker/dataloader/store_wrapper.py`: `AsyncStoreView` for read-only
   scheduling boundaries and `HistorySink` for historical-data persistence.
+- `haymaker/dataloader/time_policy.py`: canonical historical-date policy for
+  `formatDate=2`, keeping intraday points as UTC-aware datetimes and
+  daily/weekly/monthly points as dates.
 
 ### Research and Backtesting
 
@@ -117,11 +120,15 @@ The research package is intentionally separate from live execution. It works dir
 1. `dataloader` loads config, creates an `ib_insync.IB` client, and runs a dataloader runtime under the shared connection supervisor.
 2. The supervisor connects the socket and waits for a successful historical-data probe before starting dataloader work.
 3. Contract source data is expanded into IB contracts.
-4. The async store view inspects the Arctic-backed store and `TaskPlanner`
-   creates backfill, update, and optional gap-fill download containers.
+4. The async store view inspects the Arctic-backed store, normalizes scheduling
+   boundaries according to the dataloader date policy, and `TaskPlanner` creates
+   backfill, update, and optional gap-fill download containers.
 5. A producer submits work to an asyncio queue.
 6. Workers call IB historical-data requests under pacer restrictions.
-7. Downloaded chunks are normalized, passed to `HistorySink`, concatenated with stored data, and written through the async datastore; Arctic owns final cleaning and metadata updates.
+7. Downloaded chunks are passed to `HistorySink`, concatenated with stored data,
+   and written through the async datastore; Arctic owns final cleaning and
+   metadata updates. The returned first bar timestamp is validated before it
+   drives the next request boundary.
 
 ### Research Flow
 
