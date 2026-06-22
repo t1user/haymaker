@@ -373,6 +373,7 @@ async def test_sync_coordinator_returns_false_for_broker_state_timeout(
     result = await coordinator.run()
 
     assert not result
+    assert coordinator.request_restart
     assert not controller._trading_disabled
 
 

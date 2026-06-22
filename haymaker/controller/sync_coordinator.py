@@ -2,9 +2,10 @@
 
 Sync starts by validating that ``ib.positions()`` agrees with
 ``await ib.reqPositionsAsync()``.  If broker state verification fails, the pass
-returns ``False`` without attempting recovery or correction actions;
-:meth:`Controller.sync` owns checking the connection, retrying, and deciding
-whether repeated failures should disable trading.
+requests a reconnect and returns ``False`` without attempting recovery or
+correction actions; :meth:`Controller.sync` owns checking the connection,
+restarting once, retrying, and deciding whether repeated failures should
+disable trading.
 
 After broker validation, each step reads current state directly from
 ``controller.ib`` or ``controller.sm`` instead of using stored broker/local
@@ -104,6 +105,7 @@ class SyncCoordinator:
             self.controller.ib,
             self.controller.broker_request_timeout,
         ):
+            self.request_restart = True
             return False
 
         order_sync = OrderSync(self.controller.ib, self.controller.sm)
@@ -152,7 +154,6 @@ class SyncCoordinator:
             )
         except BracketSyncError as exc:
             raise SyncBrokenStateError("bracket sync failed") from exc
-
         return True
 
     def handle_unknown_trades(self, trades: list[ibi.Trade]) -> bool:
