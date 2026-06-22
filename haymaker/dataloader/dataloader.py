@@ -31,7 +31,7 @@ from . import helpers
 from .connect import connection
 from .contract_selectors import ContractSelector
 from .pacer import RequestPacing
-from .scheduling import TaskPlanner
+from .scheduling import RangeKind, TaskPlanner
 from .store_wrapper import AsyncStoreView, HistorySink
 from .task_logger import create_task
 from .time_policy import normalize_point
@@ -245,6 +245,8 @@ class DownloadJob:
                 log.warning(
                     f"{self!s} cannot download data past {self._container.next_date}"
                 )
+            if self._container.kind == "backfill":
+                await self.sink.mark_backfill_exhausted()
             self.queue.pop()
 
     async def write_to_store(self) -> None:
@@ -302,6 +304,8 @@ class DownloadContainer:
     Args:
         from_date: Earliest point this range should cover.
         to_date: Latest point this range should cover.
+        kind: Download range kind used to distinguish backfill exhaustion from
+            update and gap-fill misses.
         bars: Downloaded chunks buffered before persistence.
 
     Public methods/attributes:
@@ -319,6 +323,7 @@ class DownloadContainer:
     from_date: datetime | date
     to_date: datetime | date
     bar_size: str = BARSIZE
+    kind: RangeKind = "backfill"
     _next_date: datetime | date | None = field(init=False, repr=False)
     bars: list[ibi.BarDataList] = field(default_factory=list, repr=False)
 
@@ -454,8 +459,13 @@ class Manager:
             fill_gaps=self.fill_gaps,
         )
         return [
-            DownloadContainer(t.from_date, t.to_date, bar_size=self.bar_size)
-            for t in planner.ranges()
+            DownloadContainer(
+                t.from_date,
+                t.to_date,
+                bar_size=self.bar_size,
+                kind=t.kind,
+            )
+            for t in planner.planned_ranges()
         ]
 
     async def jobs(self) -> AsyncGenerator[DownloadJob, None]:

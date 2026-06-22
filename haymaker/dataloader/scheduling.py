@@ -2,7 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import NamedTuple, Optional, Self, Union
+from typing import Literal, NamedTuple, Optional, Self, Union
 
 import pandas as pd
 
@@ -15,6 +15,15 @@ log = logging.getLogger(__name__)
 class Dates(NamedTuple):
     from_date: Union[date, datetime]
     to_date: Union[date, datetime]
+
+
+RangeKind = Literal["gap", "backfill", "update"]
+
+
+class PlannedRange(NamedTuple):
+    from_date: Union[date, datetime]
+    to_date: Union[date, datetime]
+    kind: RangeKind
 
 
 @dataclass
@@ -168,9 +177,14 @@ class TaskPlanner:
     def ranges(self) -> list[Dates]:
         """Return planned download ranges in worker execution order."""
 
+        return [Dates(r.from_date, r.to_date) for r in self.planned_ranges()]
+
+    def planned_ranges(self) -> list[PlannedRange]:
+        """Return tagged planned download ranges in worker execution order."""
+
         if self.fill_gaps:
-            return task_factory_with_gaps(self.store, self.start)
-        return task_factory(self.store, self.start)
+            return planned_task_factory_with_gaps(self.store, self.start)
+        return planned_task_factory(self.store, self.start)
 
 
 def _gap_ranges(store: AsyncStoreView) -> list[Dates]:
@@ -183,16 +197,42 @@ def _gap_ranges(store: AsyncStoreView) -> list[Dates]:
     ]
 
 
+def _range_from_factory(task: TaskFactory, kind: RangeKind) -> PlannedRange | None:
+    """Return a tagged range from a task factory when it has work."""
+
+    dates = task.dates()
+    if dates is None:
+        return None
+    return PlannedRange(dates.from_date, dates.to_date, kind)
+
+
+def planned_task_factory(
+    store: AsyncStoreView, head: Union[date, datetime]
+) -> list[PlannedRange]:
+    """Return tagged backfill and update ranges."""
+
+    ranges = []
+    if not store.backfill_exhausted:
+        ranges.append(_range_from_factory(BackfillFactory(store, head), "backfill"))
+    ranges.append(_range_from_factory(UpdateFactory(store, head), "update"))
+    return [r for r in ranges if r is not None]
+
+
+def planned_task_factory_with_gaps(
+    store: AsyncStoreView, head: Union[date, datetime]
+) -> list[PlannedRange]:
+    """Return tagged gap-fill, backfill, and update ranges."""
+
+    return [
+        *[PlannedRange(d.from_date, d.to_date, "gap") for d in _gap_ranges(store)],
+        *planned_task_factory(store, head),
+    ]
+
+
 def task_factory(store: AsyncStoreView, head: Union[date, datetime]) -> list[Dates]:
     """Return backfill and update ranges for compatibility callers."""
 
-    return [
-        t
-        for t in [
-            task(store, head).dates() for task in (BackfillFactory, UpdateFactory)
-        ]
-        if t
-    ]
+    return [Dates(r.from_date, r.to_date) for r in planned_task_factory(store, head)]
 
 
 def task_factory_with_gaps(
@@ -201,6 +241,6 @@ def task_factory_with_gaps(
     """Return gap-fill, backfill, and update ranges for compatibility callers."""
 
     return [
-        *_gap_ranges(store),
-        *task_factory(store, head),
+        Dates(r.from_date, r.to_date)
+        for r in planned_task_factory_with_gaps(store, head)
     ]

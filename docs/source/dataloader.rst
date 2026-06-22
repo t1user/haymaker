@@ -70,6 +70,21 @@ The dataloader talks to the async datastore interface. Arctic still owns data
 cleaning and metadata updates when data is written. The current target
 responsibility split is recorded in ``docs/dataloader-object-boundaries.md``.
 
+Backfill Exhaustion Metadata
+============================
+
+When a backfill request reaches a point where IB returns no older bars for a
+series that already has stored data, the dataloader writes
+``backfill_exhausted: true`` to that series metadata. Later dataloader runs use
+that marker to skip older backfill requests for the same Arctic library and
+collection, while still allowing updates and optional gap filling.
+
+Missing metadata never disables downloads. If the marker is absent, the
+dataloader proceeds normally from the stored data boundaries and IB
+``headTimeStamp``. The dataloader does not write a ``from`` metadata key; that
+lower-bound metadata belongs with datastore-maintained series boundaries, in
+the same spirit as the existing ``up_to`` field.
+
 Historical Date Policy
 ======================
 

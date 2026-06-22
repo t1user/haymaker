@@ -206,6 +206,85 @@ def test_daily_download_job_uses_date_end_datetime(dataloader_module):
     assert job.params["endDateTime"] == date(2025, 1, 5)
 
 
+@pytest.mark.asyncio
+async def test_download_job_marks_backfill_exhausted_on_empty_backfill(
+    dataloader_module,
+):
+    """Empty backfill chunks should mark older history as exhausted."""
+
+    dataloader = dataloader_module
+
+    class FakeSink:
+        def __init__(self):
+            self.marked = 0
+
+        async def write(self, data):
+            return "version"
+
+        async def mark_backfill_exhausted(self):
+            self.marked += 1
+
+    sink = FakeSink()
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=sink,
+        queue=[
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 1, tzinfo=timezone.utc),
+                datetime(2025, 1, 2, tzinfo=timezone.utc),
+                bar_size="30 secs",
+                kind="backfill",
+            )
+        ],
+        bar_size="30 secs",
+    )
+
+    await job.save_chunk([])
+
+    assert sink.marked == 1
+    assert job.is_done()
+
+
+@pytest.mark.asyncio
+async def test_download_job_does_not_mark_update_or_gap_exhausted(
+    dataloader_module,
+):
+    """Only backfill misses should persist the exhaustion marker."""
+
+    dataloader = dataloader_module
+
+    class FakeSink:
+        def __init__(self):
+            self.marked = 0
+
+        async def write(self, data):
+            return "version"
+
+        async def mark_backfill_exhausted(self):
+            self.marked += 1
+
+    for kind in ("update", "gap"):
+        sink = FakeSink()
+        job = dataloader.DownloadJob(
+            FakeContract(),
+            sink=sink,
+            queue=[
+                dataloader.DownloadContainer(
+                    datetime(2025, 1, 1, tzinfo=timezone.utc),
+                    datetime(2025, 1, 2, tzinfo=timezone.utc),
+                    bar_size="30 secs",
+                    kind=kind,
+                )
+            ],
+            bar_size="30 secs",
+        )
+
+        await job.save_chunk([])
+
+        assert sink.marked == 0
+        assert job.is_done()
+
+
 def test_validate_age_uses_run_scoped_now(dataloader_module):
     """Age validation should use the run snapshot supplied by the caller."""
 
@@ -260,9 +339,16 @@ async def test_manager_policy_flows_to_store_and_download_job(
             assert requested_contract is contract
             return None
 
+        async def read_metadata(self, requested_contract):
+            assert requested_contract is contract
+            return {}
+
     class FakeSink:
         async def write(self, data):
             return "version"
+
+        async def mark_backfill_exhausted(self):
+            return None
 
     async def fake_headstamps(self):
         yield contract, datetime(2025, 1, 1, tzinfo=timezone.utc)

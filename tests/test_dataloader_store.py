@@ -46,16 +46,32 @@ def dataloader_module(monkeypatch):
 class FakeAsyncStore:
     """Minimal async datastore used by dataloader store-wrapper tests."""
 
-    def __init__(self, data: pd.DataFrame | None = None) -> None:
+    def __init__(
+        self, data: pd.DataFrame | None = None, metadata: dict | None = None
+    ) -> None:
         self.data = data
+        self.metadata = metadata or {}
         self.reads: list[ibi.Contract] = []
         self.writes: list[tuple[ibi.Contract, pd.DataFrame]] = []
+        self.metadata_writes: list[tuple[ibi.Contract, dict]] = []
 
     async def read(self, contract: ibi.Contract) -> pd.DataFrame | None:
         """Return configured data and record the requested contract."""
 
         self.reads.append(contract)
         return self.data
+
+    async def read_metadata(self, contract: ibi.Contract) -> dict:
+        """Return configured metadata."""
+
+        return self.metadata
+
+    def write_metadata(self, contract: ibi.Contract, metadata: dict) -> str:
+        """Record a metadata write and merge it into latest metadata."""
+
+        self.metadata_writes.append((contract, metadata))
+        self.metadata.update(metadata)
+        return "metadata-version"
 
     async def async_write(self, contract: ibi.Contract, data: pd.DataFrame) -> str:
         """Record a write and keep the dataframe as latest store state."""
@@ -147,6 +163,83 @@ async def test_task_planner_clamps_start_to_max_period(contract):
     ).ranges()
 
     assert tasks == [(datetime(2025, 1, 7, tzinfo=timezone.utc), now)]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_missing_metadata_still_schedules_backfill(contract):
+    """Missing optional metadata should not prevent normal backfill planning."""
+
+    now = datetime(2025, 1, 10, tzinfo=timezone.utc)
+    headstamp = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "30 secs")
+
+    tasks = TaskPlanner(
+        wrapper,
+        headstamp,
+        max_period_days=3,
+        fill_gaps=False,
+    ).planned_ranges()
+
+    assert tasks == [
+        (
+            datetime(2025, 1, 7, tzinfo=timezone.utc),
+            now,
+            "backfill",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_skips_exhausted_backfill_but_keeps_update(
+    contract, store_index
+):
+    """Backfill exhaustion should not block update ranges."""
+
+    data = pd.DataFrame({"close": [1, 2, 3]}, index=store_index)
+    now = datetime(2025, 1, 5, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(data, metadata={"backfill_exhausted": True}),
+        now,
+        "30 secs",
+    )
+
+    tasks = TaskPlanner(
+        wrapper,
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        max_period_days=100,
+        fill_gaps=False,
+    ).planned_ranges()
+
+    assert tasks == [(store_index[-1], now, "update")]
+    assert task_factory(wrapper, datetime(2025, 1, 1, tzinfo=timezone.utc)) == [
+        (store_index[-1], now)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_exhausted_backfill_without_update_has_no_range(
+    contract, store_index
+):
+    """Backfill exhaustion should make a current store a no-op."""
+
+    data = pd.DataFrame({"close": [1, 2, 3]}, index=store_index)
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(data, metadata={"backfill_exhausted": True}),
+        store_index[-1],
+        "30 secs",
+    )
+
+    assert (
+        TaskPlanner(
+            wrapper,
+            datetime(2025, 1, 1, tzinfo=timezone.utc),
+            max_period_days=100,
+            fill_gaps=False,
+        ).planned_ranges()
+        == []
+    )
 
 
 @pytest.mark.asyncio
@@ -299,6 +392,35 @@ async def test_history_sink_preserves_raw_downloaded_index(contract):
     await sink.write(new_data)
 
     pd.testing.assert_frame_equal(store.writes[0][1], new_data)
+
+
+@pytest.mark.asyncio
+async def test_history_sink_marks_backfill_exhausted_for_existing_series(
+    contract, store_index
+):
+    """HistorySink should persist the backfill exhaustion marker only."""
+
+    data = pd.DataFrame({"close": [1]}, index=store_index[:1])
+    store = FakeAsyncStore(data, metadata={"up_to": store_index[0].isoformat()})
+    sink = HistorySink(contract, store)
+
+    version = await sink.mark_backfill_exhausted()
+
+    assert version == "metadata-version"
+    assert store.metadata_writes == [(contract, {"backfill_exhausted": True})]
+    assert "from" not in store.metadata
+    assert store.metadata["up_to"] == store_index[0].isoformat()
+
+
+@pytest.mark.asyncio
+async def test_history_sink_does_not_mark_empty_series(contract):
+    """Empty series should not be marked as exhausted without a data anchor."""
+
+    store = FakeAsyncStore()
+    sink = HistorySink(contract, store)
+
+    assert await sink.mark_backfill_exhausted() is None
+    assert store.metadata_writes == []
 
 
 def test_create_dataloader_store_builds_async_arctic_store(

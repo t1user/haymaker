@@ -89,6 +89,12 @@ stable and mark items off as they are addressed.
   daily/weekly/monthly scheduling uses `date` values, naive intraday datetimes
   are rejected before comparison, and alternative IB date formats remain out of
   scope for the current datastore path.
+- [x] `DL-024`: Persist lower-bound backfill exhaustion in datastore metadata.
+  Backfill ranges that return no bars after a series already has stored data now
+  mark that series with `backfill_exhausted: true`. Later runs skip older
+  backfills for the same series while still allowing updates and gap filling.
+  Missing metadata remains non-blocking; datastore-owned lower-bound metadata
+  such as `from` is left for a separate datastore change.
 
 ## Refactor Plan
 

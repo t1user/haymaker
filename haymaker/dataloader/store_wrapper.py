@@ -20,6 +20,7 @@ class AsyncStoreView:
     now: Union[date, datetime]
     bar_size: str
     data: pd.DataFrame | None = field(default=None, init=False, repr=False)
+    metadata: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     async def create(
@@ -33,6 +34,7 @@ class AsyncStoreView:
 
         wrapper = cls(contract, store, normalize_point(now, bar_size), bar_size)
         await wrapper.read()
+        await wrapper.read_metadata()
         return wrapper
 
     async def read(self) -> pd.DataFrame | None:
@@ -44,6 +46,12 @@ class AsyncStoreView:
             data.index = normalize_index(data.index, self.bar_size)
         self.data = data
         return data
+
+    async def read_metadata(self) -> dict[str, Any]:
+        """Read and cache optional datastore metadata for this contract."""
+
+        self.metadata = await self.store.read_metadata(self.contract) or {}
+        return self.metadata
 
     @property
     def from_date(self) -> date | datetime | None:
@@ -62,6 +70,12 @@ class AsyncStoreView:
             return None
         date = self.data.index.max() if self.data is not None else None
         return date
+
+    @property
+    def backfill_exhausted(self) -> bool:
+        """Return whether older backfill was marked unavailable."""
+
+        return self.metadata.get("backfill_exhausted") is True
 
     @staticmethod
     def cast_expiry(func: Callable, *args, **kwargs) -> Callable:
@@ -119,3 +133,11 @@ class HistorySink:
             existing = pd.DataFrame()
         data = pd.concat([existing, new_data])
         return await self.store.async_write(self.contract, data)
+
+    async def mark_backfill_exhausted(self) -> Any:
+        """Mark this series as unavailable for older backfills."""
+
+        existing = await self.store.read(self.contract)
+        if existing is None or existing.empty:
+            return None
+        return self.store.write_metadata(self.contract, {"backfill_exhausted": True})
