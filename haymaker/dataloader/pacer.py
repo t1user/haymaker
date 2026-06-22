@@ -32,6 +32,7 @@ T = TypeVar("T")
 # reqHistoricalSchedule. IBKR documents these as sharing historical data pacing.
 HISTORICAL_GLOBAL_LIMIT = 60  # 60 weighted historical requests.
 HISTORICAL_GLOBAL_WINDOW = 600.0  # Rolling 10-minute window, in seconds.
+HISTORICAL_PROBE_RESERVE = 1  # Leave room for supervised connection probes.
 HISTORICAL_SAME_KEY_LIMIT = 5  # Same contract/exchange/data type requests.
 HISTORICAL_SAME_KEY_WINDOW = 2.0  # Rolling 2-second same-key window.
 HISTORICAL_IDENTICAL_COOLDOWN = 15.0  # Exact duplicate request cooldown.
@@ -72,6 +73,18 @@ def scaled_capacity(limit: int, allowance_fraction: float, minimum: int = 1) -> 
     """
 
     return max(minimum, int(limit * allowance_fraction))
+
+
+def historical_global_capacity(allowance_fraction: float) -> int:
+    """Return historical global capacity after reserving probe allowance.
+
+    The connection supervisor uses a historical-data request as its readiness
+    probe. That request is outside this pacer, so the dataloader keeps one
+    historical global slot unused rather than trying to account for individual
+    probe timings.
+    """
+
+    return max(1, scaled_capacity(HISTORICAL_GLOBAL_LIMIT, allowance_fraction) - 1)
 
 
 @dataclass(frozen=True)
@@ -371,7 +384,7 @@ class RequestPacing:
         return RequestBucket(
             [
                 RollingWindowRule(
-                    scaled_capacity(HISTORICAL_GLOBAL_LIMIT, self.allowance_fraction),
+                    historical_global_capacity(self.allowance_fraction),
                     HISTORICAL_GLOBAL_WINDOW,
                 ),
                 KeyedRollingWindowRule(

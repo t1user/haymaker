@@ -6,6 +6,8 @@ import pytest
 from haymaker.dataloader.pacer import (
     BID_ASK_WEIGHT,
     HISTORICAL_GLOBAL_LIMIT,
+    HISTORICAL_PROBE_RESERVE,
+    HISTORICAL_SAME_KEY_LIMIT,
     RequestKind,
     RequestPacing,
 )
@@ -57,11 +59,25 @@ class FakeIB:
 
 
 def test_historical_allowance_fraction_scales_capacity():
-    """Allowance fraction should scale internal historical capacity."""
+    """Allowance fraction should scale capacity while reserving probe room."""
 
     pacing = RequestPacing(FakeIB(), "30 secs", "TRADES", allowance_fraction=2)
 
-    assert pacing.historical.rules[0].capacity == HISTORICAL_GLOBAL_LIMIT * 2
+    assert (
+        pacing.historical.rules[0].capacity
+        == HISTORICAL_GLOBAL_LIMIT * 2 - HISTORICAL_PROBE_RESERVE
+    )
+
+
+def test_historical_probe_reserve_does_not_reduce_same_key_limit():
+    """Supervisor probe reserve should only affect the global historical bucket."""
+
+    pacing = RequestPacing(FakeIB(), "30 secs", "TRADES")
+
+    assert pacing.historical.rules[0].capacity == (
+        HISTORICAL_GLOBAL_LIMIT - HISTORICAL_PROBE_RESERVE
+    )
+    assert pacing.historical.rules[1].capacity == HISTORICAL_SAME_KEY_LIMIT
 
 
 def test_bid_ask_historical_profile_uses_weight_two():

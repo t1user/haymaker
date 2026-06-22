@@ -40,6 +40,9 @@ The dataloader keeps a client-side request pacer for IB historical-data,
 head-timestamp, historical-schedule, and contract-details requests. The pacer
 uses module-level limits that model current IBKR historical-data guidance and
 keeps retry handling for pacing violations out of worker code.
+The historical global request window reserves one slot for supervised
+connection probes, which also use historical-data requests but run outside the
+dataloader pacer.
 
 Two dataloader config keys adjust that machinery:
 
