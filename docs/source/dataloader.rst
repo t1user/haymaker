@@ -119,6 +119,21 @@ dataloader proceeds normally from the stored data boundaries and IB
 lower-bound metadata belongs with datastore-maintained series boundaries, in
 the same spirit as the existing ``up_to`` field.
 
+Failure Handling
+================
+
+Download workers distinguish broker request failures from session-level
+failures. A broker request failure for one job is recorded and summarized when
+the session finishes, while the remaining queued jobs continue. Empty
+historical responses keep their normal no-data behavior, including
+``backfill_exhausted`` marking for older backfill ranges.
+
+Connection-class failures, such as ``ConnectionError`` or ``TimeoutError``, are
+not recorded as ordinary job failures. They escape the dataloader session so
+the supervised workload boundary can handle the broken connection. Local
+processing failures, including datastore write failures, also abort the session
+instead of being hidden behind a completed run summary.
+
 Historical Date Policy
 ======================
 

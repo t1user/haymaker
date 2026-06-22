@@ -85,10 +85,12 @@ stable and mark items off as they are addressed.
   (`bar_size`, `wts`, `max_bars`, run `now`), generated jobs carry the bar size
   used by workers, and `DataloaderSession` no longer has independent
   compatibility `bar_size`/`wts` fields.
-- [ ] `DL-022`: Classify recorded dataloader job failures as terminal or
-  retryable. Current behavior records failed download jobs and lets workers keep
-  draining the queue; later policy should decide which failures deserve retries,
-  which should only be summarized, and which indicate process/session failure.
+- [x] `DL-022`: Classify recorded dataloader job failures as terminal or
+  retryable. Worker failures are now split by source: connection-class failures
+  escape the dataloader session, broker request failures are recorded and let
+  workers keep draining the queue, empty backfills use the
+  `backfill_exhausted` path, and local processing/store failures abort the
+  session instead of being summarized as ordinary job failures.
 - [x] `DL-023`: Define dataloader historical date policy around
   `formatDate=2`. Intraday scheduling now uses UTC-aware `datetime` values,
   daily/weekly/monthly scheduling uses `date` values, naive intraday datetimes

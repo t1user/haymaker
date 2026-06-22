@@ -147,6 +147,13 @@ class DownloadFailureRegistry:
             )
 
 
+CONNECTION_FAILURE_ERRORS = (ConnectionError, TimeoutError)
+
+
+class DownloadRequestError(Exception):
+    """Raised when a broker historical-data request fails for one job."""
+
+
 def pulse_factory(interval: int) -> ibi.Event | None:
     if interval:
         return ibi.Event().timerange(interval, None, interval)
@@ -555,6 +562,7 @@ class DataloaderSession:
     queue: asyncio.Queue[DownloadJob] | None = field(default=None, init=False)
     workers: list[asyncio.Task] = field(default_factory=list, init=False)
     producer_task: asyncio.Task | None = field(default=None, init=False)
+    fatal_error: BaseException | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.manager is None:
@@ -594,8 +602,15 @@ class DataloaderSession:
         )
 
         try:
-            await self.producer_task
+            try:
+                await self.producer_task
+            except asyncio.CancelledError:
+                if self.fatal_error is not None:
+                    raise self.fatal_error
+                raise
             await self.queue.join()
+            if self.fatal_error is not None:
+                raise self.fatal_error
         finally:
             await self.cancel_execution()
             self.failures.log_summary()
@@ -635,9 +650,18 @@ class DataloaderSession:
                 await self.download_job(name, job)
             except asyncio.CancelledError:
                 raise
+            except CONNECTION_FAILURE_ERRORS as exc:
+                self.abort_execution(exc, queue)
+                log.exception("%s hit connection failure while loading %s.", name, job)
+                raise
+            except DownloadRequestError as exc:
+                error = exc.__cause__ or exc
+                log.exception("%s request failed while loading %s.", name, job)
+                self.failures.record(job, error)
             except Exception as exc:
-                log.exception("%s failed while loading %s.", name, job)
-                self.failures.record(job, exc)
+                self.abort_execution(exc, queue)
+                log.exception("%s hit fatal failure while loading %s.", name, job)
+                raise
             finally:
                 queue.task_done()
 
@@ -655,13 +679,18 @@ class DataloaderSession:
                 f"{name} loading {job!s} ending: {job.next_date} "
                 f"duration: {params['durationStr']}"
             )
-            chunk = await self.pacing.historical_data(
-                **params,
-                barSizeSetting=job.bar_size,
-                whatToShow=self.manager.wts,
-                useRTH=False,
-                formatDate=2,
-            )
+            try:
+                chunk = await self.pacing.historical_data(
+                    **params,
+                    barSizeSetting=job.bar_size,
+                    whatToShow=self.manager.wts,
+                    useRTH=False,
+                    formatDate=2,
+                )
+            except CONNECTION_FAILURE_ERRORS:
+                raise
+            except Exception as exc:
+                raise DownloadRequestError(str(exc)) from exc
             await job.save_chunk(chunk)
 
             if job.next_date:
@@ -682,6 +711,17 @@ class DataloaderSession:
         if self.queue:
             shutdown_queue(self.queue)
         log.debug("Dataloader session tasks cancelled.")
+
+    def abort_execution(
+        self, error: BaseException, queue: asyncio.Queue[DownloadJob]
+    ) -> None:
+        """Abort the current session after a fatal worker failure."""
+
+        if self.fatal_error is None:
+            self.fatal_error = error
+        if self.producer_task and not self.producer_task.done():
+            self.producer_task.cancel()
+        shutdown_queue(queue)
 
     async def cancel_execution(self) -> None:
         """Cancel active dataloader execution tasks and drain queued work."""

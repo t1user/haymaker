@@ -513,8 +513,8 @@ async def test_headstamp_retries_pacing_violation(dataloader_module):
 
 
 @pytest.mark.asyncio
-async def test_worker_connection_loss_is_recorded(dataloader_module):
-    """Connection loss should record the failed job and keep the queue moving."""
+async def test_worker_connection_loss_aborts_worker(dataloader_module):
+    """Connection loss should escape instead of becoming an ordinary job failure."""
 
     dataloader = dataloader_module
 
@@ -551,32 +551,30 @@ async def test_worker_connection_loss_is_recorded(dataloader_module):
     task = asyncio.create_task(session.worker("worker", queue))
     await asyncio.wait_for(queue.join(), timeout=1)
     task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
 
     assert not job.saved
-    assert len(session.failures.failures) == 1
-    assert isinstance(session.failures.failures[0].error, ConnectionError)
+    with pytest.raises(ConnectionError, match="socket down"):
+        await task
+    assert session.fatal_error is not None
+    assert len(session.failures.failures) == 0
 
 
 @pytest.mark.asyncio
-async def test_worker_failure_does_not_stop_next_job(dataloader_module):
-    """A failed job should be recorded without stopping the worker."""
+async def test_session_run_propagates_worker_connection_loss(
+    monkeypatch, dataloader_module
+):
+    """Session-level workload should fail when a worker hits connection loss."""
 
     dataloader = dataloader_module
 
     class FakeIB:
         async def reqHistoricalDataAsync(self, *args, **kwargs):
-            return []
+            raise ConnectionError("socket down")
 
     class FakeJob:
         contract = FakeContract()
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
         bar_size = "1 min"
-
-        def __init__(self, name, *, fail=False):
-            self.name = name
-            self.fail = fail
-            self.saved = False
 
         @property
         def params(self):
@@ -587,8 +585,60 @@ async def test_worker_failure_does_not_stop_next_job(dataloader_module):
             }
 
         async def save_chunk(self, chunk):
-            if self.fail:
-                raise RuntimeError("job failed")
+            self.next_date = None
+
+        def __str__(self):
+            return "<FakeJob>"
+
+    async def fake_producer(self, queue):
+        await queue.put(FakeJob())
+
+    monkeypatch.setattr(dataloader.DataloaderSession, "producer", fake_producer)
+    session = dataloader.DataloaderSession(FakeIB(), number_of_workers=1)
+    session.pacing.no_restriction = True
+
+    with pytest.raises(ConnectionError, match="socket down"):
+        await session.run()
+    assert len(session.failures.failures) == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_request_failure_does_not_stop_next_job(dataloader_module):
+    """A failed broker request should be recorded without stopping the worker."""
+
+    dataloader = dataloader_module
+
+    class FakeIB:
+        async def reqHistoricalDataAsync(self, contract, *args, **kwargs):
+            if contract.localSymbol == "failed":
+                raise RuntimeError("request failed")
+            return []
+
+    class FakeRequestContract:
+        def __init__(self, local_symbol):
+            self.localSymbol = local_symbol
+
+        def __hash__(self):
+            return hash(self.localSymbol)
+
+    class FakeJob:
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        bar_size = "1 min"
+
+        def __init__(self, name):
+            self.name = name
+            self.saved = False
+            self.contract = FakeRequestContract(name)
+
+        @property
+        def params(self):
+            return {
+                "contract": self.contract,
+                "endDateTime": self.next_date,
+                "durationStr": "1 D",
+            }
+
+        async def save_chunk(self, chunk):
             self.saved = True
             self.next_date = None
 
@@ -598,7 +648,7 @@ async def test_worker_failure_does_not_stop_next_job(dataloader_module):
     session = dataloader.DataloaderSession(FakeIB())
     session.pacing.no_restriction = True
     queue = asyncio.Queue()
-    failed_job = FakeJob("failed", fail=True)
+    failed_job = FakeJob("failed")
     good_job = FakeJob("good")
     await queue.put(failed_job)
     await queue.put(good_job)
@@ -613,6 +663,50 @@ async def test_worker_failure_does_not_stop_next_job(dataloader_module):
     assert len(session.failures.failures) == 1
     assert session.failures.failures[0].job is failed_job
     assert isinstance(session.failures.failures[0].error, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_worker_local_failure_aborts_worker(dataloader_module):
+    """Local processing failures should abort the session instead of being hidden."""
+
+    dataloader = dataloader_module
+
+    class FakeIB:
+        async def reqHistoricalDataAsync(self, *args, **kwargs):
+            return []
+
+    class FakeJob:
+        contract = FakeContract()
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        bar_size = "1 min"
+
+        @property
+        def params(self):
+            return {
+                "contract": self.contract,
+                "endDateTime": self.next_date,
+                "durationStr": "1 D",
+            }
+
+        async def save_chunk(self, chunk):
+            raise RuntimeError("store failed")
+
+        def __str__(self):
+            return "<FakeJob>"
+
+    session = dataloader.DataloaderSession(FakeIB())
+    session.pacing.no_restriction = True
+    queue = asyncio.Queue()
+    await queue.put(FakeJob())
+
+    task = asyncio.create_task(session.worker("worker", queue))
+    await asyncio.wait_for(queue.join(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(RuntimeError, match="store failed"):
+        await task
+    assert isinstance(session.fatal_error, RuntimeError)
+    assert len(session.failures.failures) == 0
 
 
 @pytest.mark.asyncio
