@@ -206,9 +206,58 @@ def test_daily_download_job_uses_date_end_datetime(dataloader_module):
     assert job.params["endDateTime"] == date(2025, 1, 5)
 
 
+@pytest.mark.asyncio
+async def test_manager_policy_flows_to_store_and_download_job(
+    monkeypatch, dataloader_module
+):
+    """Manager request policy should reach store naming and generated jobs."""
+
+    dataloader = dataloader_module
+    contract = FakeContract()
+    created_stores = []
+
+    class FakeStore:
+        async def read(self, requested_contract):
+            assert requested_contract is contract
+            return None
+
+    class FakeSink:
+        async def write(self, data):
+            return "version"
+
+    async def fake_headstamps(self):
+        yield contract, datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    def fake_store(wts, bar_size):
+        created_stores.append((wts, bar_size))
+        return FakeStore()
+
+    monkeypatch.setattr(dataloader.Manager, "headstamps", fake_headstamps)
+    monkeypatch.setattr(dataloader, "create_dataloader_store", fake_store)
+    monkeypatch.setattr(dataloader, "HistorySink", lambda contract, store: FakeSink())
+
+    manager = dataloader.Manager(
+        object(),
+        bar_size="1 day",
+        wts="MIDPOINT",
+        now=datetime(2025, 1, 10, tzinfo=timezone.utc),
+        max_period=120,
+        max_bars=12,
+    )
+    job = await anext(manager._job_generator())
+
+    assert created_stores == [("MIDPOINT", "1 day")]
+    assert manager.pacing.bar_size == "1 day"
+    assert manager.pacing.wts == "MIDPOINT"
+    assert job.bar_size == "1 day"
+    assert job.max_bars == 12
+    assert job.params["endDateTime"] == date(2025, 1, 10)
+
+
 class FakeContract:
     symbol = "ES"
     localSymbol = "ESZ5"
+    lastTradeDateOrContractMonth = ""
 
 
 @pytest.mark.asyncio
@@ -269,6 +318,7 @@ async def test_worker_connection_loss_is_recorded(dataloader_module):
     class FakeJob:
         contract = FakeContract()
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        bar_size = dataloader.BARSIZE
         saved = False
 
         @property
@@ -440,7 +490,7 @@ async def test_worker_hardcodes_historical_format_date_two(dataloader_module):
     class FakeJob:
         contract = FakeContract()
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
-        bar_size = dataloader.BARSIZE
+        bar_size = "1 day"
 
         @property
         def params(self):
@@ -457,7 +507,8 @@ async def test_worker_hardcodes_historical_format_date_two(dataloader_module):
             return "<FakeJob>"
 
     ib = FakeIB()
-    session = dataloader.DataloaderSession(ib)
+    manager = dataloader.Manager(ib, bar_size="30 secs", wts="MIDPOINT")
+    session = dataloader.DataloaderSession(ib, manager=manager)
     session.pacing.no_restriction = True
     queue = asyncio.Queue()
     await queue.put(FakeJob())
@@ -468,3 +519,5 @@ async def test_worker_hardcodes_historical_format_date_two(dataloader_module):
     await asyncio.gather(task, return_exceptions=True)
 
     assert ib.kwargs["formatDate"] == 2
+    assert ib.kwargs["barSizeSetting"] == "1 day"
+    assert ib.kwargs["whatToShow"] == "MIDPOINT"

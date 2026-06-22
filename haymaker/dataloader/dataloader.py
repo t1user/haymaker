@@ -79,13 +79,17 @@ def create_dataloader_store(
     return AsyncArcticStore(lib=lib, host=get_mongo_client())
 
 
-def request_pacing_factory(ib: ibi.IB) -> RequestPacing:
-    """Create request pacing from dataloader config constants."""
+def request_pacing_factory(
+    ib: ibi.IB,
+    bar_size: str = BARSIZE,
+    wts: str = WTS,
+) -> RequestPacing:
+    """Create request pacing from dataloader request policy."""
 
     return RequestPacing(
         ib,
-        BARSIZE,
-        WTS,
+        bar_size,
+        wts,
         no_restriction=PACER_NO_RESTRICTION,
         allowance_fraction=PACER_ALLOWANCE_FRACTION,
     )
@@ -386,6 +390,8 @@ class Manager:
     source: str = SOURCE
     fill_gaps: bool = FILL_GAPS
     max_period: int = MAX_PERIOD
+    max_bars: int = MAX_BARS
+    auto_save_interval: int = AUTO_SAVE_INTERVAL
     wts: str = WTS
     bar_size: str = BARSIZE
     now: date | datetime = field(default_factory=current_session_now)
@@ -394,16 +400,18 @@ class Manager:
     new_job_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
 
     def __post_init__(self) -> None:
+        self.bar_size = bar_size_validator(self.bar_size)
+        self.wts = wts_validator(self.wts)
         self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
-            self.pacing = request_pacing_factory(self.ib)
+            self.pacing = request_pacing_factory(self.ib, self.bar_size, self.wts)
         self.new_job_generator = self._job_generator()
 
     def get_store(self) -> AsyncAbstractBaseStore:
         """Return the session datastore, creating it lazily when needed."""
 
         if self.store is None:
-            self.store = create_dataloader_store()
+            self.store = create_dataloader_store(self.wts, self.bar_size)
         return self.store
 
     @functools.cached_property
@@ -458,7 +466,14 @@ class Manager:
             )
             sink = HistorySink(contract, datastore)
             tasks = self.tasks(store, headstamp)
-            new_job = DownloadJob(contract, sink, tasks)
+            new_job = DownloadJob(
+                contract,
+                sink,
+                tasks,
+                bar_size=self.bar_size,
+                max_bars=self.max_bars,
+                auto_save_interval=self.auto_save_interval,
+            )
             if new_job.is_done():
                 log.debug(f"Skipping {new_job!s} - no need to download data.")
                 continue
@@ -496,21 +511,20 @@ class Manager:
         return hs
 
 
-def validate_age(job: DownloadJob) -> bool:
+def validate_age(job: DownloadJob, now: date | datetime) -> bool:
     """Return whether a job is still inside IB's sub-30-second age limit.
 
     IB does not allow requests for bars under 30 seconds older than six months.
 
     Args:
         job: Download job being validated.
+        now: Run-scoped current point normalized for the job's bar size.
 
     Returns:
         ``True`` when the job can keep requesting data, otherwise ``False``.
     """
     if helpers.duration_in_secs(job.bar_size) < 30 and job.next_date:
         assert isinstance(job.next_date, datetime)
-        # TODO: not sure if correct or necessary
-        now = current_session_now()
         if isinstance(now, datetime) and (now - job.next_date).days > 180:
             return False
     return True
@@ -523,8 +537,6 @@ class DataloaderSession:
     ib: ibi.IB
     manager: Manager | None = None
     number_of_workers: int = NUMBER_OF_WORKERS
-    bar_size: str = BARSIZE
-    wts: str = WTS
     failures: DownloadFailureRegistry = field(default_factory=DownloadFailureRegistry)
     queue: asyncio.Queue[DownloadJob] | None = field(default=None, init=False)
     workers: list[asyncio.Task] = field(default_factory=list, init=False)
@@ -618,6 +630,7 @@ class DataloaderSession:
     async def download_job(self, name: str, job: DownloadJob) -> None:
         """Download all currently queued chunks for one job."""
 
+        assert self.manager is not None
         while True:
             params = job.params
             log.debug(
@@ -626,15 +639,15 @@ class DataloaderSession:
             )
             chunk = await self.pacing.historical_data(
                 **params,
-                barSizeSetting=self.bar_size,
-                whatToShow=self.wts,
+                barSizeSetting=job.bar_size,
+                whatToShow=self.manager.wts,
                 useRTH=False,
                 formatDate=2,
             )
             await job.save_chunk(chunk)
 
             if job.next_date:
-                if not validate_age(job):
+                if not validate_age(job, self.manager.now):
                     await job.save_chunk(None)
                     log.debug(f"{job!s} dropped on age validation.")
                     break
