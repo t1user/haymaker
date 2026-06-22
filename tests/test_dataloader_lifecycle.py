@@ -291,7 +291,7 @@ def test_validate_age_uses_run_scoped_now(dataloader_module):
     dataloader = dataloader_module
 
     class FakeJob:
-        bar_size = "1 sec"
+        bar_size = "1 secs"
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
     assert not dataloader.validate_age(

@@ -57,6 +57,20 @@ qualification and futures-chain discovery. The resolved contracts returned by
 IB are then used for historical requests so pacing follows ``ib_insync``
 contract hash semantics.
 
+Request Sizing
+==============
+
+The dataloader sizes each ``reqHistoricalData`` call from the planned missing
+range, the configured ``max_bars`` value, and IBKR's documented maximum
+duration for the selected ``barSize``. IB's step-size rules are caps on valid
+request shapes; they are not a promise that every contract/session will return
+that many bars. Exact returned counts still depend on the instrument, session
+calendar, holidays, early closes, market activity, and IB availability.
+
+The dataloader uses canonical IB bar-size spelling such as ``1 secs`` and
+``1 hour``. Noncanonical spellings such as ``1 sec`` are rejected before a
+historical request is built.
+
 Datastore
 =========
 

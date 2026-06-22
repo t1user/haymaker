@@ -41,8 +41,13 @@ stable and mark items off as they are addressed.
   run. The user-facing dataloader docs now state that supervisor recovery
   preserves in-memory active jobs within the same process, while a new process
   derives remaining work from the persisted Arctic-backed datastore.
-- [ ] `DL-018`: Review `haymaker.dataloader.helpers` period converters and make
+- [x] `DL-018`: Review `haymaker.dataloader.helpers` period converters and make
   sure duration/bar-size conversions match intended IB request behavior.
+  Dataloader helpers now use canonical IB bar-size names and explicit
+  max-duration caps from IBKR's historical-bar request tables. The caps define
+  valid request shapes only; exact bar counts remain session- and
+  instrument-dependent and are left to the separate session-aware scheduling
+  issue.
 - [ ] `DL-019`: Make gap-fill scheduling session-aware using IB
   historical schedules.  Current `GapFillFactory.gap_factory()` infers
   expected gaps only from stored data regularity, so scheduled market

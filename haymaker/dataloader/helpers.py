@@ -3,35 +3,51 @@ from datetime import date, datetime, timedelta
 from .time_policy import normalize_point
 
 # source:
-# https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/#hist-bar-size
-valid_bar_sizes = {
-    "secs": (1, 5, 10, 15, 30),
-    "mins": (1, 2, 3, 5, 10, 15, 20, 30),
-    "hours": (1, 2, 3, 4, 8),
-    "day": (1,),
-    "weeks": (1,),
-    "months": (1,),
+# https://ibkrcampus.com/campus/ibkr-api-page/twsapi-doc/#historical-bars
+BAR_SIZE_SECONDS = {
+    "1 secs": 1,
+    "5 secs": 5,
+    "10 secs": 10,
+    "15 secs": 15,
+    "30 secs": 30,
+    "1 min": 60,
+    "2 mins": 120,
+    "3 mins": 180,
+    "5 mins": 300,
+    "10 mins": 600,
+    "15 mins": 900,
+    "20 mins": 1200,
+    "30 mins": 1800,
+    "1 hour": 3600,
+    "2 hours": 7200,
+    "3 hours": 10800,
+    "4 hours": 14400,
+    "8 hours": 28800,
+    "1 day": 3600 * 23,
+    "1 week": 3600 * 23 * 5,
+    "1 month": 3600 * 23 * 22,
 }
 
-VALID_BAR_SIZES = [
-    f"{size} {unit}" for unit, sizes in valid_bar_sizes.items() for size in sizes
-]
+# IBKR's current max-duration table allows only seconds requests for 1-second
+# bars. Other supported dataloader bar sizes share the documented 68-year cap.
+MAX_DURATION_BY_BAR_SIZE = {
+    **{bar_size: "68 Y" for bar_size in BAR_SIZE_SECONDS},
+    "1 secs": "2000 S",
+}
+
+VALID_BAR_SIZES = list(BAR_SIZE_SECONDS)
+
+
+def _validate_bar_size(barSize: str) -> None:
+    if barSize not in BAR_SIZE_SECONDS:
+        raise ValueError(f"Invalid IB bar size: {barSize}")
 
 
 def duration_in_secs(barSize: str) -> int:
     """Given duration string return duration in seconds int"""
 
-    number, time = barSize.split(" ")
-    time = time[:-1] if time.endswith("s") else time
-    multiplier = {
-        "sec": 1,
-        "min": 60,
-        "hour": 3600,
-        "day": 3600 * 23,
-        "week": 3600 * 23 * 5,
-        "month": 3600 * 23 * 22,
-    }
-    return int(number) * multiplier[time]
+    _validate_bar_size(barSize)
+    return BAR_SIZE_SECONDS[barSize]
 
 
 def duration_str(duration_in_secs: int) -> str:
@@ -103,14 +119,30 @@ def timedelta_and_barSize_to_duration_str(
     max_bars - maximum number of bars to be requested at once
 
     """
+    _validate_bar_size(barSize)
     bar_size_in_secs = duration_in_secs(barSize)
+    duration_seconds = max(
+        timedelta_to_duration_in_secs(duration, bar_size_in_secs, max_bars), 30
+    )
 
-    if bar_size_in_secs == 1:
-        return duration_str(2000)
-    else:
-        return duration_str(
-            max(timedelta_to_duration_in_secs(duration, bar_size_in_secs, max_bars), 30)
+    return _cap_duration_str(
+        duration_str(duration_seconds), MAX_DURATION_BY_BAR_SIZE[barSize]
+    )
+
+
+def _cap_duration_str(durationStr: str, maxDurationStr: str) -> str:
+    """Cap duration strings to IBKR's documented max request span."""
+
+    number, unit = durationStr.split(" ")
+    max_number, max_unit = maxDurationStr.split(" ")
+    if max_unit == "S":
+        seconds = min(
+            int(duration_to_timedelta(durationStr).total_seconds()), int(max_number)
         )
+        return duration_str(seconds)
+    if unit == max_unit == "Y" and int(number) > int(max_number):
+        return maxDurationStr
+    return durationStr
 
 
 def duration_to_timedelta(duration: str) -> timedelta:
