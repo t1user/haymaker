@@ -18,7 +18,11 @@ stable and mark items off as they are addressed.
 - [x] `DL-007`: Store/date helpers have brittle one-row and stale-cache
   assumptions.
 - [x] `DL-008`: `BID_ASK` pacing adjustment appears backwards.
-- [ ] `DL-009`: Docs are stale around dataloader connection implementation.
+- [x] `DL-009`: Docs are stale around dataloader connection implementation.
+  Public dataloader, supervisor, configuration, and codebase-map docs now
+  describe the supervised-only connection model: dataloader owns a separate
+  `IB` socket under `ConnectionSupervisor`, uses a distinct default client ID,
+  and leaves TWS/Gateway process management outside the supervisor.
 - [x] `DL-010`: Workload has two phases, but restart currently re-enters
   discovery instead of resuming known remaining work.
 - [x] `DL-011`: Reconcile dataloader pacing limits with current Interactive
@@ -32,9 +36,11 @@ stable and mark items off as they are addressed.
   reduced allowance for future optional non-supervised modes.
 - [x] `DL-016`: Make managed restart resume in-memory discovered work instead of
   rerunning discovery after every supervisor restart.
-- [ ] `DL-017`: Define process-stop semantics explicitly: no separate checkpoint
+- [x] `DL-017`: Define process-stop semantics explicitly: no separate checkpoint
   state for now; restart from persisted datastore boundaries on next process
-  run.
+  run. The user-facing dataloader docs now state that supervisor recovery
+  preserves in-memory active jobs within the same process, while a new process
+  derives remaining work from the persisted Arctic-backed datastore.
 - [ ] `DL-018`: Review `haymaker.dataloader.helpers` period converters and make
   sure duration/bar-size conversions match intended IB request behavior.
 - [ ] `DL-019`: Make gap-fill scheduling session-aware using IB

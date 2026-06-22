@@ -130,6 +130,10 @@ The research package is intentionally separate from live execution. It works dir
    and written through the async datastore; Arctic owns final cleaning and
    metadata updates. The returned first bar timestamp is validated before it
    drives the next request boundary.
+8. Supervisor recovery within the same process resumes in-memory active jobs
+   before discovering new work. A full process stop writes no separate
+   dataloader checkpoint; the next process rediscovers remaining work from
+   persisted datastore boundaries.
 
 ### Research Flow
 

@@ -21,6 +21,18 @@ config only when another process already uses that ID. A duplicate client ID is
 treated as a
 connection configuration failure.
 
+Workload Resume and Process Stop
+================================
+
+Within one running dataloader process, supervisor recovery preserves discovered
+unfinished work in memory. If the socket has to reconnect and the workload is
+restarted, the dataloader resumes active jobs before discovering new contracts.
+
+A full process stop does not write a separate checkpoint file or checkpoint
+collection. The next dataloader process reads the persisted Arctic-backed
+datastore, derives boundaries from the stored data, and schedules any remaining
+backfill, update, or gap-fill work from those datastore boundaries.
+
 Request Pacing
 ==============
 
