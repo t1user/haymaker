@@ -18,7 +18,7 @@ class AsyncStoreView:
     contract: ibi.Contract
     store: AsyncAbstractBaseStore
     now: Union[date, datetime]
-    bar_size: str = "30 secs"
+    bar_size: str
     data: pd.DataFrame | None = field(default=None, init=False, repr=False)
 
     @classmethod
@@ -27,7 +27,7 @@ class AsyncStoreView:
         contract: ibi.Contract,
         store: AsyncAbstractBaseStore,
         now: Union[date, datetime],
-        bar_size: str = "30 secs",
+        bar_size: str,
     ) -> "AsyncStoreView":
         """Create a wrapper and preload the existing dataframe once."""
 
@@ -95,13 +95,17 @@ class AsyncStoreView:
 
 @dataclass
 class HistorySink:
-    """Persist downloaded historical chunks for one contract."""
+    """Persist raw downloaded historical chunks for one contract."""
 
     contract: ibi.Contract
     store: AsyncAbstractBaseStore
 
     async def write(self, new_data: pd.DataFrame) -> Any:
         """Merge downloaded data with stored history and rewrite the collection.
+
+        The sink preserves the dataframe exactly as supplied by IB-side callers.
+        Index normalization for scheduling lives in :class:`AsyncStoreView`;
+        final sorting, duplicate removal, and metadata belong to the datastore.
 
         Args:
             new_data: Newly downloaded bars indexed by bar timestamp.

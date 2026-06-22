@@ -92,7 +92,7 @@ async def test_async_store_view_preloads_existing_data(contract, store_index):
     data = pd.DataFrame({"close": [1, 2, 3]}, index=store_index)
     store = FakeAsyncStore(data)
 
-    wrapper = await AsyncStoreView.create(contract, store, store_index[-1])
+    wrapper = await AsyncStoreView.create(contract, store, store_index[-1], "30 secs")
 
     assert store.reads == [contract]
     assert wrapper.from_date == store_index[1]
@@ -108,7 +108,7 @@ async def test_async_store_view_one_row_uses_single_timestamp_boundary(
     data = pd.DataFrame({"close": [1]}, index=store_index[:1])
 
     wrapper = await AsyncStoreView.create(
-        contract, FakeAsyncStore(data), store_index[-1]
+        contract, FakeAsyncStore(data), store_index[-1], "30 secs"
     )
 
     assert wrapper.from_date == store_index[0]
@@ -123,7 +123,7 @@ async def test_task_factory_one_row_store_does_not_schedule_full_duplicate(
 
     data = pd.DataFrame({"close": [1]}, index=store_index[:1])
     wrapper = await AsyncStoreView.create(
-        contract, FakeAsyncStore(data), store_index[-1]
+        contract, FakeAsyncStore(data), store_index[-1], "30 secs"
     )
 
     tasks = task_factory(wrapper, store_index[0])
@@ -137,7 +137,7 @@ async def test_task_planner_clamps_start_to_max_period(contract):
 
     now = datetime(2025, 1, 10, tzinfo=timezone.utc)
     headstamp = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "30 secs")
 
     tasks = TaskPlanner(
         wrapper,
@@ -168,7 +168,9 @@ async def test_task_planner_preserves_gap_factory_order(contract):
     data = pd.DataFrame({"close": range(len(index))}, index=index)
     now = datetime(2025, 1, 15, tzinfo=timezone.utc)
     headstamp = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(data), now)
+    wrapper = await AsyncStoreView.create(
+        contract, FakeAsyncStore(data), now, "30 secs"
+    )
 
     tasks = TaskPlanner(
         wrapper,
@@ -185,7 +187,7 @@ async def test_async_store_view_dates_update_after_reload(contract, store_index)
     """Date boundaries should reflect the latest loaded store data."""
 
     store = FakeAsyncStore(pd.DataFrame({"close": [1]}, index=store_index[:1]))
-    wrapper = await AsyncStoreView.create(contract, store, store_index[-1])
+    wrapper = await AsyncStoreView.create(contract, store, store_index[-1], "30 secs")
     store.data = pd.DataFrame({"close": [1, 2, 3]}, index=store_index)
 
     await wrapper.read()
@@ -203,7 +205,9 @@ async def test_async_store_view_ignores_month_only_expiry(store_index):
         localSymbol="ESM5",
         lastTradeDateOrContractMonth="202506",
     )
-    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), store_index[-1])
+    wrapper = await AsyncStoreView.create(
+        contract, FakeAsyncStore(), store_index[-1], "30 secs"
+    )
 
     assert wrapper.expiry is None
     assert wrapper.expiry_or_now() == store_index[-1]
@@ -219,7 +223,7 @@ async def test_async_store_view_exact_expiry_caps_now(store_index):
         lastTradeDateOrContractMonth="20250102",
     )
     now = datetime(2025, 1, 3, tzinfo=timezone.utc)
-    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "30 secs")
 
     assert wrapper.expiry_or_now() == datetime(2025, 1, 2, tzinfo=timezone.utc)
 
@@ -257,6 +261,7 @@ async def test_async_store_view_intraday_rejects_naive_datastore_index(contract)
             contract,
             FakeAsyncStore(data),
             datetime(2025, 1, 2, tzinfo=timezone.utc),
+            "30 secs",
         )
 
 
@@ -280,6 +285,20 @@ async def test_history_sink_concats_existing_data_and_writes(contract, store_ind
     assert version == "version"
     assert store.writes[0][0] is contract
     pd.testing.assert_frame_equal(store.writes[0][1], updated)
+
+
+@pytest.mark.asyncio
+async def test_history_sink_preserves_raw_downloaded_index(contract):
+    """HistorySink should not normalize the dataframe received from callers."""
+
+    raw_dates = pd.Index([date(2025, 1, 1), date(2025, 1, 2)], name="date")
+    new_data = pd.DataFrame({"close": [1, 2]}, index=raw_dates)
+    store = FakeAsyncStore()
+    sink = HistorySink(contract, store)
+
+    await sink.write(new_data)
+
+    pd.testing.assert_frame_equal(store.writes[0][1], new_data)
 
 
 def test_create_dataloader_store_builds_async_arctic_store(

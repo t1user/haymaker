@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-06-10.
+Last updated: 2026-06-22.
 
 ## High-Level Purpose
 
@@ -26,7 +26,7 @@ Runtime singletons are assembled in `haymaker/manager.py`:
 
 `haymaker/app.py` bootstraps live execution: it sets up logging, imports the runtime singletons, builds a live `App` composition from config, and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns futures-roll scheduling, the fixed daily contract-refresh restart timer, controller startup, and streamer jobs for each connection cycle.
 
-The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. The current supported dataloader backend is Arctic, with the library name derived from `wts` and `barSize`.
+The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `Manager` owns the historical request policy (`bar_size`, `wts`, `max_bars`) and the run-scoped `now` value; worker sessions execute generated jobs rather than carrying independent request-policy defaults. The current supported dataloader backend is Arctic, with the library name derived from `wts` and `barSize`.
 
 The research package is intentionally separate from live execution. It works directly with pandas dataframes and NumPy/Numba kernels to validate signal timing, stops, synthetic data, and performance without depending on live `Atom` pipelines.
 
@@ -75,7 +75,8 @@ The research package is intentionally separate from live execution. It works dir
   factories for backfill, updates, max-period clamping, and optional gap
   filling.
 - `haymaker/dataloader/store_wrapper.py`: `AsyncStoreView` for read-only
-  scheduling boundaries and `HistorySink` for historical-data persistence.
+  scheduling boundaries with explicit bar-size policy and `HistorySink` for
+  raw historical-data persistence.
 - `haymaker/dataloader/time_policy.py`: canonical historical-date policy for
   `formatDate=2`, keeping intraday points as UTC-aware datetimes and
   daily/weekly/monthly points as dates.

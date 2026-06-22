@@ -1,7 +1,7 @@
 import asyncio
 import importlib
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -204,6 +204,25 @@ def test_daily_download_job_uses_date_end_datetime(dataloader_module):
     )
 
     assert job.params["endDateTime"] == date(2025, 1, 5)
+
+
+def test_validate_age_uses_run_scoped_now(dataloader_module):
+    """Age validation should use the run snapshot supplied by the caller."""
+
+    dataloader = dataloader_module
+
+    class FakeJob:
+        bar_size = "1 sec"
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    assert not dataloader.validate_age(
+        FakeJob(),
+        FakeJob.next_date + timedelta(days=181),
+    )
+    assert dataloader.validate_age(
+        FakeJob(),
+        FakeJob.next_date + timedelta(days=1),
+    )
 
 
 def test_manager_syncs_injected_pacing_to_request_policy(dataloader_module):

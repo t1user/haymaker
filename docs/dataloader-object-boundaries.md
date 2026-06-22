@@ -10,6 +10,8 @@ remain separate work.
 ### AsyncStoreView
 
 - Owns an async datastore, one contract, and the run's `now` value.
+- Requires the caller to provide the run's bar size explicitly; it does not
+  carry a compatibility default.
 - Loads existing stored data once before scheduling.
 - Exposes `from_date`, `to_date`, and `expiry_or_now()` for scheduling.
 - Normalizes read-side scheduling boundaries according to the configured bar
@@ -40,6 +42,8 @@ compatibility wrappers around the same lower-level range logic.
 
 - Owns one contract's planned ranges and request progression.
 - Produces request parameters for workers.
+- Carries the bar size used for request duration calculation and worker
+  `barSizeSetting`.
 - Buffers downloaded bars only until they are handed to persistence.
 - Does not read existing store state.
 
@@ -48,6 +52,8 @@ compatibility wrappers around the same lower-level range logic.
 - Owns persistence for downloaded bars.
 - For now, preserves current behavior: read existing data, concatenate the new
   chunk, and call `async_write()`.
+- Does not normalize or clean the downloaded dataframe; it persists the
+  IB-side dataframe shape it receives.
 - Later can switch to smarter append, prepend, or gap-fill persistence without
   changing downloader request logic.
 
@@ -68,13 +74,16 @@ Collection naming uses the datastore default `simple_collection_namer`.
 The current split is:
 
 - `Manager` owns source expansion, contract discovery, headstamp lookup, store
-  and sink construction, and active job tracking for restart/resume.
+  and sink construction, request policy (`bar_size`, `wts`, `max_bars`), the
+  run-scoped `now` value, and active job tracking for restart/resume.
 - `TaskPlanner` owns pure scheduling and max-period clamping.
 - `DownloadJob` owns request progression for one contract.
 - `DownloadContainer` owns per-range buffering and missing-range progress.
 - `AsyncStoreView` owns read-only datastore boundaries for scheduling.
 - Time policy owns date/datetime normalization before scheduling comparisons.
 - `HistorySink` owns persistence.
+- `DataloaderSession` owns producer/worker orchestration and IB request
+  execution. It does not own an independent `bar_size` or `whatToShow` policy.
 
 Deferred scheduling work should keep IB historical schedule requests outside
 `TaskPlanner`; those requests belong in the async request layer under

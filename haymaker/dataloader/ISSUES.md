@@ -62,16 +62,18 @@ stable and mark items off as they are addressed.
   IB strings such as `20250330-17:00:00`, timezone is a string such as
   `US/Central`, and sessions include normal trading days, weekend
   gaps, holidays, and early closes.
-- [ ] `DL-020`: Define run-wide `now` snapshot semantics explicitly. Current
-  behavior uses a per-manager `now` snapshot for job discovery but fresh
-  `current_session_now()` calls for age validation. If future behavior needs one
-  cutoff shared by every object in a dataloader run, move the snapshot to
-  `DataloaderSession` and pass it down.
+- [x] `DL-020`: Define run-wide `now` snapshot semantics explicitly. `Manager`
+  owns the run-scoped `now` value, normalizes it for the configured bar size,
+  and passes it into scheduling and request-age validation. `DataloaderSession`
+  does not recompute a separate freshness cutoff during worker execution.
 - [x] `DL-021`: Review legacy dataloader runtime objects for overly broad scope
   or execution responsibilities. Pay special attention to whether manager,
   job, store wrapper, selector, and scheduler boundaries still match the
   simplified queue/worker architecture. Start from
-  `docs/dataloader-object-boundaries.md`.
+  `docs/dataloader-object-boundaries.md`. Manager now owns request policy
+  (`bar_size`, `wts`, `max_bars`, run `now`), generated jobs carry the bar size
+  used by workers, and `DataloaderSession` no longer has independent
+  compatibility `bar_size`/`wts` fields.
 - [ ] `DL-022`: Classify recorded dataloader job failures as terminal or
   retryable. Current behavior records failed download jobs and lets workers keep
   draining the queue; later policy should decide which failures deserve retries,
@@ -143,6 +145,10 @@ stable and mark items off as they are addressed.
    - First-class `TaskPlanner` now owns pure range planning and max-period
      clamping.
    - `DownloadJob` now names the request-progression object.
+   - `Manager` owns historical request policy and run-scoped `now`; worker
+     execution reads request bar size from each generated job.
+   - `AsyncStoreView` requires explicit bar-size policy, and `HistorySink`
+     preserves raw downloaded data without scheduling normalization.
    - Start from `docs/dataloader-object-boundaries.md`.
    - Covers `DL-021`.
 
