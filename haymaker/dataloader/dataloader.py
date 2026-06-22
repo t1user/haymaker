@@ -525,9 +525,10 @@ class Manager:
 
 
 def validate_age(job: DownloadJob, now: date | datetime) -> bool:
-    """Return whether a job is still inside IB's sub-30-second age limit.
+    """Return whether a job is still inside IB's small-bar age limit.
 
-    IB does not allow requests for bars under 30 seconds older than six months.
+    IB does not allow requests for bars 30 seconds or smaller older than six
+    months.
 
     Args:
         job: Download job being validated.
@@ -536,7 +537,7 @@ def validate_age(job: DownloadJob, now: date | datetime) -> bool:
     Returns:
         ``True`` when the job can keep requesting data, otherwise ``False``.
     """
-    if helpers.duration_in_secs(job.bar_size) < 30 and job.next_date:
+    if helpers.duration_in_secs(job.bar_size) <= 30 and job.next_date:
         assert isinstance(job.next_date, datetime)
         if isinstance(now, datetime) and (now - job.next_date).days > 180:
             return False
@@ -645,6 +646,10 @@ class DataloaderSession:
 
         assert self.manager is not None
         while True:
+            if not validate_age(job, self.manager.now):
+                await job.save_chunk(None)
+                log.debug(f"{job!s} dropped before request on age validation.")
+                break
             params = job.params
             log.debug(
                 f"{name} loading {job!s} ending: {job.next_date} "

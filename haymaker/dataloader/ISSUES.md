@@ -100,6 +100,12 @@ stable and mark items off as they are addressed.
   backfills for the same series while still allowing updates and gap filling.
   Missing metadata remains non-blocking; datastore-owned lower-bound metadata
   such as `from` is left for a separate datastore change.
+- [x] `DL-025`: Apply practical IB historical availability limits before
+  requesting data. The dataloader now avoids requests for bars of `30 secs` or
+  smaller beyond IB's six-month limit, clamps expired futures backfill to two
+  years before exact expiry, and skips expired options, futures options, and
+  warrants when exact expiry is known. Less predictable unavailable-data cases
+  remain handled by IB no-data responses and `backfill_exhausted` metadata.
 
 ## Refactor Plan
 

@@ -6,10 +6,15 @@ from typing import Literal, NamedTuple, Optional, Self, Union
 
 import pandas as pd
 
+from .helpers import duration_in_secs
 from .store_wrapper import AsyncStoreView
 from .time_policy import is_date_bar, normalize_point
 
 log = logging.getLogger(__name__)
+
+SMALL_BAR_MAX_AGE = timedelta(days=180)
+EXPIRED_FUTURE_MAX_AGE = timedelta(days=365 * 2)
+UNAVAILABLE_EXPIRED_SECTYPES = {"OPT", "FOP", "WAR"}
 
 
 class Dates(NamedTuple):
@@ -172,7 +177,13 @@ class TaskPlanner:
         """Return the clamped earliest point for this planning run."""
 
         latest_available = self.store.expiry_or_now()
-        return max(self.head, latest_available - timedelta(days=self.max_period_days))
+        candidates = [
+            self.head,
+            latest_available - timedelta(days=self.max_period_days),
+        ]
+        if availability_start := historical_availability_start(self.store):
+            candidates.append(availability_start)
+        return max(candidates)
 
     def ranges(self) -> list[Dates]:
         """Return planned download ranges in worker execution order."""
@@ -182,6 +193,8 @@ class TaskPlanner:
     def planned_ranges(self) -> list[PlannedRange]:
         """Return tagged planned download ranges in worker execution order."""
 
+        if historical_data_unavailable(self.store):
+            return []
         if self.fill_gaps:
             return planned_task_factory_with_gaps(self.store, self.start)
         return planned_task_factory(self.store, self.start)
@@ -195,6 +208,42 @@ def _gap_ranges(store: AsyncStoreView) -> list[Dates]:
         for gap in GapFillFactory.gap_factory(store)
         if (dates := gap.dates()) is not None
     ]
+
+
+def _sec_type(store: AsyncStoreView) -> str:
+    """Return the upper-case IB security type for a store view."""
+
+    return str(getattr(store.contract, "secType", "")).upper()
+
+
+def _is_expired(store: AsyncStoreView) -> bool:
+    """Return whether the contract has an exact expiry in the past."""
+
+    expiry = store.expiry
+    return expiry is not None and expiry <= store.now
+
+
+def historical_data_unavailable(store: AsyncStoreView) -> bool:
+    """Return whether IB documents this expired instrument as unavailable."""
+
+    return _sec_type(store) in UNAVAILABLE_EXPIRED_SECTYPES and _is_expired(store)
+
+
+def historical_availability_start(
+    store: AsyncStoreView,
+) -> Union[date, datetime, None]:
+    """Return the earliest point IB availability rules allow requesting."""
+
+    candidates: list[date | datetime] = []
+    if duration_in_secs(store.bar_size) <= 30 and isinstance(store.now, datetime):
+        candidates.append(store.now - SMALL_BAR_MAX_AGE)
+    if _sec_type(store) == "FUT" and _is_expired(store):
+        expiry = store.expiry
+        assert expiry is not None
+        candidates.append(expiry - EXPIRED_FUTURE_MAX_AGE)
+    if candidates:
+        return max(candidates)
+    return None
 
 
 def _range_from_factory(task: TaskFactory, kind: RangeKind) -> PlannedRange | None:

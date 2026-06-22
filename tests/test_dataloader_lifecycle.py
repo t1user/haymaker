@@ -304,6 +304,88 @@ def test_validate_age_uses_run_scoped_now(dataloader_module):
     )
 
 
+def test_validate_age_applies_to_30_second_bars(dataloader_module):
+    """IB's six-month hard limit applies to 30-second bars too."""
+
+    dataloader = dataloader_module
+
+    class FakeJob:
+        bar_size = "30 secs"
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    assert not dataloader.validate_age(
+        FakeJob(),
+        FakeJob.next_date + timedelta(days=181),
+    )
+
+
+def test_validate_age_does_not_apply_to_one_minute_bars(dataloader_module):
+    """Bars larger than 30 seconds should not use the six-month hard limit."""
+
+    dataloader = dataloader_module
+
+    class FakeJob:
+        bar_size = "1 min"
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    assert dataloader.validate_age(
+        FakeJob(),
+        FakeJob.next_date + timedelta(days=1000),
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_skips_small_bar_request_past_age_limit(dataloader_module):
+    """Known unavailable small-bar ranges should be dropped before IB request."""
+
+    dataloader = dataloader_module
+
+    class FakeIB:
+        def __init__(self):
+            self.requests = 0
+
+        async def reqHistoricalDataAsync(self, *args, **kwargs):
+            self.requests += 1
+            return ["unexpected"]
+
+    class FakeJob:
+        contract = FakeContract()
+        next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        bar_size = "30 secs"
+
+        def __init__(self):
+            self.saved_chunks = []
+
+        @property
+        def params(self):
+            return {
+                "contract": self.contract,
+                "endDateTime": self.next_date,
+                "durationStr": "1 D",
+            }
+
+        async def save_chunk(self, chunk):
+            self.saved_chunks.append(chunk)
+            self.next_date = None
+
+        def __str__(self):
+            return "<FakeJob>"
+
+    ib = FakeIB()
+    manager = dataloader.Manager(
+        ib,
+        bar_size="30 secs",
+        now=datetime(2025, 7, 1, tzinfo=timezone.utc),
+    )
+    session = dataloader.DataloaderSession(ib, manager=manager)
+    job = FakeJob()
+
+    await session.download_job("worker", job)
+
+    assert ib.requests == 0
+    assert job.saved_chunks == [None]
+
+
 def test_manager_syncs_injected_pacing_to_request_policy(dataloader_module):
     """Injected pacing should not keep stale request-policy metadata."""
 
@@ -443,7 +525,7 @@ async def test_worker_connection_loss_is_recorded(dataloader_module):
     class FakeJob:
         contract = FakeContract()
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
-        bar_size = dataloader.BARSIZE
+        bar_size = "1 min"
         saved = False
 
         @property
@@ -489,7 +571,7 @@ async def test_worker_failure_does_not_stop_next_job(dataloader_module):
     class FakeJob:
         contract = FakeContract()
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
-        bar_size = dataloader.BARSIZE
+        bar_size = "1 min"
 
         def __init__(self, name, *, fail=False):
             self.name = name
@@ -547,7 +629,7 @@ async def test_worker_pacing_violation_retries_same_job(
             self.contract = contract
             self.next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
             self.saved_chunks = []
-            self.bar_size = dataloader.BARSIZE
+            self.bar_size = "1 min"
 
         @property
         def params(self):

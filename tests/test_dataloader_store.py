@@ -1,6 +1,6 @@
 import importlib
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import ib_insync as ibi
 import pandas as pd
@@ -163,6 +163,109 @@ async def test_task_planner_clamps_start_to_max_period(contract):
     ).ranges()
 
     assert tasks == [(datetime(2025, 1, 7, tzinfo=timezone.utc), now)]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_clamps_small_bars_to_six_month_limit(contract):
+    """Bars 30 seconds or smaller should not request past IB's age limit."""
+
+    now = datetime(2025, 7, 1, tzinfo=timezone.utc)
+    headstamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "30 secs")
+
+    tasks = TaskPlanner(
+        wrapper,
+        headstamp,
+        max_period_days=5000,
+        fill_gaps=False,
+    ).ranges()
+
+    assert tasks == [(now - timedelta(days=180), now)]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_does_not_apply_six_month_limit_to_one_min(contract):
+    """The six-month hard limit does not apply to bars larger than 30 seconds."""
+
+    now = datetime(2025, 7, 1, tzinfo=timezone.utc)
+    headstamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 min")
+
+    tasks = TaskPlanner(
+        wrapper,
+        headstamp,
+        max_period_days=5000,
+        fill_gaps=False,
+    ).ranges()
+
+    assert tasks == [(headstamp, now)]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_clamps_expired_future_to_two_year_limit():
+    """Expired futures should not request older than two years from expiry."""
+
+    contract = ibi.Contract(
+        secType="FUT",
+        localSymbol="NQZ5",
+        lastTradeDateOrContractMonth="20250102",
+    )
+    now = datetime(2025, 1, 3, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 day")
+
+    tasks = TaskPlanner(
+        wrapper,
+        date(2020, 1, 1),
+        max_period_days=5000,
+        fill_gaps=False,
+    ).ranges()
+
+    assert tasks == [(date(2023, 1, 3), date(2025, 1, 2))]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_does_not_apply_expired_future_limit_to_active_future():
+    """The two-year expired-future limit should not clamp active contracts."""
+
+    contract = ibi.Contract(
+        secType="FUT",
+        localSymbol="NQZ9",
+        lastTradeDateOrContractMonth="20290102",
+    )
+    now = datetime(2025, 1, 3, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 day")
+
+    tasks = TaskPlanner(
+        wrapper,
+        date(2020, 1, 1),
+        max_period_days=5000,
+        fill_gaps=False,
+    ).ranges()
+
+    assert tasks == [(date(2020, 1, 1), date(2025, 1, 3))]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_skips_expired_options():
+    """IB documents expired options as unavailable historical data."""
+
+    contract = ibi.Contract(
+        secType="OPT",
+        localSymbol="AAPL  250102C00100000",
+        lastTradeDateOrContractMonth="20250102",
+    )
+    now = datetime(2025, 1, 3, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 day")
+
+    assert (
+        TaskPlanner(
+            wrapper,
+            date(2020, 1, 1),
+            max_period_days=5000,
+            fill_gaps=False,
+        ).ranges()
+        == []
+    )
 
 
 @pytest.mark.asyncio

@@ -71,6 +71,26 @@ The dataloader uses canonical IB bar-size spelling such as ``1 secs`` and
 ``1 hour``. Noncanonical spellings such as ``1 sec`` are rejected before a
 historical request is built.
 
+Historical Availability Limits
+==============================
+
+The dataloader applies IBKR's documented hard availability limits when they can
+be known from the contract and configured bar size:
+
+* bars of ``30 secs`` or smaller are not requested more than six months back;
+* expired futures are not requested earlier than two years before the exact
+  contract expiry date;
+* expired options, futures options, and warrants are skipped when their exact
+  expiry date is known.
+
+Other IB unavailability cases, such as delisted securities, exchange moves,
+expired future spreads, or contract-specific gaps in intraday futures history,
+are not reliably knowable from the dataloader's local inputs. Those cases fall
+back to IB's response: when backfill reaches a no-data boundary for a series
+that already has stored data, the dataloader marks that series with
+``backfill_exhausted: true`` and avoids repeating older backfill requests on
+future runs.
+
 Datastore
 =========
 
