@@ -405,6 +405,9 @@ class Manager:
         self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
             self.pacing = request_pacing_factory(self.ib, self.bar_size, self.wts)
+        else:
+            self.pacing.bar_size = self.bar_size
+            self.pacing.wts = self.wts
         self.new_job_generator = self._job_generator()
 
     def get_store(self) -> AsyncAbstractBaseStore:

@@ -206,6 +206,26 @@ def test_daily_download_job_uses_date_end_datetime(dataloader_module):
     assert job.params["endDateTime"] == date(2025, 1, 5)
 
 
+def test_manager_syncs_injected_pacing_to_request_policy(dataloader_module):
+    """Injected pacing should not keep stale request-policy metadata."""
+
+    dataloader = dataloader_module
+    pacing = dataloader.request_pacing_factory(
+        object(), bar_size="30 secs", wts="TRADES"
+    )
+
+    manager = dataloader.Manager(
+        object(),
+        pacing=pacing,
+        bar_size="1 day",
+        wts="MIDPOINT",
+    )
+
+    assert manager.pacing is pacing
+    assert pacing.bar_size == "1 day"
+    assert pacing.wts == "MIDPOINT"
+
+
 @pytest.mark.asyncio
 async def test_manager_policy_flows_to_store_and_download_job(
     monkeypatch, dataloader_module
