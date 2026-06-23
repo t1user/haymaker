@@ -24,7 +24,7 @@ Runtime singletons are assembled in `haymaker/manager.py`:
 - `CONTROLLER`: broker/state reconciliation and order gateway,
 - `JOBS`: startup data acquisition plus streamer execution.
 
-`haymaker/app.py` bootstraps live execution: it sets up logging, imports the runtime singletons, builds a live `App` composition from config, and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns futures-roll scheduling, the fixed daily contract-refresh restart timer, controller startup, and streamer jobs for each connection cycle.
+`haymaker/app.py` bootstraps live execution: it sets up logging, imports the runtime singletons, builds a live `App` composition from config, schedules the daily futures roll once for the app process, and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns controller startup and streamer jobs for each connection cycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames to a configured datastore.
 
@@ -35,14 +35,14 @@ The research package is intentionally separate from live execution. It works dir
 ### Live Execution Core
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
-- `haymaker/app.py`: live application bootstrap, top-level `App.run()`, and `LiveRuntime`, which owns live workload startup/cleanup, the fixed daily contract-refresh restart timer, and futures-roll scheduling.
+- `haymaker/app.py`: live application bootstrap, top-level `App.run()`, the app-lifetime futures-roll schedule, and `LiveRuntime`, which owns live workload startup/cleanup for each supervised connection cycle.
 - `haymaker/supervisor/`: IB socket supervisor package for owned managed
   connections. It owns workload task lifecycle, broker auto-recovery waits,
   probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
   each state through a race between state completion, lifecycle requests, and
   workload completion. It does not manage the gateway process.
 - `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
-- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, back-reports known fills before position comparison, can request a reconnect before corrective mutations, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
+- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, back-reports known fills before position comparison, can request one reconnect before corrective mutations on the first sync after hold/startup, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/state_machine.py`: persisted strategy and order state, rejection tracking, active positions, and locks.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.

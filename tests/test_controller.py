@@ -957,6 +957,34 @@ async def test_sync_disables_trading_when_recovery_does_not_converge(
     assert controller._trading_disabled
 
 
+@pytest.mark.asyncio
+async def test_sync_success_clears_restart_before_correction(controller, monkeypatch):
+    restart_flags = []
+    controller._restart_before_correction = True
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+
+    async def successful_sync(self):
+        restart_flags.append(self._restart_before_correction)
+        return True
+
+    monkeypatch.setattr(SyncCoordinator, "run", successful_sync)
+
+    result = await controller.sync()
+
+    assert result
+    assert restart_flags == [True]
+    assert not controller._restart_before_correction
+
+
+def test_set_hold_arms_restart_before_correction(controller):
+    controller._restart_before_correction = False
+
+    controller.set_hold()
+
+    assert controller._hold
+    assert controller._restart_before_correction
+
+
 def test_bracket_sync_does_not_report_protected_broker_position(
     controller, trade, monkeypatch
 ):

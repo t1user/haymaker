@@ -73,7 +73,7 @@ class Controller(Atom):
     _health_check_triggers: list[str] = field(default_factory=list, repr=False)
     _new_position_lock: bool = False
     _trading_disabled: bool = False
-    _restart_on_failed_sync: bool = True
+    _restart_before_correction: bool = True
 
     @classmethod
     def from_config(
@@ -196,7 +196,18 @@ class Controller(Atom):
         ]
 
     def set_hold(self) -> None:
+        """Hold event-driven record updates and arm first-sync reconfirmation.
+
+        The first sync after startup, reconnect, or an explicit hold may see
+        incomplete broker order/position registers.  If that first sync finds a
+        concrete order or position mismatch, the controller requests one fresh
+        broker connection before mutating local records.  A clean sync clears
+        this flag so later live mismatches are treated as reconciliation issues,
+        not connection freshness issues.
+        """
+
         self._hold = True
+        self._restart_before_correction = True
         log.debug("hold set")
 
     def release_hold(self) -> None:
@@ -269,9 +280,10 @@ class Controller(Atom):
         ``SyncCoordinator`` performs one pass and never disables trading.  A
         ``False`` result means broker state could not be verified or a recovery
         action changed local or broker state, so the controller waits and
-        retries from fresh broker/local reads.  A coordinator can request a
-        reconnect before corrective mutations; the next pass is then allowed to
-        correct state if the same mismatch persists.  ``SyncBrokenStateError``
+        retries from fresh broker/local reads.  The first sync after hold may
+        request one reconnect before corrective mutations; a clean sync clears
+        that startup/reconnect reconfirmation flag so later mismatches are
+        corrected or rejected without another restart.  ``SyncBrokenStateError``
         means broker/local state is unsafe and trading must be disabled
         immediately.
         """
@@ -285,10 +297,10 @@ class Controller(Atom):
         for attempt in range(1, self.sync_max_attempts + 1):
             if attempt > 1:
                 log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
-            coordinator = SyncCoordinator(self, self._restart_on_failed_sync)
+            coordinator = SyncCoordinator(self, self._restart_before_correction)
             try:
                 if await coordinator.run():
-                    self._restart_on_failed_sync = True
+                    self._restart_before_correction = False
                     log.debug("--- Sync completed ---")
                     return True
             except SyncBrokenStateError as exc:
@@ -299,7 +311,7 @@ class Controller(Atom):
                 log.debug("Sync did not complete; will retry checks.")
                 await asyncio.sleep(self.sync_resync_delay)
                 if coordinator.request_restart:
-                    self._restart_on_failed_sync = False
+                    self._restart_before_correction = False
                     self.ib.disconnect()
 
         self.disable_trading("sync did not converge")
