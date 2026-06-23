@@ -123,7 +123,7 @@ async def test_session_producer_requeues_active_jobs_before_new_discovery(
         ib=None,
         active_jobs=[active_job],
         new_job_generator=new_jobs(),
-        pacing=dataloader.request_pacing_factory(object()),
+        pacing=dataloader.RequestPacing(object()),
     )
     session = dataloader.DataloaderSession(object(), manager=manager)
     queue = asyncio.Queue()
@@ -393,7 +393,7 @@ def test_manager_preserves_injected_pacing_policy(dataloader_module):
     """Injected pacing should not be silently mutated by Manager setup."""
 
     dataloader = dataloader_module
-    pacing = dataloader.request_pacing_factory(object())
+    pacing = dataloader.RequestPacing(object())
 
     manager = dataloader.Manager(
         object(),

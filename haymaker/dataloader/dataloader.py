@@ -75,22 +75,6 @@ log.debug(
 )
 
 
-def request_pacing_factory(ib: ibi.IB) -> RequestPacing:
-    """Create request pacing from dataloader request policy."""
-
-    return RequestPacing(
-        ib,
-        no_restriction=PACER_NO_RESTRICTION,
-        allowance_fraction=PACER_ALLOWANCE_FRACTION,
-    )
-
-
-def current_session_now() -> date | datetime:
-    """Return current time normalized for the configured bar size."""
-
-    return normalize_point(datetime.now(timezone.utc), BARSIZE)
-
-
 class Params(TypedDict):
     contract: ibi.Contract
     endDateTime: datetime | date | str
@@ -428,7 +412,7 @@ class Manager:
     auto_save_interval: int = AUTO_SAVE_INTERVAL
     wts: str = WTS
     bar_size: str = BARSIZE
-    now: date | datetime = field(default_factory=current_session_now)
+    now: date | datetime = cast(date | datetime, None)
     active_jobs: list[DownloadJob] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
     gap_learner: RunGapLearner = field(default_factory=RunGapLearner, repr=False)
@@ -437,9 +421,15 @@ class Manager:
     def __post_init__(self) -> None:
         self.bar_size = bar_size_validator(self.bar_size)
         self.wts = wts_validator(self.wts)
+        if self.now is None:
+            self.now = datetime.now(timezone.utc)
         self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
-            self.pacing = request_pacing_factory(self.ib)
+            self.pacing = RequestPacing(
+                self.ib,
+                no_restriction=PACER_NO_RESTRICTION,
+                allowance_fraction=PACER_ALLOWANCE_FRACTION,
+            )
         self.new_job_generator = self._job_generator()
 
     @property
