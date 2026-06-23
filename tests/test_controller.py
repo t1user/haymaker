@@ -976,12 +976,22 @@ async def test_sync_success_clears_restart_before_correction(controller, monkeyp
     assert not controller._restart_before_correction
 
 
-def test_set_hold_arms_restart_before_correction(controller):
+@pytest.mark.asyncio
+async def test_completed_sync_arms_restart(controller, monkeypatch):
+    restart_flags = []
     controller._restart_before_correction = False
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
 
-    controller.set_hold()
+    async def successful_sync(self):
+        restart_flags.append(self._restart_before_correction)
+        return True
 
-    assert controller._hold
+    monkeypatch.setattr(SyncCoordinator, "run", successful_sync)
+
+    result = await controller.run()
+
+    assert result
+    assert restart_flags == [False]
     assert controller._restart_before_correction
 
 

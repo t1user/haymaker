@@ -207,7 +207,6 @@ class Controller(Atom):
         """
 
         self._hold = True
-        self._restart_before_correction = True
         log.debug("hold set")
 
     def release_hold(self) -> None:
@@ -263,6 +262,7 @@ class Controller(Atom):
             self.sm.clear_strategies()
 
         log.debug("Controller run sequence completed successfully.")
+        self._restart_before_correction = True
         # now Streamers will run
         return True
 
@@ -301,6 +301,8 @@ class Controller(Atom):
             try:
                 if await coordinator.run():
                     self._restart_before_correction = False
+                    if self._trading_disabled:
+                        log.debug(f"TRADING DISABLED")
                     log.debug("--- Sync completed ---")
                     return True
             except SyncBrokenStateError as exc:
