@@ -11,6 +11,16 @@ log = logging.getLogger(__name__)
 
 
 class OrderSync:
+    """Classify broker/local order state for one sync pass.
+
+    The pass performs housekeeping immediately: open broker trades relink local
+    order records, inactive local records are pruned, and local active orders
+    that completed while disconnected are matched to session trades or fills.
+    Unknown broker orders and local active orders that cannot be resolved are
+    exposed as errors for :class:`~haymaker.controller.sync_coordinator.SyncCoordinator`
+    to handle.
+    """
+
     def __init__(self, ib: ibi.IB, sm: StateMachine) -> None:
         self.ib = ib
         self.sm = sm
@@ -22,7 +32,6 @@ class OrderSync:
         self.done: list[ibi.Trade] = []
         # local trades that cannot be resolved with broker
         self.errors: list[ibi.Trade] = []  # <- We're potentially fucked
-        self._issues: list[int] = []  # done orders for double checking
 
         self.update_trades().review_trades().handle_inactive_trades().report()
 
@@ -60,10 +69,11 @@ class OrderSync:
                     # while we were disconnected and report it as appropriate
                     self.inactive.append(oi.trade)
                 else:
-                    log.debug(f"Will prune order: {orderId}")
+                    # log.debug(f"Will prune order: {orderId}")
                     # this order is no longer of interest
                     # it's inactive in our records and inactive in IB
-                    self.sm.prune_order(orderId)  # <- CHANGING RECORDS
+                    # self.sm.prune_order(orderId)  # <- CHANGING RECORDS
+                    pass
         return self
 
     def handle_inactive_trades(self) -> Self:
@@ -145,17 +155,6 @@ class OrderSync:
             )
             return trade
 
-    async def verify(self) -> Self:
-        # This is dead code now; use or delete
-        completed_trades = await self.ib.reqCompletedOrdersAsync(True)
-        completed_trades_list = [trade.order.permId for trade in completed_trades]
-        my_orders = [oi.permId for oi in self.sm._orders.values()]
-        self._issues = [
-            permId for permId in my_orders if permId in completed_trades_list
-        ]
-        log.debug(f"{self._issues=}")
-        return self
-
     def report(self) -> Self:
         if any(self.lists):
             log.debug(
@@ -176,10 +175,18 @@ class OrderSync:
     def is_ok(self) -> bool:
         return not any(self.lists)
 
+    @property
+    def is_error(self) -> bool:
+        return bool(self.errors) or bool(self.unknown)
+
 
 class PositionSync:
-    """
-    Must be called after :class:`.OrderSync`
+    """Compare broker positions with aggregate local strategy positions.
+
+    This must run after :class:`OrderSync` has had a chance to back-report known
+    completed fills.  Otherwise a legitimate outage fill could still look like
+    a position mismatch and be handled as an error instead of normal execution
+    replay.
     """
 
     def __init__(self, ib: ibi.IB, sm: StateMachine):
@@ -220,3 +227,7 @@ class PositionSync:
     @property
     def is_ok(self) -> bool:
         return not bool(self.errors)
+
+    @property
+    def is_error(self) -> bool:
+        return bool(self.errors)

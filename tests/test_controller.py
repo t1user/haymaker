@@ -149,17 +149,66 @@ async def test_StateMachine_linked_to_ib_newOrderEvent(caplog, Atom):
 
 def test_register_position_skips_already_accounted_execution(controller, trade):
     strategy = controller.sm.strategy["coolstrategy"]
-    controller.sm.order[trade.order.orderId] = OrderInfo(
-        "coolstrategy", "OPEN", trade, {}
-    )
+    order_info = OrderInfo("coolstrategy", "OPEN", trade, {})
+    controller.sm.order[trade.order.orderId] = order_info
 
-    controller.register_position(strategy, trade, trade.fills[0])
-    controller.register_position(strategy, trade, trade.fills[0])
+    controller.register_position(order_info, trade.fills[0])
+    controller.register_position(order_info, trade.fills[0])
 
     assert strategy.position == 1
     assert controller.sm.order[trade.order.orderId].accounted_exec_ids == [
         trade.fills[0].execution.execId
     ]
+
+
+@pytest.mark.asyncio
+async def test_on_exec_details_matches_zero_order_trade_by_trade_perm_id(
+    controller, trade
+):
+    strategy = controller.sm.strategy["coolstrategy"]
+    order_info = OrderInfo("coolstrategy", "OPEN", trade, {})
+    controller.sm.save_order(order_info)
+    replayed_trade = deepcopy(trade)
+    replayed_trade.order.orderId = 0
+    replayed_trade.orderStatus.orderId = 0
+    fill = replayed_trade.fills[0]
+    fill.execution.orderId = 888001
+    fill.execution.permId = 999001
+
+    await controller.onExecDetailsEvent(replayed_trade, fill)
+    await controller.onExecDetailsEvent(replayed_trade, fill)
+
+    assert strategy.position == 1
+    assert controller.sm.order[trade.order.orderId] is order_info
+    assert order_info.accounted_exec_ids == [fill.execution.execId]
+    assert "unknown_ES" not in controller.sm.strategy
+
+
+@pytest.mark.asyncio
+async def test_on_exec_details_creates_unknown_record_for_unmatched_zero_order(
+    controller, trade, caplog
+):
+    replayed_trade = deepcopy(trade)
+    replayed_trade.order.orderId = 0
+    replayed_trade.order.permId = 999001
+    replayed_trade.orderStatus.orderId = 0
+    fill = replayed_trade.fills[0]
+    fill.execution.orderId = 888001
+    fill.execution.permId = 999001
+    fill.execution.execId = "zero-order-fill"
+
+    with caplog.at_level(logging.ERROR):
+        await controller.onExecDetailsEvent(replayed_trade, fill)
+        await controller.onExecDetailsEvent(replayed_trade, fill)
+
+    order_info = controller.sm.order[999001]
+    strategy = controller.sm.strategy["unknown_ES"]
+    assert order_info.trade is replayed_trade
+    assert order_info.trade.order.orderId == 0
+    assert order_info.strategy == "unknown_ES"
+    assert order_info.accounted_exec_ids == ["zero-order-fill"]
+    assert strategy.position == 1
+    assert "using permId as local order key" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -252,12 +301,12 @@ async def test_commission_report_skips_unknown_zero_order_id(
 
     controller.release_hold()
     monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
-    caplog.set_level(logging.ERROR)
+    caplog.set_level(logging.DEBUG)
 
     await controller.onCommissionReport(trade, fill, report)
 
     assert 0 not in controller.sm.order
-    assert "Commission report for unknown trade: 0 RTYM6" in caplog.text
+    assert "Skipping blotter entry for orderId==0, permId: 0" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -324,6 +373,7 @@ async def test_sync_coordinator_returns_false_for_broker_state_timeout(
     result = await coordinator.run()
 
     assert not result
+    assert coordinator.request_restart
     assert not controller._trading_disabled
 
 
@@ -428,6 +478,30 @@ async def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
 
     assert not result
     assert cancelled == [trade]
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_coordinator_requests_restart_before_unknown_order_correction(
+    controller, trade, monkeypatch
+):
+    cancelled = []
+
+    async def requested_positions():
+        return []
+
+    controller.cancel_unknown_trades = True
+    set_broker_state(controller, monkeypatch, open_trades=(trade,))
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(controller, "cancel", lambda trade: cancelled.append(trade))
+
+    coordinator = SyncCoordinator(controller, restart_before_correction=True)
+    result = await coordinator.run()
+
+    assert not result
+    assert coordinator.request_restart
+    assert cancelled == []
     assert not controller._trading_disabled
 
 
@@ -681,6 +755,59 @@ async def test_sync_coordinator_relinks_open_trade_and_completes(
 
 
 @pytest.mark.asyncio
+async def test_sync_coordinator_back_reports_done_trade_before_restart_gate(
+    controller, trade, monkeypatch
+):
+    old_trade = deepcopy(trade)
+    old_trade.orderStatus = ibi.OrderStatus(status="Submitted", filled=0, remaining=1)
+    old_trade.fills = []
+    done_trade = deepcopy(trade)
+    done_trade.order.orderId = 0
+    done_trade.orderStatus.orderId = 0
+    controller.sm.strategy["coolstrategy"].active_contract = old_trade.contract
+    controller.sm.strategy["coolstrategy"].position = 0
+    controller.sm.order[old_trade.order.orderId] = OrderInfo(
+        "coolstrategy", "OPEN", old_trade, {}
+    )
+    broker_position = ibi.Position(
+        account="DU123",
+        contract=old_trade.contract,
+        position=1,
+        avgCost=1,
+    )
+    bracket_checked = []
+
+    async def requested_positions():
+        return [broker_position]
+
+    set_broker_state(
+        controller,
+        monkeypatch,
+        positions=(broker_position,),
+        trades=(done_trade,),
+    )
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(
+        BracketSyncAction,
+        "from_policy",
+        staticmethod(lambda policy, controller: bracket_checked.append(policy)),
+    )
+
+    coordinator = SyncCoordinator(controller, restart_before_correction=True)
+    result = await coordinator.run()
+
+    assert not result
+    assert not coordinator.request_restart
+    assert await wait_for_condition(
+        lambda: controller.sm.strategy["coolstrategy"].position == 1
+    )
+    assert controller.sm.order[old_trade.order.orderId].trade is done_trade
+    assert bracket_checked == []
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
 async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
     controller, trade, monkeypatch
 ):
@@ -713,6 +840,71 @@ async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
 
     assert not result
     assert old_trade.order.orderId not in controller.sm.order
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_coordinator_requests_restart_before_position_correction(
+    controller, trade, monkeypatch
+):
+    corrected = []
+
+    async def requested_positions():
+        return []
+
+    def fake_handle_error_positions(self, errors):
+        corrected.append(errors)
+
+    controller.sm.strategy["coolstrategy"].active_contract = trade.contract
+    controller.sm.strategy["coolstrategy"].position = 1
+    set_broker_state(controller, monkeypatch)
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(
+        SyncCoordinator,
+        "handle_error_positions",
+        fake_handle_error_positions,
+    )
+
+    coordinator = SyncCoordinator(controller, restart_before_correction=True)
+    result = await coordinator.run()
+
+    assert not result
+    assert coordinator.request_restart
+    assert corrected == []
+    assert controller.sm.strategy["coolstrategy"].position == 1
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_coordinator_allows_position_correction_after_restart(
+    controller, trade, monkeypatch
+):
+    corrected = []
+
+    async def requested_positions():
+        return []
+
+    def fake_handle_error_positions(self, errors):
+        corrected.append(errors)
+
+    controller.sm.strategy["coolstrategy"].active_contract = trade.contract
+    controller.sm.strategy["coolstrategy"].position = 1
+    set_broker_state(controller, monkeypatch)
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    monkeypatch.setattr(
+        SyncCoordinator,
+        "handle_error_positions",
+        fake_handle_error_positions,
+    )
+
+    coordinator = SyncCoordinator(controller, restart_before_correction=False)
+    result = await coordinator.run()
+
+    assert not result
+    assert not coordinator.request_restart
+    assert corrected == [{trade.contract: 1.0}]
     assert not controller._trading_disabled
 
 

@@ -292,7 +292,10 @@ class HistoricalDataStreamer(Streamer):
         log.debug(f"{self!s} requesting bars {self._durationStr=}")
         await self.sync_last_bar_date()
         bars = await self.streaming_func()
-        log.debug(f"{self!s} received historical bars, last bar date: {bars[-1].date}")
+        log.debug(
+            f"{self!s} received historical bars, last bar date: "
+            f"{bars[-1].date if bars else bars}"
+        )
         self._set_timeout(bars.updateEvent, "bars")
 
         try:

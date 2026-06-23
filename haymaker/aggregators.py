@@ -5,6 +5,7 @@ import itertools
 import logging
 import operator as op
 from collections import deque
+from collections.abc import Callable
 from datetime import date, datetime
 from functools import cached_property
 from typing import Literal
@@ -56,8 +57,8 @@ class BarAggregator(Atom):
         future_adjust_type: Literal["add", "mul", None] = "add",
     ):
         Atom.__init__(self)
-        self.filter = filter
-        self.filter += self.onDataBar
+        self.filter: CountBars | VolumeBars | TimeBars | NoFilter = filter
+        self.filter.connect(self.onDataBar)
         self.future_adjust_type = future_adjust_type
         # if future needs to be adjusted; set by onContractChanged
         self._future_adjust_flag = False
@@ -192,16 +193,16 @@ class BarAggregator(Atom):
             raise
 
     @cached_property
-    def operator(self):
+    def operator(self) -> Callable[[float, float], float] | None:
         return {"add": op.add, "mul": op.mul, None: None}.get(self.future_adjust_type)
 
     @cached_property
-    def reverse_operator(self):
+    def reverse_operator(self) -> Callable[[float, float], float] | None:
         return {"add": op.sub, "mul": op.truediv, None: None}.get(
             self.future_adjust_type
         )
 
-    def adjust_future(self, bars: ibi.BarDataList):
+    def adjust_future(self, bars: ibi.BarDataList) -> None:
         """
         Create continuous future price series on future contract
         change.
@@ -217,21 +218,26 @@ class BarAggregator(Atom):
         log.warning(f"{self!s} adjusting future.")
 
         old_bar = self.filter.bars[-1]
+        new_bar: ibi.BarData | None = None
         for bar_ in reversed(bars):
             if bar_.date == old_bar.date:
                 new_bar = bar_
                 break
         assert new_bar, f"{self!s} failed future adjustment: non-overlapping series."
+        reverse_operator = self.reverse_operator
+        operator = self.operator
+        assert reverse_operator is not None
+        assert operator is not None
 
-        value = self.reverse_operator(new_bar.close, old_bar.close)
+        value = reverse_operator(new_bar.close, old_bar.close)
         log.warning(
             f"FUTURES ADJUSTMENT | old bar: {old_bar} | new bar: {new_bar} "
-            f"| adjustment basis: {value} | operator: {self.operator}"
+            f"| adjustment basis: {value} | operator: {operator}"
         )
 
         for bar in self.filter.bars:
             for field in ("open", "high", "low", "close", "average"):
-                setattr(bar, field, self.operator(getattr(bar, field), value))
+                setattr(bar, field, operator(getattr(bar, field), value))
 
         self._future_adjust_flag = False
 

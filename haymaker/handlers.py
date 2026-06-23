@@ -46,6 +46,12 @@ class IBHandlers:
         self.log.info("Connection established")
         self.account = self.ib.client.getAccounts()[0]
         await self.ib.accountSummaryAsync()
+        self._reset_pnl_subscription
+
+    def _reset_pnl_subscription(self) -> None:
+        key = (self.account, "")
+        if key in self.ib.wrapper.pnlKey2ReqId:
+            self.ib.cancelPnL(self.account)
         self.ib.reqPnL(self.account)
 
     def onDisconnected(self):

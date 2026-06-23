@@ -7,8 +7,6 @@ replacement.  It excludes the experimental dashboard.
 
 - `haymaker/handlers.py`: `IB.accountSummary()` now awaits
   `IB.accountSummaryAsync()` in the connected event handler.
-- `haymaker/controller/sync_routines.py`: `IB.reqCompletedOrders()` now awaits
-  `IB.reqCompletedOrdersAsync()` in `OrderSync.verify()`.
 - `haymaker/controller/controller.py`: `IB.qualifyContracts()` now awaits
   `IB.qualifyContractsAsync()` in the nuke close path.
 

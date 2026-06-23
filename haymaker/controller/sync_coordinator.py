@@ -2,9 +2,10 @@
 
 Sync starts by validating that ``ib.positions()`` agrees with
 ``await ib.reqPositionsAsync()``.  If broker state verification fails, the pass
-returns ``False`` without attempting recovery or correction actions;
-:meth:`Controller.sync` owns checking the connection, retrying, and deciding
-whether repeated failures should disable trading.
+requests a reconnect and returns ``False`` without attempting recovery or
+correction actions; :meth:`Controller.sync` owns checking the connection,
+restarting once, retrying, and deciding whether repeated failures should
+disable trading.
 
 After broker validation, each step reads current state directly from
 ``controller.ib`` or ``controller.sm`` instead of using stored broker/local
@@ -20,8 +21,10 @@ snapshots.  The ordered flow is:
 
 The coordinator does not disable trading and does not retry.  Any recovery
 action returns ``False`` so :meth:`Controller.sync` can start a fresh pass from
-current broker/local state.  Non-retryable unsafe state raises
-``SyncBrokenStateError``.
+current broker/local state.  A caller can request a reconnect-before-correction
+mode so known-fill housekeeping runs first, but unresolved order or position
+errors only set ``request_restart`` instead of mutating broker/local state.
+Non-retryable unsafe state raises ``SyncBrokenStateError``.
 """
 
 from __future__ import annotations
@@ -44,15 +47,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class BrokerStateError(Exception):
-    """Raised when broker state verification failed unexpectedly."""
-
-    def __init__(self, reason: str) -> None:
-        """Initialize the exception with a human-readable failure reason."""
-        super().__init__(reason)
-        self.reason = reason
-
-
 class SyncBrokenStateError(Exception):
     """Raised when sync detects unsafe state that must stop trading."""
 
@@ -69,13 +63,28 @@ class SyncCoordinator:
     fresh broker/local reads.  Retryable broker connection and broker-state
     verification failures also return ``False``.  Terminal safety failures
     raise ``SyncBrokenStateError``; :class:`Controller` owns the decision to
-    disable trading.
+    disable trading.  Known completed trades are back-reported before position
+    comparison even when corrective actions are gated behind a reconnect.
     """
 
-    def __init__(self, controller: Controller) -> None:
-        """Initialize the coordinator for one controller sync run."""
+    def __init__(
+        self, controller: Controller, restart_before_correction: bool = False
+    ) -> None:
+        """Initialize the coordinator for one controller sync run.
+
+        Args:
+            controller: Controller whose broker and local state should be
+                reconciled.
+            restart_before_correction: When ``True``, unresolved order or
+                position mismatches set ``request_restart`` and end the pass
+                before cancelling unknown orders, pruning local order records,
+                or changing strategy positions.  Trade-object refreshes and
+                known completed-fill back-reporting still run first.
+        """
         self.controller = controller
+        self.request_restart = False
         self._faulty_trades: list[OrderInfo] = []
+        self._restart_before_correction = restart_before_correction
 
     async def run(self) -> bool:
         """Run one sync pass against current broker and local state.
@@ -83,29 +92,41 @@ class SyncCoordinator:
         Returns:
             ``True`` when sync completed without recovery actions or terminal
             safety failures.  ``False`` means the controller should retry the
-            sync from fresh broker/local reads.
+            sync from fresh broker/local reads.  If ``request_restart`` is set
+            after ``False``, the caller should refresh the broker connection
+            before the next pass.
 
         Raises:
             SyncBrokenStateError: Raised for unsafe state that should stop
                 trading immediately.
         """
 
-        try:
-            broker_state_verified = await verify_broker_position_source(
-                self.controller.ib,
-                self.controller.broker_request_timeout,
-            )
-        except BrokerStateError as exc:
-            log.error(f"Broker state verification failed: {exc.reason}")
-            return False
-        if not broker_state_verified:
+        if not await verify_broker_position_source(
+            self.controller.ib,
+            self.controller.broker_request_timeout,
+        ):
+            self.request_restart = True
             return False
 
         order_sync = OrderSync(self.controller.ib, self.controller.sm)
+
         self.controller.release_hold()
         if order_sync.done:
             self.handle_done_trades(order_sync.done)
             await asyncio.sleep(0)
+
+        position_sync = PositionSync(self.controller.ib, self.controller.sm)
+
+        if (
+            order_sync.is_error or position_sync.is_error
+        ) and self._restart_before_correction:
+            self.request_restart = True
+            return False
+
+        # these are corrective actions that will be taken only if they
+        # persist after a restart
+
+        # order fixes
         if order_sync.errors:
             self.handle_error_trades(order_sync.errors)
             await asyncio.sleep(0)
@@ -116,7 +137,7 @@ class SyncCoordinator:
         if order_sync.done or order_sync.errors:
             return False
 
-        position_sync = PositionSync(self.controller.ib, self.controller.sm)
+        # position fixes
         if position_sync.errors:
             try:
                 self.handle_error_positions(position_sync.errors)
@@ -133,7 +154,6 @@ class SyncCoordinator:
             )
         except BracketSyncError as exc:
             raise SyncBrokenStateError("bracket sync failed") from exc
-
         return True
 
     def handle_unknown_trades(self, trades: list[ibi.Trade]) -> bool:
@@ -244,11 +264,11 @@ async def verify_broker_position_source(ib: ibi.IB, timeout: float) -> bool:
             await asyncio.wait_for(ib.reqPositionsAsync(), timeout)
         )
     except asyncio.TimeoutError:
-        log.debug(f"broker position request timed out after {timeout}s")
+        log.warning(f"broker position request timed out after {timeout}s")
         return False
     except Exception as exc:
-        reason = f"broker position request failed: {exc!r}"
-        raise BrokerStateError(reason) from exc
+        log.warning(f"broker position request failed: {exc!r}")
+        return False
 
     positions_dict = {
         position.contract.localSymbol: position.position for position in positions
