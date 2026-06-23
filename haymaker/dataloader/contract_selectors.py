@@ -275,6 +275,6 @@ class CurrentExpiredFutureContractSelector(FutureContractSelector):
 
 
 class ExactFutureContractSelector(FutureContractSelector):
-    """Just pick the future contract without messing with it."""
+    """Named selector mode that uses the base future contract exactly as configured."""
 
     pass

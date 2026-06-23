@@ -61,7 +61,7 @@ class FakeIB:
 def test_historical_allowance_fraction_scales_capacity():
     """Allowance fraction should scale capacity while reserving probe room."""
 
-    pacing = RequestPacing(FakeIB(), "30 secs", "TRADES", allowance_fraction=2)
+    pacing = RequestPacing(FakeIB(), allowance_fraction=2)
 
     assert (
         pacing.historical.rules[0].capacity
@@ -72,7 +72,7 @@ def test_historical_allowance_fraction_scales_capacity():
 def test_historical_probe_reserve_does_not_reduce_same_key_limit():
     """Supervisor probe reserve should only affect the global historical bucket."""
 
-    pacing = RequestPacing(FakeIB(), "30 secs", "TRADES")
+    pacing = RequestPacing(FakeIB())
 
     assert pacing.historical.rules[0].capacity == (
         HISTORICAL_GLOBAL_LIMIT - HISTORICAL_PROBE_RESERVE
@@ -84,7 +84,7 @@ def test_bid_ask_historical_profile_uses_weight_two():
     """BID_ASK requests should consume double historical pacing weight."""
 
     contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
-    pacing = RequestPacing(FakeIB(), "30 secs", "BID_ASK")
+    pacing = RequestPacing(FakeIB())
 
     profile = pacing._historical_profile(
         RequestKind.HISTORICAL_DATA,
@@ -106,7 +106,7 @@ def test_identical_historical_request_cooldown():
     """Identical historical requests should be delayed by the cooldown rule."""
 
     contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
-    pacing = RequestPacing(FakeIB(), "30 secs", "TRADES")
+    pacing = RequestPacing(FakeIB())
     profile = pacing._historical_profile(
         RequestKind.HISTORICAL_DATA,
         contract,
@@ -131,7 +131,7 @@ def test_pacing_violation_registry_uses_hashable_contracts():
     """Pacing violation tracking should use ib_insync contract hash semantics."""
 
     contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
-    pacing = RequestPacing(FakeIB(), "30 secs", "TRADES")
+    pacing = RequestPacing(FakeIB())
 
     pacing.registry.register(1, 162, "pacing violation", contract)
 
@@ -143,7 +143,7 @@ def test_historical_profile_rejects_unqualified_ib_contracts():
     """Historical pacing should not synthesize keys for unqualified contracts."""
 
     contract = ibi.Future(symbol="ES", exchange="CME", currency="USD")
-    pacing = RequestPacing(FakeIB(), "30 secs", "TRADES")
+    pacing = RequestPacing(FakeIB())
 
     with pytest.raises(ValueError, match="can't be hashed"):
         pacing._historical_profile(
@@ -166,7 +166,7 @@ async def test_no_restriction_bypasses_identical_request_cooldown():
 
     contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
     ib = FakeIB()
-    pacing = RequestPacing(ib, "30 secs", "TRADES", no_restriction=True)
+    pacing = RequestPacing(ib, no_restriction=True)
 
     await pacing.historical_data(
         contract,
@@ -196,7 +196,7 @@ async def test_contract_details_requests_are_paced_without_caching():
 
     contract = ibi.Future(symbol="ES", exchange="CME", currency="USD")
     ib = FakeIB()
-    pacing = RequestPacing(ib, "30 secs", "TRADES", no_restriction=True)
+    pacing = RequestPacing(ib, no_restriction=True)
 
     await pacing.contract_details(contract)
     await pacing.contract_details(contract)
@@ -209,7 +209,7 @@ async def test_historical_data_rejects_updating_requests():
     """Dataloader historical requests must be finite requests."""
 
     contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
-    pacing = RequestPacing(FakeIB(), "30 secs", "TRADES", no_restriction=True)
+    pacing = RequestPacing(FakeIB(), no_restriction=True)
 
     with pytest.raises(ValueError, match="finite"):
         await pacing.historical_data(
@@ -230,7 +230,7 @@ async def test_contfuture_historical_data_requires_empty_end_datetime():
 
     contract = ibi.ContFuture(symbol="ES", exchange="CME", currency="USD", conId=123)
     ib = FakeIB()
-    pacing = RequestPacing(ib, "30 secs", "TRADES", no_restriction=True)
+    pacing = RequestPacing(ib, no_restriction=True)
 
     with pytest.raises(ValueError, match="empty endDateTime"):
         await pacing.historical_data(

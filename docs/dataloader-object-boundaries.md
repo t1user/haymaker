@@ -13,7 +13,7 @@ remain separate work.
 - Requires the caller to provide the run's bar size explicitly; it does not
   carry a compatibility default.
 - Loads existing stored data once before scheduling.
-- Exposes `from_date`, `to_date`, and `expiry_or_now()` for scheduling.
+- Exposes `backfill_boundary`, `to_date`, and `expiry_or_now()` for scheduling.
 - Normalizes read-side scheduling boundaries according to the configured bar
   size: intraday values are UTC-aware `datetime` objects, while `1 day`,
   `1 week`, and `1 month` values are `date` objects.
@@ -26,12 +26,11 @@ remain separate work.
 - Uses date-only scheduling points for daily, weekly, and monthly bars.
 - Does not expose alternative IB date formats in the current datastore path.
 
-### TaskPlanner
+### BaseRangePlanner
 
 - Is the pure scheduling boundary.
-- Consumes an `AsyncStoreView`, a head timestamp, max-period policy, and gap
-  policy.
-- Owns the run lookback clamp and produces download ranges.
+- Consumes an `AsyncStoreView`, a head timestamp, and max-period policy.
+- Owns the run lookback clamp and produces base backfill/update ranges.
 - Keeps broker schedule calls out of pure scheduling code; `Manager` owns those
   async request-layer inputs.
 
@@ -73,7 +72,7 @@ The current split is:
 - `Manager` owns source expansion, contract discovery, headstamp lookup, store
   and sink construction, request policy (`bar_size`, `wts`, `max_bars`), the
   run-scoped `now` value, and active job tracking for restart/resume.
-- `TaskPlanner` owns pure scheduling and max-period clamping.
+- `BaseRangePlanner` owns pure base-range scheduling and max-period clamping.
 - `DownloadJob` owns request progression for one contract.
 - `DownloadContainer` owns per-range buffering and missing-range progress.
 - `AsyncStoreView` owns read-only datastore boundaries for scheduling.
@@ -83,5 +82,5 @@ The current split is:
   execution. It does not own an independent `bar_size` or `whatToShow` policy.
 
 Deferred scheduling work should keep IB historical schedule requests outside
-`TaskPlanner`; those requests belong in the async request layer under
+`BaseRangePlanner`; those requests belong in the async request layer under
 session-scoped pacing before their result is supplied to pure scheduling code.

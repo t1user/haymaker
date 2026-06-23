@@ -154,8 +154,8 @@ stable and mark items off as they are addressed.
    - Review whether manager, download job, download container,
      scheduling factories, `AsyncStoreView`, and `HistorySink` have the right
      responsibilities.
-   - First-class `TaskPlanner` now owns pure range planning and max-period
-     clamping.
+   - First-class `BaseRangePlanner` now owns pure base-range planning and
+     max-period clamping.
    - `DownloadJob` now names the request-progression object.
    - `Manager` owns historical request policy and run-scoped `now`; worker
      execution reads request bar size from each generated job.

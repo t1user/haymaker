@@ -347,9 +347,6 @@ class RequestPacing:
 
     Args:
         ib: IB client used for paced requests.
-        bar_size: Configured historical bar size. Kept for session context and
-            future request-family defaults.
-        wts: Configured ``whatToShow`` value.
         no_restriction: Disable all local pacing while keeping retry handling
             and call routing in place.
         allowance_fraction: Multiplier applied to module-level request limits.
@@ -359,8 +356,6 @@ class RequestPacing:
     """
 
     ib: ibi.IB
-    bar_size: str
-    wts: str
     no_restriction: bool = False
     allowance_fraction: float = 1.0
     pacing_retry_delay: float = DEFAULT_PACING_RETRY_DELAY

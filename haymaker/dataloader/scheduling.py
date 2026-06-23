@@ -18,11 +18,6 @@ EXPIRED_FUTURE_MAX_AGE = timedelta(days=365 * 2)
 UNAVAILABLE_EXPIRED_SECTYPES = {"OPT", "FOP", "WAR"}
 
 
-class Dates(NamedTuple):
-    from_date: Union[date, datetime]
-    to_date: Union[date, datetime]
-
-
 RangeKind = Literal["gap", "backfill", "update"]
 GapFillMode = Literal["off", "heuristic", "schedule", "auto"]
 HEURISTIC_GAP_PASSES = 2
@@ -67,11 +62,11 @@ class GapCandidate:
     missing_end: date | datetime
     duration: timedelta
 
-    def dates(self) -> Dates | None:
-        """Return request dates when the candidate has a valid range."""
+    def request_range(self) -> tuple[date | datetime, date | datetime] | None:
+        """Return request range when the candidate has valid bounds."""
 
         if self.to_date > self.from_date:
-            return Dates(self.from_date, self.to_date)
+            return self.from_date, self.to_date
         return None
 
     def pattern(self, timezone_name: str | None) -> GapPattern | None:
@@ -102,14 +97,6 @@ class BaseTask(ABC):
     def __post_init__(self) -> None:
         self.head = normalize_point(self.head, self.store.bar_size)
 
-    def dates(self) -> Optional[Dates]:
-        from_date = self.from_date
-        to_date = self.to_date
-        if from_date and to_date and (to_date > from_date):
-            return Dates(from_date, to_date)
-        else:
-            return None
-
     def __str__(self) -> str:
         return f"<{self.__class__.__name__} from: {self.from_date} to: {self.to_date}"
 
@@ -124,8 +111,9 @@ class BackfillTask(BaseTask):
     @property
     def to_date(self) -> Union[date, datetime, None]:
         # data present in datastore
-        if self.store.from_date:
-            return self.store.from_date if self.store.from_date > self.head else None
+        boundary = self.store.backfill_boundary
+        if boundary:
+            return boundary if boundary > self.head else None
         # data not in datastore yet
         else:
             return self.store.expiry_or_now()
@@ -158,8 +146,8 @@ class UpdateTask(BaseTask):
 
 
 @dataclass
-class TaskPlanner:
-    """Plan historical download ranges for one contract store view.
+class BaseRangePlanner:
+    """Plan base historical download ranges for one contract store view.
 
     Args:
         store: Preloaded datastore view for the contract being planned.
@@ -187,36 +175,22 @@ class TaskPlanner:
             candidates.append(availability_start)
         return max(candidates)
 
-    def ranges(self) -> list[Dates]:
-        """Return planned download ranges in worker execution order."""
-
-        return [Dates(r.from_date, r.to_date) for r in self.planned_ranges()]
-
     def planned_ranges(self) -> list[PlannedRange]:
         """Return tagged backfill and update ranges in worker execution order."""
 
         if historical_data_unavailable(self.store):
             return []
-        return planned_task_factory(self.store, self.start)
-
-
-def _gap_ranges(
-    store: AsyncStoreView,
-    *,
-    start: date | datetime | None = None,
-    timezone_name: str | None = None,
-) -> list[PlannedRange]:
-    """Return heuristic datastore gap-fill ranges inferred from the store view."""
-
-    return [
-        PlannedRange(
-            dates.from_date, dates.to_date, "gap", candidate.pattern(timezone_name)
+        ranges = []
+        if not self.store.backfill_exhausted:
+            ranges.append(
+                _planned_range_from_task(
+                    BackfillTask(self.store, self.start), "backfill"
+                )
+            )
+        ranges.append(
+            _planned_range_from_task(UpdateTask(self.store, self.start), "update")
         )
-        for candidate in heuristic_gap_candidates(
-            raw_gap_candidates(store, start=start), timezone_name=timezone_name
-        )
-        if (dates := candidate.dates()) is not None
-    ]
+        return [r for r in ranges if r is not None]
 
 
 def _sec_type(store: AsyncStoreView) -> str:
@@ -264,36 +238,11 @@ def historical_availability_start(
 def _planned_range_from_task(task: BaseTask, kind: RangeKind) -> PlannedRange | None:
     """Return a tagged range from a task when it has work."""
 
-    dates = task.dates()
-    if dates is None:
+    from_date = task.from_date
+    to_date = task.to_date
+    if not from_date or not to_date or to_date <= from_date:
         return None
-    return PlannedRange(dates.from_date, dates.to_date, kind)
-
-
-def planned_task_factory(
-    store: AsyncStoreView, head: Union[date, datetime]
-) -> list[PlannedRange]:
-    """Return tagged backfill and update ranges."""
-
-    ranges = []
-    if not store.backfill_exhausted:
-        ranges.append(_planned_range_from_task(BackfillTask(store, head), "backfill"))
-    ranges.append(_planned_range_from_task(UpdateTask(store, head), "update"))
-    return [r for r in ranges if r is not None]
-
-
-def planned_task_factory_with_gaps(
-    store: AsyncStoreView,
-    head: Union[date, datetime],
-    *,
-    timezone_name: str | None = None,
-) -> list[PlannedRange]:
-    """Return tagged gap-fill, backfill, and update ranges."""
-
-    return [
-        *_gap_ranges(store, start=head, timezone_name=timezone_name),
-        *planned_task_factory(store, head),
-    ]
+    return PlannedRange(from_date, to_date, kind)
 
 
 def raw_gap_candidates(

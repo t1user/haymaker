@@ -1,6 +1,4 @@
-from datetime import date, datetime, timedelta
-
-from .time_policy import normalize_point
+from datetime import timedelta
 
 # source:
 # https://ibkrcampus.com/campus/ibkr-api-page/twsapi-doc/#historical-bars
@@ -160,11 +158,3 @@ def duration_to_timedelta(duration: str) -> timedelta:
     if time == "Y":
         return timedelta(days=365)
     raise ValueError(f"Unknown duration string: {duration}")
-
-
-def datetime_normalizer(dt: datetime, barsize: str) -> datetime | date:
-    return normalize_point(dt, barsize)
-
-
-def strjoin(*args: str):
-    return "".join(args)

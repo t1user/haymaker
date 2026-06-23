@@ -33,7 +33,7 @@ async def test_selector_qualifies_with_paced_contract_details():
             raise AssertionError("ContractSelector should use reqContractDetailsAsync")
 
     ib = FakeIB()
-    pacing = RequestPacing(ib, "30 secs", "TRADES", no_restriction=True)
+    pacing = RequestPacing(ib, no_restriction=True)
     kwargs = {
         "secType": "STK",
         "symbol": "AAPL",
@@ -87,7 +87,7 @@ async def test_current_future_selector_requalifies_after_changing_contfuture():
             return [ibi.ContractDetails(contract=qualified)]
 
     ib = FakeIB()
-    pacing = RequestPacing(ib, "30 secs", "TRADES", no_restriction=True)
+    pacing = RequestPacing(ib, no_restriction=True)
     selector = CurrentFutureContractSelector(
         pacing=pacing,
         secType="FUT",

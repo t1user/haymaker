@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from functools import wraps
-from typing import Any, Callable, Union
+from typing import Any, Union
 
 import ib_insync as ibi
 import pandas as pd
@@ -54,8 +53,9 @@ class AsyncStoreView:
         return self.metadata
 
     @property
-    def from_date(self) -> date | datetime | None:
-        """Earliest point in datastore"""
+    def backfill_boundary(self) -> date | datetime | None:
+        """Earliest stored point safe to use as a backfill request boundary."""
+
         if self.data is None or self.data.empty:
             return None
         if len(self.data.index) == 1:
@@ -68,8 +68,7 @@ class AsyncStoreView:
         """Latest point in datastore"""
         if self.data is None or self.data.empty:
             return None
-        date = self.data.index.max() if self.data is not None else None
-        return date
+        return self.data.index.max()
 
     @property
     def backfill_exhausted(self) -> bool:
@@ -77,24 +76,15 @@ class AsyncStoreView:
 
         return self.metadata.get("backfill_exhausted") is True
 
-    @staticmethod
-    def cast_expiry(func: Callable, *args, **kwargs) -> Callable:
-        @wraps(func)
-        def wrapper(self):
-            d = func(self, *args, **kwargs)
-            return normalize_optional_point(d, self.bar_size)
-
-        return wrapper
-
     @property
-    @cast_expiry
     def expiry(self) -> date | datetime | None:
         """Return precise contract expiry when available."""
 
         e = self.contract.lastTradeDateOrContractMonth
         if not e or len(e) == 6:
             return None
-        return datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
+        expiry = datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
+        return normalize_optional_point(expiry, self.bar_size)
 
     def expiry_or_now(self):
         """

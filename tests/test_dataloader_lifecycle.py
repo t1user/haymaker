@@ -288,7 +288,7 @@ async def test_download_job_does_not_mark_update_or_gap_exhausted(
         assert job.is_done()
 
 
-def test_validate_age_uses_run_scoped_now(dataloader_module):
+def test_request_age_available_uses_run_scoped_now(dataloader_module):
     """Age validation should use the run snapshot supplied by the caller."""
 
     dataloader = dataloader_module
@@ -297,17 +297,17 @@ def test_validate_age_uses_run_scoped_now(dataloader_module):
         bar_size = "1 secs"
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
-    assert not dataloader.validate_age(
+    assert not dataloader.request_age_available(
         FakeJob(),
         FakeJob.next_date + timedelta(days=181),
     )
-    assert dataloader.validate_age(
+    assert dataloader.request_age_available(
         FakeJob(),
         FakeJob.next_date + timedelta(days=1),
     )
 
 
-def test_validate_age_applies_to_30_second_bars(dataloader_module):
+def test_request_age_available_applies_to_30_second_bars(dataloader_module):
     """IB's six-month hard limit applies to 30-second bars too."""
 
     dataloader = dataloader_module
@@ -316,13 +316,13 @@ def test_validate_age_applies_to_30_second_bars(dataloader_module):
         bar_size = "30 secs"
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
-    assert not dataloader.validate_age(
+    assert not dataloader.request_age_available(
         FakeJob(),
         FakeJob.next_date + timedelta(days=181),
     )
 
 
-def test_validate_age_does_not_apply_to_one_minute_bars(dataloader_module):
+def test_request_age_available_does_not_apply_to_one_minute_bars(dataloader_module):
     """Bars larger than 30 seconds should not use the six-month hard limit."""
 
     dataloader = dataloader_module
@@ -331,7 +331,7 @@ def test_validate_age_does_not_apply_to_one_minute_bars(dataloader_module):
         bar_size = "1 min"
         next_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
-    assert dataloader.validate_age(
+    assert dataloader.request_age_available(
         FakeJob(),
         FakeJob.next_date + timedelta(days=1000),
     )
@@ -393,9 +393,7 @@ def test_manager_preserves_injected_pacing_policy(dataloader_module):
     """Injected pacing should not be silently mutated by Manager setup."""
 
     dataloader = dataloader_module
-    pacing = dataloader.request_pacing_factory(
-        object(), bar_size="30 secs", wts="TRADES"
-    )
+    pacing = dataloader.request_pacing_factory(object())
 
     manager = dataloader.Manager(
         object(),
@@ -405,8 +403,10 @@ def test_manager_preserves_injected_pacing_policy(dataloader_module):
     )
 
     assert manager.pacing is pacing
-    assert pacing.bar_size == "30 secs"
-    assert pacing.wts == "TRADES"
+    assert manager.bar_size == "1 day"
+    assert manager.wts == "MIDPOINT"
+    assert not hasattr(pacing, "bar_size")
+    assert not hasattr(pacing, "wts")
 
 
 @pytest.mark.asyncio
@@ -457,8 +457,10 @@ async def test_manager_policy_flows_to_store_and_download_job(
     job = await anext(manager._job_generator())
 
     assert created_stores == [("MIDPOINT_1_day", "mongo")]
-    assert manager.pacing.bar_size == "1 day"
-    assert manager.pacing.wts == "MIDPOINT"
+    assert manager.bar_size == "1 day"
+    assert manager.wts == "MIDPOINT"
+    assert not hasattr(manager.pacing, "bar_size")
+    assert not hasattr(manager.pacing, "wts")
     assert job.bar_size == "1 day"
     assert job.max_bars == 12
     assert job.params["endDateTime"] == date(2025, 1, 10)

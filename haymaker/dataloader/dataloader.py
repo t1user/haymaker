@@ -33,11 +33,12 @@ from .connect import connection
 from .contract_selectors import ContractSelector
 from .pacer import RequestPacing
 from .scheduling import (
+    BaseRangePlanner,
     GapFillMode,
     GapPattern,
     PlannedRange,
     RangeKind,
-    TaskPlanner,
+    SMALL_BAR_MAX_AGE,
     heuristic_gap_candidates,
     historical_data_unavailable,
     raw_gap_candidates,
@@ -75,17 +76,11 @@ log.debug(
 )
 
 
-def request_pacing_factory(
-    ib: ibi.IB,
-    bar_size: str = BARSIZE,
-    wts: str = WTS,
-) -> RequestPacing:
+def request_pacing_factory(ib: ibi.IB) -> RequestPacing:
     """Create request pacing from dataloader request policy."""
 
     return RequestPacing(
         ib,
-        bar_size,
-        wts,
         no_restriction=PACER_NO_RESTRICTION,
         allowance_fraction=PACER_ALLOWANCE_FRACTION,
     )
@@ -448,7 +443,7 @@ class Manager:
         self.wts = wts_validator(self.wts)
         self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
-            self.pacing = request_pacing_factory(self.ib, self.bar_size, self.wts)
+            self.pacing = request_pacing_factory(self.ib)
         self.new_job_generator = self._job_generator()
 
     def get_store(self) -> AsyncAbstractBaseStore:
@@ -489,7 +484,7 @@ class Manager:
     ) -> list[DownloadContainer]:
         """Return planned download containers for one contract store view."""
 
-        planner = TaskPlanner(
+        planner = BaseRangePlanner(
             store,
             headstamp,
             max_period_days=self.max_period,
@@ -507,7 +502,7 @@ class Manager:
         ]
 
     async def planned_ranges(
-        self, store: AsyncStoreView, planner: TaskPlanner
+        self, store: AsyncStoreView, planner: BaseRangePlanner
     ) -> list[PlannedRange]:
         """Return planned ranges, resolving async gap-fill inputs as needed."""
 
@@ -523,7 +518,7 @@ class Manager:
     async def _scheduled_planned_ranges(
         self,
         store: AsyncStoreView,
-        planner: TaskPlanner,
+        planner: BaseRangePlanner,
         base_ranges: list[PlannedRange],
     ) -> list[PlannedRange]:
         """Plan gap-fill ranges with IB historical schedules when available."""
@@ -564,25 +559,24 @@ class Manager:
                 )
             return [*await self._heuristic_gap_ranges(store, planner), *base_ranges]
 
-        gap_ranges = [
-            PlannedRange(
-                dates.from_date,
-                dates.to_date,
-                "gap",
-                candidate.pattern(timezone_name),
-            )
-            for candidate in scheduled_gap_candidates(
-                candidates,
-                sessions,
-                timezone_name=timezone_name,
-                typical_patterns=self.gap_learner.typical_patterns,
-            )
-            if (dates := candidate.dates()) is not None
-        ]
+        gap_ranges: list[PlannedRange] = []
+        for candidate in scheduled_gap_candidates(
+            candidates,
+            sessions,
+            timezone_name=timezone_name,
+            typical_patterns=self.gap_learner.typical_patterns,
+        ):
+            if request_range := candidate.request_range():
+                from_date, to_date = request_range
+                gap_ranges.append(
+                    PlannedRange(
+                        from_date, to_date, "gap", candidate.pattern(timezone_name)
+                    )
+                )
         return [*gap_ranges, *base_ranges]
 
     async def _heuristic_gap_ranges(
-        self, store: AsyncStoreView, planner: TaskPlanner
+        self, store: AsyncStoreView, planner: BaseRangePlanner
     ) -> list[PlannedRange]:
         """Return heuristic gap ranges filtered by run-local learned patterns."""
 
@@ -595,10 +589,9 @@ class Manager:
             pattern = candidate.pattern(timezone_name)
             if pattern in self.gap_learner.typical_patterns:
                 continue
-            if dates := candidate.dates():
-                ranges.append(
-                    PlannedRange(dates.from_date, dates.to_date, "gap", pattern)
-                )
+            if request_range := candidate.request_range():
+                from_date, to_date = request_range
+                ranges.append(PlannedRange(from_date, to_date, "gap", pattern))
         return ranges
 
     async def _historical_schedules(
@@ -665,7 +658,7 @@ class Manager:
         return _timezone_from_details(contract, details)
 
     async def _futures_chain_timezone(self, contract: ibi.Contract) -> str | None:
-        """Return timezone from a sibling futures contract when exact details lack it."""
+        """Return timezone from a sibling future when exact details lack it."""
 
         assert self.pacing is not None
         chain_contract = ibi.Future(
@@ -731,7 +724,7 @@ class Manager:
         return hs
 
 
-def validate_age(job: DownloadJob, now: date | datetime) -> bool:
+def request_age_available(job: DownloadJob, now: date | datetime) -> bool:
     """Return whether a job is still inside IB's small-bar age limit.
 
     IB does not allow requests for bars 30 seconds or smaller older than six
@@ -746,7 +739,7 @@ def validate_age(job: DownloadJob, now: date | datetime) -> bool:
     """
     if helpers.duration_in_secs(job.bar_size) <= 30 and job.next_date:
         assert isinstance(job.next_date, datetime)
-        if isinstance(now, datetime) and (now - job.next_date).days > 180:
+        if isinstance(now, datetime) and now - job.next_date > SMALL_BAR_MAX_AGE:
             return False
     return True
 
@@ -870,7 +863,7 @@ class DataloaderSession:
 
         assert self.manager is not None
         while True:
-            if not validate_age(job, self.manager.now):
+            if not request_age_available(job, self.manager.now):
                 await job.save_chunk(None)
                 log.debug(f"{job!s} dropped before request on age validation.")
                 break
@@ -894,7 +887,7 @@ class DataloaderSession:
             await job.save_chunk(chunk)
 
             if job.next_date:
-                if not validate_age(job, self.manager.now):
+                if not request_age_available(job, self.manager.now):
                     await job.save_chunk(None)
                     log.debug(f"{job!s} dropped on age validation.")
                     break
@@ -926,32 +919,18 @@ class DataloaderSession:
     async def cancel_execution(self) -> None:
         """Cancel active dataloader execution tasks and drain queued work."""
 
-        await cancel_execution(self.producer_task, self.workers, self.queue)
+        tasks = [
+            task for task in [self.producer_task, *self.workers] if task is not None
+        ]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
 
+        if self.queue is not None:
+            shutdown_queue(self.queue)
 
-async def main(manager: Manager, ib: ibi.IB) -> None:
-    """Run a dataloader session for compatibility with older call sites."""
-
-    await DataloaderSession(ib, manager=manager).run()
-
-
-async def cancel_execution(
-    producer_task: asyncio.Task | None,
-    workers: list[asyncio.Task],
-    queue: asyncio.Queue | None,
-) -> None:
-    """Cancel active dataloader execution tasks and drain queued work."""
-
-    tasks = [task for task in [producer_task, *workers] if task is not None]
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-
-    if queue is not None:
-        shutdown_queue(queue)
-
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def shutdown_queue(queue: asyncio.Queue) -> None:
