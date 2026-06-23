@@ -154,7 +154,6 @@ async def test_task_planner_one_row_store_does_not_schedule_full_duplicate(
         wrapper,
         store_index[0],
         max_period_days=100,
-        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(store_index[0], store_index[-1])]
@@ -172,7 +171,6 @@ async def test_task_planner_clamps_start_to_max_period(contract):
         wrapper,
         headstamp,
         max_period_days=3,
-        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(datetime(2025, 1, 7, tzinfo=timezone.utc), now)]
@@ -190,7 +188,6 @@ async def test_task_planner_clamps_small_bars_to_six_month_limit(contract):
         wrapper,
         headstamp,
         max_period_days=5000,
-        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(now - timedelta(days=180), now)]
@@ -208,7 +205,6 @@ async def test_task_planner_does_not_apply_six_month_limit_to_one_min(contract):
         wrapper,
         headstamp,
         max_period_days=5000,
-        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(headstamp, now)]
@@ -230,7 +226,6 @@ async def test_task_planner_clamps_expired_future_to_two_year_limit():
         wrapper,
         date(2020, 1, 1),
         max_period_days=5000,
-        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(date(2023, 1, 3), date(2025, 1, 2))]
@@ -252,7 +247,6 @@ async def test_task_planner_does_not_apply_expired_future_limit_to_active_future
         wrapper,
         date(2020, 1, 1),
         max_period_days=5000,
-        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(date(2020, 1, 1), date(2025, 1, 3))]
@@ -275,7 +269,6 @@ async def test_task_planner_skips_expired_options():
             wrapper,
             date(2020, 1, 1),
             max_period_days=5000,
-            gap_fill_mode="off",
         ).ranges()
         == []
     )
@@ -293,7 +286,6 @@ async def test_task_planner_missing_metadata_still_schedules_backfill(contract):
         wrapper,
         headstamp,
         max_period_days=3,
-        gap_fill_mode="off",
     ).planned_ranges()
 
     assert tasks == [
@@ -324,7 +316,6 @@ async def test_task_planner_skips_exhausted_backfill_but_keeps_update(
         wrapper,
         datetime(2025, 1, 1, tzinfo=timezone.utc),
         max_period_days=100,
-        gap_fill_mode="off",
     ).planned_ranges()
 
     assert tasks == [PlannedRange(store_index[-1], now, "update")]
@@ -335,7 +326,6 @@ async def test_task_planner_skips_exhausted_backfill_but_keeps_update(
         wrapper,
         datetime(2025, 1, 1, tzinfo=timezone.utc),
         max_period_days=100,
-        gap_fill_mode="off",
     ).ranges() == [(store_index[-1], now)]
 
 
@@ -358,15 +348,14 @@ async def test_task_planner_exhausted_backfill_without_update_has_no_range(
             wrapper,
             datetime(2025, 1, 1, tzinfo=timezone.utc),
             max_period_days=100,
-            gap_fill_mode="off",
         ).planned_ranges()
         == []
     )
 
 
 @pytest.mark.asyncio
-async def test_task_planner_preserves_gap_first_order(contract):
-    """TaskPlanner should keep gap ranges before backfill/update work."""
+async def test_gap_planning_preserves_gap_first_order(contract):
+    """Heuristic gap planning should keep gaps before backfill/update work."""
 
     index = pd.DatetimeIndex(
         [
@@ -387,19 +376,10 @@ async def test_task_planner_preserves_gap_first_order(contract):
         contract, FakeAsyncStore(data), now, "30 secs"
     )
 
-    tasks = TaskPlanner(
-        wrapper,
-        headstamp,
-        max_period_days=100,
-        gap_fill_mode="heuristic",
-    ).ranges()
+    tasks = planned_task_factory_with_gaps(wrapper, headstamp)
 
-    assert TaskPlanner(
-        wrapper,
-        headstamp,
-        max_period_days=100,
-        gap_fill_mode="heuristic",
-    ).planned_ranges() == planned_task_factory_with_gaps(wrapper, headstamp)
+    assert [task.kind for task in tasks] == ["gap", "gap", "backfill", "update"]
+    assert tasks[-2:] == planned_task_factory(wrapper, headstamp)
 
 
 @pytest.mark.asyncio
@@ -550,11 +530,10 @@ async def test_history_sink_does_not_mark_empty_series(contract):
     assert store.metadata_writes == []
 
 
-def test_create_dataloader_store_builds_async_arctic_store(
-    monkeypatch, dataloader_module
-):
-    """The dataloader store factory should build the only supported backend."""
+def test_manager_get_store_builds_async_arctic_store(monkeypatch, dataloader_module):
+    """Manager should lazily build the only supported dataloader backend."""
 
+    dataloader = dataloader_module
     created: dict[str, object] = {}
 
     class FakeAsyncArcticStore:
@@ -567,7 +546,12 @@ def test_create_dataloader_store_builds_async_arctic_store(
     monkeypatch.setattr(dataloader_module, "get_mongo_client", lambda: "mongo")
     monkeypatch.setattr(dataloader_module, "AsyncArcticStore", FakeAsyncArcticStore)
 
-    store = dataloader_module.create_dataloader_store(wts="TRADES", bar_size="30 secs")
+    manager = dataloader.Manager(
+        object(),
+        wts="TRADES",
+        bar_size="30 secs",
+    )
+    store = manager.get_store()
 
     assert isinstance(store, FakeAsyncArcticStore)
     assert created == {"lib": "TRADES_30_secs", "host": "mongo"}

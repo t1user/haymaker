@@ -389,8 +389,8 @@ async def test_worker_skips_small_bar_request_past_age_limit(dataloader_module):
     assert job.saved_chunks == [None]
 
 
-def test_manager_syncs_injected_pacing_to_request_policy(dataloader_module):
-    """Injected pacing should not keep stale request-policy metadata."""
+def test_manager_preserves_injected_pacing_policy(dataloader_module):
+    """Injected pacing should not be silently mutated by Manager setup."""
 
     dataloader = dataloader_module
     pacing = dataloader.request_pacing_factory(
@@ -405,8 +405,8 @@ def test_manager_syncs_injected_pacing_to_request_policy(dataloader_module):
     )
 
     assert manager.pacing is pacing
-    assert pacing.bar_size == "1 day"
-    assert pacing.wts == "MIDPOINT"
+    assert pacing.bar_size == "30 secs"
+    assert pacing.wts == "TRADES"
 
 
 @pytest.mark.asyncio
@@ -420,6 +420,9 @@ async def test_manager_policy_flows_to_store_and_download_job(
     created_stores = []
 
     class FakeStore:
+        def __init__(self, lib, host):
+            created_stores.append((lib, host))
+
         async def read(self, requested_contract):
             assert requested_contract is contract
             return None
@@ -438,12 +441,9 @@ async def test_manager_policy_flows_to_store_and_download_job(
     async def fake_headstamps(self):
         yield contract, datetime(2025, 1, 1, tzinfo=timezone.utc)
 
-    def fake_store(wts, bar_size):
-        created_stores.append((wts, bar_size))
-        return FakeStore()
-
     monkeypatch.setattr(dataloader.Manager, "headstamps", fake_headstamps)
-    monkeypatch.setattr(dataloader, "create_dataloader_store", fake_store)
+    monkeypatch.setattr(dataloader, "get_mongo_client", lambda: "mongo")
+    monkeypatch.setattr(dataloader, "AsyncArcticStore", FakeStore)
     monkeypatch.setattr(dataloader, "HistorySink", lambda contract, store: FakeSink())
 
     manager = dataloader.Manager(
@@ -456,7 +456,7 @@ async def test_manager_policy_flows_to_store_and_download_job(
     )
     job = await anext(manager._job_generator())
 
-    assert created_stores == [("MIDPOINT", "1 day")]
+    assert created_stores == [("MIDPOINT_1_day", "mongo")]
     assert manager.pacing.bar_size == "1 day"
     assert manager.pacing.wts == "MIDPOINT"
     assert job.bar_size == "1 day"
@@ -679,6 +679,31 @@ async def test_headstamp_retries_pacing_violation(dataloader_module):
         2025, 1, 1, tzinfo=timezone.utc
     )
     assert ib.requests == 2
+
+
+@pytest.mark.asyncio
+async def test_headstamp_empty_response_uses_fallback_once(dataloader_module):
+    """A non-retryable empty headstamp should use fallback without local looping."""
+
+    dataloader = dataloader_module
+
+    class FakeIB:
+        def __init__(self):
+            self.requests = 0
+
+        async def reqHeadTimeStampAsync(self, *args, **kwargs):
+            self.requests += 1
+            return None
+
+    ib = FakeIB()
+    manager = dataloader.Manager(ib)
+    manager.pacing.no_restriction = True
+
+    headstamp = await manager.headstamp(FakeContract())
+
+    assert ib.requests == 1
+    assert isinstance(headstamp, datetime)
+    assert headstamp.tzinfo is timezone.utc
 
 
 @pytest.mark.asyncio

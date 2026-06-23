@@ -41,8 +41,8 @@ from .scheduling import (
     heuristic_gap_candidates,
     historical_data_unavailable,
     raw_gap_candidates,
-    scheduled_gap_candidates,
     schedule_timezone,
+    scheduled_gap_candidates,
     sessions_from_historical_schedule,
 )
 from .store_wrapper import AsyncStoreView, HistorySink
@@ -73,24 +73,6 @@ log.debug(
     f"{AUTO_SAVE_INTERVAL=}, {NUMBER_OF_WORKERS=}, {MAX_PERIOD=}, "
     f"{PACER_ALLOWANCE_FRACTION=}"
 )
-
-
-def create_dataloader_store(
-    wts: str = WTS,
-    bar_size: str = BARSIZE,
-) -> AsyncAbstractBaseStore:
-    """Create the Arctic-backed async datastore used by dataloader jobs.
-
-    Args:
-        wts: IB ``whatToShow`` value used to derive the Arctic library name.
-        bar_size: IB ``barSizeSetting`` value used to derive the library name.
-
-    Returns:
-        Async datastore instance for the configured historical data library.
-    """
-
-    lib = f"{wts_validator(wts)}_{bar_size_validator(bar_size)}".replace(" ", "_")
-    return AsyncArcticStore(lib=lib, host=get_mongo_client())
 
 
 def request_pacing_factory(
@@ -424,7 +406,9 @@ class DownloadContainer:
         if self.bars:
             df = ibi.util.df(
                 [b for bars in reversed(self.bars) for b in bars]
-            ).set_index("date")
+            ).set_index(  # type: ignore
+                "date"
+            )
             return df
         else:
             return None
@@ -465,16 +449,14 @@ class Manager:
         self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
             self.pacing = request_pacing_factory(self.ib, self.bar_size, self.wts)
-        else:
-            self.pacing.bar_size = self.bar_size
-            self.pacing.wts = self.wts
         self.new_job_generator = self._job_generator()
 
     def get_store(self) -> AsyncAbstractBaseStore:
         """Return the session datastore, creating it lazily when needed."""
 
         if self.store is None:
-            self.store = create_dataloader_store(self.wts, self.bar_size)
+            lib = f"{self.wts}_{self.bar_size}".replace(" ", "_")
+            self.store = AsyncArcticStore(lib=lib, host=get_mongo_client())
         return self.store
 
     @functools.cached_property
@@ -511,7 +493,6 @@ class Manager:
             store,
             headstamp,
             max_period_days=self.max_period,
-            gap_fill_mode=self.gap_fill_mode,
         )
         planned_ranges = await self.planned_ranges(store, planner)
         return [
@@ -532,13 +513,7 @@ class Manager:
 
         if historical_data_unavailable(store):
             return []
-        base_planner = TaskPlanner(
-            store,
-            planner.head,
-            max_period_days=planner.max_period_days,
-            gap_fill_mode="off",
-        )
-        base_ranges = base_planner.planned_ranges()
+        base_ranges = planner.planned_ranges()
         if self.gap_fill_mode == "off":
             return base_ranges
         if self.gap_fill_mode == "heuristic":
@@ -733,26 +708,23 @@ class Manager:
             yield new_job
 
     async def headstamp(self, contract: ibi.Contract) -> date | datetime:
-        headTimeStamp = None
-        while not headTimeStamp:
-            assert self.pacing is not None
-            headTimeStamp = await self.pacing.head_timestamp(
-                contract,
-                whatToShow=self.wts,
-                useRTH=self.use_rth,
-                formatDate=2,
-            )
+        assert self.pacing is not None
+        headTimeStamp = await self.pacing.head_timestamp(
+            contract,
+            whatToShow=self.wts,
+            useRTH=self.use_rth,
+            formatDate=2,
+        )
 
-            # empty response after pacing retries means no headstamp is available
-            if not headTimeStamp:
-                five_years_ago = datetime.now(tz=timezone.utc) - timedelta(days=5 * 250)
-                log.warning(
-                    (
-                        f"Unavailable headTimeStamp ({headTimeStamp}) for "
-                        f"{contract}. Will use {five_years_ago}"
-                    )
+        # empty response after pacing retries means no headstamp is available
+        if not headTimeStamp:
+            headTimeStamp = datetime.now(tz=timezone.utc) - timedelta(days=5 * 250)
+            log.warning(
+                (
+                    f"Unavailable headTimeStamp for {contract}. "
+                    f"Will use {headTimeStamp}"
                 )
-                headTimeStamp = five_years_ago
+            )
 
         hs = normalize_point(headTimeStamp, self.bar_size)
         log.debug(f"Headstamp for: {contract.localSymbol}: {hs}")

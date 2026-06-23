@@ -87,7 +87,7 @@ class GapCandidate:
 
 
 @dataclass
-class TaskFactory(ABC):
+class BaseTask(ABC):
     store: AsyncStoreView
     head: Union[date, datetime]  # HeadTimeStamp earliest point for which IB has data
 
@@ -115,7 +115,7 @@ class TaskFactory(ABC):
 
 
 @dataclass
-class BackfillFactory(TaskFactory):
+class BackfillTask(BaseTask):
 
     @property
     def from_date(self) -> Union[date, datetime, None]:
@@ -132,7 +132,7 @@ class BackfillFactory(TaskFactory):
 
 
 @dataclass
-class UpdateFactory(TaskFactory):
+class UpdateTask(BaseTask):
     """
     If no data in datastore for this symbol, there is no update.  All
     download handles by backfill.
@@ -165,13 +165,11 @@ class TaskPlanner:
         store: Preloaded datastore view for the contract being planned.
         head: Earliest available IB timestamp to consider.
         max_period_days: Maximum lookback window for this planning run.
-        gap_fill_mode: Gap-fill planning mode for this store view.
     """
 
     store: AsyncStoreView
     head: Union[date, datetime]
     max_period_days: int
-    gap_fill_mode: GapFillMode = "off"
 
     def __post_init__(self) -> None:
         self.head = normalize_point(self.head, self.store.bar_size)
@@ -195,17 +193,10 @@ class TaskPlanner:
         return [Dates(r.from_date, r.to_date) for r in self.planned_ranges()]
 
     def planned_ranges(self) -> list[PlannedRange]:
-        """Return tagged planned download ranges in worker execution order."""
+        """Return tagged backfill and update ranges in worker execution order."""
 
         if historical_data_unavailable(self.store):
             return []
-        if self.gap_fill_mode == "heuristic":
-            return planned_task_factory_with_gaps(self.store, self.start)
-        if self.gap_fill_mode in {"schedule", "auto"}:
-            log.debug(
-                "%s gap-fill planning is async and must be supplied by Manager.",
-                self.gap_fill_mode,
-            )
         return planned_task_factory(self.store, self.start)
 
 
@@ -270,8 +261,8 @@ def historical_availability_start(
     return None
 
 
-def _range_from_factory(task: TaskFactory, kind: RangeKind) -> PlannedRange | None:
-    """Return a tagged range from a task factory when it has work."""
+def _planned_range_from_task(task: BaseTask, kind: RangeKind) -> PlannedRange | None:
+    """Return a tagged range from a task when it has work."""
 
     dates = task.dates()
     if dates is None:
@@ -286,8 +277,8 @@ def planned_task_factory(
 
     ranges = []
     if not store.backfill_exhausted:
-        ranges.append(_range_from_factory(BackfillFactory(store, head), "backfill"))
-    ranges.append(_range_from_factory(UpdateFactory(store, head), "update"))
+        ranges.append(_planned_range_from_task(BackfillTask(store, head), "backfill"))
+    ranges.append(_planned_range_from_task(UpdateTask(store, head), "update"))
     return [r for r in ranges if r is not None]
 
 
