@@ -11,7 +11,7 @@ from haymaker.dataloader.scheduling import (
     GapCandidate,
     PlannedRange,
     SessionRange,
-    BaseRangePlanner,
+    TaskPlanner,
     heuristic_gap_candidates,
     scheduled_gap_candidates,
     sessions_from_historical_schedule,
@@ -138,7 +138,7 @@ async def test_async_store_view_one_row_uses_single_timestamp_boundary(
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_one_row_store_does_not_schedule_full_duplicate(
+async def test_task_planner_one_row_store_does_not_schedule_full_duplicate(
     contract, store_index
 ):
     """A one-row collection should schedule around the stored boundary."""
@@ -148,7 +148,7 @@ async def test_base_range_planner_one_row_store_does_not_schedule_full_duplicate
         contract, FakeAsyncStore(data), store_index[-1], "30 secs"
     )
 
-    tasks = BaseRangePlanner(
+    tasks = TaskPlanner(
         wrapper,
         store_index[0],
         max_period_days=100,
@@ -158,14 +158,14 @@ async def test_base_range_planner_one_row_store_does_not_schedule_full_duplicate
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_clamps_start_to_max_period(contract):
-    """BaseRangePlanner should own the run lookback clamp for download ranges."""
+async def test_task_planner_clamps_start_to_max_period(contract):
+    """TaskPlanner should own the run lookback clamp for download ranges."""
 
     now = datetime(2025, 1, 10, tzinfo=timezone.utc)
     headstamp = datetime(2025, 1, 1, tzinfo=timezone.utc)
     wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "30 secs")
 
-    tasks = BaseRangePlanner(
+    tasks = TaskPlanner(
         wrapper,
         headstamp,
         max_period_days=3,
@@ -177,14 +177,14 @@ async def test_base_range_planner_clamps_start_to_max_period(contract):
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_clamps_small_bars_to_six_month_limit(contract):
+async def test_task_planner_clamps_small_bars_to_six_month_limit(contract):
     """Bars 30 seconds or smaller should not request past IB's age limit."""
 
     now = datetime(2025, 7, 1, tzinfo=timezone.utc)
     headstamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
     wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "30 secs")
 
-    tasks = BaseRangePlanner(
+    tasks = TaskPlanner(
         wrapper,
         headstamp,
         max_period_days=5000,
@@ -194,14 +194,14 @@ async def test_base_range_planner_clamps_small_bars_to_six_month_limit(contract)
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_does_not_apply_six_month_limit_to_one_min(contract):
+async def test_task_planner_does_not_apply_six_month_limit_to_one_min(contract):
     """The six-month hard limit does not apply to bars larger than 30 seconds."""
 
     now = datetime(2025, 7, 1, tzinfo=timezone.utc)
     headstamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
     wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 min")
 
-    tasks = BaseRangePlanner(
+    tasks = TaskPlanner(
         wrapper,
         headstamp,
         max_period_days=5000,
@@ -211,7 +211,7 @@ async def test_base_range_planner_does_not_apply_six_month_limit_to_one_min(cont
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_clamps_expired_future_to_two_year_limit():
+async def test_task_planner_clamps_expired_future_to_two_year_limit():
     """Expired futures should not request older than two years from expiry."""
 
     contract = ibi.Contract(
@@ -222,7 +222,7 @@ async def test_base_range_planner_clamps_expired_future_to_two_year_limit():
     now = datetime(2025, 1, 3, tzinfo=timezone.utc)
     wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 day")
 
-    tasks = BaseRangePlanner(
+    tasks = TaskPlanner(
         wrapper,
         date(2020, 1, 1),
         max_period_days=5000,
@@ -232,7 +232,7 @@ async def test_base_range_planner_clamps_expired_future_to_two_year_limit():
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_keeps_active_future_unclamped():
+async def test_task_planner_keeps_active_future_unclamped():
     """The two-year expired-future limit should not clamp active contracts."""
 
     contract = ibi.Contract(
@@ -243,7 +243,7 @@ async def test_base_range_planner_keeps_active_future_unclamped():
     now = datetime(2025, 1, 3, tzinfo=timezone.utc)
     wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 day")
 
-    tasks = BaseRangePlanner(
+    tasks = TaskPlanner(
         wrapper,
         date(2020, 1, 1),
         max_period_days=5000,
@@ -253,7 +253,7 @@ async def test_base_range_planner_keeps_active_future_unclamped():
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_skips_expired_options():
+async def test_task_planner_skips_expired_options():
     """IB documents expired options as unavailable historical data."""
 
     contract = ibi.Contract(
@@ -265,7 +265,7 @@ async def test_base_range_planner_skips_expired_options():
     wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 day")
 
     assert (
-        BaseRangePlanner(
+        TaskPlanner(
             wrapper,
             date(2020, 1, 1),
             max_period_days=5000,
@@ -275,14 +275,14 @@ async def test_base_range_planner_skips_expired_options():
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_missing_metadata_still_schedules_backfill(contract):
+async def test_task_planner_missing_metadata_still_schedules_backfill(contract):
     """Missing optional metadata should not prevent normal backfill planning."""
 
     now = datetime(2025, 1, 10, tzinfo=timezone.utc)
     headstamp = datetime(2025, 1, 1, tzinfo=timezone.utc)
     wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "30 secs")
 
-    tasks = BaseRangePlanner(
+    tasks = TaskPlanner(
         wrapper,
         headstamp,
         max_period_days=3,
@@ -298,7 +298,7 @@ async def test_base_range_planner_missing_metadata_still_schedules_backfill(cont
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_skips_exhausted_backfill_but_keeps_update(
+async def test_task_planner_skips_exhausted_backfill_but_keeps_update(
     contract, store_index
 ):
     """Backfill exhaustion should not block update ranges."""
@@ -312,14 +312,14 @@ async def test_base_range_planner_skips_exhausted_backfill_but_keeps_update(
         "30 secs",
     )
 
-    tasks = BaseRangePlanner(
+    tasks = TaskPlanner(
         wrapper,
         datetime(2025, 1, 1, tzinfo=timezone.utc),
         max_period_days=100,
     ).planned_ranges()
 
     assert tasks == [PlannedRange(store_index[-1], now, "update")]
-    assert BaseRangePlanner(
+    assert TaskPlanner(
         wrapper,
         datetime(2025, 1, 1, tzinfo=timezone.utc),
         max_period_days=100,
@@ -327,7 +327,7 @@ async def test_base_range_planner_skips_exhausted_backfill_but_keeps_update(
 
 
 @pytest.mark.asyncio
-async def test_base_range_planner_exhausted_backfill_without_update_has_no_range(
+async def test_task_planner_exhausted_backfill_without_update_has_no_range(
     contract, store_index
 ):
     """Backfill exhaustion should make a current store a no-op."""
@@ -341,7 +341,7 @@ async def test_base_range_planner_exhausted_backfill_without_update_has_no_range
     )
 
     assert (
-        BaseRangePlanner(
+        TaskPlanner(
             wrapper,
             datetime(2025, 1, 1, tzinfo=timezone.utc),
             max_period_days=100,
@@ -351,12 +351,8 @@ async def test_base_range_planner_exhausted_backfill_without_update_has_no_range
 
 
 @pytest.mark.asyncio
-async def test_gap_planning_preserves_gap_first_order(contract, dataloader_module):
+async def test_gap_planning_preserves_gap_first_order(contract):
     """Heuristic gap planning should keep gaps before backfill/update work."""
-
-    class FakePacing:
-        async def contract_details(self, contract):
-            return []
 
     index = pd.DatetimeIndex(
         [
@@ -376,19 +372,18 @@ async def test_gap_planning_preserves_gap_first_order(contract, dataloader_modul
     wrapper = await AsyncStoreView.create(
         contract, FakeAsyncStore(data), now, "30 secs"
     )
-    planner = BaseRangePlanner(wrapper, headstamp, max_period_days=100)
-    manager = dataloader_module.Manager(
-        object(),
-        pacing=FakePacing(),
+    planner = TaskPlanner(
+        wrapper,
+        headstamp,
+        max_period_days=100,
         gap_fill_mode="heuristic",
-        now=now,
-        bar_size="30 secs",
+        timezone_name="UTC",
     )
 
-    tasks = await manager.planned_ranges(wrapper, planner)
+    tasks = planner.planned_ranges()
 
     assert [task.kind for task in tasks] == ["gap", "gap", "backfill", "update"]
-    assert tasks[-2:] == planner.planned_ranges()
+    assert tasks[-2:] == planner.base_ranges()
 
 
 @pytest.mark.asyncio
@@ -539,7 +534,7 @@ async def test_history_sink_does_not_mark_empty_series(contract):
     assert store.metadata_writes == []
 
 
-def test_manager_get_store_builds_async_arctic_store(monkeypatch, dataloader_module):
+def test_manager_datastore_builds_async_arctic_store(monkeypatch, dataloader_module):
     """Manager should lazily build the only supported dataloader backend."""
 
     dataloader = dataloader_module
@@ -560,7 +555,7 @@ def test_manager_get_store_builds_async_arctic_store(monkeypatch, dataloader_mod
         wts="TRADES",
         bar_size="30 secs",
     )
-    store = manager.get_store()
+    store = manager.datastore
 
     assert isinstance(store, FakeAsyncArcticStore)
     assert created == {"lib": "TRADES_30_secs", "host": "mongo"}

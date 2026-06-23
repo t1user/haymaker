@@ -205,6 +205,48 @@ async def test_contract_details_requests_are_paced_without_caching():
 
 
 @pytest.mark.asyncio
+async def test_contract_details_records_symbol_timezone_metadata():
+    """Contract-details responses should seed session timezone metadata."""
+
+    class MetadataIB(FakeIB):
+        async def reqContractDetailsAsync(self, contract):
+            self.contract_details_requests += 1
+            future = ibi.Future(
+                symbol="NQ",
+                exchange="CME",
+                currency="USD",
+                localSymbol="NQU6",
+                tradingClass="NQ",
+            )
+            return [
+                ibi.ContractDetails(
+                    contract=future,
+                    marketName="NQ",
+                    timeZoneId="US/Central",
+                    tradingHours="20260622:1700-20260623:1600",
+                    liquidHours="20260623:0830-20260623:1600",
+                    realExpirationDate="20260918",
+                )
+            ]
+
+    pacing = RequestPacing(MetadataIB(), no_restriction=True)
+
+    await pacing.contract_details(ibi.Future(symbol="NQ", exchange="CME"))
+
+    expired_contract = ibi.Future(
+        symbol="NQ",
+        exchange="CME",
+        currency="USD",
+        localSymbol="NQH6",
+        tradingClass="NQ",
+    )
+    assert pacing.contract_timezone(expired_contract) == "US/Central"
+    assert pacing.contract_metadata["NQ"].liquid_hours == (
+        "20260623:0830-20260623:1600"
+    )
+
+
+@pytest.mark.asyncio
 async def test_historical_data_rejects_updating_requests():
     """Dataloader historical requests must be finite requests."""
 

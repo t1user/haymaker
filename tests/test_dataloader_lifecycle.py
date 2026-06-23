@@ -499,6 +499,9 @@ async def test_schedule_gap_mode_uses_matching_use_rth(dataloader_module):
         def __init__(self):
             self.schedule_calls = []
 
+        def contract_timezone(self, contract):
+            return "UTC"
+
         async def historical_schedule(self, contract, *, numDays, endDateTime, useRTH):
             self.schedule_calls.append((contract, numDays, endDateTime, useRTH))
             return SimpleNamespace(
@@ -570,6 +573,9 @@ async def test_schedule_gap_mode_fails_when_schedule_empty(dataloader_module):
             return {}
 
     class FakePacing:
+        def contract_timezone(self, contract):
+            return "UTC"
+
         async def historical_schedule(self, contract, *, numDays, endDateTime, useRTH):
             return SimpleNamespace(timeZone="UTC", sessions=[])
 

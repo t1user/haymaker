@@ -58,7 +58,8 @@ Two dataloader config keys adjust that machinery:
 Contract selectors use paced ``reqContractDetailsAsync`` calls for
 qualification and futures-chain discovery. The resolved contracts returned by
 IB are then used for historical requests so pacing follows ``ib_insync``
-contract hash semantics.
+contract hash semantics. Contract-details responses also seed a run-local
+metadata cache, including exchange timezone when IB provides it.
 
 Request Sizing
 ==============
@@ -145,10 +146,11 @@ Gap filling is controlled by ``gap_fill_mode``:
     heuristic mode.
 
 Schedule requests use the same ``useRTH`` setting as historical data requests.
-Schedule timezone is used when IB provides it; otherwise the dataloader makes a
-best-effort contract-details timezone lookup and falls back to UTC. Short
-scheduled-session gaps that return no bars are learned only for the current run
-and are not written to datastore metadata.
+Schedule timezone is used when IB provides it; otherwise the planner uses
+run-local contract metadata already collected by the pacer and falls back to
+UTC. Gap planning does not make extra contract-details requests for timezone.
+Short scheduled-session gaps that return no bars are learned only for the
+current run and are not written to datastore metadata.
 
 Failure Handling
 ================

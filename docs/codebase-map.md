@@ -71,9 +71,9 @@ The research package is intentionally separate from live execution. It works dir
   connection ownership, using dataloader client ID `1` by default.
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
-- `haymaker/dataloader/scheduling.py`: `BaseRangePlanner` and lower-level range
-  helpers for backfill, updates, max-period clamping, and pure heuristic or
-  schedule/session gap filtering helpers.
+- `haymaker/dataloader/scheduling.py`: `TaskPlanner`, `BackfillTask`,
+  `UpdateTask`, `GapFillTask`, and pure heuristic or schedule/session gap
+  filtering helpers.
 - `haymaker/dataloader/store_wrapper.py`: `AsyncStoreView` for read-only
   scheduling boundaries with explicit bar-size policy and `HistorySink` for
   raw historical-data persistence.
@@ -123,9 +123,8 @@ The research package is intentionally separate from live execution. It works dir
 3. Contract source data is expanded into IB contracts.
 4. The async store view inspects the Arctic-backed store and normalizes
    scheduling boundaries according to the dataloader date policy.
-   `BaseRangePlanner` creates backfill/update ranges, while `Manager` adds
-   optional gap-fill ranges from either heuristic detection or IB historical
-   schedules.
+   `Manager` obtains any async schedule inputs and passes them to
+   `TaskPlanner`, which creates backfill, update, and optional gap-fill ranges.
 5. A producer submits work to an asyncio queue.
 6. Workers call IB historical-data requests under pacer restrictions.
 7. Downloaded chunks are passed to `HistorySink`, concatenated with stored data,

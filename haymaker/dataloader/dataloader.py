@@ -33,18 +33,17 @@ from .connect import connection
 from .contract_selectors import ContractSelector
 from .pacer import RequestPacing
 from .scheduling import (
-    BaseRangePlanner,
     GapFillMode,
     GapPattern,
+    GapCandidate,
     PlannedRange,
     RangeKind,
     SMALL_BAR_MAX_AGE,
-    heuristic_gap_candidates,
+    SessionRange,
     historical_data_unavailable,
-    raw_gap_candidates,
     schedule_timezone,
-    scheduled_gap_candidates,
     sessions_from_historical_schedule,
+    TaskPlanner,
 )
 from .store_wrapper import AsyncStoreView, HistorySink
 from .task_logger import create_task
@@ -433,9 +432,6 @@ class Manager:
     active_jobs: list[DownloadJob] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
     gap_learner: RunGapLearner = field(default_factory=RunGapLearner, repr=False)
-    _timezone_cache: dict[tuple[str, str, str], str] = field(
-        default_factory=dict, repr=False
-    )
     new_job_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -446,7 +442,8 @@ class Manager:
             self.pacing = request_pacing_factory(self.ib)
         self.new_job_generator = self._job_generator()
 
-    def get_store(self) -> AsyncAbstractBaseStore:
+    @property
+    def datastore(self) -> AsyncAbstractBaseStore:
         """Return the session datastore, creating it lazily when needed."""
 
         if self.store is None:
@@ -484,12 +481,16 @@ class Manager:
     ) -> list[DownloadContainer]:
         """Return planned download containers for one contract store view."""
 
-        planner = BaseRangePlanner(
+        assert self.pacing is not None
+        planner = TaskPlanner(
             store,
             headstamp,
             max_period_days=self.max_period,
+            gap_fill_mode=self._sync_gap_fill_mode,
+            timezone_name=self.pacing.contract_timezone(store.contract),
+            typical_patterns=self.gap_learner.typical_patterns,
         )
-        planned_ranges = await self.planned_ranges(store, planner)
+        planned_ranges = await self.planned_ranges(planner)
         return [
             DownloadContainer(
                 t.from_date,
@@ -501,41 +502,41 @@ class Manager:
             for t in planned_ranges
         ]
 
-    async def planned_ranges(
-        self, store: AsyncStoreView, planner: BaseRangePlanner
-    ) -> list[PlannedRange]:
+    async def planned_ranges(self, planner: TaskPlanner) -> list[PlannedRange]:
         """Return planned ranges, resolving async gap-fill inputs as needed."""
 
-        if historical_data_unavailable(store):
+        if historical_data_unavailable(planner.store):
             return []
-        base_ranges = planner.planned_ranges()
-        if self.gap_fill_mode == "off":
-            return base_ranges
-        if self.gap_fill_mode == "heuristic":
-            return [*await self._heuristic_gap_ranges(store, planner), *base_ranges]
-        return await self._scheduled_planned_ranges(store, planner, base_ranges)
+        if self.gap_fill_mode in {"off", "heuristic"}:
+            return planner.planned_ranges()
+        return await self._scheduled_planned_ranges(planner)
+
+    @property
+    def _sync_gap_fill_mode(self) -> GapFillMode:
+        """Return the non-async fallback mode used before schedule resolution."""
+
+        return "heuristic" if self.gap_fill_mode == "auto" else self.gap_fill_mode
 
     async def _scheduled_planned_ranges(
-        self,
-        store: AsyncStoreView,
-        planner: BaseRangePlanner,
-        base_ranges: list[PlannedRange],
+        self, planner: TaskPlanner
     ) -> list[PlannedRange]:
         """Plan gap-fill ranges with IB historical schedules when available."""
 
-        candidates = raw_gap_candidates(store, start=planner.start)
+        candidates = planner.gap_candidates()
         if not candidates:
-            return base_ranges
+            return planner.base_ranges()
         try:
-            schedules = await self._historical_schedules(store.contract, candidates)
+            schedules = await self._historical_schedules(
+                planner.store.contract, candidates
+            )
         except Exception:
             if self.gap_fill_mode == "schedule":
                 raise
             log.exception(
                 "Schedule gap-fill unavailable for %s; using heuristic.",
-                store.contract,
+                planner.store.contract,
             )
-            return [*await self._heuristic_gap_ranges(store, planner), *base_ranges]
+            return self._planner_with_mode(planner, "heuristic").planned_ranges()
 
         sessions = [
             session
@@ -550,52 +551,41 @@ class Manager:
             ),
             None,
         )
-        if timezone_name is None:
-            timezone_name = await self.contract_timezone(store.contract)
         if not sessions:
             if self.gap_fill_mode == "schedule":
                 raise RuntimeError(
-                    f"No historical schedule returned for {store.contract}"
+                    f"No historical schedule returned for {planner.store.contract}"
                 )
-            return [*await self._heuristic_gap_ranges(store, planner), *base_ranges]
+            return self._planner_with_mode(planner, "heuristic").planned_ranges()
 
-        gap_ranges: list[PlannedRange] = []
-        for candidate in scheduled_gap_candidates(
-            candidates,
+        return self._planner_with_mode(
+            planner,
+            "schedule",
             sessions,
-            timezone_name=timezone_name,
-            typical_patterns=self.gap_learner.typical_patterns,
-        ):
-            if request_range := candidate.request_range():
-                from_date, to_date = request_range
-                gap_ranges.append(
-                    PlannedRange(
-                        from_date, to_date, "gap", candidate.pattern(timezone_name)
-                    )
-                )
-        return [*gap_ranges, *base_ranges]
+            timezone_name or planner.timezone_name,
+        ).planned_ranges()
 
-    async def _heuristic_gap_ranges(
-        self, store: AsyncStoreView, planner: BaseRangePlanner
-    ) -> list[PlannedRange]:
-        """Return heuristic gap ranges filtered by run-local learned patterns."""
+    def _planner_with_mode(
+        self,
+        planner: TaskPlanner,
+        mode: GapFillMode,
+        sessions: list[SessionRange] | None = None,
+        timezone_name: str | None = None,
+    ) -> TaskPlanner:
+        """Return a planner with resolved gap-fill inputs."""
 
-        timezone_name = await self.contract_timezone(store.contract)
-        ranges: list[PlannedRange] = []
-        for candidate in heuristic_gap_candidates(
-            raw_gap_candidates(store, start=planner.start),
-            timezone_name=timezone_name,
-        ):
-            pattern = candidate.pattern(timezone_name)
-            if pattern in self.gap_learner.typical_patterns:
-                continue
-            if request_range := candidate.request_range():
-                from_date, to_date = request_range
-                ranges.append(PlannedRange(from_date, to_date, "gap", pattern))
-        return ranges
+        return TaskPlanner(
+            planner.store,
+            planner.head,
+            planner.max_period_days,
+            gap_fill_mode=mode,
+            timezone_name=timezone_name or planner.timezone_name,
+            sessions=sessions,
+            typical_patterns=planner.typical_patterns,
+        )
 
     async def _historical_schedules(
-        self, contract: ibi.Contract, candidates: list
+        self, contract: ibi.Contract, candidates: list[GapCandidate]
     ) -> list[object]:
         """Request historical schedules covering candidate gaps."""
 
@@ -622,7 +612,7 @@ class Manager:
         return schedules
 
     async def _historical_schedule_chunk(
-        self, contract: ibi.Contract, candidates: list
+        self, contract: ibi.Contract, candidates: list[GapCandidate]
     ) -> object:
         """Request one historical schedule chunk for candidate gaps."""
 
@@ -637,49 +627,15 @@ class Manager:
             useRTH=self.use_rth,
         )
 
-    async def contract_timezone(self, contract: ibi.Contract) -> str | None:
-        """Return best-effort exchange timezone for gap heuristics."""
-
-        cache_key = _contract_timezone_key(contract)
-        if cache_key in self._timezone_cache:
-            return self._timezone_cache[cache_key]
-        timezone_name = await self._contract_details_timezone(contract)
-        if timezone_name is None and getattr(contract, "secType", "").upper() == "FUT":
-            timezone_name = await self._futures_chain_timezone(contract)
-        if timezone_name is not None:
-            self._timezone_cache[cache_key] = timezone_name
-        return timezone_name
-
-    async def _contract_details_timezone(self, contract: ibi.Contract) -> str | None:
-        """Return timezone from exact contract details when available."""
-
-        assert self.pacing is not None
-        details = await self.pacing.contract_details(contract)
-        return _timezone_from_details(contract, details)
-
-    async def _futures_chain_timezone(self, contract: ibi.Contract) -> str | None:
-        """Return timezone from a sibling future when exact details lack it."""
-
-        assert self.pacing is not None
-        chain_contract = ibi.Future(
-            symbol=getattr(contract, "symbol", ""),
-            exchange=getattr(contract, "exchange", ""),
-            currency=getattr(contract, "currency", ""),
-            includeExpired=True,
-        )
-        details = await self.pacing.contract_details(chain_contract)
-        return _timezone_from_details(contract, details)
-
     async def jobs(self) -> AsyncGenerator[DownloadJob, None]:
         async for contract, headstamp in self.headstamps():
             if contract in self._initiated_contracts:
                 continue
             self._initiated_contracts.append(contract)
-            datastore = self.get_store()
             store = await AsyncStoreView.create(
-                contract, datastore, self.now, self.bar_size
+                contract, self.datastore, self.now, self.bar_size
             )
-            sink = HistorySink(contract, datastore)
+            sink = HistorySink(contract, self.datastore)
             tasks = await self.tasks(store, headstamp)
             new_job = DownloadJob(
                 contract,
@@ -949,62 +905,6 @@ def _days_between(start: date | datetime, end: date | datetime) -> int:
     start_date = start.date() if isinstance(start, datetime) else start
     end_date = end.date() if isinstance(end, datetime) else end
     return (end_date - start_date).days
-
-
-def _contract_timezone_key(contract: ibi.Contract) -> tuple[str, str, str]:
-    """Return a stable cache key for contract timezone lookups."""
-
-    return (
-        str(getattr(contract, "symbol", "")),
-        str(getattr(contract, "exchange", "")),
-        str(getattr(contract, "tradingClass", "")),
-    )
-
-
-def _timezone_from_details(
-    contract: ibi.Contract, details: list[ibi.ContractDetails]
-) -> str | None:
-    """Return exact or sibling timezone from contract details."""
-
-    for detail in details:
-        if (
-            detail.contract is not None
-            and _contract_matches(contract, detail.contract)
-            and detail.timeZoneId
-        ):
-            return detail.timeZoneId
-    for detail in details:
-        if (
-            detail.contract is not None
-            and _contract_sibling_matches(contract, detail.contract)
-            and detail.timeZoneId
-        ):
-            return detail.timeZoneId
-    return None
-
-
-def _contract_matches(contract: ibi.Contract, candidate: ibi.Contract) -> bool:
-    """Return whether two contract descriptions identify the same contract."""
-
-    con_id = getattr(contract, "conId", 0)
-    local_symbol = getattr(contract, "localSymbol", "")
-    return bool(con_id and con_id == getattr(candidate, "conId", 0)) or bool(
-        local_symbol and local_symbol == getattr(candidate, "localSymbol", "")
-    )
-
-
-def _contract_sibling_matches(contract: ibi.Contract, candidate: ibi.Contract) -> bool:
-    """Return whether a contract detail belongs to the same symbol family."""
-
-    return (
-        getattr(contract, "symbol", "") == getattr(candidate, "symbol", "")
-        and getattr(contract, "exchange", "") == getattr(candidate, "exchange", "")
-        and (
-            not getattr(contract, "tradingClass", "")
-            or getattr(contract, "tradingClass", "")
-            == getattr(candidate, "tradingClass", "")
-        )
-    )
 
 
 def start():

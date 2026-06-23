@@ -58,6 +58,29 @@ class RequestKind(StrEnum):
     CONTRACT_DETAILS = "reqContractDetails"
 
 
+@dataclass(frozen=True)
+class ContractMetadata:
+    """Session metadata extracted from IB contract-details responses.
+
+    Args:
+        symbol: Symbol key used by the session cache.
+        exchange: Contract exchange from the detail response.
+        trading_class: IB trading class when available.
+        time_zone_id: Exchange timezone advertised by IB.
+        trading_hours: Raw trading-hours string from IB.
+        liquid_hours: Raw liquid-hours string from IB.
+        real_expiration_date: Real expiration date advertised by IB.
+    """
+
+    symbol: str
+    exchange: str = ""
+    trading_class: str = ""
+    time_zone_id: str | None = None
+    trading_hours: str = ""
+    liquid_hours: str = ""
+    real_expiration_date: str = ""
+
+
 def scaled_capacity(limit: int, allowance_fraction: float, minimum: int = 1) -> int:
     """Return an integer capacity scaled by the configured allowance fraction.
 
@@ -362,6 +385,9 @@ class RequestPacing:
     registry: PacingViolationRegistry = field(
         default_factory=PacingViolationRegistry, repr=False
     )
+    contract_metadata: dict[str, ContractMetadata] = field(
+        default_factory=dict, repr=False
+    )
     historical: RequestBucket = field(init=False, repr=False)
     metadata: RequestBucket = field(init=False, repr=False)
 
@@ -583,11 +609,39 @@ class RequestPacing:
         profile = RequestProfile(
             RequestKind.CONTRACT_DETAILS,
         )
-        return await self.metadata.run(
+        details = await self.metadata.run(
             profile,
             lambda: self.ib.reqContractDetailsAsync(contract),
             disabled=self.no_restriction,
         )
+        self.record_contract_metadata(details)
+        return details
+
+    def record_contract_metadata(self, details: list[ibi.ContractDetails]) -> None:
+        """Record useful contract metadata from an IB details response."""
+
+        for detail in details:
+            metadata = _contract_metadata(detail)
+            if metadata is None:
+                continue
+            for key in _metadata_keys(detail, metadata):
+                self._store_contract_metadata(key, metadata)
+
+    def contract_timezone(self, contract: ibi.Contract) -> str | None:
+        """Return cached timezone for a contract symbol without broker calls."""
+
+        for key in _contract_keys(contract):
+            if metadata := self.contract_metadata.get(key):
+                if metadata.time_zone_id:
+                    return metadata.time_zone_id
+        return None
+
+    def _store_contract_metadata(self, key: str, metadata: ContractMetadata) -> None:
+        """Store metadata, preferring entries that include timezone data."""
+
+        existing = self.contract_metadata.get(key)
+        if existing is None or (metadata.time_zone_id and not existing.time_zone_id):
+            self.contract_metadata[key] = metadata
 
     async def _run_with_pacing_retry(
         self,
@@ -669,3 +723,66 @@ class RequestPacing:
         """Handle ``ib.errorEvent`` updates relevant to pacing violations."""
 
         self.registry.onError(reqId, errorCode, errorString, contract)
+
+
+def _contract_metadata(detail: ibi.ContractDetails) -> ContractMetadata | None:
+    """Return cacheable metadata from one contract-details entry."""
+
+    contract = detail.contract
+    if contract is None:
+        return None
+    symbol = _clean_key(getattr(contract, "symbol", ""))
+    if not symbol:
+        return None
+    return ContractMetadata(
+        symbol=symbol,
+        exchange=str(getattr(contract, "exchange", "")),
+        trading_class=str(getattr(contract, "tradingClass", "")),
+        time_zone_id=str(detail.timeZoneId) if detail.timeZoneId else None,
+        trading_hours=str(detail.tradingHours or ""),
+        liquid_hours=str(detail.liquidHours or ""),
+        real_expiration_date=str(detail.realExpirationDate or ""),
+    )
+
+
+def _metadata_keys(
+    detail: ibi.ContractDetails, metadata: ContractMetadata
+) -> set[str]:
+    """Return symbol-family keys for a contract-details entry."""
+
+    contract = detail.contract
+    keys = {metadata.symbol}
+    if contract is not None:
+        keys.update(
+            _clean_key(value)
+            for value in (
+                getattr(contract, "symbol", ""),
+                getattr(contract, "tradingClass", ""),
+                getattr(contract, "localSymbol", ""),
+            )
+        )
+    keys.update(
+        _clean_key(value)
+        for value in (
+            getattr(detail, "marketName", ""),
+            getattr(detail, "underSymbol", ""),
+        )
+    )
+    return {key for key in keys if key}
+
+
+def _contract_keys(contract: ibi.Contract) -> tuple[str, ...]:
+    """Return cache lookup keys for a contract."""
+
+    keys = [
+        _clean_key(getattr(contract, "symbol", "")),
+        _clean_key(getattr(contract, "tradingClass", "")),
+        _clean_key(getattr(contract, "localSymbol", "")),
+    ]
+    return tuple(key for key in keys if key)
+
+
+def _clean_key(value: object) -> str:
+    """Return a normalized metadata key."""
+
+    return str(value or "").strip().upper()

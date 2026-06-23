@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, NamedTuple, Optional, Union
 from zoneinfo import ZoneInfo
@@ -97,6 +97,15 @@ class BaseTask(ABC):
     def __post_init__(self) -> None:
         self.head = normalize_point(self.head, self.store.bar_size)
 
+    def planned_ranges(self, kind: RangeKind) -> list[PlannedRange]:
+        """Return this task's range when it has work."""
+
+        from_date = self.from_date
+        to_date = self.to_date
+        if not from_date or not to_date or to_date <= from_date:
+            return []
+        return [PlannedRange(from_date, to_date, kind)]
+
     def __str__(self) -> str:
         return f"<{self.__class__.__name__} from: {self.from_date} to: {self.to_date}"
 
@@ -146,18 +155,82 @@ class UpdateTask(BaseTask):
 
 
 @dataclass
-class BaseRangePlanner:
-    """Plan base historical download ranges for one contract store view.
+class GapFillTask:
+    """Plan gap-fill ranges from stored-data gaps and optional sessions.
+
+    Args:
+        store: Preloaded datastore view for the contract being planned.
+        start: Earliest point considered by this run.
+        timezone_name: Exchange timezone from session metadata or schedule.
+        sessions: Optional scheduled sessions. When present, gaps must overlap
+            a session to be actionable.
+        typical_patterns: Run-local no-data patterns to suppress.
+    """
+
+    store: AsyncStoreView
+    start: Union[date, datetime]
+    timezone_name: str | None = None
+    sessions: list[SessionRange] | None = None
+    typical_patterns: set[GapPattern] = field(default_factory=set)
+
+    @property
+    def candidates(self) -> list[GapCandidate]:
+        """Return raw datastore gap candidates for this planning window."""
+
+        return raw_gap_candidates(self.store, start=self.start)
+
+    def planned_ranges(self) -> list[PlannedRange]:
+        """Return tagged gap-fill ranges."""
+
+        candidates = self._filtered_candidates()
+        ranges = []
+        for candidate in candidates:
+            pattern = candidate.pattern(self.timezone_name)
+            if pattern in self.typical_patterns:
+                continue
+            if request_range := candidate.request_range():
+                from_date, to_date = request_range
+                ranges.append(PlannedRange(from_date, to_date, "gap", pattern))
+        return ranges
+
+    def _filtered_candidates(self) -> list[GapCandidate]:
+        """Return candidates filtered by schedule or heuristic policy."""
+
+        if self.sessions is not None:
+            return scheduled_gap_candidates(
+                self.candidates,
+                self.sessions,
+                timezone_name=self.timezone_name,
+                typical_patterns=self.typical_patterns,
+            )
+        return heuristic_gap_candidates(
+            self.candidates,
+            timezone_name=self.timezone_name,
+            typical_patterns=self.typical_patterns,
+        )
+
+
+@dataclass
+class TaskPlanner:
+    """Plan historical download ranges for one contract store view.
 
     Args:
         store: Preloaded datastore view for the contract being planned.
         head: Earliest available IB timestamp to consider.
         max_period_days: Maximum lookback window for this planning run.
+        gap_fill_mode: Gap-fill strategy selected for this planning run.
+        timezone_name: Exchange timezone from caller-provided metadata.
+        sessions: Historical schedule sessions, when schedule mode is active.
+        typical_patterns: Run-local no-data gap patterns to suppress.
     """
 
     store: AsyncStoreView
     head: Union[date, datetime]
     max_period_days: int
+    gap_fill_mode: GapFillMode = "off"
+    timezone_name: str | None = None
+    sessions: list[SessionRange] | None = None
+    typical_patterns: set[GapPattern] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.head = normalize_point(self.head, self.store.bar_size)
@@ -176,21 +249,45 @@ class BaseRangePlanner:
         return max(candidates)
 
     def planned_ranges(self) -> list[PlannedRange]:
-        """Return tagged backfill and update ranges in worker execution order."""
+        """Return tagged ranges in worker execution order."""
 
         if historical_data_unavailable(self.store):
             return []
-        ranges = []
+        return [*self.gap_ranges(), *self.base_ranges()]
+
+    def base_ranges(self) -> list[PlannedRange]:
+        """Return tagged backfill and update ranges."""
+
+        ranges: list[PlannedRange] = []
         if not self.store.backfill_exhausted:
-            ranges.append(
-                _planned_range_from_task(
-                    BackfillTask(self.store, self.start), "backfill"
-                )
+            ranges.extend(
+                BackfillTask(self.store, self.start).planned_ranges("backfill")
             )
-        ranges.append(
-            _planned_range_from_task(UpdateTask(self.store, self.start), "update")
+        ranges.extend(UpdateTask(self.store, self.start).planned_ranges("update"))
+        return ranges
+
+    def gap_candidates(self) -> list[GapCandidate]:
+        """Return raw gap candidates for this planning window."""
+
+        return self.gap_task().candidates
+
+    def gap_ranges(self) -> list[PlannedRange]:
+        """Return tagged gap-fill ranges for the configured gap mode."""
+
+        if self.gap_fill_mode == "off":
+            return []
+        return self.gap_task().planned_ranges()
+
+    def gap_task(self) -> GapFillTask:
+        """Return a gap-fill task configured from this planner."""
+
+        return GapFillTask(
+            self.store,
+            self.start,
+            timezone_name=self.timezone_name,
+            sessions=self.sessions if self.gap_fill_mode == "schedule" else None,
+            typical_patterns=self.typical_patterns,
         )
-        return [r for r in ranges if r is not None]
 
 
 def _sec_type(store: AsyncStoreView) -> str:
@@ -233,16 +330,6 @@ def historical_availability_start(
     if candidates:
         return max(candidates)
     return None
-
-
-def _planned_range_from_task(task: BaseTask, kind: RangeKind) -> PlannedRange | None:
-    """Return a tagged range from a task when it has work."""
-
-    from_date = task.from_date
-    to_date = task.to_date
-    if not from_date or not to_date or to_date <= from_date:
-        return None
-    return PlannedRange(from_date, to_date, kind)
 
 
 def raw_gap_candidates(
@@ -293,9 +380,11 @@ def heuristic_gap_candidates(
     candidates: list[GapCandidate],
     *,
     timezone_name: str | None,
+    typical_patterns: set[GapPattern] | None = None,
 ) -> list[GapCandidate]:
     """Filter raw gap candidates using calendar and repeated short patterns."""
 
+    typical_patterns = typical_patterns or set()
     if not candidates:
         return []
     if not isinstance(candidates[0].from_date, datetime):
@@ -324,7 +413,11 @@ def heuristic_gap_candidates(
             for candidate in remaining
             if candidate.pattern(timezone_name) != typical
         ]
-    return remaining
+    return [
+        candidate
+        for candidate in remaining
+        if candidate.pattern(timezone_name) not in typical_patterns
+    ]
 
 
 def scheduled_gap_candidates(
