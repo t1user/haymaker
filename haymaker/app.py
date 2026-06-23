@@ -3,7 +3,7 @@ import datetime
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import eventkit as ev  # type: ignore
@@ -40,8 +40,6 @@ if config.get("log_broker"):
 class LiveRuntime:
     """Run live controller and streamer work for one supervisor cycle."""
 
-    CONTRACT_REFRESH_INTERVAL: ClassVar[int] = 24 * 60 * 60
-
     jobs: Jobs = field(default_factory=lambda: JOBS)
     controller: "Controller" = field(default_factory=lambda: CONTROLLER)
     future_roll_time: tuple[int, int] = (10, 0)
@@ -51,9 +49,6 @@ class LiveRuntime:
         default=None, init=False, repr=False
     )
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
-    _contract_refresh_timer: ev.Timer | None = field(
-        default=None, init=False, repr=False
-    )
 
     @classmethod
     def from_config(cls, top_config: Mapping[str, Any]) -> "LiveRuntime":
@@ -71,7 +66,7 @@ class LiveRuntime:
     def set_restart_handler(
         self, request_restart: Callable[[str], bool | None]
     ) -> None:
-        """Set the restart callback used by timeout and daily refresh timers."""
+        """Set the restart callback used by stale-streamer timeouts."""
 
         self.request_restart = request_restart
         Timeout.set_restart_handler(request_restart)
@@ -85,14 +80,11 @@ class LiveRuntime:
         """Start controller and strategy jobs after connectivity is verified."""
 
         log.debug("Probe successful. Will run controller...")
-        started_scheduled_tasks = False
         try:
             controller_started = await self.controller.run()
             if not controller_started:
                 log.debug("Controller did not start; jobs will not be started.")
                 return
-            self._start_scheduled_tasks()
-            started_scheduled_tasks = True
             await self.jobs()
         except asyncio.CancelledError:
             log.debug("Live runtime task cancelled.")
@@ -101,46 +93,15 @@ class LiveRuntime:
             log.info(f"Connection fault: {ce}")
         except Exception as e:
             log.exception(e)
-        finally:
-            if started_scheduled_tasks:
-                self._stop_scheduled_tasks()
 
     async def stop(self, reason: str) -> None:
-        """Put controller on hold and stop scheduled runtime checks."""
+        """Put controller on hold while supervised runtime work stops."""
 
         self.controller.set_hold()
-        self._stop_scheduled_tasks()
         log.debug(f"Stopping live runtime: {reason}")
 
-    def _start_scheduled_tasks(self) -> None:
-        """Start scheduled live-runtime checks for the current cycle."""
-
-        if self._has_scheduled_tasks():
-            log.warning("Replacing already scheduled live-runtime tasks.")
-            self._stop_scheduled_tasks()
-        self.schedule_future_roll()
-        self.schedule_contract_refresh_restart()
-
-    def _stop_scheduled_tasks(self) -> None:
-        """Stop scheduled live-runtime checks for the current cycle."""
-
-        if self._future_roll_timer is not None:
-            self._future_roll_timer.set_done()
-            self._future_roll_timer = None
-        if self._contract_refresh_timer is not None:
-            self._contract_refresh_timer.set_done()
-            self._contract_refresh_timer = None
-
-    def _has_scheduled_tasks(self) -> bool:
-        """Return whether runtime timer handles are currently active."""
-
-        return (
-            self._future_roll_timer is not None
-            or self._contract_refresh_timer is not None
-        )
-
     def schedule_future_roll(self) -> None:
-        """Schedule daily futures rolls while live runtime is active."""
+        """Schedule daily futures rolls for the app lifetime."""
 
         roll_hour, roll_minute = self.future_roll_time
         roll_timezone = ZoneInfo(self.future_roll_timezone)
@@ -151,18 +112,6 @@ class LiveRuntime:
         )
         self._future_roll_timer += self.controller.roll_futures
         log.debug(f"Future roll scheduled for {rt} {rt.tzinfo.key}")  # type: ignore
-
-    def schedule_contract_refresh_restart(self) -> None:
-        """Schedule a daily restart so contract metadata is refreshed."""
-
-        self._contract_refresh_timer = ev.Timer(self.CONTRACT_REFRESH_INTERVAL, count=1)
-        self._contract_refresh_timer += self.request_contract_refresh_restart  # type: ignore
-
-    def request_contract_refresh_restart(self, *args) -> None:
-        """Request a restart after the fixed contract-refresh interval elapses."""
-
-        if self.request_restart:
-            self.request_restart("daily contract metadata refresh")
 
 
 @dataclass
@@ -181,6 +130,7 @@ class App:
 
     def __post_init__(self) -> None:
         self.runtime.set_no_future_roll_strategies(self.no_future_roll_strategies)
+        self.runtime.schedule_future_roll()
         self.supervisor = ConnectionSupervisor(self.ib, self.runtime, self.settings)
         self.runtime.set_restart_handler(self.supervisor.request_restart)
         log.debug(f"App initiated: {self}")

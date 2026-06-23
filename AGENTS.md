@@ -100,6 +100,9 @@ BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fa
   research tools.
 - Live trading, controller sync, futures rolling, and order reconciliation are
   high-risk areas. Keep changes especially narrow and well verified there.
+- Futures roll scheduling is app-lifetime behavior. Schedule the daily roll once
+  for the app process, not per supervisor connection/workload cycle; reconnects
+  and workload restarts must not create additional roll timers.
 - IB/TWS connection outages, especially around a broker's daily restart period,
   are expected and should normally be recoverable. Do not treat a connection
   outage alone as an unsafe broker/local state; emergency trading disablement
