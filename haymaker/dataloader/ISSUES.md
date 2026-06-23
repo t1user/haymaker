@@ -48,31 +48,18 @@ stable and mark items off as they are addressed.
   valid request shapes only; exact bar counts remain session- and
   instrument-dependent and are left to the separate session-aware scheduling
   issue.
-- [ ] `DL-019`: Make gap-fill scheduling session-aware using IB
-  historical schedules.  Current `GapFillFactory.gap_factory()` infers
-  expected gaps only from stored data regularity, so scheduled market
-  closures, holidays, early closes, and weekend breaks have to be
-  guessed from timestamps. Later refactor work should combine
-  datastore gap detection with
-  `ib_insync.IB.reqHistoricalScheduleAsync` output and schedule only
-  missing ranges that fall inside IB sessions where bars should
-  exist. The IB schedule request should not live inside
-  `TaskFactory`/`GapFillFactory`: it is an async broker call and must
-  run through the dataloader request layer under session-scoped
-  `RequestPacing`, so schedule requests are counted with the rest of broker
-  usage. Preserve a
-  narrow pure scheduling helper that can be tested from stored data
-  plus a supplied historical schedule. The observed
-  `ib.reqHistoricalScheduleAsync` return shape is like this: [
-  HistoricalSession(startDateTime='20250330- 17:00:00',
-  endDateTime='20250331-16:00:00', refDate='20250331'),] is an
-  `ib_insync.objects.HistoricalSchedule` with `startDateTime`,
-  `endDateTime`, `timeZone`, and `sessions`; each session is an
-  `ib_insync.objects.HistoricalSession` with `startDateTime`,
-  `endDateTime`, and `refDate`. In the observed output, datetimes are
-  IB strings such as `20250330-17:00:00`, timezone is a string such as
-  `US/Central`, and sessions include normal trading days, weekend
-  gaps, holidays, and early closes.
+- [x] `DL-019`: Make gap-fill scheduling session-aware using IB
+  historical schedules. Gap filling now uses `gap_fill_mode` with `off`,
+  `heuristic`, `schedule`, and `auto` modes. Schedule requests run in
+  `Manager` through session-scoped `RequestPacing`, use the same `useRTH`
+  policy as historical-data requests, and feed pure schedule-comparison
+  helpers in `haymaker.dataloader.scheduling`. `schedule` mode fails when IB
+  returns no usable schedule; `auto` falls back to the fixed two-pass heuristic.
+  The heuristic compares repeated short `(local start time, duration)` patterns
+  rather than suppressing every gap at the most common start time, and simple
+  weekend gaps are treated as typical. Short open-session gaps that return no
+  bars are learned only for the current run and are not persisted to datastore
+  metadata.
 - [x] `DL-020`: Define run-wide `now` snapshot semantics explicitly. `Manager`
   owns the run-scoped `now` value, normalizes it for the configured bar size,
   and passes it into scheduling and request-age validation. `DataloaderSession`
@@ -187,7 +174,7 @@ stable and mark items off as they are addressed.
 
 9. **Make Gap-Fill Scheduling Session-Aware**
    - Fetch IB historical schedules in the async dataloader request path, not in
-     `TaskFactory`/`GapFillFactory`.
+     pure `TaskFactory` scheduling objects.
    - Run `reqHistoricalScheduleAsync` under session-scoped `RequestPacing` so
      schedule lookups count against broker usage and can share retry/failure
      policy with other requests.

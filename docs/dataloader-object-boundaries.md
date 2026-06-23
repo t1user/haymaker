@@ -32,11 +32,8 @@ remain separate work.
 - Consumes an `AsyncStoreView`, a head timestamp, max-period policy, and gap
   policy.
 - Owns the run lookback clamp and produces download ranges.
-- Later can consume IB historical schedules without putting broker calls inside
-  pure scheduling code.
-
-The older `task_factory()` and `task_factory_with_gaps()` functions remain as
-compatibility wrappers around the same lower-level range logic.
+- Keeps broker schedule calls out of pure scheduling code; `Manager` owns those
+  async request-layer inputs.
 
 ### DownloadJob
 

@@ -1,15 +1,22 @@
 import importlib
 import sys
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import ib_insync as ibi
 import pandas as pd
 import pytest
 
 from haymaker.dataloader.scheduling import (
+    GapCandidate,
+    PlannedRange,
+    SessionRange,
     TaskPlanner,
-    task_factory,
-    task_factory_with_gaps,
+    heuristic_gap_candidates,
+    planned_task_factory,
+    planned_task_factory_with_gaps,
+    scheduled_gap_candidates,
+    sessions_from_historical_schedule,
 )
 from haymaker.dataloader.helpers import duration_in_secs
 from haymaker.dataloader.store_wrapper import AsyncStoreView, HistorySink
@@ -27,7 +34,8 @@ def dataloader_module(monkeypatch):
         "barSize": "30 secs",
         "wts": "TRADES",
         "max_bars": 100_000,
-        "fill_gaps": False,
+        "gap_fill_mode": "off",
+        "useRTH": False,
         "auto_save_interval": 0,
         "number_of_workers": 2,
         "clientId": 1,
@@ -132,7 +140,7 @@ async def test_async_store_view_one_row_uses_single_timestamp_boundary(
 
 
 @pytest.mark.asyncio
-async def test_task_factory_one_row_store_does_not_schedule_full_duplicate(
+async def test_task_planner_one_row_store_does_not_schedule_full_duplicate(
     contract, store_index
 ):
     """A one-row collection should schedule around the stored boundary."""
@@ -142,7 +150,12 @@ async def test_task_factory_one_row_store_does_not_schedule_full_duplicate(
         contract, FakeAsyncStore(data), store_index[-1], "30 secs"
     )
 
-    tasks = task_factory(wrapper, store_index[0])
+    tasks = TaskPlanner(
+        wrapper,
+        store_index[0],
+        max_period_days=100,
+        gap_fill_mode="off",
+    ).ranges()
 
     assert tasks == [(store_index[0], store_index[-1])]
 
@@ -159,7 +172,7 @@ async def test_task_planner_clamps_start_to_max_period(contract):
         wrapper,
         headstamp,
         max_period_days=3,
-        fill_gaps=False,
+        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(datetime(2025, 1, 7, tzinfo=timezone.utc), now)]
@@ -177,7 +190,7 @@ async def test_task_planner_clamps_small_bars_to_six_month_limit(contract):
         wrapper,
         headstamp,
         max_period_days=5000,
-        fill_gaps=False,
+        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(now - timedelta(days=180), now)]
@@ -195,7 +208,7 @@ async def test_task_planner_does_not_apply_six_month_limit_to_one_min(contract):
         wrapper,
         headstamp,
         max_period_days=5000,
-        fill_gaps=False,
+        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(headstamp, now)]
@@ -217,7 +230,7 @@ async def test_task_planner_clamps_expired_future_to_two_year_limit():
         wrapper,
         date(2020, 1, 1),
         max_period_days=5000,
-        fill_gaps=False,
+        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(date(2023, 1, 3), date(2025, 1, 2))]
@@ -239,7 +252,7 @@ async def test_task_planner_does_not_apply_expired_future_limit_to_active_future
         wrapper,
         date(2020, 1, 1),
         max_period_days=5000,
-        fill_gaps=False,
+        gap_fill_mode="off",
     ).ranges()
 
     assert tasks == [(date(2020, 1, 1), date(2025, 1, 3))]
@@ -262,7 +275,7 @@ async def test_task_planner_skips_expired_options():
             wrapper,
             date(2020, 1, 1),
             max_period_days=5000,
-            fill_gaps=False,
+            gap_fill_mode="off",
         ).ranges()
         == []
     )
@@ -280,11 +293,11 @@ async def test_task_planner_missing_metadata_still_schedules_backfill(contract):
         wrapper,
         headstamp,
         max_period_days=3,
-        fill_gaps=False,
+        gap_fill_mode="off",
     ).planned_ranges()
 
     assert tasks == [
-        (
+        PlannedRange(
             datetime(2025, 1, 7, tzinfo=timezone.utc),
             now,
             "backfill",
@@ -311,13 +324,19 @@ async def test_task_planner_skips_exhausted_backfill_but_keeps_update(
         wrapper,
         datetime(2025, 1, 1, tzinfo=timezone.utc),
         max_period_days=100,
-        fill_gaps=False,
+        gap_fill_mode="off",
     ).planned_ranges()
 
-    assert tasks == [(store_index[-1], now, "update")]
-    assert task_factory(wrapper, datetime(2025, 1, 1, tzinfo=timezone.utc)) == [
-        (store_index[-1], now)
+    assert tasks == [PlannedRange(store_index[-1], now, "update")]
+    assert planned_task_factory(wrapper, datetime(2025, 1, 1, tzinfo=timezone.utc)) == [
+        PlannedRange(store_index[-1], now, "update")
     ]
+    assert TaskPlanner(
+        wrapper,
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        max_period_days=100,
+        gap_fill_mode="off",
+    ).ranges() == [(store_index[-1], now)]
 
 
 @pytest.mark.asyncio
@@ -339,15 +358,15 @@ async def test_task_planner_exhausted_backfill_without_update_has_no_range(
             wrapper,
             datetime(2025, 1, 1, tzinfo=timezone.utc),
             max_period_days=100,
-            fill_gaps=False,
+            gap_fill_mode="off",
         ).planned_ranges()
         == []
     )
 
 
 @pytest.mark.asyncio
-async def test_task_planner_preserves_gap_factory_order(contract):
-    """TaskPlanner should preserve legacy gap-first scheduling behavior."""
+async def test_task_planner_preserves_gap_first_order(contract):
+    """TaskPlanner should keep gap ranges before backfill/update work."""
 
     index = pd.DatetimeIndex(
         [
@@ -372,10 +391,15 @@ async def test_task_planner_preserves_gap_factory_order(contract):
         wrapper,
         headstamp,
         max_period_days=100,
-        fill_gaps=True,
+        gap_fill_mode="heuristic",
     ).ranges()
 
-    assert tasks == task_factory_with_gaps(wrapper, headstamp)
+    assert TaskPlanner(
+        wrapper,
+        headstamp,
+        max_period_days=100,
+        gap_fill_mode="heuristic",
+    ).planned_ranges() == planned_task_factory_with_gaps(wrapper, headstamp)
 
 
 @pytest.mark.asyncio
@@ -547,3 +571,98 @@ def test_create_dataloader_store_builds_async_arctic_store(
 
     assert isinstance(store, FakeAsyncArcticStore)
     assert created == {"lib": "TRADES_30_secs", "host": "mongo"}
+
+
+def test_heuristic_suppresses_repeated_short_pair_but_keeps_long_gap():
+    """Repeated short gaps should not hide long missing intervals at same time."""
+
+    start = datetime(2025, 1, 1, 21, tzinfo=timezone.utc)
+    short_one = GapCandidate(
+        start,
+        start + timedelta(hours=1),
+        start + timedelta(seconds=30),
+        start + timedelta(minutes=59, seconds=30),
+        timedelta(hours=1),
+    )
+    short_two = GapCandidate(
+        start + timedelta(days=1),
+        start + timedelta(days=1, hours=1),
+        start + timedelta(days=1, seconds=30),
+        start + timedelta(days=1, minutes=59, seconds=30),
+        timedelta(hours=1),
+    )
+    long_gap = GapCandidate(
+        start + timedelta(days=2),
+        start + timedelta(days=2, hours=23),
+        start + timedelta(days=2, seconds=30),
+        start + timedelta(days=2, hours=22, minutes=59, seconds=30),
+        timedelta(hours=23),
+    )
+
+    assert heuristic_gap_candidates(
+        [short_one, short_two, long_gap], timezone_name="UTC"
+    ) == [long_gap]
+
+
+def test_heuristic_suppresses_simple_weekend_gap():
+    """A gap whose missing interval is Saturday/Sunday is typical by calendar."""
+
+    candidate = GapCandidate(
+        datetime(2025, 1, 3, 22, tzinfo=timezone.utc),
+        datetime(2025, 1, 6, 1, tzinfo=timezone.utc),
+        datetime(2025, 1, 4, 0, tzinfo=timezone.utc),
+        datetime(2025, 1, 5, 23, tzinfo=timezone.utc),
+        timedelta(days=2, hours=3),
+    )
+
+    assert heuristic_gap_candidates([candidate], timezone_name="UTC") == []
+
+
+def test_schedule_filter_keeps_only_session_overlap():
+    """Schedule filtering should suppress closed-market gaps."""
+
+    open_gap = GapCandidate(
+        datetime(2025, 1, 1, 10, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 10, 2, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 10, 1, 30, tzinfo=timezone.utc),
+        timedelta(minutes=2),
+    )
+    closed_gap = GapCandidate(
+        datetime(2025, 1, 1, 21, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 22, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 21, 0, 30, tzinfo=timezone.utc),
+        datetime(2025, 1, 1, 21, 59, 30, tzinfo=timezone.utc),
+        timedelta(hours=1),
+    )
+    sessions = [
+        SessionRange(
+            datetime(2025, 1, 1, 9, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 16, tzinfo=timezone.utc),
+        )
+    ]
+
+    assert scheduled_gap_candidates(
+        [open_gap, closed_gap], sessions, timezone_name="UTC"
+    ) == [open_gap]
+
+
+def test_sessions_from_historical_schedule_uses_schedule_timezone():
+    """IB schedule strings should be interpreted in the schedule timezone."""
+
+    schedule = SimpleNamespace(
+        timeZone="US/Central",
+        sessions=[
+            SimpleNamespace(
+                startDateTime="20250101-17:00:00",
+                endDateTime="20250102-16:00:00",
+            )
+        ],
+    )
+
+    assert sessions_from_historical_schedule(schedule) == [
+        SessionRange(
+            datetime(2025, 1, 1, 23, tzinfo=timezone.utc),
+            datetime(2025, 1, 2, 22, tzinfo=timezone.utc),
+        )
+    ]

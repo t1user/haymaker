@@ -6,7 +6,8 @@ max_period: 120 # max duration of downloaded data in days
 clientId: 1 # keep distinct from live runtime clientId=0
 supervisor: state # one of: state, onion
 number_of_workers: 20
-fill_gaps: False
+gap_fill_mode: off # off, heuristic, schedule, auto
+useRTH: False
 auto_save_interval: 900 # in secs, zero=off
 restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
 max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping

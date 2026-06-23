@@ -122,6 +122,34 @@ dataloader proceeds normally from the stored data boundaries and IB
 lower-bound metadata belongs with datastore-maintained series boundaries, in
 the same spirit as the existing ``up_to`` field.
 
+Gap Fill Modes
+==============
+
+Gap filling is controlled by ``gap_fill_mode``:
+
+``off``
+    Do not schedule internal datastore gaps.
+
+``heuristic``
+    Detect gaps from stored bar regularity and suppress repeated short
+    local-time patterns and simple weekend gaps. The heuristic uses a fixed
+    two-pass implementation detail rather than a user-facing tuning setting.
+
+``schedule``
+    Request IB historical schedules through the dataloader request pacer and
+    schedule only gaps that overlap reported trading sessions. If no usable
+    schedule is returned, planning for that contract fails.
+
+``auto``
+    Use schedule mode when IB returns a usable schedule, otherwise fall back to
+    heuristic mode.
+
+Schedule requests use the same ``useRTH`` setting as historical data requests.
+Schedule timezone is used when IB provides it; otherwise the dataloader makes a
+best-effort contract-details timezone lookup and falls back to UTC. Short
+scheduled-session gaps that return no bars are learned only for the current run
+and are not written to datastore metadata.
+
 Failure Handling
 ================
 

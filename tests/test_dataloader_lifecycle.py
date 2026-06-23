@@ -4,6 +4,8 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import ib_insync as ibi
+import pandas as pd
 import pytest
 
 
@@ -19,7 +21,8 @@ def dataloader_module(monkeypatch):
         "barSize": "30 secs",
         "wts": "TRADES",
         "max_bars": 100_000,
-        "fill_gaps": False,
+        "gap_fill_mode": "off",
+        "useRTH": False,
         "auto_save_interval": 0,
         "number_of_workers": 2,
         "clientId": 1,
@@ -459,6 +462,172 @@ async def test_manager_policy_flows_to_store_and_download_job(
     assert job.bar_size == "1 day"
     assert job.max_bars == 12
     assert job.params["endDateTime"] == date(2025, 1, 10)
+
+
+@pytest.mark.asyncio
+async def test_schedule_gap_mode_uses_matching_use_rth(dataloader_module):
+    """Schedule gap planning should pass the manager's historical-data RTH mode."""
+
+    dataloader = dataloader_module
+    contract = ibi.Contract(
+        secType="FUT",
+        symbol="NQ",
+        exchange="CME",
+        currency="USD",
+        localSymbol="NQM6",
+        tradingClass="NQ",
+    )
+    index = pd.DatetimeIndex(
+        [
+            datetime(2025, 1, 1, 10, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 2, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 2, 30, tzinfo=timezone.utc),
+        ]
+    )
+
+    class FakeStore:
+        async def read(self, requested_contract):
+            return pd.DataFrame({"close": range(len(index))}, index=index)
+
+        async def read_metadata(self, requested_contract):
+            return {}
+
+    class FakePacing:
+        def __init__(self):
+            self.schedule_calls = []
+
+        async def historical_schedule(self, contract, *, numDays, endDateTime, useRTH):
+            self.schedule_calls.append((contract, numDays, endDateTime, useRTH))
+            return SimpleNamespace(
+                timeZone="UTC",
+                sessions=[
+                    SimpleNamespace(
+                        startDateTime="20250101-09:00:00",
+                        endDateTime="20250101-11:00:00",
+                    )
+                ],
+            )
+
+    pacing = FakePacing()
+    manager = dataloader.Manager(
+        object(),
+        pacing=pacing,
+        bar_size="30 secs",
+        gap_fill_mode="schedule",
+        use_rth=True,
+        now=datetime(2025, 1, 1, 11, tzinfo=timezone.utc),
+    )
+    store = await dataloader.AsyncStoreView.create(
+        contract, FakeStore(), manager.now, manager.bar_size
+    )
+
+    tasks = await manager.tasks(store, datetime(2025, 1, 1, 9, tzinfo=timezone.utc))
+
+    assert pacing.schedule_calls == [
+        (contract, 2, datetime(2025, 1, 1, 10, 2, 30, tzinfo=timezone.utc), True)
+    ]
+    assert [(task.kind, task.from_date, task.to_date) for task in tasks] == [
+        (
+            "gap",
+            datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 2, 30, tzinfo=timezone.utc),
+        ),
+        (
+            "backfill",
+            datetime(2025, 1, 1, 9, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
+        ),
+        (
+            "update",
+            datetime(2025, 1, 1, 10, 2, 30, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 11, tzinfo=timezone.utc),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_schedule_gap_mode_fails_when_schedule_empty(dataloader_module):
+    """Explicit schedule mode should fail instead of silently using heuristics."""
+
+    dataloader = dataloader_module
+    contract = ibi.Contract(secType="FUT", symbol="NQ", exchange="CME")
+    index = pd.DatetimeIndex(
+        [
+            datetime(2025, 1, 1, 10, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 2, tzinfo=timezone.utc),
+        ]
+    )
+
+    class FakeStore:
+        async def read(self, requested_contract):
+            return pd.DataFrame({"close": range(len(index))}, index=index)
+
+        async def read_metadata(self, requested_contract):
+            return {}
+
+    class FakePacing:
+        async def historical_schedule(self, contract, *, numDays, endDateTime, useRTH):
+            return SimpleNamespace(timeZone="UTC", sessions=[])
+
+    manager = dataloader.Manager(
+        object(),
+        pacing=FakePacing(),
+        bar_size="30 secs",
+        gap_fill_mode="schedule",
+        now=datetime(2025, 1, 1, 11, tzinfo=timezone.utc),
+    )
+    store = await dataloader.AsyncStoreView.create(
+        contract, FakeStore(), manager.now, manager.bar_size
+    )
+
+    with pytest.raises(RuntimeError, match="No historical schedule"):
+        await manager.tasks(store, datetime(2025, 1, 1, 9, tzinfo=timezone.utc))
+
+
+@pytest.mark.asyncio
+async def test_gap_learner_is_run_local_and_does_not_touch_sink(dataloader_module):
+    """No-data gap patterns should be learned in memory only."""
+
+    dataloader = dataloader_module
+    pattern = dataloader.GapPattern(
+        datetime(2025, 1, 1, 10).time(),
+        timedelta(minutes=15, seconds=30),
+        "UTC",
+    )
+
+    class FakeSink:
+        def __init__(self):
+            self.marked = False
+
+        async def write(self, data):
+            return "version"
+
+        async def mark_backfill_exhausted(self):
+            self.marked = True
+
+    sink = FakeSink()
+    learner = dataloader.RunGapLearner()
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink,
+        [
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 1, 10, tzinfo=timezone.utc),
+                datetime(2025, 1, 1, 10, 16, tzinfo=timezone.utc),
+                kind="gap",
+                gap_pattern=pattern,
+            )
+        ],
+        gap_learner=learner,
+    )
+
+    await job.save_chunk(None)
+    learner.record_empty_gap(pattern)
+
+    assert learner.typical_patterns == {pattern}
+    assert sink.marked is False
 
 
 class FakeContract:

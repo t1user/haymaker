@@ -108,11 +108,11 @@ options_by_module: dict[str, list] = {
     ],
     "dataloader": [
         (
-            ("-g", "--fill_gaps"),
+            ("-g", "--gap_fill_mode"),
             {
-                "action": "store_true",
-                "default": False,
-                "help": "Whether dataloader should attempt to patch any existing gap in data.",
+                "choices": ("off", "heuristic", "schedule", "auto"),
+                "default": "off",
+                "help": "Gap-fill mode for existing stored historical data.",
             },
         ),
     ],
