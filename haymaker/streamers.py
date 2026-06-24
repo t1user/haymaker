@@ -52,7 +52,7 @@ def bar_filter(bar: ibi.BarData) -> bool:
 
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
-    timeout: bool = True
+    timeout: bool | float = True
 
     def __new__(cls, *args, **kwargs):
         # Keep track of all :class:`.Streamer` instances created so that they
@@ -93,8 +93,10 @@ class Streamer(Atom, ABC):
         Automatically monitor event for stale data.  Can be switched
         off by overriding class variable `set_timeout`
         """
-        if self.timeout:
+        if self.timeout and isinstance(self.timeout, bool):
             Timeout.from_atom(self, event, name)
+        elif self.timeout:
+            Timeout.from_atom(self, event, name, self.timeout)
 
     @cached_property
     def _id(self) -> int:
@@ -187,6 +189,7 @@ class HistoricalDataStreamer(Streamer):
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
     datastore: bool | AsyncAbstractBaseStore = False
+    timeout: bool | float = True
     _last_bar_date: datetime | None = None
 
     def __post_init__(self) -> None:
@@ -327,6 +330,7 @@ class MktDataStreamer(Streamer):
 
     contract: ibi.Contract
     tickList: str
+    timeout: bool | float = True
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -359,6 +363,7 @@ class RealTimeBarsStreamer(Streamer):
     whatToShow: str
     useRTH: bool
     realTimeBarsOptions: list[ibi.TagValue] = field(default_factory=list)
+    timeout: bool | float = True
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -401,6 +406,7 @@ class TickByTickStreamer(Streamer):
     tickType: str
     numberOfTicks: int = 0
     ignoreSize: bool = False
+    timeout: bool | float = True
 
     def __post_init__(self):
         Atom.__init__(self)

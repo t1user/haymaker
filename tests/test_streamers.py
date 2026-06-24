@@ -95,6 +95,36 @@ def mock_arctic_store():
         yield mock_store_class
 
 
+def test_timer_true():
+    with patch("haymaker.streamers.Timeout.from_atom") as MockTimeout:
+        streamer = HistoricalDataStreamer(
+            ibi.Future(symbol="NQ", exchange="CME"),
+            10000,
+            "1 min",
+            "TRADES",
+            timeout=True,
+        )
+        event = ibi.Event()
+        name = "my_test_timeout"
+        streamer._set_timeout(event, name)
+        MockTimeout.assert_called_once_with(streamer, event, name)
+
+
+def test_timer_float():
+    with patch("haymaker.streamers.Timeout.from_atom") as MockTimeout:
+        streamer = HistoricalDataStreamer(
+            ibi.Future(symbol="NQ", exchange="CME"),
+            10000,
+            "1 min",
+            "TRADES",
+            timeout=100,
+        )
+        event = ibi.Event()
+        name = "my_test_timeout"
+        streamer._set_timeout(event, name)
+        MockTimeout.assert_called_once_with(streamer, event, name, 100)
+
+
 @pytest.mark.parametrize(
     "datastore_value,expected",
     [(True, "mock"), (False, None), (fakestore := FakeStore(), fakestore)],

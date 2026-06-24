@@ -544,7 +544,7 @@ class Controller(Atom):
 
         try:
             strategy, action, _, params, _ = order_info
-            position_id = params["position_id"]
+            position_id = params.get("position_id", "unknown")
 
             kwargs = {
                 "strategy": strategy,
@@ -650,6 +650,10 @@ class Controller(Atom):
         return order_info
 
     def _assign_trade(self, trade: ibi.Trade) -> Strategy | None:
+
+        # these are BAG contracts
+        if not trade.contract.isHashable():
+            return None
 
         # assumed unknown trade is to close a position
         active_strategies_list = [
