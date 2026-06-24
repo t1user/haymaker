@@ -50,6 +50,7 @@ class ConnectionSettings:
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
     max_recoveries: int = 10
+    exit_on_failed_sync: bool = False
 
     @classmethod
     def from_config(
@@ -77,4 +78,5 @@ class ConnectionSettings:
                 "restart_on_recovered_connection", False
             ),
             max_recoveries=config.get("max_recoveries", 10),
+            exit_on_failed_sync=config.get("exit_on_failed_sync", False),
         )

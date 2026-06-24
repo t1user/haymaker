@@ -32,6 +32,7 @@ app:
   auto_recovery_grace_period: 120
   restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
   max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
+  exit_on_failed_sync: False
   future_roll_time: [10, 0]   # time when future rolls are executed, must be a list [hour, minute]
   future_roll_timezone: "America/New_York" # must be a string acceptable by ZoneInfo
   
