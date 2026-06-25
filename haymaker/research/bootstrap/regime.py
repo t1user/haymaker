@@ -10,8 +10,13 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-from .data import RAW_COLUMNS, RandomState, _reconstruct_path, _rng
-from .data import prepare_bootstrap_frame
+from .data import (
+    RAW_COLUMNS,
+    RandomState,
+    _reconstruct_path,
+    _rng,
+    prepare_bootstrap_frame,
+)
 
 __all__ = ["regime_bootstrap"]
 
