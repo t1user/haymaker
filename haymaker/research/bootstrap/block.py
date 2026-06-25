@@ -4,7 +4,7 @@ Block bootstrap generators for synthetic OHLC research data.
 
 from __future__ import annotations
 
-from typing import Literal, Sequence, cast
+from typing import Any, Literal, Sequence, cast
 
 import numpy as np
 import pandas as pd
@@ -45,6 +45,41 @@ def _fallback_optimal_block_length(series: pd.Series) -> int:
         if abs(value) <= noise_band:
             return max(1, lag)
     return max_lag
+
+
+def _extract_arch_block_length(
+    result: pd.DataFrame, *, result_key: str, column: str
+) -> float:
+    """
+    Extract a block length from supported ``arch`` result formats.
+
+    Args:
+        result: Dataframe returned by ``arch.bootstrap.optimal_block_length``.
+        result_key: Bootstrap method key, ``"stationary"`` or ``"circular"``.
+        column: Source column name used when ``arch`` returns variables on the
+            index.
+
+    Returns:
+        Estimated block length as a finite float.
+
+    Raises:
+        ValueError: If the result format or value is unsupported.
+    """
+    if "block_length" in result.columns and result_key in result.index:
+        block_length = float(cast(Any, result.loc[result_key, "block_length"]))
+    elif result_key in result.columns:
+        if column in result.index:
+            block_length = float(cast(Any, result.loc[column, result_key]))
+        elif len(result) == 1:
+            block_length = float(cast(Any, result[result_key].iloc[0]))
+        else:
+            raise ValueError("Cannot select an arch block-length row.")
+    else:
+        raise ValueError("Unsupported arch block-length result format.")
+
+    if not np.isfinite(block_length):
+        raise ValueError("arch returned a non-finite block length.")
+    return block_length
 
 
 def optimal_block_length(
@@ -93,7 +128,12 @@ def optimal_block_length(
         return _fallback_optimal_block_length(series)
 
     result_key = "stationary" if method == "stationary" else "circular"
-    block_length = cast(float, result.loc[result_key, "block_length"])
+    try:
+        block_length = _extract_arch_block_length(
+            result, result_key=result_key, column=column
+        )
+    except (KeyError, TypeError, ValueError):
+        return _fallback_optimal_block_length(series)
     return max(1, int(np.ceil(block_length)))
 
 

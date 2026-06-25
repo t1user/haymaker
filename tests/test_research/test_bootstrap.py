@@ -17,6 +17,7 @@ from haymaker.research import (
     volatility_states,
 )
 from haymaker.research.bootstrap import regime_bootstrap as package_regime_bootstrap
+from haymaker.research.bootstrap.block import _extract_arch_block_length
 
 
 def _ohlc_frame() -> pd.DataFrame:
@@ -207,6 +208,28 @@ def test_optimal_block_length_returns_positive_integer() -> None:
     actual = optimal_block_length(pd.Series([0.01, 0.02, -0.01, 0.03, 0.0]))
 
     assert actual >= 1
+
+
+def test_extract_arch_block_length_accepts_legacy_result_shape() -> None:
+    result = pd.DataFrame(
+        {"block_length": [2.25, 3.25]}, index=["stationary", "circular"]
+    )
+
+    actual = _extract_arch_block_length(
+        result, result_key="stationary", column="close"
+    )
+
+    assert actual == 2.25
+
+
+def test_extract_arch_block_length_accepts_current_result_shape() -> None:
+    result = pd.DataFrame(
+        {"stationary": [2.25], "circular": [3.25]}, index=["close"]
+    )
+
+    actual = _extract_arch_block_length(result, result_key="circular", column="close")
+
+    assert actual == 3.25
 
 
 def test_bootstrap_public_imports_work() -> None:
