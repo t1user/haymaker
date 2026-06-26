@@ -4,19 +4,21 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from haymaker.research import (
+from haymaker.research.bootstrap import (
     bootstrap,
     combine_states,
     hmm_states,
     optimal_block_length,
     prepare_bootstrap_frame,
     range_states,
-    regime_bootstrap,
+)
+from haymaker.research.bootstrap import regime_bootstrap
+from haymaker.research.bootstrap import regime_bootstrap as package_regime_bootstrap
+from haymaker.research.bootstrap import (
     return_states,
     trend_states,
     volatility_states,
 )
-from haymaker.research.bootstrap import regime_bootstrap as package_regime_bootstrap
 from haymaker.research.bootstrap.block import _extract_arch_block_length
 
 
@@ -65,6 +67,27 @@ def _regime_ohlc_frame(rows: int = 121) -> pd.DataFrame:
     )
 
 
+def _alternating_return_ohlc_frame(rows: int = 121) -> pd.DataFrame:
+    index = pd.date_range("2024-01-02 09:30", periods=rows, freq="min", name="date")
+    returns = np.resize(np.array([0.001, -0.001]), rows)
+    returns[0] = 0.0
+    close = pd.Series(100 * np.exp(np.cumsum(returns)), index=index)
+    open_ = close.shift(fill_value=close.iloc[0])
+    high = pd.concat([open_, close], axis=1).max(axis=1) * 1.002
+    low = pd.concat([open_, close], axis=1).min(axis=1) * 0.998
+    return pd.DataFrame(
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": np.arange(rows) + 100,
+            "barCount": np.arange(rows) + 1,
+        },
+        index=index,
+    )
+
+
 def _alternating_states(index: pd.Index, labels: tuple[object, object]) -> pd.Series:
     values = [labels[location % 2] for location in range(len(index))]
     return pd.Series(values, index=index, name="state")
@@ -86,20 +109,17 @@ def test_prepare_bootstrap_frame_anchors_ohlc_to_previous_close() -> None:
     assert actual.index.equals(source.index[1:])
     assert actual.loc[source.index[1], "open"] == pytest.approx(
         np.log(
-            source.loc[source.index[1], "open"]
-            / source.loc[source.index[0], "close"]
+            source.loc[source.index[1], "open"] / source.loc[source.index[0], "close"]
         )
     )
     assert actual.loc[source.index[1], "high"] == pytest.approx(
         np.log(
-            source.loc[source.index[1], "high"]
-            / source.loc[source.index[0], "close"]
+            source.loc[source.index[1], "high"] / source.loc[source.index[0], "close"]
         )
     )
     assert actual.loc[source.index[1], "low"] == pytest.approx(
         np.log(
-            source.loc[source.index[1], "low"]
-            / source.loc[source.index[0], "close"]
+            source.loc[source.index[1], "low"] / source.loc[source.index[0], "close"]
         )
     )
     assert actual.loc[source.index[1], "close"] == pytest.approx(
@@ -107,12 +127,13 @@ def test_prepare_bootstrap_frame_anchors_ohlc_to_previous_close() -> None:
             source.loc[source.index[1], "close"] / source.loc[source.index[0], "close"]
         )
     )
-    assert actual.loc[source.index[1], "volume"] == source.loc[
-        source.index[1], "volume"
-    ]
-    assert actual.loc[source.index[1], "barCount"] == source.loc[
-        source.index[1], "barCount"
-    ]
+    assert (
+        actual.loc[source.index[1], "volume"] == source.loc[source.index[1], "volume"]
+    )
+    assert (
+        actual.loc[source.index[1], "barCount"]
+        == source.loc[source.index[1], "barCount"]
+    )
 
 
 def test_moving_bootstrap_full_block_reconstructs_source_path() -> None:
@@ -215,17 +236,13 @@ def test_extract_arch_block_length_accepts_legacy_result_shape() -> None:
         {"block_length": [2.25, 3.25]}, index=["stationary", "circular"]
     )
 
-    actual = _extract_arch_block_length(
-        result, result_key="stationary", column="close"
-    )
+    actual = _extract_arch_block_length(result, result_key="stationary", column="close")
 
     assert actual == 2.25
 
 
 def test_extract_arch_block_length_accepts_current_result_shape() -> None:
-    result = pd.DataFrame(
-        {"stationary": [2.25], "circular": [3.25]}, index=["close"]
-    )
+    result = pd.DataFrame({"stationary": [2.25], "circular": [3.25]}, index=["close"])
 
     actual = _extract_arch_block_length(result, result_key="circular", column="close")
 
@@ -266,6 +283,24 @@ def test_regime_bootstrap_accepts_hashable_state_labels(
             "volume",
             "barCount",
         ]
+
+
+def test_regime_bootstrap_uses_return_states_by_default() -> None:
+    source = _alternating_return_ohlc_frame()
+
+    actual = regime_bootstrap(source, paths=2, random_state=1)
+    expected = regime_bootstrap(
+        source,
+        states=return_states(source),
+        paths=2,
+        random_state=1,
+    )
+
+    assert isinstance(actual, list)
+    assert len(actual) == 2
+    for actual_path, expected_path in zip(actual, expected):
+        pd.testing.assert_frame_equal(actual_path, expected_path)
+        pd.testing.assert_index_equal(actual_path.index, source.index[1:])
 
 
 def test_regime_bootstrap_rejects_missing_state_labels() -> None:

@@ -21,6 +21,21 @@ from .data import (
 __all__ = ["regime_bootstrap"]
 
 
+def _default_states(data: pd.DataFrame) -> pd.Series:
+    """
+    Build default state labels for regime bootstrap generation.
+
+    Args:
+        data: Source OHLC dataframe.
+
+    Returns:
+        Positive/negative close-return state labels.
+    """
+    from .states import return_states
+
+    return return_states(data)
+
+
 def _align_states(states: pd.Series, index: pd.Index) -> pd.Series:
     aligned = states.reindex(index)
     missing = aligned.isna()
@@ -125,7 +140,7 @@ def _sample_positions_by_state(
 def regime_bootstrap(
     data: pd.DataFrame,
     *,
-    states: pd.Series,
+    states: pd.Series | None = None,
     paths: int = 1,
     random_state: RandomState = None,
     raw_columns: Sequence[str] = RAW_COLUMNS,
@@ -137,7 +152,9 @@ def regime_bootstrap(
 
     Args:
         data: Source OHLC dataframe.
-        states: Hard state labels whose index covers ``data.index[1:]``.
+        states: Optional hard state labels whose index covers
+            ``data.index[1:]``. If omitted, bars are labeled with
+            ``return_states(data)``.
         paths: Number of paths to generate.
         random_state: Integer seed or numpy generator.
         raw_columns: Columns sampled as raw bar attributes instead of returns.
@@ -156,6 +173,8 @@ def regime_bootstrap(
         raise ValueError("min_transition_count must be at least 1.")
 
     prepared = prepare_bootstrap_frame(data, raw_columns=raw_columns)
+    if states is None:
+        states = _default_states(data)
     aligned_states = _align_states(states, prepared.index)
     codes, labels = _state_codes(aligned_states)
     state_counts = np.bincount(codes, minlength=len(labels))

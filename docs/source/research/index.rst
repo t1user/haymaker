@@ -1,6 +1,6 @@
-****************
-Research Package
-****************
+***************
+Research Module
+***************
 
 The :mod:`haymaker.research` package is a lightweight layer for strategy
 research with pandas dataframes. It is meant for fast iteration: generate a
@@ -12,6 +12,10 @@ The tools in this package deliberately stay close to ordinary
 to mix Haymaker with external data sources, indicator libraries, plotting
 tools, and notebooks.
 
+Use this section as the public guide to the research module. The pages below
+explain the core workflow, the timing vocabulary, the backtester and stop
+engine, frequency alignment, and synthetic data generation.
+
 .. toctree::
    :maxdepth: 2
 
@@ -22,4 +26,3 @@ tools, and notebooks.
    upsampling
    bootstrap
    examples
-

@@ -66,7 +66,6 @@ Upsampling and grouping
     Generate signals on custom bars such as volume bars, then align generated
     information back to a higher-frequency execution dataframe.
 
-Bootstrap
+Data bootstrapping
     Generate synthetic OHLC paths using block bootstrap or regime/state-based
     empirical sampling.
-
