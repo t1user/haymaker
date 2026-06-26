@@ -3,18 +3,51 @@ from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime as time
 from functools import partial
+from numbers import Real
 from typing import Any
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns  # type: ignore[import-untyped]
+from matplotlib.figure import Figure
 from pyfolio.timeseries import perf_stats  # type: ignore[import-untyped]
 
+from .backtester import Results, perf
 from .signal_converters import sig_pos
 from .stop import stop_loss
-from .backtester import Results, perf
 
 Pair = tuple[float, float]
+
+DEFAULT_GRID_TABLE_FIELDS: list[str] = [
+    "annual_return",
+    "sharpe_ratio",
+    "position_ev",
+    "monthly_ev",
+    "max_drawdown",
+    "skew",
+    "win_ratio",
+    "payoff_ratio",
+    "long_ev",
+    "short_ev",
+    "calmar_ratio",
+    "annual_volatility",
+]
+
+
+def _format_grid_label(value: Any) -> str:
+    """Format optimizer grid labels without noisy floating-point tails.
+
+    Args:
+        value: Row or column label from an optimizer statistics table.
+
+    Returns:
+        Compact text representation for notebook table display.
+    """
+    if isinstance(value, tuple):
+        return "(" + ", ".join(_format_grid_label(item) for item in value) + ")"
+    if isinstance(value, Real) and not isinstance(value, bool):
+        return f"{float(value):.6g}"
+    return str(value)
 
 
 def _callable_name(func: Callable[..., Any]) -> str:
@@ -185,14 +218,13 @@ class Optimizer:
     def calc(self, pair: Pair) -> Results:
         p_1, p_2 = pair
         args, kwargs = self.args_kwargs(p_1, p_2)
-        if isinstance(self.func, OptiWrapper):
-            data = self.func(self.df, self.in_data, *args, **kwargs)
-        else:
-            try:
-                data = self.func(self.in_data, *args, **kwargs)
-            except:  # noqa
-                print(f"Error running function for pair: {pair}")
-                raise
+
+        try:
+            data = self.func(self.in_data, *args, **kwargs)
+        except Exception:
+            print(f"Error running function for pair: {pair}")
+            raise
+
         if not isinstance(data, pd.DataFrame):
             raise ValueError(
                 "Optimizer functions must return a transaction dataframe "
@@ -332,128 +364,9 @@ class Optimizer:
         return f"Two param simulation for {_callable_name(self.func)}"
 
 
-class OptiWrapper:
-    """Combine a signal function with ``stop_loss`` for optimization.
-
-    ``OptiWrapper`` adapts a signal-producing function to the optimizer's
-    transaction-frame convention. On each call it evaluates ``func``, converts
-    the returned signal to a position with ``sig_pos``, stores that position on
-    the supplied dataframe, and returns the transaction dataframe produced by
-    :func:`haymaker.research.stop.stop_loss`.
-
-    Args:
-        func: Signal function. It receives the optimizer input data plus
-            ``signal_kwargs`` and optimized ``signal__`` parameters, and returns
-            data accepted by ``sig_pos``.
-        X: First optimized parameter name. Must be prefixed with ``signal__`` or
-            ``stop__`` to route the value to ``func`` or ``stop_loss``.
-        Y: Second optimized parameter name. Must use the same prefix convention
-            as ``X``.
-
-    Attributes:
-        signal_kwargs: Extra keyword arguments passed to ``func``.
-        stop_kwargs: Extra keyword arguments passed to ``stop_loss``.
-    """
-
-    signal_kwargs: dict[str, Any] = {}
-    stop_kwargs: dict[str, Any] = {}
-
-    def __init__(self, func: Callable[..., Any], X: str, Y: str):
-        self.X = X
-        self.Y = Y
-        self.func = func
-        self.opti_params_dict = self.extractor((X, Y))
-        for i in (X, Y):
-            assert "__" in i, (
-                "optimization parameters must be given "
-                "as 'signal__<param>' or 'stop__<param>'"
-            )
-        self.key_param: list[tuple[str, str]] = []
-        self.params_formater()
-
-    @staticmethod
-    def extractor(i: tuple[str, str]) -> defaultdict[str, list[str]]:
-        """
-        Convert user defined optimization parameters in the format
-        'signal__<param>' or 'stop__<param>' into a dict that can to
-        used to insert the params into appropriate function during
-        simulation.
-        """
-        d: defaultdict[str, list[str]] = defaultdict(list)
-        for x in i:
-            items = x.split("__")
-            d[items[0]].append(items[1])
-        assert set(d.keys()).issubset(
-            set(("signal", "stop"))
-        ), "prefixes must be either 'signal' or 'stop'"
-        # create empty lists for missing keys
-        d["signal"]
-        d["stop"]
-        return d
-
-    def params_formater(self) -> None:
-        """
-        Create a dictionary that will be feed as **params to signal
-        and stop functions with placeholders for variable params in
-        appropriate places.
-        """
-        self.params_values_dict: dict[str, dict[str, float]] = {
-            k: {} for k in self.opti_params_dict.keys()
-        }
-        for key, param_list in self.opti_params_dict.items():
-            for param in param_list:
-                self.params_values_dict[key][param] = 0
-                self.key_param.append((key, param))
-
-    def assign(self, X: float, Y: float) -> dict[str, dict[str, float]]:
-        """
-        During every param iteration put the current value of params
-        into the dict that will feed them into appropriate function.
-        WTF is that supposed to mean????
-        """
-        for i, j in zip(self.key_param, (X, Y)):
-            self.params_values_dict[i[0]][i[1]] = j
-        return self.params_values_dict
-
-    def __call__(
-        self,
-        df: pd.DataFrame,
-        in_data: pd.Series | pd.DataFrame,
-        X: float,
-        Y: float,
-    ) -> pd.DataFrame:
-        params_values = self.assign(X, Y)
-        signal_kwargs: dict[str, Any] = {
-            **self.signal_kwargs,
-            **params_values["signal"],
-        }
-        stop_kwargs: dict[str, Any] = {**self.stop_kwargs, **params_values["stop"]}
-        df["position"] = sig_pos(self.func(in_data, **signal_kwargs))
-        return stop_loss(df, **stop_kwargs)
-
-    def optimize(
-        self,
-        df: pd.DataFrame,
-        sp_1: tuple[Any, ...],
-        sp_2: tuple[Any, ...],
-        **kwargs: Any,
-    ) -> Optimizer:
-        return Optimizer(df, self, sp_1, sp_2, **kwargs)
-
-    @property
-    def __name__(self):
-        return self.__repr__()
-
-    def __repr__(self):
-        return (
-            f"{self.__class__.__name__}(X={self.X}, Y={self.Y},"
-            f" self.func={_callable_name(self.func)})"
-        )
-
-
 def plot_grid(
     data: Optimizer, fields: str | Sequence[str] = ("annual_return", "sharpe_ratio")
-) -> None:
+) -> Figure:
     if isinstance(fields, str):
         fields = ["annual_return", fields]
     else:
@@ -648,3 +561,84 @@ def plot_grid(
         vmax=100,
         center=50,
     )
+
+    return fig
+
+
+def show_grid(
+    data: Optimizer,
+    fields: str | Sequence[str] = ("annual_return", "sharpe_ratio"),
+    plotting_function: Callable[
+        [Optimizer, str | Sequence[str]],
+        Figure | None,
+    ] = plot_grid,
+) -> None:
+    """Display an optimizer grid in a notebook and close the figure.
+
+    Args:
+        data: Optimizer result object passed to ``plotting_function``.
+        fields: Statistic field or pair of fields to plot.
+        plotting_function: Function that creates the grid figure. It should
+            accept the same arguments as ``plot_grid`` and preferably return the
+            created figure. If it returns ``None``, the current matplotlib figure
+            is displayed and closed.
+    """
+    fig = plotting_function(data, fields)
+    if fig is None:
+        fig = plt.gcf()
+
+    from IPython.display import display
+
+    display(fig)
+    plt.close(fig)
+
+
+def show_grid_table(data: Optimizer, fields: str | Sequence[str] | None = None) -> None:
+    """Display optimizer result fields as plain formatted notebook tables.
+
+    Args:
+        data: Optimizer result object containing statistic tables.
+        fields: Statistic field or fields to display. ``None`` displays the
+            preferred default field set from ``DEFAULT_GRID_TABLE_FIELDS``. A
+            string keeps the same convention as ``plot_grid`` and displays
+            ``annual_return`` plus the requested field.
+    """
+    if fields is None:
+        fields = DEFAULT_GRID_TABLE_FIELDS.copy()
+    elif isinstance(fields, str):
+        fields = ["annual_return", fields]
+    else:
+        fields = list(fields)
+
+    assert isinstance(fields, Sequence), f"{fields} is neither string nor sequence"
+    assert set(fields).issubset(
+        set(data.fields)
+    ), f"Wrong field. Allowed fields are: {data.fields}"
+
+    percent_fields = {
+        "annual_return",
+        "cummulative_return",
+        "max_drawdown",
+        "daily_value_at_risk",
+        "win_percent",
+    }
+
+    from IPython.display import display
+
+    for field in fields:
+        table = getattr(data, field)
+        if table.dtypes.iloc[0] == int:
+            fmt = "{:.0f}"
+        else:
+            fmt = "{:.2f}"
+
+        if field in percent_fields:
+            fmt = "{:.0%}"
+
+        styled_table = (
+            table.style.format(fmt)
+            .format_index(_format_grid_label, axis=0)
+            .format_index(_format_grid_label, axis=1)
+            .set_caption(field)
+        )
+        display(styled_table)
