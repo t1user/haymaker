@@ -9,7 +9,13 @@ from typing import Any, Literal, Sequence, cast
 import numpy as np
 import pandas as pd
 
-from .data import RAW_COLUMNS, RandomState, _reconstruct_path, _rng
+from .data import (
+    RAW_COLUMNS,
+    RandomState,
+    _estimate_tick_size,
+    _reconstruct_path,
+    _rng,
+)
 from .data import prepare_bootstrap_frame
 
 BootstrapMethod = Literal["stationary", "moving", "circular"]
@@ -258,6 +264,7 @@ def bootstrap(
 
     resolved_block_length = _resolve_block_length(prepared, block_length, method)
     starting_price = float(data["close"].iloc[0])
+    tick_size = _estimate_tick_size(data)
     path_index = data.index[1:]
     generator = _rng(random_state)
 
@@ -273,6 +280,7 @@ def bootstrap(
                 starting_price=starting_price,
                 index=path_index,
                 raw_columns=raw_columns,
+                tick_size=tick_size,
             )
         )
 

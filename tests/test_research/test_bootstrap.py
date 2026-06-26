@@ -88,9 +88,37 @@ def _alternating_return_ohlc_frame(rows: int = 121) -> pd.DataFrame:
     )
 
 
+def _quarter_tick_ohlc_frame(rows: int = 121) -> pd.DataFrame:
+    """Build deterministic OHLC data whose source tick size is 0.25."""
+    index = pd.date_range("2024-01-02 09:30", periods=rows, freq="min", name="date")
+    moves = np.resize(np.array([0.25, -0.50, 0.75, -0.25]), rows)
+    moves[0] = 0.0
+    close = pd.Series(100.0 + np.cumsum(moves), index=index)
+    open_ = close.shift(fill_value=close.iloc[0])
+    high = pd.concat([open_, close], axis=1).max(axis=1) + 0.25
+    low = pd.concat([open_, close], axis=1).min(axis=1) - 0.25
+    return pd.DataFrame(
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": np.arange(rows) + 100,
+            "barCount": np.arange(rows) + 1,
+        },
+        index=index,
+    )
+
+
 def _alternating_states(index: pd.Index, labels: tuple[object, object]) -> pd.Series:
     values = [labels[location % 2] for location in range(len(index))]
     return pd.Series(values, index=index, name="state")
+
+
+def _assert_ohlc_on_tick(data: pd.DataFrame, tick_size: float) -> None:
+    """Assert that all OHLC values are aligned to ``tick_size``."""
+    ratios = data[["open", "high", "low", "close"]].to_numpy() / tick_size
+    np.testing.assert_allclose(ratios, np.round(ratios), atol=1e-9)
 
 
 def test_prepare_bootstrap_frame_anchors_ohlc_to_previous_close() -> None:
@@ -207,6 +235,21 @@ def test_bootstrap_supports_all_block_methods(method: str) -> None:
     ]
 
 
+def test_bootstrap_rounds_synthetic_ohlc_to_source_tick_size() -> None:
+    source = _quarter_tick_ohlc_frame()
+
+    actual = bootstrap(
+        source,
+        method="stationary",
+        block_length=3,
+        paths=3,
+        random_state=2,
+    )
+
+    for path in actual:
+        _assert_ohlc_on_tick(path, 0.25)
+
+
 def test_explicit_moving_block_length_cannot_exceed_sample_length() -> None:
     source = _ohlc_frame()
 
@@ -301,6 +344,15 @@ def test_regime_bootstrap_uses_return_states_by_default() -> None:
     for actual_path, expected_path in zip(actual, expected):
         pd.testing.assert_frame_equal(actual_path, expected_path)
         pd.testing.assert_index_equal(actual_path.index, source.index[1:])
+
+
+def test_regime_bootstrap_rounds_synthetic_ohlc_to_source_tick_size() -> None:
+    source = _quarter_tick_ohlc_frame()
+
+    actual = regime_bootstrap(source, paths=2, random_state=1)
+
+    for path in actual:
+        _assert_ohlc_on_tick(path, 0.25)
 
 
 def test_regime_bootstrap_rejects_missing_state_labels() -> None:

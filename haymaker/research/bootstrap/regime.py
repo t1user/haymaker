@@ -13,6 +13,7 @@ import pandas as pd
 from .data import (
     RAW_COLUMNS,
     RandomState,
+    _estimate_tick_size,
     _reconstruct_path,
     _rng,
     prepare_bootstrap_frame,
@@ -185,6 +186,7 @@ def regime_bootstrap(
 
     state_buckets = [np.flatnonzero(codes == code) for code in range(len(labels))]
     starting_price = float(data["close"].iloc[0])
+    tick_size = _estimate_tick_size(data)
     path_index = data.index[1:]
     generator = _rng(random_state)
 
@@ -203,6 +205,7 @@ def regime_bootstrap(
                 starting_price=starting_price,
                 index=path_index,
                 raw_columns=raw_columns,
+                tick_size=tick_size,
             )
         )
 

@@ -422,11 +422,21 @@ Both generator families use the same OHLC representation:
    log distances from the previous real close.
 #. The generator samples those prepared rows.
 #. Reconstruction applies sampled log distances to the previous synthetic close.
+#. Reconstructed OHLC prices are rounded back to the tick grid inferred from
+   the source OHLC prices.
 
 This means the next synthetic bar is built from the previous synthetic close,
 not by copying historical prices directly. It preserves the shape of sampled
 bars while allowing the synthetic path to move away from the original price
 level.
+
+Tick rounding matters because the backtester estimates transaction costs from
+minimum tick size. Without rounding, repeated log/exp reconstruction can create
+prices such as ``100.2499999997`` or ``100.251381`` even when the original
+instrument traded in ``0.25`` increments. Haymaker estimates the source tick
+size from the OHLC price columns and rounds generated ``open``, ``high``,
+``low``, and ``close`` values to that grid. If the source data does not contain
+enough price variation to infer a tick size, no tick rounding is applied.
 
 ``volume`` and ``barCount`` are sampled as raw bar attributes when present.
 Unknown columns, including ``average``, are dropped unless you explicitly pass
@@ -452,6 +462,8 @@ Each generated path:
 * Uses index ``data.index[1:]``.
 * Starts reconstruction from ``data["close"].iloc[0]``.
 * Contains reconstructed ``open``, ``high``, ``low``, and ``close`` columns.
+* Rounds reconstructed OHLC prices to the inferred source tick size when one
+  can be inferred.
 * Contains available raw columns from ``raw_columns``.
 
 Ready-Made One-Liners

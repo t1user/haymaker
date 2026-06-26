@@ -16,6 +16,9 @@ RAW_COLUMNS = ("volume", "barCount")
 
 __all__ = ["PRICE_COLUMNS", "RAW_COLUMNS", "RandomState", "prepare_bootstrap_frame"]
 
+_DIFF_TOLERANCE = 1e-10
+_TICK_DECIMALS = 10
+
 
 def _rng(random_state: RandomState) -> np.random.Generator:
     if isinstance(random_state, np.random.Generator):
@@ -74,12 +77,58 @@ def prepare_bootstrap_frame(
     return prepared.iloc[1:].copy()
 
 
+def _estimate_tick_size(data: pd.DataFrame) -> float:
+    """
+    Estimate the source tick size from OHLC price columns.
+
+    Args:
+        data: Source OHLC dataframe.
+
+    Returns:
+        Most common positive adjacent price difference, or ``0.0`` when no
+        tick size can be inferred.
+    """
+    values = data[list(PRICE_COLUMNS)].to_numpy(dtype=np.float64, copy=False).ravel()
+    values = np.sort(values[np.isfinite(values)])
+    diffs = np.diff(values)
+    diffs = diffs[diffs > _DIFF_TOLERANCE]
+    if len(diffs) == 0:
+        return 0.0
+
+    rounded_diffs = np.round(diffs, 8)
+    ticks, counts = np.unique(rounded_diffs, return_counts=True)
+    return float(ticks[np.argmax(counts)])
+
+
+def _round_price_columns(output: pd.DataFrame, tick_size: float) -> pd.DataFrame:
+    """
+    Round reconstructed OHLC prices to the inferred tick grid.
+
+    Args:
+        output: Reconstructed synthetic OHLC dataframe.
+        tick_size: Inferred source tick size.
+
+    Returns:
+        Dataframe with OHLC columns rounded to ``tick_size``. If ``tick_size``
+        is not positive, ``output`` is returned unchanged.
+    """
+    if tick_size <= 0:
+        return output
+
+    rounded = output.copy()
+    values = rounded[list(PRICE_COLUMNS)].to_numpy(dtype=np.float64, copy=True)
+    values = np.rint(values / tick_size) * tick_size
+    rounded[list(PRICE_COLUMNS)] = np.round(values, _TICK_DECIMALS)
+    return rounded
+
+
 def _reconstruct_path(
     sampled: pd.DataFrame,
     *,
     starting_price: float,
     index: pd.Index,
     raw_columns: Sequence[str],
+    tick_size: float,
 ) -> pd.DataFrame:
     output = sampled[list(PRICE_COLUMNS)].set_axis(index)
     output["close"] = starting_price * np.exp(output["close"].cumsum())
@@ -92,4 +141,4 @@ def _reconstruct_path(
     if raw_available:
         output[raw_available] = sampled[raw_available].set_axis(index)
 
-    return output
+    return _round_price_columns(output, tick_size)
