@@ -71,9 +71,7 @@ class Optimizer:
         df: Source data supplied to ``func``. If ``pass_full_df`` is ``False``,
             only ``df["close"]`` is passed, so ``df`` must contain ``close``. If
             ``pass_full_df`` is ``True``, the full dataframe is passed and the
-            required columns are defined by ``func``. For ``OptiWrapper`` usage,
-            ``df`` is also passed to ``stop_loss`` and must contain the columns
-            required by that function, such as ``open``, ``high``, and ``low``.
+            required columns are defined by ``func``.
         func: Callable receiving the input data and two optimization parameters.
             It must return a transaction dataframe accepted by ``perf``.
         sp_1: First parameter progression as ``(start, step[, mode])`` or an
@@ -82,7 +80,7 @@ class Optimizer:
             explicit sequence of values. ``mode`` may be ``"geo"`` or ``"lin"``.
         opti_params: Optional names for the optimized parameters. If given, the
             generated pair values are passed to ``func`` as keyword arguments in
-            this order. Ignored when ``func`` is an ``OptiWrapper``.
+            this order.
         pairs: Explicit parameter pairs. If provided, ``sp_1`` and ``sp_2`` are
             ignored.
         multiprocess: Whether to run parameter pairs in separate processes.
@@ -117,25 +115,25 @@ class Optimizer:
         save_mem: bool = False,
         **kwargs: Any,
     ) -> None:
-        self.time = time.now()
+        self.time: time = time.now()
 
         if not (pairs or (sp_1 and sp_2)):
             raise ValueError("Either pairs or parameters required")
 
-        self.func = func
-        self.df = df
+        self.func: Callable[..., Any] = func
+        self.df: pd.DataFrame = df
         # self.slip = slip
-        self.kwargs = kwargs
-        self.save_mem = save_mem
+        self.kwargs: dict[str, Any] = kwargs
+        self.save_mem: bool = save_mem
 
         if pass_full_df:
             self.in_data = df
         else:
             self.in_data = df["close"]
 
-        if opti_params and not isinstance(self.func, OptiWrapper):
+        if opti_params:
             assert len(opti_params) == 2, "Need exactly two optimization parameters"
-            self.opti_params = opti_params
+            self.opti_params: Sequence[str] = opti_params
         else:
             self.opti_params = []
 
@@ -146,7 +144,7 @@ class Optimizer:
         self.raw_warnings: dict[Pair, list[str]] = {}
         self._table: dict[str, pd.DataFrame] = {}
 
-        self.pairs = pairs or self.get_pairs(
+        self.pairs: Sequence[Pair] = pairs or self.get_pairs(
             self.progression(sp_1), self.progression(sp_2)
         )
         if multiprocess:
@@ -232,7 +230,7 @@ class Optimizer:
             )
         try:
             out = perf(data, **self.kwargs)
-        except:  # noqa
+        except Exception:
             print(f"Error running perf for pair: {pair}")
             raise
         if self.save_mem:
@@ -260,14 +258,14 @@ class Optimizer:
             i for i in self.raw_stats[self.pairs[-1]].index  # type: ignore
         ]
 
-        self.field_trans = {
+        self.field_trans: dict[str, str] = {
             i: i.lower().replace(" ", "_").replace("/", "_").replace(".", "")
             for i in self._fields
         }
-        self.fields = list(self.field_trans.values())
+        self.fields: list[str] = list(self.field_trans.values())
         # index -50 because in the middle of the table it's least likely to hit nan
         try:
-            dtypes = {
+            dtypes: dict[str, type[Any]] = {
                 self.field_trans[i]: type(self.raw_stats[self.pairs[-50]].loc[i])
                 for i in self._fields
             }
@@ -278,7 +276,7 @@ class Optimizer:
                 for i in self._fields
             }
         # external access for debuging
-        self.dtypes = dtypes
+        self.dtypes: dict[str, type[Any]] = dtypes
         self._table = {f: pd.DataFrame() for f in self.fields}
         for index, stats_table in self.raw_stats.items():
             for field in self._fields:
@@ -300,20 +298,20 @@ class Optimizer:
                 if dtypes[key] == pd.Timedelta:
                     try:
                         self._table[key] = table / pd.Timedelta("1day")  # type: ignore
-                    except:  # noqa
+                    except Exception:
                         self._table[key] = table
 
     def extract_dailys(self) -> None:
-        log_returns = {}
-        returns = {}
-        paths = {}
+        log_returns: dict[Pair, pd.Series] = {}
+        returns: dict[Pair, pd.Series] = {}
+        paths: dict[Pair, pd.Series] = {}
         for k, v in self.raw_dailys.items():
             log_returns[k] = v["lreturn"]
             returns[k] = v["returns"]
             paths[k] = v["balance"]
-        self.log_returns = pd.DataFrame(log_returns)
-        self.returns = pd.DataFrame(returns)
-        self.paths = pd.DataFrame(paths)
+        self.log_returns: pd.DataFrame = pd.DataFrame(log_returns)
+        self.returns: pd.DataFrame = pd.DataFrame(returns)
+        self.paths: pd.DataFrame = pd.DataFrame(paths)
 
     @property
     def corr(self) -> pd.DataFrame:
@@ -342,25 +340,25 @@ class Optimizer:
         return f"{m:.2%}"
 
     @property
-    def combine(self):
+    def combine(self) -> pd.Series:
         return self.returns.mean(axis=1)
 
     @property
-    def combine_stats(self):
+    def combine_stats(self) -> pd.Series:
         return perf_stats(self.combine)
 
     @property
-    def combine_paths(self):
+    def combine_paths(self) -> pd.Series:
         return (self.combine + 1).cumprod()
 
     @property
-    def warnings(self):
+    def warnings(self) -> dict[Pair, list[str]]:
         return {k: v for k, v in self.raw_warnings.items() if len(v) != 0}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.__class__.__name__}(func={_callable_name(self.func)})"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Two param simulation for {_callable_name(self.func)}"
 
 
