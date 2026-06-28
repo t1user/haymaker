@@ -24,5 +24,6 @@ engine, frequency alignment, and synthetic data generation.
    backtester
    stop
    upsampling
+   grid_search
    bootstrap
    examples

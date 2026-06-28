@@ -75,7 +75,7 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/research/stop/`: public `stop_loss()`, lazy `before_close()` / `BeforeClose`, Python reference stop engine, and Numba stop engine.
 - `haymaker/research/backtester/`: transaction-frame pipeline, Numba/Python perf engine, Pyfolio statistics, and legacy utilities.
 - `haymaker/research/bootstrap/`: block and regime/state bootstrap generators for synthetic OHLC paths.
-- `haymaker/research/optimizer.py`, `tester.py`, `plotting.py`, `grouper.py`, `candlesticks.py`: research workflow helpers around parameter sweeps, plotting, grouping, and indicators.
+- `haymaker/research/grid_search.py`, `tester.py`, `plotting.py`, `grouper.py`, `candlesticks.py`: research workflow helpers around `GridSearch` parameter/dataframe sweeps, plotting, grouping, and indicators.
 
 ## Entry Points
 
