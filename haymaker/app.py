@@ -80,7 +80,7 @@ class LiveRuntime:
     async def start(self) -> None:
         """Start controller and strategy jobs after connectivity is verified."""
 
-        log.debug("Probe successful. Will run controller...")
+        log.debug("Will run controller...")
         try:
             controller_started = await self.controller.run()
             if not controller_started and self.exit_on_failed_sync:
