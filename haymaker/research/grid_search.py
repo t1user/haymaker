@@ -1,3 +1,60 @@
+"""Grid-search helpers for dataframe backtesting research.
+
+This module runs a user strategy function over several dataframe/parameter
+combinations, sends each returned transaction dataframe through
+``haymaker.research.backtester.perf``, and returns a ``GridSearchResult``.
+
+The strategy function receives ``df["close"]`` as its first argument by default.
+Set ``pass_full_df=True`` when the strategy needs the full dataframe. Searched
+parameters are passed positionally unless ``param_names`` is supplied; use
+``fixed_kwargs`` for settings that are shared by every simulation.
+
+Examples:
+    Grid search from two progressions:
+
+    .. code-block:: python
+
+        from haymaker.research.grid_search import GridSearch, show_grid_table
+
+        search = GridSearch.from_progressions(
+            df,
+            strategy_func,
+            [(0.5, 0.5, "lin"), (30, 10, "lin")],
+            param_names=("threshold", "lookback"),
+            fixed_kwargs={"side": "long"},
+            multiprocess=False,
+        )
+
+        result = search.run()
+        show_grid_table(result)
+
+    Grid search from explicit parameter pairs:
+
+    .. code-block:: python
+
+        search = GridSearch.from_pairs(
+            df,
+            strategy_func,
+            [(0.5, 30), (1.0, 40), (1.5, 50)],
+            param_names=("threshold", "lookback"),
+        )
+
+        result = search.run()
+
+    Grid search over many dataframes with one parameter tuple:
+
+    .. code-block:: python
+
+        search = GridSearch.from_dfs(
+            {"sample_a": df_a, "sample_b": df_b},
+            strategy_func,
+            params=(0.5, 30),
+            param_names=("threshold", "lookback"),
+        )
+
+        result = search.run()
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
@@ -37,7 +94,7 @@ def _format_grid_label(value: Any) -> str:
     """Format grid-search labels without noisy floating-point tails.
 
     Args:
-        value: Row or column label from an optimizer statistics table.
+        value: Row or column label from a grid-search statistics table.
 
     Returns:
         Compact text representation for notebook table display.
@@ -261,9 +318,11 @@ class GridSearch:
             df: Source dataframe used by every simulation.
             func: Function returning a transaction dataframe accepted by
                 ``perf``.
-            progressions: Exactly two progression specs. Each spec is
-                ``(start, step[, mode])`` where ``mode`` is ``"geo"`` or
-                ``"lin"``, or has a sequence of explicit values as ``start``.
+            progressions: Exactly two progression specs. A spec can generate
+                ten values as ``(start, step[, mode])``, where ``mode`` is
+                ``"geo"`` or ``"lin"``. A spec can also provide explicit values
+                by passing a sequence as ``start``; in that case, ``step`` and
+                ``mode`` are ignored.
             param_names: Optional names for the two searched parameters. When
                 omitted, searched values are passed positionally.
             fixed_kwargs: Keyword arguments included in every call to ``func``.
@@ -658,7 +717,16 @@ def combined_path(
     *,
     missing: MissingPolicy = "zero",
 ) -> pd.Series:
-    """Return the cumulative path of selected equal-weight simulation returns."""
+    """Return the cumulative path of selected equal-weight simulation returns.
+
+    Args:
+        result: Grid-search result containing daily simulation returns.
+        keys: Simulation keys to combine.
+        missing: Missing-data policy forwarded to :func:`combined_returns`.
+
+    Returns:
+        Cumulative return path built from the selected combined returns.
+    """
     return (combined_returns(result, keys, missing=missing) + 1).cumprod()
 
 
@@ -668,7 +736,19 @@ def combined_stats(
     *,
     missing: MissingPolicy = "zero",
 ) -> pd.Series:
-    """Return pyfolio return statistics for selected combined returns."""
+    """Return pyfolio return statistics for selected combined returns.
+
+    ``pyfolio.timeseries.perf_stats`` is imported lazily, so importing this
+    module does not load pyfolio unless this function is called.
+
+    Args:
+        result: Grid-search result containing daily simulation returns.
+        keys: Simulation keys to combine.
+        missing: Missing-data policy forwarded to :func:`combined_returns`.
+
+    Returns:
+        Pyfolio statistics for the selected combined return stream.
+    """
     from pyfolio.timeseries import perf_stats  # type: ignore[import-untyped]
 
     return perf_stats(combined_returns(result, keys, missing=missing))
@@ -690,6 +770,22 @@ def plot_grid(
     data: GridSearchResult,
     fields: str | Sequence[str] = ("annual_return", "sharpe_ratio"),
 ) -> Figure:
+    """Create the notebook heatmap layout for two grid-search result fields.
+
+    Args:
+        data: Grid-search result object containing statistic tables.
+        fields: Statistic field or pair of fields to plot. A string keeps the
+            notebook convention of plotting ``annual_return`` next to that
+            field.
+
+    Returns:
+        Matplotlib figure containing the grid heatmaps and row/column summary
+        heatmaps.
+
+    Raises:
+        AssertionError: If a requested field is unavailable, or if either
+            selected field is not a 10 by 10 table.
+    """
     if isinstance(fields, str):
         fields = ["annual_return", fields]
     else:

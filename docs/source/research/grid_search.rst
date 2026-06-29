@@ -14,6 +14,12 @@ through :func:`haymaker.research.backtester.perf`, and returns a
 Basic Usage
 ===========
 
+The three supported construction paths all return a ``GridSearch`` object.
+Call ``run()`` to execute the simulations and get a ``GridSearchResult``.
+
+Progressions
+------------
+
 Use ``GridSearch.from_progressions`` when you want a Cartesian product of two
 parameter progressions:
 
@@ -33,9 +39,31 @@ parameter progressions:
    result = search.run()
    show_grid_table(result)
 
+Each progression is ``(start, step, mode)``. ``mode="lin"`` creates ten values
+by adding ``step``. ``mode="geo"`` creates ten values by multiplying by
+``step``. If ``start`` is itself a sequence, those explicit values are used
+directly and ``step``/``mode`` are ignored.
+
+For example, this uses the exact first-axis values ``0.5``, ``1.0``, and
+``2.0`` instead of generating ten values:
+
+.. code-block:: python
+
+   search = GridSearch.from_progressions(
+       df,
+       strategy_func,
+       [((0.5, 1.0, 2.0), None, "lin"), (30, 10, "lin")],
+       param_names=("threshold", "lookback"),
+   )
+
+Pairs
+-----
+
 Use ``GridSearch.from_pairs`` when you already know the exact pairs to test:
 
 .. code-block:: python
+
+   from haymaker.research.grid_search import GridSearch
 
    search = GridSearch.from_pairs(
        df,
@@ -44,11 +72,22 @@ Use ``GridSearch.from_pairs`` when you already know the exact pairs to test:
        param_names=("threshold", "lookback"),
    )
 
+   result = search.run()
+
+The result keys are the pairs themselves, so ``result.tables["annual_return"]``
+is indexed by the first searched value and has columns for the second searched
+value.
+
+Dataframes
+----------
+
 Use ``GridSearch.from_dfs`` when you want to run one fixed parameter tuple
 against many dataframes, for example bootstrap paths or different sample
 periods:
 
 .. code-block:: python
+
+   from haymaker.research.grid_search import GridSearch
 
    search = GridSearch.from_dfs(
        {"sample_a": df_a, "sample_b": df_b},
@@ -56,6 +95,11 @@ periods:
        params=(0.5, 30),
        param_names=("threshold", "lookback"),
    )
+
+   result = search.run()
+
+Mapping keys become the first part of the result key. If you pass a sequence of
+dataframes instead of a mapping, integer positions are used as labels.
 
 Function Contract
 =================
@@ -73,8 +117,57 @@ way to supply parameters that are not part of the search. If a searched
 ``param_names`` entry overlaps with ``fixed_kwargs``, GridSearch raises
 ``ValueError``.
 
-Results
-=======
+GridSearch API
+==============
+
+``GridSearch`` is the simulation plan. It does not run anything until
+``run()`` is called.
+
+``GridSearch.from_progressions(df, func, progressions, ...)``
+    Builds a two-axis parameter grid from two progression specs. This is the
+    usual 10 by 10 heatmap workflow.
+
+``GridSearch.from_pairs(df, func, pairs, ...)``
+    Builds simulations from exact parameter pairs. Use this when the parameter
+    combinations are irregular or preselected.
+
+``GridSearch.from_dfs(dfs, func, params, ...)``
+    Runs one parameter tuple against many dataframes. Use this for bootstrap
+    samples, different time windows, or different instruments prepared into the
+    same dataframe shape.
+
+``GridSearch.run()``
+    Executes every simulation and returns ``GridSearchResult``.
+
+Common constructor options:
+
+``param_names``
+    Names for the searched parameters. If provided, searched values are passed
+    as keyword arguments. If omitted, searched values are passed positionally.
+
+``fixed_kwargs``
+    Keyword arguments passed to every strategy call. These must not overlap
+    with ``param_names``.
+
+``pass_full_df``
+    By default the strategy receives ``df["close"]``. Set this to ``True`` when
+    the strategy needs the whole dataframe.
+
+``multiprocess``
+    Runs simulations in separate processes when ``True``. Set to ``False`` for
+    easier debugging or notebook work with non-picklable callables.
+
+``save_mem``
+    Omits daily return data and enriched bar-level data from the result. This
+    keeps memory use lower but disables ``returns``, ``log_returns``, ``paths``,
+    ``corr``, ``rank``, and combined-return helpers.
+
+``**perf_kwargs``
+    Extra keyword arguments forwarded to
+    :func:`haymaker.research.backtester.perf`.
+
+GridSearchResult
+================
 
 ``GridSearch.run()`` returns ``GridSearchResult``. The main access path is:
 
@@ -108,6 +201,29 @@ The result also stores raw backtester outputs:
 ``raw_warnings``
     Backtester warnings keyed by simulation key.
 
+Convenience properties:
+
+``returns``
+    Daily simple returns for every simulation, arranged by simulation key.
+
+``log_returns``
+    Daily log returns for every simulation.
+
+``paths``
+    Daily balance paths for every simulation.
+
+``corr``
+    Correlation matrix of simulation log returns.
+
+``rank``
+    Top 20 simulations by final balance minus one.
+
+``return_mean`` and ``return_median``
+    Formatted summaries of non-zero annual returns.
+
+``warnings``
+    Only the non-empty warning lists from ``raw_warnings``.
+
 When ``save_mem=True``, daily return data and bar-level data are omitted. In
 that mode, ``returns``, ``log_returns``, ``paths``, ``corr``, and ``rank`` raise
 ``ValueError``.
@@ -125,8 +241,22 @@ Existing display helpers accept ``GridSearchResult``:
    show_grid(result)
    show_grid_table(result)
 
-``plot_grid`` keeps its original 10 by 10, two-field heatmap layout.
-``show_grid_table`` displays plain formatted notebook tables.
+``plot_grid(result, fields=("annual_return", "sharpe_ratio"))``
+    Creates the 10 by 10, two-field heatmap layout and returns the Matplotlib
+    figure. ``plot_grid`` expects both selected statistic tables to be 10 by 10,
+    so it is meant for ``from_progressions`` output using two ten-value axes.
+
+``show_grid(result, fields=..., plotting_function=plot_grid)``
+    Notebook helper that displays the figure and closes it with
+    ``plt.close(fig)`` afterwards. Use this instead of manually calling
+    ``display(fig)`` when you do not want the figure to remain open in
+    Matplotlib state.
+
+``show_grid_table(result, fields=None)``
+    Displays statistic tables as plain formatted notebook tables. ``fields=None``
+    displays the preferred default fields. Passing a string displays
+    ``annual_return`` plus that field. Passing a sequence displays exactly those
+    fields.
 
 Combined Portfolio Analytics
 ============================
@@ -147,6 +277,27 @@ of completed simulation return streams. It is not a directly simulated strategy.
 The default missing-data policy is ``missing="zero"``, which treats missing
 sleeve returns as idle cash. Use ``missing="raise"`` to reject missing selected
 returns, or ``missing="drop"`` to average over available sleeves only.
+
+``combined_returns(result, keys, missing="zero")``
+    Returns the selected equal-weight daily return stream.
+
+``combined_path(result, keys, missing="zero")``
+    Returns ``(combined_returns(...) + 1).cumprod()``.
+
+``combined_stats(result, keys, missing="zero")``
+    Returns pyfolio statistics for the combined return stream. Pyfolio is
+    imported lazily only when this function is called.
+
+Lower-Level Helpers
+===================
+
+``GridSearch.progression(spec)``
+    Converts one progression spec into values. Most callers should use
+    ``from_progressions`` instead.
+
+``GridSearch.get_pairs(sp_1, sp_2)``
+    Returns the Cartesian product of two parameter sequences. Most callers
+    should use ``from_progressions`` or ``from_pairs`` instead.
 
 API Reference
 =============
