@@ -60,14 +60,16 @@ class ConnectionSupervisor:
             try:
                 self.restart_requested.clear()
 
+                log.debug("Supervisor cycle starting.")
                 self.onion_task = asyncio.create_task(
                     self._run_onion(), name="ConnectionSupervisor-onion-task"
                 )
                 # Do not let external cancellation decide onion cleanup; run()
                 # classifies the interruption and owns the recovery policy.
                 outcome = await asyncio.shield(self.onion_task)
+                log.debug(f"Supervisor cycle outcome: {outcome.name}.")
                 if outcome in (CycleOutcome.STOP, CycleOutcome.WORKLOAD_DONE):
-                    log.debug(f"Supervisor cycle finished with {outcome.name}.")
+                    log.debug(f"Supervisor run finished with {outcome.name}.")
                     return
                 recoveries = 0
                 if outcome is CycleOutcome.RESTART and self._delay_next_restart:
@@ -76,6 +78,9 @@ class ConnectionSupervisor:
                         self.settings.connection_lost_retry_delay
                     ):
                         break
+                    log.debug(
+                        "Reconnect delay finished; starting new supervisor cycle."
+                    )
 
             except (asyncio.CancelledError, Exception) as exc:
                 # asyncio.CancelledError is not an Exception!
@@ -163,6 +168,7 @@ class ConnectionSupervisor:
         self._resets_blocked = False
 
     def set_workload_completed(self) -> None:
+        log.debug("Supervised workload completed.")
         self._workload_completed = True
 
     def onDisconnectedEvent(self, *args) -> None:
@@ -225,6 +231,7 @@ class Connection(OnionLayer):
                     clientId=self.ct.settings.client_id,
                     timeout=self.ct.settings.connect_timeout,
                 )
+                log.debug("IB socket connected.")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -280,6 +287,7 @@ class Workload(OnionLayer):
         """Start the supervised workload as a tracked task."""
 
         if self.ct.workload_task is None or self.ct.workload_task.done():
+            log.debug("Starting supervised workload.")
             self.ct.workload_task = asyncio.create_task(
                 self.ct.workload.start(), name="connection-supervisor-workload"
             )
@@ -297,12 +305,25 @@ class Workload(OnionLayer):
         if task is None:
             return
 
+        reason = self._stop_reason(exc_type, exc)
+        should_stop = (
+            self.ct.stop_requested.is_set()
+            or self.ct.restart_requested.is_set()
+            or exc_type is not None
+        )
+        if should_stop:
+            log.debug(f"Stopping supervised workload: {reason}")
+            await self.ct.workload.stop(reason)
+
         if task.done():
+            log.debug("Supervised workload task already finished during cleanup.")
             self._log_workload_result(task)
             self.ct.workload_task = None
             return
 
-        await self.ct.workload.stop(self._stop_reason(exc_type, exc))
+        if not should_stop:
+            log.debug(f"Stopping supervised workload: {reason}")
+            await self.ct.workload.stop(reason)
         task.cancel()
         try:
             await task
@@ -363,9 +384,6 @@ class Waiter(OnionLayer):
                 task.cancel()
             await asyncio.gather(*self._event_waiters, return_exceptions=True)
         self._event_waiters = None
-        assert self.ct.workload_task
-        if self.ct.workload_task.done():
-            self.ct.set_workload_completed()
 
     async def wait(self) -> CycleOutcome:
         assert self.ct.workload_task is not None
@@ -383,6 +401,7 @@ class Waiter(OnionLayer):
         if self.ct.restart_requested.is_set():
             return CycleOutcome.RESTART
         if self.ct.workload_task in done:
+            self.ct.set_workload_completed()
             return CycleOutcome.WORKLOAD_DONE
         return CycleOutcome.RESTART
 

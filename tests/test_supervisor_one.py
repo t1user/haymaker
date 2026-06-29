@@ -92,6 +92,12 @@ class FakeWorkload:
         if self._release is not None:
             self._release.set()
 
+    def finish(self) -> None:
+        """Let the active workload complete without a supervisor stop call."""
+
+        if self._release is not None:
+            self._release.set()
+
 
 def make_supervisor(
     fake_ib: FakeIB,
@@ -179,6 +185,26 @@ async def test_stop_interrupts_connection_lost_retry_sleep() -> None:
 
     assert workload.stops == ["restart requested"]
     assert fake_ib.connect_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_disconnect_restart_wins_when_workload_finishes_during_cleanup() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, connection_lost_retry_delay=0)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.disconnect()
+    workload.finish()
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.connect_attempts == 2
+    assert not supervisor._workload_completed
+
+    await stop_and_wait(supervisor, task)
 
 
 @pytest.mark.asyncio
