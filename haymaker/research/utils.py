@@ -262,17 +262,34 @@ def long_short_returns(r: Results) -> pd.DataFrame:
     return combined.fillna(0).cumsum().apply(np.exp)
 
 
-def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFrame:
-    """Split simulation results into long, short positions, total
-    strategy return and underlying instrument return
+def paths(r: Results, cumsum: bool = True, log_return: bool = False) -> pd.DataFrame:
+    """Return chart-ready strategy, long, short, and underlying paths.
+
+    This helper is meant for quick visual comparison between the strategy,
+    the underlying asset movement, and the parts of strategy performance
+    contributed by long and short exposure.
 
     Args:
-    --------
-    cumsum - running sum of all values accross columns, useful for path chart
+        r: Backtester result returned by :func:`haymaker.research.backtester.perf`.
+        cumsum: If ``True``, return running sums suitable for a path chart.
+            With ``log_return=True``, these are cumulative log returns. With
+            ``log_return=False``, these are cumulative price-point/PnL values.
+        log_return: If ``True``, use bar log returns from the strategy and
+            underlying asset. If ``False``, use absolute price-point movement
+            for the underlying and absolute PnL for the strategy.
 
-    log_return - if True logarithmic returns, else absolute values in
-    price points
+    Returns:
+        DataFrame with four columns:
 
+        - ``price``: movement of the underlying asset.
+        - ``longs``: strategy bar result attributed to long exposure.
+        - ``shorts``: strategy bar result attributed to short exposure.
+        - ``strategy``: total strategy bar result.
+
+        For current ``perf()`` output, exit rows are attributed to the side
+        being closed. This matters on reversal bars, where ``position`` already
+        contains the new side but the closing mark-to-market PnL belongs to the
+        previous side.
     """
 
     rdf = r.df.copy()
@@ -298,22 +315,21 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFr
         shorts = rdf[(rdf["curr_price"] < 0) | (rdf["position"] == -1)]
     else:
         rdf["_return"] = rdf[field]
-        direction = rdf["position"].where(
-            rdf["position"] != 0, rdf["position"].shift().fillna(0)
-        )
+        direction = pd.Series(0.0, index=rdf.index)
+        direction = direction.mask(rdf["position"] != 0, rdf["position"])
         if "open_price" in rdf.columns:
             direction = direction.mask(
-                (direction == 0) & (rdf["open_price"] != 0),
+                rdf["open_price"] != 0,
                 np.sign(rdf["open_price"]),  # type: ignore
             )
         if "close_price" in rdf.columns:
             direction = direction.mask(
-                (direction == 0) & (rdf["close_price"] != 0),
+                rdf["close_price"] != 0,
                 -np.sign(rdf["close_price"]),  # type: ignore
             )
         if "stop_price" in rdf.columns:
             direction = direction.mask(
-                (direction == 0) & (rdf["stop_price"] != 0),
+                rdf["stop_price"] != 0,
                 -np.sign(rdf["stop_price"]),  # type: ignore
             )
         longs = rdf[direction > 0]

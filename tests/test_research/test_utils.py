@@ -530,10 +530,6 @@ def test_paths_assigns_stop_loss_to_stopped_position_direction() -> None:
     assert actual["strategy"].sum() == result.df["pnl"].sum()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Current perf schema assigns reversal-bar PnL to the new direction.",
-)
 def test_paths_current_schema_reversal_bar_pnl_belongs_to_previous_position() -> None:
     raw = _raw_frame()
     raw["position"] = [1, 1, -1, -1, 1, 1]
@@ -552,6 +548,11 @@ def test_paths_current_schema_reversal_bar_pnl_belongs_to_previous_position() ->
         == result.df.loc["2026-01-01 09:04", "pnl"]
     )
     assert actual.loc["2026-01-01 09:04", "longs"] == 0.0
+    pd.testing.assert_series_equal(
+        actual["longs"] + actual["shorts"],
+        actual["strategy"],
+        check_names=False,
+    )
 
 
 def test_upsample_left_labeled_irregular_index_uses_previous_bar() -> None:
