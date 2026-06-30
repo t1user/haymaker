@@ -36,21 +36,6 @@ def true_sharpe(ret: pd.Series) -> pd.Series:
     return r
 
 
-def rolling_sharpe(returns: pd.Series, months: float) -> pd.DataFrame:
-    """Return rolling annualized mean, volatility, and Sharpe ratio.
-
-    ``months`` is the historical name for a window multiplier. The rolling
-    window is ``int(12 * months)`` observations, so the actual calendar span
-    depends on the frequency of ``returns``.
-    """
-    ret = pd.DataFrame({"returns": returns})
-    ret["mean"] = ret["returns"].rolling(int(12 * months)).mean() * 252
-    ret["vol"] = ret["returns"].rolling(int(12 * months)).std() * np.sqrt(252)
-    ret["sharpe"] = ret["mean"] / ret["vol"]
-    ret = ret.dropna()
-    return ret
-
-
 def sampler(
     data: pd.DataFrame,
     start: str | pd.Timestamp | None = None,
@@ -260,15 +245,21 @@ def weighted_zscore(df: pd.DataFrame, lookback: int) -> pd.Series:
 
 
 def long_short_returns(r: Results) -> pd.DataFrame:
-    """Return df with log returns of long and short positions in r"""
-    pos = r.positions
-    pos["return"] = np.log(pos["pnl"] / pos["open"].abs())
+    """Return cumulative long-only and short-only trade-return paths.
+
+    This is a hypothetical decomposition of completed trades in
+    ``Results.positions``. Long trades are included only in the ``long`` path
+    and short trades only in the ``short`` path. Per-trade returns are computed
+    as log returns, ``log1p(pnl / abs(open))``, then accumulated and converted
+    back to cumulative simple-return paths.
+    """
+    pos = r.positions.copy()
+    pos["return"] = np.log1p(pos["pnl"] / pos["open"].abs())
     pos = pos.set_index("date_c")
     long = pos[pos["open"] > 0]
     short = pos[pos["open"] < 0]
     combined = pd.DataFrame({"long": long["return"], "short": short["return"]})
-    combined = (combined + 1).fillna(1).cumprod()
-    return combined
+    return combined.fillna(0).cumsum().apply(np.exp)
 
 
 def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFrame:

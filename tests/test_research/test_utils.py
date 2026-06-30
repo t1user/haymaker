@@ -4,13 +4,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from haymaker.research.backtester import no_stop, perf
+from haymaker.research.backtester import Results, no_stop, perf
 from haymaker.research import upsample
 from haymaker.research.stop import stop_loss
 from haymaker.research.utils import (
     always_on,
     crosser,
     gap_tracer,
+    long_short_returns,
     paths,
     rolling_weighted_mean,
     rolling_weighted_std,
@@ -105,6 +106,33 @@ def test_rolling_weighted_std_uses_population_denominator() -> None:
 def test_weighted_zscore_requires_close_and_volume_columns() -> None:
     with pytest.raises(ValueError, match="volume"):
         weighted_zscore(pd.DataFrame({"close": [1.0, 2.0]}), lookback=2)
+
+
+def test_long_short_returns_uses_log1p_trade_returns() -> None:
+    result = Results(
+        stats=pd.Series(dtype=float),
+        daily=pd.DataFrame(),
+        positions=pd.DataFrame(
+            {
+                "date_c": pd.date_range("2026-01-01", periods=4, freq="D"),
+                "open": [100.0, -200.0, 100.0, -100.0],
+                "pnl": [10.0, -20.0, -50.0, 10.0],
+            }
+        ),
+        df=pd.DataFrame(),
+        warnings=[],
+    )
+
+    actual = long_short_returns(result)
+
+    expected = pd.DataFrame(
+        {
+            "long": [1.1, 1.1, 0.55, 0.55],
+            "short": [1.0, 0.9, 0.9, 0.99],
+        },
+        index=pd.date_range("2026-01-01", periods=4, freq="D", name="date_c"),
+    )
+    pd.testing.assert_frame_equal(actual, expected)
 
 
 @pytest.mark.parametrize(
