@@ -173,8 +173,15 @@ GridSearchResult
 
 .. code-block:: python
 
+   result.stats_frame
    result.tables["annual_return"]
    result.tables["sharpe_ratio"]
+
+``stats_frame`` shows every statistic returned by ``perf`` in one dataframe.
+Rows are the original statistic names and columns are simulations. Parameter
+searches use the parameter pair as the column label. Searches created with
+``from_dfs`` use only the dataframe label, because the searched parameter tuple
+is the same for every column.
 
 For plotting compatibility, statistic tables are also available as dynamic
 attributes:
@@ -202,6 +209,10 @@ The result also stores raw backtester outputs:
     Backtester warnings keyed by simulation key.
 
 Convenience properties:
+
+``stats_frame``
+    All ``perf`` statistics in one dataframe, with statistic names as rows and
+    simulations as columns.
 
 ``returns``
     Daily simple returns for every simulation, arranged by simulation key.

@@ -203,6 +203,37 @@ def test_grid_search_run_returns_result_with_tables_and_dynamic_fields() -> None
         result.not_a_field
 
 
+def test_stats_frame_shows_all_perf_stats_by_simulation() -> None:
+    result = _result_with_returns()
+
+    frame = result.stats_frame
+
+    assert list(frame.index) == ["Annual return", "Sharpe ratio"]
+    assert list(frame.columns) == [("a", 1), ("b", 1)]
+    assert frame.iloc[0, 0] == 0.1
+    assert frame.iloc[0, 1] == 0.2
+    assert frame.iloc[1, 0] == 1.0
+    assert frame.iloc[1, 1] == 2.0
+    assert result.stats_frame is frame
+
+
+def test_stats_frame_uses_dataframe_labels_for_from_dfs() -> None:
+    result = GridSearch.from_dfs(
+        {"left": _price_df(), "right": _price_df(10)},
+        _strategy,
+        params=(1, 2),
+        param_names=("first", "second"),
+        multiprocess=False,
+    ).run()
+
+    assert list(result.raw_stats) == [
+        ("left", (1, 2)),
+        ("right", (1, 2)),
+    ]
+    assert list(result.stats_frame.columns) == ["left", "right"]
+    assert "annual_return" in result.fields
+
+
 def test_pass_full_df_sends_full_dataframe_to_strategy() -> None:
     result = GridSearch.from_pairs(
         _price_df(),

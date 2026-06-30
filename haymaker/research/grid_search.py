@@ -127,12 +127,15 @@ class Simulation:
         args: Searched parameters passed positionally to the user function.
         kwargs: Fixed and searched keyword arguments passed to the user
             function.
+        stat_column_label: Optional label used for this simulation in
+            ``GridSearchResult.stats_frame``.
     """
 
     key: JobKey
     input_data: pd.Series | pd.DataFrame
     args: tuple[Any, ...]
     kwargs: Mapping[str, Any]
+    stat_column_label: Hashable | None = None
 
 
 @dataclass
@@ -145,10 +148,14 @@ class GridSearchResult:
         raw_positions: Trade/position records keyed by simulation key.
         raw_dfs: Bar-level performance data keyed by simulation key.
         raw_warnings: Warning messages keyed by simulation key.
+        stat_column_labels: Optional column labels for ``stats_frame`` keyed by
+            simulation key. Missing entries fall back to the simulation key.
 
     Attributes:
         tables: Statistic tables keyed by translated field name. This is the
             canonical access path for grid-search statistics.
+        stats_frame: Dataframe of all ``perf`` statistics, with stat names as
+            rows and simulations as columns.
         fields: Translated statistic field names available in ``tables``.
     """
 
@@ -157,6 +164,7 @@ class GridSearchResult:
     raw_positions: dict[JobKey, pd.DataFrame]
     raw_dfs: dict[JobKey, pd.DataFrame]
     raw_warnings: dict[JobKey, list[str]]
+    stat_column_labels: Mapping[JobKey, Hashable] | None = None
     tables: dict[str, pd.DataFrame] = field(init=False)
     fields: list[str] = field(init=False)
     field_trans: dict[str, str] = field(init=False)
@@ -165,6 +173,7 @@ class GridSearchResult:
     _returns: pd.DataFrame | None = field(default=None, init=False, repr=False)
     _log_returns: pd.DataFrame | None = field(default=None, init=False, repr=False)
     _paths: pd.DataFrame | None = field(default=None, init=False, repr=False)
+    _stats_frame: pd.DataFrame | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.raw_stats:
@@ -222,6 +231,11 @@ class GridSearchResult:
         except (TypeError, ValueError):
             return table
 
+    def _stat_column_label(self, key: JobKey) -> Hashable:
+        if self.stat_column_labels is None:
+            return key
+        return self.stat_column_labels.get(key, key)
+
     def _daily_table(self, column: str) -> pd.DataFrame:
         if not self.raw_dailys:
             raise ValueError(
@@ -236,6 +250,24 @@ class GridSearchResult:
         return pd.DataFrame(
             {key: daily[column] for key, daily in self.raw_dailys.items()}
         )
+
+    @property
+    def stats_frame(self) -> pd.DataFrame:
+        """All ``perf`` statistics arranged by simulation.
+
+        Rows are the original statistic names returned by ``perf``. Columns are
+        simulation labels: parameter pairs for parameter searches and dataframe
+        labels for searches created with :meth:`GridSearch.from_dfs`.
+        """
+        if self._stats_frame is None:
+            keys = list(self.raw_stats)
+            frame = pd.DataFrame(
+                {index: self.raw_stats[key] for index, key in enumerate(keys)}
+            )
+            frame = frame.reindex(self._field_names)
+            frame.columns = [self._stat_column_label(key) for key in keys]
+            self._stats_frame = frame
+        return self._stats_frame
 
     @property
     def returns(self) -> pd.DataFrame:
@@ -549,6 +581,7 @@ class GridSearch:
                     input_data=cls._input_data(df, pass_full_df),
                     args=args,
                     kwargs=dict(kwargs),
+                    stat_column_label=label,
                 )
             )
         if not simulations:
@@ -694,6 +727,7 @@ class GridSearch:
         items: Sequence[tuple[JobKey, Any]],
         *,
         save_mem: bool,
+        stat_column_labels: Mapping[JobKey, Hashable] | None = None,
     ) -> GridSearchResult:
         raw_stats: dict[JobKey, pd.Series] = {}
         raw_dailys: dict[JobKey, pd.DataFrame] = {}
@@ -715,6 +749,7 @@ class GridSearch:
             raw_positions=raw_positions,
             raw_dfs=raw_dfs,
             raw_warnings=raw_warnings,
+            stat_column_labels=stat_column_labels,
         )
 
     @staticmethod
@@ -736,7 +771,17 @@ class GridSearch:
                 items = list(executor.map(runner, self.simulations))
         else:
             items = [runner(simulation) for simulation in self.simulations]
-        return self._result_from_items(items, save_mem=self.save_mem)
+
+        stat_column_labels = {
+            simulation.key: simulation.stat_column_label
+            for simulation in self.simulations
+            if simulation.stat_column_label is not None
+        }
+        return self._result_from_items(
+            items,
+            save_mem=self.save_mem,
+            stat_column_labels=stat_column_labels or None,
+        )
 
     def __repr__(self) -> str:
         return (
