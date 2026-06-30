@@ -157,13 +157,12 @@ class ConnectionSupervisor:
         self.restart_requested.set()
         return True
 
-    def clear_connect_phase_restart(self) -> None:
-        """Discard restart requests raised while the connection layer was retrying."""
+    def clear_cycle_restart_request(self) -> None:
+        """Discard restart requests after the current watcher cycle has ended."""
 
         if self.restart_requested.is_set():
-            log.debug("Clearing restart request raised during connection retry.")
+            log.debug("Clearing restart request after watcher cleanup.")
         self.restart_requested.clear()
-        self._delay_next_restart = False
 
     def block_resets_set(self) -> None:
         """Block restart requests while broker recovery owns the lifecycle decision."""
@@ -246,7 +245,6 @@ class Connection(OnionLayer):
                 log.debug(f"IB connection attempt failed: {exc!r}")
                 if await self.ct.wait_before_reconnect(self.ct.settings.retry_delay):
                     raise asyncio.CancelledError()
-        self.ct.clear_connect_phase_restart()
         return self
 
     async def __aexit__(
@@ -288,6 +286,8 @@ class Watcher(OnionLayer):
         self._connection_issue_manager_task = None
         if self._connection_issue_manager is not None:
             self._connection_issue_manager.close()
+            self._connection_issue_manager = None
+        self.ct.clear_cycle_restart_request()
 
 
 class Workload(OnionLayer):

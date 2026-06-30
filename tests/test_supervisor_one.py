@@ -249,20 +249,22 @@ async def test_connection_cancelled_error_retries_without_stopping() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_connect_disconnect_event_does_not_restart_after_success() -> None:
+async def test_failed_connect_disconnect_event_is_cleared_by_watcher_cleanup() -> None:
     fake_ib = FakeIB()
     fake_ib.fail_connect_attempts = 1
     fake_ib.emit_disconnect_on_failed_connect = True
     workload = FakeWorkload()
-    supervisor = make_supervisor(fake_ib, workload, retry_delay=0)
+    supervisor = make_supervisor(
+        fake_ib, workload, retry_delay=0, connection_lost_retry_delay=0
+    )
     task = asyncio.create_task(supervisor.run())
 
-    assert await wait_for_condition(lambda: workload.starts == 1)
+    assert await wait_for_condition(lambda: workload.starts == 2)
     await asyncio.sleep(0.01)
 
-    assert fake_ib.connect_attempts == 2
-    assert workload.starts == 1
-    assert workload.stops == []
+    assert fake_ib.connect_attempts == 3
+    assert workload.starts == 2
+    assert workload.stops == ["restart requested"]
     assert not supervisor.restart_requested.is_set()
     assert not supervisor._delay_next_restart
 
