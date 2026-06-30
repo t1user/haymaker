@@ -1,24 +1,32 @@
-from multiprocessing import Pool, cpu_count
-from typing import cast
-
 import numpy as np
 import pandas as pd
 
 from .backtester import Results, get_min_tick
 
 
-def true_sharpe(ret):
+def true_sharpe(ret: pd.Series) -> pd.Series:
+    """Compare simple-return and log-return Sharpe calculations.
+
+    Args:
+        ret: Period returns as simple returns, for example ``P1 / P0 - 1``.
+
+    Returns:
+        A series with cumulative return, annualized return, annualized means,
+        annualized volatility, and Sharpe ratios calculated from both simple
+        and log returns.
+
+    Raises:
+        ValueError: If ``ret`` is empty.
     """
-    Given Series with daily returns (simple, non-log ie. P1/P0-1),
-    return indicators comparing simplified Sharpe to 'true' Sharpe
-    (defined by different caluclation conventions).
-    """
-    r = pd.Series()
-    df = pd.DataFrame({"returns": ret})
-    df["cummulative_return"] = (df["returns"] + 1).cumprod()
+    if ret.empty:
+        raise ValueError("ret must contain at least one return.")
+
+    r = pd.Series(dtype=float)
+    df = pd.DataFrame({"returns": ret.astype(float)})
+    df["cumulative_return"] = (df["returns"] + 1).cumprod()
     df["log_returns"] = np.log(df["returns"] + 1)
-    r["cummulative_return"] = df["cummulative_return"][-1] - 1
-    r["annual_return"] = ((r["cummulative_return"] + 1) ** (252 / len(df.index))) - 1
+    r["cumulative_return"] = df["cumulative_return"].iloc[-1] - 1
+    r["annual_return"] = ((r["cumulative_return"] + 1) ** (252 / len(df.index))) - 1
     r["mean"] = df["returns"].mean() * 252
     r["mean_log"] = df["log_returns"].mean() * 252
     r["vol"] = df["returns"].std() * np.sqrt(252)
@@ -29,6 +37,12 @@ def true_sharpe(ret):
 
 
 def rolling_sharpe(returns: pd.Series, months: float) -> pd.DataFrame:
+    """Return rolling annualized mean, volatility, and Sharpe ratio.
+
+    ``months`` is the historical name for a window multiplier. The rolling
+    window is ``int(12 * months)`` observations, so the actual calendar span
+    depends on the frequency of ``returns``.
+    """
     ret = pd.DataFrame({"returns": returns})
     ret["mean"] = ret["returns"].rolling(int(12 * months)).mean() * 252
     ret["vol"] = ret["returns"].rolling(int(12 * months)).std() * np.sqrt(252)
@@ -37,58 +51,79 @@ def rolling_sharpe(returns: pd.Series, months: float) -> pd.DataFrame:
     return ret
 
 
-def plot_rolling_sharpe(returns: pd.Series, months: float) -> None:
-    rolling = rolling_sharpe(returns, months)
-    rolling["mean_sharpe"] = rolling["sharpe"].mean()
-    rolling[["sharpe", "mean_sharpe"]].plot(figsize=(20, 5), grid=True)
+def sampler(
+    data: pd.DataFrame,
+    start: str | pd.Timestamp | None = None,
+    end: str | pd.Timestamp | None = None,
+    period_length: int = 25,
+    paths: int = 100,
+    seed: int | None = None,
+) -> list[pd.DataFrame]:
+    """Sample random contiguous business-day windows from a dataframe.
 
+    This is a small exploratory helper. For production bootstrap workflows, use
+    :mod:`haymaker.research.bootstrap`.
 
-def plot_rolling_vol(returns: pd.Series, months: float) -> None:
-    rolling = rolling_sharpe(returns, months)
-    rolling["mean_vol"] = rolling["vol"].mean()
-    rolling[["vol", "mean_vol"]].plot(figsize=(20, 5), grid=True)
+    Args:
+        data: Dataframe indexed by timestamps.
+        start: Optional inclusive lower bound for the source data.
+        end: Optional inclusive upper bound for the source data.
+        period_length: Number of business-day anchors in each sampled window.
+        paths: Number of sampled windows to return.
+        seed: Optional random seed for reproducible samples.
 
+    Returns:
+        List of dataframe slices. Each slice starts on a randomly selected
+        business-day anchor and ends before the next anchor after
+        ``period_length`` business-day anchors.
 
-def sampler(data, start=None, end=None, period_length=25, paths=100):
+    Raises:
+        TypeError: If ``data`` does not use a ``DatetimeIndex``.
+        ValueError: If arguments are invalid or not enough data is available.
+    """
+    if not isinstance(data.index, pd.DatetimeIndex):
+        raise TypeError("data must use a DatetimeIndex.")
+    if not data.index.is_monotonic_increasing:
+        raise ValueError("data index must be sorted in increasing order.")
+    if period_length < 1:
+        raise ValueError("period_length must be at least 1.")
+    if paths < 1:
+        raise ValueError("paths must be at least 1.")
+
     if start:
-        data = data.loc[start:]
+        data = data[data.index >= pd.Timestamp(start)]
     if end:
-        data = data.loc[:end]
+        data = data[data.index <= pd.Timestamp(end)]
+    if data.empty:
+        raise ValueError("data is empty after applying start/end filters.")
 
-    daily = data.resample("B").first()
-    lookup_table = pd.Series(daily.index.shift(period_length), index=daily.index)
-    d = np.random.choice(daily.index[:-period_length], size=paths)
+    daily = data.resample("B").first().dropna(how="all")
+    if len(daily.index) <= period_length:
+        raise ValueError("not enough business-day anchors for period_length.")
+
+    candidates = daily.index[:-period_length]
+    lookup_table = pd.Series(daily.index[period_length:], index=candidates)
+    rng = np.random.default_rng(seed)
+    selected = rng.choice(candidates.to_numpy(), size=paths)
     output = []
-    for i in d:
-        p = data.loc[i : lookup_table[i]].iloc[:-1]
+    for i in selected:
+        anchor = pd.Timestamp(i)
+        p = data.loc[anchor : lookup_table[anchor]].iloc[:-1]
         # p.set_index(pd.date_range(freq='min', start=data.index[0],
         #                          periods=len(p), name='date'), inplace=True)
         output.append(p)
     return output
 
 
-def m_proc(dfs, func):
-    """
-    Run func on every element of dfs in mulpiple processes.
-    dfs is a list of DataFrames
-    """
-    pool = Pool(processes=cpu_count())
-    results = [pool.apply_async(func, args=(df,)) for df in dfs]
-    output = [p.get() for p in results]
-    return output
-
-
 def crosser(ind: pd.Series, threshold: float) -> pd.Series:
+    """Return threshold-crossing blips for an indicator series.
+
+    Values equal to ``threshold`` are treated as above the threshold. The first
+    row is always ``0`` because there is no previous side to cross from.
     """
-    Generate blips only at points where indicator goes above/below threshold.
-    """
-    df = pd.DataFrame({"ind": ind})
-    df["above_below"] = (df["ind"] >= threshold) * 1 - (df["ind"] < threshold) * 1
-    df["blip"] = ((df["above_below"].shift() + df["above_below"]) == 0) * df[
-        "above_below"
-    ]
-    df = df.dropna()
-    return df["blip"]
+    side = pd.Series(np.where(ind >= threshold, 1, -1), index=ind.index)
+    crossed = (side.shift() + side).eq(0)
+    return side.where(crossed, 0).astype(int)
 
 
 def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFrame:
@@ -107,10 +142,18 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFra
     occur to be treated as normal
 
     """
+    empty = pd.DataFrame(columns=["from", "to", "duration"])
+    if len(df.index) < 2:
+        return empty
+
     df = df.copy()
     df["timestamp"] = df.index
     df["gap"] = df.timestamp.diff()
-    df["gap_bool"] = df["gap"] > df["gap"].mode()[0]
+    gap_mode = df["gap"].mode()
+    if gap_mode.empty:
+        return empty
+
+    df["gap_bool"] = df["gap"] > gap_mode[0]
     df["from"] = df["timestamp"].shift()
     # all gaps in timeseries
     gaps = df[df["gap_bool"]]
@@ -120,14 +163,16 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFra
         drop=True
     )
     out["duration"] = out["to"] - out["from"]
-    out = out[1:]
 
     out["from_time"] = out["from"].apply(lambda x: x.time())
 
     # most frequent time cutoff (end of day)
     def time_cut(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Timestamp]:
         df = df.copy()
-        cutoff_time = df["from_time"].mode()[0]
+        cutoff_mode = df["from_time"].mode()
+        if cutoff_mode.empty:
+            raise KeyError("No gap cutoff available.")
+        cutoff_time = cutoff_mode[0]
         gapless = df[(df["from_time"] != cutoff_time)].reset_index(drop=True)
         return gapless, cutoff_time
 
@@ -165,6 +210,10 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFra
 def rolling_weighted_mean(
     price: pd.Series, weights: pd.Series, periods: int
 ) -> pd.Series:
+    """Return rolling weighted mean.
+
+    A window whose weight sum is zero returns ``NaN``.
+    """
     price_vol = price * weights
     return price_vol.rolling(periods).sum() / weights.rolling(periods).sum()
 
@@ -175,22 +224,36 @@ def rolling_weighted_std(
     periods: int,
     weighted_mean: pd.Series | None = None,
 ) -> pd.Series:
-    """weighted_mean can be passed to save one computation"""
+    """Return rolling population-style weighted standard deviation.
+
+    The denominator is the rolling sum of weights, not a sample-variance
+    correction. ``weighted_mean`` can be passed to save one computation.
+    """
 
     if weighted_mean is None:
         weighted_mean = rolling_weighted_mean(price, weights, periods)
 
-    diff_vol = ((price - weighted_mean) ** 2) * weights
-    weighted_var = diff_vol.rolling(periods).sum() / weights.rolling(periods).sum()
+    weighted_second_moment = rolling_weighted_mean(price**2, weights, periods)
+    weighted_var = (weighted_second_moment - weighted_mean**2).clip(lower=0)
     return np.sqrt(weighted_var)  # type: ignore
 
 
 def weighted_zscore(df: pd.DataFrame, lookback: int) -> pd.Series:
-    """
-    Weighted z-score. Can be used to test whether price is within/outside
-    Bollinger Bands.
+    """Return volume-weighted z-score of the ``close`` column.
 
+    Args:
+        df: Dataframe with ``close`` and ``volume`` columns.
+        lookback: Rolling window length.
+
+    Raises:
+        ValueError: If required columns are missing or ``lookback`` is invalid.
     """
+    missing = {"close", "volume"} - set(df.columns)
+    if missing:
+        raise ValueError(f"weighted_zscore() missing required columns: {missing}.")
+    if lookback < 1:
+        raise ValueError("lookback must be at least 1.")
+
     wmean = rolling_weighted_mean(df["close"], df["volume"], lookback)
     wstd = rolling_weighted_std(df["close"], df["volume"], lookback, wmean)
     return ((df["close"] - wmean) / wstd).dropna()
@@ -280,26 +343,21 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = True) -> pd.DataFr
 
 
 def always_on(series: pd.Series) -> bool:
+    """Return whether a position series stays in-market after first entry.
+
+    Leading flat rows are ignored. A series with only zero positions, or an
+    empty series, returns ``False``.
     """
-    Based on passed position series determine whether system is always
-    in the market (closing position always means opening opposite position).
-    """
-    start = min(series.idxmax(), series.idxmin())
-    start_index = cast(int, series.index.get_indexer([start])[0])
-    return bool(series.iloc[start_index:].eq(0).sum() == 0)
+    non_zero_positions = np.flatnonzero(series.ne(0).to_numpy())
+    if len(non_zero_positions) == 0:
+        return False
+    return bool(series.iloc[non_zero_positions[0] :].ne(0).all())
 
 
 def round_tick(series: pd.Series) -> pd.Series:
     tick = get_min_tick(series)
+    if tick == 0:
+        return series.copy()
     floor = series // tick
     remainder = series % tick
-    return floor * tick + 1 * (remainder > tick / 2)
-
-
-def multiply(series: pd.Series, multiplier: float) -> pd.Series:
-    """
-    Floor multiplied price series to the nearest tick.
-    """
-    if multiplier != 1:
-        series = series * multiplier
-    return round_tick(series)
+    return floor * tick + tick * (remainder > tick / 2)
