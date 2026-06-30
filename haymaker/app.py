@@ -139,4 +139,8 @@ class App:
     def run(self) -> None:
         # this is the main entry point into strategy
         log.debug("Initializing connection supervisor.")
-        asyncio.run(self.supervisor.run())
+        try:
+            asyncio.run(self.supervisor.run())
+        except KeyboardInterrupt:
+            log.info("Keyboard interrupt received; stopping application.")
+            self.supervisor.stop()

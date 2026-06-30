@@ -272,7 +272,7 @@ async def test_failed_connect_disconnect_event_is_cleared_by_watcher_cleanup() -
 
 
 @pytest.mark.asyncio
-async def test_unexpected_run_cancellation_restarts_after_cleanup() -> None:
+async def test_run_cancellation_stops_after_cleanup() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload, connection_lost_retry_delay=0)
@@ -282,13 +282,14 @@ async def test_unexpected_run_cancellation_restarts_after_cleanup() -> None:
 
     task.cancel()
 
-    assert await wait_for_condition(lambda: workload.starts == 2)
-    assert workload.stops == ["restart requested"]
-    assert fake_ib.connect_attempts == 2
-    assert fake_ib.disconnect_count == 1
-    assert not task.done()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
-    await stop_and_wait(supervisor, task)
+    assert workload.starts == 1
+    assert workload.stops == ["supervisor stopped"]
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 1
+    assert supervisor.stop_requested.is_set()
 
 
 @pytest.mark.asyncio

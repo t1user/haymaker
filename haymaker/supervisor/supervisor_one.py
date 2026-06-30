@@ -82,8 +82,19 @@ class ConnectionSupervisor:
                         "Reconnect delay finished; starting new supervisor cycle."
                     )
 
-            except (asyncio.CancelledError, Exception) as exc:
-                # asyncio.CancelledError is not an Exception!
+            except asyncio.CancelledError as exc:
+                if self.stop_requested.is_set():
+                    break
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    log.debug("Supervisor run cancelled; stopping.")
+                    self.stop()
+                    await self.cleanup_onion()
+                    raise
+                recoveries += 1
+                if await self.recover_from_unexpected_error(exc, recoveries):
+                    break
+            except Exception as exc:
                 if self.stop_requested.is_set():
                     break
                 recoveries += 1
