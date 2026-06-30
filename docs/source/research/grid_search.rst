@@ -261,15 +261,14 @@ Existing display helpers accept ``GridSearchResult``:
 Combined Portfolio Analytics
 ============================
 
-Combined analytics are explicit functions over selected simulation keys:
+Combined analytics are methods on ``GridSearchResult`` over selected simulation
+keys:
 
 .. code-block:: python
 
-   from haymaker.research.grid_search import combined_path, combined_returns
-
    keys = [(0.5, 30), (1.0, 40), (1.5, 50)]
-   returns = combined_returns(result, keys)
-   path = combined_path(result, keys)
+   returns = result.combined_returns(keys)
+   path = result.combined_path(keys)
 
 The combined return stream represents a daily-rebalanced equal-weight portfolio
 of completed simulation return streams. It is not a directly simulated strategy.
@@ -278,15 +277,19 @@ The default missing-data policy is ``missing="zero"``, which treats missing
 sleeve returns as idle cash. Use ``missing="raise"`` to reject missing selected
 returns, or ``missing="drop"`` to average over available sleeves only.
 
-``combined_returns(result, keys, missing="zero")``
+``result.combined_returns(keys, missing="zero")``
     Returns the selected equal-weight daily return stream.
 
-``combined_path(result, keys, missing="zero")``
-    Returns ``(combined_returns(...) + 1).cumprod()``.
+``result.combined_path(keys, missing="zero")``
+    Returns ``(result.combined_returns(...) + 1).cumprod()``.
 
-``combined_stats(result, keys, missing="zero")``
+``result.combined_stats(keys, missing="zero")``
     Returns pyfolio statistics for the combined return stream. Pyfolio is
-    imported lazily only when this function is called.
+    imported lazily only when this method is called.
+
+The module-level ``combined_returns(result, keys)``,
+``combined_path(result, keys)``, and ``combined_stats(result, keys)`` functions
+remain available as convenience wrappers around the result methods.
 
 Lower-Level Helpers
 ===================

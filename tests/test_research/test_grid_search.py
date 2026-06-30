@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
+import haymaker.research.grid_search as grid_search
 from haymaker.research.grid_search import (
     GridSearch,
     GridSearchResult,
@@ -20,6 +21,19 @@ from haymaker.research.grid_search import (
     show_grid,
     show_grid_table,
 )
+
+
+def test_public_api_is_explicit() -> None:
+    assert set(grid_search.__all__) == {
+        "GridSearch",
+        "GridSearchResult",
+        "combined_returns",
+        "combined_path",
+        "combined_stats",
+        "plot_grid",
+        "show_grid",
+        "show_grid_table",
+    }
 
 
 def _price_df(offset: float = 0) -> pd.DataFrame:
@@ -220,8 +234,8 @@ def test_combined_returns_missing_policies() -> None:
     result = _result_with_returns()
     keys = [("a", 1), ("b", 1)]
 
-    zero = combined_returns(result, keys)
-    drop = combined_returns(result, keys, missing="drop")
+    zero = result.combined_returns(keys)
+    drop = result.combined_returns(keys, missing="drop")
 
     expected_zero = pd.Series(
         [0.05, 0.05, 0.1],
@@ -234,16 +248,34 @@ def test_combined_returns_missing_policies() -> None:
     pd.testing.assert_series_equal(zero, expected_zero)
     pd.testing.assert_series_equal(drop, expected_drop)
     with pytest.raises(ValueError, match="missing daily returns"):
-        combined_returns(result, keys, missing="raise")
+        result.combined_returns(keys, missing="raise")
 
 
 def test_combined_path_and_stats() -> None:
     result = _result_with_returns()
     keys = [("a", 1), ("b", 1)]
 
-    path = combined_path(result, keys)
-    pd.testing.assert_series_equal(path, (combined_returns(result, keys) + 1).cumprod())
+    path = result.combined_path(keys)
+    pd.testing.assert_series_equal(
+        path,
+        (result.combined_returns(keys) + 1).cumprod(),
+    )
     assert "perf_stats" not in vars(sys.modules["haymaker.research.grid_search"])
+    assert isinstance(result.combined_stats(keys), pd.Series)
+
+
+def test_combined_function_wrappers_delegate_to_result_methods() -> None:
+    result = _result_with_returns()
+    keys = [("a", 1), ("b", 1)]
+
+    pd.testing.assert_series_equal(
+        combined_returns(result, keys),
+        result.combined_returns(keys),
+    )
+    pd.testing.assert_series_equal(
+        combined_path(result, keys),
+        result.combined_path(keys),
+    )
     assert isinstance(combined_stats(result, keys), pd.Series)
 
 

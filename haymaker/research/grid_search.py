@@ -89,6 +89,17 @@ DEFAULT_GRID_TABLE_FIELDS: list[str] = [
     "annual_volatility",
 ]
 
+__all__ = [
+    "GridSearch",
+    "GridSearchResult",
+    "combined_returns",
+    "combined_path",
+    "combined_stats",
+    "plot_grid",
+    "show_grid",
+    "show_grid_table",
+]
+
 
 def _format_grid_label(value: Any) -> str:
     """Format grid-search labels without noisy floating-point tails.
@@ -104,12 +115,6 @@ def _format_grid_label(value: Any) -> str:
     if isinstance(value, Real) and not isinstance(value, bool):
         return f"{float(value):.6g}"
     return str(value)
-
-
-def _callable_name(func: Callable[..., Any]) -> str:
-    if isinstance(func, partial):
-        return _callable_name(func.func)
-    return getattr(func, "__name__", repr(func))
 
 
 @dataclass(frozen=True)
@@ -175,7 +180,7 @@ class GridSearchResult:
     def _build_stat_tables(self) -> None:
         self._field_names = list(next(iter(self.raw_stats.values())).index)
         self.field_trans = {
-            field: _translate_field_name(field) for field in self._field_names
+            field: self._translate_field_name(field) for field in self._field_names
         }
         if len(set(self.field_trans.values())) != len(self.field_trans):
             raise ValueError("Statistic field names are not unique after translation.")
@@ -191,9 +196,31 @@ class GridSearchResult:
                 for key, stats in self.raw_stats.items()
             }
             table = pd.Series(values).unstack()
-            sample = _first_valid_value(values.values())
+            sample = self._first_valid_value(values.values())
             self.dtypes[field] = type(sample) if sample is not None else object
-            self.tables[field] = _coerce_stat_table(table, sample)
+            self.tables[field] = self._coerce_stat_table(table, sample)
+
+    @staticmethod
+    def _translate_field_name(field: str) -> str:
+        return field.lower().replace(" ", "_").replace("/", "_").replace(".", "")
+
+    @staticmethod
+    def _first_valid_value(values: Iterable[Any]) -> Any | None:
+        for value in values:
+            if not pd.isna(value):
+                return value
+        return None
+
+    @staticmethod
+    def _coerce_stat_table(table: pd.DataFrame, sample: Any | None) -> pd.DataFrame:
+        if sample is None:
+            return table
+        if isinstance(sample, pd.Timedelta):
+            return table.apply(lambda column: column / pd.Timedelta("1day"))
+        try:
+            return table.astype(type(sample))
+        except (TypeError, ValueError):
+            return table
 
     def _daily_table(self, column: str) -> pd.DataFrame:
         if not self.raw_dailys:
@@ -265,6 +292,90 @@ class GridSearchResult:
     def warnings(self) -> dict[JobKey, list[str]]:
         """Non-empty warnings keyed by simulation key."""
         return {key: value for key, value in self.raw_warnings.items() if value}
+
+    def combined_returns(
+        self,
+        keys: Sequence[JobKey],
+        *,
+        missing: MissingPolicy = "zero",
+    ) -> pd.Series:
+        """Return equal-weight daily returns for selected simulations.
+
+        The combined return stream represents a daily-rebalanced equal-weight
+        portfolio of completed simulation return streams. It is not a directly
+        simulated strategy path.
+
+        Args:
+            keys: Simulation keys to combine.
+            missing: Missing-data policy. ``"zero"`` treats missing sleeve
+                returns as idle cash, ``"raise"`` rejects missing selected
+                returns, and ``"drop"`` preserves the old skip-NaN averaging
+                behavior.
+
+        Returns:
+            Daily return series for the selected equal-weight sleeve portfolio.
+        """
+        selected = self._selected_returns(keys)
+        if missing == "zero":
+            return selected.fillna(0).sum(axis=1) / len(selected.columns)
+        if missing == "raise":
+            if selected.isna().any().any():
+                raise ValueError("Selected simulations contain missing daily returns.")
+            return selected.mean(axis=1)
+        if missing == "drop":
+            return selected.mean(axis=1, skipna=True)
+        raise ValueError(f"Unknown missing policy: {missing!r}")
+
+    def combined_path(
+        self,
+        keys: Sequence[JobKey],
+        *,
+        missing: MissingPolicy = "zero",
+    ) -> pd.Series:
+        """Return the cumulative path of selected combined returns.
+
+        Args:
+            keys: Simulation keys to combine.
+            missing: Missing-data policy forwarded to
+                :meth:`combined_returns`.
+
+        Returns:
+            Cumulative return path built from the selected combined returns.
+        """
+        return (self.combined_returns(keys, missing=missing) + 1).cumprod()
+
+    def combined_stats(
+        self,
+        keys: Sequence[JobKey],
+        *,
+        missing: MissingPolicy = "zero",
+    ) -> pd.Series:
+        """Return pyfolio return statistics for selected combined returns.
+
+        ``pyfolio.timeseries.perf_stats`` is imported lazily, so importing this
+        module does not load pyfolio unless this method is called.
+
+        Args:
+            keys: Simulation keys to combine.
+            missing: Missing-data policy forwarded to
+                :meth:`combined_returns`.
+
+        Returns:
+            Pyfolio statistics for the selected combined return stream.
+        """
+        from pyfolio.timeseries import perf_stats  # type: ignore[import-untyped]
+
+        return perf_stats(self.combined_returns(keys, missing=missing))
+
+    def _selected_returns(self, keys: Sequence[JobKey]) -> pd.DataFrame:
+        if not keys:
+            raise ValueError("At least one simulation key is required.")
+        missing_keys = [key for key in keys if key not in self.returns.columns]
+        if missing_keys:
+            raise KeyError(
+                f"Simulation keys not found in result returns: {missing_keys}"
+            )
+        return self.returns.loc[:, list(keys)]
 
 
 @dataclass
@@ -377,14 +488,14 @@ class GridSearch:
             save_mem: If ``True``, omit daily returns and bar-level data.
             **perf_kwargs: Keyword arguments passed to ``perf``.
         """
-        pair_list = [_as_pair(pair) for pair in pairs]
+        pair_list = [cls._as_pair(pair) for pair in pairs]
         if not pair_list:
             raise ValueError("from_pairs requires at least one pair.")
 
-        input_data = _input_data(df, pass_full_df)
+        input_data = cls._input_data(df, pass_full_df)
         simulations = []
         for pair in pair_list:
-            args, kwargs = _call_args(pair, param_names, fixed_kwargs)
+            args, kwargs = cls._call_args(pair, param_names, fixed_kwargs)
             simulations.append(
                 Simulation(
                     key=pair,
@@ -427,15 +538,15 @@ class GridSearch:
             **perf_kwargs: Keyword arguments passed to ``perf``.
         """
         params_tuple = tuple(params)
-        args, kwargs = _call_args(params_tuple, param_names, fixed_kwargs)
+        args, kwargs = cls._call_args(params_tuple, param_names, fixed_kwargs)
         simulations = []
-        for label, df in _iter_dataframes(dfs):
+        for label, df in cls._iter_dataframes(dfs):
             key = (label, params_tuple)
-            _validate_hashable_key(key)
+            cls._validate_hashable_key(key)
             simulations.append(
                 Simulation(
                     key=key,
-                    input_data=_input_data(df, pass_full_df),
+                    input_data=cls._input_data(df, pass_full_df),
                     args=args,
                     kwargs=dict(kwargs),
                 )
@@ -476,6 +587,142 @@ class GridSearch:
         """Return the Cartesian product of two parameter sequences."""
         return [(p_1, p_2) for p_1 in sp_1 for p_2 in sp_2]
 
+    @staticmethod
+    def _as_pair(pair: Sequence[Any]) -> ParamPair:
+        if isinstance(pair, (str, bytes)):
+            raise ValueError(
+                "Parameter pairs must be two-value sequences, not strings."
+            )
+        values = tuple(pair)
+        if len(values) != 2:
+            raise ValueError(f"Parameter pair must contain exactly two values: {pair}")
+        GridSearch._validate_hashable_key(values)
+        return values
+
+    @staticmethod
+    def _input_data(
+        df: pd.DataFrame,
+        pass_full_df: bool,
+    ) -> pd.Series | pd.DataFrame:
+        if pass_full_df:
+            return df
+        if "close" not in df:
+            raise ValueError("Dataframe must contain 'close' when pass_full_df=False.")
+        return df["close"]
+
+    @staticmethod
+    def _validated_fixed_kwargs(
+        fixed_kwargs: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if fixed_kwargs is None:
+            return {}
+        invalid = [key for key in fixed_kwargs if not isinstance(key, str)]
+        if invalid:
+            raise ValueError(f"fixed_kwargs keys must be strings: {invalid}")
+        return dict(fixed_kwargs)
+
+    @staticmethod
+    def _validated_param_names(
+        param_names: Sequence[str] | None,
+        expected_count: int,
+    ) -> tuple[str, ...] | None:
+        if param_names is None:
+            return None
+        names = tuple(param_names)
+        if len(names) != expected_count:
+            raise ValueError(
+                f"Expected {expected_count} parameter names, got {len(names)}."
+            )
+        invalid = [name for name in names if not isinstance(name, str)]
+        if invalid:
+            raise ValueError(f"Parameter names must be strings: {invalid}")
+        return names
+
+    @staticmethod
+    def _call_args(
+        params: Sequence[Any],
+        param_names: Sequence[str] | None,
+        fixed_kwargs: Mapping[str, Any] | None,
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        values = tuple(params)
+        fixed = GridSearch._validated_fixed_kwargs(fixed_kwargs)
+        names = GridSearch._validated_param_names(param_names, len(values))
+        if names is None:
+            return values, fixed
+
+        overlap = set(names) & set(fixed)
+        if overlap:
+            raise ValueError(
+                "Searched parameter names overlap with fixed_kwargs: "
+                f"{sorted(overlap)}"
+            )
+        return (), {**fixed, **dict(zip(names, values))}
+
+    @staticmethod
+    def _iter_dataframes(
+        dfs: Mapping[Hashable, pd.DataFrame] | Sequence[pd.DataFrame],
+    ) -> Iterable[tuple[Hashable, pd.DataFrame]]:
+        if isinstance(dfs, pd.DataFrame):
+            raise ValueError("from_dfs expects a mapping or sequence of dataframes.")
+
+        if isinstance(dfs, Mapping):
+            for label, df in dfs.items():
+                if not isinstance(df, pd.DataFrame):
+                    raise ValueError(
+                        f"Expected dataframe for {label!r}, got {type(df)!r}."
+                    )
+                GridSearch._validate_hashable_key(label)
+                yield label, df
+            return
+
+        for label, df in enumerate(dfs):
+            if not isinstance(df, pd.DataFrame):
+                raise ValueError(f"Expected dataframe for {label!r}, got {type(df)!r}.")
+            yield label, df
+
+    @staticmethod
+    def _validate_hashable_key(value: Any) -> None:
+        try:
+            hash(value)
+        except TypeError as exc:
+            raise ValueError(
+                f"Simulation key values must be hashable: {value!r}"
+            ) from exc
+
+    @staticmethod
+    def _result_from_items(
+        items: Sequence[tuple[JobKey, Any]],
+        *,
+        save_mem: bool,
+    ) -> GridSearchResult:
+        raw_stats: dict[JobKey, pd.Series] = {}
+        raw_dailys: dict[JobKey, pd.DataFrame] = {}
+        raw_positions: dict[JobKey, pd.DataFrame] = {}
+        raw_dfs: dict[JobKey, pd.DataFrame] = {}
+        raw_warnings: dict[JobKey, list[str]] = {}
+
+        for key, out in items:
+            raw_stats[key] = out.stats
+            raw_positions[key] = out.positions
+            raw_warnings[key] = out.warnings
+            if not save_mem:
+                raw_dailys[key] = out.daily
+                raw_dfs[key] = out.df
+
+        return GridSearchResult(
+            raw_stats=raw_stats,
+            raw_dailys=raw_dailys,
+            raw_positions=raw_positions,
+            raw_dfs=raw_dfs,
+            raw_warnings=raw_warnings,
+        )
+
+    @staticmethod
+    def _callable_name(func: Callable[..., Any]) -> str:
+        if isinstance(func, partial):
+            return GridSearch._callable_name(func.func)
+        return getattr(func, "__name__", repr(func))
+
     def run(self) -> GridSearchResult:
         """Execute all simulations and return a result object."""
         runner = partial(
@@ -489,127 +736,13 @@ class GridSearch:
                 items = list(executor.map(runner, self.simulations))
         else:
             items = [runner(simulation) for simulation in self.simulations]
-        return _result_from_items(items, save_mem=self.save_mem)
+        return self._result_from_items(items, save_mem=self.save_mem)
 
     def __repr__(self) -> str:
         return (
-            f"{self.__class__.__name__}(func={_callable_name(self.func)}, "
+            f"{self.__class__.__name__}(func={self._callable_name(self.func)}, "
             f"simulations={len(self.simulations)})"
         )
-
-
-def _translate_field_name(field: str) -> str:
-    return field.lower().replace(" ", "_").replace("/", "_").replace(".", "")
-
-
-def _first_valid_value(values: Iterable[Any]) -> Any | None:
-    for value in values:
-        if not pd.isna(value):
-            return value
-    return None
-
-
-def _coerce_stat_table(table: pd.DataFrame, sample: Any | None) -> pd.DataFrame:
-    if sample is None:
-        return table
-    if isinstance(sample, pd.Timedelta):
-        return table.apply(lambda column: column / pd.Timedelta("1day"))
-    try:
-        return table.astype(type(sample))
-    except (TypeError, ValueError):
-        return table
-
-
-def _as_pair(pair: Sequence[Any]) -> ParamPair:
-    if isinstance(pair, (str, bytes)):
-        raise ValueError("Parameter pairs must be two-value sequences, not strings.")
-    values = tuple(pair)
-    if len(values) != 2:
-        raise ValueError(f"Parameter pair must contain exactly two values: {pair}")
-    _validate_hashable_key(values)
-    return values
-
-
-def _input_data(df: pd.DataFrame, pass_full_df: bool) -> pd.Series | pd.DataFrame:
-    if pass_full_df:
-        return df
-    if "close" not in df:
-        raise ValueError("Dataframe must contain 'close' when pass_full_df=False.")
-    return df["close"]
-
-
-def _validated_fixed_kwargs(
-    fixed_kwargs: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    if fixed_kwargs is None:
-        return {}
-    invalid = [key for key in fixed_kwargs if not isinstance(key, str)]
-    if invalid:
-        raise ValueError(f"fixed_kwargs keys must be strings: {invalid}")
-    return dict(fixed_kwargs)
-
-
-def _validated_param_names(
-    param_names: Sequence[str] | None,
-    expected_count: int,
-) -> tuple[str, ...] | None:
-    if param_names is None:
-        return None
-    names = tuple(param_names)
-    if len(names) != expected_count:
-        raise ValueError(
-            f"Expected {expected_count} parameter names, got {len(names)}."
-        )
-    invalid = [name for name in names if not isinstance(name, str)]
-    if invalid:
-        raise ValueError(f"Parameter names must be strings: {invalid}")
-    return names
-
-
-def _call_args(
-    params: Sequence[Any],
-    param_names: Sequence[str] | None,
-    fixed_kwargs: Mapping[str, Any] | None,
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
-    values = tuple(params)
-    fixed = _validated_fixed_kwargs(fixed_kwargs)
-    names = _validated_param_names(param_names, len(values))
-    if names is None:
-        return values, fixed
-
-    overlap = set(names) & set(fixed)
-    if overlap:
-        raise ValueError(
-            "Searched parameter names overlap with fixed_kwargs: " f"{sorted(overlap)}"
-        )
-    return (), {**fixed, **dict(zip(names, values))}
-
-
-def _iter_dataframes(
-    dfs: Mapping[Hashable, pd.DataFrame] | Sequence[pd.DataFrame],
-) -> Iterable[tuple[Hashable, pd.DataFrame]]:
-    if isinstance(dfs, pd.DataFrame):
-        raise ValueError("from_dfs expects a mapping or sequence of dataframes.")
-
-    if isinstance(dfs, Mapping):
-        for label, df in dfs.items():
-            if not isinstance(df, pd.DataFrame):
-                raise ValueError(f"Expected dataframe for {label!r}, got {type(df)!r}.")
-            _validate_hashable_key(label)
-            yield label, df
-        return
-
-    for label, df in enumerate(dfs):
-        if not isinstance(df, pd.DataFrame):
-            raise ValueError(f"Expected dataframe for {label!r}, got {type(df)!r}.")
-        yield label, df
-
-
-def _validate_hashable_key(value: Any) -> None:
-    try:
-        hash(value)
-    except TypeError as exc:
-        raise ValueError(f"Simulation key values must be hashable: {value!r}") from exc
 
 
 def _run_simulation(
@@ -649,34 +782,6 @@ def _run_simulation(
     return simulation.key, out
 
 
-def _result_from_items(
-    items: Sequence[tuple[JobKey, Any]],
-    *,
-    save_mem: bool,
-) -> GridSearchResult:
-    raw_stats: dict[JobKey, pd.Series] = {}
-    raw_dailys: dict[JobKey, pd.DataFrame] = {}
-    raw_positions: dict[JobKey, pd.DataFrame] = {}
-    raw_dfs: dict[JobKey, pd.DataFrame] = {}
-    raw_warnings: dict[JobKey, list[str]] = {}
-
-    for key, out in items:
-        raw_stats[key] = out.stats
-        raw_positions[key] = out.positions
-        raw_warnings[key] = out.warnings
-        if not save_mem:
-            raw_dailys[key] = out.daily
-            raw_dfs[key] = out.df
-
-    return GridSearchResult(
-        raw_stats=raw_stats,
-        raw_dailys=raw_dailys,
-        raw_positions=raw_positions,
-        raw_dfs=raw_dfs,
-        raw_warnings=raw_warnings,
-    )
-
-
 def combined_returns(
     result: GridSearchResult,
     keys: Sequence[JobKey],
@@ -699,16 +804,7 @@ def combined_returns(
     Returns:
         Daily return series for the selected equal-weight sleeve portfolio.
     """
-    selected = _selected_returns(result, keys)
-    if missing == "zero":
-        return selected.fillna(0).sum(axis=1) / len(selected.columns)
-    if missing == "raise":
-        if selected.isna().any().any():
-            raise ValueError("Selected simulations contain missing daily returns.")
-        return selected.mean(axis=1)
-    if missing == "drop":
-        return selected.mean(axis=1, skipna=True)
-    raise ValueError(f"Unknown missing policy: {missing!r}")
+    return result.combined_returns(keys, missing=missing)
 
 
 def combined_path(
@@ -727,7 +823,7 @@ def combined_path(
     Returns:
         Cumulative return path built from the selected combined returns.
     """
-    return (combined_returns(result, keys, missing=missing) + 1).cumprod()
+    return result.combined_path(keys, missing=missing)
 
 
 def combined_stats(
@@ -749,21 +845,7 @@ def combined_stats(
     Returns:
         Pyfolio statistics for the selected combined return stream.
     """
-    from pyfolio.timeseries import perf_stats  # type: ignore[import-untyped]
-
-    return perf_stats(combined_returns(result, keys, missing=missing))
-
-
-def _selected_returns(
-    result: GridSearchResult,
-    keys: Sequence[JobKey],
-) -> pd.DataFrame:
-    if not keys:
-        raise ValueError("At least one simulation key is required.")
-    missing_keys = [key for key in keys if key not in result.returns.columns]
-    if missing_keys:
-        raise KeyError(f"Simulation keys not found in result returns: {missing_keys}")
-    return result.returns.loc[:, list(keys)]
+    return result.combined_stats(keys, missing=missing)
 
 
 def plot_grid(
