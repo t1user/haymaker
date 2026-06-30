@@ -22,8 +22,12 @@ The supervisor needs three things:
 * a workload object with async ``start()`` and ``stop(reason)`` methods;
 * optional :class:`haymaker.supervisor.ConnectionSettings`.
 
-The main entrypoint is ``run()``. It connects, probes the broker, starts the
-workload, handles reconnect/rebuild cycles, and returns only after shutdown.
+The main entrypoint is ``run()``. It connects, starts the workload when the
+selected implementation considers the socket usable, handles reconnect/rebuild
+cycles, and returns only after shutdown. The default ``state`` implementation
+probes before starting the workload; the alternative ``onion`` implementation
+starts after socket connection and defers historical-data probes until a health
+signal such as ``timeoutEvent`` or broker recovery wait requires one.
 
 .. code-block:: python
 
@@ -48,8 +52,10 @@ The public lifecycle API is intentionally small:
 Workload Contract
 =================
 
-The workload is started only after a successful connection probe. For live
-execution this workload is ``LiveRuntime``; for managed dataloader runs it is
+With the default ``state`` supervisor, the workload is started only after a
+successful connection probe. With ``onion``, the workload is started after the
+socket connects and probes are used for later health checks. For live execution
+this workload is ``LiveRuntime``; for managed dataloader runs it is
 ``DataloaderRuntime``.
 
 ``start()`` should run until the workload completes or is cancelled. If it

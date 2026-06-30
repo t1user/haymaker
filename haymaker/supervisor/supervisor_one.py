@@ -422,7 +422,6 @@ class ConnectionIssueManager:
 
     async def run(self):
         while True:
-            await self.probe()
             self.set_timeout()
             await self.wakeup.wait()
             self.wakeup.clear()
@@ -453,6 +452,8 @@ class ConnectionIssueManager:
                         f"Broker re-connected, restarting due to policy {data_maintained=}"
                     )
                     break
+            else:
+                await self.probe()
 
     def clear_flags(self) -> None:
         """Clear broker recovery flags after one broker-wait episode."""

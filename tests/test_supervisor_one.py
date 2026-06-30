@@ -145,6 +145,28 @@ async def test_completed_workload_stops_without_restart() -> None:
 
 
 @pytest.mark.asyncio
+async def test_watcher_probe_waits_for_idle_timeout() -> None:
+    fake_ib = FakeIB()
+    fake_ib.probe_results = [[]]
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+    assert await wait_for_condition(lambda: fake_ib.timeouts == [20])
+    assert fake_ib.probe_count == 0
+
+    fake_ib.timeoutEvent.emit(20)
+
+    assert await wait_for_condition(lambda: fake_ib.probe_count == 1)
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.connect_attempts == 2
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
 async def test_restart_disconnects_reconnects_and_reports_restart_reason() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()

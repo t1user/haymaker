@@ -25,8 +25,11 @@ Live execution and the current managed dataloader path use the same socket
 connection supervisor package, with separate supervisor instances for separately
 owned sockets. The supervisor reconnects to the configured TWS or IB Gateway API
 endpoint but does not start, stop, or restart the gateway process.
-Each connection cycle verifies broker usability with a short historical-data
-probe before starting the supervised workload.
+The default ``state`` supervisor verifies broker usability with a short
+historical-data probe before starting the supervised workload. The alternative
+``onion`` supervisor starts the workload after the socket connects, arms the IB
+idle timeout, and defers historical-data probes until a health signal such as
+``timeoutEvent`` or broker recovery wait requires one.
 
 ``app.supervisor`` selects the live supervisor implementation. ``state`` is the
 default state-machine implementation; ``onion`` selects the alternative layered
