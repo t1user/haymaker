@@ -46,7 +46,7 @@ Examples: `true_range`, `atr`, `rsi`, `macd`, `tsi`, `carver`, `adx`,
 Functions that interpret prices or indicators into trading-intent-like outputs:
 signals, blips, entries, exits, long/short/flat decisions, or signal filters.
 
-Examples: `crosser`, `zero_crosser`, `range_crosser`, `range_blip`,
+Examples: `crosser`, `zero_crosser`, `extreme_reversal_blip`, `range_blip`,
 `min_max_blip`, `min_max_signal`, `min_max_buffer_signal`, `breakout`,
 `breakout_blip`, `signal_generator`, `combine_signals`, `inout_range`.
 

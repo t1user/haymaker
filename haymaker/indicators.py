@@ -73,10 +73,6 @@ def atr(df: pd.DataFrame, periods: int, exp: bool = True, **kwargs) -> pd.Series
     return mmean(true_range(df, 1), periods, exp, **kwargs).rename("ATR")
 
 
-# depricated function name
-get_ATR = atr
-
-
 def resample(
     df: pd.DataFrame | pd.Series, freq: str, how: dict[str, str] | None = None, **kwargs
 ) -> pd.DataFrame:
@@ -155,57 +151,62 @@ def weighted_resample(
 
 
 def downsampled_func(
-    df: pd.DataFrame | pd.Series, freq: str, func: Callable, *args, **kwargs
+    df: pd.DataFrame | pd.Series,
+    freq: str,
+    func: Callable[..., pd.Series],
+    *args: object,
+    **kwargs: object,
 ) -> pd.Series:
-    """
-    Calculate <func> over lower frequency than df and fill forward values.
+    """Apply a lower-frequency indicator and align it to raw bars.
 
+    The input bars are expected to be labeled at the start of each raw interval.
+    For example, a 1-minute row at ``10:00`` represents the bar starting at
+    ``10:00``. The resampled bars are labeled on the right edge, so the
+    completed 1-hour bar for ``10:00`` through ``10:59`` is labeled ``11:00``.
+    The value returned by ``func`` first appears on that right-edge timestamp
+    and is then forward-filled over the next raw bars until a new
+    lower-frequency value is available.
 
-    Exapmple use: signals could be based on 1-minute df, but they would be filtered
-    by trends based on 1-hour data.
-
-
-    Usage:
-    -----
-    downsampled_func(df, 'B', lambda x: x.close.rolling(10).mean())
-
-    this will return daily rolling mean over 10 days, which will be filled forward to
-    every point in time next day.
+    This means lower-frequency values do not appear before their source bar is
+    complete. With 1-minute input and ``freq="1h"``, the hourly value labeled
+    ``11:00`` is visible on the raw rows from ``11:00`` until the next hourly
+    value replaces it.
 
     Args:
-    -----
-
-    df - must have columns 'open', 'high', 'low', 'close'
-
-    freq -  pandas offset string representing frequency of data to which df
-    will be resampled before being passed to <func>
-
-    func - callable to be applied to lower frequency data (must take
-    the same type as df and return series)
-
-    func_kwargs - will be passed to <func>
+        df: Raw input data. OHLC data should be passed as a DataFrame; a single
+            price series may be passed as a Series.
+        freq: Pandas resampling frequency used to build the lower-frequency
+            data, for example ``"1h"`` or ``"1D"``.
+        func: Function that receives the resampled data and returns a Series
+            indexed by the resampled timestamps.
+        *args: Positional arguments passed to ``func``.
+        **kwargs: Keyword arguments passed to ``func``.
 
     Returns:
-    -------
-    pd.Series that can be inserted as column to the original df ensuring
-    no forward data snooping
+        Series named ``"f"`` aligned to the original index.
 
+    Example:
+        Add a 20-period moving average calculated on hourly bars to 1-minute
+        data:
+
+        .. code-block:: python
+
+            df["hourly_ma"] = downsampled_func(
+                df,
+                "1h",
+                lambda hourly: hourly["close"].rolling(20).mean(),
+            )
     """
 
-    # label="right" ensures no forward data snooping
-    resampled = resample(df, freq, label="right")
-
-    if isinstance(df, pd.DataFrame):
-        df = df.copy()
-    elif isinstance(df, pd.Series):
-        df = pd.DataFrame({"data": df})
-    else:
+    if not isinstance(df, (pd.DataFrame, pd.Series)):
         raise TypeError("df must be pd.DataFrame or pd.Series")
 
-    df["f"] = func(resampled, *args, **kwargs)
-    df["f"] = df["f"].shift(-1)
-    df["f"] = df["f"].ffill()
-    return df["f"]
+    resampled = resample(df, freq, label="right")
+    result = func(resampled, *args, **kwargs)
+    if not isinstance(result, pd.Series):
+        raise TypeError("func must return a pd.Series")
+
+    return result.reindex(df.index).ffill().rename("f")
 
 
 def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.Series:
@@ -304,99 +305,23 @@ def min_max_blip(price: pd.Series, period: int) -> pd.Series:
     )
 
 
-def min_max_signal(data: pd.Series, period: int) -> pd.Series:
-    """
-    DEPRECATED
-    For backward compatibility only.  Correct nomenclature for the
-    returned type of series is 'blip'.
-    """
-    return min_max_blip(data, period)
-
-
 def min_max_buffer_signal(data: pd.Series, period: int, buff: float = 0) -> pd.Series:
-    """
-    Return Series of signals (one of: -1, 0 or 1) dependig on whether
-    price broke out above max + <buff> (1) or below min - <buff> (-1) over last
-    <period> observations.
+    """Return breakout blips with a price-unit buffer.
 
-    This is a general case of min_max_signal, not combined because this one
-    will be removed if not found useful.
-
-    Args:
-    ---------
-    data: price Series
-    period: lookback period
-    buff: buffor expressing sensitivity filter for deciding whether min or max
-          has been breached, given in price units (default: 0)
+    A positive ``buff`` makes breakouts harder to trigger: price must move above
+    the previous rolling maximum plus ``buff`` or below the previous rolling
+    minimum minus ``buff``.
     """
+    prior_max = data.shift(1).rolling(period).max()
+    prior_min = data.shift(1).rolling(period).min()
     df = pd.DataFrame(
         {
-            "max": ((data - data.shift(1).rolling(period).max() + buff) > 0) * 1,
-            "min": ((data.shift(1).rolling(period).min() + buff - data) > 0) * 1,
+            "max": (data > prior_max + buff) * 1,
+            "min": (data < prior_min - buff) * 1,
         }
     )
     df["signal"] = df["max"] - df["min"]
     return df["signal"]
-
-
-def get_std(data, periods):
-    returns = np.log(data.avg_price.pct_change() + 1)
-    return returns.rolling(periods).std() * data.avg_price
-
-
-def get_min_max(data: pd.Series, period: int) -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "max": (data - data.shift(1).rolling(period).max()) > 0,
-            "min": (data.shift(1).rolling(period).min() - data) > 0,
-        }
-    )
-
-
-def majority_function(data: pd.DataFrame) -> pd.Series:
-    """
-    Return a reduced Series where every row = True, if majority of values in
-    input row is True, else False.
-
-    Args:
-    ---------
-    data: every row contains bool values, on which majority function is applied
-    """
-    return (0.5 + ((data.sum(axis=1) - 0.5) / data.count(axis=1))).apply(np.floor)
-
-
-def get_min_max_df(
-    data: pd.Series,
-    periods: tuple[int],
-    func: Callable[[pd.Series, int], pd.DataFrame] = get_min_max,
-) -> dict[str, pd.DataFrame]:
-    """
-    Given a list of periods, return func on each of those periods.
-    This is bullshit.
-    """
-    min_max_func = partial(func, data)
-    mins = pd.DataFrame()
-    maxs = pd.DataFrame()
-    for period in periods:
-        df = min_max_func(period)
-        mins[period] = df["min"]
-        maxs[period] = df["max"]
-    return {"min": mins, "max": maxs}
-
-
-def get_signals(data: pd.Series, periods: tuple[int]) -> pd.DataFrame:
-    min_max = get_min_max_df(data, periods)
-    return pd.DataFrame(
-        {
-            "signal": majority_function(min_max["max"])
-            - majority_function(min_max["min"])
-        }
-    )
-
-
-def any_signal(data: pd.Series, periods: tuple[int]) -> pd.Series:
-    min_max = get_min_max_df(data, periods)
-    return min_max["max"].any(axis=1) * 1 - min_max["min"].any(axis=1) * 1
 
 
 def modified_rsi(rsi: pd.Series) -> pd.Series:
@@ -470,8 +395,11 @@ def macd(
 
 
 def tsi(price: pd.Series, lookback1, lookback2):
-    """
-    True Strenght Index. Kaufman 2013, p. 404.
+    """Return Blau's True Strength Index.
+
+    Kaufman 2013, pp. 404-406 describes TSI as double-smoothed momentum
+    divided by double-smoothed absolute momentum. This implementation omits the
+    conventional ``100`` multiplier and returns the ratio directly.
     """
     return (
         price.diff().ewm(span=lookback1).mean().ewm(span=lookback2).mean()
@@ -495,43 +423,61 @@ def carver(price: pd.Series, lookback: int, ratio: int = 1) -> pd.Series:
     return df["carver"]
 
 
-def range_crosser(ind: pd.Series, threshold: float) -> pd.Series:
+def extreme_reversal_blip(ind: pd.Series, threshold: float) -> pd.Series:
+    """Return reversal blips when an oscillator leaves an extreme zone.
+
+    Returns a one-bar ``-1`` blip when the series crosses down through
+    ``threshold`` from above, a one-bar ``1`` blip when it crosses up through
+    ``-threshold`` from below, and ``0`` otherwise. This is useful for
+    oscillators where returning from an extreme is interpreted as a contrarian
+    reversal event.
     """
-    For an ind like rsi, returns signal (-1, 0, 1) when ind crosses
-    threshold from above or -threshold from below.
-    THIS IS LIKELY CRAP. CHECK BEFORE USE!!!
-    """
-    df = pd.DataFrame({"ind": ind})
-    df["inside"] = df["ind"].abs() < threshold
-    df["ss"] = ~(df["inside"].shift().fillna(False)) & df["inside"]
-    df["s"] = np.sign(df["ind"].diff())
-    df["signal"] = df["ss"] * df["s"]
-    return df["signal"]
+    previous = ind.shift()
+    return pd.Series(
+        np.select(
+            [
+                (previous > threshold) & (ind <= threshold),
+                (previous < -threshold) & (ind >= -threshold),
+            ],
+            [-1, 1],
+            default=0,
+        ),
+        index=ind.index,
+    )
 
 
 def adx(data: pd.DataFrame, lookback: int) -> pd.Series:
-    """
-    Average directional movement index (expotentially weighted).
+    """Return Wilder-style Average Directional Movement Index.
 
-    data - must have columns: 'high' and 'low'
+    ADX measures trend strength, not direction: higher values mean stronger
+    directional movement whether the market is rising or falling. Kaufman cites
+    common trend filters such as ADX crossing above 25 for trending markets and
+    below 20 for consolidating markets.
 
-    references:
-    https://en.wikipedia.org/wiki/Average_directional_movement_index
-    https://www.investopedia.com/terms/d/dmi.asp
-    https://www.fmlabs.com/reference/default.htm?url=ADX.htm
+    ``+DM`` is today's high minus yesterday's high when that upward move is
+    larger than the downward move. ``-DM`` is yesterday's low minus today's low
+    when that downward move is larger. The directional movement components,
+    true range, and DX are exponentially smoothed with ``alpha=1/lookback``.
+    This follows Kaufman's/Wilder's directional movement and DX construction,
+    but it also smooths ADX itself with ``alpha=1/lookback`` rather than the
+    fixed 0.133 constant Kaufman gives for 14-day ADX, and it returns ADX rather
+    than ADXR.
+
+    References:
+        Perry J. Kaufman, *Trading Systems and Methods*, 5th ed., Chapter 23.
     """
     df = data.copy()
-    df["atr"] = atr(df, lookback)
-    df["deltaHigh"] = (df["high"] - df["high"].shift()).clip(lower=0)
-    df["deltaLow"] = (df["low"] - df["low"].shift()).clip(lower=0)
-    df["plusDM"] = (df["deltaHigh"] > df["deltaLow"]) * df["deltaHigh"]
-    df["minusDM"] = (df["deltaLow"] > df["deltaHigh"]) * df["deltaLow"]
-    df["pdm_s"] = df["plusDM"].ewm(span=lookback).mean()
-    df["mdm_s"] = df["minusDM"].ewm(span=lookback).mean()
+    up_move = df["high"].astype(float).diff()
+    down_move = df["low"].astype(float).shift() - df["low"].astype(float)
+    df["plusDM"] = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    df["minusDM"] = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    df["atr"] = true_range(df, 1).ewm(alpha=1 / lookback, adjust=False).mean()
+    df["pdm_s"] = df["plusDM"].ewm(alpha=1 / lookback, adjust=False).mean()
+    df["mdm_s"] = df["minusDM"].ewm(alpha=1 / lookback, adjust=False).mean()
     df["pDI"] = (df["pdm_s"] / df["atr"]) * 100
     df["mDI"] = (df["mdm_s"] / df["atr"]) * 100
     df["dx"] = ((df["pDI"] - df["mDI"]).abs() / (df["pDI"] + df["mDI"])) * 100
-    df["adx"] = df["dx"].ewm(span=lookback).mean()
+    df["adx"] = df["dx"].ewm(alpha=1 / lookback, adjust=False).mean()
     return df["adx"]
 
 
@@ -539,12 +485,9 @@ def breakout(
     price: pd.Series,
     lookback: int,
     stop_frac: float = 0.5,
+    always_on: bool = False,
 ) -> pd.Series:
-    """
-    Create a Series with a generated signal representing buying breakout
-    beyond lookback periods maximum and selling breakout below
-    lookback periods minimum.  Once generated, signal stays constant
-    until canceled or reversed.
+    """Return stateful breakout signal from rolling high/low blips.
 
     The returned signal is recorded on the bar where the breakout
     information becomes known. It is not an executable position. For
@@ -552,25 +495,18 @@ def breakout(
     passed to ``stop_loss``.
 
     Args:
-    -----
-
-    data: price series on which the breakouts are to be determined,
-    typically close prices
-
-    lookback: number of periods for max/min calculation
-
-    stop_frac: number of periods expresed as fraction of lookback
-    periods; breakout above/blow max/min of this number of periods
-    (rounded to nearest int) in the opposite direction to the existing
-    position will close out existing position; must be between 0 and
-    1; if equal to 1, strategy is always in the market (oposite signal
-    reverses existing position); default: .5
+        price: Price series, typically close prices.
+        lookback: Rolling high/low lookback.
+        stop_frac: Fraction of ``lookback`` used for opposite-side close blips.
+            Must be in ``(0, 1]``. If ``stop_frac == 1``, opposite breakout
+            blips are interpreted directly by ``always_on``.
+        always_on: Relevant when ``stop_frac == 1``. If ``True``, an opposite
+            breakout blip reverses the signal immediately. If ``False``, an
+            opposite breakout blip closes the existing signal to zero.
 
     Returns:
-    --------
-
-    Series where 1 means long signal, -1 short signal, 0 no desired
-    position at a given index point.
+        Series where ``1`` means long signal, ``-1`` short signal, and ``0`` no
+        desired market exposure at that bar.
     """
 
     if not isinstance(price, pd.Series):
@@ -581,7 +517,9 @@ def breakout(
     df = pd.DataFrame({"price": price})
     df["in"] = min_max_blip(df["price"], lookback)
     if stop_frac == 1:
-        df["break"] = _blip_to_signal_converter(df["in"].to_numpy())
+        df["break"] = _blip_to_signal_converter(
+            df["in"].to_numpy(), always_on=always_on
+        )
     else:
         df["out"] = min_max_blip(df["price"], int(lookback * stop_frac))
         df["break"] = _in_out_blip_unifier(df[["in", "out"]].to_numpy())
@@ -631,7 +569,11 @@ def breakout_blip(
 
 
 def strength_oscillator(df: pd.DataFrame, periods) -> pd.Series:
-    """Kaufman 2013, p. 408"""
+    """Return Kaufman's trend-strength oscillator.
+
+    This follows the idea in Kaufman 2013, p. 408: average close-to-close
+    momentum divided by average high-low range over the same window.
+    """
     d = df.copy()
     d["momentum"] = d.close.diff().fillna(0).rolling(periods).mean()
     d["high_low"] = (d["high"] - d["low"]).rolling(periods).mean()
@@ -639,8 +581,12 @@ def strength_oscillator(df: pd.DataFrame, periods) -> pd.Series:
 
 
 def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
-    """
-    Trend strength ranking indicator. Kaufman book 2013 edition, p. 1069.
+    """Return a volatility-normalized trend-strength ranking.
+
+    This follows the market-ranking idea referenced by Kaufman 2013 around the
+    Directional Movement discussion: compare lookback log return with realized
+    one-period volatility over the same lookback. Higher absolute values imply
+    stronger trend relative to recent noise.
     """
     df = pd.DataFrame(index=price.index)
     df["log_return"] = np.log(price.pct_change(lookback) + 1)
@@ -652,13 +598,15 @@ def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
 def chande_momentum_indicator(
     price: pd.Series, lookback: int, diff_period: int = 1
 ) -> pd.Series:
+    """Return Chande Momentum Oscillator on a ``-100`` to ``100`` scale."""
     df = pd.DataFrame({"price": price})
     df["diff"] = df["price"].diff(diff_period)
-    df["ups"] = (df["diff"] * (df["diff"] > 0)).rolling(lookback).sum()
-    df["downs"] = (df["diff"] * (df["diff"] < 0)).rolling(lookback).sum()
+    df["ups"] = df["diff"].clip(lower=0).rolling(lookback).sum()
+    df["downs"] = (-df["diff"].clip(upper=0)).rolling(lookback).sum()
     df["numerator"] = df["ups"] - df["downs"]
     df["denominator"] = df["ups"] + df["downs"]
-    return (df["numerator"] / df["denominator"]).ffill()
+    df["cmo"] = 100 * df["numerator"] / df["denominator"]
+    return df["cmo"].ffill()
 
 
 def join_swing(
@@ -697,8 +645,12 @@ def momentum(price, periods):
 
 @ensure_df
 def divergence_index(df, fast, factor=1):
-    """
-    Kaufman 2013 p. 384
+    """Return Kaufman's Divergence Index and adaptive bands.
+
+    Kaufman 2013, pp. 384-385 defines DI as the volatility-adjusted difference
+    between fast and slow moving averages. This implementation uses an EMA with
+    ``fast`` and ``10 * fast`` spans, then bands based on the rolling standard
+    deviation of DI.
     """
     df = df.copy()
     slow = 10 * fast
@@ -768,8 +720,7 @@ def _range_entry(s: pd.Series) -> pd.Series:
     """
     s is the output of inout_range
     """
-
-    return -((s.shift() - s) * s)
+    return s.astype(int).diff().eq(1).astype(int)
 
 
 def _signed_range_entry(entry: pd.Series, sign: pd.Series) -> pd.Series:
@@ -779,7 +730,7 @@ def _signed_range_entry(entry: pd.Series, sign: pd.Series) -> pd.Series:
     entry will be signed same as price when entering range.
     """
 
-    return (_range_entry(entry) * np.sign(sign)).dropna().astype(int)
+    return (entry * np.sign(sign)).astype(int)
 
 
 def range_blip(
@@ -787,9 +738,13 @@ def range_blip(
     threshold: float | pd.Series = 0,
     inout: Literal["inside", "outside"] = "inside",
 ) -> pd.Series:
-    """
-    Blip when indicator enters or leaves range. Blip is signed the same as sign of
-    the indicator.
+    """Return a signed blip when an indicator enters the selected range.
+
+    The range is selected by :func:`inout_range`. With ``inout="inside"``, a
+    blip is emitted when the indicator moves from outside to inside
+    ``(-threshold, threshold)``. With ``inout="outside"``, a blip is emitted
+    when the indicator leaves that range. The blip is signed the same as the
+    indicator value on the entry bar.
     """
 
     indicator = indicator.dropna()
