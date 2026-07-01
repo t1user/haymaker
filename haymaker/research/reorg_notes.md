@@ -28,8 +28,7 @@ Tools that reshape, align, resample, sample, normalize, or validate market data.
 They do not encode trading logic.
 
 Examples: `resample`, `weighted_resample`, `downsampled_func`,
-`downsampled_atr`, `cont_downsampled_func`, `cont_downsampled_atr`, `sampler`,
-`gap_tracer`, `round_tick`.
+`downsampled_atr`, `sampler`, `gap_tracer`, `round_tick`.
 
 ### Indicators
 

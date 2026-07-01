@@ -1,5 +1,5 @@
 from functools import partial, wraps
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -35,6 +35,13 @@ def ensure_df(func):
 
 
 def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
+    """Return true range over ``bar`` periods.
+
+    For ``bar=1`` this is the standard true range: the maximum of high-low,
+    high-previous close, and low-previous close in absolute price units.
+    Larger ``bar`` values compare the rolling high/low range against the close
+    ``bar`` rows ago.
+    """
     if not isinstance(df, pd.DataFrame):
         raise TypeError("df must be a pd.DataFrame")
 
@@ -49,32 +56,85 @@ def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
     return d["TR"]
 
 
-def mmean(d: pd.Series, periods: int, exp: bool = True, **kwargs) -> pd.Series:
-    """Shotcut to select type of mean over a series (modified mean)."""
-    if exp:
+def mmean(
+    d: pd.Series,
+    periods: int,
+    smooth_type: Literal["simple", "exponential", "wilder"] = "exponential",
+    **kwargs,
+) -> pd.Series:
+    """Return a moving average using the selected smoothing method.
+
+    Args:
+        d: Input series.
+        periods: Moving-average lookback.
+        smooth_type: Smoothing method:
+
+            ``"simple"``
+                Simple moving average,
+                ``mean(d[t - periods + 1], ..., d[t])``.
+
+            ``"exponential"``
+                Pandas span-based exponential moving average,
+                ``d.ewm(span=periods).mean()``. This uses
+                ``alpha = 2 / (periods + 1)``.
+
+            ``"wilder"``
+                Wilder's average-off smoothing. The first value is seeded with
+                the simple average of the first ``periods`` values, then updated
+                as ``previous + (current - previous) / periods``. This is
+                equivalent to an EMA with ``alpha = 1 / periods`` after the
+                initial seed.
+        **kwargs: Passed to pandas for ``"simple"`` and ``"exponential"``.
+    """
+    if smooth_type == "wilder":
+        out = _wilder_average(d, periods)
+    elif smooth_type == "exponential":
         out = d.ewm(span=periods, **kwargs).mean()
-    else:
+    elif smooth_type == "simple":
         out = d.rolling(periods, **kwargs).mean()
+    else:
+        raise ValueError(
+            "smooth_type must be one of: 'simple', 'exponential', 'wilder'"
+        )
     return out
 
 
-def atr(df: pd.DataFrame, periods: int, exp: bool = True, **kwargs) -> pd.Series:
-    """
-    Return Series with ATRs.
+def atr(
+    df: pd.DataFrame,
+    periods: int,
+    smooth_type: Literal["simple", "exponential", "wilder"] = "exponential",
+    **kwargs,
+) -> pd.Series:
+    """Return Average True Range in price units.
 
     Args:
-    ---------
-    data: must have columns: 'high', 'low', 'close'
-    periods: lookback period
-    exp: True - expotential mean, False - simple rolling mean
-    **kwargs will be passed to averaging function
+        df: DataFrame with ``high``, ``low``, and ``close`` columns.
+        periods: Moving-average lookback.
+        smooth_type: Moving-average smoothing type. See :func:`mmean` for the
+            formulas. The default ``"exponential"`` preserves the framework's
+            existing span-based ATR behavior.
+        **kwargs: Passed to the selected pandas averaging method.
+
+    Returns:
+        Series named ``"ATR"``.
+
+    Notes:
+        This function uses the standard true range calculation. With
+        ``smooth_type="exponential"`` it uses pandas' span-based exponential
+        mean, which is not Wilder's original average-off smoothing. Use
+        ``smooth_type="simple"`` for a simple moving average ATR, or
+        ``smooth_type="wilder"`` for Wilder ATR. The default is unchanged
+        because this function is used by live strategies.
     """
 
-    return mmean(true_range(df, 1), periods, exp, **kwargs).rename("ATR")
+    return mmean(true_range(df, 1), periods, smooth_type, **kwargs).rename("ATR")
 
 
 def resample(
-    df: pd.DataFrame | pd.Series, freq: str, how: dict[str, str] | None = None, **kwargs
+    df: pd.DataFrame | pd.Series,
+    freq: str,
+    how: dict[str, Any] | None = None,
+    **kwargs: Any,
 ) -> pd.DataFrame:
     """Shortcut function to resample ohlc dataframe or close price series.
     Args:
@@ -122,32 +182,33 @@ def resample(
 
 
 def weighted_resample(
-    df: pd.DataFrame, freq: str, price_column: str = "average", **kwargs
+    df: pd.DataFrame, freq: str, price_column: str = "average", **kwargs: Any
 ) -> pd.DataFrame:
-    """
-    While performing resample calculate also volume weighted price.
+    """Resample OHLC data and calculate a volume-weighted average price.
 
     Args:
-    ----------
+        df: DataFrame with OHLC data, ``volume``, and ``price_column``.
+        freq: Pandas resampling frequency.
+        price_column: Column used for the weighted price calculation.
+        **kwargs: Passed to all resampling operations.
 
-    df, freq - same as in resample
-
-    price_column - price column to be used for caluclation, typically
-    should be volume weighted average price for the bar.
-
-    **kwargs - will be passed to resample function
-
+    Returns:
+        Resampled OHLC data with an ``average`` column. Groups with zero total
+        volume get ``NaN`` for ``average`` rather than a synthetic zero price.
     """
 
     if "volume" not in df.columns:
         raise KeyError("df must have column: volume")
+    if price_column not in df.columns:
+        raise KeyError(f"df must have column: {price_column}")
 
-    df = df.copy()
-    df["weights"] = df.volume.resample(freq).transform(lambda x: x / x.sum())
-    df["weight_price"] = df["weights"] * df[price_column]
-    return resample(df, freq, how={"weight_price": "sum"}, **kwargs).rename(
-        columns={"weight_price": "average"}
+    volume = df["volume"].resample(freq, **kwargs).sum()
+    weighted_price = (
+        (df[price_column] * df["volume"]).resample(freq, **kwargs).sum(min_count=1)
     )
+    out = resample(df, freq, **kwargs)
+    out["average"] = weighted_price / volume.replace(0, np.nan)
+    return out
 
 
 def downsampled_func(
@@ -220,73 +281,10 @@ def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.
 
     downsampled_atr(df, 20, freq='B') - 20 day atr
 
-    downsampled_atr(df, 46, freq='H', exp=False) - 46 hour atr, simple moving average
+    downsampled_atr(df, 46, freq='H', smooth_type="simple") - 46 hour simple ATR
     """
 
     return downsampled_func(df, freq, partial(atr, periods=periods), **kwargs)
-
-
-def cont_downsampled_func(d: pd.Series, bar: int, func, *args, **kwargs) -> pd.Series:
-    """Apply <func> to continuous resampled series.  At every df row, last
-    <bar> rows will be treated as one bar.  It's different from downsampled_func,
-    where price series is first resampled to a new frequency and then any missing
-    values are forward filled from last available point.
-
-    So for hourly calculation at half hour point, downsampled_func will
-    give the last value from the hour top, wherus cont_downsampled_func
-    will calculate value based on last sixty minutes.
-
-    If result compared to resample, resample will need closed='right',
-    label='right'.
-
-    Usage:
-    -----
-
-    For d being an OHLC one minute price dataframe, this is hourly
-    standard deviation over rolling 23 hours (i.e. 1 day):
-
-    cont_downsampled_func(d.close, 60, lambda x: x.rolling(23).std())
-
-
-    Args:
-    -----
-
-    d - input data, must be a pd.Series
-
-    bar - number of df rows to treat as one (e.g. if d has 30s data
-    and hourly <func> is required, <bar> value should be 120)
-
-    """
-
-    # easier to reshape in numpy
-    values = d.values
-    assert isinstance(values, np.ndarray)
-    start_index = values.shape[0] % bar
-    step1 = pd.DataFrame(values[start_index:].reshape((-1, bar)))
-    try:
-        # for functions that calculate dataframe columnwise
-        step2 = func(step1, *args, **kwargs)
-    except ValueError:
-        # for functions that require a series
-        step2 = step1.apply(lambda x: func(x, *args, **kwargs), axis=0)
-    out = step2.values.reshape((1, -1)).T
-    # out is an ndarray, has no index and needs to be put back into correct place in d
-    d = d.iloc[start_index:]
-    return pd.Series(out.flatten(), index=d.index)
-
-
-def cont_downsampled_atr(
-    df: pd.DataFrame, bar: int, periods: int, exp: bool = True
-) -> pd.Series:
-    """Shortcut function to get continues downsampled atr
-    (cont_downsampled_func where func is atr).
-
-    exp - True = expotential moving average, False = simple moving average
-    """
-
-    return cont_downsampled_func(
-        true_range(df, bar), bar, mmean, periods=periods, exp=exp
-    )
 
 
 def min_max_blip(price: pd.Series, period: int) -> pd.Series:
@@ -325,52 +323,69 @@ def min_max_buffer_signal(data: pd.Series, period: int, buff: float = 0) -> pd.S
 
 
 def modified_rsi(rsi: pd.Series) -> pd.Series:
-    """
-    Rescale passed rsi to -1 to 1.
-    """
+    """Rescale RSI from ``0..100`` to ``-1..1``."""
     return (2 * (rsi - 50)) / 100
+
+
+def _wilder_average(series: pd.Series, lookback: int) -> pd.Series:
+    """Return Wilder's average-off smoothing for a positive series."""
+    if lookback <= 0:
+        raise ValueError("lookback must be positive")
+
+    rolling = series.rolling(lookback, min_periods=lookback).mean()
+    out = pd.Series(np.nan, index=series.index, dtype=float)
+    first_valid = rolling.first_valid_index()
+    if first_valid is None:
+        return out
+
+    first_position = series.index.get_loc(first_valid)
+    if not isinstance(first_position, int):
+        raise ValueError("series index must not contain duplicate labels")
+
+    out.iloc[first_position] = rolling.iloc[first_position]
+    for position in range(first_position + 1, len(series)):
+        value = series.iloc[position]
+        if pd.isna(value):
+            out.iloc[position] = out.iloc[position - 1]
+        else:
+            out.iloc[position] = (
+                out.iloc[position - 1] + (value - out.iloc[position - 1]) / lookback
+            )
+    return out
 
 
 def rsi(
     price: pd.Series,
     lookback: int,
-    periods: int = 1,
-    exp: bool = True,
-    rescale=False,
-    *args,
-    **kwargs,
+    diff_period: int = 1,
+    rescale: bool = False,
 ) -> pd.Series:
-    """
-    Rsi indicator on a scale of 0 - 100.
+    """Return Wilder/Kaufman Relative Strength Index.
 
-    Parameteres:
-    -----------
+    RSI compares the average upward price changes with the average downward
+    price changes and scales the result from ``0`` to ``100``. Kaufman describes
+    the usual interpretation as overbought near ``70`` and oversold near ``30``.
 
-    periods:
-        number of periods over which ups and downs are to be caluclated
+    Args:
+        price: Price series, typically close prices.
+        lookback: Number of changes included in Wilder's average-off smoothing.
+            Kaufman notes Wilder's common default of 14.
+        diff_period: Price-difference lag. The Kaufman/Wilder definition uses
+            ``1``; larger values calculate RSI from multi-period changes.
+        rescale: If ``False``, return RSI on the usual ``0..100`` scale. If
+            ``True``, return the same oscillator on ``-1..1``, which is easier
+            to combine with symmetric threshold helpers such as
+            :func:`extreme_reversal_blip`.
 
-    exp:
-        wheather expotential or simple moving average should be used
-
-    rescale:
-        False - return classic RSI
-        True - rescale classic RSI to (-1, 1)
-
-    note:
-    ----
-    Resluts not matching talib.RSI -> for that averaging function must be:
-    .ewm(span=1/lookback).mean()
+    Returns:
+        RSI series aligned to ``price``.
     """
     df = pd.DataFrame({"price": price})
-    df["change"] = df["price"].diff(periods).fillna(0)
-    df["up"] = (df["change"] > 0) * df["change"]
-    df["down"] = (df["change"] < 0) * df["change"].abs()
-    if exp:
-        df["up_roll"] = df["up"].ewm(span=lookback).mean()
-        df["down_roll"] = df["down"].ewm(span=lookback).mean()
-    else:
-        df["up_roll"] = df["up"].rolling(lookback).mean()
-        df["down_roll"] = df["down"].rolling(lookback).mean()
+    df["change"] = df["price"].diff(diff_period)
+    df["up"] = df["change"].clip(lower=0)
+    df["down"] = -df["change"].clip(upper=0)
+    df["up_roll"] = _wilder_average(df["up"], lookback)
+    df["down_roll"] = _wilder_average(df["down"], lookback)
     df["rs"] = df["up_roll"] / df["down_roll"]
     df["rsi"] = 100 - (100 / (1 + df["rs"]))
     if rescale:
@@ -382,8 +397,24 @@ def rsi(
 def macd(
     price: pd.Series, fastperiod: int, slowperiod: int, signalperiod: int
 ) -> pd.DataFrame:
-    """
-    Results checked against talib.MACD, maching exactly.
+    """Return Moving Average Convergence/Divergence components.
+
+    MACD is the difference between a fast and slow exponential moving average.
+    The signal line is an exponential moving average of MACD, and the histogram
+    is MACD minus the signal line.
+
+    Args:
+        price: Price series, typically close prices.
+        fastperiod: Span for the fast EMA.
+        slowperiod: Span for the slow EMA.
+        signalperiod: Span for the MACD signal EMA.
+
+    Returns:
+        DataFrame with ``macd``, ``macdsignal``, and ``macdhist`` columns.
+
+    Notes:
+        This uses pandas ``ewm(span=...)`` defaults. Verify against a target
+        library before assuming exact TA-Lib parity.
     """
     df = pd.DataFrame({"close": price})
     df["fast_trendline"] = df["close"].ewm(span=fastperiod).mean()
@@ -573,11 +604,14 @@ def strength_oscillator(df: pd.DataFrame, periods) -> pd.Series:
 
     This follows the idea in Kaufman 2013, p. 408: average close-to-close
     momentum divided by average high-low range over the same window.
+    Positive values indicate upward movement, negative values indicate downward
+    movement, and the magnitude is expressed in average bar-range units. The
+    result is not bounded to a fixed scale.
     """
     d = df.copy()
     d["momentum"] = d.close.diff().fillna(0).rolling(periods).mean()
     d["high_low"] = (d["high"] - d["low"]).rolling(periods).mean()
-    return (d["momentum"] / d["high_low"]).dropna()
+    return d["momentum"] / d["high_low"]
 
 
 def chande_ranking(price: pd.Series, lookback: int) -> pd.Series:
@@ -625,6 +659,12 @@ def join_swing(
 
 
 def spread(df: pd.DataFrame, lookback: int) -> pd.Series:
+    """Return the rolling high-low spread over ``lookback`` rows.
+
+    If ``high`` and ``low`` are missing but ``close`` is present, ``close`` is
+    used as both high and low. This gives a zero spread for flat close-only
+    windows and keeps the function usable on single-price data.
+    """
     df = df.copy()
     if not set(["high", "low"]).issubset(set(df.columns)):
         if "close" in df.columns:
@@ -638,9 +678,39 @@ def spread(df: pd.DataFrame, lookback: int) -> pd.Series:
     return df["max"] - df["min"]
 
 
-def momentum(price, periods):
-    """Double smoothed momentum"""
-    return price.diff(periods).ewm(span=periods).mean().ewm(span=periods).mean()
+def momentum(
+    price: pd.Series,
+    periods: int,
+    smooth_periods: int | tuple[int, int] | None = None,
+) -> pd.Series:
+    """Return Blau/Kaufman double-smoothed momentum.
+
+    Momentum is the price change over ``periods`` rows. Kaufman describes Blau's
+    double-smoothed momentum as applying exponential smoothing to that price
+    change, then smoothing the result again. This keeps the indicator centered
+    around zero while reducing noise.
+
+    Args:
+        price: Price series, typically close prices.
+        periods: Price-difference lag.
+        smooth_periods: EMA span used for smoothing. If ``None``, use
+            ``periods`` for both smoothing passes. If an integer, use it for
+            both passes. If a ``(first, second)`` tuple, use separate spans for
+            the first and second smoothing passes.
+
+    Returns:
+        Double-smoothed momentum in price units.
+    """
+    if smooth_periods is None:
+        first_smooth = second_smooth = periods
+    elif isinstance(smooth_periods, tuple):
+        first_smooth, second_smooth = smooth_periods
+    else:
+        first_smooth = second_smooth = smooth_periods
+
+    return (
+        price.diff(periods).ewm(span=first_smooth).mean().ewm(span=second_smooth).mean()
+    )
 
 
 @ensure_df
@@ -666,7 +736,29 @@ def divergence_index(df, fast, factor=1):
     return df[["di", "upper", "lower"]]
 
 
-def signal_generator(series: pd.Series, threshold: float = 0) -> pd.Series:
+def signal_generator(
+    series: pd.Series,
+    threshold: float = 0,
+    handle_na: Literal["ignore", "drop", "raise"] = "ignore",
+) -> pd.Series:
+    """Return ``1``, ``0``, or ``-1`` based on a threshold comparison.
+
+    Args:
+        series: Input indicator.
+        threshold: Comparison level.
+        handle_na: Missing-value policy. ``"ignore"`` keeps current framework
+            behavior and treats missing values as flat ``0``. ``"drop"`` drops
+            missing input rows before generating signals. ``"raise"`` raises
+            if any missing values are present.
+    """
+    if handle_na == "raise":
+        if series.isna().any():
+            raise ValueError("series contains NaN values")
+    elif handle_na == "drop":
+        series = series.dropna()
+    elif handle_na != "ignore":
+        raise ValueError("handle_na must be one of: 'ignore', 'drop', 'raise'")
+
     return (
         (series > threshold) * 1 - (series < threshold) * 1 + (series == threshold) * 0
     )
