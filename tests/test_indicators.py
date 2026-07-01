@@ -6,29 +6,32 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from haymaker.indicators import (
+import haymaker.indicators as indicator_facade
+from haymaker.research.indicators import (
     adx,
     atr,
-    breakout,
     chande_momentum_indicator,
     chande_ranking,
-    combine_signals,
     divergence_index,
     downsampled_func,
-    extreme_reversal_blip,
-    inout_range,
     macd,
     momentum,
-    min_max_blip,
     min_max_index,
-    range_blip,
     resample,
     rsi,
-    signal_generator,
     strength_oscillator,
     true_range,
     tsi,
     weighted_resample,
+)
+from haymaker.research.transformers import (
+    breakout,
+    combine_signals,
+    extreme_reversal_blip,
+    inout_range,
+    min_max_blip,
+    range_blip,
+    signal_generator,
     zero_crosser,
 )
 
@@ -44,6 +47,11 @@ def _ohlc(close: list[float]) -> pd.DataFrame:
             "close": price,
         }
     )
+
+
+def test_legacy_indicators_facade_reexports_new_modules() -> None:
+    assert indicator_facade.atr is atr
+    assert indicator_facade.combine_signals is combine_signals
 
 
 def test_min_max_blip_uses_previous_rolling_window() -> None:
