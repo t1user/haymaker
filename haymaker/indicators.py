@@ -111,8 +111,7 @@ def atr(
         df: DataFrame with ``high``, ``low``, and ``close`` columns.
         periods: Moving-average lookback.
         smooth_type: Moving-average smoothing type. See :func:`mmean` for the
-            formulas. The default ``"exponential"`` preserves the framework's
-            existing span-based ATR behavior.
+            formulas. The default ``"exponential"``.
         **kwargs: Passed to the selected pandas averaging method.
 
     Returns:
@@ -123,8 +122,7 @@ def atr(
         ``smooth_type="exponential"`` it uses pandas' span-based exponential
         mean, which is not Wilder's original average-off smoothing. Use
         ``smooth_type="simple"`` for a simple moving average ATR, or
-        ``smooth_type="wilder"`` for Wilder ATR. The default is unchanged
-        because this function is used by live strategies.
+        ``smooth_type="wilder"`` for Wilder ATR.
     """
 
     return mmean(true_range(df, 1), periods, smooth_type, **kwargs).rename("ATR")
@@ -136,17 +134,18 @@ def resample(
     how: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> pd.DataFrame:
-    """Shortcut function to resample ohlc dataframe or close price series.
+    """Resample OHLC data or a single price series.
+
     Args:
+        df: DataFrame with any supported OHLC-style columns, or a Series.
+        freq: Pandas offset string for the target frequency.
+        how: Optional aggregation rules for additional DataFrame columns.
+        **kwargs: Passed to ``DataFrame.resample`` or ``Series.resample``.
 
-    df - DataFrame to be resampled
-
-    freq - pandas offset key
-
-    how - dict of functions for aggregation of non-standard fields
-
-    **kwargs - will be passed directly to pd.DataFrame.resample
-      function
+    Returns:
+        Resampled data. DataFrame columns use OHLC-style aggregation where
+        available: first open, maximum high, minimum low, last close, and summed
+        volume/bar count.
 
     """
     if how is None:
@@ -271,32 +270,39 @@ def downsampled_func(
 
 
 def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.Series:
-    """
-    Shortcut function to simplify generating downsampled atr.
+    """Return ATR calculated on resampled data and aligned to raw bars.
 
-    **kwargs will be passed directly to atr function.
+    Args:
+        df: Raw OHLC data.
+        periods: ATR lookback on the resampled data.
+        freq: Pandas resampling frequency.
+        **kwargs: Passed to :func:`atr`.
 
-    Usage:
-    ------
+    Returns:
+        ATR series aligned to ``df.index``. Values become available when the
+        lower-frequency bar is complete and are forward-filled until the next
+        value.
 
-    downsampled_atr(df, 20, freq='B') - 20 day atr
-
-    downsampled_atr(df, 46, freq='H', smooth_type="simple") - 46 hour simple ATR
+    Examples:
+        ``downsampled_atr(df, 20, freq="B")`` calculates 20-day ATR.
+        ``downsampled_atr(df, 46, freq="h", smooth_type="simple")`` calculates
+        46-hour simple ATR.
     """
 
     return downsampled_func(df, freq, partial(atr, periods=periods), **kwargs)
 
 
 def min_max_blip(price: pd.Series, period: int) -> pd.Series:
-    """
-    Return Series of blips (one of: -1, 0 or 1) dependig on whether
-    price broke out above max (1) or below min (-1) over last <period>
-    observations.
+    """Return breakout blips from the previous rolling high or low.
 
     Args:
-    ---------
-    price: price Series
-    period: lookback period
+        price: Price series.
+        period: Lookback window for the previous rolling high and low.
+
+    Returns:
+        Series with ``1`` when price breaks above the previous rolling high,
+        ``-1`` when price breaks below the previous rolling low, and ``0``
+        otherwise. Blips are recorded on the bar where they are detected.
     """
     return ((price > price.rolling(period, closed="left").max()) * 1) - (
         (price < price.rolling(period, closed="left").min()) * 1
@@ -413,8 +419,8 @@ def macd(
         DataFrame with ``macd``, ``macdsignal``, and ``macdhist`` columns.
 
     Notes:
-        This uses pandas ``ewm(span=...)`` defaults. Verify against a target
-        library before assuming exact TA-Lib parity.
+        This uses pandas ``ewm(span=...)`` defaults. Results can differ from
+        libraries that use different EMA seeding or adjustment rules.
     """
     df = pd.DataFrame({"close": price})
     df["fast_trendline"] = df["close"].ewm(span=fastperiod).mean()
@@ -429,8 +435,8 @@ def tsi(price: pd.Series, lookback1, lookback2):
     """Return Blau's True Strength Index.
 
     Kaufman 2013, pp. 404-406 describes TSI as double-smoothed momentum
-    divided by double-smoothed absolute momentum. This implementation omits the
-    conventional ``100`` multiplier and returns the ratio directly.
+    divided by double-smoothed absolute momentum. The returned value is the raw
+    ratio; multiply by ``100`` if you need the percentage-style scale.
     """
     return (
         price.diff().ewm(span=lookback1).mean().ewm(span=lookback2).mean()
@@ -562,29 +568,19 @@ def breakout_blip(
     lookback: int,
     stop_frac: float = 0.5,
 ) -> pd.Series:
-    """
-    Same as :func:`.breakout`, but generating a series with blips
-    rather than signals.
+    """Return breakout event blips instead of a stateful breakout signal.
 
     Blips are raw generated events recorded on the bar where the breakout
     information becomes known. Do not pre-shift them before passing them to
     blip-aware consumers such as ``stop_loss`` or ``no_stop``.
 
     Args:
-    -----
-
-    data: price series on which the breakouts are to be determined,
-    typically close prices
-
-    lookback: number of periods for max/min calculation
-
-    stop_frac: number of periods expresed as fraction of lookback
-    periods
+        price: Price series, typically close prices.
+        lookback: Rolling high/low lookback.
+        stop_frac: Fraction of ``lookback`` used for opposite-side close blips.
 
     Returns:
-    --------
-
-    Series with blips representing breakout strategy entry/exit points.
+        Series with ``1`` and ``-1`` breakout blips, and ``0`` otherwise.
     """
 
     if not isinstance(price, pd.Series):
@@ -718,9 +714,9 @@ def divergence_index(df, fast, factor=1):
     """Return Kaufman's Divergence Index and adaptive bands.
 
     Kaufman 2013, pp. 384-385 defines DI as the volatility-adjusted difference
-    between fast and slow moving averages. This implementation uses an EMA with
-    ``fast`` and ``10 * fast`` spans, then bands based on the rolling standard
-    deviation of DI.
+    between fast and slow moving averages. This function uses EMA spans of
+    ``fast`` and ``10 * fast`` and returns DI with upper/lower bands based on
+    the rolling standard deviation of DI.
     """
     df = df.copy()
     slow = 10 * fast
@@ -746,10 +742,9 @@ def signal_generator(
     Args:
         series: Input indicator.
         threshold: Comparison level.
-        handle_na: Missing-value policy. ``"ignore"`` keeps current framework
-            behavior and treats missing values as flat ``0``. ``"drop"`` drops
-            missing input rows before generating signals. ``"raise"`` raises
-            if any missing values are present.
+        handle_na: Missing-value policy. ``"ignore"`` treats missing values as
+            flat ``0``. ``"drop"`` drops missing input rows before generating
+            signals. ``"raise"`` raises if any missing values are present.
     """
     if handle_na == "raise":
         if series.isna().any():
@@ -765,9 +760,14 @@ def signal_generator(
 
 
 def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
-    """
-    Series2 is filter. If input signals disagree, no signal is
-    output. If they agree, series1 signal is the output.
+    """Filter one signed signal by another signed signal.
+
+    Args:
+        series1: Primary signal.
+        series2: Filter signal.
+
+    Returns:
+        ``series1`` where both inputs have the same sign, otherwise ``0``.
     """
     return ((np.sign(series1) == np.sign(series2)) * series1).astype(int, copy=False)
 
@@ -776,10 +776,11 @@ def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
 
 
 def zero_crosser(indicator: pd.Series) -> pd.Series:
-    """
-    Blip when indicator crosses zero. Blip is signed the same as sign of the indicator.
-    When indicator value is exactly zero at some point, next value will be treated as
-    having crossed zero.
+    """Return signed blips when an indicator crosses zero.
+
+    The blip sign matches the indicator sign after the crossing. If an
+    indicator value is exactly zero, the next nonzero value is treated as a
+    crossing from zero.
     """
     indicator = indicator.fillna(0)
     return (((indicator.shift() * indicator) <= 0) * np.sign(indicator)).astype(int)
@@ -790,8 +791,16 @@ def inout_range(
     threshold: float | pd.Series = 0,
     inout: Literal["inside", "outside"] = "inside",
 ) -> pd.Series:
-    """Given a threshold, return True/False series indicating whether s prices
-    are inside/outside (-threshold, threshold) range.
+    """Return whether values are inside or outside a symmetric threshold range.
+
+    Args:
+        s: Input series.
+        threshold: Positive or negative threshold. The absolute value is used.
+        inout: ``"inside"`` for values inside ``(-threshold, threshold)`` or
+            ``"outside"`` for values outside that range.
+
+    Returns:
+        Boolean series aligned to ``s``.
     """
 
     if isinstance(threshold, (int, float)) and threshold == 0:
@@ -848,20 +857,19 @@ def range_blip(
 def min_max_index(
     price: pd.Series, lookback: int, cutoff_value: int = 1, binary: bool = True
 ) -> pd.Series:
-    """
-    Difference between min and max index.  Negative means downtrend,
-    positive uptrend.
+    """Return relative position of recent rolling min and max.
 
     Args:
-    -----
+        price: Price series.
+        lookback: Rolling window for finding the most recent min and max.
+        cutoff_value: Absolute index difference below this value is treated as
+            unchanged and forward-filled.
+        binary: If ``True``, return only the sign of the index: ``1`` or ``-1``.
 
-    lookback: rolling window over which the index will be calculated
-
-    cutoff_value: any value below this, considered to be unchanged
-    from previous value, prevents zig-zaging during periods without
-    any changes
-
-    binary: if True will convert values to binary signal (1: long, -1: short)
+    Returns:
+        Signed trend indicator. Negative values mean the rolling max is more
+        recent than the rolling min; positive values mean the rolling min is
+        more recent than the rolling max.
     """
 
     df = pd.DataFrame(
