@@ -46,8 +46,8 @@ Functions that interpret prices or indicators into trading-intent-like outputs:
 signals, blips, entries, exits, long/short/flat decisions, or signal filters.
 
 Examples: `crosser`, `zero_crosser`, `extreme_reversal_blip`, `range_blip`,
-`min_max_blip`, `min_max_signal`, `min_max_buffer_signal`, `breakout`,
-`breakout_blip`, `signal_generator`, `combine_signals`, `inout_range`.
+`min_max_blip`, `breakout`, `breakout_blip`, `signal_generator`,
+`combine_signals`, `inout_range`.
 
 ### Performance Metrics
 
@@ -75,9 +75,7 @@ Examples: `v_backtester`, `summary`.
 Decorators, private helpers, deprecated names, unclear old helpers, and
 numba-backed wrappers should not define the architecture until reviewed.
 
-Examples: `ensure_df`, `mmean`, `modified_rsi`, `majority_function`,
-`get_min_max`, `get_min_max_df`, `get_signals`, `any_signal`, `_range_entry`,
-`_signed_range_entry`, `join_swing`.
+Examples: `mmean`, `join_swing`.
 
 ## Initial Shape To Consider
 

@@ -1,4 +1,4 @@
-from functools import partial, wraps
+from functools import partial
 from typing import Any, Callable, Literal
 
 import numpy as np
@@ -10,28 +10,6 @@ from .research.numba_tools import (
     rolling_min_max_index,
     swing,
 )
-
-
-def ensure_df(func):
-    """
-    Decorator allowing signal producing functions to work with either
-    dataframe or series.
-    """
-
-    @wraps(func)
-    def verify(data, *args, **kwargs) -> pd.DataFrame:
-        if isinstance(data, pd.Series):
-            data = pd.DataFrame({"close": data})
-        elif isinstance(data, pd.DataFrame):
-            data = data.copy()
-        else:
-            raise TypeError(
-                f"Data must be either Series or DataFrame with column 'close'"
-                f" containing prices, not {type(data)}."
-            )
-        return func(data, *args, **kwargs)
-
-    return verify
 
 
 def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
@@ -292,45 +270,38 @@ def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.
     return downsampled_func(df, freq, partial(atr, periods=periods), **kwargs)
 
 
-def min_max_blip(price: pd.Series, period: int) -> pd.Series:
+def min_max_blip(
+    price: pd.Series, period: int, buff: float | pd.Series = 0
+) -> pd.Series:
     """Return breakout blips from the previous rolling high or low.
 
     Args:
         price: Price series.
         period: Lookback window for the previous rolling high and low.
+        buff: Price-unit buffer added to the upper breakout threshold and
+            subtracted from the lower breakout threshold. A positive value makes
+            breakouts harder to trigger. If passed as a Series, it must have the
+            same index as ``price``.
 
     Returns:
-        Series with ``1`` when price breaks above the previous rolling high,
-        ``-1`` when price breaks below the previous rolling low, and ``0``
-        otherwise. Blips are recorded on the bar where they are detected.
+        Series with ``1`` when price breaks above the previous rolling high plus
+        ``buff``, ``-1`` when price breaks below the previous rolling low minus
+        ``buff``, and ``0`` otherwise. Blips are recorded on the bar where they
+        are detected.
     """
-    return ((price > price.rolling(period, closed="left").max()) * 1) - (
-        (price < price.rolling(period, closed="left").min()) * 1
-    )
+    if isinstance(buff, pd.Series) and not buff.index.equals(price.index):
+        raise ValueError("buff index must match price index")
 
-
-def min_max_buffer_signal(data: pd.Series, period: int, buff: float = 0) -> pd.Series:
-    """Return breakout blips with a price-unit buffer.
-
-    A positive ``buff`` makes breakouts harder to trigger: price must move above
-    the previous rolling maximum plus ``buff`` or below the previous rolling
-    minimum minus ``buff``.
-    """
-    prior_max = data.shift(1).rolling(period).max()
-    prior_min = data.shift(1).rolling(period).min()
+    prior_max = price.rolling(period, closed="left").max()
+    prior_min = price.rolling(period, closed="left").min()
     df = pd.DataFrame(
         {
-            "max": (data > prior_max + buff) * 1,
-            "min": (data < prior_min - buff) * 1,
+            "max": (price > prior_max + buff) * 1,
+            "min": (price < prior_min - buff) * 1,
         }
     )
-    df["signal"] = df["max"] - df["min"]
-    return df["signal"]
-
-
-def modified_rsi(rsi: pd.Series) -> pd.Series:
-    """Rescale RSI from ``0..100`` to ``-1..1``."""
-    return (2 * (rsi - 50)) / 100
+    df["blip"] = df["max"] - df["min"]
+    return df["blip"].rename(None)
 
 
 def _wilder_average(series: pd.Series, lookback: int) -> pd.Series:
@@ -395,7 +366,7 @@ def rsi(
     df["rs"] = df["up_roll"] / df["down_roll"]
     df["rsi"] = 100 - (100 / (1 + df["rs"]))
     if rescale:
-        return modified_rsi(df["rsi"])
+        return (2 * (df["rsi"] - 50)) / 100
     else:
         return df["rsi"]
 
@@ -526,11 +497,6 @@ def breakout(
 ) -> pd.Series:
     """Return stateful breakout signal from rolling high/low blips.
 
-    The returned signal is recorded on the bar where the breakout
-    information becomes known. It is not an executable position. For
-    stop-loss workflows prefer :func:`breakout_blip` or raw blip columns
-    passed to ``stop_loss``.
-
     Args:
         price: Price series, typically close prices.
         lookback: Rolling high/low lookback.
@@ -543,7 +509,9 @@ def breakout(
 
     Returns:
         Series where ``1`` means long signal, ``-1`` short signal, and ``0`` no
-        desired market exposure at that bar.
+        desired market exposure at that bar. The signal is recorded on the bar
+        where the breakout is detected; for next-bar execution, shift the output
+        before deriving executable positions.
     """
 
     if not isinstance(price, pd.Series):
@@ -572,7 +540,8 @@ def breakout_blip(
 
     Blips are raw generated events recorded on the bar where the breakout
     information becomes known. Do not pre-shift them before passing them to
-    blip-aware consumers such as ``stop_loss`` or ``no_stop``.
+    blip-aware consumers such as ``stop_loss`` or ``no_stop``. For direct
+    next-bar execution, shift the returned blips before deriving positions.
 
     Args:
         price: Price series, typically close prices.
@@ -709,22 +678,41 @@ def momentum(
     )
 
 
-@ensure_df
-def divergence_index(df, fast, factor=1):
+def divergence_index(
+    data: pd.Series | pd.DataFrame, fast: int, factor: float = 1
+) -> pd.DataFrame:
     """Return Kaufman's Divergence Index and adaptive bands.
 
     Kaufman 2013, pp. 384-385 defines DI as the volatility-adjusted difference
     between fast and slow moving averages. This function uses EMA spans of
-    ``fast`` and ``10 * fast`` and returns DI with upper/lower bands based on
-    the rolling standard deviation of DI.
+    ``fast`` and ``10 * fast``. The EMA difference is divided by the rolling
+    standard deviation of one-period price changes. Upper/lower bands are based
+    on the rolling standard deviation of DI.
+
+    Args:
+        data: Price series, or dataframe with a ``close`` column.
+        fast: Span for the fast EMA. The slow EMA span is ``10 * fast``.
+        factor: Multiplier for the upper and lower DI bands.
+
+    Returns:
+        DataFrame with ``di``, ``upper``, and ``lower`` columns.
     """
-    df = df.copy()
+    if isinstance(data, pd.Series):
+        df = pd.DataFrame({"close": data})
+    elif isinstance(data, pd.DataFrame):
+        df = data.copy()
+    else:
+        raise TypeError(
+            "data must be either a Series or a DataFrame with a 'close' column, "
+            f"not {type(data)}."
+        )
+
     slow = 10 * fast
     df["fast_ema"] = df["close"].ewm(span=fast).mean()
     df["slow_ema"] = df["close"].ewm(span=slow).mean()
-    df["diff"] = df["close"].diff(slow)
+    df["diff"] = df["close"].diff()
     numerator = df["fast_ema"] - df["slow_ema"]
-    denominator = (df["diff"].rolling(slow).std()) ** 2
+    denominator = df["diff"].rolling(slow).std()
     df["di"] = numerator / denominator
     band = df["di"].rolling(slow).std()
     df["upper"] = factor * band
@@ -817,23 +805,6 @@ def inout_range(
     return result
 
 
-def _range_entry(s: pd.Series) -> pd.Series:
-    """
-    s is the output of inout_range
-    """
-    return s.astype(int).diff().eq(1).astype(int)
-
-
-def _signed_range_entry(entry: pd.Series, sign: pd.Series) -> pd.Series:
-    """
-    entry is the output of _range_entry
-
-    entry will be signed same as price when entering range.
-    """
-
-    return (entry * np.sign(sign)).astype(int)
-
-
 def range_blip(
     indicator: pd.Series,
     threshold: float | pd.Series = 0,
@@ -850,8 +821,9 @@ def range_blip(
 
     indicator = indicator.dropna()
 
-    r = inout_range(indicator, threshold, inout)
-    return _signed_range_entry(_range_entry(r), indicator)
+    selected_range = inout_range(indicator, threshold, inout)
+    entry = selected_range.astype(int).diff().eq(1).astype(int)
+    return (entry * np.sign(indicator)).astype(int)
 
 
 def min_max_index(
