@@ -15,7 +15,6 @@ __all__ = [
     "downsampled_func",
     "join_swing",
     "macd",
-    "min_max_index",
     "mmean",
     "momentum",
     "resample",
@@ -502,7 +501,7 @@ def join_swing(
     swing.  All args and kwargs must be compatible with swing function
     requirements.
     """
-    from .numba_tools import swing
+    from ..numba_tools import swing
 
     s = swing(df, f, margin, output_as_df=True)
     assert isinstance(s, pd.DataFrame)
@@ -604,36 +603,3 @@ def divergence_index(
     df["upper"] = factor * band
     df["lower"] = -factor * band
     return df[["di", "upper", "lower"]]
-
-
-def min_max_index(
-    price: pd.Series, lookback: int, cutoff_value: int = 1, binary: bool = True
-) -> pd.Series:
-    """Return relative position of recent rolling min and max.
-
-    Args:
-        price: Price series.
-        lookback: Rolling window for finding the most recent min and max.
-        cutoff_value: Absolute index difference below this value is treated as
-            unchanged and forward-filled.
-        binary: If ``True``, return only the sign of the index: ``1`` or ``-1``.
-
-    Returns:
-        Signed trend indicator. Negative values mean the rolling max is more
-        recent than the rolling min; positive values mean the rolling min is
-        more recent than the rolling max.
-    """
-    from .numba_tools import rolling_min_max_index
-
-    df = pd.DataFrame(
-        rolling_min_max_index(price.to_numpy(), lookback),
-        columns=["min", "max"],
-        index=price.index,
-    )
-    df["ind"] = df["min"] - df["max"]
-    df.loc[df[df["ind"].abs() < cutoff_value].index, "ind"] = 0
-    df = df.replace(0, np.nan).ffill()
-    if binary:
-        return np.sign(df["ind"])  # type: ignore
-    else:
-        return df["ind"]

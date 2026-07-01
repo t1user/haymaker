@@ -1,39 +1,33 @@
-"""Compatibility facade for research indicators.
+"""Technical indicators, breakout indicators, and signal/blip transformers."""
 
-The canonical implementations live under :mod:`haymaker.research.indicators`.
-Importing from ``haymaker.indicators`` is kept for live strategies and older
-notebooks.
-"""
-
-from .research.indicators import (
+from .breakout import breakout, breakout_blip, min_max_blip, min_max_index
+from .technical import (
     adx,
     atr,
-    breakout,
-    breakout_blip,
     carver,
     chande_momentum_indicator,
     chande_ranking,
-    combine_signals,
     divergence_index,
     downsampled_atr,
     downsampled_func,
-    extreme_reversal_blip,
-    inout_range,
     join_swing,
     macd,
-    min_max_blip,
-    min_max_index,
     mmean,
     momentum,
-    range_blip,
     resample,
     rsi,
-    signal_generator,
     spread,
     strength_oscillator,
     true_range,
     tsi,
     weighted_resample,
+)
+from .transformers import (
+    combine_signals,
+    extreme_reversal_blip,
+    inout_range,
+    range_blip,
+    signal_generator,
     zero_crosser,
 )
 

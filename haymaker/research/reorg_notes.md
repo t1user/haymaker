@@ -10,9 +10,8 @@ indicator for correctness, usefulness, live-trading usage, and import cost.
   backtester, pyfolio, plotting libraries, numba, or other optional/heavy
   dependencies.
 - Keep `haymaker.indicators` as a compatibility facade over
-  `haymaker.research.indicators` and `haymaker.research.transformers` for now
-  because live trading code may import from it. Remove the facade only after
-  live usage is audited and migrated.
+  `haymaker.research.indicators` for now because live trading code may import
+  from it. Remove the facade only after live usage is audited and migrated.
 - Importing general indicator helpers should not import libraries that are only
   needed by specific indicators. In particular, numba-backed helpers should be
   isolated or imported lazily.
@@ -36,19 +35,22 @@ Examples: `resample`, `weighted_resample`, `downsampled_func`,
 Functions that calculate market-derived features. They answer: "what is the
 state of the market or series?"
 
-Examples: `true_range`, `atr`, `rsi`, `macd`, `tsi`, `carver`, `adx`,
+Technical examples: `true_range`, `atr`, `rsi`, `macd`, `tsi`, `carver`, `adx`,
 `strength_oscillator`, `chande_ranking`, `chande_momentum_indicator`, `spread`,
 `momentum`, `divergence_index`, `weighted_zscore`, `rolling_weighted_mean`,
-`rolling_weighted_std`, `min_max_index`.
+`rolling_weighted_std`.
 
-### Signal Rules
+Breakout examples: `min_max_blip`, `min_max_index`, `breakout`,
+`breakout_blip`.
+
+### Generic Indicator Transformers
 
 Functions that interpret prices or indicators into trading-intent-like outputs:
 signals, blips, entries, exits, long/short/flat decisions, or signal filters.
 
-Moved to `haymaker.research.transformers`: `zero_crosser`,
-`extreme_reversal_blip`, `range_blip`, `min_max_blip`, `breakout`,
-`breakout_blip`, `signal_generator`, `combine_signals`, `inout_range`.
+Moved to `haymaker.research.indicators.transformers`: `zero_crosser`,
+`extreme_reversal_blip`, `range_blip`, `signal_generator`, `combine_signals`,
+`inout_range`.
 
 Potential later move from `haymaker.research.utils`: `crosser`.
 
@@ -84,10 +86,12 @@ Examples: `mmean`, `join_swing`.
 
 Current broad modules:
 
-- `haymaker.research.indicators`: market-data helpers and indicator
-  calculations.
-- `haymaker.research.transformers`: signal and blip rules that transform
-  indicators/prices into events or desired exposure.
+- `haymaker.research.indicators.technical`: market-data helpers and technical
+  indicator calculations.
+- `haymaker.research.indicators.breakout`: breakout/channel indicators and
+  strategy-ready breakout wrappers.
+- `haymaker.research.indicators.transformers`: generic helpers that transform
+  indicators/prices into discrete events, filters, or desired exposure.
 - `haymaker.research.tools`: market-data tools, result analysis, and backtest
   tools that are not tightly owned by a specific package.
 - `haymaker.research.metrics`: performance metrics.

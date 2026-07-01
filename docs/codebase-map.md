@@ -72,8 +72,11 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/research/signal_converters.py`: canonical timing vocabulary and conversions between `signal`, `blip`, `transaction`, and `position`.
 - `haymaker/research/upsampling.py`: aligns lower-frequency data to higher-frequency execution bars. Ordinary values propagate after availability; canonical `blip` / `close_blip` events and raw provenance columns remain sparse.
-- `haymaker/research/indicators.py`: market-data resampling helpers and indicator calculations such as ATR, RSI, ADX, MACD, momentum, and Kaufman/Chande-style research indicators.
-- `haymaker/research/transformers.py`: signal and blip transformers such as breakout blips, stateful breakout signals, threshold signals, zero/range crossing events, and signal filters. `haymaker/indicators.py` remains a compatibility facade that reexports indicators and transformers for older notebooks and live strategy imports.
+- `haymaker/research/indicators/`: indicator package with technical indicators,
+  breakout/channel indicators, and generic transformers for converting
+  indicators or prices into discrete events, filters, or desired exposure.
+  `haymaker/indicators.py` remains a compatibility facade for older notebooks
+  and live strategy imports.
 - `haymaker/research/stop/`: public `stop_loss()`, lazy `before_close()` / `BeforeClose`, Python reference stop engine, and Numba stop engine.
 - `haymaker/research/backtester/`: transaction-frame pipeline, Numba/Python perf engine, Pyfolio statistics, and legacy utilities.
 - `haymaker/research/bootstrap/`: block and regime/state bootstrap generators for synthetic OHLC paths.
