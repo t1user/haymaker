@@ -14,22 +14,27 @@ from haymaker.research.indicators import (
     chande_momentum_indicator,
     chande_ranking,
     combine_signals,
+    crosser,
     divergence_index,
     downsampled_func,
     extreme_reversal_blip,
     inout_range,
     macd,
+    mmean,
     momentum,
     min_max_blip,
     min_max_index,
     range_blip,
     resample,
+    rolling_weighted_mean,
+    rolling_weighted_std,
     rsi,
     signal_generator,
     strength_oscillator,
     true_range,
     tsi,
     weighted_resample,
+    weighted_zscore,
     zero_crosser,
 )
 
@@ -167,6 +172,11 @@ def test_atr_can_use_simple_smoothing() -> None:
 
     expected = pd.Series([np.nan, np.nan, 2.0, 3.0], name="ATR")
     pd.testing.assert_series_equal(actual, expected)
+
+
+def test_mmean_rejects_invalid_periods() -> None:
+    with pytest.raises(ValueError, match="periods"):
+        mmean(pd.Series([1.0, 2.0]), periods=0)
 
 
 def test_true_range_can_use_multi_bar_comparison() -> None:
@@ -377,6 +387,52 @@ def test_weighted_resample_respects_resampling_label_and_closed_kwargs() -> None
     assert actual.loc[pd.Timestamp("2026-01-01 09:02"), "average"] == 3.5
 
 
+def test_rolling_weighted_mean_zero_weight_window_returns_nan() -> None:
+    price = pd.Series([1.0, 2.0, 3.0])
+    weights = pd.Series([0.0, 0.0, 1.0])
+
+    actual = rolling_weighted_mean(price, weights, periods=2)
+
+    assert np.isnan(actual.iloc[1])
+    assert actual.iloc[2] == 3.0
+
+
+def test_rolling_weighted_mean_rejects_negative_weights() -> None:
+    price = pd.Series([1.0, 2.0])
+    weights = pd.Series([1.0, -1.0])
+
+    with pytest.raises(ValueError, match="non-negative"):
+        rolling_weighted_mean(price, weights, periods=2)
+
+
+def test_rolling_weighted_std_uses_population_denominator() -> None:
+    price = pd.Series([1.0, 3.0])
+    weights = pd.Series([1.0, 1.0])
+
+    actual = rolling_weighted_std(price, weights, periods=2)
+
+    assert actual.iloc[1] == pytest.approx(1.0)
+
+
+def test_weighted_zscore_returns_volume_weighted_indicator() -> None:
+    data = pd.DataFrame(
+        {
+            "close": [1.0, 2.0, 3.0],
+            "volume": [1.0, 1.0, 1.0],
+        }
+    )
+
+    actual = weighted_zscore(data, lookback=2)
+
+    expected = pd.Series([1.0, 1.0], index=[1, 2])
+    pd.testing.assert_series_equal(actual, expected)
+
+
+def test_weighted_zscore_requires_close_and_volume_columns() -> None:
+    with pytest.raises(ValueError, match="volume"):
+        weighted_zscore(pd.DataFrame({"close": [1.0, 2.0]}), lookback=2)
+
+
 def test_signal_generator_can_choose_missing_value_policy() -> None:
     indicator = pd.Series([np.nan, -1.0, 0.0, 1.0])
 
@@ -408,6 +464,24 @@ def test_signal_helpers_preserve_expected_event_and_filter_semantics() -> None:
     pd.testing.assert_series_equal(
         outside, pd.Series([True, False, False, False, True], name="outside")
     )
+
+
+def test_crosser_marks_only_side_changes_and_treats_equal_as_above() -> None:
+    indicator = pd.Series([-1.0, 0.0, 0.5, -0.1, 0.0])
+
+    actual = crosser(indicator, threshold=0.0)
+
+    expected = pd.Series([0, 1, 0, -1, 1])
+    pd.testing.assert_series_equal(actual, expected)
+
+
+def test_crosser_does_not_turn_missing_values_into_crossings() -> None:
+    indicator = pd.Series([-1.0, np.nan, 1.0, -1.0])
+
+    actual = crosser(indicator, threshold=0.0)
+
+    expected = pd.Series([0, 0, 0, -1])
+    pd.testing.assert_series_equal(actual, expected)
 
 
 def test_strength_oscillator_preserves_original_index() -> None:

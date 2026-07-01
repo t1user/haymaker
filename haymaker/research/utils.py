@@ -100,17 +100,6 @@ def sampler(
     return output
 
 
-def crosser(ind: pd.Series, threshold: float) -> pd.Series:
-    """Return threshold-crossing blips for an indicator series.
-
-    Values equal to ``threshold`` are treated as above the threshold. The first
-    row is always ``0`` because there is no previous side to cross from.
-    """
-    side = pd.Series(np.where(ind >= threshold, 1, -1), index=ind.index)
-    crossed = (side.shift() + side).eq(0)
-    return side.where(crossed, 0).astype(int)
-
-
 def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFrame:
     """
     Verify consistency of price data df.  Return all points where
@@ -190,58 +179,6 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFra
     del out_df["from_time"]
 
     return out_df
-
-
-def rolling_weighted_mean(
-    price: pd.Series, weights: pd.Series, periods: int
-) -> pd.Series:
-    """Return rolling weighted mean.
-
-    A window whose weight sum is zero returns ``NaN``.
-    """
-    price_vol = price * weights
-    return price_vol.rolling(periods).sum() / weights.rolling(periods).sum()
-
-
-def rolling_weighted_std(
-    price: pd.Series,
-    weights: pd.Series,
-    periods: int,
-    weighted_mean: pd.Series | None = None,
-) -> pd.Series:
-    """Return rolling population-style weighted standard deviation.
-
-    The denominator is the rolling sum of weights, not a sample-variance
-    correction. ``weighted_mean`` can be passed to save one computation.
-    """
-
-    if weighted_mean is None:
-        weighted_mean = rolling_weighted_mean(price, weights, periods)
-
-    weighted_second_moment = rolling_weighted_mean(price**2, weights, periods)
-    weighted_var = (weighted_second_moment - weighted_mean**2).clip(lower=0)
-    return np.sqrt(weighted_var)  # type: ignore
-
-
-def weighted_zscore(df: pd.DataFrame, lookback: int) -> pd.Series:
-    """Return volume-weighted z-score of the ``close`` column.
-
-    Args:
-        df: Dataframe with ``close`` and ``volume`` columns.
-        lookback: Rolling window length.
-
-    Raises:
-        ValueError: If required columns are missing or ``lookback`` is invalid.
-    """
-    missing = {"close", "volume"} - set(df.columns)
-    if missing:
-        raise ValueError(f"weighted_zscore() missing required columns: {missing}.")
-    if lookback < 1:
-        raise ValueError("lookback must be at least 1.")
-
-    wmean = rolling_weighted_mean(df["close"], df["volume"], lookback)
-    wstd = rolling_weighted_std(df["close"], df["volume"], lookback, wmean)
-    return ((df["close"] - wmean) / wstd).dropna()
 
 
 def long_short_returns(r: Results) -> pd.DataFrame:

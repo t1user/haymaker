@@ -9,16 +9,12 @@ from haymaker.research import upsample
 from haymaker.research.stop import stop_loss
 from haymaker.research.utils import (
     always_on,
-    crosser,
     gap_tracer,
     long_short_returns,
     paths,
-    rolling_weighted_mean,
-    rolling_weighted_std,
     round_tick,
     sampler,
     true_sharpe,
-    weighted_zscore,
 )
 
 
@@ -73,39 +69,6 @@ def test_sampler_rejects_too_short_data() -> None:
 
     with pytest.raises(ValueError, match="not enough"):
         sampler(data, period_length=3)
-
-
-def test_crosser_marks_only_side_changes_and_treats_equal_as_above() -> None:
-    indicator = pd.Series([-1.0, 0.0, 0.5, -0.1, 0.0])
-
-    actual = crosser(indicator, threshold=0.0)
-
-    expected = pd.Series([0, 1, 0, -1, 1])
-    pd.testing.assert_series_equal(actual, expected)
-
-
-def test_rolling_weighted_mean_zero_weight_window_returns_nan() -> None:
-    price = pd.Series([1.0, 2.0, 3.0])
-    weights = pd.Series([0.0, 0.0, 1.0])
-
-    actual = rolling_weighted_mean(price, weights, periods=2)
-
-    assert np.isnan(actual.iloc[1])
-    assert actual.iloc[2] == 3.0
-
-
-def test_rolling_weighted_std_uses_population_denominator() -> None:
-    price = pd.Series([1.0, 3.0])
-    weights = pd.Series([1.0, 1.0])
-
-    actual = rolling_weighted_std(price, weights, periods=2)
-
-    assert actual.iloc[1] == pytest.approx(1.0)
-
-
-def test_weighted_zscore_requires_close_and_volume_columns() -> None:
-    with pytest.raises(ValueError, match="volume"):
-        weighted_zscore(pd.DataFrame({"close": [1.0, 2.0]}), lookback=2)
 
 
 def test_long_short_returns_uses_log1p_trade_returns() -> None:

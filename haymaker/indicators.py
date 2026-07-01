@@ -14,6 +14,7 @@ from .research.indicators import (
     chande_momentum_indicator,
     chande_ranking,
     combine_signals,
+    crosser,
     divergence_index,
     downsampled_atr,
     downsampled_func,
@@ -27,6 +28,8 @@ from .research.indicators import (
     momentum,
     range_blip,
     resample,
+    rolling_weighted_mean,
+    rolling_weighted_std,
     rsi,
     signal_generator,
     spread,
@@ -34,6 +37,7 @@ from .research.indicators import (
     true_range,
     tsi,
     weighted_resample,
+    weighted_zscore,
     zero_crosser,
 )
 
@@ -46,6 +50,7 @@ __all__ = [
     "chande_momentum_indicator",
     "chande_ranking",
     "combine_signals",
+    "crosser",
     "divergence_index",
     "downsampled_atr",
     "downsampled_func",
@@ -59,6 +64,8 @@ __all__ = [
     "momentum",
     "range_blip",
     "resample",
+    "rolling_weighted_mean",
+    "rolling_weighted_std",
     "rsi",
     "signal_generator",
     "spread",
@@ -66,5 +73,6 @@ __all__ = [
     "true_range",
     "tsi",
     "weighted_resample",
+    "weighted_zscore",
     "zero_crosser",
 ]

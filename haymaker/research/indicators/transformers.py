@@ -7,6 +7,7 @@ import pandas as pd
 
 __all__ = [
     "combine_signals",
+    "crosser",
     "extreme_reversal_blip",
     "inout_range",
     "range_blip",
@@ -76,6 +77,20 @@ def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
         ``series1`` where both inputs have the same sign, otherwise ``0``.
     """
     return ((np.sign(series1) == np.sign(series2)) * series1).astype(int, copy=False)
+
+
+def crosser(ind: pd.Series, threshold: float) -> pd.Series:
+    """Return threshold-crossing blips for an indicator series.
+
+    Values equal to ``threshold`` are treated as above the threshold. A ``1`` is
+    emitted when the indicator crosses from below to above, and ``-1`` when it
+    crosses from above to below. Rows with missing indicator values do not emit
+    blips and do not create a crossing on the following row.
+    """
+    side = pd.Series(np.where(ind >= threshold, 1, -1), index=ind.index)
+    side = side.mask(ind.isna())
+    crossed = side.notna() & side.shift().notna() & (side.shift() + side).eq(0)
+    return side.where(crossed, 0).astype(int)
 
 
 def zero_crosser(indicator: pd.Series) -> pd.Series:

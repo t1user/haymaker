@@ -1,6 +1,7 @@
 """Technical indicators, breakout indicators, and signal/blip transformers."""
 
 from .breakout import breakout, breakout_blip, min_max_blip, min_max_index
+from .mean import mmean, rolling_weighted_mean, rolling_weighted_std, weighted_zscore
 from .technical import (
     adx,
     atr,
@@ -12,7 +13,6 @@ from .technical import (
     downsampled_func,
     join_swing,
     macd,
-    mmean,
     momentum,
     resample,
     rsi,
@@ -24,6 +24,7 @@ from .technical import (
 )
 from .transformers import (
     combine_signals,
+    crosser,
     extreme_reversal_blip,
     inout_range,
     range_blip,
@@ -40,6 +41,7 @@ __all__ = [
     "chande_momentum_indicator",
     "chande_ranking",
     "combine_signals",
+    "crosser",
     "divergence_index",
     "downsampled_atr",
     "downsampled_func",
@@ -53,6 +55,8 @@ __all__ = [
     "momentum",
     "range_blip",
     "resample",
+    "rolling_weighted_mean",
+    "rolling_weighted_std",
     "rsi",
     "signal_generator",
     "spread",
@@ -60,5 +64,6 @@ __all__ = [
     "true_range",
     "tsi",
     "weighted_resample",
+    "weighted_zscore",
     "zero_crosser",
 ]

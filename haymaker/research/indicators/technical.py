@@ -4,6 +4,8 @@ from typing import Any, Callable, Literal
 import numpy as np
 import pandas as pd
 
+from .mean import _wilder_average, mmean
+
 __all__ = [
     "adx",
     "atr",
@@ -15,7 +17,6 @@ __all__ = [
     "downsampled_func",
     "join_swing",
     "macd",
-    "mmean",
     "momentum",
     "resample",
     "rsi",
@@ -47,49 +48,6 @@ def true_range(df: pd.DataFrame, bar: int = 1) -> pd.Series:
     d["C"] = (df["low"].rolling(bar).min() - df["close"].shift(bar)).abs()
     d["TR"] = d.max(axis=1)
     return d["TR"]
-
-
-def mmean(
-    d: pd.Series,
-    periods: int,
-    smooth_type: Literal["simple", "exponential", "wilder"] = "exponential",
-    **kwargs,
-) -> pd.Series:
-    """Return a moving average using the selected smoothing method.
-
-    Args:
-        d: Input series.
-        periods: Moving-average lookback.
-        smooth_type: Smoothing method:
-
-            ``"simple"``
-                Simple moving average,
-                ``mean(d[t - periods + 1], ..., d[t])``.
-
-            ``"exponential"``
-                Pandas span-based exponential moving average,
-                ``d.ewm(span=periods).mean()``. This uses
-                ``alpha = 2 / (periods + 1)``.
-
-            ``"wilder"``
-                Wilder's average-off smoothing. The first value is seeded with
-                the simple average of the first ``periods`` values, then updated
-                as ``previous + (current - previous) / periods``. This is
-                equivalent to an EMA with ``alpha = 1 / periods`` after the
-                initial seed.
-        **kwargs: Passed to pandas for ``"simple"`` and ``"exponential"``.
-    """
-    if smooth_type == "wilder":
-        out = _wilder_average(d, periods)
-    elif smooth_type == "exponential":
-        out = d.ewm(span=periods, **kwargs).mean()
-    elif smooth_type == "simple":
-        out = d.rolling(periods, **kwargs).mean()
-    else:
-        raise ValueError(
-            "smooth_type must be one of: 'simple', 'exponential', 'wilder'"
-        )
-    return out
 
 
 def atr(
@@ -283,33 +241,6 @@ def downsampled_atr(df: pd.DataFrame, periods, freq: str = "B", **kwargs) -> pd.
     """
 
     return downsampled_func(df, freq, partial(atr, periods=periods), **kwargs)
-
-
-def _wilder_average(series: pd.Series, lookback: int) -> pd.Series:
-    """Return Wilder's average-off smoothing for a positive series."""
-    if lookback <= 0:
-        raise ValueError("lookback must be positive")
-
-    rolling = series.rolling(lookback, min_periods=lookback).mean()
-    out = pd.Series(np.nan, index=series.index, dtype=float)
-    first_valid = rolling.first_valid_index()
-    if first_valid is None:
-        return out
-
-    first_position = series.index.get_loc(first_valid)
-    if not isinstance(first_position, int):
-        raise ValueError("series index must not contain duplicate labels")
-
-    out.iloc[first_position] = rolling.iloc[first_position]
-    for position in range(first_position + 1, len(series)):
-        value = series.iloc[position]
-        if pd.isna(value):
-            out.iloc[position] = out.iloc[position - 1]
-        else:
-            out.iloc[position] = (
-                out.iloc[position - 1] + (value - out.iloc[position - 1]) / lookback
-            )
-    return out
 
 
 def rsi(
