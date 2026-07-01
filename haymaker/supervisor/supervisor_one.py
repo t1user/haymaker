@@ -24,6 +24,15 @@ class CycleOutcome(Enum):
     WORKLOAD_DONE = auto()
 
 
+class BrokerRecoveryOutcome(Enum):
+    """Result from waiting for broker-side connectivity recovery."""
+
+    TIMEOUT = auto()
+    DATA_MAINTAINED = auto()
+    DATA_LOST = auto()
+    RECOVERY_HINT = auto()
+
+
 @dataclass
 class ConnectionSupervisor:
     ib: ibi.IB
@@ -45,10 +54,11 @@ class ConnectionSupervisor:
     _delay_next_restart: bool = field(default=False, init=False, repr=False)
 
     BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
+    BROKER_RECOVERY_HINT_CODES = frozenset({2104, 2106, 2158})
+    LIVE_UPDATE_FAILED_CODE = 10182
     DATA_LOST_CODE = 1101
     DATA_MAINTAINED_CODE = 1102
     SOCKET_RESET_CODE = 1300
-    CONNECTION_RESTORED_CODES = frozenset({DATA_MAINTAINED_CODE, DATA_LOST_CODE})
 
     def __post_init__(self) -> None:
         OnionLayer.set_context(self)
@@ -434,6 +444,8 @@ class ConnectionIssueManager:
         ct.ib.timeoutEvent += self.onTimeoutEvent
         self.wakeup = asyncio.Event()
         self._broker_wait_requested = False
+        self._broker_recovery_hint = False
+        self._live_update_failed = False
         self._data_maintained = False
 
     def set_timeout(self):
@@ -451,23 +463,43 @@ class ConnectionIssueManager:
                     "Entering broker recovery wait for "
                     f"{self.ct.settings.auto_recovery_grace_period}s."
                 )
-                broker_recovered = await self.wait_for_broker()
+                broker_outcome = await self.wait_for_broker()
+                live_update_failed = self._live_update_failed
                 data_maintained = self._data_maintained
                 self.clear_flags()
-                if not broker_recovered:
+                if broker_outcome is BrokerRecoveryOutcome.TIMEOUT:
                     self.restart(
                         f"Broker grace period of "
                         f"{self.ct.settings.auto_recovery_grace_period}s "
                         f"expired without re-establishing connection."
                     )
                     break
-                if (
-                    data_maintained
-                    and not self.ct.settings.restart_on_recovered_connection
-                ):
+                if broker_outcome is BrokerRecoveryOutcome.DATA_MAINTAINED:
+                    if self.ct.settings.restart_on_recovered_connection:
+                        self.restart(
+                            "Broker re-connected, restarting due to policy "
+                            f"{data_maintained=}"
+                        )
+                        break
                     log.debug("Broker re-connected with data maintained, no restart.")
                     continue
-                else:
+                if broker_outcome is BrokerRecoveryOutcome.RECOVERY_HINT:
+                    if self.ct.settings.restart_on_recovered_connection:
+                        self.restart(
+                            "Broker recovery hint received, restarting due to policy."
+                        )
+                        break
+                    if live_update_failed:
+                        self.restart(
+                            "Broker recovery hint received after live update failure."
+                        )
+                        break
+                    if await self._probe():
+                        log.debug("Broker recovery hint verified by probe, no restart.")
+                        continue
+                    self.restart("Broker recovery hint probe failed.")
+                    break
+                if broker_outcome is BrokerRecoveryOutcome.DATA_LOST:
                     self.restart(
                         f"Broker re-connected, restarting due to policy {data_maintained=}"
                     )
@@ -479,6 +511,8 @@ class ConnectionIssueManager:
         """Clear broker recovery flags after one broker-wait episode."""
 
         self._broker_wait_requested = False
+        self._broker_recovery_hint = False
+        self._live_update_failed = False
         self._data_maintained = False
         self.ct.block_resets_clear()
 
@@ -488,8 +522,13 @@ class ConnectionIssueManager:
         if code in self.ct.BROKER_WAIT_CODES:
             log.debug(f"Broker recovery wait requested by code {code}: {message}")
             self._broker_wait_requested = True
+            if code == self.ct.LIVE_UPDATE_FAILED_CODE:
+                self._live_update_failed = True
             self.ct.block_resets_set()
             self.wakeup.set()
+        if code in self.ct.BROKER_RECOVERY_HINT_CODES and self._broker_wait_requested:
+            log.debug(f"Broker recovery hint received by code {code}: {message}")
+            self._broker_recovery_hint = True
         if code == self.ct.SOCKET_RESET_CODE:
             # this is meant to test live behaviour and change if necessary
             log.debug("Socket reset code received.")
@@ -503,20 +542,18 @@ class ConnectionIssueManager:
     def onTimeoutEvent(self, idle_period: float) -> None:
         self.wakeup.set()
 
-    async def wait_for_broker(self) -> bool:
+    async def wait_for_broker(self) -> BrokerRecoveryOutcome:
         waiting_object = BrokerWaiter(self.ct)
-        broker_recovered = False
         try:
-            await asyncio.wait_for(
-                waiting_object.wait(),
-                self.ct.settings.auto_recovery_grace_period,
+            if self._broker_recovery_hint:
+                return BrokerRecoveryOutcome.RECOVERY_HINT
+            return await asyncio.wait_for(
+                waiting_object.wait(), self.ct.settings.auto_recovery_grace_period
             )
-            broker_recovered = True
         except asyncio.TimeoutError:
-            pass
+            return BrokerRecoveryOutcome.TIMEOUT
         finally:
             waiting_object.close()
-        return broker_recovered
 
     async def probe(self) -> None:
         if not await self._probe():
@@ -550,16 +587,25 @@ class BrokerWaiter:
     def __init__(self, ct: ConnectionSupervisor) -> None:
         self.ct = ct
         self.connection_restored_event = asyncio.Event()
+        self.outcome = BrokerRecoveryOutcome.TIMEOUT
         ct.ib.errorEvent += self.onErrEvent
 
     def onErrEvent(
         self, reqId: int, code: int, message: str, contract: ibi.Contract
     ) -> None:
-        if code in self.ct.CONNECTION_RESTORED_CODES:
+        if code == self.ct.DATA_MAINTAINED_CODE:
+            self.outcome = BrokerRecoveryOutcome.DATA_MAINTAINED
+            self.connection_restored_event.set()
+        elif code == self.ct.DATA_LOST_CODE:
+            self.outcome = BrokerRecoveryOutcome.DATA_LOST
+            self.connection_restored_event.set()
+        elif code in self.ct.BROKER_RECOVERY_HINT_CODES:
+            self.outcome = BrokerRecoveryOutcome.RECOVERY_HINT
             self.connection_restored_event.set()
 
-    async def wait(self) -> None:
+    async def wait(self) -> BrokerRecoveryOutcome:
         await self.connection_restored_event.wait()
+        return self.outcome
 
     def close(self):
         self.ct.ib.errorEvent -= self.onErrEvent

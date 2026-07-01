@@ -357,6 +357,79 @@ async def test_broker_data_maintained_continues_without_restart() -> None:
 
 
 @pytest.mark.asyncio
+async def test_broker_farm_recovery_hint_probes_and_continues() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, auto_recovery_grace_period=0.2)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(
+        -1,
+        2103,
+        "Market data farm connection is broken:usfuture",
+        ibi.Contract(),
+    )
+    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 2)
+
+    fake_ib.errorEvent.emit(
+        -1,
+        2104,
+        "Market data farm connection is OK:usfuture",
+        ibi.Contract(),
+    )
+
+    assert await wait_for_condition(lambda: fake_ib.probe_count == 1)
+    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 1)
+    assert workload.starts == 1
+    assert workload.stops == []
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 0
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_broker_recovery_hint_after_live_update_failure_restarts() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, auto_recovery_grace_period=0.2)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(
+        -1,
+        2105,
+        "HMDS data farm connection is broken:euhmds",
+        ibi.Contract(),
+    )
+    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 2)
+
+    fake_ib.errorEvent.emit(
+        -1,
+        10182,
+        "Failed to request live updates (disconnected).",
+        ibi.Contract(),
+    )
+    fake_ib.errorEvent.emit(
+        -1,
+        2106,
+        "HMDS data farm connection is OK:euhmds",
+        ibi.Contract(),
+    )
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.probe_count == 0
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
 async def test_restart_requests_are_blocked_during_broker_recovery_wait() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
