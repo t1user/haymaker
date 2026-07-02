@@ -50,7 +50,7 @@ Breakout examples: `min_max_blip`, `min_max_index`, `breakout`,
 Functions that interpret prices or indicators into trading-intent-like outputs:
 signals, blips, entries, exits, long/short/flat decisions, or signal filters.
 
-Moved to `haymaker.research.indicators.transformers`: `crosser`, `zero_crosser`,
+Moved to `haymaker.research.indicators.transformers`: `crosser`,
 `extreme_reversal_blip`, `range_blip`, `signal_generator`, `combine_signals`,
 `inout_range`.
 

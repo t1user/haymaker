@@ -12,7 +12,6 @@ __all__ = [
     "inout_range",
     "range_blip",
     "signal_generator",
-    "zero_crosser",
 ]
 
 
@@ -79,29 +78,19 @@ def combine_signals(series1: pd.Series, series2: pd.Series) -> pd.Series:
     return ((np.sign(series1) == np.sign(series2)) * series1).astype(int, copy=False)
 
 
-def crosser(ind: pd.Series, threshold: float) -> pd.Series:
+def crosser(ind: pd.Series, threshold: float = 0) -> pd.Series:
     """Return threshold-crossing blips for an indicator series.
 
-    Values equal to ``threshold`` are treated as above the threshold. A ``1`` is
-    emitted when the indicator crosses from below to above, and ``-1`` when it
-    crosses from above to below. Rows with missing indicator values do not emit
-    blips and do not create a crossing on the following row.
+    A ``1`` is emitted when the indicator crosses from below ``threshold`` to
+    above it, and ``-1`` when it crosses from above to below. Values exactly at
+    ``threshold`` are neutral: they emit no blip, but moving away from the
+    threshold on the next row emits the new side. Rows with missing indicator
+    values do not emit blips and do not create a crossing on the following row.
     """
-    side = pd.Series(np.where(ind >= threshold, 1, -1), index=ind.index)
-    side = side.mask(ind.isna())
-    crossed = side.notna() & side.shift().notna() & (side.shift() + side).eq(0)
+    centered = ind - threshold
+    side = pd.Series(np.sign(centered), index=ind.index).mask(ind.isna())
+    crossed = side.notna() & side.shift().notna() & (side.shift() * side).le(0)
     return side.where(crossed, 0).astype(int)
-
-
-def zero_crosser(indicator: pd.Series) -> pd.Series:
-    """Return signed blips when an indicator crosses zero.
-
-    The blip sign matches the indicator sign after the crossing. If an
-    indicator value is exactly zero, the next nonzero value is treated as a
-    crossing from zero.
-    """
-    indicator = indicator.fillna(0)
-    return (((indicator.shift() * indicator) <= 0) * np.sign(indicator)).astype(int)
 
 
 def inout_range(
@@ -122,7 +111,7 @@ def inout_range(
     """
 
     if isinstance(threshold, (int, float)) and threshold == 0:
-        raise ValueError("theshold cannot be zero, use: <zero_crosser>")
+        raise ValueError("threshold cannot be zero, use: crosser()")
     threshold = abs(threshold)  # type: ignore
     excess = s.abs() - threshold
     if inout == "outside":

@@ -29,7 +29,6 @@ from .transformers import (
     inout_range,
     range_blip,
     signal_generator,
-    zero_crosser,
 )
 
 __all__ = [
@@ -65,5 +64,4 @@ __all__ = [
     "tsi",
     "weighted_resample",
     "weighted_zscore",
-    "zero_crosser",
 ]

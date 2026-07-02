@@ -38,7 +38,6 @@ from .research.indicators import (
     tsi,
     weighted_resample,
     weighted_zscore,
-    zero_crosser,
 )
 
 __all__ = [
@@ -74,5 +73,4 @@ __all__ = [
     "tsi",
     "weighted_resample",
     "weighted_zscore",
-    "zero_crosser",
 ]

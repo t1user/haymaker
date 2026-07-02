@@ -35,7 +35,6 @@ from haymaker.research.indicators import (
     tsi,
     weighted_resample,
     weighted_zscore,
-    zero_crosser,
 )
 
 
@@ -452,7 +451,7 @@ def test_signal_helpers_preserve_expected_event_and_filter_semantics() -> None:
     range_indicator = pd.Series([-2.0, -0.5, 0.0, 0.5, 2.0])
 
     combined = combine_signals(primary, filter_)
-    zero_crossed = zero_crosser(crossing_indicator)
+    zero_crossed = crosser(crossing_indicator)
     inside = inout_range(range_indicator, threshold=-1.0, inout="inside")
     outside = inout_range(range_indicator, threshold=1.0, inout="outside")
 
@@ -466,12 +465,12 @@ def test_signal_helpers_preserve_expected_event_and_filter_semantics() -> None:
     )
 
 
-def test_crosser_marks_only_side_changes_and_treats_equal_as_above() -> None:
+def test_crosser_marks_only_side_changes_and_treats_threshold_as_neutral() -> None:
     indicator = pd.Series([-1.0, 0.0, 0.5, -0.1, 0.0])
 
     actual = crosser(indicator, threshold=0.0)
 
-    expected = pd.Series([0, 1, 0, -1, 1])
+    expected = pd.Series([0, 0, 1, -1, 0])
     pd.testing.assert_series_equal(actual, expected)
 
 
