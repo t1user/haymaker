@@ -140,6 +140,7 @@ class ProbingState(AbstractState):
         probe_succeeded = probe_task.result()
 
         if probe_succeeded:
+            self.context.mark_connection_available("connection probe succeeded")
             if not self.context.has_workload:
                 return StartingWorkloadState
             return ConnectedState
@@ -164,6 +165,9 @@ class ProbingState(AbstractState):
 
         if code in self.context.BROKER_WAIT_CODES:
             self._broker_wait_requested = True
+            self.context.mark_connection_unavailable(
+                f"broker recovery wait requested by code {code}"
+            )
             self.wakeup.set()
 
 
@@ -190,6 +194,7 @@ class ConnectedState(AbstractState):
         await self.wait_for_wakeup_or()
 
         if self._broker_wait_requested:
+            self.context.mark_connection_unavailable("broker recovery wait")
             return WaitingForBrokerState
 
         if self._timeout_registered:
@@ -208,6 +213,9 @@ class ConnectedState(AbstractState):
 
         if code in self.context.BROKER_WAIT_CODES:
             self._broker_wait_requested = True
+            self.context.mark_connection_unavailable(
+                f"broker recovery wait requested by code {code}"
+            )
             self.wakeup.set()
 
 
@@ -219,6 +227,7 @@ class WaitingForBrokerState(AbstractState):
         self._probe_requested = False
 
     async def handle(self) -> StateResult:
+        self.context.mark_connection_unavailable("broker recovery wait")
         await self.wait_for_wakeup_or(
             asyncio.sleep(self.settings.auto_recovery_grace_period)
         )
@@ -246,6 +255,7 @@ class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
     async def handle(self) -> StateResult:
+        self.context.mark_connection_unavailable("restart requested")
         await self.context.cleanup_workload("restart requested")
         self.context.disconnect()
         return ConnectingState
@@ -255,6 +265,7 @@ class StoppingState(AbstractState):
     """Final cleanup for supervisor shutdown."""
 
     async def handle(self) -> StateResult:
+        self.context.mark_connection_unavailable("supervisor stopped")
         await self.context.cleanup_workload("supervisor stopped")
         self.context.disconnect()
         return StoppedState

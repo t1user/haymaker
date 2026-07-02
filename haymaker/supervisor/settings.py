@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -17,6 +19,29 @@ class SupervisorWorkload(Protocol):
 
     async def stop(self, reason: str) -> None:
         """Release active work before the supervisor reconnects or exits."""
+
+
+class SupervisorControlsWorkload(Protocol):
+    """Optional workload protocol for supervisor lifecycle controls."""
+
+    def bind_supervisor(
+        self,
+        request_restart: Callable[[str], bool | None],
+        connection_unavailable: asyncio.Event,
+    ) -> None:
+        """Receive supervisor restart and connection lifecycle controls."""
+
+
+def bind_supervisor_controls(
+    workload: SupervisorWorkload,
+    request_restart: Callable[[str], bool | None],
+    connection_unavailable: asyncio.Event,
+) -> None:
+    """Bind optional supervisor controls when the workload supports them."""
+
+    bind_supervisor = getattr(workload, "bind_supervisor", None)
+    if bind_supervisor is not None:
+        bind_supervisor(request_restart, connection_unavailable)
 
 
 @dataclass(frozen=True)

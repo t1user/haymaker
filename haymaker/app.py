@@ -64,6 +64,17 @@ class LiveRuntime:
             ),
         )
 
+    def bind_supervisor(
+        self,
+        request_restart: Callable[[str], bool | None],
+        connection_unavailable: asyncio.Event,
+    ) -> None:
+        """Bind supervisor controls used by runtime components."""
+
+        self.request_restart = request_restart
+        Timeout.set_restart_handler(request_restart)
+        self.controller.set_sync_abort_event(connection_unavailable)
+
     def set_restart_handler(
         self, request_restart: Callable[[str], bool | None]
     ) -> None:
@@ -133,7 +144,6 @@ class App:
         self.runtime.set_no_future_roll_strategies(self.no_future_roll_strategies)
         self.runtime.schedule_future_roll()
         self.supervisor = ConnectionSupervisor(self.ib, self.runtime, self.settings)
-        self.runtime.set_restart_handler(self.supervisor.request_restart)
         log.debug(f"App initiated: {self}")
 
     def run(self) -> None:

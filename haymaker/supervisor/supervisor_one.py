@@ -11,7 +11,11 @@ from typing import Self
 
 import ib_insync as ibi
 
-from .settings import ConnectionSettings, SupervisorWorkload
+from .settings import (
+    ConnectionSettings,
+    SupervisorWorkload,
+    bind_supervisor_controls,
+)
 
 log = getLogger(__name__)
 
@@ -46,6 +50,9 @@ class ConnectionSupervisor:
     restart_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
+    connection_unavailable: asyncio.Event = field(
+        default_factory=asyncio.Event, init=False, repr=False
+    )
     _workload_completed: bool = False
     # True while the supervisor closes its own socket, so disconnectedEvent is
     # not classified as an unexpected outage.
@@ -62,6 +69,12 @@ class ConnectionSupervisor:
 
     def __post_init__(self) -> None:
         OnionLayer.set_context(self)
+        self.connection_unavailable.set()
+        bind_supervisor_controls(
+            self.workload,
+            self.request_restart,
+            self.connection_unavailable,
+        )
         self.ib.disconnectedEvent += self.onDisconnectedEvent
 
     async def run(self):
@@ -161,6 +174,7 @@ class ConnectionSupervisor:
     def stop(self) -> None:
         """Request supervisor shutdown; the run loop performs cleanup."""
         log.debug("Stop requested")
+        self.mark_connection_unavailable("supervisor stop requested")
         self.stop_requested.set()
         if self.onion_task is not None:
             self.onion_task.cancel()
@@ -175,8 +189,23 @@ class ConnectionSupervisor:
             )
             return False
         log.debug(f"Restart requested: {restart_reason}")
+        self.mark_connection_unavailable(restart_reason)
         self.restart_requested.set()
         return True
+
+    def mark_connection_available(self, reason: str) -> None:
+        """Allow workload sync after the supervisor has a usable connection."""
+
+        if self.connection_unavailable.is_set():
+            log.debug(f"Connection marked available: {reason}")
+        self.connection_unavailable.clear()
+
+    def mark_connection_unavailable(self, reason: str) -> None:
+        """Abort workload sync while the supervisor cannot trust the connection."""
+
+        if not self.connection_unavailable.is_set():
+            log.debug(f"Connection marked unavailable: {reason}")
+        self.connection_unavailable.set()
 
     def clear_cycle_restart_request(self) -> None:
         """Discard restart requests after the current watcher cycle has ended."""
@@ -260,6 +289,7 @@ class Connection(OnionLayer):
                     timeout=self.ct.settings.connect_timeout,
                 )
                 log.debug("IB socket connected.")
+                self.ct.mark_connection_available("IB socket connected")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -275,6 +305,7 @@ class Connection(OnionLayer):
         traceback: object | None,
     ) -> None:
         if self.ct.ib.isConnected():
+            self.ct.mark_connection_unavailable("disconnecting IB socket")
             self.ct._intentional_disconnect = True
             try:
                 self.ct.ib.disconnect()
@@ -459,6 +490,7 @@ class ConnectionIssueManager:
             self.wakeup.clear()
 
             if self._broker_wait_requested:
+                self.ct.mark_connection_unavailable("broker recovery wait")
                 log.debug(
                     "Entering broker recovery wait for "
                     f"{self.ct.settings.auto_recovery_grace_period}s."
@@ -482,6 +514,9 @@ class ConnectionIssueManager:
                         )
                         break
                     log.debug("Broker re-connected with data maintained, no restart.")
+                    self.ct.mark_connection_available(
+                        "broker re-connected with data maintained"
+                    )
                     continue
                 if broker_outcome is BrokerRecoveryOutcome.RECOVERY_HINT:
                     if self.ct.settings.restart_on_recovered_connection:
@@ -496,6 +531,9 @@ class ConnectionIssueManager:
                         break
                     if await self._probe():
                         log.debug("Broker recovery hint verified by probe, no restart.")
+                        self.ct.mark_connection_available(
+                            "broker recovery hint verified by probe"
+                        )
                         continue
                     self.restart("Broker recovery hint probe failed.")
                     break
@@ -522,6 +560,9 @@ class ConnectionIssueManager:
         if code in self.ct.BROKER_WAIT_CODES:
             log.debug(f"Broker recovery wait requested by code {code}: {message}")
             self._broker_wait_requested = True
+            self.ct.mark_connection_unavailable(
+                f"broker recovery wait requested by code {code}"
+            )
             if code == self.ct.LIVE_UPDATE_FAILED_CODE:
                 self._live_update_failed = True
             self.ct.block_resets_set()

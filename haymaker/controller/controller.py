@@ -6,6 +6,7 @@ import logging
 from collections import abc
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
+from enum import Enum, auto
 from functools import partial
 from typing import TYPE_CHECKING, Literal, Self
 
@@ -30,6 +31,19 @@ log = logging.getLogger(__name__)
 
 class ControllerError(Exception):
     pass
+
+
+class SyncOutcome(Enum):
+    """Result of a controller sync attempt."""
+
+    OK = auto()
+    FAILED = auto()
+    ABORTED = auto()
+
+    def __bool__(self) -> bool:
+        """Return True only when sync completed cleanly."""
+
+        return self is SyncOutcome.OK
 
 
 @dataclass
@@ -74,6 +88,7 @@ class Controller(Atom):
     _new_position_lock: bool = False
     _trading_disabled: bool = False
     _restart_before_correction: bool = True
+    _sync_abort_event: asyncio.Event | None = field(default=None, repr=False)
 
     @classmethod
     def from_config(
@@ -178,6 +193,11 @@ class Controller(Atom):
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
 
+    def set_sync_abort_event(self, event: asyncio.Event) -> None:
+        """Set the supervisor lifecycle event that aborts controller sync."""
+
+        self._sync_abort_event = event
+
     def run_health_check(self, *args) -> None:
         for func in itertools.chain(
             itertools.chain(*self.health_check_observables),
@@ -245,9 +265,12 @@ class Controller(Atom):
         else:
             log.debug(f"No startup delay.")
 
-        sync_ok = await self.sync()
-        if not sync_ok:
-            log.critical("Controller startup sync failed. Trading remains disabled.")
+        sync_outcome = await self.sync()
+        if not sync_outcome:
+            if sync_outcome is SyncOutcome.ABORTED:
+                log.debug("Controller startup sync aborted: connection unavailable.")
+            else:
+                log.critical("Controller startup sync failed. Trading remains disabled.")
             return False
 
         if self.zero:
@@ -274,23 +297,64 @@ class Controller(Atom):
         roller = FutureRoller(self, self.no_future_roll_strategies)
         roller.roll()
 
-    async def sync(self, *args) -> bool:
+    async def sync(self, *args) -> SyncOutcome:
+        """Run sync unless the supervisor marks the connection unavailable."""
+
+        abort_event = self._sync_abort_event
+        if abort_event is None:
+            return await self._sync(*args)
+
+        if abort_event.is_set():
+            log.debug("Connection unavailable. Skipping sync.")
+            return SyncOutcome.ABORTED
+
+        sync_task = asyncio.create_task(self._sync(*args), name="controller-sync")
+        abort_task = asyncio.create_task(
+            abort_event.wait(), name="controller-sync-abort"
+        )
+
+        try:
+            done, _ = await asyncio.wait(
+                (sync_task, abort_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if abort_task in done and abort_event.is_set():
+                log.debug("Controller sync aborted: connection unavailable.")
+                sync_task.cancel()
+                await asyncio.gather(sync_task, return_exceptions=True)
+                return SyncOutcome.ABORTED
+
+            abort_task.cancel()
+            await asyncio.gather(abort_task, return_exceptions=True)
+            return await sync_task
+        except asyncio.CancelledError:
+            sync_task.cancel()
+            abort_task.cancel()
+            await asyncio.gather(sync_task, abort_task, return_exceptions=True)
+            raise
+        finally:
+            for task in (sync_task, abort_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(sync_task, abort_task, return_exceptions=True)
+
+    async def _sync(self, *args) -> SyncOutcome:
         """Run sync passes until state is clean, broken, or non-convergent.
 
-        ``SyncCoordinator`` performs one pass and never disables trading.  A
-        ``False`` result means broker state could not be verified or a recovery
-        action changed local or broker state, so the controller waits and
-        retries from fresh broker/local reads.  The first sync after hold may
+        ``SyncCoordinator`` performs one pass and never disables trading.
+        Retryable broker-state verification failures or recovery actions
+        return ``False`` from the coordinator, so the controller waits and
+        retries from fresh broker/local reads. The first sync after hold may
         request one reconnect before corrective mutations; a clean sync clears
         that startup/reconnect reconfirmation flag so later mismatches are
-        corrected or rejected without another restart.  ``SyncBrokenStateError``
+        corrected or rejected without another restart. ``SyncBrokenStateError``
         means broker/local state is unsafe and trading must be disabled
         immediately.
         """
 
         if not self.ib.isConnected():
             log.debug("No connection. Skipping sync.")
-            return False
+            return SyncOutcome.FAILED
 
         log.debug("--- Sync ---")
 
@@ -304,10 +368,10 @@ class Controller(Atom):
                     if self._trading_disabled:
                         log.debug(f"TRADING DISABLED")
                     log.debug("--- Sync completed ---")
-                    return True
+                    return SyncOutcome.OK
             except SyncBrokenStateError as exc:
                 self.disable_trading(str(exc))
-                return False
+                return SyncOutcome.FAILED
 
             if attempt < self.sync_max_attempts:
                 log.debug("Sync did not complete; will retry checks.")
@@ -316,8 +380,12 @@ class Controller(Atom):
                     self._restart_before_correction = False
                     self.ib.disconnect()
 
+        if self._sync_abort_event is not None and self._sync_abort_event.is_set():
+            log.debug("Controller sync aborted before disabling trading.")
+            return SyncOutcome.ABORTED
+
         self.disable_trading("sync did not converge")
-        return False
+        return SyncOutcome.FAILED
 
     def onStart(self, data, *args) -> None:
         # prevent superclass from setting attributes here

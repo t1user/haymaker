@@ -9,7 +9,11 @@ from typing import Any
 
 import ib_insync as ibi
 
-from .settings import ConnectionSettings, SupervisorWorkload
+from .settings import (
+    ConnectionSettings,
+    SupervisorWorkload,
+    bind_supervisor_controls,
+)
 from .states import (
     AbstractState,
     ConnectingState,
@@ -218,6 +222,9 @@ class ConnectionSupervisor:
     _restart_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
+    connection_unavailable: asyncio.Event = field(
+        default_factory=asyncio.Event, init=False, repr=False
+    )
     # True while the supervisor closes its own socket, so disconnectedEvent is
     # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
@@ -229,6 +236,12 @@ class ConnectionSupervisor:
 
     def __post_init__(self) -> None:
         self._state = INITIAL_STATE(self)
+        self.connection_unavailable.set()
+        bind_supervisor_controls(
+            self.workload,
+            self.request_restart,
+            self.connection_unavailable,
+        )
         self.ib.errorEvent += self.onErrEvent
         self.ib.disconnectedEvent += self.onDisconnectedEvent
         self.ib.timeoutEvent += self.onTimeoutEvent
@@ -272,6 +285,7 @@ class ConnectionSupervisor:
     def stop(self) -> None:
         """Request supervisor shutdown; the run loop performs cleanup."""
 
+        self.mark_connection_unavailable("supervisor stop requested")
         self._stop_requested.set()
 
     def request_restart(self, reason: str = "") -> bool:
@@ -279,8 +293,23 @@ class ConnectionSupervisor:
 
         restart_reason = reason or "restart requested"
         log.debug(f"Restart requested: {restart_reason}")
+        self.mark_connection_unavailable(restart_reason)
         self._restart_requested.set()
         return True
+
+    def mark_connection_available(self, reason: str) -> None:
+        """Allow workload sync after the supervisor has a usable connection."""
+
+        if self.connection_unavailable.is_set():
+            log.debug(f"Connection marked available: {reason}")
+        self.connection_unavailable.clear()
+
+    def mark_connection_unavailable(self, reason: str) -> None:
+        """Abort workload sync while the supervisor cannot trust the connection."""
+
+        if not self.connection_unavailable.is_set():
+            log.debug(f"Connection marked unavailable: {reason}")
+        self.connection_unavailable.set()
 
     def onDisconnectedEvent(self) -> None:
         """Request restart after unexpected API socket disconnection."""
@@ -372,6 +401,7 @@ class ConnectionSupervisor:
         """Disconnect the owned IB socket without triggering restart handling."""
 
         if self.ib.isConnected():
+            self.mark_connection_unavailable("disconnecting IB socket")
             self._intentional_disconnect = True
             try:
                 self.ib.disconnect()

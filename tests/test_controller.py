@@ -10,7 +10,7 @@ import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.controller.controller import Controller, ControllerError
+from haymaker.controller.controller import Controller, ControllerError, SyncOutcome
 from haymaker.controller.future_roller import FutureRoller
 from haymaker.controller.sync_brackets import (
     BracketSync,
@@ -230,8 +230,108 @@ async def test_sync_timeout_disables_trading(controller, monkeypatch):
 
     result = await controller.sync()
 
-    assert not result
+    assert result is SyncOutcome.FAILED
     assert disabled_reasons == ["sync did not converge"]
+
+
+@pytest.mark.asyncio
+async def test_sync_skips_when_connection_unavailable(controller, monkeypatch):
+    abort_event = asyncio.Event()
+    abort_event.set()
+    controller.set_sync_abort_event(abort_event)
+    sync_called = False
+
+    async def sync_body(*args):
+        nonlocal sync_called
+        sync_called = True
+        return SyncOutcome.OK
+
+    monkeypatch.setattr(controller, "_sync", sync_body)
+
+    result = await controller.sync()
+
+    assert result is SyncOutcome.ABORTED
+    assert not sync_called
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_run_treats_connection_unavailable_sync_as_abort(
+    controller, monkeypatch, caplog
+):
+    abort_event = asyncio.Event()
+    abort_event.set()
+    controller.set_sync_abort_event(abort_event)
+
+    async def sync_body(*args):
+        return SyncOutcome.OK
+
+    monkeypatch.setattr(controller, "_sync", sync_body)
+
+    with caplog.at_level(logging.DEBUG):
+        result = await controller.run()
+
+    assert not result
+    assert "Controller startup sync aborted: connection unavailable." in caplog.text
+    assert "Controller startup sync failed" not in caplog.text
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_aborts_in_flight_position_request(controller, monkeypatch):
+    abort_event = asyncio.Event()
+    request_started = asyncio.Event()
+    disabled_reasons = []
+    controller.set_sync_abort_event(abort_event)
+    controller.broker_request_timeout = 10
+    controller.sync_resync_delay = 0
+
+    async def pending_positions():
+        request_started.set()
+        await asyncio.sleep(10)
+        return []
+
+    monkeypatch.setattr(
+        controller, "disable_trading", lambda reason: disabled_reasons.append(reason)
+    )
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", pending_positions)
+
+    sync_task = asyncio.create_task(controller.sync())
+    await asyncio.wait_for(request_started.wait(), timeout=1)
+    abort_event.set()
+
+    result = await asyncio.wait_for(sync_task, timeout=1)
+
+    assert result is SyncOutcome.ABORTED
+    assert disabled_reasons == []
+
+
+@pytest.mark.asyncio
+async def test_sync_cancellation_cancels_inner_sync(controller, monkeypatch):
+    inner_started = asyncio.Event()
+    inner_cancelled = asyncio.Event()
+
+    async def sync_body(*args):
+        inner_started.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            inner_cancelled.set()
+            raise
+
+    controller.set_sync_abort_event(asyncio.Event())
+    monkeypatch.setattr(controller, "_sync", sync_body)
+
+    sync_task = asyncio.create_task(controller.sync())
+    await asyncio.wait_for(inner_started.wait(), timeout=1)
+    sync_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await sync_task
+
+    assert inner_cancelled.is_set()
 
 
 @pytest.mark.asyncio
@@ -335,7 +435,7 @@ async def test_sync_disconnected_does_not_query_broker_state(controller, monkeyp
 
     result = await controller.sync()
 
-    assert not result
+    assert result is SyncOutcome.FAILED
     assert connection_attempts == 1
     assert disabled_reasons == []
 
@@ -351,7 +451,7 @@ async def test_sync_disconnected_does_not_release_hold(controller, monkeypatch):
 
     result = await controller.sync()
 
-    assert not result
+    assert result is SyncOutcome.FAILED
     assert controller._hold
     assert not controller._trading_disabled
 
@@ -398,7 +498,7 @@ async def test_broker_position_source_disagreement_disables_trading(
 
     result = await controller.sync()
 
-    assert not result
+    assert result is SyncOutcome.FAILED
     assert controller._trading_disabled
 
 
