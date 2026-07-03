@@ -49,9 +49,9 @@ what was still working afterward.
   Check whether Haymaker enters broker-connectivity recovery and probes after
   `1102` or grace expiry.
 - `2103`, `2105`, `2157`, `10182`, `2104`, `2106`, `2158`: Data-farm or live
-  update status messages. In the state-machine supervisor these are log context
-  only; look for `timeoutEvent`, failed probes, `1100`/`2110`, `1101`, `1300`,
-  or `disconnectedEvent` before attributing a restart to them.
+  update status messages. These are log context only; look for `timeoutEvent`,
+  failed probes, `1100`/`2110`, `1101`, `1300`, or `disconnectedEvent` before
+  attributing a restart to them.
 
 Also note repeated request errors, pacing violations, `ConnectionError`,
 streamer timeout messages, controller sync skips, and order/position mismatch

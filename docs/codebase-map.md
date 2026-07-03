@@ -133,12 +133,12 @@ The research package is intentionally separate from live execution. It works dir
 - Interactive Brokers TWS/Gateway through `ib_insync`.
 - Haymaker-owned `ConnectionSupervisor` instances for live and current managed
   dataloader IB socket recovery. TWS or IB Gateway process management is
-  external. Broker message codes are categorized into restart requests,
-  broker-wait signals, and recovery hints; broker-wait signals move the
-  supervisor into broker recovery wait while connected, while `timeoutEvent` and
-  probes remain active health checks.
-  `updateEvent` or `1102` can trigger a recovery probe when traffic resumes
-  during a broker-degraded wait.
+  external. Broker message codes are categorized into hard restart requests,
+  broker-connectivity-lost signals, and informational farm/live-update messages.
+  Connectivity-lost signals move the supervisor into broker recovery wait while
+  connected; informational farm/live-update messages are log context only.
+  `timeoutEvent` and probes remain active health checks, and `1102` can end a
+  broker-connectivity wait when IB reports data maintained.
 - MongoDB through `pymongo`.
 - Arctic through `arctic` for dataframe time-series storage.
 - pandas, NumPy, and Numba for dataframe research and kernels.

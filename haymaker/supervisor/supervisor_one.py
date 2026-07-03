@@ -34,7 +34,6 @@ class BrokerRecoveryOutcome(Enum):
     TIMEOUT = auto()
     DATA_MAINTAINED = auto()
     DATA_LOST = auto()
-    RECOVERY_HINT = auto()
 
 
 @dataclass
@@ -60,9 +59,8 @@ class ConnectionSupervisor:
     _resets_blocked: bool = field(default=False, init=False, repr=False)
     _delay_next_restart: bool = field(default=False, init=False, repr=False)
 
-    BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
-    BROKER_RECOVERY_HINT_CODES = frozenset({2104, 2106, 2158})
-    LIVE_UPDATE_FAILED_CODE = 10182
+    BROKER_WAIT_CODES = frozenset({1100, 2110})
+    WEAK_DATA_FARM_CODES = frozenset({2103, 2105, 2157, 10182, 2104, 2106, 2158})
     DATA_LOST_CODE = 1101
     DATA_MAINTAINED_CODE = 1102
     SOCKET_RESET_CODE = 1300
@@ -475,8 +473,6 @@ class ConnectionIssueManager:
         ct.ib.timeoutEvent += self.onTimeoutEvent
         self.wakeup = asyncio.Event()
         self._broker_wait_requested = False
-        self._broker_recovery_hint = False
-        self._live_update_failed = False
         self._data_maintained = False
 
     def set_timeout(self):
@@ -496,7 +492,6 @@ class ConnectionIssueManager:
                     f"{self.ct.settings.auto_recovery_grace_period}s."
                 )
                 broker_outcome = await self.wait_for_broker()
-                live_update_failed = self._live_update_failed
                 data_maintained = self._data_maintained
                 self.clear_flags()
                 if broker_outcome is BrokerRecoveryOutcome.TIMEOUT:
@@ -518,28 +513,9 @@ class ConnectionIssueManager:
                         "broker re-connected with data maintained"
                     )
                     continue
-                if broker_outcome is BrokerRecoveryOutcome.RECOVERY_HINT:
-                    if self.ct.settings.restart_on_recovered_connection:
-                        self.restart(
-                            "Broker recovery hint received, restarting due to policy."
-                        )
-                        break
-                    if live_update_failed:
-                        self.restart(
-                            "Broker recovery hint received after live update failure."
-                        )
-                        break
-                    if await self._probe():
-                        log.debug("Broker recovery hint verified by probe, no restart.")
-                        self.ct.mark_connection_available(
-                            "broker recovery hint verified by probe"
-                        )
-                        continue
-                    self.restart("Broker recovery hint probe failed.")
-                    break
                 if broker_outcome is BrokerRecoveryOutcome.DATA_LOST:
                     self.restart(
-                        f"Broker re-connected, restarting due to policy {data_maintained=}"
+                        "Broker re-connected with data lost; restarting."
                     )
                     break
             else:
@@ -549,8 +525,6 @@ class ConnectionIssueManager:
         """Clear broker recovery flags after one broker-wait episode."""
 
         self._broker_wait_requested = False
-        self._broker_recovery_hint = False
-        self._live_update_failed = False
         self._data_maintained = False
         self.ct.block_resets_clear()
 
@@ -563,22 +537,28 @@ class ConnectionIssueManager:
             self.ct.mark_connection_unavailable(
                 f"broker recovery wait requested by code {code}"
             )
-            if code == self.ct.LIVE_UPDATE_FAILED_CODE:
-                self._live_update_failed = True
             self.ct.block_resets_set()
             self.wakeup.set()
-        if code in self.ct.BROKER_RECOVERY_HINT_CODES and self._broker_wait_requested:
-            log.debug(f"Broker recovery hint received by code {code}: {message}")
-            self._broker_recovery_hint = True
         if code == self.ct.SOCKET_RESET_CODE:
-            # this is meant to test live behaviour and change if necessary
-            log.debug("Socket reset code received.")
+            log.debug(f"Broker reports API socket reset: {message}")
+            self.restart(f"broker reset API socket port ({code})")
         if code == self.ct.DATA_MAINTAINED_CODE:
             log.debug(f"Broker reports data maintained after recovery: {message}")
             self._data_maintained = True
+            if (
+                self.ct.settings.restart_on_recovered_connection
+                and not self._broker_wait_requested
+            ):
+                self.restart(
+                    f"broker connectivity restored with data maintained ({code})"
+                )
         if code == self.ct.DATA_LOST_CODE:
             log.debug(f"Broker reports data lost after recovery: {message}")
             self._data_maintained = False
+            if not self._broker_wait_requested:
+                self.restart(f"broker connectivity restored with data lost ({code})")
+        if code in self.ct.WEAK_DATA_FARM_CODES:
+            log.debug(f"Ignoring informational broker message {code}: {message}")
 
     def onTimeoutEvent(self, idle_period: float) -> None:
         self.wakeup.set()
@@ -586,8 +566,6 @@ class ConnectionIssueManager:
     async def wait_for_broker(self) -> BrokerRecoveryOutcome:
         waiting_object = BrokerWaiter(self.ct)
         try:
-            if self._broker_recovery_hint:
-                return BrokerRecoveryOutcome.RECOVERY_HINT
             return await asyncio.wait_for(
                 waiting_object.wait(), self.ct.settings.auto_recovery_grace_period
             )
@@ -639,9 +617,6 @@ class BrokerWaiter:
             self.connection_restored_event.set()
         elif code == self.ct.DATA_LOST_CODE:
             self.outcome = BrokerRecoveryOutcome.DATA_LOST
-            self.connection_restored_event.set()
-        elif code in self.ct.BROKER_RECOVERY_HINT_CODES:
-            self.outcome = BrokerRecoveryOutcome.RECOVERY_HINT
             self.connection_restored_event.set()
 
     async def wait(self) -> BrokerRecoveryOutcome:
