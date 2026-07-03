@@ -27,7 +27,7 @@ selected implementation considers the socket usable, handles reconnect/rebuild
 cycles, and returns only after shutdown. The default ``state`` implementation
 probes before starting the workload; the alternative ``onion`` implementation
 starts after socket connection and defers historical-data probes until a health
-signal such as ``timeoutEvent`` or broker recovery wait requires one.
+signal such as ``timeoutEvent`` or broker recovery handling requires one.
 
 .. code-block:: python
 
@@ -84,16 +84,16 @@ central priority rules and returns the next state.
 Broker messages are grouped into three categories:
 
 * restart requests, such as ``1101`` and ``1300``;
-* broker-wait signals, such as ``1100``, ``2110``, ``2103``, ``2105``,
-  ``2157``, and ``10182``;
-* recovery hints, such as ``1102`` when
-  ``restart_on_recovered_connection`` is false.
+* broker-connectivity-lost signals, ``1100`` and ``2110``;
+* informational data-farm messages, such as ``2103``, ``2105``, ``2157``,
+  ``10182``, ``2104``, ``2106``, and ``2158``.
 
 ``timeoutEvent`` remains an active health check while connected. It triggers a
-probe rather than an immediate reconnect. While waiting for broker-side
-auto-recovery, ``updateEvent`` or ``1102`` can trigger a probe because traffic
-has resumed. A successful probe proves current request connectivity, but it does
-not prove existing subscriptions are fresh; streamer timeouts should still
+probe rather than an immediate reconnect. While broker connectivity is reported
+lost, ``1102`` triggers a probe; generic ``updateEvent`` traffic and data-farm
+messages do not. A failed probe enters a backoff restart state before
+reconnecting. A successful probe proves current request connectivity, but it
+does not prove existing subscriptions are fresh; streamer timeouts should still
 detect stale subscriptions later.
 
 State Transition Chart
@@ -118,13 +118,16 @@ Priority Rules
 cleanup is running, the supervisor finishes that cleanup without cancelling it
 and goes to ``Stopping`` instead of reconnecting.
 
-Restart requests coalesce. Multiple restart requests before the rebuild cycle
-are handled as one restart, and restart requests are ignored once
-``Restarting``, ``Stopping``, or ``Stopped`` is active.
+Restart requests coalesce. Multiple accepted restart requests before the
+rebuild cycle are handled as one restart. States declare whether restart can
+interrupt them: ``Connecting`` and the backoff restart state consume redundant
+restart requests at the source, and ``Restarting``, ``Stopping``, or
+``Stopped`` also ignore them.
 
-Broker wait is not a hidden connected sub-state. Broker-degraded messages move
-the state machine to ``WaitingForBroker`` immediately. From there, recovery
-hints probe the connection, and the grace-period timeout rebuilds the socket.
+Broker connectivity loss is not a hidden connected sub-state. ``1100`` and
+``2110`` move the state machine to ``BrokerConnectivityLost`` immediately. From
+there, ``1102`` or the grace-period timeout probes the connection. Weak
+data-farm messages are logged as context only.
 
 Configuration Notes
 ===================
@@ -136,7 +139,8 @@ Important recovery settings are documented in :doc:`configuration`, including:
 * ``retryDelay``: pause between failed connection attempts;
 * ``appTimeout``: idle period before ``timeoutEvent`` probes;
 * ``probeTimeout``: readiness probe timeout;
-* ``auto_recovery_grace_period``: broker wait duration before restart;
+* ``auto_recovery_grace_period``: broker-connectivity-lost duration before
+  probing;
 * ``restart_on_recovered_connection``: whether ``1102`` forces rebuild.
 * ``max_recoveries``: consecutive unexpected cycle recoveries before stopping.
 

@@ -103,6 +103,10 @@ class SupervisorRace:
         if self._state_task is None:
             raise RuntimeError("SupervisorRace must be entered before waiting.")
 
+        request_transition = self._request_transition()
+        if request_transition is not None:
+            return request_transition
+
         tasks: set[asyncio.Future[Any]] = {
             self._state_task,
             *self._request_tasks.values(),
@@ -130,18 +134,12 @@ class SupervisorRace:
     def _active_requests(self) -> dict[str, asyncio.Event]:
         """Return lifecycle request events that may interrupt this race."""
 
-        if isinstance(self._state, RestartingState):
-            # Do not cancel restart cleanup halfway through; pending stop is
-            # applied after this state finishes so cleanup remains single-pass.
-            return {}
-
-        if isinstance(self._state, (StoppingState, StoppedState)):
-            return {}
-
-        return {
-            "connection-supervisor-stop": self._stop_requested,
-            "connection-supervisor-restart": self._restart_requested,
-        }
+        requests: dict[str, asyncio.Event] = {}
+        if self._state.accepts_stop:
+            requests["connection-supervisor-stop"] = self._stop_requested
+        if self._state.accepts_restart:
+            requests["connection-supervisor-restart"] = self._restart_requested
+        return requests
 
     def _active_workload_task(self) -> asyncio.Task[None] | None:
         """Return workload completion when it is an external race signal."""
@@ -154,19 +152,15 @@ class SupervisorRace:
     def _request_transition(self) -> type[AbstractState] | None:
         """Return the highest-priority lifecycle request for this race."""
 
-        if self._stop_requested.is_set() and not isinstance(
-            self._state, (StoppingState, StoppedState)
-        ):
+        if self._stop_requested.is_set() and self._state.accepts_stop:
             self._restart_requested.clear()
             return StoppingState
 
-        if self._restart_requested.is_set() and not isinstance(
-            self._state, (RestartingState, StoppingState, StoppedState)
-        ):
+        if self._restart_requested.is_set() and self._state.accepts_restart:
             self._restart_requested.clear()
             return RestartingState
 
-        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+        if self._restart_requested.is_set() and not self._state.accepts_restart:
             self._restart_requested.clear()
 
         return None
@@ -200,9 +194,9 @@ class ConnectionSupervisor:
     The supervisor does not start, stop, or restart TWS/IB Gateway
     itself, and it does not know whether the workload is live trading
     or dataloader work. Broker messages are categorized into restart
-    requests, broker-recovery wait signals, or recovery hints;
-    non-restart messages are interpreted immediately by the active
-    state.
+    requests, broker-connectivity-lost signals, or informational
+    data-farm messages; non-restart messages are interpreted immediately
+    by the active state or logged as context.
 
     States return their proposed next state, but supervisor-owned
     lifecycle requests keep final priority: stop overrides restart, and
@@ -229,7 +223,8 @@ class ConnectionSupervisor:
     # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
 
-    BROKER_WAIT_CODES = frozenset({1100, 2110, 2103, 2105, 2157, 10182})
+    BROKER_WAIT_CODES = frozenset({1100, 2110})
+    WEAK_DATA_FARM_CODES = frozenset({2103, 2105, 2157, 10182, 2104, 2106, 2158})
     DATA_LOST_CODE = 1101
     DATA_MAINTAINED_CODE = 1102
     SOCKET_RESET_CODE = 1300
@@ -292,6 +287,13 @@ class ConnectionSupervisor:
         """Record a reconnect/rebuild request."""
 
         restart_reason = reason or "restart requested"
+        if not self._state.accepts_restart:
+            log.debug(
+                f"Restart request ignored by {type(self._state).__name__}: "
+                f"{restart_reason}"
+            )
+            return False
+
         log.debug(f"Restart requested: {restart_reason}")
         self.mark_connection_unavailable(restart_reason)
         self._restart_requested.set()
@@ -350,6 +352,8 @@ class ConnectionSupervisor:
                 )
             else:
                 self._state.on_broker_message(code, message)
+        elif code in self.WEAK_DATA_FARM_CODES:
+            log.debug(f"Ignoring informational broker message {code}: {message}")
         else:
             self._state.on_broker_message(code, message)
 

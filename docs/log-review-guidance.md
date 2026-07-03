@@ -36,8 +36,8 @@ what was still working afterward.
 ## Broker Codes To Track
 
 - `1100`: IB reports connectivity between IB and TWS/Gateway is lost. Check
-  whether Haymaker moves into broker wait, whether the API socket stays open,
-  and whether subscriptions resume or later become stale.
+  whether Haymaker moves into broker-connectivity recovery, whether the API
+  socket stays open, and whether subscriptions resume or later become stale.
 - `1101`: Connectivity restored with data lost. Expect a restart/rebuild path;
   verify that subscriptions are resubmitted and workload restarts cleanly.
 - `1102`: Connectivity restored with data maintained. Verify whether existing
@@ -45,10 +45,13 @@ what was still working afterward.
   current request connectivity, not subscription freshness.
 - `1300`: API socket port reset. Expect reconnect/rebuild behavior; verify no
   stale workload keeps running on the old socket.
-- `2110`, `2103`, `2105`, `2157`, `10182`: Broker farm or data connectivity
-  degradation. Check whether Haymaker waits for broker recovery, whether
-  `updateEvent` or later broker messages trigger a probe, and whether waiting
-  avoids unnecessary reconnects without leaving stale subscriptions undetected.
+- `2110`: Broker connectivity between TWS/Gateway and IB servers is broken.
+  Check whether Haymaker enters broker-connectivity recovery and probes after
+  `1102` or grace expiry.
+- `2103`, `2105`, `2157`, `10182`, `2104`, `2106`, `2158`: Data-farm or live
+  update status messages. In the state-machine supervisor these are log context
+  only; look for `timeoutEvent`, failed probes, `1100`/`2110`, `1101`, `1300`,
+  or `disconnectedEvent` before attributing a restart to them.
 
 Also note repeated request errors, pacing violations, `ConnectionError`,
 streamer timeout messages, controller sync skips, and order/position mismatch
@@ -73,9 +76,10 @@ than filling the gap.
 
 ## Signs Of Healthy Recovery
 
-- Broker-degraded messages enter a broker wait without immediate unnecessary
+- `1100` or `2110` enters broker-connectivity recovery without immediate
   reconnect when the socket remains connected.
-- `updateEvent` or `1102` is followed by a successful probe while waiting.
+- `1102` or grace expiry is followed by a probe while broker connectivity is
+  marked lost.
 - A `1101`, `1300`, failed probe, or unexpected socket disconnect causes one
   coherent reconnect/rebuild cycle, not repeated overlapping restarts.
 - Workload cleanup happens once per restart/shutdown and a new workload starts
@@ -88,7 +92,8 @@ than filling the gap.
 
 - Connection appears restored, but streamers stop receiving updates and no
   timeout/restart follows.
-- Repeated broker wait cycles hide a condition that clearly requires reconnect.
+- Repeated broker-connectivity recovery cycles hide a condition that clearly
+  requires reconnect.
 - Multiple restart requests overlap, or a stop request is followed by reconnect.
 - Controller sync treats a routine outage as an unsafe unreconciled trading
   state instead of a recoverable missing-connection condition.

@@ -39,20 +39,22 @@ read from a flat mapping.
 
 For live execution, ``timeoutEvent`` is the active health signal after the IB
 client has received no traffic for ``app.appTimeout`` seconds. Haymaker probes
-the connection and requests a restart if the probe fails. Broker-degraded
-messages such as ``1100``, ``2110``, ``2103``, ``2105``, ``2157``, or
-``10182`` move Haymaker into a broker auto-recovery wait immediately while
-connected. ``app.auto_recovery_grace_period`` controls how long Haymaker waits
-there before requesting a restart cycle. While Haymaker is waiting for broker
-auto-recovery, ``updateEvent`` or ``1102`` can trigger a probe when IB traffic
-resumes; a failed probe keeps waiting without resetting the grace timer.
-Restart cycles reconnect immediately; ``app.retryDelay`` controls the pause
-between failed connection attempts.
+the connection and enters a delayed restart cycle if the probe fails. For the
+default ``state`` supervisor, only broker connectivity-loss messages ``1100``
+and ``2110`` move Haymaker into broker-connectivity recovery while connected.
+``app.auto_recovery_grace_period`` controls how long Haymaker waits there
+before probing the connection. Generic ``updateEvent`` traffic does not wake
+that state, and weak data-farm messages such as ``2103``, ``2105``, ``2157``,
+``10182``, ``2104``, ``2106``, and ``2158`` are logged as context only.
+Restart cycles after failed probes wait ``app.connection_lost_retry`` before
+reconnecting; ``app.retryDelay`` controls the pause between failed connection
+attempts.
 When IB sends ``1102`` (connectivity restored, data maintained),
 ``app.restart_on_recovered_connection`` controls whether Haymaker requests an
 immediate restart cycle anyway. The default is ``False``: Haymaker treats
-``1102`` as recovered connection state and leaves streamers to detect stale
-subscriptions. Set it to ``True`` to rebuild immediately after ``1102``.
+``1102`` as a prompt to probe while broker connectivity is marked lost and
+leaves streamers to detect stale subscriptions. Set it to ``True`` to rebuild
+immediately after ``1102``.
 ``max_recoveries`` limits consecutive unexpected supervisor-cycle recoveries
 before Haymaker stops trying to rebuild the same failing cycle. Planned restart
 requests and normal broker/socket recovery cycles do not consume this budget.

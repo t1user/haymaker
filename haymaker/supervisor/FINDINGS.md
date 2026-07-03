@@ -67,8 +67,9 @@ IB broker issue/recovery messages were noisy and not precise enough to be the
 primary recovery signal. The useful split remains:
 
 - data-lost or socket-reset style messages can request restart,
-- broker-wait messages may move the supervisor into a waiting/probing state,
-- data-maintained and farm recovery messages should generally be hints only,
+- hard broker-connectivity-lost messages can move the supervisor into a
+  waiting/probing state,
+- data-maintained and farm messages should generally be hints only,
   with probes and stream health deciding whether work is actually healthy.
 
 ## Non-Liquid Session Timeouts
@@ -101,4 +102,3 @@ After real-world testing, compare the two implementations using:
 Then pick one implementation, fold in the best ideas from the other, add only
 the improvements that still look useful after live testing, and delete the
 losing implementation.
-

@@ -27,6 +27,9 @@ class StoppedError(Exception):
 class AbstractState(ABC):
     """Base class for connection supervisor states."""
 
+    accepts_stop = True
+    accepts_restart = True
+
     def __init__(self, context: ConnectionSupervisor) -> None:
         self.context = context
         self.settings = context.settings
@@ -85,6 +88,8 @@ class AbstractState(ABC):
 class ConnectingState(AbstractState):
     """Connect the owned IB client."""
 
+    accepts_restart = False
+
     async def handle(self) -> StateResult:
         if self.ib.isConnected():
             return ProbingState
@@ -132,7 +137,7 @@ class ProbingState(AbstractState):
         done = await self.wait_for_wakeup_or(probe_task)
 
         if self._broker_wait_requested:
-            return WaitingForBrokerState
+            return BrokerConnectivityLostState
 
         if probe_task not in done:
             return ProbingState
@@ -145,7 +150,7 @@ class ProbingState(AbstractState):
                 return StartingWorkloadState
             return ConnectedState
 
-        return RestartingState
+        return BackoffRestartingState
 
     async def _probe(self) -> bool:
         """Return whether the broker accepted a small historical-data request."""
@@ -166,7 +171,7 @@ class ProbingState(AbstractState):
         if code in self.context.BROKER_WAIT_CODES:
             self._broker_wait_requested = True
             self.context.mark_connection_unavailable(
-                f"broker recovery wait requested by code {code}"
+                f"broker connectivity lost by code {code}"
             )
             self.wakeup.set()
 
@@ -194,8 +199,8 @@ class ConnectedState(AbstractState):
         await self.wait_for_wakeup_or()
 
         if self._broker_wait_requested:
-            self.context.mark_connection_unavailable("broker recovery wait")
-            return WaitingForBrokerState
+            self.context.mark_connection_unavailable("broker connectivity lost")
+            return BrokerConnectivityLostState
 
         if self._timeout_registered:
             return ProbingState
@@ -214,55 +219,69 @@ class ConnectedState(AbstractState):
         if code in self.context.BROKER_WAIT_CODES:
             self._broker_wait_requested = True
             self.context.mark_connection_unavailable(
-                f"broker recovery wait requested by code {code}"
+                f"broker connectivity lost by code {code}"
             )
             self.wakeup.set()
 
 
-class WaitingForBrokerState(AbstractState):
-    """Wait briefly for broker-side auto-recovery before rebuilding."""
-
-    def __init__(self, context: ConnectionSupervisor) -> None:
-        super().__init__(context)
-        self._probe_requested = False
+class BrokerConnectivityLostState(AbstractState):
+    """Wait briefly for broker-side connectivity to recover before probing."""
 
     async def handle(self) -> StateResult:
-        self.context.mark_connection_unavailable("broker recovery wait")
+        self.context.mark_connection_unavailable("broker connectivity lost")
         await self.wait_for_wakeup_or(
             asyncio.sleep(self.settings.auto_recovery_grace_period)
         )
 
-        if self._probe_requested:
-            return ProbingState
-
-        return RestartingState
+        return ProbingState
 
     def on_update(self) -> None:
-        """Request a probe when IB traffic resumes during broker recovery."""
-
-        self._probe_requested = True
-        self.wakeup.set()
+        """Ignore generic IB traffic while broker connectivity is lost."""
 
     def on_broker_message(self, code: int, message: str) -> None:
         """Request a probe when IB reports data-maintained recovery."""
 
         if code == self.context.DATA_MAINTAINED_CODE:
-            self._probe_requested = True
             self.wakeup.set()
 
 
 class RestartingState(AbstractState):
     """Stop active work and disconnect before reconnecting immediately."""
 
+    accepts_stop = False
+    accepts_restart = False
+
     async def handle(self) -> StateResult:
+        await self._cleanup_for_restart()
+        return ConnectingState
+
+    async def _cleanup_for_restart(self) -> None:
+        """Stop active work and disconnect the owned socket before reconnecting."""
+
         self.context.mark_connection_unavailable("restart requested")
         await self.context.cleanup_workload("restart requested")
         self.context.disconnect()
+
+
+class BackoffRestartingState(RestartingState):
+    """Stop active work, disconnect, and pause before reconnecting."""
+
+    accepts_stop = True
+    accepts_restart = False
+
+    async def handle(self) -> StateResult:
+        await self._cleanup_for_restart()
+        delay = self.settings.connection_lost_retry_delay
+        log.debug(f"Waiting {delay}s before reconnecting after failed probe.")
+        await asyncio.sleep(delay)
         return ConnectingState
 
 
 class StoppingState(AbstractState):
     """Final cleanup for supervisor shutdown."""
+
+    accepts_stop = False
+    accepts_restart = False
 
     async def handle(self) -> StateResult:
         self.context.mark_connection_unavailable("supervisor stopped")
@@ -273,6 +292,9 @@ class StoppingState(AbstractState):
 
 class StoppedState(AbstractState):
     """Terminal stopped state."""
+
+    accepts_stop = False
+    accepts_restart = False
 
     async def handle(self) -> StateResult:
         raise StoppedError

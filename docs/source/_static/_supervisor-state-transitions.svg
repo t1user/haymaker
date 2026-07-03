@@ -28,7 +28,7 @@
 <title>Probing&#45;&gt;Restarting</title>
 <path fill="none" stroke="#b3261e" stroke-width="2.4" stroke-dasharray="5,2" d="M285.74,-36.28C330.43,-239.2 332.58,-257.11 292.2,-361.24"/>
 <polygon fill="#b3261e" stroke="#b3261e" stroke-width="2.4" points="289.16,-360.37 288.82,-369.9 295.03,-362.66 289.16,-360.37"/>
-<text text-anchor="middle" x="292.87" y="-239.21" font-family="Arial" font-size="12.00">probe fails</text>
+<text text-anchor="middle" x="292.87" y="-239.21" font-family="Arial" font-size="12.00">probe fails (backoff)</text>
 </g>
 <!-- StartingWorkload&#45;&gt;Connected -->
 <g id="edge3" class="edge">
@@ -44,12 +44,12 @@
 <polygon fill="#1565c0" stroke="#1565c0" stroke-width="2.4" points="298.75,-42.62 291.66,-36.24 293.22,-45.64 298.75,-42.62"/>
 <text text-anchor="middle" x="312.57" y="-130.41" font-family="Arial" font-size="12.00">timeoutEvent</text>
 </g>
-<!-- Connected&#45;&gt;WaitingForBroker -->
+<!-- Connected&#45;&gt;BrokerConnectivityLost -->
 <g id="edge5" class="edge">
-<title>Connected&#45;&gt;WaitingForBroker</title>
+<title>Connected&#45;&gt;BrokerConnectivityLost</title>
 <path fill="none" stroke="#1565c0" stroke-width="2.4" d="M494.42,-221.14C480.24,-284.17 475.07,-301.15 453.53,-322.87"/>
 <polygon fill="#1565c0" stroke="#1565c0" stroke-width="2.4" points="451.3,-320.65 447,-329.16 455.67,-325.18 451.3,-320.65"/>
-<text text-anchor="middle" x="429.23" y="-290.92" font-family="Arial" font-size="12.00">broker&#45;wait codes</text>
+<text text-anchor="middle" x="429.23" y="-290.92" font-family="Arial" font-size="12.00">1100 / 2110</text>
 </g>
 <!-- Connected&#45;&gt;Restarting -->
 <g id="edge9" class="edge">
@@ -65,19 +65,19 @@
 <polygon fill="#6f3cc3" stroke="#6f3cc3" stroke-width="2.4" points="165.64,-347.32 156.51,-350.07 165.36,-353.61 165.64,-347.32"/>
 <text text-anchor="middle" x="292.22" y="-336.32" font-family="Arial" font-size="12.00">stop()</text>
 </g>
-<!-- WaitingForBroker&#45;&gt;Probing -->
+<!-- BrokerConnectivityLost&#45;&gt;Probing -->
 <g id="edge6" class="edge">
-<title>WaitingForBroker&#45;&gt;Probing</title>
+<title>BrokerConnectivityLost&#45;&gt;Probing</title>
 <path fill="none" stroke="#1565c0" stroke-width="2.4" d="M407.47,-329.19C295.14,-219.36 289.09,-205.7 282.76,-45.26"/>
 <polygon fill="#1565c0" stroke="#1565c0" stroke-width="2.4" points="285.9,-44.87 282.4,-36 279.6,-45.12 285.9,-44.87"/>
-<text text-anchor="middle" x="250.78" y="-202.1" font-family="Arial" font-size="12.00">updateEvent / 1102</text>
+<text text-anchor="middle" x="250.78" y="-202.1" font-family="Arial" font-size="12.00">1102 / grace expires</text>
 </g>
-<!-- WaitingForBroker&#45;&gt;Restarting -->
+<!-- BrokerConnectivityLost&#45;&gt;Restarting -->
 <g id="edge7" class="edge">
-<title>WaitingForBroker&#45;&gt;Restarting</title>
+<title>BrokerConnectivityLost&#45;&gt;Restarting</title>
 <path fill="none" stroke="#b3261e" stroke-width="2.4" stroke-dasharray="5,2" d="M400.64,-365.58C376.37,-382.35 362.4,-389.99 345.34,-392.24"/>
 <polygon fill="#b3261e" stroke="#b3261e" stroke-width="2.4" points="344.8,-389.13 336.07,-392.95 345.28,-395.41 344.8,-389.13"/>
-<text text-anchor="middle" x="406.58" y="-387.86" font-family="Arial" font-size="12.00">grace expires</text>
+<text text-anchor="middle" x="406.58" y="-387.86" font-family="Arial" font-size="12.00">restart request</text>
 </g>
 <!-- Restarting&#45;&gt;Connecting -->
 <g id="edge10" class="edge">
@@ -124,11 +124,11 @@
 <path fill="white" stroke="#1f2933" stroke-width="2" d="M542.49,-220.98C542.49,-220.98 454.49,-220.98 454.49,-220.98 448.49,-220.98 442.49,-214.98 442.49,-208.98 442.49,-208.98 442.49,-196.98 442.49,-196.98 442.49,-190.98 448.49,-184.98 454.49,-184.98 454.49,-184.98 542.49,-184.98 542.49,-184.98 548.49,-184.98 554.49,-190.98 554.49,-196.98 554.49,-196.98 554.49,-208.98 554.49,-208.98 554.49,-214.98 548.49,-220.98 542.49,-220.98"/>
 <text text-anchor="middle" x="498.49" y="-198.58" font-family="Arial" font-size="18.00">Connected</text>
 </g>
-<!-- WaitingForBroker -->
+<!-- BrokerConnectivityLost -->
 <g id="node5" class="node">
-<title>WaitingForBroker</title>
+<title>BrokerConnectivityLost</title>
 <path fill="white" stroke="#1f2933" stroke-width="2" d="M496.73,-365.49C496.73,-365.49 355.73,-365.49 355.73,-365.49 349.73,-365.49 343.73,-359.49 343.73,-353.49 343.73,-353.49 343.73,-341.49 343.73,-341.49 343.73,-335.49 349.73,-329.49 355.73,-329.49 355.73,-329.49 496.73,-329.49 496.73,-329.49 502.73,-329.49 508.73,-335.49 508.73,-341.49 508.73,-341.49 508.73,-353.49 508.73,-353.49 508.73,-359.49 502.73,-365.49 496.73,-365.49"/>
-<text text-anchor="middle" x="426.23" y="-343.09" font-family="Arial" font-size="18.00">WaitingForBroker</text>
+<text text-anchor="middle" x="426.23" y="-343.09" font-family="Arial" font-size="18.00">BrokerConnectivityLost</text>
 </g>
 <!-- Restarting -->
 <g id="node6" class="node">
