@@ -369,12 +369,12 @@ async def test_broker_data_maintained_continues_without_restart() -> None:
 
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
     assert supervisor.connection_unavailable.is_set()
-    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 2)
 
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
 
-    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 1)
-    assert not supervisor.connection_unavailable.is_set()
+    assert await wait_for_condition(
+        lambda: not supervisor.connection_unavailable.is_set()
+    )
     assert workload.starts == 1
     assert workload.stops == []
     assert fake_ib.connect_attempts == 1
@@ -461,7 +461,7 @@ async def test_restart_requests_are_blocked_during_broker_recovery_wait() -> Non
     assert await wait_for_condition(lambda: workload.starts == 1)
 
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
-    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 2)
+    assert supervisor.connection_unavailable.is_set()
 
     assert not supervisor.request_restart("timeout while broker is recovering")
     assert not supervisor.restart_requested.is_set()
@@ -469,13 +469,67 @@ async def test_restart_requests_are_blocked_during_broker_recovery_wait() -> Non
     assert workload.stops == []
 
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
-    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 1)
+    assert await wait_for_condition(
+        lambda: not supervisor.connection_unavailable.is_set()
+    )
     assert workload.starts == 1
     assert workload.stops == []
 
     assert supervisor.request_restart("manual restart after broker recovery")
     assert await wait_for_condition(lambda: workload.starts == 2)
     assert workload.stops == ["restart requested"]
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_broker_data_maintained_is_not_missed_before_waiter_starts() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, auto_recovery_grace_period=0.01)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+    fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
+
+    assert await wait_for_condition(
+        lambda: not supervisor.connection_unavailable.is_set()
+    )
+    await asyncio.sleep(0.03)
+
+    assert workload.starts == 1
+    assert workload.stops == []
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 0
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_socket_disconnect_bypasses_broker_recovery_restart_block() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib,
+        workload,
+        auto_recovery_grace_period=60,
+        connection_lost_retry_delay=0,
+    )
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+    assert supervisor.connection_unavailable.is_set()
+
+    fake_ib.disconnect()
+
+    assert await wait_for_condition(lambda: workload.starts == 2)
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.connect_attempts == 2
+    assert fake_ib.disconnect_count == 1
 
     await stop_and_wait(supervisor, task)
 
