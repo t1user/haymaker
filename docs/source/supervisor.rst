@@ -72,14 +72,15 @@ work and return a proposed next state. The supervisor owns lifecycle priority:
 ``stop()`` wins over restart, and restart requests are ignored while restart or
 shutdown cleanup is already active.
 
-The run loop evaluates each state through a supervisor race. The race waits for
-the state's ``handle()`` task together with the lifecycle request events and
-workload task that are meaningful for the active state. This is needed because
-service interruptions are independent of normal state progress: broker messages,
-unexpected socket disconnects, explicit shutdown, and workload completion can
-arrive while a state is blocked in broker I/O, a retry sleep, or a state-local
-wait. The first completed task wakes the supervisor, then the race applies the
-central priority rules and returns the next state.
+The run loop evaluates each state through a supervisor race. Each state declares
+whether stop requests, restart requests, and workload completion may interrupt
+it. The race waits for the state's ``handle()`` task together with only those
+state-declared external signals. This is needed because service interruptions
+are independent of normal state progress: broker messages, unexpected socket
+disconnects, explicit shutdown, and workload completion can arrive while a
+state is blocked in broker I/O, a retry sleep, or a state-local wait. The first
+completed task wakes the supervisor, then the race applies the central priority
+rules and returns the next state.
 
 Broker messages are grouped into three categories:
 
@@ -91,10 +92,11 @@ Broker messages are grouped into three categories:
 ``timeoutEvent`` remains an active health check while connected. It triggers a
 probe rather than an immediate reconnect. While broker connectivity is reported
 lost, ``1102`` triggers a probe; generic ``updateEvent`` traffic and data-farm
-messages do not. A failed probe enters a backoff restart state before
-reconnecting. A successful probe proves current request connectivity, but it
-does not prove existing subscriptions are fresh; streamer timeouts should still
-detect stale subscriptions later.
+messages do not. A failed probe enters a backoff restart path before
+reconnecting: cleanup is non-interruptible, while the backoff wait can be
+interrupted by ``stop()``. A successful probe proves current request
+connectivity, but it does not prove existing subscriptions are fresh; streamer
+timeouts should still detect stale subscriptions later.
 
 State Transition Chart
 ======================
@@ -120,8 +122,8 @@ and goes to ``Stopping`` instead of reconnecting.
 
 Restart requests coalesce. Multiple accepted restart requests before the
 rebuild cycle are handled as one restart. States declare whether restart can
-interrupt them: ``Connecting`` and the backoff restart state consume redundant
-restart requests at the source, and ``Restarting``, ``Stopping``, or
+interrupt them: ``Connecting`` and the backoff wait state consume redundant
+restart requests at the source, and restart cleanup, ``Stopping``, or
 ``Stopped`` also ignore them.
 
 Broker connectivity loss is not a hidden connected sub-state. ``1100`` and

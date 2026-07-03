@@ -684,7 +684,7 @@ async def test_connecting_ignores_redundant_restart_but_honors_stop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_restart_request_overrides_pending_broker_wait() -> None:
+async def test_restart_request_overrides_pending_connectivity_loss() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload)
@@ -701,6 +701,38 @@ async def test_restart_request_overrides_pending_broker_wait() -> None:
     assert fake_ib.disconnect_count == 1
 
     await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_stop_during_backoff_restart_cleanup_prevents_reconnect() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    workload.stop_started = asyncio.Event()
+    workload.release_stop = asyncio.Event()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+
+    fake_ib.probe_results = [[]]
+    fake_ib.timeoutEvent.emit(20)
+    await asyncio.wait_for(workload.stop_started.wait(), timeout=1)
+
+    supervisor.stop()
+
+    await asyncio.sleep(0.05)
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.disconnect_count == 0
+    assert not task.done()
+
+    workload.release_stop.set()
+
+    await asyncio.wait_for(task, timeout=1)
+
+    assert current_state(supervisor) is StoppedState
+    assert workload.stops == ["restart requested"]
+    assert fake_ib.connect_attempts == 1
+    assert fake_ib.disconnect_count == 1
 
 
 @pytest.mark.asyncio

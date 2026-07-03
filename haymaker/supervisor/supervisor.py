@@ -19,7 +19,6 @@ from .states import (
     ConnectingState,
     RestartingState,
     StoppedError,
-    StoppedState,
     StoppingState,
 )
 
@@ -38,10 +37,11 @@ class SupervisorRace:
     race gives those signals one centralized policy point instead of spreading
     interruption checks across states and event handlers.
 
-    Each run creates a task for ``state.handle()`` plus the request waiters and
-    workload task that are meaningful for the active state. The first completed
-    task wins; request events are then prioritized over normal state completion,
-    with stop taking precedence over restart.
+    Each run creates request waiters first, checks already-pending lifecycle
+    requests, then creates a task for ``state.handle()`` if state work should
+    actually begin. The first completed task wins; request events are then
+    prioritized over normal state completion, with stop taking precedence over
+    restart.
     """
 
     def __init__(
@@ -71,10 +71,6 @@ class SupervisorRace:
     async def __aenter__(self) -> SupervisorRace:
         """Create tasks participating in the current supervisor race."""
 
-        self._state_task = asyncio.create_task(
-            self._state.handle(),
-            name="connection-supervisor-state",
-        )
         self._request_tasks = {
             name: asyncio.create_task(event.wait(), name=f"{name}-request")
             for name, event in self._active_requests().items()
@@ -100,13 +96,14 @@ class SupervisorRace:
     async def wait(self) -> type[AbstractState]:
         """Wait for the first active task and return the proposed next state."""
 
-        if self._state_task is None:
-            raise RuntimeError("SupervisorRace must be entered before waiting.")
-
         request_transition = self._request_transition()
         if request_transition is not None:
             return request_transition
 
+        self._state_task = asyncio.create_task(
+            self._state.handle(),
+            name="connection-supervisor-state",
+        )
         tasks: set[asyncio.Future[Any]] = {
             self._state_task,
             *self._request_tasks.values(),
@@ -144,7 +141,7 @@ class SupervisorRace:
     def _active_workload_task(self) -> asyncio.Task[None] | None:
         """Return workload completion when it is an external race signal."""
 
-        if isinstance(self._state, (RestartingState, StoppingState, StoppedState)):
+        if not self._state.observes_workload:
             return None
 
         return self._workload_task
@@ -223,7 +220,7 @@ class ConnectionSupervisor:
     # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
 
-    BROKER_WAIT_CODES = frozenset({1100, 2110})
+    BROKER_CONNECTIVITY_LOST_CODES = frozenset({1100, 2110})
     WEAK_DATA_FARM_CODES = frozenset({2103, 2105, 2157, 10182, 2104, 2106, 2158})
     DATA_LOST_CODE = 1101
     DATA_MAINTAINED_CODE = 1102

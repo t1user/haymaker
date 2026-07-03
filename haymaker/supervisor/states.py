@@ -29,6 +29,7 @@ class AbstractState(ABC):
 
     accepts_stop = True
     accepts_restart = True
+    observes_workload = True
 
     def __init__(self, context: ConnectionSupervisor) -> None:
         self.context = context
@@ -125,7 +126,7 @@ class ProbingState(AbstractState):
 
     def __init__(self, context: ConnectionSupervisor) -> None:
         super().__init__(context)
-        self._broker_wait_requested = False
+        self._connectivity_lost_requested = False
 
     async def handle(self) -> StateResult:
         if not self.ib.isConnected():
@@ -136,7 +137,7 @@ class ProbingState(AbstractState):
         )
         done = await self.wait_for_wakeup_or(probe_task)
 
-        if self._broker_wait_requested:
+        if self._connectivity_lost_requested:
             return BrokerConnectivityLostState
 
         if probe_task not in done:
@@ -150,7 +151,7 @@ class ProbingState(AbstractState):
                 return StartingWorkloadState
             return ConnectedState
 
-        return BackoffRestartingState
+        return BackoffRestartCleanupState
 
     async def _probe(self) -> bool:
         """Return whether the broker accepted a small historical-data request."""
@@ -166,10 +167,10 @@ class ProbingState(AbstractState):
         return bool(bars)
 
     def on_broker_message(self, code: int, message: str) -> None:
-        """Wait for broker recovery if degradation is reported while probing."""
+        """Wait for broker connectivity recovery if loss is reported."""
 
-        if code in self.context.BROKER_WAIT_CODES:
-            self._broker_wait_requested = True
+        if code in self.context.BROKER_CONNECTIVITY_LOST_CODES:
+            self._connectivity_lost_requested = True
             self.context.mark_connection_unavailable(
                 f"broker connectivity lost by code {code}"
             )
@@ -190,7 +191,7 @@ class ConnectedState(AbstractState):
     def __init__(self, context: ConnectionSupervisor) -> None:
         super().__init__(context)
         self._timeout_registered = False
-        self._broker_wait_requested = False
+        self._connectivity_lost_requested = False
 
     async def handle(self) -> StateResult:
         if self.settings.app_timeout:
@@ -198,7 +199,7 @@ class ConnectedState(AbstractState):
 
         await self.wait_for_wakeup_or()
 
-        if self._broker_wait_requested:
+        if self._connectivity_lost_requested:
             self.context.mark_connection_unavailable("broker connectivity lost")
             return BrokerConnectivityLostState
 
@@ -214,10 +215,10 @@ class ConnectedState(AbstractState):
         self.wakeup.set()
 
     def on_broker_message(self, code: int, message: str) -> None:
-        """Wait for broker recovery when degradation is reported."""
+        """Wait for broker connectivity recovery if loss is reported."""
 
-        if code in self.context.BROKER_WAIT_CODES:
-            self._broker_wait_requested = True
+        if code in self.context.BROKER_CONNECTIVITY_LOST_CODES:
+            self._connectivity_lost_requested = True
             self.context.mark_connection_unavailable(
                 f"broker connectivity lost by code {code}"
             )
@@ -250,9 +251,15 @@ class RestartingState(AbstractState):
 
     accepts_stop = False
     accepts_restart = False
+    observes_workload = False
 
     async def handle(self) -> StateResult:
         await self._cleanup_for_restart()
+        return self.next_state()
+
+    def next_state(self) -> StateResult:
+        """Return the state to enter after restart cleanup completes."""
+
         return ConnectingState
 
     async def _cleanup_for_restart(self) -> None:
@@ -263,18 +270,27 @@ class RestartingState(AbstractState):
         self.context.disconnect()
 
 
-class BackoffRestartingState(RestartingState):
-    """Stop active work, disconnect, and pause before reconnecting."""
+class BackoffRestartingState(AbstractState):
+    """Pause before reconnecting after failed-probe cleanup has finished."""
 
     accepts_stop = True
     accepts_restart = False
+    observes_workload = False
 
     async def handle(self) -> StateResult:
-        await self._cleanup_for_restart()
         delay = self.settings.connection_lost_retry_delay
         log.debug(f"Waiting {delay}s before reconnecting after failed probe.")
         await asyncio.sleep(delay)
         return ConnectingState
+
+
+class BackoffRestartCleanupState(RestartingState):
+    """Stop active work and disconnect before a delayed reconnect."""
+
+    def next_state(self) -> StateResult:
+        """Return the backoff-wait state after cleanup completes."""
+
+        return BackoffRestartingState
 
 
 class StoppingState(AbstractState):
@@ -282,6 +298,7 @@ class StoppingState(AbstractState):
 
     accepts_stop = False
     accepts_restart = False
+    observes_workload = False
 
     async def handle(self) -> StateResult:
         self.context.mark_connection_unavailable("supervisor stopped")
@@ -295,6 +312,7 @@ class StoppedState(AbstractState):
 
     accepts_stop = False
     accepts_restart = False
+    observes_workload = False
 
     async def handle(self) -> StateResult:
         raise StoppedError
