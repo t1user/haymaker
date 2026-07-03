@@ -177,11 +177,11 @@ class ConnectionSupervisor:
         if self.onion_task is not None:
             self.onion_task.cancel()
 
-    def request_restart(self, reason: str = "", *, hard: bool = False) -> bool:
-        """Record a reconnect/rebuild request."""
+    def request_restart(self, reason: str = "") -> bool:
+        """Record a reconnect/rebuild request if this phase accepts one."""
 
         restart_reason = reason or "restart requested"
-        if self._resets_blocked and not hard:
+        if self._resets_blocked:
             log.debug(
                 f"Restart request blocked during broker recovery: {restart_reason}"
             )
@@ -190,6 +190,12 @@ class ConnectionSupervisor:
         self.mark_connection_unavailable(restart_reason)
         self.restart_requested.set()
         return True
+
+    def _request_restart_now(self, reason: str = "") -> bool:
+        """Record a supervisor-owned immediate reconnect/rebuild request."""
+
+        self.block_resets_clear()
+        return self.request_restart(reason)
 
     def mark_connection_available(self, reason: str) -> None:
         """Allow workload sync after the supervisor has a usable connection."""
@@ -228,7 +234,7 @@ class ConnectionSupervisor:
 
     def onDisconnectedEvent(self, *args) -> None:
         if not self._intentional_disconnect:
-            if self.request_restart("IB socket disconnected", hard=True):
+            if self._request_restart_now("IB socket disconnected"):
                 self._delay_next_restart = True
 
     async def wait_before_reconnect(self, delay: float) -> bool:
@@ -542,7 +548,7 @@ class ConnectionIssueManager:
             self.wakeup.set()
         if code == self.ct.SOCKET_RESET_CODE:
             log.debug(f"Broker reports API socket reset: {message}")
-            self.restart(f"broker reset API socket port ({code})", hard=True)
+            self.restart(f"broker reset API socket port ({code})")
         elif code == self.ct.DATA_MAINTAINED_CODE:
             log.debug(f"Broker reports data maintained after recovery: {message}")
             if self._broker_wait_requested:
@@ -550,8 +556,7 @@ class ConnectionIssueManager:
                 self._broker_recovery_event.set()
             elif self.ct.settings.restart_on_recovered_connection:
                 self.restart(
-                    f"broker connectivity restored with data maintained ({code})",
-                    hard=True,
+                    f"broker connectivity restored with data maintained ({code})"
                 )
         elif code == self.ct.DATA_LOST_CODE:
             log.debug(f"Broker reports data lost after recovery: {message}")
@@ -559,9 +564,7 @@ class ConnectionIssueManager:
                 self._broker_outcome = BrokerRecoveryOutcome.DATA_LOST
                 self._broker_recovery_event.set()
             else:
-                self.restart(
-                    f"broker connectivity restored with data lost ({code})", hard=True
-                )
+                self.restart(f"broker connectivity restored with data lost ({code})")
         elif code in self.ct.WEAK_DATA_FARM_CODES:
             log.debug(f"Ignoring informational broker message {code}: {message}")
 
@@ -598,9 +601,8 @@ class ConnectionIssueManager:
             return False
         return bool(bars)
 
-    def restart(self, reason: str = "", *, hard: bool = False) -> None:
-        self.ct.block_resets_clear()
-        self.ct.request_restart(reason, hard=hard)
+    def restart(self, reason: str = "") -> None:
+        self.ct._request_restart_now(reason)
 
     def close(self) -> None:
         self.ct.block_resets_clear()
