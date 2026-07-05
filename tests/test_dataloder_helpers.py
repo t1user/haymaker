@@ -38,7 +38,14 @@ def test_duration_str():
     ],
 )
 def test_timedelta_and_barSize_to_duration_in_secs(duration, bar_size, output):
-    assert timedelta_to_duration_in_secs(duration, bar_size, max_bars=100_000) == output
+    assert (
+        timedelta_to_duration_in_secs(
+            duration,
+            bar_size,
+            target_bars_per_request=100_000,
+        )
+        == output
+    )
 
 
 @pytest.mark.parametrize(
@@ -51,7 +58,11 @@ def test_timedelta_and_barSize_to_duration_in_secs(duration, bar_size, output):
 )
 def test_timedelta_and_barSize_to_duration_str(duration, barSize, output):
     assert (
-        timedelta_and_barSize_to_duration_str(duration, barSize, max_bars=100_000)
+        timedelta_and_barSize_to_duration_str(
+            duration,
+            barSize,
+            target_bars_per_request=100_000,
+        )
         == output
     )
 
@@ -73,18 +84,18 @@ def test_timedelta_and_barSize_to_duration_str_caps_year_duration():
         timedelta_and_barSize_to_duration_str(
             timedelta(days=100_000),
             "1 day",
-            max_bars=1_000_000,
+            target_bars_per_request=1_000_000,
         )
         == "68 Y"
     )
 
 
-def test_timedelta_and_barSize_to_duration_str_max_bars_reduces_request():
+def test_timedelta_and_barSize_to_duration_str_target_bars_reduces_request():
     assert (
         timedelta_and_barSize_to_duration_str(
             timedelta(days=5),
             "30 secs",
-            max_bars=10,
+            target_bars_per_request=10,
         )
         == "300 S"
     )

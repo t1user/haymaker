@@ -34,8 +34,7 @@ Example settings file:
    source: nq.csv
    barSize: 30 secs
    wts: TRADES
-   max_period: 120
-   max_bars: 100000
+   max_lookback_days: null
    gap_fill_mode: off
    useRTH: false
    clientId: 1
@@ -47,9 +46,9 @@ Run it:
 
    dataloader -f nq_30s.yaml
 
-The first run backfills the available range allowed by ``max_period`` and IB's
-availability rules. Re-running the same command updates the same datastore
-series from its stored boundary.
+The first run backfills the available range allowed by IB and the datastore
+state. Re-running the same command updates the same datastore series from its
+stored boundary.
 
 Source CSV
 ==========
@@ -137,7 +136,6 @@ Common futures setup:
    barSize: 30 secs
    wts: TRADES
    futures_selector: current_and_expired
-   max_period: 120
 
 Exact-contract setup:
 
@@ -177,7 +175,7 @@ Set simple config values from the command line:
 
 For booleans and numbers, prefer a YAML settings file. Command-line
 ``-s KEY VALUE`` values are strings, while YAML preserves types like
-``false``, ``120``, and ``100000``.
+``false``, ``365``, and ``null``.
 
 Configuration
 =============
@@ -198,13 +196,12 @@ Common settings:
    IB ``whatToShow`` value. Common choices are ``TRADES``, ``MIDPOINT``,
    ``BID``, ``ASK``, and ``BID_ASK``.
 
-``max_period``
-   Maximum lookback span, in calendar days, considered by one dataloader run.
-   Increase it for deeper backfills, or keep it smaller for incremental runs.
-
-``max_bars``
-   Maximum number of bars requested in one historical-data call. The dataloader
-   also applies IB's maximum request-duration rules for the selected bar size.
+``max_lookback_days``
+   Optional maximum lookback span, in calendar days, considered by one
+   dataloader run. Omit it or set it to ``null`` to load all data available
+   under IB's limits and the datastore's own backfill state. Set it to a
+   positive integer, such as ``30``, to deliberately limit a run to recent
+   history.
 
 ``gap_fill_mode``
    Gap-fill behavior for already stored data. See :ref:`dataloader-gap-fill`.
@@ -232,7 +229,7 @@ Example: daily stock bars:
    source: stocks.csv
    barSize: 1 day
    wts: TRADES
-   max_period: 3650
+   max_lookback_days: null
    gap_fill_mode: off
    useRTH: true
 
@@ -244,7 +241,7 @@ Example: hourly FX midpoint bars:
    source: fx.csv
    barSize: 1 hour
    wts: MIDPOINT
-   max_period: 365
+   max_lookback_days: 365
    gap_fill_mode: auto
    useRTH: false
 
@@ -321,6 +318,10 @@ dataloader avoids requests that are known to be unavailable:
 * expired futures are not requested earlier than two years before exact expiry;
 * expired options, futures options, and warrants are skipped when exact expiry
   is known.
+
+Historical-data request chunk size is an internal dataloader policy. It is
+large enough for efficient backfills, but still capped by IB's documented
+duration rules for the selected bar size.
 
 When a backfill request reaches a no-data boundary for a series that already
 has stored data, the dataloader writes ``backfill_exhausted: true`` to that

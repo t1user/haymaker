@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+DEFAULT_TARGET_BARS_PER_REQUEST = 100_000
+
 # source:
 # https://ibkrcampus.com/campus/ibkr-api-page/twsapi-doc/#historical-bars
 BAR_SIZE_SECONDS = {
@@ -92,16 +94,20 @@ def timedelta_normalizer(seconds: float) -> int:
 
 
 def timedelta_to_duration_in_secs(
-    duration: timedelta, bar_size_in_secs: int, max_bars: int
+    duration: timedelta,
+    bar_size_in_secs: int,
+    target_bars_per_request: int = DEFAULT_TARGET_BARS_PER_REQUEST,
 ) -> int:
-    max_bars_duration_in_secs = max_bars * bar_size_in_secs
+    target_duration_in_secs = target_bars_per_request * bar_size_in_secs
     return min(
-        timedelta_normalizer(duration.total_seconds()), max_bars_duration_in_secs
+        timedelta_normalizer(duration.total_seconds()), target_duration_in_secs
     )
 
 
 def timedelta_and_barSize_to_duration_str(
-    duration: timedelta, barSize: str, max_bars: int = 100_000
+    duration: timedelta,
+    barSize: str,
+    target_bars_per_request: int = DEFAULT_TARGET_BARS_PER_REQUEST,
 ) -> str:
     """
     Given bar size str and duration, return optimal duration str.
@@ -114,13 +120,16 @@ def timedelta_and_barSize_to_duration_str(
 
     barSize - barSize str acceptable by IB's reqHistoricalData
 
-    max_bars - maximum number of bars to be requested at once
+    target_bars_per_request - target number of bars to request at once
 
     """
     _validate_bar_size(barSize)
     bar_size_in_secs = duration_in_secs(barSize)
     duration_seconds = max(
-        timedelta_to_duration_in_secs(duration, bar_size_in_secs, max_bars), 30
+        timedelta_to_duration_in_secs(
+            duration, bar_size_in_secs, target_bars_per_request
+        ),
+        30,
     )
 
     return _cap_duration_str(

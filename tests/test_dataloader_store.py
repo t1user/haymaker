@@ -31,7 +31,6 @@ def dataloader_module(monkeypatch):
         "logging_config": None,
         "barSize": "30 secs",
         "wts": "TRADES",
-        "max_bars": 100_000,
         "gap_fill_mode": "off",
         "useRTH": False,
         "auto_save_interval": 0,
@@ -40,7 +39,6 @@ def dataloader_module(monkeypatch):
         "source": "contracts.csv",
         "pacer_no_restriction": False,
         "pacer_allowance_fraction": 1.0,
-        "max_period": 120,
     }
     for key, value in config_values.items():
         monkeypatch.setitem(CONFIG.maps[0], key, value)
@@ -151,14 +149,14 @@ async def test_task_planner_one_row_store_does_not_schedule_full_duplicate(
     tasks = TaskPlanner(
         wrapper,
         store_index[0],
-        max_period_days=100,
+        max_lookback_days=100,
     ).planned_ranges()
 
     assert tasks == [PlannedRange(store_index[0], store_index[-1], "update")]
 
 
 @pytest.mark.asyncio
-async def test_task_planner_clamps_start_to_max_period(contract):
+async def test_task_planner_clamps_start_to_max_lookback(contract):
     """TaskPlanner should own the run lookback clamp for download ranges."""
 
     now = datetime(2025, 1, 10, tzinfo=timezone.utc)
@@ -168,12 +166,29 @@ async def test_task_planner_clamps_start_to_max_period(contract):
     tasks = TaskPlanner(
         wrapper,
         headstamp,
-        max_period_days=3,
+        max_lookback_days=3,
     ).planned_ranges()
 
     assert tasks == [
         PlannedRange(datetime(2025, 1, 7, tzinfo=timezone.utc), now, "backfill")
     ]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_without_max_lookback_uses_headstamp(contract):
+    """No user lookback should leave headTimestamp as the start candidate."""
+
+    now = datetime(2025, 1, 10, tzinfo=timezone.utc)
+    headstamp = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "1 min")
+
+    tasks = TaskPlanner(
+        wrapper,
+        headstamp,
+        max_lookback_days=None,
+    ).planned_ranges()
+
+    assert tasks == [PlannedRange(headstamp, now, "backfill")]
 
 
 @pytest.mark.asyncio
@@ -187,7 +202,7 @@ async def test_task_planner_clamps_small_bars_to_six_month_limit(contract):
     tasks = TaskPlanner(
         wrapper,
         headstamp,
-        max_period_days=5000,
+        max_lookback_days=None,
     ).planned_ranges()
 
     assert tasks == [PlannedRange(now - timedelta(days=180), now, "backfill")]
@@ -204,7 +219,7 @@ async def test_task_planner_does_not_apply_six_month_limit_to_one_min(contract):
     tasks = TaskPlanner(
         wrapper,
         headstamp,
-        max_period_days=5000,
+        max_lookback_days=None,
     ).planned_ranges()
 
     assert tasks == [PlannedRange(headstamp, now, "backfill")]
@@ -225,7 +240,7 @@ async def test_task_planner_clamps_expired_future_to_two_year_limit():
     tasks = TaskPlanner(
         wrapper,
         date(2020, 1, 1),
-        max_period_days=5000,
+        max_lookback_days=None,
     ).planned_ranges()
 
     assert tasks == [PlannedRange(date(2023, 1, 3), date(2025, 1, 2), "backfill")]
@@ -246,7 +261,7 @@ async def test_task_planner_keeps_active_future_unclamped():
     tasks = TaskPlanner(
         wrapper,
         date(2020, 1, 1),
-        max_period_days=5000,
+        max_lookback_days=None,
     ).planned_ranges()
 
     assert tasks == [PlannedRange(date(2020, 1, 1), date(2025, 1, 3), "backfill")]
@@ -268,7 +283,7 @@ async def test_task_planner_skips_expired_options():
         TaskPlanner(
             wrapper,
             date(2020, 1, 1),
-            max_period_days=5000,
+            max_lookback_days=None,
         ).planned_ranges()
         == []
     )
@@ -285,7 +300,7 @@ async def test_task_planner_missing_metadata_still_schedules_backfill(contract):
     tasks = TaskPlanner(
         wrapper,
         headstamp,
-        max_period_days=3,
+        max_lookback_days=3,
     ).planned_ranges()
 
     assert tasks == [
@@ -315,14 +330,14 @@ async def test_task_planner_skips_exhausted_backfill_but_keeps_update(
     tasks = TaskPlanner(
         wrapper,
         datetime(2025, 1, 1, tzinfo=timezone.utc),
-        max_period_days=100,
+        max_lookback_days=100,
     ).planned_ranges()
 
     assert tasks == [PlannedRange(store_index[-1], now, "update")]
     assert TaskPlanner(
         wrapper,
         datetime(2025, 1, 1, tzinfo=timezone.utc),
-        max_period_days=100,
+        max_lookback_days=100,
     ).planned_ranges() == [PlannedRange(store_index[-1], now, "update")]
 
 
@@ -344,7 +359,7 @@ async def test_task_planner_exhausted_backfill_without_update_has_no_range(
         TaskPlanner(
             wrapper,
             datetime(2025, 1, 1, tzinfo=timezone.utc),
-            max_period_days=100,
+            max_lookback_days=100,
         ).planned_ranges()
         == []
     )
@@ -375,7 +390,7 @@ async def test_gap_planning_preserves_execution_order(contract):
     planner = TaskPlanner(
         wrapper,
         headstamp,
-        max_period_days=100,
+        max_lookback_days=100,
         gap_fill_mode="heuristic",
         timezone_name="UTC",
     )
@@ -413,7 +428,7 @@ async def test_task_planner_skips_gap_fill_for_continuous_futures():
     tasks = TaskPlanner(
         wrapper,
         datetime(2025, 1, 1, 9, tzinfo=timezone.utc),
-        max_period_days=100,
+        max_lookback_days=100,
         gap_fill_mode="heuristic",
     ).planned_ranges()
 
@@ -437,7 +452,7 @@ async def test_task_planner_backfills_empty_continuous_future_once():
     tasks = TaskPlanner(
         wrapper,
         datetime(2025, 1, 1, tzinfo=timezone.utc),
-        max_period_days=100,
+        max_lookback_days=100,
         gap_fill_mode="heuristic",
     ).planned_ranges()
 

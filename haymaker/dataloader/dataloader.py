@@ -55,7 +55,6 @@ log = logging.getLogger(__name__)
 
 BARSIZE: str = bar_size_validator(CONFIG["barSize"])
 WTS: str = wts_validator(CONFIG["wts"])
-MAX_BARS: int = CONFIG.get("max_bars", 50000)
 GAP_FILL_MODE: GapFillMode = CONFIG.get("gap_fill_mode", "off")
 USE_RTH: bool = CONFIG.get("useRTH", False)
 AUTO_SAVE_INTERVAL: int = CONFIG.get("auto_save_interval", 0)
@@ -63,14 +62,14 @@ NUMBER_OF_WORKERS: int = CONFIG.get("number_of_workers", 20)
 SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
 PACER_ALLOWANCE_FRACTION: float = CONFIG.get("pacer_allowance_fraction", 1.0)
-MAX_PERIOD: int = CONFIG.get("max_period", 30)
+MAX_LOOKBACK_DAYS: int | None = CONFIG.get("max_lookback_days")
 
 if PACER_ALLOWANCE_FRACTION <= 0:
     raise ValueError("pacer_allowance_fraction must be greater than 0")
 
 log.debug(
-    f"settings: {BARSIZE=}, {WTS=}, {MAX_BARS=}, {GAP_FILL_MODE=}, {USE_RTH=}, "
-    f"{AUTO_SAVE_INTERVAL=}, {NUMBER_OF_WORKERS=}, {MAX_PERIOD=}, "
+    f"settings: {BARSIZE=}, {WTS=}, {GAP_FILL_MODE=}, {USE_RTH=}, "
+    f"{AUTO_SAVE_INTERVAL=}, {NUMBER_OF_WORKERS=}, {MAX_LOOKBACK_DAYS=}, "
     f"{PACER_ALLOWANCE_FRACTION=}"
 )
 
@@ -193,7 +192,8 @@ class DownloadJob:
         sink: Persistence boundary for downloaded bars.
         queue: Planned download ranges for this contract.
         bar_size: IB bar size used to calculate request durations.
-        max_bars: Maximum bars allowed per request.
+        target_bars_per_request: Target chunk size used before applying IB's
+            hard duration limits.
         auto_save_interval: Optional interval for flushing buffered bars.
     """
 
@@ -201,7 +201,7 @@ class DownloadJob:
     sink: HistorySink = field(repr=False)
     queue: list[DownloadContainer] = field(default_factory=list, repr=False)
     bar_size: str = BARSIZE
-    max_bars: int = MAX_BARS
+    target_bars_per_request: int = helpers.DEFAULT_TARGET_BARS_PER_REQUEST
     auto_save_interval: int = AUTO_SAVE_INTERVAL
     gap_learner: RunGapLearner | None = field(default=None, repr=False)
     _pulse: ibi.Event | None = field(default=None, repr=False, init=False)
@@ -325,7 +325,7 @@ class DownloadJob:
         else:
             delta = next_date - cast(date, self._container.from_date)
         return helpers.timedelta_and_barSize_to_duration_str(
-            delta, self.bar_size, self.max_bars
+            delta, self.bar_size, self.target_bars_per_request
         )
 
     def __str__(self) -> str:
@@ -439,8 +439,7 @@ class Manager:
     source: str = SOURCE
     gap_fill_mode: GapFillMode = GAP_FILL_MODE
     use_rth: bool = USE_RTH
-    max_period: int = MAX_PERIOD
-    max_bars: int = MAX_BARS
+    max_lookback_days: int | None = MAX_LOOKBACK_DAYS
     auto_save_interval: int = AUTO_SAVE_INTERVAL
     wts: str = WTS
     bar_size: str = BARSIZE
@@ -505,7 +504,7 @@ class Manager:
         planner = TaskPlanner(
             store,
             headstamp,
-            max_period_days=self.max_period,
+            max_lookback_days=self.max_lookback_days,
             gap_fill_mode=self._sync_gap_fill_mode,
             timezone_name=self.pacing.contract_timezone(store.contract),
             typical_patterns=self.gap_learner.typical_patterns,
@@ -597,7 +596,7 @@ class Manager:
         return TaskPlanner(
             planner.store,
             planner.head,
-            planner.max_period_days,
+            planner.max_lookback_days,
             gap_fill_mode=mode,
             timezone_name=timezone_name or planner.timezone_name,
             sessions=sessions,
@@ -662,7 +661,6 @@ class Manager:
                 sink,
                 tasks,
                 bar_size=self.bar_size,
-                max_bars=self.max_bars,
                 auto_save_interval=self.auto_save_interval,
                 gap_learner=self.gap_learner,
             )

@@ -20,7 +20,6 @@ def dataloader_module(monkeypatch):
         "logging_config": None,
         "barSize": "30 secs",
         "wts": "TRADES",
-        "max_bars": 100_000,
         "gap_fill_mode": "off",
         "useRTH": False,
         "auto_save_interval": 0,
@@ -29,7 +28,6 @@ def dataloader_module(monkeypatch):
         "source": "contracts.csv",
         "pacer_no_restriction": False,
         "pacer_allowance_fraction": 1.0,
-        "max_period": 120,
     }
     for key, value in config_values.items():
         monkeypatch.setitem(CONFIG.maps[0], key, value)
@@ -518,8 +516,7 @@ async def test_manager_policy_flows_to_store_and_download_job(
         bar_size="1 day",
         wts="MIDPOINT",
         now=datetime(2025, 1, 10, tzinfo=timezone.utc),
-        max_period=120,
-        max_bars=12,
+        max_lookback_days=120,
     )
     job = await anext(manager._job_generator())
 
@@ -529,7 +526,11 @@ async def test_manager_policy_flows_to_store_and_download_job(
     assert not hasattr(manager.pacing, "bar_size")
     assert not hasattr(manager.pacing, "wts")
     assert job.bar_size == "1 day"
-    assert job.max_bars == 12
+    assert not hasattr(job, "max_bars")
+    assert (
+        job.target_bars_per_request
+        == dataloader.helpers.DEFAULT_TARGET_BARS_PER_REQUEST
+    )
     assert job.params["endDateTime"] == date(2025, 1, 10)
 
 

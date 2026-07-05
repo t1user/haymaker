@@ -217,7 +217,8 @@ class TaskPlanner:
     Args:
         store: Preloaded datastore view for the contract being planned.
         head: Earliest available IB timestamp to consider.
-        max_period_days: Maximum lookback window for this planning run.
+        max_lookback_days: Optional maximum lookback window for this planning
+            run. ``None`` means no user-imposed lookback limit.
         gap_fill_mode: Gap-fill strategy selected for this planning run.
         timezone_name: Exchange timezone from caller-provided metadata.
         sessions: Historical schedule sessions, when schedule mode is active.
@@ -226,7 +227,7 @@ class TaskPlanner:
 
     store: AsyncStoreView
     head: Union[date, datetime]
-    max_period_days: int
+    max_lookback_days: int | None
     gap_fill_mode: GapFillMode = "off"
     timezone_name: str | None = None
     sessions: list[SessionRange] | None = None
@@ -240,10 +241,11 @@ class TaskPlanner:
         """Return the clamped earliest point for this planning run."""
 
         latest_available = self.store.expiry_or_now()
-        candidates = [
-            self.head,
-            latest_available - timedelta(days=self.max_period_days),
-        ]
+        candidates = [self.head]
+        if self.max_lookback_days is not None:
+            candidates.append(
+                latest_available - timedelta(days=self.max_lookback_days)
+            )
         if availability_start := historical_availability_start(self.store):
             candidates.append(availability_start)
         return max(candidates)

@@ -72,7 +72,7 @@ stable and mark items off as they are addressed.
   job, store wrapper, selector, and scheduler boundaries still match the
   simplified queue/worker architecture. Start from
   `docs/dataloader-object-boundaries.md`. Manager now owns request policy
-  (`bar_size`, `wts`, `max_bars`, run `now`), generated jobs carry the bar size
+  (`bar_size`, `wts`, run `now`), generated jobs carry the bar size
   used by workers, planned ranges execute in update, backfill, gap-fill order,
   and `DataloaderSession` no longer has independent compatibility
   `bar_size`/`wts` fields.
