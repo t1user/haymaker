@@ -152,6 +152,12 @@ UTC. Gap planning does not make extra contract-details requests for timezone.
 Short scheduled-session gaps that return no bars are learned only for the
 current run and are not written to datastore metadata.
 
+When a contract has update, backfill, and gap-fill work, the dataloader runs
+the update range first, then backfill, then gap-fill ranges. Continuous futures
+(``CONTFUT``) follow IB's historical-data restriction that ``endDateTime`` must
+be empty. They are therefore requested as one latest-ended range and internal
+gap-fill ranges are not scheduled for them.
+
 Failure Handling
 ================
 

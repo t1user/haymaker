@@ -200,12 +200,16 @@ class ContfutureFutureContractSelector(FutureContractSelector):
 
 
 class FullchainFutureContractSelector(FutureContractSelector):
-    spec = FUTURES_FULLCHAIN_SPEC
+
+    def __init__(
+        self, pacing: RequestPacing, spec: str = FUTURES_FULLCHAIN_SPEC, **kwargs
+    ):
+        self.spec = spec
+        super().__init__(pacing=pacing, **kwargs)
 
     @classmethod
     def with_spec(cls, spec: str, pacing: RequestPacing, **kwargs) -> Self:
-        cls.spec = spec
-        return cls(pacing=pacing, **kwargs)
+        return cls(pacing=pacing, spec=spec, **kwargs)
 
     async def _objects(self) -> AsyncGenerator[ibi.Contract, None]:
 

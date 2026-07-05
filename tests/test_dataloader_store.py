@@ -351,8 +351,8 @@ async def test_task_planner_exhausted_backfill_without_update_has_no_range(
 
 
 @pytest.mark.asyncio
-async def test_gap_planning_preserves_gap_first_order(contract):
-    """Heuristic gap planning should keep gaps before backfill/update work."""
+async def test_gap_planning_preserves_execution_order(contract):
+    """Heuristic gap planning should run update, backfill, then gaps."""
 
     index = pd.DatetimeIndex(
         [
@@ -382,8 +382,72 @@ async def test_gap_planning_preserves_gap_first_order(contract):
 
     tasks = planner.planned_ranges()
 
-    assert [task.kind for task in tasks] == ["gap", "gap", "backfill", "update"]
-    assert tasks[-2:] == planner.base_ranges()
+    assert [task.kind for task in tasks] == ["update", "backfill", "gap", "gap"]
+    assert tasks[:2] == planner.base_ranges()
+
+
+@pytest.mark.asyncio
+async def test_task_planner_skips_gap_fill_for_continuous_futures():
+    """Continuous futures cannot target historical gap windows with endDateTime."""
+
+    contract = ibi.ContFuture(
+        symbol="ES",
+        exchange="CME",
+        currency="USD",
+        conId=123,
+        localSymbol="ES",
+    )
+    index = pd.DatetimeIndex(
+        [
+            datetime(2025, 1, 1, 10, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 2, tzinfo=timezone.utc),
+        ]
+    )
+    data = pd.DataFrame({"close": range(len(index))}, index=index)
+    now = datetime(2025, 1, 1, 11, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(
+        contract, FakeAsyncStore(data), now, "30 secs"
+    )
+
+    tasks = TaskPlanner(
+        wrapper,
+        datetime(2025, 1, 1, 9, tzinfo=timezone.utc),
+        max_period_days=100,
+        gap_fill_mode="heuristic",
+    ).planned_ranges()
+
+    assert [task.kind for task in tasks] == ["update"]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_backfills_empty_continuous_future_once():
+    """An empty continuous-future series can make one latest-ended backfill."""
+
+    contract = ibi.ContFuture(
+        symbol="ES",
+        exchange="CME",
+        currency="USD",
+        conId=123,
+        localSymbol="ES",
+    )
+    now = datetime(2025, 1, 10, tzinfo=timezone.utc)
+    wrapper = await AsyncStoreView.create(contract, FakeAsyncStore(), now, "30 secs")
+
+    tasks = TaskPlanner(
+        wrapper,
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        max_period_days=100,
+        gap_fill_mode="heuristic",
+    ).planned_ranges()
+
+    assert tasks == [
+        PlannedRange(
+            datetime(2025, 1, 1, tzinfo=timezone.utc),
+            now,
+            "backfill",
+        )
+    ]
 
 
 @pytest.mark.asyncio

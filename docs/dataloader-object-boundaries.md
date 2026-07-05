@@ -34,6 +34,9 @@ remain separate work.
   learned gap patterns.
 - Owns the run lookback clamp and produces backfill, update, and gap-fill
   ranges.
+- Returns ranges in execution order: update, backfill, then gap-fill.
+- Skips gap-fill ranges for continuous futures because IB historical requests
+  for `CONTFUT` cannot target an explicit `endDateTime`.
 - Keeps broker schedule calls out of pure scheduling code; `Manager` owns those
   async request-layer inputs.
 
@@ -41,6 +44,9 @@ remain separate work.
 
 - Owns one contract's planned ranges and request progression.
 - Produces request parameters for workers.
+- Uses FIFO range execution. Continuous-future jobs pass an empty
+  `endDateTime`; planning produces at most one latest-ended range for them, and
+  the job treats that range as one terminal IB request.
 - Carries the bar size used for request duration calculation and worker
   `barSizeSetting`.
 - Buffers downloaded bars only until they are handed to persistence.

@@ -59,7 +59,8 @@ stable and mark items off as they are addressed.
   rather than suppressing every gap at the most common start time, and simple
   weekend gaps are treated as typical. Short open-session gaps that return no
   bars are learned only for the current run and are not persisted to datastore
-  metadata.
+  metadata. Continuous futures do not schedule internal gap-fill ranges because
+  IB requires their historical requests to use an empty `endDateTime`.
 - [x] `DL-020`: Define run-wide `now` snapshot semantics explicitly. `Manager`
   owns the run-scoped `now` value, normalizes it for the configured bar size,
   and passes it into scheduling and request-age validation. `DataloaderSession`
@@ -70,8 +71,9 @@ stable and mark items off as they are addressed.
   simplified queue/worker architecture. Start from
   `docs/dataloader-object-boundaries.md`. Manager now owns request policy
   (`bar_size`, `wts`, `max_bars`, run `now`), generated jobs carry the bar size
-  used by workers, and `DataloaderSession` no longer has independent
-  compatibility `bar_size`/`wts` fields.
+  used by workers, planned ranges execute in update, backfill, gap-fill order,
+  and `DataloaderSession` no longer has independent compatibility
+  `bar_size`/`wts` fields.
 - [x] `DL-022`: Classify recorded dataloader job failures as terminal or
   retryable. Worker failures are now split by source: connection-class failures
   escape the dataloader session, broker request failures are recorded and let
@@ -161,6 +163,7 @@ stable and mark items off as they are addressed.
      execution reads request bar size from each generated job.
    - `AsyncStoreView` requires explicit bar-size policy, and `HistorySink`
      preserves raw downloaded data without scheduling normalization.
+   - Planned ranges execute in update, backfill, gap-fill order.
    - Start from `docs/dataloader-object-boundaries.md`.
    - Covers `DL-021`.
 

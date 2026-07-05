@@ -224,7 +224,7 @@ class DownloadJob:
                 if self._container.next_date:
                     return False
                 else:
-                    self.queue.pop()
+                    self.queue.pop(0)
             else:
                 return True
 
@@ -233,7 +233,7 @@ class DownloadJob:
         # there must be at least one object in the queue, otherwise it's an error
         # don't call the method without verifying the queue is not empty
         # with self.is_done()
-        return self.queue[-1]
+        return self.queue[0]
 
     @property
     def next_date(self) -> date | datetime | None:
@@ -247,6 +247,8 @@ class DownloadJob:
             log.info(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
             self._container.save_chunk(data)
             await self.write_to_store()
+            if self.is_continuous_future:
+                self.queue.pop(0)
         else:
             if self._container.kind == "gap" and self.gap_learner is not None:
                 self.gap_learner.record_empty_gap(self._container.gap_pattern)
@@ -256,7 +258,7 @@ class DownloadJob:
                 )
             if self._container.kind == "backfill":
                 await self.sink.mark_backfill_exhausted()
-            self.queue.pop()
+            self.queue.pop(0)
 
     async def write_to_store(self) -> None:
         """
@@ -280,9 +282,15 @@ class DownloadJob:
         assert self.next_date is not None
         return {
             "contract": self.contract,
-            "endDateTime": self.next_date,
+            "endDateTime": "" if self.is_continuous_future else self.next_date,
             "durationStr": self.duration,
         }
+
+    @property
+    def is_continuous_future(self) -> bool:
+        """Return whether this job uses IB's continuous-future request policy."""
+
+        return getattr(self.contract, "secType", "") == "CONTFUT"
 
     @property
     def duration(self) -> str:

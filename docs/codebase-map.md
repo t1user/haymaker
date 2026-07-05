@@ -124,7 +124,9 @@ The research package is intentionally separate from live execution. It works dir
 4. The async store view inspects the Arctic-backed store and normalizes
    scheduling boundaries according to the dataloader date policy.
    `Manager` obtains any async schedule inputs and passes them to
-   `TaskPlanner`, which creates backfill, update, and optional gap-fill ranges.
+   `TaskPlanner`, which creates update, backfill, and optional gap-fill ranges.
+   Continuous futures use IB's empty-`endDateTime` latest-ended request shape
+   and do not schedule internal gap-fill ranges.
 5. A producer submits work to an asyncio queue.
 6. Workers call IB historical-data requests under pacer restrictions.
 7. Downloaded chunks are passed to `HistorySink`, concatenated with stored data,

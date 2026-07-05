@@ -4,6 +4,8 @@ import pytest
 from haymaker.dataloader.contract_selectors import (
     ContractSelector,
     CurrentFutureContractSelector,
+    FUTURES_FULLCHAIN_SPEC,
+    FullchainFutureContractSelector,
 )
 from haymaker.dataloader.pacer import RequestPacing
 
@@ -101,3 +103,34 @@ async def test_current_future_selector_requalifies_after_changing_contfuture():
     assert ib.sec_types == ["CONTFUT", "FUT"]
     assert contracts[0].secType == "FUT"
     assert contracts[0].conId == 200
+
+
+def test_fullchain_selector_spec_is_instance_scoped():
+    """Specialized full-chain selector specs should not mutate the class default."""
+
+    class FakeIB:
+        async def reqContractDetailsAsync(
+            self, contract: ibi.Contract
+        ) -> list[ibi.ContractDetails]:
+            return []
+
+    pacing = RequestPacing(FakeIB(), no_restriction=True)
+
+    expired = FullchainFutureContractSelector.with_spec(
+        "expired",
+        pacing=pacing,
+        secType="FUT",
+        symbol="ES",
+        exchange="CME",
+        currency="USD",
+    )
+    fresh = FullchainFutureContractSelector(
+        pacing=pacing,
+        secType="FUT",
+        symbol="NQ",
+        exchange="CME",
+        currency="USD",
+    )
+
+    assert expired.spec == "expired"
+    assert fresh.spec == FUTURES_FULLCHAIN_SPEC

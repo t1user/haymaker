@@ -210,6 +210,59 @@ def test_daily_download_job_uses_date_end_datetime(dataloader_module):
 
 
 @pytest.mark.asyncio
+async def test_contfuture_download_job_uses_empty_end_datetime_once(dataloader_module):
+    """Continuous futures should use IB's latest-ended request shape only once."""
+
+    dataloader = dataloader_module
+    contract = ibi.ContFuture(
+        symbol="ES",
+        exchange="CME",
+        currency="USD",
+        conId=123,
+        localSymbol="ES",
+    )
+
+    class FakeSink:
+        def __init__(self):
+            self.writes = []
+
+        async def write(self, data):
+            self.writes.append(data)
+            return "version"
+
+    sink = FakeSink()
+    container = dataloader.DownloadContainer(
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        datetime(2025, 1, 10, tzinfo=timezone.utc),
+        bar_size="30 secs",
+    )
+    job = dataloader.DownloadJob(
+        contract,
+        sink=sink,
+        queue=[container],
+        bar_size="30 secs",
+    )
+
+    assert job.params["endDateTime"] == ""
+
+    bars = ibi.BarDataList(
+        [
+            ibi.BarData(
+                date=datetime(2025, 1, 9, tzinfo=timezone.utc),
+                open=1,
+                high=1,
+                low=1,
+                close=1,
+            )
+        ]
+    )
+    await job.save_chunk(bars)
+
+    assert job.is_done()
+    assert len(sink.writes) == 1
+
+
+@pytest.mark.asyncio
 async def test_download_job_marks_backfill_exhausted_on_empty_backfill(
     dataloader_module,
 ):
@@ -534,9 +587,9 @@ async def test_schedule_gap_mode_uses_matching_use_rth(dataloader_module):
     ]
     assert [(task.kind, task.from_date, task.to_date) for task in tasks] == [
         (
-            "gap",
-            datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
+            "update",
             datetime(2025, 1, 1, 10, 2, 30, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 11, tzinfo=timezone.utc),
         ),
         (
             "backfill",
@@ -544,9 +597,9 @@ async def test_schedule_gap_mode_uses_matching_use_rth(dataloader_module):
             datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
         ),
         (
-            "update",
+            "gap",
+            datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
             datetime(2025, 1, 1, 10, 2, 30, tzinfo=timezone.utc),
-            datetime(2025, 1, 1, 11, tzinfo=timezone.utc),
         ),
     ]
 

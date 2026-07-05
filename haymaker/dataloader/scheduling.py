@@ -253,18 +253,30 @@ class TaskPlanner:
 
         if historical_data_unavailable(self.store):
             return []
-        return [*self.gap_ranges(), *self.base_ranges()]
+        return [*self.base_ranges(), *self.gap_ranges()]
 
     def base_ranges(self) -> list[PlannedRange]:
         """Return tagged backfill and update ranges."""
 
+        if _sec_type(self.store) == "CONTFUT":
+            return self.continuous_future_ranges()
+
         ranges: list[PlannedRange] = []
+        ranges.extend(UpdateTask(self.store, self.start).planned_ranges("update"))
         if not self.store.backfill_exhausted:
             ranges.extend(
                 BackfillTask(self.store, self.start).planned_ranges("backfill")
             )
-        ranges.extend(UpdateTask(self.store, self.start).planned_ranges("update"))
         return ranges
+
+    def continuous_future_ranges(self) -> list[PlannedRange]:
+        """Return the one latest-ended range allowed for continuous futures."""
+
+        if self.store.to_date:
+            return UpdateTask(self.store, self.start).planned_ranges("update")
+        if self.store.backfill_exhausted:
+            return []
+        return BackfillTask(self.store, self.start).planned_ranges("backfill")
 
     def gap_candidates(self) -> list[GapCandidate]:
         """Return raw gap candidates for this planning window."""
@@ -275,6 +287,8 @@ class TaskPlanner:
         """Return tagged gap-fill ranges for the configured gap mode."""
 
         if self.gap_fill_mode == "off":
+            return []
+        if _sec_type(self.store) == "CONTFUT":
             return []
         return self.gap_task().planned_ranges()
 
