@@ -60,7 +60,9 @@ stable and mark items off as they are addressed.
   weekend gaps are treated as typical. Short open-session gaps that return no
   bars are learned only for the current run and are not persisted to datastore
   metadata. Continuous futures do not schedule internal gap-fill ranges because
-  IB requires their historical requests to use an empty `endDateTime`.
+  IB requires their historical requests to use an empty `endDateTime`. Once a
+  short no-data pattern becomes typical during one job, matching pending gaps
+  in that same job are pruned.
 - [x] `DL-020`: Define run-wide `now` snapshot semantics explicitly. `Manager`
   owns the run-scoped `now` value, normalizes it for the configured bar size,
   and passes it into scheduling and request-age validation. `DataloaderSession`

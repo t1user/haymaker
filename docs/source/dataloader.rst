@@ -150,7 +150,9 @@ Schedule timezone is used when IB provides it; otherwise the planner uses
 run-local contract metadata already collected by the pacer and falls back to
 UTC. Gap planning does not make extra contract-details requests for timezone.
 Short scheduled-session gaps that return no bars are learned only for the
-current run and are not written to datastore metadata.
+current run and are not written to datastore metadata. Once a pattern becomes
+typical during a job, remaining pending gap ranges with the same pattern are
+dropped from that job.
 
 When a contract has update, backfill, and gap-fill work, the dataloader runs
 the update range first, then backfill, then gap-fill ranges. Continuous futures

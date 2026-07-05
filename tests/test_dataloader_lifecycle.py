@@ -462,6 +462,20 @@ def test_manager_preserves_injected_pacing_policy(dataloader_module):
     assert not hasattr(pacing, "wts")
 
 
+def test_manager_default_now_is_normalized_without_optional_sentinel(dataloader_module):
+    """Manager should expose a concrete normalized now value after construction."""
+
+    dataloader = dataloader_module
+
+    intraday = dataloader.Manager(object(), bar_size="30 secs")
+    daily = dataloader.Manager(object(), bar_size="1 day")
+
+    assert isinstance(intraday.now, datetime)
+    assert intraday.now.tzinfo is timezone.utc
+    assert isinstance(daily.now, date)
+    assert not isinstance(daily.now, datetime)
+
+
 @pytest.mark.asyncio
 async def test_manager_policy_flows_to_store_and_download_job(
     monkeypatch, dataloader_module
@@ -689,6 +703,75 @@ async def test_gap_learner_is_run_local_and_does_not_touch_sink(dataloader_modul
 
     assert learner.typical_patterns == {pattern}
     assert sink.marked is False
+
+
+@pytest.mark.asyncio
+async def test_gap_learner_prunes_same_job_pending_typical_gaps(dataloader_module):
+    """Repeated empty gap patterns should drop remaining matching gap ranges."""
+
+    dataloader = dataloader_module
+    repeated = dataloader.GapPattern(
+        datetime(2025, 1, 1, 10).time(),
+        timedelta(minutes=15, seconds=30),
+        "UTC",
+    )
+    different = dataloader.GapPattern(
+        datetime(2025, 1, 1, 11).time(),
+        timedelta(minutes=15, seconds=30),
+        "UTC",
+    )
+
+    class FakeSink:
+        async def write(self, data):
+            return "version"
+
+        async def mark_backfill_exhausted(self):
+            return None
+
+    learner = dataloader.RunGapLearner()
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        FakeSink(),
+        [
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 1, 10, tzinfo=timezone.utc),
+                datetime(2025, 1, 1, 10, 16, tzinfo=timezone.utc),
+                kind="gap",
+                gap_pattern=repeated,
+            ),
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 2, 10, tzinfo=timezone.utc),
+                datetime(2025, 1, 2, 10, 16, tzinfo=timezone.utc),
+                kind="gap",
+                gap_pattern=repeated,
+            ),
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 3, 10, tzinfo=timezone.utc),
+                datetime(2025, 1, 3, 10, 16, tzinfo=timezone.utc),
+                kind="gap",
+                gap_pattern=repeated,
+            ),
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 3, 11, tzinfo=timezone.utc),
+                datetime(2025, 1, 3, 11, 16, tzinfo=timezone.utc),
+                kind="gap",
+                gap_pattern=different,
+            ),
+        ],
+        gap_learner=learner,
+    )
+
+    await job.save_chunk(None)
+    assert [container.gap_pattern for container in job.queue] == [
+        repeated,
+        repeated,
+        different,
+    ]
+
+    await job.save_chunk(None)
+
+    assert learner.typical_patterns == {repeated}
+    assert [container.gap_pattern for container in job.queue] == [different]
 
 
 class FakeContract:

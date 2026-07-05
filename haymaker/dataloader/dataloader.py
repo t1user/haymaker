@@ -250,8 +250,7 @@ class DownloadJob:
             if self.is_continuous_future:
                 self.queue.pop(0)
         else:
-            if self._container.kind == "gap" and self.gap_learner is not None:
-                self.gap_learner.record_empty_gap(self._container.gap_pattern)
+            learned_gap_pattern = self._learn_empty_gap_pattern()
             if self._container.next_date:
                 log.warning(
                     f"{self!s} cannot download data past {self._container.next_date}"
@@ -259,6 +258,31 @@ class DownloadJob:
             if self._container.kind == "backfill":
                 await self.sink.mark_backfill_exhausted()
             self.queue.pop(0)
+            self._drop_typical_gap_containers(learned_gap_pattern)
+
+    def _learn_empty_gap_pattern(self) -> GapPattern | None:
+        """Record an empty gap-fill response and return its learned pattern."""
+
+        if self._container.kind != "gap" or self.gap_learner is None:
+            return None
+        pattern = self._container.gap_pattern
+        self.gap_learner.record_empty_gap(pattern)
+        return pattern
+
+    def _drop_typical_gap_containers(self, pattern: GapPattern | None) -> None:
+        """Remove remaining gap ranges with a pattern now known to be empty."""
+
+        if (
+            pattern is None
+            or self.gap_learner is None
+            or pattern not in self.gap_learner.typical_patterns
+        ):
+            return
+        self.queue = [
+            container
+            for container in self.queue
+            if container.kind != "gap" or container.gap_pattern != pattern
+        ]
 
     async def write_to_store(self) -> None:
         """
@@ -420,7 +444,7 @@ class Manager:
     auto_save_interval: int = AUTO_SAVE_INTERVAL
     wts: str = WTS
     bar_size: str = BARSIZE
-    now: date | datetime = cast(date | datetime, None)
+    now: date | datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     active_jobs: list[DownloadJob] = field(default_factory=list, repr=False)
     _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
     gap_learner: RunGapLearner = field(default_factory=RunGapLearner, repr=False)
@@ -429,8 +453,6 @@ class Manager:
     def __post_init__(self) -> None:
         self.bar_size = bar_size_validator(self.bar_size)
         self.wts = wts_validator(self.wts)
-        if self.now is None:
-            self.now = datetime.now(timezone.utc)
         self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
             self.pacing = RequestPacing(

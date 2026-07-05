@@ -47,6 +47,8 @@ remain separate work.
 - Uses FIFO range execution. Continuous-future jobs pass an empty
   `endDateTime`; planning produces at most one latest-ended range for them, and
   the job treats that range as one terminal IB request.
+- Prunes pending same-job gap ranges once the run-local learner marks their
+  pattern as repeatedly empty.
 - Carries the bar size used for request duration calculation and worker
   `barSizeSetting`.
 - Buffers downloaded bars only until they are handed to persistence.
