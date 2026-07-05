@@ -2,192 +2,363 @@
 Dataloader Module
 *****************
 
-Interactive Brokers imposes strict throttling on historical data downloads.
-While IB is not designed for data collection, the Dataloader Module works
-within IB limitations to download available historical price and volume data.
+The dataloader is Haymaker's standalone command for collecting Interactive
+Brokers historical data into the configured Arctic datastore. It reads a CSV of
+IB contract definitions, downloads the missing history for each contract, and
+can later refresh the same series or fill detected gaps.
 
-Connection Recovery
-===================
+It does not place orders.
 
-The dataloader uses the same Interactive Brokers socket connection supervisor
-package as live execution, but with its own supervisor instance, ``IB`` client,
-and owned socket. The supervisor reconnects the API client but does not manage
-or restart the TWS or IB Gateway process.
-See :doc:`supervisor` for the supervisor lifecycle and state transition chart.
+Quick Start
+===========
 
-The dataloader client ID defaults to ``1`` so it is distinct from the live
-runtime's expected ``clientId=0``. Override ``clientId`` in the dataloader
-config only when another process already uses that ID. A duplicate client ID is
-treated as a
-connection configuration failure.
+1. Make sure TWS or IB Gateway is running and API connections are enabled.
+2. Create a source CSV with one contract specification per row.
+3. Create a dataloader YAML settings file, or use the defaults with command-line
+   overrides.
+4. Run ``dataloader``.
 
-Workload Resume and Process Stop
-================================
+Example source file:
 
-Within one running dataloader process, supervisor recovery preserves discovered
-unfinished work in memory. If the socket has to reconnect and the workload is
-restarted, the dataloader resumes active jobs before discovering new contracts.
+.. code-block:: text
+   :caption: nq.csv
 
-A full process stop does not write a separate checkpoint file or checkpoint
-collection. The next dataloader process reads the persisted Arctic-backed
-datastore, derives boundaries from the stored data, and schedules any remaining
-backfill, update, or gap-fill work from those datastore boundaries.
+   secType,symbol,exchange,currency
+   FUT,NQ,CME,USD
 
-Request Pacing
-==============
+Example settings file:
 
-The dataloader keeps a client-side request pacer for IB historical-data,
-head-timestamp, historical-schedule, and contract-details requests. The pacer
-uses module-level limits that model current IBKR historical-data guidance and
-keeps retry handling for pacing violations out of worker code.
-The historical global request window reserves one slot for supervised
-connection probes, which also use historical-data requests but run outside the
-dataloader pacer.
+.. code-block:: yaml
+   :caption: nq_30s.yaml
 
-Two dataloader config keys adjust that machinery:
+   source: nq.csv
+   barSize: 30 secs
+   wts: TRADES
+   max_period: 120
+   max_bars: 100000
+   gap_fill_mode: off
+   useRTH: false
+   clientId: 1
+   futures_selector: current_and_expired
+
+Run it:
+
+.. code-block:: bash
+
+   dataloader -f nq_30s.yaml
+
+The first run backfills the available range allowed by ``max_period`` and IB's
+availability rules. Re-running the same command updates the same datastore
+series from its stored boundary.
+
+Source CSV
+==========
+
+The source CSV columns should be valid ``ib_insync.Contract`` fields. The most
+important columns are usually:
+
+``secType``
+   IB security type, such as ``STK``, ``FUT``, ``CONTFUT``, ``CASH``, ``IND``,
+   ``CFD``, ``OPT``, or ``FOP``.
+
+``symbol``
+   IB symbol, such as ``AAPL``, ``NQ``, or ``EUR``.
+
+``exchange``
+   Exchange or routing destination, such as ``SMART``, ``CME``, ``IDEALPRO``,
+   or ``NASDAQ``.
+
+``currency``
+   Contract currency, such as ``USD`` or ``EUR``.
+
+``lastTradeDateOrContractMonth``
+   Optional contract month or exact expiry for futures/options. Use this when
+   you want a specific contract instead of the configured futures selector.
+
+Examples:
+
+.. code-block:: text
+   :caption: stocks.csv
+
+   secType,symbol,exchange,currency
+   STK,AAPL,SMART,USD
+   STK,MSFT,SMART,USD
+
+.. code-block:: text
+   :caption: fx.csv
+
+   secType,symbol,exchange,currency
+   CASH,EUR,IDEALPRO,USD
+   CASH,GBP,IDEALPRO,USD
+
+.. code-block:: text
+   :caption: exact_futures.csv
+
+   secType,symbol,lastTradeDateOrContractMonth,exchange,currency
+   FUT,NQ,20260918,CME,USD
+   FUT,ES,20260918,CME,USD
+
+Futures Selection
+=================
+
+Rows with ``secType`` set to ``FUT`` or ``CONTFUT`` use the dataloader futures
+selector. Configure it with ``futures_selector``:
+
+``current_and_expired``
+   Default. Download the current contract and expired contracts returned by IB.
+   This is the usual choice for building a historical futures library.
+
+``current``
+   Download the current contract. Use ``futures_current_index`` to offset from
+   the current contract in the futures chain.
+
+``fullchain``
+   Download contracts from the full chain returned by IB. Use
+   ``futures_fullchain_spec`` with ``full``, ``active``, or ``expired`` to narrow
+   the chain.
+
+``exact``
+   Use the contract exactly as specified in the CSV row.
+
+``contfuture``
+   Download IB's continuous future contract. IB requires continuous-future
+   historical requests to use an empty ``endDateTime``, so the dataloader makes
+   one latest-ended request range and does not schedule internal gap fills for
+   ``CONTFUT``.
+
+``current_and_contfuture``
+   Download both the current explicit future and IB's continuous future.
+
+Common futures setup:
+
+.. code-block:: yaml
+
+   source: nq.csv
+   barSize: 30 secs
+   wts: TRADES
+   futures_selector: current_and_expired
+   max_period: 120
+
+Exact-contract setup:
+
+.. code-block:: yaml
+
+   source: exact_futures.csv
+   barSize: 1 hour
+   wts: TRADES
+   futures_selector: exact
+
+Command Line
+============
+
+Run with a source CSV and default settings:
+
+.. code-block:: bash
+
+   dataloader contracts.csv
+
+Run with a YAML settings file:
+
+.. code-block:: bash
+
+   dataloader -f settings.yaml
+
+Override the gap-fill mode for one run:
+
+.. code-block:: bash
+
+   dataloader -f settings.yaml -g auto
+
+Set simple config values from the command line:
+
+.. code-block:: bash
+
+   dataloader contracts.csv -s barSize "1 hour" -s wts MIDPOINT
+
+For booleans and numbers, prefer a YAML settings file. Command-line
+``-s KEY VALUE`` values are strings, while YAML preserves types like
+``false``, ``120``, and ``100000``.
+
+Configuration
+=============
+
+Start from ``haymaker/config/dataloader_base_config.yaml`` and override only
+the values needed for a run.
+
+Common settings:
+
+``source``
+   CSV file containing contract rows.
+
+``barSize``
+   IB bar size. Examples: ``30 secs``, ``1 min``, ``1 hour``, ``1 day``,
+   ``1 week``, ``1 month``.
+
+``wts``
+   IB ``whatToShow`` value. Common choices are ``TRADES``, ``MIDPOINT``,
+   ``BID``, ``ASK``, and ``BID_ASK``.
+
+``max_period``
+   Maximum lookback span, in calendar days, considered by one dataloader run.
+   Increase it for deeper backfills, or keep it smaller for incremental runs.
+
+``max_bars``
+   Maximum number of bars requested in one historical-data call. The dataloader
+   also applies IB's maximum request-duration rules for the selected bar size.
+
+``gap_fill_mode``
+   Gap-fill behavior for already stored data. See :ref:`dataloader-gap-fill`.
+
+``useRTH``
+   Passed to IB historical-data and historical-schedule requests.
+
+``clientId``
+   IB API client ID. The dataloader default is ``1`` so it is distinct from the
+   live runtime's expected ``clientId=0``.
+
+``number_of_workers``
+   Number of worker tasks consuming planned downloads. Pacing still limits
+   outbound IB requests.
 
 ``pacer_allowance_fraction``
-   Multiplies the module-level client-side capacities. Values below ``1.0``
-   reserve more broker allowance for other IB clients; values above ``1.0``
-   deliberately make the local pacer more aggressive.
+   Multiplies the dataloader's local pacing capacity. Use values below ``1.0``
+   to leave more room for other IB clients.
 
-``pacer_no_restriction``
-   Disables client-side pacing waits while keeping the same request-routing API.
-   Use this only when relying on Gateway/TWS pacing or for targeted testing.
+Example: daily stock bars:
 
-Contract selectors use paced ``reqContractDetailsAsync`` calls for
-qualification and futures-chain discovery. The resolved contracts returned by
-IB are then used for historical requests so pacing follows ``ib_insync``
-contract hash semantics. Contract-details responses also seed a run-local
-metadata cache, including exchange timezone when IB provides it.
+.. code-block:: yaml
+   :caption: stocks_daily.yaml
 
-Request Sizing
-==============
+   source: stocks.csv
+   barSize: 1 day
+   wts: TRADES
+   max_period: 3650
+   gap_fill_mode: off
+   useRTH: true
 
-The dataloader sizes each ``reqHistoricalData`` call from the planned missing
-range, the configured ``max_bars`` value, and IBKR's documented maximum
-duration for the selected ``barSize``. IB's step-size rules are caps on valid
-request shapes; they are not a promise that every contract/session will return
-that many bars. Exact returned counts still depend on the instrument, session
-calendar, holidays, early closes, market activity, and IB availability.
+Example: hourly FX midpoint bars:
 
-The dataloader uses canonical IB bar-size spelling such as ``1 secs`` and
-``1 hour``. Noncanonical spellings such as ``1 sec`` are rejected before a
-historical request is built.
+.. code-block:: yaml
+   :caption: fx_hourly.yaml
 
-Historical Availability Limits
-==============================
+   source: fx.csv
+   barSize: 1 hour
+   wts: MIDPOINT
+   max_period: 365
+   gap_fill_mode: auto
+   useRTH: false
 
-The dataloader applies IBKR's documented hard availability limits when they can
-be known from the contract and configured bar size:
+.. _dataloader-gap-fill:
 
-* bars of ``30 secs`` or smaller are not requested more than six months back;
-* expired futures are not requested earlier than two years before the exact
-  contract expiry date;
-* expired options, futures options, and warrants are skipped when their exact
-  expiry date is known.
+Gap Filling
+===========
 
-Other IB unavailability cases, such as delisted securities, exchange moves,
-expired future spreads, or contract-specific gaps in intraday futures history,
-are not reliably knowable from the dataloader's local inputs. Those cases fall
-back to IB's response: when backfill reaches a no-data boundary for a series
-that already has stored data, the dataloader marks that series with
-``backfill_exhausted: true`` and avoids repeating older backfill requests on
-future runs.
+Gap filling is optional. It is intended for a second pass over already stored
+dataloader data.
+
+``off``
+   Do not schedule internal datastore gaps. This is the safest default for a
+   first run.
+
+``heuristic``
+   Detect gaps from stored bar regularity. Repeated short local-time gaps and
+   simple weekend gaps are treated as typical non-trading gaps.
+
+``schedule``
+   Ask IB for historical schedules and fill only gaps that overlap reported
+   trading sessions. If IB does not return a usable schedule for a contract,
+   planning for that contract fails.
+
+``auto``
+   Try schedule mode first, then fall back to heuristic mode when schedule data
+   is unavailable.
+
+Suggested workflow:
+
+.. code-block:: bash
+
+   dataloader -f nq_30s.yaml
+   dataloader -f nq_30s.yaml -g auto
+
+The first command builds or updates the library. The second command performs a
+gap-fill pass over the stored data.
 
 Datastore
 =========
 
-The dataloader currently supports the Arctic datastore backend only. There is
-no datastore backend config key; the dataloader derives the Arctic library name
-from ``wts`` and ``barSize`` such as ``TRADES_30_secs``. Collections use the
-datastore module's default
-``simple_collection_namer(contract)`` naming policy.
+The dataloader currently writes to the Arctic-backed Haymaker datastore. The
+library name is derived from ``wts`` and ``barSize``:
 
-The dataloader talks to the async datastore interface. Arctic still owns data
-cleaning and metadata updates when data is written. The current target
-responsibility split is recorded in ``docs/dataloader-object-boundaries.md``.
+* ``TRADES`` + ``30 secs`` -> ``TRADES_30_secs``
+* ``MIDPOINT`` + ``1 hour`` -> ``MIDPOINT_1_hour``
+* ``TRADES`` + ``1 day`` -> ``TRADES_1_day``
 
-Backfill Exhaustion Metadata
-============================
+Collections use Haymaker's default contract naming policy.
 
-When a backfill request reaches a point where IB returns no older bars for a
-series that already has stored data, the dataloader writes
-``backfill_exhausted: true`` to that series metadata. Later dataloader runs use
-that marker to skip older backfill requests for the same Arctic library and
-collection, while still allowing updates and optional gap filling.
+Read data back with the datastore API:
 
-Missing metadata never disables downloads. If the marker is absent, the
-dataloader proceeds normally from the stored data boundaries and IB
-``headTimeStamp``. The dataloader does not write a ``from`` metadata key; that
-lower-bound metadata belongs with datastore-maintained series boundaries, in
-the same spirit as the existing ``up_to`` field.
+.. code-block:: python
 
-Gap Fill Modes
-==============
+   from ib_insync import Future
+   from haymaker.datastore import ArcticStore
 
-Gap filling is controlled by ``gap_fill_mode``:
+   store = ArcticStore("TRADES_30_secs")
+   contract = Future("NQ", "20260918", "CME", currency="USD")
 
-``off``
-    Do not schedule internal datastore gaps.
+   df = store.read(contract)
+   metadata = store.read_metadata(contract)
 
-``heuristic``
-    Detect gaps from stored bar regularity and suppress repeated short
-    local-time patterns and simple weekend gaps. The heuristic uses a fixed
-    two-pass implementation detail rather than a user-facing tuning setting.
+Use ``store.keys()`` to inspect the available collection names when you do not
+know the exact contract key.
 
-``schedule``
-    Request IB historical schedules through the dataloader request pacer and
-    schedule only gaps that overlap reported trading sessions. If no usable
-    schedule is returned, planning for that contract fails.
+Availability And Limits
+=======================
 
-``auto``
-    Use schedule mode when IB returns a usable schedule, otherwise fall back to
-    heuristic mode.
+IB historical data has hard limits and contract-specific availability gaps. The
+dataloader avoids requests that are known to be unavailable:
 
-Schedule requests use the same ``useRTH`` setting as historical data requests.
-Schedule timezone is used when IB provides it; otherwise the planner uses
-run-local contract metadata already collected by the pacer and falls back to
-UTC. Gap planning does not make extra contract-details requests for timezone.
-Short scheduled-session gaps that return no bars are learned only for the
-current run and are not written to datastore metadata. Once a pattern becomes
-typical during a job, remaining pending gap ranges with the same pattern are
-dropped from that job.
+* bars of ``30 secs`` or smaller are not requested more than six months back;
+* expired futures are not requested earlier than two years before exact expiry;
+* expired options, futures options, and warrants are skipped when exact expiry
+  is known.
 
-When a contract has update, backfill, and gap-fill work, the dataloader runs
-the update range first, then backfill, then gap-fill ranges. Continuous futures
-(``CONTFUT``) follow IB's historical-data restriction that ``endDateTime`` must
-be empty. They are therefore requested as one latest-ended range and internal
-gap-fill ranges are not scheduled for them.
+When a backfill request reaches a no-data boundary for a series that already
+has stored data, the dataloader writes ``backfill_exhausted: true`` to that
+series metadata. Later runs skip older backfill for that series while still
+allowing updates and optional gap filling.
 
-Failure Handling
-================
+Date Policy
+===========
 
-Download workers distinguish broker request failures from session-level
-failures. A broker request failure for one job is recorded and summarized when
-the session finishes, while the remaining queued jobs continue. Empty
-historical responses keep their normal no-data behavior, including
-``backfill_exhausted`` marking for older backfill ranges.
+The dataloader uses IB ``formatDate=2``.
 
-Connection-class failures, such as ``ConnectionError`` or ``TimeoutError``, are
-not recorded as ordinary job failures. They escape the dataloader session so
-the supervised workload boundary can handle the broken connection. Local
-processing failures, including datastore write failures, also abort the session
-instead of being hidden behind a completed run summary.
+* Intraday bars are stored and compared as timezone-aware UTC ``datetime``
+  values.
+* Daily, weekly, and monthly bars use ``date`` values.
+* Other IB date formats are not exposed in this dataloader path.
 
-Historical Date Policy
-======================
+Connection And Pacing
+=====================
 
-The dataloader intentionally requests historical bars with Interactive Brokers
-``formatDate=2``. For intraday bars, ``ib_insync`` returns timezone-aware UTC
-``datetime`` values. For daily, weekly, and monthly bars, IB returns date-only
-values. The dataloader keeps that split as its scheduling and storage policy:
+The dataloader creates its own ``ib_insync.IB`` client and runs under the
+Haymaker connection supervisor. The supervisor reconnects the IB API socket but
+does not start, stop, or restart TWS/IB Gateway.
 
-* intraday ranges use UTC-aware ``datetime`` values;
-* ``1 day``, ``1 week``, and ``1 month`` ranges use ``date`` values;
-* naive intraday ``datetime`` values are rejected before scheduling.
+The dataloader also keeps a local pacer for historical data, head timestamps,
+historical schedules, and contract details. This reduces avoidable IB pacing
+violations while still allowing supervised connection probes to reserve one
+historical-data request slot.
 
-Do not configure ``formatDate`` per run in this dataloader path. Other IB date
-formats can depend on Gateway/TWS settings or instrument time zones and would
-need a separate datastore policy to avoid mixing incompatible indexes in one
-collection.
+Operational Notes
+=================
+
+* Use a distinct ``clientId`` if another process already uses ``1``.
+* Keep ``gap_fill_mode: off`` for initial large downloads unless you are
+  intentionally running a gap pass.
+* Use ``useRTH: true`` only when you want regular-trading-hours data and
+  schedules.
+* Re-run the same settings file to update an existing library.
+* If IB returns no older backfill data for an existing series, future runs will
+  honor ``backfill_exhausted: true`` metadata.
+* A full process stop does not write a separate checkpoint. The next process
+  derives remaining work from the persisted datastore boundaries.
