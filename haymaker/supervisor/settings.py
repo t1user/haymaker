@@ -60,6 +60,7 @@ class ConnectionSettings:
         connection_lost_retry_delay: Seconds to wait after lost connection before reconnecting.
         auto_recovery_grace_period: Seconds to wait for broker-side recovery before reconnecting.
         restart_on_recovered_connection: Whether to restart even after IB reports data was maintained.
+        log_datafarm_status: Whether to log non-actionable data-farm status messages.
         max_recoveries: Maximum consecutive unexpected supervisor-cycle recoveries.
     """
 
@@ -74,6 +75,7 @@ class ConnectionSettings:
     connection_lost_retry_delay: float = 90
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
+    log_datafarm_status: bool = True
     max_recoveries: int = 10
     exit_on_failed_sync: bool = False
 
@@ -102,6 +104,7 @@ class ConnectionSettings:
             restart_on_recovered_connection=config.get(
                 "restart_on_recovered_connection", False
             ),
+            log_datafarm_status=config.get("log_datafarm_status", True),
             max_recoveries=config.get("max_recoveries", 10),
             exit_on_failed_sync=config.get("exit_on_failed_sync", False),
         )

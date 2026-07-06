@@ -385,7 +385,9 @@ async def test_broker_data_maintained_continues_without_restart() -> None:
 
 @pytest.mark.parametrize("code", [2103, 2105, 2157, 10182, 2104, 2106, 2158])
 @pytest.mark.asyncio
-async def test_weak_data_farm_messages_do_not_change_lifecycle(code: int) -> None:
+async def test_weak_data_farm_messages_do_not_change_lifecycle(
+    code: int, caplog: pytest.LogCaptureFixture
+) -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload)
@@ -394,6 +396,8 @@ async def test_weak_data_farm_messages_do_not_change_lifecycle(code: int) -> Non
     assert await wait_for_condition(lambda: workload.starts == 1)
     assert not supervisor.connection_unavailable.is_set()
 
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.supervisor_one")
+    caplog.clear()
     fake_ib.errorEvent.emit(-1, code, "Weak farm message", ibi.Contract())
     await asyncio.sleep(0)
 
@@ -405,6 +409,35 @@ async def test_weak_data_farm_messages_do_not_change_lifecycle(code: int) -> Non
     assert workload.stops == []
     assert fake_ib.connect_attempts == 1
     assert fake_ib.disconnect_count == 0
+    assert f"broker message {code}: Weak farm message" in caplog.text
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_weak_data_farm_logging_can_be_disabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, log_datafarm_status=False)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: workload.starts == 1)
+    assert not supervisor.connection_unavailable.is_set()
+
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.supervisor_one")
+    caplog.clear()
+    fake_ib.errorEvent.emit(-1, 2105, "Weak farm message", ibi.Contract())
+    await asyncio.sleep(0)
+
+    assert await wait_for_condition(lambda: len(fake_ib.errorEvent) == 1)
+    assert not supervisor.connection_unavailable.is_set()
+    assert not supervisor.restart_requested.is_set()
+    assert fake_ib.probe_count == 0
+    assert workload.starts == 1
+    assert workload.stops == []
+    assert "Weak farm message" not in caplog.text
 
     await stop_and_wait(supervisor, task)
 

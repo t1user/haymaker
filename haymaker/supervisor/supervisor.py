@@ -361,7 +361,8 @@ class ConnectionSupervisor:
             else:
                 self._state.on_broker_message(code, message)
         elif code in self.WEAK_DATA_FARM_CODES:
-            log.debug(f"broker message {code}: {message}")
+            if self.settings.log_datafarm_status:
+                log.debug(f"broker message {code}: {message}")
         else:
             self._state.on_broker_message(code, message)
 

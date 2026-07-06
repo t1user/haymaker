@@ -571,7 +571,9 @@ async def test_update_event_does_not_wake_broker_connectivity_lost_state() -> No
 
 @pytest.mark.parametrize("code", [2103, 2105, 2157, 10182, 2104, 2106, 2158])
 @pytest.mark.asyncio
-async def test_weak_data_farm_messages_do_not_change_state(code: int) -> None:
+async def test_weak_data_farm_messages_do_not_change_state(
+    code: int, caplog: pytest.LogCaptureFixture
+) -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload)
@@ -580,6 +582,8 @@ async def test_weak_data_farm_messages_do_not_change_state(code: int) -> None:
     assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
     assert not supervisor.connection_unavailable.is_set()
 
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.supervisor")
+    caplog.clear()
     fake_ib.errorEvent.emit(-1, code, "Weak farm message", ibi.Contract())
     await asyncio.sleep(0)
 
@@ -589,6 +593,32 @@ async def test_weak_data_farm_messages_do_not_change_state(code: int) -> None:
     assert fake_ib.probe_count == 1
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
+    assert f"broker message {code}: Weak farm message" in caplog.text
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_weak_data_farm_logging_can_be_disabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, log_datafarm_status=False)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+    assert not supervisor.connection_unavailable.is_set()
+
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.supervisor")
+    caplog.clear()
+    fake_ib.errorEvent.emit(-1, 2105, "Weak farm message", ibi.Contract())
+    await asyncio.sleep(0)
+
+    assert current_state(supervisor) is ConnectedState
+    assert not supervisor.connection_unavailable.is_set()
+    assert not supervisor._restart_requested.is_set()
+    assert "Weak farm message" not in caplog.text
 
     await stop_and_wait(supervisor, task)
 
@@ -854,6 +884,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
             "recovery_warning_after": 19,
             "recovery_warning_interval": 23,
             "restart_on_recovered_connection": True,
+            "log_datafarm_status": False,
         },
         client_id=42,
     )
@@ -869,6 +900,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert settings.auto_recovery_grace_period == 17
     assert settings.max_recoveries == 21
     assert settings.restart_on_recovered_connection is True
+    assert settings.log_datafarm_status is False
     assert not hasattr(settings, "restart_delay")
     assert not hasattr(settings, "recovery_warning_after")
     assert not hasattr(settings, "recovery_warning_interval")
@@ -888,6 +920,7 @@ def test_connection_settings_from_config_uses_defaults() -> None:
     assert settings.auto_recovery_grace_period == 120
     assert settings.max_recoveries == 10
     assert settings.restart_on_recovered_connection is False
+    assert settings.log_datafarm_status is True
 
 
 def test_request_restart_returns_true_when_state_supervisor_accepts_request() -> None:

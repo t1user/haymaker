@@ -89,6 +89,10 @@ Broker messages are grouped into three categories:
 * informational data-farm messages, such as ``2103``, ``2105``, ``2157``,
   ``10182``, ``2104``, ``2106``, and ``2158``.
 
+``app.log_datafarm_status`` controls whether informational data-farm messages
+are written to the supervisor log. Turning it off silences those messages only;
+it does not make them restart triggers.
+
 ``timeoutEvent`` remains an active health check while connected. It triggers a
 probe rather than an immediate reconnect. While broker connectivity is reported
 lost, ``1102`` triggers a probe; generic ``updateEvent`` traffic and data-farm
@@ -129,7 +133,8 @@ restart requests at the source, and restart cleanup, ``Stopping``, or
 Broker connectivity loss is not a hidden connected sub-state. ``1100`` and
 ``2110`` move the state machine to ``BrokerConnectivityLost`` immediately. From
 there, ``1102`` or the grace-period timeout probes the connection. Weak
-data-farm messages are logged as context only.
+data-farm messages are ignored or logged as context depending on
+``app.log_datafarm_status``.
 
 Configuration Notes
 ===================

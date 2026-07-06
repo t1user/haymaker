@@ -45,7 +45,9 @@ and ``2110`` move Haymaker into broker-connectivity recovery while connected.
 ``app.auto_recovery_grace_period`` controls how long Haymaker waits there
 before probing the connection. Generic ``updateEvent`` traffic does not wake
 that state, and weak data-farm messages such as ``2103``, ``2105``, ``2157``,
-``10182``, ``2104``, ``2106``, and ``2158`` are logged as context only.
+``10182``, ``2104``, ``2106``, and ``2158`` are logged as context only when
+``app.log_datafarm_status`` is ``True``. Set it to ``False`` to ignore those
+non-actionable messages silently while keeping the same recovery behavior.
 Restart cycles after failed probes wait ``app.connection_lost_retry`` before
 reconnecting; ``app.retryDelay`` controls the pause between failed connection
 attempts.

@@ -566,7 +566,8 @@ class ConnectionIssueManager:
             else:
                 self.restart(f"broker connectivity restored with data lost ({code})")
         elif code in self.ct.WEAK_DATA_FARM_CODES:
-            log.debug(f"Ignoring informational broker message {code}: {message}")
+            if self.ct.settings.log_datafarm_status:
+                log.debug(f"broker message {code}: {message}")
 
     def onTimeoutEvent(self, idle_period: float) -> None:
         self.wakeup.set()
