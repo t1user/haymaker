@@ -50,6 +50,25 @@ class AbstractState(ABC):
     def on_broker_message(self, code: int, message: str) -> None:
         """Handle a broker message while this state is active."""
 
+    def handle_broker_connectivity_lost_code(self, code: int) -> bool:
+        """Handle a broker message code indicating broker connectivity loss.
+
+        Args:
+            code: IB broker message code.
+
+        Returns:
+            True if the code indicated broker connectivity loss, otherwise False.
+        """
+
+        if code not in self.context.BROKER_CONNECTIVITY_LOST_CODES:
+            return False
+
+        self.context.mark_connection_unavailable(
+            f"broker connectivity lost by code {code}"
+        )
+        self.wakeup.set()
+        return True
+
     async def wait_for_wakeup_or(
         self,
         *awaitables: Awaitable[Any] | asyncio.Future[Any],
@@ -169,12 +188,8 @@ class ProbingState(AbstractState):
     def on_broker_message(self, code: int, message: str) -> None:
         """Wait for broker connectivity recovery if loss is reported."""
 
-        if code in self.context.BROKER_CONNECTIVITY_LOST_CODES:
+        if self.handle_broker_connectivity_lost_code(code):
             self._connectivity_lost_requested = True
-            self.context.mark_connection_unavailable(
-                f"broker connectivity lost by code {code}"
-            )
-            self.wakeup.set()
 
 
 class StartingWorkloadState(AbstractState):
@@ -200,7 +215,6 @@ class ConnectedState(AbstractState):
         await self.wait_for_wakeup_or()
 
         if self._connectivity_lost_requested:
-            self.context.mark_connection_unavailable("broker connectivity lost")
             return BrokerConnectivityLostState
 
         if self._timeout_registered:
@@ -217,12 +231,8 @@ class ConnectedState(AbstractState):
     def on_broker_message(self, code: int, message: str) -> None:
         """Wait for broker connectivity recovery if loss is reported."""
 
-        if code in self.context.BROKER_CONNECTIVITY_LOST_CODES:
+        if self.handle_broker_connectivity_lost_code(code):
             self._connectivity_lost_requested = True
-            self.context.mark_connection_unavailable(
-                f"broker connectivity lost by code {code}"
-            )
-            self.wakeup.set()
 
 
 class BrokerConnectivityLostState(AbstractState):

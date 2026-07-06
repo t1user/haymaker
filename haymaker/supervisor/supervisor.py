@@ -118,9 +118,7 @@ class SupervisorRace:
         if request_transition is not None:
             return request_transition
 
-        if self._state_task in done and (
-            self._state_task.cancelled() or self._state_task.exception() is not None
-        ):
+        if self._state_task in done:
             return self._state_task.result()
 
         if workload_task is not None and workload_task in done:
@@ -147,7 +145,20 @@ class SupervisorRace:
         return self._workload_task
 
     def _request_transition(self) -> type[AbstractState] | None:
-        """Return the highest-priority lifecycle request for this race."""
+        """Return the highest-priority lifecycle request for this
+        race.
+
+        The purpose of this method is to ensure that:
+
+            - pending stop/restart has priority over normal state
+              completion;
+
+            - state work does not begin if a lifecycle request is
+              already pending;
+
+            - restart requests are not accidentally carried into later
+              states that should not inherit them.
+        """
 
         if self._stop_requested.is_set() and self._state.accepts_stop:
             self._restart_requested.clear()
@@ -350,7 +361,7 @@ class ConnectionSupervisor:
             else:
                 self._state.on_broker_message(code, message)
         elif code in self.WEAK_DATA_FARM_CODES:
-            log.debug(f"Ignoring informational broker message {code}: {message}")
+            log.debug(f"broker message {code}: {message}")
         else:
             self._state.on_broker_message(code, message)
 
