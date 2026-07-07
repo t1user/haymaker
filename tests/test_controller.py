@@ -24,8 +24,6 @@ from haymaker.controller.sync_coordinator import (
 from haymaker.state_machine import OrderInfo
 from haymaker.trader import Trader
 
-# from haymaker.manager import IB
-
 
 @pytest.fixture
 def trades_and_positions():

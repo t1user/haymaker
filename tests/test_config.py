@@ -53,7 +53,7 @@ def test_env_variable_loading(clear_env):
     # `HAYMAKER_` needs to be chopped off
     # all keys are small caps
     os.environ["HAYMAKER_TEST_KEY"] = "test_value"
-    config = ConfigMaps()
+    config = ConfigMaps("live", ["strategy.py"])
     assert config.environ["test_key"] == "test_value"
 
 
@@ -62,39 +62,41 @@ def test_cmdline_parsing(reset_sys_argv):
         temp_path = Path(temp_file.name)  # Get the temporary file path
 
     try:
-        sys.argv = [
-            "script_name",
+        args = [
+            "strategy.py",
             "--file",
             str(temp_path),
             "--set_option",
             "option",
             "value",
         ]
-        config = ConfigMaps()
+        config = ConfigMaps("live", args)
 
         assert config.cmdline["file"] == str(temp_path)
         assert config.cmdline["option"] == "value"
+        assert "module_path" not in config.cmdline
     finally:
         temp_path.unlink()  # Cleanup the temporary file
 
 
 def test_yaml_parsing(temp_yaml_file):
-    config = ConfigMaps()
+    config = ConfigMaps("live", ["strategy.py"])
     parsed_yaml = config.parse_yaml(temp_yaml_file)
     assert parsed_yaml["key"] == "value"
     assert parsed_yaml["nested"]["subkey"] == "subvalue"
 
 
 def test_missing_yaml_file():
-    config = ConfigMaps()
+    config = ConfigMaps("live", ["strategy.py"])
     with pytest.raises(FileNotFoundError):
         config.parse_yaml("non_existent.yaml")
 
 
 def test_config_merging(monkeypatch):
     monkeypatch.setenv("HAYMAKER_TEST_KEY", "env_value")
-    sys.argv = ["script_name", "--set_option", "option", "cmdline_value"]
-    config_maps = ConfigMaps()
+    config_maps = ConfigMaps(
+        "live", ["strategy.py", "--set_option", "option", "cmdline_value"]
+    )
     merged = ChainMap(*config_maps.maps)
     assert merged["option"] == "cmdline_value"
     assert merged.get("test_key") == "env_value"
@@ -103,8 +105,9 @@ def test_config_merging(monkeypatch):
 def test_priorities_1(monkeypatch):
     # cmdline overrides env value
     monkeypatch.setenv("HAYMAKER_TEST_KEY", "env_value")
-    sys.argv = ["script_name", "--set_option", "test_key", "cmdline_value"]
-    config_maps = ConfigMaps()
+    config_maps = ConfigMaps(
+        "live", ["strategy.py", "--set_option", "test_key", "cmdline_value"]
+    )
     merged = ChainMap(*config_maps.maps)
     assert merged["test_key"] == "cmdline_value"
 
@@ -113,12 +116,12 @@ def test_priorities_2(monkeypatch, temp_yaml_file, reset_sys_argv):
     # config file has priority before env
     monkeypatch.setenv("HAYMAKER_KEY", "env_value")
     # config file name passed as cli argument
-    sys.argv = [
-        "script_name",
+    args = [
+        "strategy.py",
         "--file",
         str(temp_yaml_file),
     ]
-    config_maps = ConfigMaps()
+    config_maps = ConfigMaps("live", args)
     merged = ChainMap(*config_maps.maps)
     assert merged.get("key") == "value"
 
@@ -127,7 +130,19 @@ def test_config_file_read_from_env(monkeypatch, temp_yaml_file, reset_sys_argv):
     # config file is read from env
     monkeypatch.setenv("HAYMAKER_KEY", "env_value")
     monkeypatch.setenv("HAYMAKER_HAYMAKER_CONFIG_OVERRIDES", str(temp_yaml_file))
-    config_maps = ConfigMaps()
+    config_maps = ConfigMaps("live", ["strategy.py"])
     merged = ChainMap(*config_maps.maps)
     # it would be 'env_value' if it wasn't overridden with config file
     assert merged.get("key") == "value"
+
+
+def test_dataloader_positional_source_is_config_value(monkeypatch):
+    monkeypatch.setattr(ConfigMaps, "get_defaults", lambda self: {})
+    config_maps = ConfigMaps("dataloader", ["contracts.csv"])
+    assert config_maps.cmdline["source"] == "contracts.csv"
+
+
+def test_live_positional_module_is_not_config_value():
+    config_maps = ConfigMaps("live", ["strategy.py"])
+    assert "module_path" not in config_maps.cmdline
+    assert "source" not in config_maps.cmdline

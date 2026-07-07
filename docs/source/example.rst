@@ -138,22 +138,27 @@ Components used:
 
   Sends a :class:`ib_insync.order.MarketOrder` to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an ``atr`` column from the :class:`haymaker.block.AbstractDfBlock`).
 
+The strategy module does not start the application itself. Haymaker imports the
+module, lets module-level pipeline construction register streamers and
+strategies, and then runs the framework-owned supervisor.
+
+If a strategy should be excluded from the daily futures roll, expose it as
+module metadata:
+
 .. code-block:: python
-   :caption: Running the application
+   :caption: Optional strategy metadata
 
-   from haymaker import app
+   no_future_roll_strategies = ["ema_cross_ES"]
 
-   if __name__ == "__main__":
-       app.App().run()
-
-Run this as a script (e.g., ``strategy.py``):
+Run the strategy module with the ``haymaker`` command:
 
 .. code-block:: bash
    :caption: Starting the strategy
 
-   python strategy.py
+   haymaker strategy.py
 
-Ensure ``python`` is the correct interpreter. Long-running scripts should be managed as processes (see process management documentation—link TBD).
+Ensure ``haymaker`` comes from the intended environment. Long-running processes
+should be managed as services (see process management documentation—link TBD).
 
 Conclusion
 ----------

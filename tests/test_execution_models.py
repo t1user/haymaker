@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import count
+import logging
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import ib_insync as ibi
@@ -29,6 +30,14 @@ def test_AbstraExecModel_is_abstract(controller: Controller):
 def test_BaseExecModel_instantiates(controller: Controller):
     bem = BaseExecModel(controller=controller)
     assert isinstance(bem, BaseExecModel)
+
+
+def test_BaseExecModel_uses_runtime_controller(Atom, controller: Controller, monkeypatch):
+    monkeypatch.setattr(
+        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+    )
+    bem = BaseExecModel()
+    assert bem.controller is controller
 
 
 def test_EventDrivenExecModel_instantiates(controller: Controller):

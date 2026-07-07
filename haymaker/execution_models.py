@@ -73,11 +73,13 @@ class AbstractExecModel(Atom, ABC):
         if controller:
             self.controller = controller
         else:
-            # importing from .manager creates singleton instances
-            # may screw up tests if test needs a specific mock
-            from .manager import CONTROLLER
-
-            self.controller = CONTROLLER
+            runtime = getattr(type(self), "runtime", None)
+            if runtime is None:
+                raise RuntimeError(
+                    f"{self.__class__.__name__} requires a RuntimeContext or an "
+                    "explicit controller."
+                )
+            self.controller = runtime.controller
         self.open_order = {**OPEN_ORDER, **open_order}
         self.close_order = {**CLOSE_ORDER, **close_order}
         self.connect_controller()

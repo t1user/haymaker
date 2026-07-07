@@ -76,7 +76,8 @@ include = ["haymaker*", "dashboard*"]
 Repository = "https://github.com/t1user/haymaker"
 
 [project.scripts]
-dataloader = "haymaker.dataloader.dataloader:start"
+haymaker = "haymaker.cli:main"
+dataloader = "haymaker.cli:dataloader_main"
 haymaker-dashboard = "dashboard.cli:main"
 
 [tool.setuptools_scm]

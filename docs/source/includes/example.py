@@ -6,7 +6,6 @@ import pandas as pd
 
 from haymaker import (
     aggregators,
-    app,
     base,
     bracket_legs,
     block,
@@ -35,6 +34,7 @@ class EMACrossStrategy(block.AbstractDfBlock):
 
 
 es_contract = ibi.ContFuture("ES", "CME")
+no_future_roll_strategies: list[str] = []
 
 portfolio.FixedPortfolio(1)
 
@@ -48,6 +48,3 @@ pipe = base.Pipe(
         stop=bracket_legs.TrailingStop(3, vol_field="atr")
     ),
 )
-
-if __name__ == "__main__":
-    app.App().run()

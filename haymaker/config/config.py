@@ -6,15 +6,14 @@ App parameters are determined in the following order:
     - yaml file passed from command line
 
     - yaml file identified by full absolute path in environment
-      variable: 'HAYMAKER_CONFIG_OVERRIDES' for modules other than
-      dataloader, and `DATALOADER_CONFIG_OVERRIDES` for dataloader
+      variable: 'HAYMAKER_HAYMAKER_CONFIG_OVERRIDES' for live execution
+      and `HAYMAKER_DATALOADER_CONFIG_OVERRIDES` for dataloader
 
     - environment variables
 
     - default yaml file (located in the same directory as
-      :class:`.Config`) named 'base_config.yaml' for execution
-      module and 'dataloader_config.yaml' for dataloader module
-      (and 'base_config.yaml' for any other module)
+      :class:`.Config`) named 'base_config.yaml' for live execution
+      and 'dataloader_base_config.yaml' for dataloader
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ from typing import Final
 
 import yaml
 
-from .cli_options import CustomArgParser
+from .cli_options import CustomArgParser, ParserProfile
 
 log = logging.getLogger(__name__)
 
@@ -38,20 +37,24 @@ module_directory = Path(__file__).parents[0]
 
 class ConfigMaps:
 
-    __slots__ = ["_file", "cmdline", "config_file", "environ", "defaults"]
+    __slots__ = ["_file", "profile", "cmdline", "config_file", "environ", "defaults"]
 
     _file: str | None
+    profile: ParserProfile
     cmdline: collections.abc.MutableMapping
     config_file: collections.abc.MutableMapping
     environ: collections.abc.MutableMapping
     defaults: collections.abc.MutableMapping
 
-    def __init__(self):
+    def __init__(
+        self, profile: ParserProfile | None = None, args: list[str] | None = None
+    ) -> None:
+        self.profile = profile or self.profile_from_program_name(sys.argv[0])
         _environ = self.get_environ()
-        self._file = self.config_file_name_environ_reader(_environ)
+        self._file = self.config_file_name_environ_reader(_environ, self.profile)
 
         # keep the priority order here
-        self.cmdline = self.get_cmdline()
+        self.cmdline = self.get_cmdline(args)
         self.config_file = self.get_config_file()
         self.environ = _environ
         self.defaults = self.get_defaults()
@@ -61,19 +64,30 @@ class ConfigMaps:
         return [self.cmdline, self.config_file, self.environ, self.defaults]
 
     @staticmethod
-    def config_file_name_environ_reader(environ: dict) -> str | None:
+    def profile_from_program_name(program_name: str) -> ParserProfile:
+        """Return default config profile for legacy direct module execution."""
+
+        module_name = Path(program_name).name.split(".")[0]
+        if module_name == "dataloader":
+            return "dataloader"
+        return "live"
+
+    @staticmethod
+    def config_file_name_environ_reader(
+        environ: collections.abc.MutableMapping, profile: ParserProfile
+    ) -> str | None:
         """
         Retrieve name of config yaml file from environment.  The name
-        of the environment variable with config file name depends on
-        the name of module which runs this.
+        of the environment variable with config file name depends on the
+        explicit command profile.
 
         Returns:
             Filename if it's stored in environment variable, None otherwise.
         """
-        module_name = Path(sys.argv[0]).name.split(".")[0]
-        environ_key = {"dataloader": "dataloader_config_overrides"}.get(
-            module_name, "haymaker_config_overrides"
-        )
+        environ_key = {
+            "dataloader": "dataloader_config_overrides",
+            "live": "haymaker_config_overrides",
+        }[profile]
         return environ.get(environ_key, None)
 
     def get_cmdline(self, args=None) -> collections.abc.MutableMapping:
@@ -89,11 +103,14 @@ class ConfigMaps:
         `sys.argv`
         """
         if args is None:
-            args = sys.argv
+            argv = sys.argv[1:]
             # crucial exception to allow pytest work as a cli tool
             if "test" in sys.argv[0]:
                 return {}
-        cmdline = CustomArgParser.from_args(args).output
+        else:
+            argv = args
+        cmdline = CustomArgParser.from_profile(self.profile, argv).output
+        cmdline.pop("module_path", None)
         if file := cmdline.get("file"):
             self._file = Path.cwd() / file
         return cmdline
@@ -133,8 +150,9 @@ class ConfigMaps:
     @property
     def base_config_file(self) -> str:
         root = "base_config.yaml"
-        filename = Path(sys.argv[0]).name.strip(".py")
-        return f"{filename}_{root}"
+        if self.profile == "dataloader":
+            return f"dataloader_{root}"
+        return root
 
     def get_defaults(self) -> collections.abc.MutableMapping:
         """
@@ -156,4 +174,21 @@ class ConfigMaps:
         return data or {}
 
 
-CONFIG: Final[collections.abc.MutableMapping] = ChainMap(*ConfigMaps().maps)
+CONFIG: Final[ChainMap] = ChainMap(*ConfigMaps().maps)
+
+
+def configure(
+    profile: ParserProfile, args: list[str] | None = None
+) -> collections.abc.MutableMapping:
+    """Install command-profile configuration into the shared config object.
+
+    Args:
+        profile: Haymaker command profile to configure.
+        args: Command-line arguments without the executable name.
+
+    Returns:
+        The shared ``CONFIG`` mapping after its underlying maps are replaced.
+    """
+
+    CONFIG.maps[:] = ConfigMaps(profile, args).maps
+    return CONFIG

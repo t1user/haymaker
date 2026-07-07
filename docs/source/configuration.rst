@@ -5,8 +5,9 @@ Configuration
 Haymaker is highly configurable. Parameters can be set in the following order of priority:
 
 #. Command-line options (highest priority).
+#. User-provided configuration YAML file passed on the command line.
+#. User-provided configuration YAML file selected by environment variable.
 #. System environment variables.
-#. User-provided configuration YAML file.
 #. Default configuration YAML file (fallback for undefined variables).
 
 Default Configuration Files
@@ -114,7 +115,7 @@ To override defaults, copy a configuration file, modify the desired parameters, 
   .. code-block:: bash
      :caption: Passing the config file via CLI
 
-     dataloader --file config.yaml
+     haymaker strategy.py --file config.yaml
 
 .. note::
    Command-line arguments take precedence over environment variables.
@@ -122,29 +123,31 @@ To override defaults, copy a configuration file, modify the desired parameters, 
 Passing Key-Value Pairs from Command Line
 =========================================
 
-Use ``-s`` or ``--set-option`` to temporarily override parameters. For example, to specify a data source:
+Use ``-s`` or ``--set-option`` to temporarily override parameters. For example,
+to specify a data source:
 
 .. code-block:: bash
    :caption: Overriding a parameter via CLI
 
-   dataloader -s source my_list.csv
+   dataloader my_list.csv
 
 Available command-line options can be listed with:
 
 .. code-block:: bash
    :caption: Displaying help for CLI options
 
-   module_name --help
+   haymaker --help
 
 CLI Options
 -----------
 
-Assuming your strategy is in ``your_module.py`` and imports :class:`haymaker.app.App`, the following options are available from the command line:
+Assuming your strategy is in ``your_module.py``, the following options are
+available from the command line:
 
 .. argparse::
    :module: haymaker.config.cli_options
    :func: get_parser_for_other_module
-   :prog: dataloader.py
+   :prog: haymaker
 
 Examples
 ^^^^^^^^
@@ -152,21 +155,22 @@ Examples
 .. code-block:: bash
    :caption: Running a strategy with a config override
 
-   python my_strategy.py -f config_overrides.yaml
+   haymaker my_strategy.py -f config_overrides.yaml
 
-This runs the strategy defined in ``my_strategy.py`` with configuration overrides from ``config_overrides.yaml`` in the current directory.
+This runs the strategy defined in ``my_strategy.py`` with configuration
+overrides from ``config_overrides.yaml`` in the current directory.
 
 .. code-block:: bash
    :caption: Triggering the emergency circuit breaker
 
-   python my_strategy.py --nuke
+   haymaker my_strategy.py --nuke
 
 This activates the emergency circuit breaker, closing all open positions, canceling resting orders, and preventing new positions.
 
 .. code-block:: bash
    :caption: Changing the log location
 
-   python my_strategy.py -s logging_path /path/to/log
+   haymaker my_strategy.py -s logging_path /path/to/log
 
 This changes the log location to ``/path/to/log``.
 
@@ -178,7 +182,7 @@ Dataloader options differ from those of other modules:
 .. argparse::
    :module: haymaker.config.cli_options
    :func: get_parser_for_dataloader
-   :prog: dataloader.py
+   :prog: dataloader
 
 Examples
 ^^^^^^^^
@@ -193,9 +197,10 @@ This runs the dataloader to collect historical data for contracts defined in ``m
 .. code-block:: bash
    :caption: Running dataloader with a custom settings file
 
-   dataloader -f settings.yaml
+   dataloader my_list.csv -f settings.yaml
 
-This runs the dataloader with settings from ``settings.yaml`` in the current directory. This file should be a modified copy of:
+This runs the dataloader for contracts in ``my_list.csv`` with settings from
+``settings.yaml`` in the current directory. This file should be a modified copy of:
 https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml
 
 specifying the source file with defined contracts, data type, frequency, etc.

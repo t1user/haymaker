@@ -50,22 +50,16 @@ class Timeout:
     """
 
     instances: ClassVar[list["Timeout"]] = []
-    restart_handler: ClassVar[Callable[[str], bool | None] | None] = None
 
     event: ev.Event
     time: float = TIMEOUT_TIME
     name: str = ""
     details: Details | None = None
     debug: bool = TIMEOUT_DEBUG
+    restart_request: Callable[[str], bool | None] | None = None
     _timeout: ev.Event | None = field(repr=False, default=None)
     _now: datetime | None = None  # for testing only
     _sleep_taks: asyncio.Task | None = field(repr=False, default=None)
-
-    @classmethod
-    def set_restart_handler(cls, handler: Callable[[str], bool | None]) -> None:
-        """Set the callback used when a stale streamer requests a restart."""
-
-        cls.restart_handler = handler
 
     @classmethod
     def from_atom(
@@ -97,6 +91,7 @@ class Timeout:
             time,
             f"{str(atom)}-<<{key}>>",
             atom.contract_details,
+            restart_request=atom.restart_request,
         )
 
     @classmethod
@@ -164,11 +159,10 @@ class Timeout:
             log.error(f"{self!s} triggered. Possibly system reset needed.")
         else:
             log.debug(f"Stale streamer {self!s} will request restart.")
-            restart_handler = type(self).restart_handler
-            if restart_handler is None:
+            if self.restart_request is None:
                 log.error("Cannot restart: no timeout restart handler configured.")
                 return
-            restart_accepted = restart_handler(f"stale streamer: {self!s}")
+            restart_accepted = self.restart_request(f"stale streamer: {self!s}")
             if restart_accepted is False:
                 self._set_timeout(self.event)
 

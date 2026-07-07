@@ -20,6 +20,7 @@ from .enums import ActiveNext
 
 if TYPE_CHECKING:
     from .contract_selector import AbstractBaseContractSelector
+    from .runtime import RuntimeContext
     from .state_machine import StateMachine, Strategy
 
 log = logging.getLogger(__name__)
@@ -133,6 +134,7 @@ class Atom:
 
     ib: ClassVar[ibi.IB]
     sm: ClassVar[StateMachine]
+    runtime: ClassVar[RuntimeContext]
     contract_registry: ClassVar[ContractRegistry] = ContractRegistry()
     events: ClassVar[Sequence[str]] = (
         "startEvent",
@@ -149,6 +151,24 @@ class Atom:
         cls.ib = ib
         cls.sm = sm
         cls.contract_registry = cr
+
+    @classmethod
+    def set_runtime_context(cls, runtime: RuntimeContext) -> None:
+        """Install process runtime services on all Atoms."""
+
+        cls.runtime = runtime
+        cls.ib = runtime.ib
+        cls.sm = runtime.state_machine
+        cls.contract_registry = runtime.contract_registry
+
+    @property
+    def restart_request(self):
+        """Return the current runtime restart callback if it is available."""
+
+        runtime = getattr(type(self), "runtime", None)
+        if runtime is None:
+            return None
+        return runtime.restart_request
 
     def __init__(self) -> None:
         self._createEvents()

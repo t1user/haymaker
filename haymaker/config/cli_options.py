@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import pathlib
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
+
+
+ParserProfile = Literal["live", "dataloader"]
 
 
 class SetValues(argparse.Action):
@@ -46,15 +49,7 @@ epilog = "Defaults will be used for all unset parameters."
 
 common_options = [
     (
-        ("source",),
-        {
-            # "action": SetSource,
-            "nargs": "?",
-            "help": "Optional file with source data.",
-        },
-    ),
-    (
-        ("-s", "--set_option"),
+        ("-s", "--set_option", "--set-option"),
         {
             "action": SetValues,
             "metavar": ("KEY", "VALUE"),
@@ -72,7 +67,7 @@ common_options = [
 ]
 
 options_by_module: dict[str, list] = {
-    "app": [
+    "live": [
         (
             ("-r", "--reset"),
             {
@@ -107,6 +102,13 @@ options_by_module: dict[str, list] = {
         ),
     ],
     "dataloader": [
+        (
+            ("source",),
+            {
+                "nargs": "?",
+                "help": "Optional file with source data.",
+            },
+        ),
         (
             ("-g", "--fill_gaps"),
             {
@@ -152,19 +154,51 @@ class CustomArgParser:
             }
 
     @classmethod
-    def from_args(cls, args: list[str]) -> CustomArgParser:
+    def from_profile(
+        cls, profile: ParserProfile, args: list[str], file_name: str | None = None
+    ) -> CustomArgParser:
+        """Create parser for a known Haymaker command profile.
+
+        Args:
+            profile: Command profile whose options should be accepted.
+            args: Command-line arguments without the executable name.
+            file_name: Optional executable name for diagnostics and test helpers.
+        """
+
+        if profile == "live":
+            options = [
+                (
+                    ("module_path",),
+                    {
+                        "help": "Python file containing the live Haymaker strategy.",
+                    },
+                ),
+                *common_options,
+                *options_by_module["live"],
+            ]
+        else:
+            options = [*common_options, *options_by_module["dataloader"]]
+        return cls(file_name or profile, args, options)
+
+    @classmethod
+    def from_args(
+        cls, args: list[str], profile: ParserProfile | None = None
+    ) -> CustomArgParser:
         """
         Create parser from ``sys.argv``
 
         Args:
            args: value of sys.argv
         """
+        if profile is not None:
+            return cls.from_profile(profile, args[1:], pathlib.Path(args[0]).name)
+
         file_name = pathlib.Path(args[0]).name
         if (options := options_by_module.get(file_name.strip(".py"))) is not None:
             return cls(file_name, args[1:], [*common_options, *options])
         else:
             return cls(
-                file_name, args[1:], [*common_options, *options_by_module["app"]]
+                file_name, args[1:], [*common_options, *options_by_module["live"]]
             )
 
     @classmethod
@@ -185,12 +219,10 @@ class CustomArgParser:
 
 
 def get_parser_for_dataloader():
-    # Simulate running as 'dataloader.py'
-    parser_instance = CustomArgParser.from_args(["dataloader.py"])
+    parser_instance = CustomArgParser.from_profile("dataloader", [])
     return parser_instance.parser
 
 
 def get_parser_for_other_module():
-    # Simulate running as 'your_module.py'
-    parser_instance = CustomArgParser.from_args(["your_module.py"])
+    parser_instance = CustomArgParser.from_profile("live", ["your_module.py"])
     return parser_instance.parser

@@ -14,17 +14,17 @@ The package is still alpha-stage. Some public docs describe the live backtester 
 
 ## Architecture Overview
 
-The live execution side is built around `Atom` pipelines. `Atom` provides event wiring, contract lookup, shared access to the global `ib_insync.IB` instance, and shared access to the `StateMachine`. Strategy code composes streamers, signal processors, portfolio sizing, and execution models into event chains.
+The live execution side is built around `Atom` pipelines. `Atom` provides event wiring, contract lookup, and shared access to process-owned runtime services. Strategy code composes streamers, signal processors, portfolio sizing, and execution models into event chains.
 
-Runtime singletons are assembled in `haymaker/manager.py`:
+Live runtime services are assembled in `haymaker/runtime.py` by `RuntimeContext`:
 
-- `IB`: shared `ib_insync.IB` client,
-- `CONTRACT_REGISTRY`: maps contract blueprints to qualified current/next contracts,
-- `STATE_MACHINE`: persisted strategy/order state,
-- `CONTROLLER`: broker/state reconciliation and order gateway,
-- `JOBS`: startup data acquisition plus streamer execution.
+- shared `ib_insync.IB` client,
+- contract registry for qualified current/next contracts,
+- persisted strategy/order state machine,
+- controller for broker/state reconciliation and order gateway,
+- startup contract-detail initialization and streamer jobs.
 
-`haymaker/app.py` bootstraps live execution: it sets up logging, imports the runtime singletons, builds a live `App` composition from config, schedules the daily futures roll once for the app process, and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns controller startup and streamer jobs for each connection cycle.
+The `haymaker` console command owns live execution: it configures Haymaker, creates `RuntimeContext`, installs it on `Atom`, imports the user strategy module so module-level pipelines are built, reads module metadata such as `no_future_roll_strategies`, and then starts `haymaker/app.py`. `App` schedules the daily futures roll once for the app process and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns controller startup and streamer jobs for each connection cycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames to a configured datastore.
 
@@ -35,7 +35,9 @@ The research package is intentionally separate from live execution. It works dir
 ### Live Execution Core
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
-- `haymaker/app.py`: live application bootstrap, top-level `App.run()`, the app-lifetime futures-roll schedule, and `LiveRuntime`, which owns live workload startup/cleanup for each supervised connection cycle.
+- `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints, explicit command-profile config setup, and user strategy module loading.
+- `haymaker/app.py`: framework-internal live application bootstrap, top-level `App.run()`, the app-lifetime futures-roll schedule, and `LiveRuntime`, which owns live workload startup/cleanup for each supervised connection cycle.
+- `haymaker/runtime.py`: process-owned live runtime context, IB/state/controller construction, contract-detail initialization, and streamer job assembly.
 - `haymaker/supervisor/`: IB socket supervisor package for owned managed
   connections. It owns workload task lifecycle, broker auto-recovery waits,
   probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
@@ -43,7 +45,6 @@ The research package is intentionally separate from live execution. It works dir
   workload completion. Workloads can optionally bind to a restart callback and
   connection-unavailable event so live controller sync can abort during broker
   recovery, restart, or shutdown. It does not manage the gateway process.
-- `haymaker/manager.py`: constructs runtime singletons and injects shared IB/state/contract data into `Atom`.
 - `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, back-reports known fills before position comparison, can request one reconnect before corrective mutations on the first sync after hold/startup, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/state_machine.py`: persisted strategy and order state, rejection tracking, active positions, and locks.
@@ -68,7 +69,7 @@ The research package is intentionally separate from live execution. It works dir
 
 ### Dataloader
 
-- `haymaker/dataloader/dataloader.py`: `dataloader` console-script entrypoint, producer/worker queue, download task orchestration, and store writes.
+- `haymaker/dataloader/dataloader.py`: dataloader runtime, producer/worker queue, download task orchestration, and store writes.
 - `haymaker/dataloader/connect.py`: dataloader adapter for shared IB connection supervision, with `reconnect` and `wait` modes.
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
@@ -86,11 +87,12 @@ The research package is intentionally separate from live execution. It works dir
 
 ## Entry Points
 
-- Live strategy scripts import and instantiate `haymaker.app.App`, then call
-  `App().run()`. `App.run()` runs the top-level supervisor coroutine directly
-  through `asyncio.run()` so `ib_insync` global socket errors remain inside the
-  supervisor recovery path.
-- `dataloader` console script maps to `haymaker.dataloader.dataloader:start`.
+- `haymaker strategy.py [options]` imports the user strategy module and then
+  starts the framework-owned `App`. `App.run()` runs the top-level supervisor
+  coroutine directly through `asyncio.run()` so `ib_insync` global socket errors
+  remain inside the supervisor recovery path.
+- `dataloader contracts.csv [options]` maps the positional source file into
+  dataloader configuration before importing the dataloader runtime.
 - Research code usually imports from `haymaker.research`, `haymaker.research.stop`, or `haymaker.research.backtester`.
 - Sphinx docs are built from `docs/source` with `make html` from the `docs/` directory.
 
@@ -98,17 +100,17 @@ The research package is intentionally separate from live execution. It works dir
 
 ### Live Execution Flow
 
-1. User strategy code builds `Atom` pipelines and starts `App.run()`.
-2. `App` starts the IB watchdog and waits for a successful historical-data probe.
-3. `Controller.run()` reads or initializes state, then `Controller.sync()` races the reconciliation pass against the supervisor's connection-unavailable event. If the supervisor enters broker recovery, restart, or shutdown, sync aborts without disabling trading. Otherwise the internal sync pass runs a bounded retry loop around a sync coordinator. Each coordinator pass first checks broker connection and validates broker position freshness, relinks current `ibi.Trade` objects to local records, back-reports known completed fills, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after broker verification failures or recovery actions so sync can retry the checks before disabling trading. If unresolved order or position mismatches remain on the first pass, the coordinator can ask the controller to reconnect before local order pruning, broker order cancellation, or strategy-position correction is allowed on a later pass. Non-retryable unsafe states raise `SyncBrokenStateError`, which disables trading immediately.
-4. `Jobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
-5. Streamers emit market data into strategy blocks.
-6. Blocks add strategy fields and emit dictionaries.
-7. Signal processors create `action`, `target_position`, and existing-position context.
-8. Portfolio sizing adds `amount`.
-9. Execution models create IB orders and call `Controller.trade()`.
-10. Controller registers orders, reconciles broker events, updates the state machine, and sends blotter records when enabled; sync failures disable further outbound trading. The global `controller.missing_brackets` option controls bracket/protection handling: `ignore` skips bracket checks, `warn` logs local bracket-record mismatches and broker positions without stop-loss protection, and `remove` also cancels obsolete bracket/closing orders and closes local strategy positions whose expected local bracket records are missing.
->>>>>>> dev
+1. The `haymaker` CLI creates `RuntimeContext`, installs it on `Atom`, and imports the user strategy module.
+2. User strategy module-level code builds `Atom` pipelines and registers streamers.
+3. `App` starts the IB watchdog and waits for a successful historical-data probe.
+4. `Controller.run()` reads or initializes state, then `Controller.sync()` races the reconciliation pass against the supervisor's connection-unavailable event. If the supervisor enters broker recovery, restart, or shutdown, sync aborts without disabling trading. Otherwise the internal sync pass runs a bounded retry loop around a sync coordinator. Each coordinator pass first checks broker connection and validates broker position freshness, relinks current `ibi.Trade` objects to local records, back-reports known completed fills, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after broker verification failures or recovery actions so sync can retry the checks before disabling trading. If unresolved order or position mismatches remain on the first pass, the coordinator can ask the controller to reconnect before local order pruning, broker order cancellation, or strategy-position correction is allowed on a later pass. Non-retryable unsafe states raise `SyncBrokenStateError`, which disables trading immediately.
+5. `Jobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
+6. Streamers emit market data into strategy blocks.
+7. Blocks add strategy fields and emit dictionaries.
+8. Signal processors create `action`, `target_position`, and existing-position context.
+9. Portfolio sizing adds `amount`.
+10. Execution models create IB orders and call `Controller.trade()`.
+11. Controller registers orders, reconciles broker events, updates the state machine, and sends blotter records when enabled; sync failures disable further outbound trading. The global `controller.missing_brackets` option controls bracket/protection handling: `ignore` skips bracket checks, `warn` logs local bracket-record mismatches and broker positions without stop-loss protection, and `remove` also cancels obsolete bracket/closing orders and closes local strategy positions whose expected local bracket records are missing.
 
 ### Dataloader Flow
 
@@ -151,11 +153,10 @@ The research package is intentionally separate from live execution. It works dir
 Config is assembled in `haymaker/config/config.py` from:
 
 1. command-line options,
-2. YAML override file,
-3. `HAYMAKER_` environment variables,
-4. default YAML files.
-
-The code's actual `ChainMap` order is command line, config file, environment, defaults. Existing `docs/source/configuration.rst` says environment variables take precedence over user YAML; that should be reconciled before relying on docs for operational precedence.
+2. YAML override file selected from the command line,
+3. YAML override file selected through environment configuration,
+4. `HAYMAKER_` environment variables,
+5. default YAML files.
 
 Important config files:
 
@@ -215,19 +216,17 @@ make html
 Run dataloader:
 
 ```bash
-dataloader -f settings.yaml
+dataloader contracts.csv -f settings.yaml
 ```
 
 ## Technical Debt
 
 - `pyproject.toml` declares `readme = "README.md"`, but the repo has `README.rst` and no top-level `README.md`.
-- `docs/source/configuration.rst` documents environment-over-YAML precedence, while the current `ConfigMaps.maps` order gives YAML override files precedence over environment values.
 - Some docs still describe backtesting as non-functional, while the research package has an active refactored backtester. Clarify whether that note refers only to live-strategy simulation.
 - `pyproject.toml` has a mypy ignore override for `backtester` with a comment to remove after fixing it.
 - Several modules contain explicit TODO/deprecated comments, especially dataloader futures selection, research numba tools, store deprecations, and old backtester utilities.
 - `haymaker/__init__.py` is empty; most public imports are exposed through subpackages, especially `haymaker.research`.
 - `ConfigMaps.parse_yaml()` uses `yaml.unsafe_load`, which supports Python object construction in config files but makes config files trusted code.
-- Live runtime singletons are constructed at import time in `haymaker/manager.py`, so imports can have side effects and tests need to avoid importing `haymaker.app`.
 
 ## Risky Areas
 
