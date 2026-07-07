@@ -623,6 +623,54 @@ async def test_weak_data_farm_logging_can_be_disabled(
     await stop_and_wait(supervisor, task)
 
 
+def test_live_update_failure_cluster_is_correlated_with_stale_restart(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_ib = FakeIB()
+    supervisor = make_supervisor(fake_ib)
+    supervisor._state = ConnectedState(supervisor)
+
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.supervisor")
+
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+
+    assert caplog.text.count("Live-update failure cluster started") == 1
+
+    caplog.clear()
+    assert supervisor.request_restart("stale streamer: Timeout <300s> for NG")
+    assert (
+        "Stale-streamer restart follows recent live-update failure cluster: "
+        "2 failures"
+    ) in caplog.text
+
+    caplog.clear()
+    assert supervisor.request_restart("stale streamer: Timeout <300s> for GC")
+    assert (
+        "Stale-streamer restart follows recent live-update failure cluster"
+        not in caplog.text
+    )
+
+
+def test_live_update_failure_correlation_respects_datafarm_logging_switch(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_ib = FakeIB()
+    supervisor = make_supervisor(fake_ib, log_datafarm_status=False)
+    supervisor._state = ConnectedState(supervisor)
+
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.supervisor")
+
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    supervisor.request_restart("stale streamer: Timeout <300s> for NG")
+
+    assert "Live-update failure cluster started" not in caplog.text
+    assert (
+        "Stale-streamer restart follows recent live-update failure cluster"
+        not in caplog.text
+    )
+
+
 @pytest.mark.asyncio
 async def test_timeout_event_in_connected_state_moves_to_probing() -> None:
     fake_ib = FakeIB()

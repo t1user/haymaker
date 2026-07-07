@@ -72,6 +72,26 @@ primary recovery signal. The useful split remains:
 - data-maintained and farm messages should generally be hints only,
   with probes and stream health deciding whether work is actually healthy.
 
+### Deferred 10182 Handling
+
+Recent nightly logs suggest that `10182` live-update failure clusters probably
+invalidate existing `reqHistoricalData(..., keepUpToDate=True)` subscriptions.
+When the state-machine supervisor waited for normal stale-streamer detection,
+the later restart was followed by backfill for the affected window, which
+supports the interpretation that the stream had really stopped.
+
+A possible future optimization is to treat a `10182` cluster as "streamer
+rebuild needed", wait for a short quiet period after weak data-farm messages
+such as `2105`/`10182`, then restart the workload without waiting for streamer
+timeouts. `2106` only says an HMDS farm is OK again, so it should not by itself
+be treated as a complete recovery signal across all farms/contracts.
+
+This optimization is intentionally deferred. The current behavior misses a few
+minutes of live updates during the nightly IB reset, but backfills immediately
+after restart and avoids extra policy based on weak broker messages. Revisit
+only if `10182` starts appearing during active sessions, backfill becomes
+unreliable, or another streamer type proves it needs a different recovery path.
+
 ## Non-Liquid Session Timeouts
 
 Changing timeout policy purely because a contract is `OPEN NOT LIQUID` is
