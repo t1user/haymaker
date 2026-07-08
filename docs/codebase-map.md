@@ -22,7 +22,7 @@ Live runtime services are assembled in `haymaker/runtime.py` by `RuntimeContext`
 - contract registry for qualified current/next contracts,
 - persisted strategy/order state machine,
 - controller for broker/state reconciliation and order gateway,
-- startup contract-detail initialization and streamer jobs.
+- startup contract-detail initialization and streamer startup jobs.
 
 The `haymaker` console command owns live execution: it configures Haymaker, creates `RuntimeContext`, installs it on `Atom`, imports the user strategy module so module-level pipelines are built, reads module metadata such as `no_future_roll_strategies`, and then starts `haymaker/app.py`. `App` schedules the daily futures roll once for the app process and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns controller startup and streamer jobs for each connection cycle.
 
@@ -104,7 +104,7 @@ The research package is intentionally separate from live execution. It works dir
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
 3. `App` starts the IB watchdog and waits for a successful historical-data probe.
 4. `Controller.run()` reads or initializes state, then `Controller.sync()` races the reconciliation pass against the supervisor's connection-unavailable event. If the supervisor enters broker recovery, restart, or shutdown, sync aborts without disabling trading. Otherwise the internal sync pass runs a bounded retry loop around a sync coordinator. Each coordinator pass first checks broker connection and validates broker position freshness, relinks current `ibi.Trade` objects to local records, back-reports known completed fills, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after broker verification failures or recovery actions so sync can retry the checks before disabling trading. If unresolved order or position mismatches remain on the first pass, the coordinator can ask the controller to reconnect before local order pruning, broker order cancellation, or strategy-position correction is allowed on a later pass. Non-retryable unsafe states raise `SyncBrokenStateError`, which disables trading immediately.
-5. `Jobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
+5. `StartupJobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
 6. Streamers emit market data into strategy blocks.
 7. Blocks add strategy fields and emit dictionaries.
 8. Signal processors create `action`, `target_position`, and existing-position context.

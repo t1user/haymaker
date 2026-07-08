@@ -63,7 +63,7 @@ class LiveRuntime:
             if not controller_started and self.exit_on_failed_sync:
                 log.debug("Controller did not start; jobs will not be started.")
                 return
-            await self.context.require_jobs()()
+            await self.context.require_startup_jobs()()
         except asyncio.CancelledError:
             log.debug("Live runtime task cancelled.")
             raise

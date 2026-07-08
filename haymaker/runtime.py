@@ -83,7 +83,7 @@ class InitData:
         return contract_
 
 
-class Jobs:
+class StartupJobs:
     """Run startup data collection and all streamers for a runtime context."""
 
     def __init__(
@@ -141,7 +141,7 @@ class RuntimeContext:
     state_machine: StateMachine
     trader: Trader
     _controller: Controller | None = field(default=None, init=False, repr=False)
-    jobs: Jobs | None = field(default=None, init=False)
+    startup_jobs: StartupJobs | None = field(default=None, init=False)
     no_future_roll_strategies: list[str] = field(default_factory=list)
     _restart_handler: Callable[[str], bool | None] | None = field(
         default=None, init=False, repr=False
@@ -205,7 +205,7 @@ class RuntimeContext:
         """Apply strategy-module metadata after module-level pipelines exist."""
 
         self.no_future_roll_strategies = self._read_no_future_roll_strategies(module)
-        self.jobs = Jobs(
+        self.startup_jobs = StartupJobs(
             InitData(self.ib, self.contract_registry),
             self.ib,
             Streamer.instances,
@@ -225,9 +225,9 @@ class RuntimeContext:
             )
         return list(strategies)
 
-    def require_jobs(self) -> Jobs:
-        """Return live jobs after strategy module loading has completed."""
+    def require_startup_jobs(self) -> StartupJobs:
+        """Return startup jobs after strategy module loading has completed."""
 
-        if self.jobs is None:
-            raise RuntimeError("Runtime jobs have not been initialized.")
-        return self.jobs
+        if self.startup_jobs is None:
+            raise RuntimeError("Startup jobs have not been initialized.")
+        return self.startup_jobs
