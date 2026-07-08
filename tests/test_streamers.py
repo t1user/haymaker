@@ -13,6 +13,13 @@ from haymaker.streamers import (
 )
 
 
+@pytest.fixture(autouse=True)
+def install_atom_runtime(atom_runtime):
+    """Install default Atom runtime for streamer tests."""
+
+    return atom_runtime
+
+
 def test_bar_filter():
     bar = ibi.BarData(
         datetime(2025, 9, 25, 9, 6, 0, 0),

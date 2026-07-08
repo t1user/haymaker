@@ -64,7 +64,7 @@ def StateMachine(strategy_saver):
 
 
 @pytest.fixture
-def pipe(StateMachine):
+def pipe(StateMachine, atom_runtime_factory):
     class SourceAtom(Atom):
         def run(self):
             self.dataEvent.emit({"strategy": "eska_NQ", "signal": 1})
@@ -72,9 +72,10 @@ def pipe(StateMachine):
     source = SourceAtom()
 
     sm = StateMachine()
+    atom_runtime_factory(sm=sm)
 
     processor = binary_signal_processor_factory(lockable=False, always_on=False)
-    processor_instance = processor(state_machine=sm)
+    processor_instance = processor()
 
     class OutputAtom(Atom):
         def onData(self, data, *args):
@@ -144,13 +145,14 @@ def test_target_position_included_in_output(pipe):
         ((-4, 0, 1, False, False), "CLOSE"),  # Same, reverse direction
     ],
 )
-def test_signal_paths_actions(test_input, expected, StateMachine):
+def test_signal_paths_actions(test_input, expected, StateMachine, atom_runtime_factory):
     position, lock, signal, lockable, always_on = test_input
 
     sm = StateMachine(position, lock)
+    atom_runtime_factory(sm=sm)
 
     processor = binary_signal_processor_factory(lockable, always_on)
-    processor_instance = processor(state_machine=sm)
+    processor_instance = processor()
     action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
@@ -196,10 +198,13 @@ def test_signal_paths_actions(test_input, expected, StateMachine):
         ((-2, 0, 1, False, False), 0),  # Same, reverse direction
     ],
 )
-def test_signal_paths_positions(test_input, expected, StateMachine):
+def test_signal_paths_positions(
+    test_input, expected, StateMachine, atom_runtime_factory
+):
     position, lock, signal, lockable, always_on = test_input
 
     sm = StateMachine(position, lock)
+    atom_runtime_factory(sm=sm)
 
     class OutputAtom(Atom):
         out = {}
@@ -211,7 +216,7 @@ def test_signal_paths_positions(test_input, expected, StateMachine):
 
     processor = binary_signal_processor_factory(lockable, always_on)
     print(processor)
-    processor_instance = processor(state_machine=sm)
+    processor_instance = processor()
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
 
@@ -239,12 +244,15 @@ def test_signal_paths_positions(test_input, expected, StateMachine):
         ((-1, -1), None),
     ],
 )
-def test_signal_paths_BinarySignalProcessor(test_input, expected, StateMachine):
+def test_signal_paths_BinarySignalProcessor(
+    test_input, expected, StateMachine, atom_runtime_factory
+):
     position, signal = test_input
 
     sm = StateMachine(position=position)
+    atom_runtime_factory(sm=sm)
 
-    processor_instance = BinarySignalProcessor(state_machine=sm)
+    processor_instance = BinarySignalProcessor()
     action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
@@ -264,12 +272,15 @@ def test_signal_paths_BinarySignalProcessor(test_input, expected, StateMachine):
         ((-1, -1), None),
     ],
 )
-def test_signal_paths_BlipBinarySignalProcessor(test_input, expected, StateMachine):
+def test_signal_paths_BlipBinarySignalProcessor(
+    test_input, expected, StateMachine, atom_runtime_factory
+):
     position, signal = test_input
 
     sm = StateMachine(position=position)
+    atom_runtime_factory(sm=sm)
 
-    processor_instance = BlipBinarySignalProcessor(state_machine=sm)
+    processor_instance = BlipBinarySignalProcessor()
     action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
@@ -308,12 +319,15 @@ def test_signal_paths_BlipBinarySignalProcessor(test_input, expected, StateMachi
         ((-1, -1, -1), None),
     ],
 )
-def test_signal_paths_LockableBinarySignalProcessor(test_input, expected, StateMachine):
+def test_signal_paths_LockableBinarySignalProcessor(
+    test_input, expected, StateMachine, atom_runtime_factory
+):
     position, signal, lock = test_input
 
     sm = StateMachine(position, lock)
+    atom_runtime_factory(sm=sm)
 
-    processor_instance = LockableBinarySignalProcessor(state_machine=sm)
+    processor_instance = LockableBinarySignalProcessor()
     action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
@@ -353,13 +367,14 @@ def test_signal_paths_LockableBinarySignalProcessor(test_input, expected, StateM
     ],
 )
 def test_signal_paths_LockableBlipBinarySignalProcessor(
-    test_input, expected, StateMachine
+    test_input, expected, StateMachine, atom_runtime_factory
 ):
     position, signal, lock = test_input
 
     sm = StateMachine(position, lock)
+    atom_runtime_factory(sm=sm)
 
-    processor_instance = LockableBlipBinarySignalProcessor(state_machine=sm)
+    processor_instance = LockableBlipBinarySignalProcessor()
     action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
@@ -399,15 +414,16 @@ def test_signal_paths_LockableBlipBinarySignalProcessor(
     ],
 )
 def test_signal_paths_AlwaysOnLockableBinarySignalProcessor(
-    test_input, expected, StateMachine
+    test_input, expected, StateMachine, atom_runtime_factory
 ):
     position, signal, lock = test_input
 
     sm = StateMachine(position, lock)
+    atom_runtime_factory(sm=sm)
     strategy = sm.strategy["x"]
     strategy.position = position
 
-    processor_instance = AlwaysOnLockableBinarySignalProcessor(state_machine=sm)
+    processor_instance = AlwaysOnLockableBinarySignalProcessor()
     action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
@@ -427,12 +443,15 @@ def test_signal_paths_AlwaysOnLockableBinarySignalProcessor(
         ((-1, -1), None),
     ],
 )
-def test_signal_paths_AlwaysOnBinarySignalProcessor(test_input, expected, StateMachine):
+def test_signal_paths_AlwaysOnBinarySignalProcessor(
+    test_input, expected, StateMachine, atom_runtime_factory
+):
     position, signal = test_input
 
     sm = StateMachine(position=position)
+    atom_runtime_factory(sm=sm)
 
-    processor_instance = AlwaysOnBinarySignalProcessor(state_machine=sm)
+    processor_instance = AlwaysOnBinarySignalProcessor()
     action = processor_instance.process_signal("x", signal, signal)
 
     assert action == expected
@@ -458,7 +477,7 @@ def test_signal_paths_AlwaysOnBinarySignalProcessor(test_input, expected, StateM
     ],
 )
 def test_signal_paths_positions_BinarySignalProcessor(
-    test_input, expected, StateMachine
+    test_input, expected, StateMachine, atom_runtime_factory
 ):
     position, signal = test_input
 
@@ -468,6 +487,7 @@ def test_signal_paths_positions_BinarySignalProcessor(
             raise TypeError("Shouldn't be here")
 
     sm = FakeStateMachine(position)
+    atom_runtime_factory(sm=sm)
     strategy = sm.strategy["x"]
     strategy.position = position
 
@@ -478,7 +498,7 @@ def test_signal_paths_positions_BinarySignalProcessor(
             self.out = data
 
     output = OutputAtom()
-    processor_instance = BinarySignalProcessor(state_machine=sm)
+    processor_instance = BinarySignalProcessor()
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
 
@@ -502,7 +522,7 @@ def test_signal_paths_positions_BinarySignalProcessor(
     ],
 )
 def test_signal_paths_positions_BlipBinarySignalProcessor(
-    test_input, expected, StateMachine
+    test_input, expected, StateMachine, atom_runtime_factory
 ):
     position, signal = test_input
 
@@ -512,6 +532,7 @@ def test_signal_paths_positions_BlipBinarySignalProcessor(
             raise TypeError("Shouldn't be here")
 
     sm = FakeStateMachine(position)
+    atom_runtime_factory(sm=sm)
     strategy = sm.strategy["x"]
     strategy.position = position
 
@@ -522,7 +543,7 @@ def test_signal_paths_positions_BlipBinarySignalProcessor(
             self.out = data
 
     output = OutputAtom()
-    processor_instance = BlipBinarySignalProcessor(state_machine=sm)
+    processor_instance = BlipBinarySignalProcessor()
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
 
@@ -565,11 +586,12 @@ def test_signal_paths_positions_BlipBinarySignalProcessor(
     ],
 )
 def test_signal_paths_positions_LockableBinarySignalProcessor(
-    test_input, expected, StateMachine
+    test_input, expected, StateMachine, atom_runtime_factory
 ):
     position, signal, lock = test_input
 
     sm = StateMachine(position, lock)
+    atom_runtime_factory(sm=sm)
 
     class OutputAtom(Atom):
         out = {}
@@ -579,7 +601,7 @@ def test_signal_paths_positions_LockableBinarySignalProcessor(
 
     output = OutputAtom()
 
-    processor_instance = LockableBinarySignalProcessor(state_machine=sm)
+    processor_instance = LockableBinarySignalProcessor()
 
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
@@ -623,11 +645,12 @@ def test_signal_paths_positions_LockableBinarySignalProcessor(
     ],
 )
 def test_signal_paths_positions_AlwaysOnLockableBinarySignalProcessor(
-    test_input, expected, StateMachine
+    test_input, expected, StateMachine, atom_runtime_factory
 ):
     position, signal, lock = test_input
 
     sm = StateMachine(position, lock)
+    atom_runtime_factory(sm=sm)
 
     class OutputAtom(Atom):
         out = {}
@@ -637,7 +660,7 @@ def test_signal_paths_positions_AlwaysOnLockableBinarySignalProcessor(
 
     output = OutputAtom()
 
-    processor_instance = AlwaysOnLockableBinarySignalProcessor(state_machine=sm)
+    processor_instance = AlwaysOnLockableBinarySignalProcessor()
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
 
@@ -661,11 +684,12 @@ def test_signal_paths_positions_AlwaysOnLockableBinarySignalProcessor(
     ],
 )
 def test_signal_paths_positions_AlwaysOnBinarySignalProcessor(
-    test_input, expected, StateMachine
+    test_input, expected, StateMachine, atom_runtime_factory
 ):
     position, signal = test_input
 
     sm = StateMachine(position)
+    atom_runtime_factory(sm=sm)
 
     class OutputAtom(Atom):
         out = {}
@@ -675,7 +699,7 @@ def test_signal_paths_positions_AlwaysOnBinarySignalProcessor(
 
     output = OutputAtom()
 
-    processor_instance = AlwaysOnBinarySignalProcessor(state_machine=sm)
+    processor_instance = AlwaysOnBinarySignalProcessor()
     processor_instance += output
     processor_instance.onData({"strategy": "x", "signal": signal})
 
@@ -702,10 +726,13 @@ def test_signal_paths_positions_AlwaysOnBinarySignalProcessor(
         ((-1, 0, 1), 0),  # out signals should be acted on
     ],
 )
-def test_double_signals_BinarySignalProcessor(test_input, expected, StateMachine):
+def test_double_signals_BinarySignalProcessor(
+    test_input, expected, StateMachine, atom_runtime_factory
+):
     position, signal_in, signal_out = test_input
 
     sm = StateMachine(position)
+    atom_runtime_factory(sm=sm)
 
     class OutputAtom(Atom):
         out = {}
@@ -716,7 +743,7 @@ def test_double_signals_BinarySignalProcessor(test_input, expected, StateMachine
     output = OutputAtom()
 
     processor_instance = BinarySignalProcessor(
-        signal_fields=("signal_in", "signal_out"), state_machine=sm
+        signal_fields=("signal_in", "signal_out")
     )
     processor_instance += output
     processor_instance.onData(
@@ -746,10 +773,13 @@ def test_double_signals_BinarySignalProcessor(test_input, expected, StateMachine
         ((-1, 0, 1), 0),  # out signals should be acted on
     ],
 )
-def test_double_signals_BlipBinarySignalProcessor(test_input, expected, StateMachine):
+def test_double_signals_BlipBinarySignalProcessor(
+    test_input, expected, StateMachine, atom_runtime_factory
+):
     position, signal_in, signal_out = test_input
 
     sm = StateMachine(position)
+    atom_runtime_factory(sm=sm)
 
     class OutputAtom(Atom):
         out = {}
@@ -760,7 +790,7 @@ def test_double_signals_BlipBinarySignalProcessor(test_input, expected, StateMac
     output = OutputAtom()
 
     processor_instance = BlipBinarySignalProcessor(
-        signal_fields=("signal_in", "signal_out"), state_machine=sm
+        signal_fields=("signal_in", "signal_out")
     )
     processor_instance += output
     processor_instance.onData(

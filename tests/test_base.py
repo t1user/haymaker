@@ -812,8 +812,7 @@ class TestContractList:
                 self.contract = contract
 
         a = NewAtomWithContract(contract)
-        yield a
-        a.contract_registry = ContractRegistry()  # type: ignore
+        return a
 
     def test_newly_added_contract_in_Atom_registry(self, atom_with_contract: Atom):
         """
@@ -826,7 +825,7 @@ class TestContractList:
         assert cont in atom_with_contract.contract_registry.blueprints
 
 
-def test_all_contracts_from_many_atoms_in_registry(Atom):
+def test_all_contracts_from_many_atoms_in_registry(Atom, atom_runtime):
     class A(Atom):
 
         def __init__(self, contract):
@@ -840,7 +839,7 @@ def test_all_contracts_from_many_atoms_in_registry(Atom):
     A(nasdaq)
     A(gold)
 
-    registry = A.contract_registry.blueprints
+    registry = atom_runtime.contract_registry.blueprints
 
     assert apple in registry
     assert nasdaq in registry
@@ -956,14 +955,13 @@ def test_event_error_logged_with_correct_logger(caplog: pytest.LogCaptureFixture
     ]
 
 
-def test_details_attr(details):
+def test_details_attr(details, atom_runtime_factory):
     """Only check if `details` on `Atom` properly linked to registry."""
 
     registry = ContractRegistry()
+    atom_runtime_factory(contract_registry=registry)
 
     class MockAtom(Atom):
-        contract_registry = registry
-
         def __init__(self):
             super().__init__()
             self.contract = details.contract
@@ -976,11 +974,12 @@ def test_details_attr(details):
     assert isinstance(a.contract_details, Details)
 
 
-def test_if_no_contract_set_empty_details_returned():
+def test_if_no_contract_set_empty_details_returned(atom_runtime_factory):
     registry = ContractRegistry()
+    atom_runtime_factory(contract_registry=registry)
 
     class NewMockAtom(Atom):
-        contract_registry = registry
+        pass
 
     atom = NewMockAtom()
 
@@ -993,14 +992,15 @@ def test_if_no_contract_set_empty_details_returned():
 
 
 def test_missing_details_log(
-    caplog: pytest.LogCaptureFixture, details: ibi.ContractDetails
+    caplog: pytest.LogCaptureFixture,
+    details: ibi.ContractDetails,
+    atom_runtime_factory,
 ):
     caplog.set_level(logging.DEBUG)
     registry = ContractRegistry()
+    atom_runtime_factory(contract_registry=registry)
 
     class NewMockAtom(Atom):
-        contract_registry = registry
-
         def __init__(self, contract):
             self.contract = contract
 
@@ -1176,12 +1176,11 @@ class Test_ActiveNext:
 
     es = ibi.Future(symbol="ES", exchange="CME")
 
-    def test_active_correct(self):
+    def test_active_correct(self, atom_runtime_factory):
         mock_registry = Mock()
+        atom_runtime_factory(contract_registry=mock_registry)
 
         class MyAtom(Atom):
-            contract_registry = mock_registry
-
             def __init__(self, contract):
                 super().__init__()
                 self.contract = contract
@@ -1193,12 +1192,11 @@ class Test_ActiveNext:
         contract = my_atom.contract  # noqa
         mock_registry.get_contract.assert_called_once_with(ANY, ActiveNext.ACTIVE)
 
-    def test_next_correct(self):
+    def test_next_correct(self, atom_runtime_factory):
         mock_registry = Mock()
+        atom_runtime_factory(contract_registry=mock_registry)
 
         class MyAtom(Atom):
-            contract_registry = mock_registry
-
             def __init__(self, contract):
                 super().__init__()
                 self.contract = contract

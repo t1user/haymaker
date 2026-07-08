@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -11,7 +10,6 @@ from typing import (
     NamedTuple,
     Self,
     Sequence,
-    cast,
 )
 
 import ib_insync as ibi
@@ -72,24 +70,6 @@ class ContractRollData(NamedTuple):
     new_contract: ibi.Contract
 
 
-class RuntimeService:
-    """Delegate an Atom runtime service lookup to the installed runtime context."""
-
-    def __init__(self, name: str) -> None:
-        """Store the runtime attribute name to resolve."""
-
-        self.name = name
-
-    def __get__(self, obj: Atom | None, owner: type[Atom] | None = None) -> Any:
-        """Return the named service from the owner class runtime context."""
-
-        atom_cls = owner or type(obj)
-        runtime = getattr(atom_cls, "runtime", None)
-        if runtime is None:
-            raise RuntimeError("Atom runtime context has not been installed.")
-        return getattr(runtime, self.name)
-
-
 class Atom:
     """
     Abstract base object from which all other objects inherit. It's a basic building
@@ -133,11 +113,11 @@ class Atom:
             (number of days prior to expiry during which NEXT will be used can be
             configured in config.)
 
-        ib (ClassVar[ibi.IB]): The instance of the :class:`ib_insync.ib.IB` client used
+        ib (ibi.IB): The instance of the :class:`ib_insync.ib.IB` client used
            for interacting with the broker. It can be used to communicate with
            the broker if neccessary.
 
-        sm (ClassVar[StateMachine]): Access to :class:`StateMachine` which is
+        sm (StateMachine): Access to :class:`StateMachine` which is
             Haymaker's central collection of information about current positions,
             orders and state of strategies.
 
@@ -153,14 +133,6 @@ class Atom:
     """
 
     runtime: ClassVar[RuntimeContext]
-    if TYPE_CHECKING:
-        ib: ClassVar[ibi.IB]
-        sm: ClassVar[StateMachine]
-        contract_registry: ClassVar[ContractRegistry]
-    else:
-        ib = RuntimeService("ib")
-        sm = RuntimeService("sm")
-        contract_registry = RuntimeService("contract_registry")
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
@@ -172,20 +144,28 @@ class Atom:
     _contract_blueprint: ibi.Contract | None = None
 
     @classmethod
-    def set_init_data(cls, ib: ibi.IB, sm: StateMachine, cr: ContractRegistry) -> None:
-        runtime = SimpleNamespace(
-            ib=ib,
-            sm=sm,
-            contract_registry=cr,
-            request_restart=lambda reason="": None,
-        )
-        cls.set_runtime_context(cast("RuntimeContext", runtime))
-
-    @classmethod
     def set_runtime_context(cls, runtime: RuntimeContext) -> None:
         """Install process runtime services on all Atoms."""
 
         cls.runtime = runtime
+
+    @property
+    def ib(self) -> ibi.IB:
+        """Return the runtime IB client."""
+
+        return self.runtime.ib
+
+    @property
+    def sm(self) -> StateMachine:
+        """Return the runtime state machine."""
+
+        return self.runtime.sm
+
+    @property
+    def contract_registry(self) -> ContractRegistry:
+        """Return the runtime contract registry."""
+
+        return self.runtime.contract_registry
 
     @property
     def request_restart(self):

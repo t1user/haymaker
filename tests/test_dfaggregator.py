@@ -27,6 +27,20 @@ def registry_with_data():
     return registry
 
 
+@pytest.fixture(autouse=True)
+def install_atom_runtime(atom_runtime):
+    """Install default Atom runtime for dfaggregator tests."""
+
+    return atom_runtime
+
+
+@pytest.fixture
+def registry_runtime(atom_runtime_factory, registry_with_data):
+    """Install the populated futures registry for dfaggregator tests."""
+
+    return atom_runtime_factory(contract_registry=registry_with_data)
+
+
 def test_HistoricalDataStreamerAccepted():
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
@@ -77,10 +91,7 @@ def test_sync_extracts_blueprint():
     assert aggregator._contract_blueprint is blueprint
 
 
-def test_DfAggregator_has_the_same_contract_as_Streamer(registry_with_data):
-    HistoricalDataStreamer.contract_registry = registry_with_data
-    DfAggregator.contract_registry = registry_with_data
-
+def test_DfAggregator_has_the_same_contract_as_Streamer(registry_runtime):
     blueprint = ibi.Future("ES", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -131,13 +142,12 @@ def test_expiry_from_contract():
     assert DfAggregator.expiry_from_contract(gc) == datetime(2025, 6, 26)
 
 
-def test_back_contracts(registry_with_data):
+def test_back_contracts(registry_runtime):
     """
     Test it includes only contracts with expiry date earlier than
     current contract and contracts are sorted backwards by expiry
     date.
     """
-    DfAggregator.contract_registry = registry_with_data
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = ibi.Future("ES", exchange="CME")
     contracts = [details.contract for details in details[0]]
@@ -155,9 +165,8 @@ def test_back_contracts(registry_with_data):
 
 
 def test_back_contracts_iterable_starting_with_current_contract(
-    registry_with_data,
+    registry_runtime,
 ):
-    DfAggregator.contract_registry = registry_with_data
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = ibi.Future("ES", exchange="CME")
     for contract in aggregator._back_contracts():
@@ -165,8 +174,7 @@ def test_back_contracts_iterable_starting_with_current_contract(
         break
 
 
-def test_back_contracts_iterable_going_backward(registry_with_data):
-    DfAggregator.contract_registry = registry_with_data
+def test_back_contracts_iterable_going_backward(registry_runtime):
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = ibi.Future("ES", exchange="CME")
     previuos_contract = None
@@ -269,7 +277,7 @@ async def test_data_queued():
         (649180695, "ESH6", None),
     ],
 )
-def test_compute_date_range(registry_with_data, conId, localSymbol, return_value):
+def test_compute_date_range(registry_runtime, conId, localSymbol, return_value):
     """
     Here are the date ranges from `aggregator.contract_selector.date_ranges`.
 
@@ -293,7 +301,6 @@ def test_compute_date_range(registry_with_data, conId, localSymbol, return_value
     basically, we're requesting data between 10-12/12/2025
 
     """
-    DfAggregator.contract_registry = registry_with_data
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = ibi.Future("ES", exchange="CME")
     aggregator._streamer_params = {
@@ -345,7 +352,7 @@ def test_compute_date_range(registry_with_data, conId, localSymbol, return_value
     ],
 )
 def test_compute_date_range_longer_period(
-    registry_with_data, conId, localSymbol, return_value
+    registry_runtime, conId, localSymbol, return_value
 ):
     """
     Here are the date ranges from `aggregator.contract_selector.date_ranges`.
@@ -370,7 +377,6 @@ def test_compute_date_range_longer_period(
     basically, we're requesting data between  3 months back from today
 
     """
-    DfAggregator.contract_registry = registry_with_data
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = ibi.Future("ES", exchange="CME")
     aggregator._streamer_params = {
@@ -391,10 +397,9 @@ def test_compute_date_range_longer_period(
         assert date_range_or_none == return_value
 
 
-def test_aggregator_offset_by_durationStr_given_as_str(registry_with_data):
+def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
-        DfAggregator.contract_registry = registry_with_data
         aggregator = DfAggregator(save_frequency=0)
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -409,11 +414,10 @@ def test_aggregator_offset_by_durationStr_given_as_str(registry_with_data):
 
 
 def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
-    registry_with_data,
+    registry_runtime,
 ):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 4, 1)
-        DfAggregator.contract_registry = registry_with_data
         aggregator = DfAggregator(save_frequency=0)
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -427,10 +431,9 @@ def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
         assert aggregator.offset_by_durationStr() == datetime(2026, 3, 25)
 
 
-def test_aggregator_offset_by_durationStr_given_as_int(registry_with_data):
+def test_aggregator_offset_by_durationStr_given_as_int(registry_runtime):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
-        DfAggregator.contract_registry = registry_with_data
         aggregator = DfAggregator(save_frequency=0)
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -448,11 +451,10 @@ def test_aggregator_offset_by_durationStr_given_as_int(registry_with_data):
 
 
 def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
-    registry_with_data,
+    registry_runtime,
 ):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
-        DfAggregator.contract_registry = registry_with_data
         aggregator = DfAggregator(save_frequency=0)
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -470,11 +472,10 @@ def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
 
 
 def test_aggregator_offset_by_durationStr_given_as_int_including_weekend(
-    registry_with_data,
+    registry_runtime,
 ):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 4, 1)
-        DfAggregator.contract_registry = registry_with_data
         aggregator = DfAggregator(save_frequency=0)
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -492,17 +493,15 @@ def test_aggregator_offset_by_durationStr_given_as_int_including_weekend(
         ) - delta.days * custom_bday - timedelta(seconds=delta.seconds)
 
 
-def test_aggregator_session_length(registry_with_data):
+def test_aggregator_session_length(registry_runtime):
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = ibi.Future(symbol="ES", exchange="CME")
-    aggregator.contract_registry = registry_with_data
     assert aggregator.session_length == timedelta(hours=23)
 
 
-def test_aggregator_datapoints_from_str(registry_with_data):
+def test_aggregator_datapoints_from_str(registry_runtime):
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = ibi.Future(symbol="ES", exchange="CME")
-    aggregator.contract_registry = registry_with_data
     aggregator._streamer_params = {
         "durationStr": "5 D",
         "barSizeSetting": "30 secs",
@@ -512,10 +511,9 @@ def test_aggregator_datapoints_from_str(registry_with_data):
     assert aggregator.datapoints == 4 * 23 * 120
 
 
-def test_aggregator_datapoints_from_int(registry_with_data):
+def test_aggregator_datapoints_from_int(registry_runtime):
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = ibi.Future(symbol="ES", exchange="CME")
-    aggregator.contract_registry = registry_with_data
     aggregator._streamer_params = {
         "durationStr": 120,
         "barSizeSetting": "30 secs",
@@ -526,7 +524,7 @@ def test_aggregator_datapoints_from_int(registry_with_data):
 
 
 @pytest.mark.asyncio
-async def test_pull_history_from_broker(Atom, registry_with_data):
+async def test_pull_history_from_broker(registry_runtime):
     """Test if using streamer parameters."""
 
     input_contract = ibi.Future(symbol="ES", exchange="CME")
@@ -541,11 +539,8 @@ async def test_pull_history_from_broker(Atom, registry_with_data):
         what_to_show,
         useRTH,
     )
-    streamer.contract_registry = registry_with_data
-
     aggregator = DfAggregator(save_frequency=0)
     aggregator.contract = input_contract
-    aggregator.contract_registry = registry_with_data
 
     streamer += aggregator
     streamer.onStart({})

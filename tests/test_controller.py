@@ -139,9 +139,11 @@ def set_broker_state(
 
 
 @pytest.mark.asyncio
-async def test_StateMachine_linked_to_ib_newOrderEvent(caplog, Atom):
-    controller = Controller(Trader(Atom.ib))  # noqa
-    Atom.ib.newOrderEvent.emit(ibi.Trade(order=ibi.Order(orderId=123, permId=45678)))
+async def test_StateMachine_linked_to_ib_newOrderEvent(caplog, atom_runtime):
+    controller = Controller(Trader(atom_runtime.ib))  # noqa
+    atom_runtime.ib.newOrderEvent.emit(
+        ibi.Trade(order=ibi.Order(orderId=123, permId=45678))
+    )
     assert await wait_for_condition(lambda: "123" in caplog.text)
 
 
@@ -603,9 +605,9 @@ async def test_sync_coordinator_requests_restart_before_unknown_order_correction
     assert not controller._trading_disabled
 
 
-def test_from_config_loads_controller_sync_options(Atom):
+def test_from_config_loads_controller_sync_options(atom_runtime):
     controller = Controller.from_config(
-        Trader(Atom.ib),
+        Trader(atom_runtime.ib),
         top_config={
             "ignore_errors": [202, 321],
             "controller": {
@@ -632,7 +634,7 @@ def test_direct_controller_does_not_schedule_future_roll(controller):
     assert controller._future_roll_timer is None
 
 
-def test_from_config_schedules_future_roll_in_utc(Atom, monkeypatch):
+def test_from_config_schedules_future_roll_in_utc(atom_runtime, monkeypatch):
     timeranges = []
 
     class FakeTimerange:
@@ -652,7 +654,7 @@ def test_from_config_schedules_future_roll_in_utc(Atom, monkeypatch):
     )
 
     controller = Controller.from_config(
-        Trader(Atom.ib),
+        Trader(atom_runtime.ib),
         top_config={"controller": {"future_roll_time": [14, 0]}},
     )
 
@@ -664,7 +666,7 @@ def test_from_config_schedules_future_roll_in_utc(Atom, monkeypatch):
     assert controller._future_roll_timer is timerange
 
 
-def test_schedule_future_roll_ignores_duplicate_request(Atom, monkeypatch):
+def test_schedule_future_roll_ignores_duplicate_request(atom_runtime, monkeypatch):
     timeranges = []
 
     class FakeTimerange:
@@ -681,7 +683,7 @@ def test_schedule_future_roll_ignores_duplicate_request(Atom, monkeypatch):
     )
 
     controller = Controller(
-        Trader(Atom.ib),
+        Trader(atom_runtime.ib),
         future_roll_time=(14, 0),
     )
 
@@ -754,9 +756,9 @@ def test_order_rejection_is_visible_and_registered(controller, caplog, monkeypat
     assert rejected == [""]
 
 
-def test_from_config_ignores_unknown_controller_config(Atom):
+def test_from_config_ignores_unknown_controller_config(atom_runtime):
     controller = Controller.from_config(
-        Trader(Atom.ib),
+        Trader(atom_runtime.ib),
         top_config={
             "controller": {
                 "invalid": True,
@@ -769,10 +771,10 @@ def test_from_config_ignores_unknown_controller_config(Atom):
     assert not hasattr(controller, "invalid")
 
 
-def test_from_config_rejects_invalid_missing_brackets_value(Atom):
+def test_from_config_rejects_invalid_missing_brackets_value(atom_runtime):
     with pytest.raises(ControllerError, match="missing_brackets"):
         Controller.from_config(
-            Trader(Atom.ib),
+            Trader(atom_runtime.ib),
             top_config={"controller": {"missing_brackets": "close"}},
         )
 

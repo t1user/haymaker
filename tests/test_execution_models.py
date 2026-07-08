@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import count
 import logging
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import ib_insync as ibi
@@ -22,25 +21,6 @@ from haymaker.execution_models import (
 COUNTER = count().__next__
 
 
-def runtime_with_controller(Atom, controller: Controller) -> SimpleNamespace:
-    """Build a complete Atom runtime stub around a test controller."""
-
-    return SimpleNamespace(
-        controller=controller,
-        ib=controller.ib,
-        sm=controller.sm,
-        contract_registry=controller.contract_registry,
-        request_restart=lambda reason="": None,
-    )
-
-
-@pytest.fixture(autouse=True)
-def bind_runtime_controller(Atom, controller: Controller, monkeypatch):
-    monkeypatch.setattr(
-        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
-    )
-
-
 def test_AbstraExecModel_is_abstract(controller: Controller):
     with pytest.raises(TypeError):
         AbstractExecModel()  # type: ignore
@@ -51,10 +31,7 @@ def test_BaseExecModel_instantiates(controller: Controller):
     assert isinstance(bem, BaseExecModel)
 
 
-def test_BaseExecModel_uses_runtime_controller(Atom, controller: Controller, monkeypatch):
-    monkeypatch.setattr(
-        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
-    )
+def test_BaseExecModel_uses_runtime_controller(controller: Controller):
     bem = BaseExecModel()
     assert bem.controller is controller
 
@@ -135,7 +112,7 @@ def test_oca_group_is_not_position_id(controller: Controller):
 
 
 @pytest.fixture
-def objects(Atom, monkeypatch) -> tuple:
+def objects(Atom, atom_runtime) -> tuple:
 
     @dataclass
     class Data:
@@ -201,9 +178,7 @@ def objects(Atom, monkeypatch) -> tuple:
         pass
 
     controller = FakeController(FakeTrader())  # type: ignore
-    monkeypatch.setattr(
-        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
-    )
+    atom_runtime.bind_controller(controller)
     source = Source()
 
     return controller, source, output_data
@@ -370,7 +345,7 @@ def test_passed_order_kwargs_update_defaults(Atom, objects):
     assert data.order.algoParams == ""
 
 
-def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade, monkeypatch):
+def test_EventDrivenExecModel_bracket_params_override_detaults(atom_runtime, trade):
     """
     Create a setup where `FakeTrader` will record received order that
     we can compare with expectations.
@@ -388,9 +363,7 @@ def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade, monk
 
     fake_trader = FakeTrader()
     controller = Controller(fake_trader)
-    monkeypatch.setattr(
-        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
-    )
+    atom_runtime.bind_controller(controller)
     em = EventDrivenExecModel(stop=TrailingStop(2, vol_field="my_vol_field"))
     with patch.object(controller, "verify_market_open", return_value=True):
         em.strategy = "fake strategy"
@@ -408,7 +381,7 @@ def test_OrderKey_picks_correct_order_low_level(controller):
     assert my_order.orderType == "STP"
 
 
-def test_OrderKey_picks_correct_order_higher_level(Atom, monkeypatch):
+def test_OrderKey_picks_correct_order_higher_level(atom_runtime):
 
     class FakeTrader:
         order = None
@@ -419,9 +392,7 @@ def test_OrderKey_picks_correct_order_higher_level(Atom, monkeypatch):
 
     fake_trader = FakeTrader()
     controller = Controller(fake_trader)
-    monkeypatch.setattr(
-        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
-    )
+    atom_runtime.bind_controller(controller)
     em = BaseExecModel(
         open_order={"orderType": "STPLMT"},
         close_order={"orderType": "TRAIL"},
@@ -438,7 +409,7 @@ def test_OrderKey_picks_correct_order_higher_level(Atom, monkeypatch):
         assert fake_trader.order.orderType == "STPLMT"
 
 
-def test_OrderKey_picks_correct_order_higher_level_2(Atom, monkeypatch):
+def test_OrderKey_picks_correct_order_higher_level_2(atom_runtime):
 
     class FakeTrader:
         order = None
@@ -450,9 +421,7 @@ def test_OrderKey_picks_correct_order_higher_level_2(Atom, monkeypatch):
     fake_trader = FakeTrader()
 
     controller = Controller(fake_trader)
-    monkeypatch.setattr(
-        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
-    )
+    atom_runtime.bind_controller(controller)
     em = BaseExecModel(
         open_order={"orderType": "STPLMT"},
         close_order={"orderType": "TRAIL"},

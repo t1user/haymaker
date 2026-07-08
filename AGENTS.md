@@ -135,7 +135,9 @@ BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fa
   framework services behind `RuntimeContext`. Future test cleanup should provide
   a small runtime/test harness for installing `ib`, state machine, contract
   registry, controller, restart callbacks, and contract details on `Atom`
-  instead of scattering `set_init_data` and ad hoc `Atom.runtime` monkeypatches.
+  instead of scattering ad hoc runtime monkeypatches. Use
+  `tests/runtime_helpers.py` and the `atom_runtime` / `atom_runtime_factory`
+  fixtures for Atom-dependent tests.
 - See `docs/codebase-map.md` for the current repository map.
 
 Dashboard is experimental and should not be looked at.

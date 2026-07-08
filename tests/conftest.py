@@ -25,6 +25,7 @@ os.environ.pop("HAYMAKER_DATALOADER_CONFIG_OVERRIDES", None)
 import ib_insync as ibi
 import pytest
 from ib_insync import Contract, ContractDetails
+from runtime_helpers import AtomRuntimeHarness
 
 from haymaker.base import Atom as BaseAtom
 from haymaker.contract_registry import ContractRegistry
@@ -170,8 +171,25 @@ def state_machine(order_saver, strategy_saver):
 
 
 @pytest.fixture
-def registry():
-    yield ContractRegistry()
+def atom_runtime_factory(monkeypatch, state_machine):
+    """Create and install test runtimes for Atom-dependent tests."""
+
+    def make(
+        *,
+        ib: ibi.IB | None = None,
+        sm: StateMachine | None = None,
+        contract_registry: ContractRegistry | None = None,
+        controller: Controller | None = None,
+    ) -> AtomRuntimeHarness:
+        runtime = AtomRuntimeHarness(
+            ib=ib or ibi.IB(),
+            sm=sm or state_machine,
+            contract_registry=contract_registry or ContractRegistry(),
+            controller=controller,
+        )
+        return runtime.install(monkeypatch)
+
+    return make
 
 
 @pytest.fixture
@@ -252,16 +270,26 @@ def details():
 
 
 @pytest.fixture
-def Atom(state_machine, details, registry):
+def atom_runtime(atom_runtime_factory, details):
+    """Install a fresh Atom runtime for tests that use Atom services."""
+
+    registry = ContractRegistry()
     registry.details[details.contract] = details
-    sm = state_machine
-    BaseAtom.set_init_data(ibi.IB(), sm, registry)
+    return atom_runtime_factory(contract_registry=registry)
+
+
+@pytest.fixture
+def Atom(atom_runtime):
+    """Return the base Atom class after installing test runtime services."""
+
     return BaseAtom
 
 
 @pytest.fixture
-def controller(Atom):
-    return Controller(Trader(Atom.ib))
+def controller(atom_runtime):
+    controller = Controller(Trader(atom_runtime.ib))
+    atom_runtime.bind_controller(controller)
+    return controller
 
 
 @pytest.fixture

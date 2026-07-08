@@ -25,16 +25,16 @@ def test_read_no_future_roll_strategies_accepts_module_list(tmp_path):
 
 
 def test_bind_strategy_module_sets_controller_roll_exclusions(
-    tmp_path, Atom, state_machine, registry
+    tmp_path, atom_runtime
 ):
     strategy = tmp_path / "strategy.py"
     strategy.write_text("no_future_roll_strategies = ['one', 'two']\n")
     module = load_user_module(strategy)
     context = RuntimeContext(
         config={"use_blotter": False, "controller": {}, "app": {}},
-        ib=Atom.ib,
-        contract_registry=registry,
-        sm=state_machine,
+        ib=atom_runtime.ib,
+        contract_registry=atom_runtime.contract_registry,
+        sm=atom_runtime.sm,
     )
 
     context.bind_strategy_module(module)

@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 import ib_insync as ibi
 import pytest
@@ -16,18 +15,6 @@ from haymaker.state_machine import StrategyContainer
 from haymaker.trader import Trader
 
 
-def runtime_with_controller(controller) -> SimpleNamespace:
-    """Build a complete Atom runtime stub around a test controller."""
-
-    return SimpleNamespace(
-        controller=controller,
-        ib=controller.ib,
-        sm=controller.sm,
-        contract_registry=controller.contract_registry,
-        request_restart=lambda reason="": None,
-    )
-
-
 @pytest.fixture
 def portfolio():
     portfolio = FixedPortfolio()
@@ -37,7 +24,7 @@ def portfolio():
 
 
 @pytest.fixture
-def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, monkeypatch):  # noqa
+def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, atom_runtime):  # noqa
 
     class FakeStateMachine:
         strategy = StrategyContainer(strategy_saver)
@@ -49,6 +36,7 @@ def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, monkeypatch):  
             return 0
 
     sm = FakeStateMachine()
+    atom_runtime.sm = sm
 
     class FakeController(Atom):
         out = None
@@ -57,13 +45,11 @@ def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, monkeypatch):  
             self.out = strategy, contract, order, action, data
 
     controller = FakeController()
-    monkeypatch.setattr(
-        Atom, "runtime", runtime_with_controller(controller), raising=False
-    )
+    atom_runtime.bind_controller(controller)
     # signal is 1, contract is NQ
     block = df_block
     # so this should result in action "OPEN"
-    signal = BinarySignalProcessor(state_machine=sm)
+    signal = BinarySignalProcessor()
 
     # on which exec_model should act by issuing Buy order
     exec_model = EventDrivenExecModel(stop=FixedStop(5))
@@ -128,7 +114,7 @@ def test_order_is_for_one_contract(pipe):
 
 
 @pytest.fixture
-def new_setup(Atom, monkeypatch):
+def new_setup(Atom, atom_runtime):
     class FakeTrader:
         def trade(self, contract: ibi.Contract, order: ibi.Order):
             return ibi.Trade(contract, order)
@@ -144,9 +130,7 @@ def new_setup(Atom, monkeypatch):
             return True
 
     controller = FakeController(trader=FakeTrader())
-    monkeypatch.setattr(
-        Atom, "runtime", runtime_with_controller(controller), raising=False
-    )
+    atom_runtime.bind_controller(controller)
 
     class Source(Atom):
         pass
@@ -241,7 +225,7 @@ async def test_sell_position_registered(new_setup):
 
 
 @pytest.mark.asyncio
-async def test_manual_order_created(Atom):
+async def test_manual_order_created(Atom, atom_runtime):
 
     class A(Atom):
         pass
@@ -273,7 +257,7 @@ async def test_manual_order_created(Atom):
             time=datetime.now(timezone.utc),
         )
     )
-    controller = Controller(trader=Trader(Atom.ib))
+    controller = Controller(trader=Trader(atom_runtime.ib))
     controller.release_hold()
     controller.ib.orderStatusEvent.emit(trade_object)
     controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
