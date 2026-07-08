@@ -20,7 +20,7 @@ from .datastore import (
 
 log = logging.getLogger(__name__)
 
-DATA_LIB = CONFIG.get("block_data_library", None)
+DATA_LIB: str | None = CONFIG.get("block_data_library", None)
 
 
 @dataclass
@@ -82,6 +82,10 @@ class AbstractDfBlock(AbstractBaseBlock):
 
     @cached_property
     def _datastore(self) -> AsyncAbstractBaseStore:
+        assert DATA_LIB, (
+            f"{self} cannot initialize datastore because block_data_library "
+            "was not given."
+        )
         datastore = self.datastore or AsyncArcticStore(
             DATA_LIB, host=get_mongo_client()
         )
