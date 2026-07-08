@@ -1,10 +1,17 @@
 import logging
+from datetime import timezone
 from unittest.mock import ANY, Mock
 
 import ib_insync as ibi
 import pytest
 
-from haymaker.base import ActiveNext, Atom, Pipe
+from haymaker.base import (
+    ActiveNext,
+    Atom,
+    ContractRollData,
+    MissingContractError,
+    Pipe,
+)
 from haymaker.contract_registry import ContractRegistry
 from haymaker.details_processor import Details
 from haymaker.state_machine import Strategy
@@ -179,6 +186,34 @@ class TestAtom:
         assert atom1.onFeedback_checksum == 1
 
 
+class TestRuntimeServices:
+    def test_runtime_properties_delegate_to_context(self, atom_runtime):
+        atom = Atom()
+
+        assert atom.ib is atom_runtime.ib
+        assert atom.sm is atom_runtime.sm
+        assert atom.contract_registry is atom_runtime.contract_registry
+
+    def test_request_restart_delegates_to_context(self, atom_runtime):
+        atom = Atom()
+
+        assert atom.request_restart("test reason")
+        assert atom_runtime.restart_requests == ["test reason"]
+
+    def test_request_restart_returns_none_without_runtime(self, monkeypatch):
+        monkeypatch.delattr(Atom, "runtime", raising=False)
+
+        assert Atom().request_restart is None
+
+    def test_set_runtime_context_installs_context(self, atom_runtime):
+        class LocalAtom(Atom):
+            pass
+
+        LocalAtom.set_runtime_context(atom_runtime)
+
+        assert LocalAtom().ib is atom_runtime.ib
+
+
 class TestPipe:
     @pytest.fixture
     def atoms(self):
@@ -348,6 +383,25 @@ class TestPipe:
         # if they were 'bla' would be captured
         assert start.onFeedback_string == "test_string_z_y_x"
 
+    def test_connect_disconnect_and_union_return_self(self):
+        source = NewAtom("source")
+        target = NewAtom("target")
+
+        assert source.connect(target) is source
+        assert source.disconnect(target) is source
+        assert source.union(target) is source
+
+    def test_clear_removes_feedback_handlers_from_all_targets(self):
+        source = NewAtom("source")
+        target1 = NewAtom("target1")
+        target2 = NewAtom("target2")
+
+        source.connect(target1, target2)
+        source.clear()
+
+        assert len(target1.feedbackEvent) == 0
+        assert len(target2.feedbackEvent) == 0
+
     def test_pass_through_startEvent_checksum(
         self, pass_through_pipe: tuple[NewAtom, NewAtom, Pipe]
     ):
@@ -413,6 +467,34 @@ class TestPipe:
         a.feedbackEvent.emit("test_message")
         assert c.onFeedback_string == "test_message_b"
         assert e.onFeedback_string == "test_message_d"
+
+    def test_repr(self):
+        x = NewAtom("x")
+        y = NewAtom("y")
+
+        assert repr(Pipe(x, y)) == f"Pipe({x!r}, {y!r})"
+
+    def test_single_member_pipe_uses_member_events(self):
+        atom = NewAtom("solo")
+        pipe = Pipe(atom)
+
+        assert pipe.first is atom
+        assert pipe.last is atom
+        assert pipe.startEvent is atom.startEvent
+        assert pipe.dataEvent is atom.dataEvent
+        assert pipe.feedbackEvent is atom.feedbackEvent
+
+    def test_single_member_pipe_forwards_to_member(self):
+        atom = NewAtom("solo")
+        pipe = Pipe(atom)
+
+        pipe.onStart("start")
+        pipe.onData("data")
+        pipe.onFeedback("feedback")
+
+        assert atom.onStart_string == "start"
+        assert atom.onData_string == "data"
+        assert atom.onFeedback_string == "feedback"
 
 
 class TestUnionPipe:
@@ -788,6 +870,33 @@ class TestContract:
         a = AtomWithContract(c)
         assert a.contract is c
 
+    def test_invalid_contract_type_raises(self):
+        atom = Atom()
+
+        with pytest.raises(TypeError, match="attr contract must be ibi.Contract"):
+            atom.contract = object()
+
+    def test_missing_contract_raises_domain_error(self, atom_runtime_factory):
+        registry = Mock()
+        registry.get_contract.side_effect = KeyError
+        atom_runtime_factory(contract_registry=registry)
+        atom = AtomWithContract(ibi.Future(symbol="ES", exchange="CME"))
+
+        with pytest.raises(MissingContractError, match="Unknown contract"):
+            atom.contract
+
+    def test_contract_selector_uses_registered_blueprint(self, atom_runtime_factory):
+        selector = object()
+        registry = Mock()
+        registry.get_selector.return_value = selector
+        atom_runtime_factory(contract_registry=registry)
+        contract = ibi.Future(symbol="ES", exchange="CME")
+
+        atom = AtomWithContract(contract)
+
+        assert atom.contract_selector is selector
+        registry.get_selector.assert_called_once_with(contract)
+
 
 class TestContractList:
     @pytest.fixture
@@ -965,6 +1074,17 @@ def test_details_attr(details, atom_runtime_factory):
     assert isinstance(a.contract_details, Details)
 
 
+def test_details_alias_returns_contract_details(details, atom_runtime):
+    class MockAtom(Atom):
+        def __init__(self):
+            super().__init__()
+            self.contract = details.contract
+
+    atom = MockAtom()
+
+    assert atom.details.contract == atom.contract_details.contract
+
+
 def test_if_no_contract_set_empty_details_returned(atom_runtime_factory):
     registry = ContractRegistry()
     atom_runtime_factory(contract_registry=registry)
@@ -1001,6 +1121,88 @@ def test_missing_details_log(
     atom.contract_details
 
     assert f"Missing contract details for: {details.contract}" in caplog.messages
+
+
+class TestLifecycle:
+    def test_init_sets_default_runtime_state(self):
+        atom = Atom()
+
+        assert atom.startEvent.name() == "startEvent"
+        assert atom.dataEvent.name() == "dataEvent"
+        assert atom.feedbackEvent.name() == "feedbackEvent"
+        assert atom._contractChangedEvent.name() == "contractChangedEvent"
+        assert atom.strategy == ""
+        assert atom.startup is False
+        assert atom._contract_memo is None
+        assert atom._roll_contract_data is None
+
+    def test_base_onData_adds_utc_timestamp(self):
+        atom = Atom()
+        payload = {}
+
+        atom.onData(payload)
+
+        timestamp = payload["Atom_ts"]
+        assert timestamp.tzinfo is timezone.utc
+
+    def test_base_onFeedback_emits_payload(self):
+        atom = Atom()
+        payload = {"x": "y"}
+        received = []
+        atom.feedbackEvent.connect(received.append, keep_ref=True)
+
+        atom.onFeedback(payload)
+
+        assert received == [payload]
+
+    def test_strategy_data_can_read_explicit_strategy(self, atom_runtime):
+        atom = Atom()
+
+        data = atom.strategy_data("manual")
+
+        assert data.strategy == "manual"
+
+    def test_strategy_data_logs_empty_strategy_access(
+        self, atom_runtime, caplog: pytest.LogCaptureFixture
+    ):
+        caplog.set_level(logging.WARNING)
+
+        Atom().strategy_data()
+
+        assert "Atom() accessing data for empty strategy." in caplog.messages
+
+    def test_contract_change_updates_roll_data(
+        self, atom_runtime_factory, caplog: pytest.LogCaptureFixture
+    ):
+        old_contract = ibi.Future(symbol="ES", exchange="CME", localSymbol="ESH4")
+        new_contract = ibi.Future(symbol="ES", exchange="CME", localSymbol="ESM4")
+
+        class RollingRegistry:
+            def __init__(self):
+                self.current_contract = old_contract
+
+            def register_blueprint(self, contract):
+                pass
+
+            def get_contract(self, contract, which):
+                return self.current_contract
+
+            def get_details(self, contract):
+                return None
+
+        registry = RollingRegistry()
+        atom_runtime_factory(contract_registry=registry)
+        atom = AtomWithContract(ibi.Future(symbol="ES", exchange="CME"))
+        caplog.set_level(logging.WARNING)
+
+        atom.onStart({})
+        registry.current_contract = new_contract
+        atom.onStart({})
+
+        assert atom._roll_contract_data == ContractRollData(
+            old_contract, new_contract
+        )
+        assert "contract changed: ESH4 --> ESM4" in caplog.text
 
 
 class Test_data_property:

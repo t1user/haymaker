@@ -61,7 +61,8 @@ class ContractManagingDescriptor:
             )
         except KeyError:
             raise MissingContractError(
-                f"Unknown contract: {contract_blueprint} on {obj}"
+                f"Unknown contract: {contract_blueprint} on "
+                f"{obj.__class__.__name__}"
             )
 
 
