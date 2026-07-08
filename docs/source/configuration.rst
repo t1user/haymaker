@@ -70,9 +70,10 @@ connection recovery and logging.
 See :doc:`supervisor` for the supervisor lifecycle, workload contract, and state
 transition chart.
 
-Contract details are refreshed during successful live startup. Live runtime
-also schedules a fixed daily restart request so normal socket recovery cannot
-leave futures selectors unchanged indefinitely.
+Contract details are refreshed during successful live startup. The live
+controller also schedules a fixed daily futures roll at the UTC time configured
+by ``controller.future_roll_time`` so normal socket recovery cannot leave
+futures selectors unchanged indefinitely.
 
 The top-level ``ignore_errors`` setting lists noisy broker message codes that
 should be omitted from normal logs. It does not suppress supervisor actions or

@@ -628,6 +628,69 @@ def test_from_config_loads_controller_sync_options(Atom):
     assert controller.ignore_errors == [202, 321]
 
 
+def test_direct_controller_does_not_schedule_future_roll(controller):
+    assert controller._future_roll_timer is None
+
+
+def test_from_config_schedules_future_roll_in_utc(Atom, monkeypatch):
+    timeranges = []
+
+    class FakeTimerange:
+        callback = None
+
+        def __iadd__(self, callback):
+            self.callback = callback
+            return self
+
+    def fake_timerange(*, start, step):
+        timerange = FakeTimerange()
+        timeranges.append((start, step, timerange))
+        return timerange
+
+    monkeypatch.setattr(
+        "haymaker.controller.controller.ev.Event.timerange", fake_timerange
+    )
+
+    controller = Controller.from_config(
+        Trader(Atom.ib),
+        top_config={"controller": {"future_roll_time": [14, 0]}},
+    )
+
+    start, step, timerange = timeranges[0]
+    assert controller.future_roll_time == (14, 0)
+    assert start == datetime.time(hour=14, minute=0, tzinfo=datetime.UTC)
+    assert step == datetime.timedelta(days=1)
+    assert timerange.callback == controller.roll_futures
+    assert controller._future_roll_timer is timerange
+
+
+def test_schedule_future_roll_ignores_duplicate_request(Atom, monkeypatch):
+    timeranges = []
+
+    class FakeTimerange:
+        def __iadd__(self, callback):
+            return self
+
+    def fake_timerange(*, start, step):
+        timerange = FakeTimerange()
+        timeranges.append(timerange)
+        return timerange
+
+    monkeypatch.setattr(
+        "haymaker.controller.controller.ev.Event.timerange", fake_timerange
+    )
+
+    controller = Controller(
+        Trader(Atom.ib),
+        future_roll_time=(14, 0),
+    )
+
+    controller.schedule_future_roll()
+
+    assert len(timeranges) == 1
+    assert controller._future_roll_timer is timeranges[0]
+
+
 def test_routine_order_cancellation_is_logged_at_debug(controller, caplog):
     caplog.set_level(logging.DEBUG)
 

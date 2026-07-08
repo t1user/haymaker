@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import itertools
 import logging
 from collections import abc
@@ -74,6 +75,8 @@ class Controller(Atom):
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
     ignore_errors: tuple[int, ...] | list[int] = field(default_factory=tuple)
+    future_roll_time: tuple[int, int] | None = None
+    no_future_roll_strategies: list[str] = field(default_factory=list)
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
@@ -89,6 +92,7 @@ class Controller(Atom):
     _trading_disabled: bool = False
     _restart_before_correction: bool = True
     _sync_abort_event: asyncio.Event | None = field(default=None, repr=False)
+    _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_config(
@@ -122,6 +126,9 @@ class Controller(Atom):
                 raise ControllerError(
                     f"Wrong parameter: {param} in 'controller' section of config."
                 )
+        if (future_roll_time := config.get("future_roll_time")) is not None:
+            roll_hour, roll_minute = future_roll_time
+            config["future_roll_time"] = (roll_hour, roll_minute)
 
         top_kwargs = {
             i: top_config.get(i, False)
@@ -149,7 +156,6 @@ class Controller(Atom):
                 "Wrong value for controller.missing_brackets: "
                 f"{self.missing_brackets!r}."
             )
-
         # these are essential (non-optional) events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent, self._log_event_error)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent, self._log_event_error)
@@ -178,6 +184,8 @@ class Controller(Atom):
                 self.run_health_check, error=self._log_event_error
             )
 
+        self.schedule_future_roll()
+
         if self.log_order_events:
             self._order_loggers = OrderLoggers(self.ib)
 
@@ -186,7 +194,6 @@ class Controller(Atom):
                 f"No qualified contracts for open position: {missing_contracts}"
             )
 
-        self.no_future_roll_strategies: list[str] = []
         log.debug(f"Controller initiated: {self}")
         log.debug(f"{self.contract_registry.current_contracts=}")
 
@@ -235,7 +242,7 @@ class Controller(Atom):
             log.debug("hold released")
 
     def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
-        self.no_future_roll_strategies.extend(strategies)
+        self.no_future_roll_strategies = list(strategies)
 
     async def run(self) -> bool:
         """
@@ -270,7 +277,9 @@ class Controller(Atom):
             if sync_outcome is SyncOutcome.ABORTED:
                 log.debug("Controller startup sync aborted: connection unavailable.")
             else:
-                log.critical("Controller startup sync failed. Trading remains disabled.")
+                log.critical(
+                    "Controller startup sync failed. Trading remains disabled."
+                )
             return False
 
         if self.zero:
@@ -291,11 +300,30 @@ class Controller(Atom):
 
     def roll_futures(self, *args) -> None:
         """
-        This method is scheduled to run once a day in :class:`.app.App`
+        This method is scheduled to run once a day.
         """
         log.info(f"Running roll on controller object: {id(self)}")
         roller = FutureRoller(self, self.no_future_roll_strategies)
         roller.roll()
+
+    def schedule_future_roll(self) -> None:
+        """Schedule the daily futures roll for this controller lifetime."""
+
+        if self.future_roll_time is None:
+            return
+        if self._future_roll_timer is not None:
+            log.warning("Future roll already scheduled; ignoring duplicate request.")
+            return
+
+        roll_hour, roll_minute = self.future_roll_time
+        roll_time = datetime.time(
+            hour=roll_hour, minute=roll_minute, tzinfo=datetime.UTC
+        )
+        self._future_roll_timer = ev.Event.timerange(
+            start=roll_time, step=datetime.timedelta(days=1)  # type: ignore
+        )
+        self._future_roll_timer += self.roll_futures
+        log.debug(f"Future roll scheduled for {roll_time} UTC.")
 
     async def sync(self, *args) -> SyncOutcome:
         """Run sync unless the supervisor marks the connection unavailable."""

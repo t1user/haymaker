@@ -34,11 +34,10 @@ app:
   log_datafarm_status: True # log non-actionable data-farm status messages
   max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
   exit_on_failed_sync: False
-  future_roll_time: [10, 0]   # time when future rolls are executed, must be a list [hour, minute]
-  future_roll_timezone: "America/New_York" # must be a string acceptable by ZoneInfo
   
 controller:
   log_order_events: False
+  future_roll_time: [14, 0] # UTC time when future rolls are executed, list [hour, minute]
   # interval at which sync will be performed
   sync_frequency: 900 # 15min
   health_check_frequency: 0 # in secs, check database connection

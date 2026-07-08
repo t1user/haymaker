@@ -24,7 +24,7 @@ Live runtime services are assembled in `haymaker/runtime.py` by `RuntimeContext`
 - controller for broker/state reconciliation and order gateway,
 - startup contract-detail initialization and streamer startup jobs.
 
-The `haymaker` console command owns live execution: it configures Haymaker, creates `RuntimeContext`, installs it on `Atom`, imports the user strategy module so module-level pipelines are built, reads module metadata such as `no_future_roll_strategies`, and then starts `haymaker/app.py`. `App` schedules the daily futures roll once for the app process and runs a `LiveRuntime` workload under a Haymaker-owned connection supervisor. `LiveRuntime` owns controller startup and streamer jobs for each connection cycle.
+The `haymaker` console command owns live execution: it configures Haymaker, creates `RuntimeContext`, installs it on `Atom`, imports the user strategy module so module-level pipelines are built, reads module metadata such as `no_future_roll_strategies`, and then starts `haymaker/app.py`. The app-lifetime `Controller` schedules the daily UTC futures roll once during initialization, and `LiveRuntime` runs the supervised controller/startup-job workload under a Haymaker-owned connection supervisor.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames to a configured datastore.
 
@@ -36,7 +36,7 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints, explicit command-profile config setup, and user strategy module loading.
-- `haymaker/app.py`: framework-internal live application bootstrap, top-level `App.run()`, the app-lifetime futures-roll schedule, and `LiveRuntime`, which owns live workload startup/cleanup for each supervised connection cycle.
+- `haymaker/app.py`: framework-internal live application bootstrap, top-level `App.run()`, and `LiveRuntime`, which owns live workload startup/cleanup for each supervised connection cycle.
 - `haymaker/runtime.py`: process-owned live runtime context, IB/state/controller construction, contract-detail initialization, and streamer job assembly.
 - `haymaker/supervisor/`: IB socket supervisor package for owned managed
   connections. It owns workload task lifecycle, broker auto-recovery waits,

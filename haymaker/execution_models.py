@@ -66,25 +66,18 @@ class AbstractExecModel(Atom, ABC):
         *,
         open_order: dict[str, Any] = {},
         close_order: dict[str, Any] = {},
-        controller: Controller | None = None,
     ) -> None:
         super().__init__()
         self.strategy: str = ""  # placeholder, defined in onStart
-        if controller:
-            self.controller = controller
-        else:
-            runtime = getattr(type(self), "runtime", None)
-            if runtime is None:
-                raise RuntimeError(
-                    f"{self.__class__.__name__} requires a RuntimeContext or an "
-                    "explicit controller."
-                )
-            self.controller = runtime.controller
         self.open_order = {**OPEN_ORDER, **open_order}
         self.close_order = {**CLOSE_ORDER, **close_order}
         self.connect_controller()
 
     def connect_controller(self):
+        runtime = getattr(self, "runtime", None)
+        if runtime is None:
+            raise RuntimeError(f"{self.__class__.__name__} requires a RuntimeContext")
+        self.controller = self.runtime.controller
         self += self.controller
 
     def onStart(self, data, *args) -> None:
@@ -371,10 +364,6 @@ class EventDrivenExecModel(BaseExecModel):
     oca_type: int, default 1
             OCA group type as per Interactive Brokers definition
 
-    controller: :class:`Controller` instance, optional
-            passing :class:`Controller` is meant for testing;
-            otherwise the system should be allowed to use its own
-            mechanisms to create it
     """
 
     stop_order = Validator(order_field_validator)
@@ -390,7 +379,6 @@ class EventDrivenExecModel(BaseExecModel):
         stop: AbstractBracketLeg | None = None,
         take_profit: AbstractBracketLeg | None = None,
         oca_type: int = OCA_TYPE,
-        controller: Controller | None = None,
     ):
         if not stop:
             raise TypeError(
@@ -402,9 +390,7 @@ class EventDrivenExecModel(BaseExecModel):
         self.tp_order = {**TP_ORDER, **tp_order}
         self.oca_type = oca_type
         self.oca_group_generator = lambda: str(uuid4())
-        super().__init__(
-            open_order=open_order, close_order=close_order, controller=controller
-        )
+        super().__init__(open_order=open_order, close_order=close_order)
 
     def open(
         self,

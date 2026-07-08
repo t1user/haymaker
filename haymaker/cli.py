@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> None:
 
     setup_logging(config.get("logging_config"))
     ibi.util.patchAsyncio()
-    context = RuntimeContext.from_config(config)
+    context = RuntimeContext(config)
     strategy_module = load_user_module(parsed["module_path"])
     context.bind_strategy_module(strategy_module)
 

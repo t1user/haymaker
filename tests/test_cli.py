@@ -24,6 +24,24 @@ def test_read_no_future_roll_strategies_accepts_module_list(tmp_path):
     assert RuntimeContext._read_no_future_roll_strategies(module) == ["one", "two"]
 
 
+def test_bind_strategy_module_sets_controller_roll_exclusions(
+    tmp_path, Atom, state_machine, registry
+):
+    strategy = tmp_path / "strategy.py"
+    strategy.write_text("no_future_roll_strategies = ['one', 'two']\n")
+    module = load_user_module(strategy)
+    context = RuntimeContext(
+        config={"use_blotter": False, "controller": {}, "app": {}},
+        ib=Atom.ib,
+        contract_registry=registry,
+        state_machine=state_machine,
+    )
+
+    context.bind_strategy_module(module)
+
+    assert context.controller.no_future_roll_strategies == ["one", "two"]
+
+
 def test_read_no_future_roll_strategies_rejects_wrong_type(tmp_path):
     strategy = tmp_path / "strategy.py"
     strategy.write_text("no_future_roll_strategies = 'one'\n")

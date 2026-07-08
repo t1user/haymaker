@@ -22,13 +22,20 @@ from haymaker.execution_models import (
 COUNTER = count().__next__
 
 
+@pytest.fixture(autouse=True)
+def bind_runtime_controller(Atom, controller: Controller, monkeypatch):
+    monkeypatch.setattr(
+        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+    )
+
+
 def test_AbstraExecModel_is_abstract(controller: Controller):
     with pytest.raises(TypeError):
-        AbstractExecModel(controller=controller)  # type: ignore
+        AbstractExecModel()  # type: ignore
 
 
 def test_BaseExecModel_instantiates(controller: Controller):
-    bem = BaseExecModel(controller=controller)
+    bem = BaseExecModel()
     assert isinstance(bem, BaseExecModel)
 
 
@@ -41,18 +48,18 @@ def test_BaseExecModel_uses_runtime_controller(Atom, controller: Controller, mon
 
 
 def test_EventDrivenExecModel_instantiates(controller: Controller):
-    edem = EventDrivenExecModel(stop=FixedStop(1), controller=controller)
+    edem = EventDrivenExecModel(stop=FixedStop(1))
     assert isinstance(edem, EventDrivenExecModel)
 
 
 def test_EventDrivenExecModel_requires_stop(controller: Controller):
     with pytest.raises(TypeError):
-        EventDrivenExecModel(controller=controller)
+        EventDrivenExecModel()
 
 
 def test_BaseExecModel_order_validator_works_with_correct_keys(controller: Controller):
     open_order = {"orderType": "LMT", "lmtPrice": 5}
-    bem = BaseExecModel(open_order=open_order, controller=controller)
+    bem = BaseExecModel(open_order=open_order)
     assert isinstance(bem.open_order, dict)
     assert bem.open_order["lmtPrice"] == 5
 
@@ -62,12 +69,12 @@ def test_BaseExecModel_order_validator_raises_with_incorrect_keys(
 ):
     open_order = {"orderType": "LMT", "price123": 5}
     with pytest.raises(ValueError) as excinfo:
-        BaseExecModel(open_order=open_order, controller=controller)
+        BaseExecModel(open_order=open_order)
     assert "price123" in str(excinfo.value)
 
 
 def test_position_id(controller: Controller):
-    em = EventDrivenExecModel(stop=FixedStop(10), controller=controller)
+    em = EventDrivenExecModel(stop=FixedStop(10))
     em.onStart({"strategy": "xxx"})
     id1 = em.get_position_id()
     id2 = em.get_position_id()
@@ -75,7 +82,7 @@ def test_position_id(controller: Controller):
 
 
 def test_position_id_reset(controller: Controller):
-    em = EventDrivenExecModel(stop=FixedStop(10), controller=controller)
+    em = EventDrivenExecModel(stop=FixedStop(10))
     em.onStart({"strategy": "xxx"})
     id1 = em.get_position_id()
     id2 = em.get_position_id(True)
@@ -86,7 +93,6 @@ def test_oca_group_EventDrivenExecModel(controller: Controller):
     e = EventDrivenExecModel(
         stop=FixedStop(1),
         take_profit=TakeProfitAsStopMultiple(1, 2),
-        controller=controller,
     )
     e.onStart({"strategy": "xxx"})
     oca_group = e.oca_group_generator()
@@ -98,7 +104,6 @@ def test_oca_group_unique_EventDrivenExecModel(controller: Controller):
     e = EventDrivenExecModel(
         stop=FixedStop(1),
         take_profit=TakeProfitAsStopMultiple(1, 2),
-        controller=controller,
     )
     e.onStart({"strategy": "xxx"})
     oca_group1 = e.oca_group_generator()
@@ -110,7 +115,6 @@ def test_oca_group_is_not_position_id(controller: Controller):
     e = EventDrivenExecModel(
         stop=FixedStop(1),
         take_profit=TakeProfitAsStopMultiple(1, 2),
-        controller=controller,
     )
     e.onStart({"strategy": "xxx"})
     oca_group = e.oca_group_generator()
@@ -119,7 +123,7 @@ def test_oca_group_is_not_position_id(controller: Controller):
 
 
 @pytest.fixture
-def objects(Atom) -> tuple:
+def objects(Atom, monkeypatch) -> tuple:
 
     @dataclass
     class Data:
@@ -185,6 +189,9 @@ def objects(Atom) -> tuple:
         pass
 
     controller = FakeController(FakeTrader())  # type: ignore
+    monkeypatch.setattr(
+        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+    )
     source = Source()
 
     return controller, source, output_data
@@ -195,7 +202,6 @@ def test_EventDrivenExecModel_brackets_have_same_oca(objects):
     em = EventDrivenExecModel(
         stop=TrailingStop(3),
         take_profit=TakeProfitAsStopMultiple(3, 3),
-        controller=controller,
     )
     em.onStart({"strategy": "xxx"})
     source += em
@@ -220,7 +226,6 @@ def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
     em = EventDrivenExecModel(
         stop=TrailingStop(3),
         take_profit=TakeProfitAsStopMultiple(3, 3),
-        controller=controller,
     )
     em.onStart({"strategy": "xxx"})
     source += em
@@ -252,7 +257,7 @@ def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
 
 def test_BaseExecModel_open_signal_generates_order(objects):
     controller, source, output_data = objects
-    em = BaseExecModel(controller=controller)
+    em = BaseExecModel()
     source += em
     data = {
         "signal": 1,
@@ -268,7 +273,7 @@ def test_BaseExecModel_open_signal_generates_order(objects):
 
 def test_BaseExecModel_no_close_order_without_position(objects):
     controller, source, output_data = objects
-    em = BaseExecModel(controller=controller)
+    em = BaseExecModel()
     em.onStart({"strategy": "xxx"})
     source += em
 
@@ -288,7 +293,7 @@ def test_BaseExecModel_faulty_close_order_logs(objects, caplog):
     Execution model logs an attempt to close a non-existing position.
     """
     controller, source, data = objects
-    em = BaseExecModel(controller=controller)
+    em = BaseExecModel()
     source += em
     em.onStart({"strategy": "xxx"})
 
@@ -305,7 +310,7 @@ def test_BaseExecModel_faulty_close_order_logs(objects, caplog):
 
 def test_BaseExecModel_close_signal_generates_order(objects):
     controller, source, data = objects
-    em = BaseExecModel(controller=controller)
+    em = BaseExecModel()
     em.onStart({"strategy": "xxx"})
     source += em
 
@@ -333,7 +338,7 @@ def test_passed_order_kwargs_update_defaults(Atom, objects):
     controller, source, data = objects
     # these are non defaults, so assert will check whether defaults
     # have been successfully overridden
-    em = BaseExecModel(open_order={"algoParams": ""}, controller=controller)
+    em = BaseExecModel(open_order={"algoParams": ""})
 
     class Source(Atom):
         pass
@@ -353,7 +358,7 @@ def test_passed_order_kwargs_update_defaults(Atom, objects):
     assert data.order.algoParams == ""
 
 
-def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade):
+def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade, monkeypatch):
     """
     Create a setup where `FakeTrader` will record received order that
     we can compare with expectations.
@@ -371,9 +376,10 @@ def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade):
 
     fake_trader = FakeTrader()
     controller = Controller(fake_trader)
-    em = EventDrivenExecModel(
-        stop=TrailingStop(2, vol_field="my_vol_field"), controller=controller
+    monkeypatch.setattr(
+        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
     )
+    em = EventDrivenExecModel(stop=TrailingStop(2, vol_field="my_vol_field"))
     with patch.object(controller, "verify_market_open", return_value=True):
         em.strategy = "fake strategy"
         em._attach_bracket(trade, {"my_vol_field": 10})
@@ -385,12 +391,12 @@ def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade):
 
 
 def test_OrderKey_picks_correct_order_low_level(controller):
-    em = BaseExecModel(open_order={"orderType": "STP"}, controller=controller)
+    em = BaseExecModel(open_order={"orderType": "STP"})
     my_order = em._order(OrderKey.open_order, {})
     assert my_order.orderType == "STP"
 
 
-def test_OrderKey_picks_correct_order_higher_level(Atom):
+def test_OrderKey_picks_correct_order_higher_level(Atom, monkeypatch):
 
     class FakeTrader:
         order = None
@@ -401,10 +407,12 @@ def test_OrderKey_picks_correct_order_higher_level(Atom):
 
     fake_trader = FakeTrader()
     controller = Controller(fake_trader)
+    monkeypatch.setattr(
+        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+    )
     em = BaseExecModel(
         open_order={"orderType": "STPLMT"},
         close_order={"orderType": "TRAIL"},
-        controller=controller,
     )
     with patch.object(controller, "verify_market_open", return_value=True):
         em.open(
@@ -418,7 +426,7 @@ def test_OrderKey_picks_correct_order_higher_level(Atom):
         assert fake_trader.order.orderType == "STPLMT"
 
 
-def test_OrderKey_picks_correct_order_higher_level_2(Atom):
+def test_OrderKey_picks_correct_order_higher_level_2(Atom, monkeypatch):
 
     class FakeTrader:
         order = None
@@ -430,10 +438,12 @@ def test_OrderKey_picks_correct_order_higher_level_2(Atom):
     fake_trader = FakeTrader()
 
     controller = Controller(fake_trader)
+    monkeypatch.setattr(
+        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+    )
     em = BaseExecModel(
         open_order={"orderType": "STPLMT"},
         close_order={"orderType": "TRAIL"},
-        controller=controller,
     )
     em.strategy = "xxx"
     with patch.object(controller, "verify_market_open", return_value=True):

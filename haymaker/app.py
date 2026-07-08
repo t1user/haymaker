@@ -1,11 +1,7 @@
 import asyncio
-import datetime
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from zoneinfo import ZoneInfo
-
-import eventkit as ev  # type: ignore
 
 from .runtime import RuntimeContext
 from .supervisor import ConnectionSettings, ConnectionSupervisor
@@ -18,28 +14,18 @@ class LiveRuntime:
     """Run live controller and streamer work for one supervisor cycle."""
 
     context: RuntimeContext
-    future_roll_time: tuple[int, int] = (10, 0)
-    future_roll_timezone: str = "America/New_York"
-    no_future_roll_strategies: list[str] = field(default_factory=list)
     request_restart: Callable[[str], bool | None] | None = field(
         default=None, init=False, repr=False
     )
     exit_on_failed_sync: bool = False
-    _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_context(cls, context: RuntimeContext) -> "LiveRuntime":
         """Create live runtime settings from the process context."""
 
         app_config = context.config.get("app") or {}
-        roll_hour, roll_minute = app_config.get("future_roll_time", [10, 0])
         return cls(
             context=context,
-            future_roll_time=(roll_hour, roll_minute),
-            future_roll_timezone=app_config.get(
-                "future_roll_timezone", "America/New_York"
-            ),
-            no_future_roll_strategies=context.no_future_roll_strategies,
             exit_on_failed_sync=app_config.get("exit_on_failed_sync", False),
         )
 
@@ -78,21 +64,6 @@ class LiveRuntime:
         self.context.controller.set_hold()
         log.debug(f"Stopping live runtime: {reason}")
 
-    def schedule_future_roll(self) -> None:
-        """Schedule daily futures rolls for the app lifetime."""
-
-        roll_hour, roll_minute = self.future_roll_time
-        roll_timezone = ZoneInfo(self.future_roll_timezone)
-        rt = datetime.time(hour=roll_hour, minute=roll_minute, tzinfo=roll_timezone)
-        self.context.controller.set_no_future_roll_strategies(
-            self.no_future_roll_strategies
-        )
-        self._future_roll_timer = ev.Event.timerange(
-            start=rt, step=datetime.timedelta(days=1)  # type: ignore
-        )
-        self._future_roll_timer += self.context.controller.roll_futures
-        log.debug(f"Future roll scheduled for {rt} {rt.tzinfo.key}")  # type: ignore
-
 
 @dataclass
 class App:
@@ -108,7 +79,6 @@ class App:
             self.settings = ConnectionSettings.from_config(
                 self.context.config.get("app") or {}, 0
             )
-        self.runtime.schedule_future_roll()
         self.supervisor = ConnectionSupervisor(
             self.context.ib, self.runtime, self.settings
         )

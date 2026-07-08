@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import ib_insync as ibi
 import pytest
@@ -24,7 +25,7 @@ def portfolio():
 
 
 @pytest.fixture
-def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver):  # noqa
+def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, monkeypatch):  # noqa
 
     class FakeStateMachine:
         strategy = StrategyContainer(strategy_saver)
@@ -44,13 +45,16 @@ def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver):  # noqa
             self.out = strategy, contract, order, action, data
 
     controller = FakeController()
+    monkeypatch.setattr(
+        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+    )
     # signal is 1, contract is NQ
     block = df_block
     # so this should result in action "OPEN"
     signal = BinarySignalProcessor(state_machine=sm)
 
     # on which exec_model should act by issuing Buy order
-    exec_model = EventDrivenExecModel(stop=FixedStop(5), controller=controller)
+    exec_model = EventDrivenExecModel(stop=FixedStop(5))
 
     class SourceAtom(Atom):
         def run(self):
@@ -112,7 +116,7 @@ def test_order_is_for_one_contract(pipe):
 
 
 @pytest.fixture
-def new_setup(Atom):
+def new_setup(Atom, monkeypatch):
     class FakeTrader:
         def trade(self, contract: ibi.Contract, order: ibi.Order):
             return ibi.Trade(contract, order)
@@ -128,12 +132,15 @@ def new_setup(Atom):
             return True
 
     controller = FakeController(trader=FakeTrader())
+    monkeypatch.setattr(
+        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+    )
 
     class Source(Atom):
         pass
 
     source = Source()
-    em = BaseExecModel(controller=controller)
+    em = BaseExecModel()
 
     source += em
 

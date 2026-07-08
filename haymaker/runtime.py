@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, MutableMapping, Sequence
 from copy import copy
 from dataclasses import dataclass, field
 from types import ModuleType
@@ -136,11 +136,12 @@ class RuntimeContext:
     """Process-owned live runtime services shared by Haymaker atoms."""
 
     config: MutableMapping
-    ib: ibi.IB
-    contract_registry: ContractRegistry
-    state_machine: StateMachine
-    trader: Trader
-    _controller: Controller | None = field(default=None, init=False, repr=False)
+    ib: ibi.IB = field(default_factory=ibi.IB)
+    contract_registry: ContractRegistry = field(default_factory=ContractRegistry)
+    state_machine: StateMachine = field(default_factory=StateMachine)
+    log_broker: bool = field(default=False, init=False)
+    trader: Trader = field(init=False)
+    controller: Controller = field(init=False)
     startup_jobs: StartupJobs | None = field(default=None, init=False)
     no_future_roll_strategies: list[str] = field(default_factory=list)
     _restart_handler: Callable[[str], bool | None] | None = field(
@@ -148,37 +149,18 @@ class RuntimeContext:
     )
     _broker_logger: IBHandlers | None = field(default=None, init=False, repr=False)
 
-    @classmethod
-    def from_config(cls, config: MutableMapping) -> RuntimeContext:
-        """Create runtime services from Haymaker configuration."""
-
-        ib = ibi.IB()
-        contract_registry = ContractRegistry()
-        state_machine = StateMachine()
-        trader = Trader(ib)
-        context = cls(config, ib, contract_registry, state_machine, trader)
-        Atom.set_runtime_context(context)
-        context.controller = Controller.from_config(
-            trader,
-            blotter_factory(config["use_blotter"]),
-            config,
+    def __post_init__(self) -> None:
+        self.log_broker = self.config.get("log_broker", False)
+        Atom.set_runtime_context(self)
+        self.trader = Trader(self.ib)
+        self.controller = Controller.from_config(
+            self.trader,
+            blotter_factory(self.config["use_blotter"]),
+            self.config,
             [HEALTH_CHECK_OBSERVABLES],
         )
-        if config.get("log_broker"):
-            context._broker_logger = IBHandlers(ib)
-        return context
-
-    @property
-    def controller(self) -> Controller:
-        """Return the process controller after it has been initialized."""
-
-        if self._controller is None:
-            raise RuntimeError("Runtime controller has not been initialized.")
-        return self._controller
-
-    @controller.setter
-    def controller(self, controller: Controller) -> None:
-        self._controller = controller
+        if self.log_broker:
+            self._broker_logger = IBHandlers(self.ib)
 
     @property
     def sm(self) -> StateMachine:
@@ -205,6 +187,9 @@ class RuntimeContext:
         """Apply strategy-module metadata after module-level pipelines exist."""
 
         self.no_future_roll_strategies = self._read_no_future_roll_strategies(module)
+        self.controller.set_no_future_roll_strategies(
+            self.no_future_roll_strategies
+        )
         self.startup_jobs = StartupJobs(
             InitData(self.ib, self.contract_registry),
             self.ib,
