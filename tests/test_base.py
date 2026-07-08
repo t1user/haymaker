@@ -996,8 +996,10 @@ def test_missing_details_log(
     caplog: pytest.LogCaptureFixture, details: ibi.ContractDetails
 ):
     caplog.set_level(logging.DEBUG)
+    registry = ContractRegistry()
 
     class NewMockAtom(Atom):
+        contract_registry = registry
 
         def __init__(self, contract):
             self.contract = contract

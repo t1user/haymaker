@@ -158,7 +158,7 @@ class Atom:
 
         cls.runtime = runtime
         cls.ib = runtime.ib
-        cls.sm = runtime.state_machine
+        cls.sm = runtime.sm
         cls.contract_registry = runtime.contract_registry
 
     @property

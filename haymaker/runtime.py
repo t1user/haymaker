@@ -138,7 +138,7 @@ class RuntimeContext:
     config: MutableMapping
     ib: ibi.IB = field(default_factory=ibi.IB)
     contract_registry: ContractRegistry = field(default_factory=ContractRegistry)
-    state_machine: StateMachine = field(default_factory=StateMachine)
+    sm: StateMachine = field(default_factory=StateMachine)
     log_broker: bool = field(default=False, init=False)
     trader: Trader = field(init=False)
     controller: Controller = field(init=False)
@@ -161,12 +161,6 @@ class RuntimeContext:
         )
         if self.log_broker:
             self._broker_logger = IBHandlers(self.ib)
-
-    @property
-    def sm(self) -> StateMachine:
-        """Return the runtime state machine."""
-
-        return self.state_machine
 
     def bind_restart_handler(
         self, restart_handler: Callable[[str], bool | None]

@@ -34,7 +34,7 @@ def test_bind_strategy_module_sets_controller_roll_exclusions(
         config={"use_blotter": False, "controller": {}, "app": {}},
         ib=Atom.ib,
         contract_registry=registry,
-        state_machine=state_machine,
+        sm=state_machine,
     )
 
     context.bind_strategy_module(module)
