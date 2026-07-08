@@ -14,9 +14,6 @@ class LiveRuntime:
     """Run live controller and streamer work for one supervisor cycle."""
 
     context: RuntimeContext
-    request_restart: Callable[[str], bool | None] | None = field(
-        default=None, init=False, repr=False
-    )
     exit_on_failed_sync: bool = False
 
     @classmethod
@@ -36,7 +33,6 @@ class LiveRuntime:
     ) -> None:
         """Bind supervisor controls used by runtime components."""
 
-        self.request_restart = request_restart
         self.context.bind_restart_handler(request_restart)
         self.context.controller.set_sync_abort_event(connection_unavailable)
 

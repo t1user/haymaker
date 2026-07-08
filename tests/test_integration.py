@@ -3,9 +3,10 @@ from datetime import datetime, timezone
 
 import ib_insync as ibi
 import pytest
-from test_block import data_for_df, df_block  # noqa
+from test_block import data_for_df  # noqa
 
-from haymaker.base import Pipe
+from haymaker.base import Atom, Pipe
+from haymaker.block import AbstractDfBlock
 from haymaker.bracket_legs import FixedStop
 from haymaker.controller import Controller
 from haymaker.execution_models import BaseExecModel, EventDrivenExecModel
@@ -24,7 +25,7 @@ def portfolio():
 
 
 @pytest.fixture
-def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, atom_runtime):  # noqa
+def pipe(data_for_df, portfolio, strategy_saver, atom_runtime_factory):  # noqa
 
     class FakeStateMachine:
         strategy = StrategyContainer(strategy_saver)
@@ -36,7 +37,12 @@ def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, atom_runtime): 
             return 0
 
     sm = FakeStateMachine()
-    atom_runtime.sm = sm
+    atom_runtime = atom_runtime_factory(sm=sm)
+
+    class Block(AbstractDfBlock):
+        def df(self, data):
+            data["price_plus"] = data["price"] + 1
+            return data
 
     class FakeController(Atom):
         out = None
@@ -47,7 +53,7 @@ def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, atom_runtime): 
     controller = FakeController()
     atom_runtime.bind_controller(controller)
     # signal is 1, contract is NQ
-    block = df_block
+    block = Block("eska_NQ", ibi.Future("NQ", "CME"))
     # so this should result in action "OPEN"
     signal = BinarySignalProcessor()
 
