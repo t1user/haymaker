@@ -16,6 +16,18 @@ from haymaker.state_machine import StrategyContainer
 from haymaker.trader import Trader
 
 
+def runtime_with_controller(controller) -> SimpleNamespace:
+    """Build a complete Atom runtime stub around a test controller."""
+
+    return SimpleNamespace(
+        controller=controller,
+        ib=controller.ib,
+        sm=controller.sm,
+        contract_registry=controller.contract_registry,
+        request_restart=lambda reason="": None,
+    )
+
+
 @pytest.fixture
 def portfolio():
     portfolio = FixedPortfolio()
@@ -46,7 +58,7 @@ def pipe(df_block, data_for_df, portfolio, Atom, strategy_saver, monkeypatch):  
 
     controller = FakeController()
     monkeypatch.setattr(
-        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+        Atom, "runtime", runtime_with_controller(controller), raising=False
     )
     # signal is 1, contract is NQ
     block = df_block
@@ -133,7 +145,7 @@ def new_setup(Atom, monkeypatch):
 
     controller = FakeController(trader=FakeTrader())
     monkeypatch.setattr(
-        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+        Atom, "runtime", runtime_with_controller(controller), raising=False
     )
 
     class Source(Atom):

@@ -85,7 +85,11 @@ def test_timeout_with_no_name_gets_a_number(Timeout):
 def test_stale_streamer_requests_restart(Timeout):
     reasons = []
     timeout = Timeout(
-        ev.Event(), time=0, name="stale", debug=False, restart_request=reasons.append
+        ev.Event(),
+        time=0,
+        name="stale",
+        debug=False,
+        request_restart=reasons.append,
     )
 
     timeout.triggered_action()
@@ -101,7 +105,11 @@ def test_stale_streamer_rearms_timeout_when_restart_is_blocked(Timeout):
         return False
 
     timeout = Timeout(
-        ev.Event(), time=0.1, name="stale", debug=False, restart_request=blocked_restart
+        ev.Event(),
+        time=0.1,
+        name="stale",
+        debug=False,
+        request_restart=blocked_restart,
     )
     original_timeout = timeout._timeout
     expected_reason = f"stale streamer: {timeout!s}"

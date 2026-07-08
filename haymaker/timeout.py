@@ -56,7 +56,7 @@ class Timeout:
     name: str = ""
     details: Details | None = None
     debug: bool = TIMEOUT_DEBUG
-    restart_request: Callable[[str], bool | None] | None = None
+    request_restart: Callable[[str], bool | None] | None = None
     _timeout: ev.Event | None = field(repr=False, default=None)
     _now: datetime | None = None  # for testing only
     _sleep_taks: asyncio.Task | None = field(repr=False, default=None)
@@ -91,7 +91,7 @@ class Timeout:
             time,
             f"{str(atom)}-<<{key}>>",
             atom.contract_details,
-            restart_request=atom.restart_request,
+            request_restart=atom.request_restart,
         )
 
     @classmethod
@@ -159,10 +159,10 @@ class Timeout:
             log.error(f"{self!s} triggered. Possibly system reset needed.")
         else:
             log.debug(f"Stale streamer {self!s} will request restart.")
-            if self.restart_request is None:
+            if self.request_restart is None:
                 log.error("Cannot restart: no timeout restart handler configured.")
                 return
-            restart_accepted = self.restart_request(f"stale streamer: {self!s}")
+            restart_accepted = self.request_restart(f"stale streamer: {self!s}")
             if restart_accepted is False:
                 self._set_timeout(self.event)
 

@@ -169,7 +169,7 @@ class RuntimeContext:
 
         self._restart_handler = restart_handler
 
-    def restart_request(self, reason: str = "") -> bool | None:
+    def request_restart(self, reason: str = "") -> bool | None:
         """Request a supervised restart when the supervisor is available."""
 
         if self._restart_handler is None:

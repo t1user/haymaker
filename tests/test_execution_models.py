@@ -22,10 +22,22 @@ from haymaker.execution_models import (
 COUNTER = count().__next__
 
 
+def runtime_with_controller(Atom, controller: Controller) -> SimpleNamespace:
+    """Build a complete Atom runtime stub around a test controller."""
+
+    return SimpleNamespace(
+        controller=controller,
+        ib=controller.ib,
+        sm=controller.sm,
+        contract_registry=controller.contract_registry,
+        request_restart=lambda reason="": None,
+    )
+
+
 @pytest.fixture(autouse=True)
 def bind_runtime_controller(Atom, controller: Controller, monkeypatch):
     monkeypatch.setattr(
-        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
     )
 
 
@@ -41,7 +53,7 @@ def test_BaseExecModel_instantiates(controller: Controller):
 
 def test_BaseExecModel_uses_runtime_controller(Atom, controller: Controller, monkeypatch):
     monkeypatch.setattr(
-        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
     )
     bem = BaseExecModel()
     assert bem.controller is controller
@@ -190,7 +202,7 @@ def objects(Atom, monkeypatch) -> tuple:
 
     controller = FakeController(FakeTrader())  # type: ignore
     monkeypatch.setattr(
-        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
     )
     source = Source()
 
@@ -377,7 +389,7 @@ def test_EventDrivenExecModel_bracket_params_override_detaults(Atom, trade, monk
     fake_trader = FakeTrader()
     controller = Controller(fake_trader)
     monkeypatch.setattr(
-        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
     )
     em = EventDrivenExecModel(stop=TrailingStop(2, vol_field="my_vol_field"))
     with patch.object(controller, "verify_market_open", return_value=True):
@@ -408,7 +420,7 @@ def test_OrderKey_picks_correct_order_higher_level(Atom, monkeypatch):
     fake_trader = FakeTrader()
     controller = Controller(fake_trader)
     monkeypatch.setattr(
-        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
     )
     em = BaseExecModel(
         open_order={"orderType": "STPLMT"},
@@ -439,7 +451,7 @@ def test_OrderKey_picks_correct_order_higher_level_2(Atom, monkeypatch):
 
     controller = Controller(fake_trader)
     monkeypatch.setattr(
-        Atom, "runtime", SimpleNamespace(controller=controller), raising=False
+        Atom, "runtime", runtime_with_controller(Atom, controller), raising=False
     )
     em = BaseExecModel(
         open_order={"orderType": "STPLMT"},

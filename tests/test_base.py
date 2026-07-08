@@ -147,7 +147,7 @@ class TestAtom:
         atom1.which_contract = ActiveNext.NEXT
         assert repr(atom1) == "NewAtom(name=atom1, which_contract=NEXT)"
 
-    def test_repr_includes_contract(self, atom1: NewAtom):
+    def test_repr_includes_contract(self, atom1: NewAtom, Atom):
         """
         If contract is set, it should be included in repr.
         """
@@ -778,13 +778,13 @@ class TestContract:
         return ibi.Contract(symbol="ES", exchange="CME")
 
     @pytest.fixture
-    def atom(self):
+    def atom(self, Atom):
         return AtomWithContract(ibi.Future(symbol="NQ", exchange="CME"))
 
     def test_can_assign_and_get_contract(self, atom: AtomWithContract):
         assert isinstance(atom.contract, ibi.Future)
 
-    def test_same_contract_returned_as_assigned(self, contract: ibi.Contract):
+    def test_same_contract_returned_as_assigned(self, contract: ibi.Contract, Atom):
         c = contract
         a = AtomWithContract(c)
         assert a.contract is c
@@ -804,7 +804,7 @@ class TestContractList:
         ]
 
     @pytest.fixture
-    def atom_with_contract(self, contract: ibi.Contract):
+    def atom_with_contract(self, contract: ibi.Contract, Atom):
         class NewAtomWithContract(Atom):
 
             def __init__(self, contract):
@@ -826,7 +826,7 @@ class TestContractList:
         assert cont in atom_with_contract.contract_registry.blueprints
 
 
-def test_all_contracts_from_many_atoms_in_registry():
+def test_all_contracts_from_many_atoms_in_registry(Atom):
     class A(Atom):
 
         def __init__(self, contract):

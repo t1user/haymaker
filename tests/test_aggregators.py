@@ -12,7 +12,7 @@ from haymaker.base import Pipe
 from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
 
 
-def test_onStart_receives_streamer():
+def test_onStart_receives_streamer(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -30,7 +30,7 @@ def test_onStart_receives_streamer():
         mock_sync_with_streamer.assert_called_with(streamer)
 
 
-def test_onStart_works_as_part_of_Pipe():
+def test_onStart_works_as_part_of_Pipe(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -55,7 +55,7 @@ def test_onStart_works_as_part_of_Pipe():
         mock_sync_with_streamer.assert_called_with(streamer)
 
 
-def test_HistoricalDataStreamerAccepted():
+def test_HistoricalDataStreamerAccepted(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -69,7 +69,7 @@ def test_HistoricalDataStreamerAccepted():
     assert aggregator.sync_with_streamer(streamer) is None
 
 
-def test_wrong_streamer_fails():
+def test_wrong_streamer_fails(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = MktDataStreamer(contract=blueprint, tickList="212")
     aggregator = BarAggregator(NoFilter())
@@ -119,7 +119,7 @@ def source_aggregator_output():
     return source, aggregator, output
 
 
-def test_BarAggregator_passes_onStart_signal(source_aggregator_output):
+def test_BarAggregator_passes_onStart_signal(source_aggregator_output, Atom):
     _, aggregator, output = source_aggregator_output
 
     streamer = HistoricalDataStreamer(

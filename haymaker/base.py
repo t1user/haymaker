@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -10,6 +11,7 @@ from typing import (
     NamedTuple,
     Self,
     Sequence,
+    cast,
 )
 
 import ib_insync as ibi
@@ -68,6 +70,24 @@ class ContractManagingDescriptor:
 class ContractRollData(NamedTuple):
     old_contract: ibi.Contract
     new_contract: ibi.Contract
+
+
+class RuntimeService:
+    """Delegate an Atom runtime service lookup to the installed runtime context."""
+
+    def __init__(self, name: str) -> None:
+        """Store the runtime attribute name to resolve."""
+
+        self.name = name
+
+    def __get__(self, obj: Atom | None, owner: type[Atom] | None = None) -> Any:
+        """Return the named service from the owner class runtime context."""
+
+        atom_cls = owner or type(obj)
+        runtime = getattr(atom_cls, "runtime", None)
+        if runtime is None:
+            raise RuntimeError("Atom runtime context has not been installed.")
+        return getattr(runtime, self.name)
 
 
 class Atom:
@@ -132,10 +152,15 @@ class Atom:
             by calling `self.dataEvent.emit(data)`.
     """
 
-    ib: ClassVar[ibi.IB]
-    sm: ClassVar[StateMachine]
     runtime: ClassVar[RuntimeContext]
-    contract_registry: ClassVar[ContractRegistry] = ContractRegistry()
+    if TYPE_CHECKING:
+        ib: ClassVar[ibi.IB]
+        sm: ClassVar[StateMachine]
+        contract_registry: ClassVar[ContractRegistry]
+    else:
+        ib = RuntimeService("ib")
+        sm = RuntimeService("sm")
+        contract_registry = RuntimeService("contract_registry")
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
@@ -148,27 +173,28 @@ class Atom:
 
     @classmethod
     def set_init_data(cls, ib: ibi.IB, sm: StateMachine, cr: ContractRegistry) -> None:
-        cls.ib = ib
-        cls.sm = sm
-        cls.contract_registry = cr
+        runtime = SimpleNamespace(
+            ib=ib,
+            sm=sm,
+            contract_registry=cr,
+            request_restart=lambda reason="": None,
+        )
+        cls.set_runtime_context(cast("RuntimeContext", runtime))
 
     @classmethod
     def set_runtime_context(cls, runtime: RuntimeContext) -> None:
         """Install process runtime services on all Atoms."""
 
         cls.runtime = runtime
-        cls.ib = runtime.ib
-        cls.sm = runtime.sm
-        cls.contract_registry = runtime.contract_registry
 
     @property
-    def restart_request(self):
+    def request_restart(self):
         """Return the current runtime restart callback if it is available."""
 
         runtime = getattr(type(self), "runtime", None)
         if runtime is None:
             return None
-        return runtime.restart_request
+        return runtime.request_restart
 
     def __init__(self) -> None:
         self._createEvents()

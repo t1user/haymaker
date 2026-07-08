@@ -446,7 +446,12 @@ class EventDrivenExecModel(BaseExecModel):
                 # take profit may be None
                 if bracket:
                     memo: dict[str, Any] = {}
-                    bracket_kwargs = bracket(params, trade, memo)
+                    bracket_kwargs = bracket(
+                        params,
+                        trade,
+                        memo,
+                        self.contract_registry.details,
+                    )
                     order_kwargs = {
                         **bracket_kwargs,
                         **dynamic_bracket_kwargs,
