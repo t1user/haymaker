@@ -147,7 +147,7 @@ class TestAtom:
         atom1.which_contract = ActiveNext.NEXT
         assert repr(atom1) == "NewAtom(name=atom1, which_contract=NEXT)"
 
-    def test_repr_includes_contract(self, atom1: NewAtom, Atom):
+    def test_repr_includes_contract(self, atom1: NewAtom, atom_runtime):
         """
         If contract is set, it should be included in repr.
         """
@@ -267,7 +267,7 @@ class TestPipe:
         pipe_.connect(end1, end2)
         start.dataEvent.emit("test_string")
         assert end1.onData_string == "test_string_x_y_z"
-        assert end1.onData_string == "test_string_x_y_z"
+        assert end2.onData_string == "test_string_x_y_z"
 
     def test_connect_multiple_objects_1(
         self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_
@@ -279,7 +279,7 @@ class TestPipe:
         pipe_.connect(end1, end2)
         start.dataEvent.emit("test_string")
         assert end1.onData_checksum == 1
-        assert end1.onData_checksum == 1
+        assert end2.onData_checksum == 1
 
     def test_connect_multiple_objects_feedback(
         self, atoms: tuple[NewAtom, NewAtom, NewAtom], pipe_: Pipe
@@ -777,14 +777,13 @@ class TestContract:
     def contract(self):
         return ibi.Contract(symbol="ES", exchange="CME")
 
-    @pytest.fixture
-    def atom(self, Atom):
-        return AtomWithContract(ibi.Future(symbol="NQ", exchange="CME"))
-
-    def test_can_assign_and_get_contract(self, atom: AtomWithContract):
+    def test_can_assign_and_get_contract(self, atom_runtime):
+        atom = AtomWithContract(ibi.Future(symbol="NQ", exchange="CME"))
         assert isinstance(atom.contract, ibi.Future)
 
-    def test_same_contract_returned_as_assigned(self, contract: ibi.Contract, Atom):
+    def test_same_contract_returned_as_assigned(
+        self, contract: ibi.Contract, atom_runtime
+    ):
         c = contract
         a = AtomWithContract(c)
         assert a.contract is c
@@ -795,40 +794,32 @@ class TestContractList:
     def contract(self):
         return ibi.Future(symbol="YM", exchange="NYMEX")
 
-    @pytest.fixture
-    def list_of_contracts(self, contract: ibi.Contract):
-        return [
-            contract,
-            ibi.ContFuture(symbol="NQ", exchange="CME"),
-            ibi.Stock(symbol="AAPL", exchange="NASDAQ"),
-        ]
+    def test_newly_added_contract_in_Atom_registry(
+        self, contract: ibi.Contract, atom_runtime
+    ):
+        """
+        All we're testing here is that the contract made it to the
+        registry.  We're not checking if contract qualification and
+        selectors work.
+        """
 
-    @pytest.fixture
-    def atom_with_contract(self, contract: ibi.Contract, Atom):
         class NewAtomWithContract(Atom):
 
             def __init__(self, contract):
                 super().__init__()
                 self.contract = contract
 
-        a = NewAtomWithContract(contract)
-        return a
-
-    def test_newly_added_contract_in_Atom_registry(self, atom_with_contract: Atom):
-        """
-        All we're testing here is that the contract made it to the
-        registry.  We're not checking if contract qualification and
-        selectors work.
-        """
+        atom = NewAtomWithContract(contract)
         cont = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
-        atom_with_contract.contract = cont
-        assert cont in atom_with_contract.contract_registry.blueprints
+        atom.contract = cont
+        assert cont in atom_runtime.contract_registry.blueprints
 
 
-def test_all_contracts_from_many_atoms_in_registry(Atom, atom_runtime):
+def test_all_contracts_from_many_atoms_in_registry(atom_runtime):
     class A(Atom):
 
         def __init__(self, contract):
+            super().__init__()
             self.contract = contract
 
     apple = ibi.Stock(symbol="AAPL", exchange="NASDAQ")
@@ -1002,6 +993,7 @@ def test_missing_details_log(
 
     class NewMockAtom(Atom):
         def __init__(self, contract):
+            super().__init__()
             self.contract = contract
 
     atom = NewMockAtom(details.contract)
@@ -1012,36 +1004,37 @@ def test_missing_details_log(
 
 
 class Test_data_property:
-    # data property test depend on StateMachine being properly set as attribute of Atom
-    # and StateMachine singleton being destroyed betewen tests
-    # for this `atom` fixture should be used
+    # data property tests depend on Atom.runtime.sm being installed and
+    # StateMachine singleton being destroyed between tests.
 
-    def test_data_property_without_strategy(self, Atom):
+    def test_data_property_without_strategy(self, atom_runtime):
         class A(Atom):
             pass
 
         a = A()
         assert isinstance(a.data, Strategy)
 
-    def test_data_property_with_strategy_first_access(self, Atom):
+    def test_data_property_with_strategy_first_access(self, atom_runtime):
         """If we're using non-existing strategy, one should be created."""
 
         class A(Atom):
             def __init__(self, strategy):
                 self.strategy = strategy
+                super().__init__()
 
         a = A("xxx")
 
         assert a.data.strategy == "xxx"
 
     def test_data_property_with_strategy_access_correct_essential_keys_in_data(
-        self, Atom
+        self, atom_runtime
     ):
         """Newly created strategy must have certain keys by default."""
 
         class A(Atom):
             def __init__(self, strategy):
                 self.strategy = strategy
+                super().__init__()
 
         a = A("xxx")
 
@@ -1049,10 +1042,11 @@ class Test_data_property:
             set(a.data.keys())
         )
 
-    def test_data_property_with_strategy_access_correct_position(self, Atom):
+    def test_data_property_with_strategy_access_correct_position(self, atom_runtime):
         class A(Atom):
             def __init__(self, strategy):
                 self.strategy = strategy
+                super().__init__()
 
         a = A("xxx")
         b = A("xxx")
@@ -1060,7 +1054,9 @@ class Test_data_property:
         a.data.position += 1
         assert b.data.position == 1
 
-    def test_data_property_multiple_strategies_access_correct_position(self, Atom):
+    def test_data_property_multiple_strategies_access_correct_position(
+        self, atom_runtime
+    ):
         class A(Atom):
             pass
 
@@ -1080,7 +1076,9 @@ class Test_data_property:
         assert b.data.position == 2
         assert c.data.position == 0
 
-    def test_data_property_multiple_strategies_access_correct_position_1(self, Atom):
+    def test_data_property_multiple_strategies_access_correct_position_1(
+        self, atom_runtime
+    ):
         class A(Atom):
             pass
 
