@@ -87,11 +87,15 @@ Broker messages are grouped into three categories:
 * restart requests, such as ``1101`` and ``1300``;
 * broker-connectivity-lost signals, ``1100`` and ``2110``;
 * informational data-farm messages, such as ``2103``, ``2105``, ``2157``,
-  ``10182``, ``2104``, ``2106``, and ``2158``.
+  ``2104``, ``2106``, and ``2158``.
 
 ``app.log_datafarm_status`` controls whether informational data-farm messages
 are written to the supervisor log. Turning it off silences those messages only;
-it does not make them restart triggers.
+it does not make them restart triggers. ``10182`` is logged as live-update
+failure context; with ``app.live_update_failure_restart_delay`` set above zero,
+the state supervisor waits that many quiet seconds after the last ``10182`` and
+then restarts the workload to rebuild historical live-update streams. ``0``
+disables this shortcut.
 
 ``timeoutEvent`` remains an active health check while connected. It triggers a
 probe rather than an immediate reconnect. While broker connectivity is reported
@@ -134,7 +138,8 @@ Broker connectivity loss is not a hidden connected sub-state. ``1100`` and
 ``2110`` move the state machine to ``BrokerConnectivityLost`` immediately. From
 there, ``1102`` or the grace-period timeout probes the connection. Weak
 data-farm messages are ignored or logged as context depending on
-``app.log_datafarm_status``.
+``app.log_datafarm_status``. ``10182`` can additionally trigger the configured
+quiet-period live-update restart shortcut.
 
 Configuration Notes
 ===================
@@ -148,7 +153,9 @@ Important recovery settings are documented in :doc:`configuration`, including:
 * ``probeTimeout``: readiness probe timeout;
 * ``auto_recovery_grace_period``: broker-connectivity-lost duration before
   probing;
-* ``restart_on_recovered_connection``: whether ``1102`` forces rebuild.
+* ``restart_on_recovered_connection``: whether ``1102`` forces rebuild;
+* ``live_update_failure_restart_delay``: quiet seconds after IB ``10182`` before
+  rebuilding live-update streams; ``0`` disables this shortcut;
 * ``max_recoveries``: consecutive unexpected cycle recoveries before stopping.
 
 Use :doc:`ib_message_codes` when reviewing broker-code behavior in logs.

@@ -623,52 +623,131 @@ async def test_weak_data_farm_logging_can_be_disabled(
     await stop_and_wait(supervisor, task)
 
 
-def test_live_update_failure_cluster_is_correlated_with_stale_restart(
+@pytest.mark.asyncio
+async def test_live_update_failure_restart_is_disabled_by_zero_delay() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload, live_update_failure_restart_delay=0)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    await asyncio.sleep(0.05)
+
+    assert current_state(supervisor) is ConnectedState
+    assert fake_ib.disconnect_count == 0
+    assert workload.starts == 1
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_live_update_failure_requests_restart_after_quiet_period(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     fake_ib = FakeIB()
-    supervisor = make_supervisor(fake_ib)
-    supervisor._state = ConnectedState(supervisor)
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib, workload, live_update_failure_restart_delay=0.01
+    )
+    task = asyncio.create_task(supervisor.run())
 
-    caplog.set_level("DEBUG", logger="haymaker.supervisor.supervisor")
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
 
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.states")
     fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
-    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
 
-    assert caplog.text.count("Live-update failure cluster started") == 1
-
-    caplog.clear()
-    assert supervisor.request_restart("stale streamer: Timeout <300s> for NG")
+    assert current_state(supervisor) is ConnectedState
+    assert fake_ib.disconnect_count == 0
+    assert await wait_for_condition(lambda: fake_ib.disconnect_count == 1)
     assert (
-        "Stale-streamer restart follows recent live-update failure cluster: "
-        "2 failures"
-    ) in caplog.text
-
-    caplog.clear()
-    assert supervisor.request_restart("stale streamer: Timeout <300s> for GC")
-    assert (
-        "Stale-streamer restart follows recent live-update failure cluster"
-        not in caplog.text
+        "Live-update failure quiet period elapsed; requesting workload restart."
+        in caplog.text
     )
 
+    await stop_and_wait(supervisor, task)
 
-def test_live_update_failure_correlation_respects_datafarm_logging_switch(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+
+@pytest.mark.asyncio
+async def test_live_update_failure_quiet_period_resets_on_repeated_message() -> None:
     fake_ib = FakeIB()
-    supervisor = make_supervisor(fake_ib, log_datafarm_status=False)
-    supervisor._state = ConnectedState(supervisor)
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib, workload, live_update_failure_restart_delay=0.05
+    )
+    task = asyncio.create_task(supervisor.run())
 
-    caplog.set_level("DEBUG", logger="haymaker.supervisor.supervisor")
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
 
     fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
-    supervisor.request_restart("stale streamer: Timeout <300s> for NG")
+    await asyncio.sleep(0.03)
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    await asyncio.sleep(0.03)
 
-    assert "Live-update failure cluster started" not in caplog.text
-    assert (
-        "Stale-streamer restart follows recent live-update failure cluster"
-        not in caplog.text
+    assert fake_ib.disconnect_count == 0
+    assert current_state(supervisor) is ConnectedState
+    assert await wait_for_condition(lambda: fake_ib.disconnect_count == 1)
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_live_update_failure_timer_stops_when_connected_state_exits() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib,
+        workload,
+        live_update_failure_restart_delay=0.05,
+        probe_timeout=1,
     )
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    await asyncio.sleep(0.01)
+    fake_ib.probe_delays = [60]
+    fake_ib.timeoutEvent.emit(20)
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ProbingState)
+    await asyncio.sleep(0.06)
+
+    assert current_state(supervisor) is ProbingState
+    assert fake_ib.disconnect_count == 0
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_broker_connectivity_loss_wins_over_pending_live_update_restart() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib,
+        workload,
+        live_update_failure_restart_delay=0.05,
+        auto_recovery_grace_period=1,
+    )
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    await asyncio.sleep(0.01)
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+
+    assert await wait_for_condition(
+        lambda: current_state(supervisor) is BrokerConnectivityLostState
+    )
+    await asyncio.sleep(0.06)
+
+    assert current_state(supervisor) is BrokerConnectivityLostState
+    assert fake_ib.disconnect_count == 0
+    assert workload.starts == 1
+
+    await stop_and_wait(supervisor, task)
 
 
 @pytest.mark.asyncio
@@ -932,6 +1011,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
             "recovery_warning_after": 19,
             "recovery_warning_interval": 23,
             "restart_on_recovered_connection": True,
+            "live_update_failure_restart_delay": 29,
             "log_datafarm_status": False,
         },
         client_id=42,
@@ -948,6 +1028,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert settings.auto_recovery_grace_period == 17
     assert settings.max_recoveries == 21
     assert settings.restart_on_recovered_connection is True
+    assert settings.live_update_failure_restart_delay == 29
     assert settings.log_datafarm_status is False
     assert not hasattr(settings, "restart_delay")
     assert not hasattr(settings, "recovery_warning_after")
@@ -968,6 +1049,7 @@ def test_connection_settings_from_config_uses_defaults() -> None:
     assert settings.auto_recovery_grace_period == 120
     assert settings.max_recoveries == 10
     assert settings.restart_on_recovered_connection is False
+    assert settings.live_update_failure_restart_delay == 0
     assert settings.log_datafarm_status is True
 
 

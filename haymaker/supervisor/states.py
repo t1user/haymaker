@@ -12,6 +12,8 @@ from collections.abc import Awaitable
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+import eventkit as ev  # type: ignore
+
 if TYPE_CHECKING:
     from .supervisor import ConnectionSupervisor
 
@@ -207,18 +209,31 @@ class ConnectedState(AbstractState):
         super().__init__(context)
         self._timeout_registered = False
         self._connectivity_lost_requested = False
+        self._live_update_failure_event: ev.Event | None = None
+        self._live_update_failure_timeout: ev.Timeout | None = None
+        self._live_update_restart_due = False
 
     async def handle(self) -> StateResult:
         if self.settings.app_timeout:
             self.ib.setTimeout(self.settings.app_timeout)
 
-        await self.wait_for_wakeup_or()
+        try:
+            await self.wait_for_wakeup_or()
+        finally:
+            self._cancel_live_update_failure_timer()
 
         if self._connectivity_lost_requested:
             return BrokerConnectivityLostState
 
         if self._timeout_registered:
             return ProbingState
+
+        if self._live_update_restart_due:
+            log.debug(
+                "Live-update failure quiet period elapsed; "
+                "requesting workload restart."
+            )
+            return RestartingState
 
         return ConnectedState
 
@@ -229,10 +244,57 @@ class ConnectedState(AbstractState):
         self.wakeup.set()
 
     def on_broker_message(self, code: int, message: str) -> None:
-        """Wait for broker connectivity recovery if loss is reported."""
+        """React to broker messages that matter while connected."""
+
+        if code == self.context.LIVE_UPDATE_FAILURE_CODE:
+            self._register_live_update_failure(message)
+            return
 
         if self.handle_broker_connectivity_lost_code(code):
             self._connectivity_lost_requested = True
+
+    def _register_live_update_failure(self, message: str) -> None:
+        """Start or reset the quiet-period timer after IB ``10182``."""
+
+        delay = self.settings.live_update_failure_restart_delay
+        if delay <= 0 or not self.context.has_workload:
+            return
+
+        if self._live_update_failure_event is None:
+            self._live_update_failure_event = ev.Event("connection-supervisor-10182")
+            self._live_update_failure_timeout = self._live_update_failure_event.timeout(
+                delay
+            )
+            self._live_update_failure_timeout.connect(
+                self._on_live_update_failure_quiet
+            )
+            if self.settings.log_datafarm_status:
+                log.debug(
+                    "Live-update failure restart scheduled in "
+                    f"{delay}s after quiet period: {message}"
+                )
+
+        self._live_update_failure_event.emit()
+
+    def _on_live_update_failure_quiet(self) -> None:
+        """Wake the state after the configured quiet period expires."""
+
+        self._live_update_restart_due = True
+        self.wakeup.set()
+
+    def _cancel_live_update_failure_timer(self) -> None:
+        """Cancel pending live-update failure timeout owned by this state."""
+
+        if self._live_update_failure_event is not None:
+            self._live_update_failure_event.set_done()
+        elif (
+            self._live_update_failure_timeout is not None
+            and not self._live_update_failure_timeout.done()
+        ):
+            self._live_update_failure_timeout.set_done()
+
+        self._live_update_failure_event = None
+        self._live_update_failure_timeout = None
 
 
 class BrokerConnectivityLostState(AbstractState):

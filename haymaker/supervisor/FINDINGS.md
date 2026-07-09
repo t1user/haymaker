@@ -72,7 +72,7 @@ primary recovery signal. The useful split remains:
 - data-maintained and farm messages should generally be hints only,
   with probes and stream health deciding whether work is actually healthy.
 
-### Deferred 10182 Handling
+### 10182 Live-Update Failure Handling
 
 Recent nightly logs suggest that `10182` live-update failure clusters probably
 invalidate existing `reqHistoricalData(..., keepUpToDate=True)` subscriptions.
@@ -80,17 +80,17 @@ When the state-machine supervisor waited for normal stale-streamer detection,
 the later restart was followed by backfill for the affected window, which
 supports the interpretation that the stream had really stopped.
 
-A possible future optimization is to treat a `10182` cluster as "streamer
-rebuild needed", wait for a short quiet period after weak data-farm messages
-such as `2105`/`10182`, then restart the workload without waiting for streamer
-timeouts. `2106` only says an HMDS farm is OK again, so it should not by itself
-be treated as a complete recovery signal across all farms/contracts.
+The state-machine supervisor now supports a single quiet-period setting:
+`live_update_failure_restart_delay`. When the value is greater than zero, each
+`10182` resets a delayed restart timer. If the timer reaches the configured
+quiet period while the workload is still running and the connection is otherwise
+available, the supervisor requests a normal workload restart to rebuild live
+updates before streamer timeouts would have fired. A value of `0` disables this
+shortcut and leaves stale-streamer timeouts as the fallback recovery path.
 
-This optimization is intentionally deferred. The current behavior misses a few
-minutes of live updates during the nightly IB reset, but backfills immediately
-after restart and avoids extra policy based on weak broker messages. Revisit
-only if `10182` starts appearing during active sessions, backfill becomes
-unreliable, or another streamer type proves it needs a different recovery path.
+Do not use `2106` as the recovery trigger for this path. `2106` only says an
+HMDS farm is OK again, so it should not by itself be treated as a complete
+recovery signal across all farms/contracts.
 
 ## Non-Liquid Session Timeouts
 

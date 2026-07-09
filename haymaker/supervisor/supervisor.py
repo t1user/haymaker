@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from logging import getLogger
-from time import monotonic
 from typing import Any
 
 import ib_insync as ibi
@@ -27,9 +26,6 @@ log = getLogger(__name__)
 
 
 INITIAL_STATE = ConnectingState
-LIVE_UPDATE_FAILURE_CODE = 10182
-LIVE_UPDATE_FAILURE_CLUSTER_GAP = 120.0
-LIVE_UPDATE_FAILURE_CORRELATION_WINDOW = 900.0
 
 
 class SupervisorRace:
@@ -228,16 +224,6 @@ class ConnectionSupervisor:
     _restart_requested: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
-    _live_update_failure_cluster_started_at: float | None = field(
-        default=None, init=False, repr=False
-    )
-    _last_live_update_failure_at: float | None = field(
-        default=None, init=False, repr=False
-    )
-    _live_update_failure_count: int = field(default=0, init=False, repr=False)
-    _live_update_failure_reported: bool = field(
-        default=False, init=False, repr=False
-    )
     connection_unavailable: asyncio.Event = field(
         default_factory=asyncio.Event, init=False, repr=False
     )
@@ -246,7 +232,10 @@ class ConnectionSupervisor:
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
 
     BROKER_CONNECTIVITY_LOST_CODES = frozenset({1100, 2110})
-    WEAK_DATA_FARM_CODES = frozenset({2103, 2105, 2157, 10182, 2104, 2106, 2158})
+    LIVE_UPDATE_FAILURE_CODE = 10182
+    WEAK_DATA_FARM_CODES = frozenset(
+        {2103, 2105, 2157, LIVE_UPDATE_FAILURE_CODE, 2104, 2106, 2158}
+    )
     DATA_LOST_CODE = 1101
     DATA_MAINTAINED_CODE = 1102
     SOCKET_RESET_CODE = 1300
@@ -317,7 +306,6 @@ class ConnectionSupervisor:
             return False
 
         log.debug(f"Restart requested: {restart_reason}")
-        self._log_restart_after_live_update_failure(restart_reason)
         self.mark_connection_unavailable(restart_reason)
         self._restart_requested.set()
         return True
@@ -376,61 +364,12 @@ class ConnectionSupervisor:
             else:
                 self._state.on_broker_message(code, message)
         elif code in self.WEAK_DATA_FARM_CODES:
-            if code == LIVE_UPDATE_FAILURE_CODE:
-                self._record_live_update_failure(message)
+            if code == self.LIVE_UPDATE_FAILURE_CODE:
+                self._state.on_broker_message(code, message)
             if self.settings.log_datafarm_status:
                 log.debug(f"broker message {code}: {message}")
         else:
             self._state.on_broker_message(code, message)
-
-    def _record_live_update_failure(self, message: str) -> None:
-        """Track recent broker live-update failures for later log correlation."""
-
-        now = monotonic()
-        if (
-            self._last_live_update_failure_at is None
-            or now - self._last_live_update_failure_at
-            > LIVE_UPDATE_FAILURE_CLUSTER_GAP
-        ):
-            self._live_update_failure_cluster_started_at = now
-            self._live_update_failure_count = 0
-            self._live_update_failure_reported = False
-            if self.settings.log_datafarm_status:
-                log.debug(
-                    "Live-update failure cluster started; existing historical "
-                    f"live-update streams may be stale: {message}"
-                )
-
-        self._last_live_update_failure_at = now
-        self._live_update_failure_count += 1
-
-    def _log_restart_after_live_update_failure(self, reason: str) -> None:
-        """Log when stale-streamer restart follows a recent 10182 cluster."""
-
-        if (
-            not self.settings.log_datafarm_status
-            or self._last_live_update_failure_at is None
-            or self._live_update_failure_cluster_started_at is None
-            or self._live_update_failure_reported
-            or not reason.startswith("stale streamer:")
-        ):
-            return
-
-        now = monotonic()
-        seconds_since_failure = now - self._last_live_update_failure_at
-        if seconds_since_failure > LIVE_UPDATE_FAILURE_CORRELATION_WINDOW:
-            return
-
-        cluster_duration = (
-            self._last_live_update_failure_at
-            - self._live_update_failure_cluster_started_at
-        )
-        log.debug(
-            "Stale-streamer restart follows recent live-update failure cluster: "
-            f"{self._live_update_failure_count} failures over "
-            f"{cluster_duration:.1f}s; last failure {seconds_since_failure:.1f}s ago."
-        )
-        self._live_update_failure_reported = True
 
     def start_workload(self) -> None:
         """Start the supervised workload as a tracked task."""
