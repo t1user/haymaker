@@ -138,22 +138,19 @@ Components used:
 
   Sends a :class:`ib_insync.order.MarketOrder` to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an ``atr`` column from the :class:`haymaker.block.AbstractDfBlock`).
 
-Save the pipeline in a normal Python strategy module, for example
-``strategy.py``. The module should only define contracts, strategy components,
-and pipeline wiring. It should not call :class:`haymaker.app.App` or start an
-event loop. Haymaker imports the module, lets module-level pipeline
-construction register streamers and strategies, and then runs the
-framework-owned supervisor.
+Save the pipeline in a Python strategy file, for example ``strategy.py``. This
+file is the trading setup passed to Haymaker: it contains the contracts,
+strategy components, and pipeline wiring for one or more strategies.
 
-If a strategy should be excluded from the daily futures roll, expose it as
-module metadata:
+To exclude a strategy from the daily futures roll, add its strategy name to
+``no_future_roll_strategies``:
 
 .. code-block:: python
    :caption: Optional strategy metadata
 
    no_future_roll_strategies = ["ema_cross_ES"]
 
-Run the strategy module with the ``haymaker`` command:
+Run the strategy file with the ``haymaker`` command:
 
 .. code-block:: bash
    :caption: Starting the strategy
@@ -175,8 +172,7 @@ as described in :doc:`configuration`:
    haymaker strategy.py
 
 Ensure ``haymaker`` comes from the intended environment. Long-running process
-management, including systemd units, is intentionally documented separately
-and is not covered here yet.
+management, including systemd units, will be documented separately.
 
 Conclusion
 ----------

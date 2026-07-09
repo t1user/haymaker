@@ -91,7 +91,7 @@ overridden config file in one of two ways:
 * Via environment variables: ``HAYMAKER_HAYMAKER_CONFIG_OVERRIDES`` for live
   execution or ``HAYMAKER_DATALOADER_CONFIG_OVERRIDES`` for the dataloader.
 
-The live command always takes the strategy module path as its first positional
+The live command always takes the strategy file path as its first positional
 argument:
 
 .. code-block:: bash
