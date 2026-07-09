@@ -221,7 +221,6 @@ dataloader contracts.csv -f settings.yaml
 
 ## Technical Debt
 
-- `pyproject.toml` declares `readme = "README.md"`, but the repo has `README.rst` and no top-level `README.md`.
 - Some docs still describe backtesting as non-functional, while the research package has an active refactored backtester. Clarify whether that note refers only to live-strategy simulation.
 - `pyproject.toml` has a mypy ignore override for `backtester` with a comment to remove after fixing it.
 - Several modules contain explicit TODO/deprecated comments, especially dataloader futures selection, research numba tools, store deprecations, and old backtester utilities.

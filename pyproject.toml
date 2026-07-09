@@ -28,7 +28,7 @@ description = 'Framework for trading with Interactive Brokers through ib_insync'
 dynamic = ["version"]
 keywords = ["ib_insync", "tws", "ibgateway", "asyncio", "interactive brokers", "algo trading"]
 name = "haymaker"
-readme = "README.md"
+readme = "README.rst"
 requires-python = ">= 3.11, <3.14"
 
 [project.optional-dependencies]
