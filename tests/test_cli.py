@@ -1,5 +1,9 @@
+import sys
+from types import ModuleType
+
 import pytest
 
+from haymaker import cli
 from haymaker.cli import load_user_module
 from haymaker.runtime import RuntimeContext
 
@@ -50,3 +54,65 @@ def test_read_no_future_roll_strategies_rejects_wrong_type(tmp_path):
 
     with pytest.raises(TypeError):
         RuntimeContext._read_no_future_roll_strategies(module)
+
+
+def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+    contexts: list[object] = []
+    strategy_module = ModuleType("strategy")
+
+    def configure(profile: str, args: list[str]) -> dict[str, object]:
+        calls.append(("configure", (profile, args)))
+        return {"logging_config": "logging.yaml", "use_blotter": False}
+
+    def setup_logging(logging_config: object) -> None:
+        calls.append(("setup_logging", logging_config))
+
+    def patch_asyncio() -> None:
+        calls.append(("patch", None))
+
+    def fake_load_user_module(module_path: object) -> ModuleType:
+        calls.append(("load", module_path))
+        return strategy_module
+
+    class FakeRuntimeContext:
+        def __init__(self, config: object) -> None:
+            contexts.append(self)
+            calls.append(("context", config))
+
+        def bind_strategy_module(self, module: object) -> None:
+            calls.append(("bind_strategy_module", module))
+
+    class FakeApp:
+        def __init__(self, context: object) -> None:
+            calls.append(("app", context))
+
+        def run(self) -> None:
+            calls.append(("run", None))
+
+    fake_logging = ModuleType("haymaker.logging")
+    setattr(fake_logging, "setup_logging", setup_logging)
+    fake_runtime = ModuleType("haymaker.runtime")
+    setattr(fake_runtime, "RuntimeContext", FakeRuntimeContext)
+    fake_app = ModuleType("haymaker.app")
+    setattr(fake_app, "App", FakeApp)
+
+    monkeypatch.setattr(cli, "configure", configure)
+    monkeypatch.setattr(cli.ibi.util, "patchAsyncio", patch_asyncio)
+    monkeypatch.setattr(cli, "load_user_module", fake_load_user_module)
+    monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
+    monkeypatch.setitem(sys.modules, "haymaker.runtime", fake_runtime)
+    monkeypatch.setitem(sys.modules, "haymaker.app", fake_app)
+
+    cli.main(["strategy.py", "-f", "config.yaml"])
+
+    assert calls == [
+        ("configure", ("live", ["strategy.py", "-f", "config.yaml"])),
+        ("setup_logging", "logging.yaml"),
+        ("patch", None),
+        ("context", {"logging_config": "logging.yaml", "use_blotter": False}),
+        ("load", "strategy.py"),
+        ("bind_strategy_module", strategy_module),
+        ("app", contexts[0]),
+        ("run", None),
+    ]

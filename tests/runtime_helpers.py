@@ -14,7 +14,7 @@ Use ``atom_runtime_factory`` when a test needs custom services:
     runtime = atom_runtime_factory(contract_registry=mock_registry)
     runtime.bind_controller(fake_controller)
 
-Concrete examples:
+Examples:
 
     def test_contract_registration(atom_runtime):
         class MyAtom(Atom):

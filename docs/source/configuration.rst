@@ -83,10 +83,29 @@ the optional raw ``broker.log`` audit trail.
 User-Provided Configuration File
 ================================
 
-The easiest way to create an override YAML file is to copy the default file and modify the desired values. Haymaker must be directed to the location of the overridden config file in one of two ways:
+The easiest way to create an override YAML file is to copy the default file and
+modify the desired values. Haymaker must be directed to the location of the
+overridden config file in one of two ways:
 
 * From the command line using the ``--file`` or ``-f`` option.
-* Via environment variables: ``HAYMAKER_HAYMAKER_CONFIG_OVERRIDES`` for the execution module or ``HAYMAKER_DATALOADER_CONFIG_OVERRIDES`` for the dataloader module.
+* Via environment variables: ``HAYMAKER_HAYMAKER_CONFIG_OVERRIDES`` for live
+  execution or ``HAYMAKER_DATALOADER_CONFIG_OVERRIDES`` for the dataloader.
+
+The live command always takes the strategy module path as its first positional
+argument:
+
+.. code-block:: bash
+   :caption: Live execution with a YAML override
+
+   haymaker strategy.py --file live_config.yaml
+
+The dataloader command uses its optional positional argument as the source file
+for contracts:
+
+.. code-block:: bash
+   :caption: Dataloader with a YAML override
+
+   dataloader contracts.csv --file dataloader_config.yaml
 
 Environment Variables
 =====================
@@ -98,6 +117,25 @@ All Haymaker-related environment variables are prefixed with ``HAYMAKER_``. This
 
 .. warning::
    For nested variables, only top-level settings can be overridden via CLI or environment variables. These are intended for quick overrides; the framework is primarily configured via YAML files.
+
+Use environment-selected YAML files when the same command should run with a
+stable deployment-specific configuration:
+
+.. code-block:: bash
+   :caption: Selecting live configuration from the environment
+
+   export HAYMAKER_HAYMAKER_CONFIG_OVERRIDES=/path/to/live_config.yaml
+   haymaker strategy.py
+
+.. code-block:: bash
+   :caption: Selecting dataloader configuration from the environment
+
+   export HAYMAKER_DATALOADER_CONFIG_OVERRIDES=/path/to/dataloader_config.yaml
+   dataloader contracts.csv
+
+Top-level scalar values can also be overridden directly through environment
+variables. For example, ``HAYMAKER_LOGGING_PATH=/tmp/haymaker.log`` provides a
+quick override for ``logging_path``.
 
 Overriding Defaults - Examples
 ==============================
@@ -124,11 +162,18 @@ To override defaults, copy a configuration file, modify the desired parameters, 
 Passing Key-Value Pairs from Command Line
 =========================================
 
-Use ``-s`` or ``--set-option`` to temporarily override parameters. For example,
-to specify a data source:
+Use ``-s`` or ``--set-option`` to temporarily override top-level parameters.
+This is useful for short-lived operational overrides:
 
 .. code-block:: bash
    :caption: Overriding a parameter via CLI
+
+   haymaker strategy.py --set-option logging_path /tmp/haymaker.log
+
+For dataloader, the source file is the positional argument:
+
+.. code-block:: bash
+   :caption: Running dataloader from a source file
 
    dataloader my_list.csv
 
@@ -202,6 +247,6 @@ This runs the dataloader to collect historical data for contracts defined in ``m
 
 This runs the dataloader for contracts in ``my_list.csv`` with settings from
 ``settings.yaml`` in the current directory. This file should be a modified copy of:
-https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml
+https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml
 
 specifying the source file with defined contracts, data type, frequency, etc.
