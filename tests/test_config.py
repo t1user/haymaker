@@ -146,3 +146,15 @@ def test_live_positional_module_is_not_config_value():
     config_maps = ConfigMaps("live", ["strategy.py"])
     assert "module_path" not in config_maps.cmdline
     assert "source" not in config_maps.cmdline
+
+
+def test_sphinx_import_does_not_parse_sphinx_arguments(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["sphinx-build", "-b", "html", "source", "build/html"],
+    )
+
+    config_maps = ConfigMaps("live")
+
+    assert config_maps.cmdline == {}

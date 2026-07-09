@@ -82,13 +82,15 @@ class AbstractDfBlock(AbstractBaseBlock):
 
     @cached_property
     def _datastore(self) -> AsyncAbstractBaseStore:
-        assert DATA_LIB, (
-            f"{self} cannot initialize datastore because block_data_library "
-            "was not given."
-        )
-        datastore = self.datastore or AsyncArcticStore(
-            DATA_LIB, host=get_mongo_client()
-        )
+        datastore: AsyncAbstractBaseStore
+        if self.datastore is None:
+            assert DATA_LIB, (
+                f"{self} cannot initialize datastore because block_data_library "
+                "was not given."
+            )
+            datastore = AsyncArcticStore(DATA_LIB, host=get_mongo_client())
+        else:
+            datastore = self.datastore
         datastore.override_collection_namer(
             CollectionNamerStrategySymbol(self.strategy)
         )

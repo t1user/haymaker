@@ -104,8 +104,8 @@ class ConfigMaps:
         """
         if args is None:
             argv = sys.argv[1:]
-            # crucial exception to allow pytest work as a cli tool
-            if "test" in sys.argv[0]:
+            # Crucial exceptions to let external tools import Haymaker modules.
+            if "test" in sys.argv[0] or "sphinx" in sys.argv[0]:
                 return {}
         else:
             argv = args

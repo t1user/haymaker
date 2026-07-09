@@ -1,4 +1,8 @@
-from haymaker.config.cli_options import CustomArgParser
+from haymaker.config.cli_options import (
+    CustomArgParser,
+    get_parser_for_dataloader,
+    get_parser_for_other_module,
+)
 
 
 def test_set_option_short():
@@ -66,3 +70,11 @@ def test_app_options():
     assert output["nuke"]
     assert not output["coldstart"]
     assert output["file"] == "filename.yaml"
+
+
+def test_docs_parser_helpers_return_unparsed_parsers():
+    live_parser = get_parser_for_other_module()
+    dataloader_parser = get_parser_for_dataloader()
+
+    assert live_parser.parse_args(["strategy.py", "--nuke"]).nuke
+    assert dataloader_parser.parse_args(["contracts.csv"]).source == "contracts.csv"
