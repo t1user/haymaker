@@ -31,7 +31,7 @@ app:
   connection_lost_retry: 90
   auto_recovery_grace_period: 120
   restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
-  live_update_failure_restart_delay: 60 # seconds of quiet after IB 10182 before restart; zero disables
+  stale_subscription_restart_delay: 60 # seconds of quiet after IB 10182 before stale-subscription restart; zero disables
   log_datafarm_status: True # log non-actionable data-farm status messages
   max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
   exit_on_failed_sync: False

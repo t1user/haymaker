@@ -52,10 +52,10 @@ what was still working afterward.
   These are log context only; look for `timeoutEvent`, failed probes,
   `1100`/`2110`, `1101`, `1300`, or `disconnectedEvent` before attributing a
   restart to them.
-- `10182`: Live-update failure status. If
-  `live_update_failure_restart_delay` is enabled, a `10182` message starts a
-  delayed workload restart timer, and later `10182` messages reset that timer.
-  Otherwise treat it as context and rely on streamer timeouts/probes.
+- `10182`: Stale-subscription warning. If
+  `stale_subscription_restart_delay` is enabled, a `10182` message starts a
+  stale-subscription restart timer, and later `10182` messages reset that
+  timer. Otherwise treat it as context and rely on streamer timeouts/probes.
 
 Also note repeated request errors, pacing violations, `ConnectionError`,
 streamer timeout messages, controller sync skips, and order/position mismatch

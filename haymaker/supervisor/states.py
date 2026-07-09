@@ -209,9 +209,9 @@ class ConnectedState(AbstractState):
         super().__init__(context)
         self._timeout_registered = False
         self._connectivity_lost_requested = False
-        self._live_update_failure_event: ev.Event | None = None
-        self._live_update_failure_timeout: ev.Timeout | None = None
-        self._live_update_restart_due = False
+        self._stale_subscription_signal: ev.Event | None = None
+        self._stale_subscription_timeout: ev.Timeout | None = None
+        self._stale_subscription_restart_due = False
 
     async def handle(self) -> StateResult:
         if self.settings.app_timeout:
@@ -220,7 +220,7 @@ class ConnectedState(AbstractState):
         try:
             await self.wait_for_wakeup_or()
         finally:
-            self._cancel_live_update_failure_timer()
+            self._cancel_stale_subscription_timer()
 
         if self._connectivity_lost_requested:
             return BrokerConnectivityLostState
@@ -228,9 +228,9 @@ class ConnectedState(AbstractState):
         if self._timeout_registered:
             return ProbingState
 
-        if self._live_update_restart_due:
+        if self._stale_subscription_restart_due:
             log.debug(
-                "Live-update failure quiet period elapsed; "
+                "Stale subscription quiet period elapsed; "
                 "requesting workload restart."
             )
             return RestartingState
@@ -247,54 +247,56 @@ class ConnectedState(AbstractState):
         """React to broker messages that matter while connected."""
 
         if code == self.context.LIVE_UPDATE_FAILURE_CODE:
-            self._register_live_update_failure(message)
+            self._register_stale_subscription_signal(message)
             return
 
         if self.handle_broker_connectivity_lost_code(code):
             self._connectivity_lost_requested = True
 
-    def _register_live_update_failure(self, message: str) -> None:
+    def _register_stale_subscription_signal(self, message: str) -> None:
         """Start or reset the quiet-period timer after IB ``10182``."""
 
-        delay = self.settings.live_update_failure_restart_delay
+        delay = self.settings.stale_subscription_restart_delay
         if delay <= 0 or not self.context.has_workload:
             return
 
-        if self._live_update_failure_event is None:
-            self._live_update_failure_event = ev.Event("connection-supervisor-10182")
-            self._live_update_failure_timeout = self._live_update_failure_event.timeout(
+        if self._stale_subscription_signal is None:
+            self._stale_subscription_signal = ev.Event(
+                "connection-supervisor-stale-subscription"
+            )
+            self._stale_subscription_timeout = self._stale_subscription_signal.timeout(
                 delay
             )
-            self._live_update_failure_timeout.connect(
-                self._on_live_update_failure_quiet
+            self._stale_subscription_timeout.connect(
+                self._on_stale_subscription_quiet_period_elapsed
             )
             if self.settings.log_datafarm_status:
                 log.debug(
-                    "Live-update failure restart scheduled in "
+                    "Stale subscription restart scheduled in "
                     f"{delay}s after quiet period: {message}"
                 )
 
-        self._live_update_failure_event.emit()
+        self._stale_subscription_signal.emit()
 
-    def _on_live_update_failure_quiet(self) -> None:
+    def _on_stale_subscription_quiet_period_elapsed(self) -> None:
         """Wake the state after the configured quiet period expires."""
 
-        self._live_update_restart_due = True
+        self._stale_subscription_restart_due = True
         self.wakeup.set()
 
-    def _cancel_live_update_failure_timer(self) -> None:
-        """Cancel pending live-update failure timeout owned by this state."""
+    def _cancel_stale_subscription_timer(self) -> None:
+        """Cancel pending stale-subscription timeout owned by this state."""
 
-        if self._live_update_failure_event is not None:
-            self._live_update_failure_event.set_done()
+        if self._stale_subscription_signal is not None:
+            self._stale_subscription_signal.set_done()
         elif (
-            self._live_update_failure_timeout is not None
-            and not self._live_update_failure_timeout.done()
+            self._stale_subscription_timeout is not None
+            and not self._stale_subscription_timeout.done()
         ):
-            self._live_update_failure_timeout.set_done()
+            self._stale_subscription_timeout.set_done()
 
-        self._live_update_failure_event = None
-        self._live_update_failure_timeout = None
+        self._stale_subscription_signal = None
+        self._stale_subscription_timeout = None
 
 
 class BrokerConnectivityLostState(AbstractState):

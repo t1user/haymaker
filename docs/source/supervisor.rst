@@ -91,10 +91,10 @@ Broker messages are grouped into three categories:
 
 ``app.log_datafarm_status`` controls whether informational data-farm messages
 are written to the supervisor log. Turning it off silences those messages only;
-it does not make them restart triggers. ``10182`` is logged as live-update
-failure context; with ``app.live_update_failure_restart_delay`` set above zero,
-the state supervisor waits that many quiet seconds after the last ``10182`` and
-then restarts the workload to rebuild historical live-update streams. ``0``
+it does not make them restart triggers. ``10182`` is logged as a
+stale-subscription warning; with ``app.stale_subscription_restart_delay`` set
+above zero, the state supervisor waits that many quiet seconds after the last
+``10182`` and then restarts the workload to rebuild subscriptions. ``0``
 disables this shortcut.
 
 ``timeoutEvent`` remains an active health check while connected. It triggers a
@@ -139,7 +139,7 @@ Broker connectivity loss is not a hidden connected sub-state. ``1100`` and
 there, ``1102`` or the grace-period timeout probes the connection. Weak
 data-farm messages are ignored or logged as context depending on
 ``app.log_datafarm_status``. ``10182`` can additionally trigger the configured
-quiet-period live-update restart shortcut.
+quiet-period stale-subscription restart shortcut.
 
 Configuration Notes
 ===================
@@ -154,8 +154,8 @@ Important recovery settings are documented in :doc:`configuration`, including:
 * ``auto_recovery_grace_period``: broker-connectivity-lost duration before
   probing;
 * ``restart_on_recovered_connection``: whether ``1102`` forces rebuild;
-* ``live_update_failure_restart_delay``: quiet seconds after IB ``10182`` before
-  rebuilding live-update streams; ``0`` disables this shortcut;
+* ``stale_subscription_restart_delay``: quiet seconds after IB ``10182`` before
+  rebuilding stale subscriptions; ``0`` disables this shortcut;
 * ``max_recoveries``: consecutive unexpected cycle recoveries before stopping.
 
 Use :doc:`ib_message_codes` when reviewing broker-code behavior in logs.

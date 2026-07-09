@@ -9,7 +9,7 @@ number_of_workers: 20
 fill_gaps: False
 auto_save_interval: 900 # in secs, zero=off
 restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
-live_update_failure_restart_delay: 0 # seconds of quiet after IB 10182 before restart; zero disables
+stale_subscription_restart_delay: 0 # seconds of quiet after IB 10182 before stale-subscription restart; zero disables
 max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
 pacer_restrictions:
   - !!python/tuple [5, 2] # [max requests, seconds]

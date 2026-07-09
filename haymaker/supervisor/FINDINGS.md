@@ -72,7 +72,7 @@ primary recovery signal. The useful split remains:
 - data-maintained and farm messages should generally be hints only,
   with probes and stream health deciding whether work is actually healthy.
 
-### 10182 Live-Update Failure Handling
+### 10182 Stale-Subscription Handling
 
 Recent nightly logs suggest that `10182` live-update failure clusters probably
 invalidate existing `reqHistoricalData(..., keepUpToDate=True)` subscriptions.
@@ -81,12 +81,13 @@ the later restart was followed by backfill for the affected window, which
 supports the interpretation that the stream had really stopped.
 
 The state-machine supervisor now supports a single quiet-period setting:
-`live_update_failure_restart_delay`. When the value is greater than zero, each
+`stale_subscription_restart_delay`. When the value is greater than zero, each
 `10182` resets a delayed restart timer. If the timer reaches the configured
 quiet period while the workload is still running and the connection is otherwise
-available, the supervisor requests a normal workload restart to rebuild live
-updates before streamer timeouts would have fired. A value of `0` disables this
-shortcut and leaves stale-streamer timeouts as the fallback recovery path.
+available, the supervisor requests a normal workload restart to rebuild stale
+subscriptions before streamer timeouts would have fired. A value of `0`
+disables this shortcut and leaves stale-streamer timeouts as the fallback
+recovery path.
 
 Do not use `2106` as the recovery trigger for this path. `2106` only says an
 HMDS farm is OK again, so it should not by itself be treated as a complete

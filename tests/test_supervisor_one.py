@@ -443,7 +443,7 @@ async def test_weak_data_farm_logging_can_be_disabled(
 
 
 @pytest.mark.asyncio
-async def test_live_update_failure_and_farm_ok_messages_do_not_restart() -> None:
+async def test_stale_subscription_and_farm_ok_messages_do_not_restart() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload)

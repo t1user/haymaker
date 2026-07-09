@@ -624,10 +624,10 @@ async def test_weak_data_farm_logging_can_be_disabled(
 
 
 @pytest.mark.asyncio
-async def test_live_update_failure_restart_is_disabled_by_zero_delay() -> None:
+async def test_stale_subscription_restart_is_disabled_by_zero_delay() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
-    supervisor = make_supervisor(fake_ib, workload, live_update_failure_restart_delay=0)
+    supervisor = make_supervisor(fake_ib, workload, stale_subscription_restart_delay=0)
     task = asyncio.create_task(supervisor.run())
 
     assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
@@ -643,13 +643,13 @@ async def test_live_update_failure_restart_is_disabled_by_zero_delay() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_update_failure_requests_restart_after_quiet_period(
+async def test_stale_subscription_restart_after_quiet_period(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(
-        fake_ib, workload, live_update_failure_restart_delay=0.01
+        fake_ib, workload, stale_subscription_restart_delay=0.01
     )
     task = asyncio.create_task(supervisor.run())
 
@@ -662,7 +662,7 @@ async def test_live_update_failure_requests_restart_after_quiet_period(
     assert fake_ib.disconnect_count == 0
     assert await wait_for_condition(lambda: fake_ib.disconnect_count == 1)
     assert (
-        "Live-update failure quiet period elapsed; requesting workload restart."
+        "Stale subscription quiet period elapsed; requesting workload restart."
         in caplog.text
     )
 
@@ -670,11 +670,11 @@ async def test_live_update_failure_requests_restart_after_quiet_period(
 
 
 @pytest.mark.asyncio
-async def test_live_update_failure_quiet_period_resets_on_repeated_message() -> None:
+async def test_stale_subscription_quiet_period_resets_on_repeated_message() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(
-        fake_ib, workload, live_update_failure_restart_delay=0.05
+        fake_ib, workload, stale_subscription_restart_delay=0.05
     )
     task = asyncio.create_task(supervisor.run())
 
@@ -693,13 +693,13 @@ async def test_live_update_failure_quiet_period_resets_on_repeated_message() -> 
 
 
 @pytest.mark.asyncio
-async def test_live_update_failure_timer_stops_when_connected_state_exits() -> None:
+async def test_stale_subscription_timer_stops_when_connected_state_exits() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(
         fake_ib,
         workload,
-        live_update_failure_restart_delay=0.05,
+        stale_subscription_restart_delay=0.05,
         probe_timeout=1,
     )
     task = asyncio.create_task(supervisor.run())
@@ -721,13 +721,13 @@ async def test_live_update_failure_timer_stops_when_connected_state_exits() -> N
 
 
 @pytest.mark.asyncio
-async def test_broker_connectivity_loss_wins_over_pending_live_update_restart() -> None:
+async def test_broker_connectivity_loss_wins_over_pending_stale_subscription() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(
         fake_ib,
         workload,
-        live_update_failure_restart_delay=0.05,
+        stale_subscription_restart_delay=0.05,
         auto_recovery_grace_period=1,
     )
     task = asyncio.create_task(supervisor.run())
@@ -1011,7 +1011,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
             "recovery_warning_after": 19,
             "recovery_warning_interval": 23,
             "restart_on_recovered_connection": True,
-            "live_update_failure_restart_delay": 29,
+            "stale_subscription_restart_delay": 29,
             "log_datafarm_status": False,
         },
         client_id=42,
@@ -1028,7 +1028,7 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert settings.auto_recovery_grace_period == 17
     assert settings.max_recoveries == 21
     assert settings.restart_on_recovered_connection is True
-    assert settings.live_update_failure_restart_delay == 29
+    assert settings.stale_subscription_restart_delay == 29
     assert settings.log_datafarm_status is False
     assert not hasattr(settings, "restart_delay")
     assert not hasattr(settings, "recovery_warning_after")
@@ -1049,7 +1049,7 @@ def test_connection_settings_from_config_uses_defaults() -> None:
     assert settings.auto_recovery_grace_period == 120
     assert settings.max_recoveries == 10
     assert settings.restart_on_recovered_connection is False
-    assert settings.live_update_failure_restart_delay == 0
+    assert settings.stale_subscription_restart_delay == 0
     assert settings.log_datafarm_status is True
 
 
