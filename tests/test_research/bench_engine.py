@@ -4,7 +4,9 @@ import numpy as np
 import pandas as pd
 
 from haymaker.research.backtester.engine import _perf_engine as perf_engine_new
-from haymaker.research.backtester.vector_backtester import _perf as perf_engine_old
+from haymaker.research.backtester.retired.vector_backtester import (
+    _perf as perf_engine_old,
+)
 
 
 def _make_test_data(seed: int = 42, length: int = 1_000_000) -> pd.DataFrame:

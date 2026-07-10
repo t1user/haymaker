@@ -13,12 +13,7 @@ The purpose of this engine is to serve as the research bridge between
 signal generation (typically developed in pandas) and rigorous
 performance evaluation.
 
-Historically, strategies were evaluated via split logic paths
-(position-based vs blip-based) and occasionally suffered from PnL
-reconciliation issues (where the sum of daily returns did not
-perfectly match the sum of trade-level PnL).
-
-This refactored package solves those issues by:
+The package provides:
 
     1. **Unified Pipeline**: Standardizing on a `TransactionFrame`
        schema to guarantee that price and transaction inputs are
@@ -81,8 +76,10 @@ Modules
     - `engine`: The low-level Numba JIT core and Python fallback
       engines.
 
-    - `utilities`: Legacy research utilities that most likely need to
-      be reviewed
+    - `utilities`: Supporting research utilities outside the core engine.
+
+Retired implementations and their historical notes live under
+`backtester.retired` and are not part of the public API.
 """
 
 from .pipeline import (

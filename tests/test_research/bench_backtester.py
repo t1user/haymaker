@@ -2,7 +2,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from haymaker.research.backtester.vector_backtester import perf as perf_old
+from haymaker.research.backtester.retired.vector_backtester import perf as perf_old
 from haymaker.research.backtester import perf as perf_new, no_stop
 from haymaker.research.signal_converters import sig_pos
 

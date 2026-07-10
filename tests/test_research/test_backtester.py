@@ -4,7 +4,7 @@ Tests for haymaker.research.backtester and the refactored stop_loss output.
 Coverage:
 - no_stop(): position path, blip path, error on missing columns
 - _perf_engine vs _perf_engine_python: identical results
-- perf(): PnL parity against old backtester/vector_backtester.perf() across scenarios
+- perf(): PnL parity against retired vector_backtester.perf() across scenarios
 - stop_loss() now emits bar_price column
 - _TransactionFrame: rejects missing columns
 """
@@ -581,7 +581,7 @@ def test_stop_loss_output_accepted_by_perf() -> None:
 
 def test_pnl_parity_simple_long_only() -> None:
     """New perf gross PnL must be close to old perf gross PnL for simple strategy."""
-    from haymaker.research.backtester.vector_backtester import perf as old_perf
+    from haymaker.research.backtester.retired.vector_backtester import perf as old_perf
 
     n = 40
     rng = np.random.default_rng(99)
@@ -610,7 +610,7 @@ def test_pnl_parity_simple_long_only() -> None:
 
 def test_pnl_parity_always_on() -> None:
     """Reversing (always-on) strategy: new and old gross PnL within tolerance."""
-    from haymaker.research.backtester.vector_backtester import perf as old_perf
+    from haymaker.research.backtester.retired.vector_backtester import perf as old_perf
 
     n = 30
     rng = np.random.default_rng(13)

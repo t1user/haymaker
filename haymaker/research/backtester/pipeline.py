@@ -1,5 +1,4 @@
-"""
-Refactored vector backtester.
+"""Vector backtester pipeline.
 
 Public interface
 ----------------
@@ -22,10 +21,6 @@ Public interface
 ``Results``
     NamedTuple returned by :func:`perf`.
 
-Design
-------
-The old ``backtester/vector_backtester.py`` is untouched.  Once this module is verified
-correct, ``__init__.py`` can be updated to expose this ``perf`` as the default.
 """
 
 from __future__ import annotations

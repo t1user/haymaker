@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 # Old implementation
-from haymaker.research.backtester.vector_backtester import perf as perf_old
+from haymaker.research.backtester.retired.vector_backtester import perf as perf_old
 from haymaker.research.signal_converters import sig_pos
 
 # New implementation

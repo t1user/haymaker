@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd  # type: ignore
 from pyfolio.timeseries import perf_stats  # type: ignore
 
-from ..signal_converters import sig_pos
+from ...signal_converters import sig_pos
 
 
 def daily_returns_log_based(lreturn: pd.Series) -> pd.DataFrame:
