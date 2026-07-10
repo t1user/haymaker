@@ -22,6 +22,7 @@ engine, frequency alignment, and synthetic data generation.
    overview
    signals
    backtester
+   result_analysis
    stop
    upsampling
    grid_search

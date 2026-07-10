@@ -164,3 +164,15 @@ def _get_min_tick(data: pd.Series) -> float:
     diffs_rounded = np.round(diffs, 8)
     vals, counts = np.unique(diffs_rounded, return_counts=True)
     return float(vals[np.argmax(counts)])
+
+
+def always_on(series: pd.Series) -> bool:
+    """Return whether a position series stays in-market after first entry.
+
+    Leading flat rows are ignored. A series with only zero positions, or an
+    empty series, returns ``False``.
+    """
+    non_zero_positions = np.flatnonzero(series.ne(0).to_numpy())
+    if len(non_zero_positions) == 0:
+        return False
+    return bool(series.iloc[non_zero_positions[0] :].ne(0).all())

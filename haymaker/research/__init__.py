@@ -2,7 +2,13 @@
 Research module for Haymaker.
 """
 
-from .result_analysis import always_on, long_short_returns, paths
+from .result_analysis import (
+    excursions,
+    factor_extractor,
+    long_short_returns,
+    paths,
+    winning_trade_adverse_excursions,
+)
 from .signal_converters import (
     blip_sig,
     pos_trans,
@@ -10,11 +16,13 @@ from .signal_converters import (
     sig_pos,
 )
 from .upsampling import upsample
-from .utils import gap_tracer, round_tick, sampler
+from .utils import always_on, gap_tracer, round_tick, sampler
 
 __all__ = [
     "always_on",
     "blip_sig",
+    "excursions",
+    "factor_extractor",
     "gap_tracer",
     "long_short_returns",
     "pos_trans",
@@ -24,4 +32,5 @@ __all__ = [
     "sig_blip",
     "sig_pos",
     "upsample",
+    "winning_trade_adverse_excursions",
 ]

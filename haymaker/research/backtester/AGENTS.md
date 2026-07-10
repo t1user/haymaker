@@ -11,7 +11,9 @@ extending, or optimizing it.
   `auto_perf()`, `perf()`, and `Results`.
 - `engine.py` owns the single-pass accounting engine. Keep the Numba and Python
   implementations behaviorally identical.
-- `utilities.py` contains supporting research helpers outside the hot path.
+- Result-analysis helpers, including excursions and entry-time factor
+  extraction, live in `haymaker.research.result_analysis` and are re-exported
+  here only for compatibility.
 - `retired/vector_backtester.py` is reference code retained for parity checks.
   Do not import it from active package code or add new features to it.
 

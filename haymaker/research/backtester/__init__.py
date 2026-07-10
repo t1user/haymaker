@@ -76,7 +76,8 @@ Modules
     - `engine`: The low-level Numba JIT core and Python fallback
       engines.
 
-    - `utilities`: Supporting research utilities outside the core engine.
+    - `haymaker.research.result_analysis`: Trade-level analysis helpers,
+      re-exported here for compatibility.
 
 Retired implementations and their historical notes live under
 `backtester.retired` and are not part of the public API.
@@ -90,28 +91,20 @@ from .pipeline import (
     no_stop,
     perf,
 )
-from .utilities import (
-    adverse_excursions,
-    blip_extractor,
+from ..result_analysis import (
     excursions,
     factor_extractor,
-    profitable_excursions,
-    summary,
-    v_backtester,
+    winning_trade_adverse_excursions,
 )
 
 __all__ = [
     "Results",
     "_TransactionFrame",
-    "adverse_excursions",
     "auto_perf",
-    "blip_extractor",
     "excursions",
     "factor_extractor",
     "get_min_tick",
     "no_stop",
     "perf",
-    "profitable_excursions",
-    "summary",
-    "v_backtester",
+    "winning_trade_adverse_excursions",
 ]

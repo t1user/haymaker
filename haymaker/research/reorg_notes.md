@@ -17,8 +17,8 @@ indicator for correctness, usefulness, live-trading usage, and import cost.
   isolated or imported lazily.
 - Do not keep a `research/utils.py` compatibility layer unless there is a real
   caller to preserve. Prefer explicit imports from the final module names.
-- Leave old backtester utilities in place until the old backtester/reference code
-  is removed or individual helpers are deliberately promoted.
+- Keep retired backtester conveniences isolated under `backtester/retired`.
+  Promote reviewed result-analysis helpers individually with focused tests.
 
 ## Working Categories
 
@@ -66,11 +66,12 @@ Functions that inspect, decompose, or present backtest results. They answer:
 "what happened in this simulation?"
 
 Examples: `paths`, `long_short_returns`, `excursions`,
-`profitable_excursions`, `adverse_excursions`, `factor_extractor`.
+`winning_trade_adverse_excursions`, `factor_extractor`.
 
-### Backtest Tools
+### Retired Backtest Tools
 
-Convenience functions that run simplified backtests or threshold summaries.
+Old convenience functions that ran simplified backtests or threshold summaries.
+They remain only with the retired backtester implementation.
 
 Examples: `v_backtester`, `summary`.
 
@@ -87,7 +88,8 @@ Current broad modules:
 
 - `haymaker.research.utils`: data sampling, gap tracing, and tick
   rounding helpers.
-- `haymaker.research.result_analysis`: backtest result decomposition helpers.
+- `haymaker.research.result_analysis`: backtest result decomposition, trade
+  excursion, and entry-time factor helpers.
 - `haymaker.research.indicators.mean`: moving-average, weighted-mean, and
   weighted z-score helpers.
 - `haymaker.research.indicators.metrics`: indicator-adjacent return metrics.
