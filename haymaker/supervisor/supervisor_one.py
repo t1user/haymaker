@@ -201,15 +201,11 @@ class ConnectionSupervisor:
     def mark_connection_available(self, reason: str) -> None:
         """Allow workload sync after the supervisor has a usable connection."""
 
-        if self.connection_unavailable.is_set():
-            log.debug(f"Connection marked available: {reason}")
         self.connection_unavailable.clear()
 
     def mark_connection_unavailable(self, reason: str) -> None:
         """Abort workload sync while the supervisor cannot trust the connection."""
 
-        if not self.connection_unavailable.is_set():
-            log.debug(f"Connection marked unavailable: {reason}")
         self.connection_unavailable.set()
 
     def clear_cycle_restart_request(self) -> None:

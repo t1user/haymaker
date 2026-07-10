@@ -9,17 +9,17 @@ from typing import Any
 
 import ib_insync as ibi
 
-from .settings import (
-    ConnectionSettings,
-    SupervisorWorkload,
-    bind_supervisor_controls,
-)
 from .codes import (
     DATA_LOST_CODE,
     DATA_MAINTAINED_CODE,
     LIVE_UPDATE_FAILURE_CODE,
     SOCKET_RESET_CODE,
     WEAK_DATA_FARM_CODES,
+)
+from .settings import (
+    ConnectionSettings,
+    SupervisorWorkload,
+    bind_supervisor_controls,
 )
 from .states import (
     AbstractState,
@@ -279,10 +279,7 @@ class ConnectionSupervisor:
         """Transition to a new state class and return the state instance."""
 
         if next_state != type(self._state):
-            log.debug(
-                f"{self.__class__.__name__}: {type(self._state).__name__} -> "
-                f"{next_state.__name__}"
-            )
+            log.debug(f"{type(self._state).__name__} -> {next_state.__name__}")
         self._state = next_state(self)
         return self._state
 
@@ -311,15 +308,11 @@ class ConnectionSupervisor:
     def mark_connection_available(self, reason: str) -> None:
         """Allow workload sync after the supervisor has a usable connection."""
 
-        if self.connection_unavailable.is_set():
-            log.debug(f"Connection marked available: {reason}")
         self.connection_unavailable.clear()
 
     def mark_connection_unavailable(self, reason: str) -> None:
         """Abort workload sync while the supervisor cannot trust the connection."""
 
-        if not self.connection_unavailable.is_set():
-            log.debug(f"Connection marked unavailable: {reason}")
         self.connection_unavailable.set()
 
     def onDisconnectedEvent(self) -> None:
