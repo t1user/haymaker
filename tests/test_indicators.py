@@ -36,6 +36,11 @@ from haymaker.research.indicators import (
     weighted_resample,
     weighted_zscore,
 )
+from haymaker.research.indicators.vumanchuswing import (
+    range_filter,
+    range_size,
+    vu_man_chu_swing,
+)
 
 
 def _ohlc(close: list[float]) -> pd.DataFrame:
@@ -54,6 +59,58 @@ def _ohlc(close: list[float]) -> pd.DataFrame:
 def test_legacy_indicators_facade_reexports_new_modules() -> None:
     assert indicator_facade.atr is atr
     assert indicator_facade.combine_signals is combine_signals
+
+
+def test_vu_man_chu_swing_applies_stepped_range_filter() -> None:
+    index = pd.date_range("2026-01-01", periods=5, freq="D")
+    data = pd.DataFrame({"close": [10.0, 10.4, 11.6, 10.8, 9.0]}, index=index)
+    ranges = pd.Series([1.0, 1.0, 1.0, 1.0, 1.0], index=index)
+
+    actual = vu_man_chu_swing(data, ranges, range_multiplier=1.0)
+
+    expected = pd.DataFrame(
+        {
+            "hi": [10.0, 11.0, 11.6, 11.6, 11.0],
+            "lo": [10.0, 9.0, 9.6, 9.6, 9.0],
+            "filter": [10.0, 10.0, 10.6, 10.6, 10.0],
+        },
+        index=index,
+    )
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_vu_man_chu_swing_rejects_misaligned_range_size() -> None:
+    data = pd.DataFrame(
+        {"close": [10.0, 11.0]},
+        index=pd.date_range("2026-01-01", periods=2, freq="D"),
+    )
+    ranges = pd.Series(
+        [1.0, 1.0],
+        index=pd.date_range("2026-01-02", periods=2, freq="D"),
+    )
+
+    with pytest.raises(ValueError, match="same index"):
+        vu_man_chu_swing(data, ranges, range_multiplier=1.0)
+
+
+def test_range_size_double_smooths_absolute_price_change() -> None:
+    price = pd.Series([10.0, 12.0, 11.0, 14.0])
+
+    actual = range_size(price, range_period=2)
+
+    expected = price.diff().abs().ewm(span=2).mean().ewm(span=2).mean()
+    pd.testing.assert_series_equal(actual, expected)
+
+
+def test_range_filter_public_helper_matches_vu_man_chu_output() -> None:
+    price = np.array([10.0, 10.4, 11.6])
+    ranges = np.array([1.0, 1.0, 1.0])
+
+    hi, lo, filt = range_filter(price, ranges)
+
+    np.testing.assert_allclose(hi, np.array([10.0, 11.0, 11.6]))
+    np.testing.assert_allclose(lo, np.array([10.0, 9.0, 9.6]))
+    np.testing.assert_allclose(filt, np.array([10.0, 10.0, 10.6]))
 
 
 def test_min_max_blip_uses_previous_rolling_window() -> None:

@@ -27,8 +27,7 @@ indicator for correctness, usefulness, live-trading usage, and import cost.
 Tools that reshape, align, resample, sample, normalize, or validate market data.
 They do not encode trading logic.
 
-Examples: `resample`, `weighted_resample`, `downsampled_func`,
-`downsampled_atr`, `sampler`, `gap_tracer`, `round_tick`.
+Examples: `sampler`, `gap_tracer`, `round_tick`.
 
 ### Indicators
 
@@ -80,20 +79,24 @@ Examples: `v_backtester`, `summary`.
 Decorators, private helpers, deprecated names, unclear old helpers, and
 numba-backed wrappers should not define the architecture until reviewed.
 
-Examples: `mmean`, `join_swing`.
+Examples: `join_swing`.
 
 ## Initial Shape To Consider
 
 Current broad modules:
 
+- `haymaker.research.market_data`: data sampling, gap tracing, and tick
+  rounding helpers.
+- `haymaker.research.metrics`: performance and return metrics.
+- `haymaker.research.result_analysis`: backtest result decomposition helpers.
 - `haymaker.research.indicators.mean`: moving-average, weighted-mean, and
   weighted z-score helpers.
-- `haymaker.research.indicators.technical`: market-data helpers and technical
-  indicator calculations.
+- `haymaker.research.indicators.resampling`: OHLC resampling, weighted
+  resampling, and lower-frequency indicator alignment helpers.
+- `haymaker.research.indicators.technical`: technical indicator calculations.
 - `haymaker.research.indicators.breakout`: breakout/channel indicators and
   strategy-ready breakout wrappers.
 - `haymaker.research.indicators.transformers`: generic helpers that transform
   indicators/prices into discrete events, filters, or desired exposure.
-- `haymaker.research.tools`: market-data tools, result analysis, and backtest
-  tools that are not tightly owned by a specific package.
-- `haymaker.research.metrics`: performance metrics.
+- `haymaker.research.indicators.vumanchuswing`: VuManChu-style range-filter
+  swing helpers.

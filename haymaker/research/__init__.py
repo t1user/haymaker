@@ -2,6 +2,7 @@
 Research module for Haymaker.
 """
 
+from .result_analysis import paths
 from .signal_converters import (
     blip_sig,
     pos_trans,
@@ -16,4 +17,5 @@ __all__ = [
     "sig_blip",
     "sig_pos",
     "upsample",
+    "paths",
 ]

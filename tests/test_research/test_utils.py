@@ -6,16 +6,10 @@ import pytest
 
 from haymaker.research.backtester import Results, no_stop, perf
 from haymaker.research import upsample
+from haymaker.research.market_data import gap_tracer, round_tick, sampler
+from haymaker.research.metrics import true_sharpe
+from haymaker.research.result_analysis import always_on, long_short_returns, paths
 from haymaker.research.stop import stop_loss
-from haymaker.research.utils import (
-    always_on,
-    gap_tracer,
-    long_short_returns,
-    paths,
-    round_tick,
-    sampler,
-    true_sharpe,
-)
 
 
 def _raw_frame() -> pd.DataFrame:

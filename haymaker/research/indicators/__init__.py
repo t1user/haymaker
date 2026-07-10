@@ -2,6 +2,12 @@
 
 from .breakout import breakout, breakout_blip, min_max_blip, min_max_index
 from .mean import mmean, rolling_weighted_mean, rolling_weighted_std, weighted_zscore
+from .resampling import (
+    downsampled_atr,
+    downsampled_func,
+    resample,
+    weighted_resample,
+)
 from .technical import (
     adx,
     atr,
@@ -9,18 +15,14 @@ from .technical import (
     chande_momentum_indicator,
     chande_ranking,
     divergence_index,
-    downsampled_atr,
-    downsampled_func,
     join_swing,
     macd,
     momentum,
-    resample,
     rsi,
     spread,
     strength_oscillator,
     true_range,
     tsi,
-    weighted_resample,
 )
 from .transformers import (
     combine_signals,
