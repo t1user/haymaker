@@ -1,9 +1,14 @@
 """Backtest result analysis helpers."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 
-from .backtester import Results
+if TYPE_CHECKING:
+    from .backtester import Results
 
 __all__ = ["always_on", "long_short_returns", "paths"]
 

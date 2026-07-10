@@ -2,6 +2,7 @@
 
 from .breakout import breakout, breakout_blip, min_max_blip, min_max_index
 from .mean import mmean, rolling_weighted_mean, rolling_weighted_std, weighted_zscore
+from .metrics import true_sharpe
 from .resampling import (
     downsampled_atr,
     downsampled_func,
@@ -62,6 +63,7 @@ __all__ = [
     "signal_generator",
     "spread",
     "strength_oscillator",
+    "true_sharpe",
     "true_range",
     "tsi",
     "weighted_resample",

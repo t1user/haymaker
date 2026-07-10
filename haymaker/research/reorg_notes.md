@@ -85,12 +85,12 @@ Examples: `join_swing`.
 
 Current broad modules:
 
-- `haymaker.research.market_data`: data sampling, gap tracing, and tick
+- `haymaker.research.utils`: data sampling, gap tracing, and tick
   rounding helpers.
-- `haymaker.research.metrics`: performance and return metrics.
 - `haymaker.research.result_analysis`: backtest result decomposition helpers.
 - `haymaker.research.indicators.mean`: moving-average, weighted-mean, and
   weighted z-score helpers.
+- `haymaker.research.indicators.metrics`: indicator-adjacent return metrics.
 - `haymaker.research.indicators.resampling`: OHLC resampling, weighted
   resampling, and lower-frequency indicator alignment helpers.
 - `haymaker.research.indicators.technical`: technical indicator calculations.

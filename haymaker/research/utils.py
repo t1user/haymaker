@@ -5,8 +5,6 @@ from datetime import time
 import numpy as np
 import pandas as pd
 
-from .backtester import get_min_tick
-
 __all__ = ["gap_tracer", "round_tick", "sampler"]
 
 
@@ -149,9 +147,20 @@ def gap_tracer(df: pd.DataFrame, runs: int = 6, gap_freq: int = 1) -> pd.DataFra
 
 def round_tick(series: pd.Series) -> pd.Series:
     """Round prices to the minimum tick inferred from the series."""
-    tick = get_min_tick(series)
+    tick = _get_min_tick(series)
     if tick == 0:
         return series.copy()
     floor = series // tick
     remainder = series % tick
     return floor * tick + tick * (remainder > tick / 2)
+
+
+def _get_min_tick(data: pd.Series) -> float:
+    arr = np.sort(data.to_numpy(dtype=np.float64, copy=False))
+    diffs = np.abs(np.diff(arr))
+    diffs = diffs[diffs > 1e-10]
+    if len(diffs) == 0:
+        return 0.0
+    diffs_rounded = np.round(diffs, 8)
+    vals, counts = np.unique(diffs_rounded, return_counts=True)
+    return float(vals[np.argmax(counts)])

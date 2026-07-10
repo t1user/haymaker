@@ -31,6 +31,7 @@ from haymaker.research.indicators import (
     rsi,
     signal_generator,
     strength_oscillator,
+    true_sharpe,
     true_range,
     tsi,
     weighted_resample,
@@ -59,6 +60,7 @@ def _ohlc(close: list[float]) -> pd.DataFrame:
 def test_legacy_indicators_facade_reexports_new_modules() -> None:
     assert indicator_facade.atr is atr
     assert indicator_facade.combine_signals is combine_signals
+    assert indicator_facade.true_sharpe is true_sharpe
 
 
 def test_vu_man_chu_swing_applies_stepped_range_filter() -> None:

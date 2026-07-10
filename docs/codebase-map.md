@@ -72,14 +72,14 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/research/signal_converters.py`: canonical timing vocabulary and conversions between `signal`, `blip`, `transaction`, and `position`.
 - `haymaker/research/upsampling.py`: aligns lower-frequency data to higher-frequency execution bars. Ordinary values propagate after availability; canonical `blip` / `close_blip` events and raw provenance columns remain sparse.
-- `haymaker/research/metrics.py`, `market_data.py`, `result_analysis.py`:
-  research metrics, data validation/sampling helpers, and backtest result
-  decomposition helpers.
+- `haymaker/research/utils.py`, `result_analysis.py`: light research utilities
+  for data validation/sampling, tick rounding, and backtest result
+  decomposition.
 - `haymaker/research/indicators/`: indicator package with mean/weighted-mean
-  helpers, resampling helpers, technical indicators, breakout/channel
-  indicators, VuManChu-style range-filter helpers, and generic transformers for
-  converting indicators or prices into discrete events, filters, or desired
-  exposure. `haymaker/indicators.py` remains a
+  helpers, indicator-adjacent metrics, resampling helpers, technical
+  indicators, breakout/channel indicators, VuManChu-style range-filter helpers,
+  and generic transformers for converting indicators or prices into discrete
+  events, filters, or desired exposure. `haymaker/indicators.py` remains a
   compatibility facade for older notebooks and live strategy imports.
 - `haymaker/research/stop/`: public `stop_loss()`, lazy `before_close()` / `BeforeClose`, Python reference stop engine, and Numba stop engine.
 - `haymaker/research/backtester/`: transaction-frame pipeline, Numba/Python perf engine, Pyfolio statistics, and legacy utilities.
