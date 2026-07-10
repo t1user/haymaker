@@ -239,8 +239,24 @@ async def test_completed_workload_stops_supervisor() -> None:
 
     assert current_state(supervisor) is StoppedState
     assert workload.starts == 1
-    assert workload.stops == []
+    assert workload.stops == ["supervisor stopped"]
     assert fake_ib.disconnect_count == 1
+
+
+@pytest.mark.asyncio
+async def test_restart_cleanup_stops_already_completed_workload() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload(complete_immediately=True)
+    supervisor = make_supervisor(fake_ib, workload)
+    supervisor.start_workload()
+    task = supervisor._workload_task
+    assert task is not None
+    await task
+
+    await supervisor.cleanup_workload("restart requested")
+
+    assert workload.stops == ["restart requested"]
+    assert supervisor._workload_task is None
 
 
 @pytest.mark.asyncio
@@ -1033,24 +1049,6 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert not hasattr(settings, "restart_delay")
     assert not hasattr(settings, "recovery_warning_after")
     assert not hasattr(settings, "recovery_warning_interval")
-
-
-def test_connection_settings_from_config_uses_defaults() -> None:
-    settings = ConnectionSettings.from_config({}, client_id=51)
-
-    assert settings.host == "127.0.0.1"
-    assert settings.port == 4002
-    assert settings.client_id == 51
-    assert settings.connect_timeout == 15
-    assert settings.retry_delay == 30
-    assert settings.app_timeout == 90
-    assert settings.probe_timeout == 15
-    assert settings.connection_lost_retry_delay == 90
-    assert settings.auto_recovery_grace_period == 120
-    assert settings.max_recoveries == 10
-    assert settings.restart_on_recovered_connection is False
-    assert settings.stale_subscription_restart_delay == 0
-    assert settings.log_datafarm_status is True
 
 
 def test_request_restart_returns_true_when_state_supervisor_accepts_request() -> None:

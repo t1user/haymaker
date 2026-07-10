@@ -392,12 +392,13 @@ class ConnectionSupervisor:
         if task is None:
             return
 
+        await self.workload.stop(reason)
+
         if task.done():
             self._log_workload_result(task)
             self._workload_task = None
             return
 
-        await self.workload.stop(reason)
         task.cancel()
         try:
             await task

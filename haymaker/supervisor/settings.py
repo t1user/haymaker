@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -77,7 +76,7 @@ class ConnectionSettings:
     connection_lost_retry_delay: float = 90
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
-    stale_subscription_restart_delay: float = 0
+    stale_subscription_restart_delay: float = 60
     log_datafarm_status: bool = True
     max_recoveries: int = 10
     exit_on_failed_sync: bool = False
@@ -108,7 +107,7 @@ class ConnectionSettings:
                 "restart_on_recovered_connection", False
             ),
             stale_subscription_restart_delay=config.get(
-                "stale_subscription_restart_delay", 0
+                "stale_subscription_restart_delay", 60
             ),
             log_datafarm_status=config.get("log_datafarm_status", True),
             max_recoveries=config.get("max_recoveries", 10),
