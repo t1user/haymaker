@@ -10,7 +10,7 @@ from haymaker.supervisor.supervisor import SupervisorRace
 from haymaker.supervisor.states import (
     AbstractState,
     BackoffRestartingState,
-    BrokerConnectivityLostState,
+    ConnectionLostState,
     ConnectingState,
     ConnectedState,
     ProbingState,
@@ -503,7 +503,7 @@ async def test_broker_connectivity_lost_message_enters_lost_state(code: int) -> 
     assert supervisor.connection_unavailable.is_set()
 
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
@@ -523,7 +523,7 @@ async def test_broker_connectivity_lost_1102_moves_to_probing() -> None:
     fake_ib.probe_delays = [60]
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
 
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
@@ -548,7 +548,7 @@ async def test_broker_connectivity_lost_grace_expiry_moves_to_probing() -> None:
     fake_ib.probe_delays = [60]
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
 
     assert await wait_for_condition(lambda: fake_ib.probe_count == 2)
@@ -571,13 +571,13 @@ async def test_update_event_does_not_wake_broker_connectivity_lost_state() -> No
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
 
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
 
     fake_ib.updateEvent.emit()
     await asyncio.sleep(0)
 
-    assert current_state(supervisor) is BrokerConnectivityLostState
+    assert current_state(supervisor) is ConnectionLostState
     assert fake_ib.probe_count == 1
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
@@ -755,11 +755,11 @@ async def test_broker_connectivity_loss_wins_over_pending_stale_subscription() -
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
 
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
     await asyncio.sleep(0.06)
 
-    assert current_state(supervisor) is BrokerConnectivityLostState
+    assert current_state(supervisor) is ConnectionLostState
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
 
@@ -938,7 +938,7 @@ async def test_data_maintained_message_resumes_without_restart_by_default() -> N
 
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
 
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())

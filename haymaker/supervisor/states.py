@@ -14,6 +14,12 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 
 import eventkit as ev  # type: ignore
 
+from .codes import (
+    BROKER_CONNECTIVITY_LOST_CODES,
+    DATA_MAINTAINED_CODE,
+    LIVE_UPDATE_FAILURE_CODE,
+)
+
 if TYPE_CHECKING:
     from .supervisor import ConnectionSupervisor
 
@@ -62,7 +68,7 @@ class AbstractState(ABC):
             True if the code indicated broker connectivity loss, otherwise False.
         """
 
-        if code not in self.context.BROKER_CONNECTIVITY_LOST_CODES:
+        if code not in BROKER_CONNECTIVITY_LOST_CODES:
             return False
 
         self.context.mark_connection_unavailable(
@@ -159,7 +165,7 @@ class ProbingState(AbstractState):
         done = await self.wait_for_wakeup_or(probe_task)
 
         if self._connectivity_lost_requested:
-            return BrokerConnectivityLostState
+            return ConnectionLostState
 
         if probe_task not in done:
             return ProbingState
@@ -223,7 +229,7 @@ class ConnectedState(AbstractState):
             self._cancel_stale_subscription_timer()
 
         if self._connectivity_lost_requested:
-            return BrokerConnectivityLostState
+            return ConnectionLostState
 
         if self._timeout_registered:
             return ProbingState
@@ -246,7 +252,7 @@ class ConnectedState(AbstractState):
     def on_broker_message(self, code: int, message: str) -> None:
         """React to broker messages that matter while connected."""
 
-        if code == self.context.LIVE_UPDATE_FAILURE_CODE:
+        if code == LIVE_UPDATE_FAILURE_CODE:
             self._register_stale_subscription_signal(message)
             return
 
@@ -299,7 +305,7 @@ class ConnectedState(AbstractState):
         self._stale_subscription_timeout = None
 
 
-class BrokerConnectivityLostState(AbstractState):
+class ConnectionLostState(AbstractState):
     """Wait briefly for broker-side connectivity to recover before probing."""
 
     async def handle(self) -> StateResult:
@@ -316,7 +322,7 @@ class BrokerConnectivityLostState(AbstractState):
     def on_broker_message(self, code: int, message: str) -> None:
         """Request a probe when IB reports data-maintained recovery."""
 
-        if code == self.context.DATA_MAINTAINED_CODE:
+        if code == DATA_MAINTAINED_CODE:
             self.wakeup.set()
 
 

@@ -79,9 +79,11 @@ Contract details are refreshed during successful live startup. Live runtime
 also schedules a fixed daily restart request so normal socket recovery cannot
 leave futures selectors unchanged indefinitely.
 
-The top-level ``ignore_errors`` setting lists noisy broker message codes that
-should be omitted from normal logs. It does not suppress supervisor actions or
-the optional raw ``broker.log`` audit trail.
+The ``controller.ignore_errors`` setting lists noisy controller-owned broker
+message codes that should be omitted from normal logs. Connection and data-farm
+status codes are owned by the supervisor and should not be listed here. This
+setting does not suppress supervisor actions or the optional raw ``broker.log``
+audit trail.
 
 
 User-Provided Configuration File

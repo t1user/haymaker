@@ -16,6 +16,7 @@ import ib_insync as ibi
 from haymaker import misc
 from haymaker.base import Atom
 from haymaker.state_machine import OrderInfo, Strategy
+from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
@@ -44,6 +45,14 @@ class SyncOutcome(Enum):
         """Return True only when sync completed cleanly."""
 
         return self is SyncOutcome.OK
+
+
+def _broker_messages_to_ignore(
+    codes: tuple[int, ...] | list[int],
+) -> tuple[int, ...]:
+    """Return broker message codes ignored by controller logging."""
+
+    return tuple(sorted(set(codes) | SUPERVISOR_OWNED_BROKER_CODES))
 
 
 @dataclass
@@ -123,6 +132,8 @@ class Controller(Atom):
                     f"Wrong parameter: {param} in 'controller' section of config."
                 )
 
+        ignore_errors = config.pop("ignore_errors", ())
+
         top_kwargs = {
             i: top_config.get(i, False)
             for i in [
@@ -137,13 +148,14 @@ class Controller(Atom):
             trader=trader,
             blotter=blotter,
             health_check_observables=health_check_observables,
-            ignore_errors=top_config.get("ignore_errors", ()),
+            ignore_errors=_broker_messages_to_ignore(ignore_errors),
             **config,
             **top_kwargs,
         )
 
     def __post_init__(self) -> None:
         super().__init__()
+        self.ignore_errors = _broker_messages_to_ignore(self.ignore_errors)
         if self.missing_brackets not in ("ignore", "warn", "remove"):
             raise ControllerError(
                 "Wrong value for controller.missing_brackets: "
@@ -270,7 +282,9 @@ class Controller(Atom):
             if sync_outcome is SyncOutcome.ABORTED:
                 log.debug("Controller startup sync aborted: connection unavailable.")
             else:
-                log.critical("Controller startup sync failed. Trading remains disabled.")
+                log.critical(
+                    "Controller startup sync failed. Trading remains disabled."
+                )
             return False
 
         if self.zero:

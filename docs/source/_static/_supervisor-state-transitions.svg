@@ -44,9 +44,9 @@
 <polygon fill="#1565c0" stroke="#1565c0" stroke-width="2.4" points="298.75,-42.62 291.66,-36.24 293.22,-45.64 298.75,-42.62"/>
 <text text-anchor="middle" x="312.57" y="-130.41" font-family="Arial" font-size="12.00">timeoutEvent</text>
 </g>
-<!-- Connected&#45;&gt;BrokerConnectivityLost -->
+<!-- Connected&#45;&gt;ConnectionLost -->
 <g id="edge5" class="edge">
-<title>Connected&#45;&gt;BrokerConnectivityLost</title>
+<title>Connected&#45;&gt;ConnectionLost</title>
 <path fill="none" stroke="#1565c0" stroke-width="2.4" d="M494.42,-221.14C480.24,-284.17 475.07,-301.15 453.53,-322.87"/>
 <polygon fill="#1565c0" stroke="#1565c0" stroke-width="2.4" points="451.3,-320.65 447,-329.16 455.67,-325.18 451.3,-320.65"/>
 <text text-anchor="middle" x="429.23" y="-290.92" font-family="Arial" font-size="12.00">1100 / 2110</text>
@@ -65,16 +65,16 @@
 <polygon fill="#6f3cc3" stroke="#6f3cc3" stroke-width="2.4" points="165.64,-347.32 156.51,-350.07 165.36,-353.61 165.64,-347.32"/>
 <text text-anchor="middle" x="292.22" y="-336.32" font-family="Arial" font-size="12.00">stop()</text>
 </g>
-<!-- BrokerConnectivityLost&#45;&gt;Probing -->
+<!-- ConnectionLost&#45;&gt;Probing -->
 <g id="edge6" class="edge">
-<title>BrokerConnectivityLost&#45;&gt;Probing</title>
+<title>ConnectionLost&#45;&gt;Probing</title>
 <path fill="none" stroke="#1565c0" stroke-width="2.4" d="M407.47,-329.19C295.14,-219.36 289.09,-205.7 282.76,-45.26"/>
 <polygon fill="#1565c0" stroke="#1565c0" stroke-width="2.4" points="285.9,-44.87 282.4,-36 279.6,-45.12 285.9,-44.87"/>
 <text text-anchor="middle" x="250.78" y="-202.1" font-family="Arial" font-size="12.00">1102 / grace expires</text>
 </g>
-<!-- BrokerConnectivityLost&#45;&gt;Restarting -->
+<!-- ConnectionLost&#45;&gt;Restarting -->
 <g id="edge7" class="edge">
-<title>BrokerConnectivityLost&#45;&gt;Restarting</title>
+<title>ConnectionLost&#45;&gt;Restarting</title>
 <path fill="none" stroke="#b3261e" stroke-width="2.4" stroke-dasharray="5,2" d="M400.64,-365.58C376.37,-382.35 362.4,-389.99 345.34,-392.24"/>
 <polygon fill="#b3261e" stroke="#b3261e" stroke-width="2.4" points="344.8,-389.13 336.07,-392.95 345.28,-395.41 344.8,-389.13"/>
 <text text-anchor="middle" x="406.58" y="-387.86" font-family="Arial" font-size="12.00">restart request</text>
@@ -124,11 +124,11 @@
 <path fill="white" stroke="#1f2933" stroke-width="2" d="M542.49,-220.98C542.49,-220.98 454.49,-220.98 454.49,-220.98 448.49,-220.98 442.49,-214.98 442.49,-208.98 442.49,-208.98 442.49,-196.98 442.49,-196.98 442.49,-190.98 448.49,-184.98 454.49,-184.98 454.49,-184.98 542.49,-184.98 542.49,-184.98 548.49,-184.98 554.49,-190.98 554.49,-196.98 554.49,-196.98 554.49,-208.98 554.49,-208.98 554.49,-214.98 548.49,-220.98 542.49,-220.98"/>
 <text text-anchor="middle" x="498.49" y="-198.58" font-family="Arial" font-size="18.00">Connected</text>
 </g>
-<!-- BrokerConnectivityLost -->
+<!-- ConnectionLost -->
 <g id="node5" class="node">
-<title>BrokerConnectivityLost</title>
+<title>ConnectionLost</title>
 <path fill="white" stroke="#1f2933" stroke-width="2" d="M496.73,-365.49C496.73,-365.49 355.73,-365.49 355.73,-365.49 349.73,-365.49 343.73,-359.49 343.73,-353.49 343.73,-353.49 343.73,-341.49 343.73,-341.49 343.73,-335.49 349.73,-329.49 355.73,-329.49 355.73,-329.49 496.73,-329.49 496.73,-329.49 502.73,-329.49 508.73,-335.49 508.73,-341.49 508.73,-341.49 508.73,-353.49 508.73,-353.49 508.73,-359.49 502.73,-365.49 496.73,-365.49"/>
-<text text-anchor="middle" x="426.23" y="-343.09" font-family="Arial" font-size="18.00">BrokerConnectivityLost</text>
+<text text-anchor="middle" x="426.23" y="-343.09" font-family="Arial" font-size="18.00">ConnectionLost</text>
 </g>
 <!-- Restarting -->
 <g id="node6" class="node">

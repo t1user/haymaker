@@ -11,6 +11,13 @@ from typing import Self
 
 import ib_insync as ibi
 
+from .codes import (
+    BROKER_CONNECTIVITY_LOST_CODES,
+    DATA_LOST_CODE,
+    DATA_MAINTAINED_CODE,
+    SOCKET_RESET_CODE,
+    WEAK_DATA_FARM_CODES,
+)
 from .settings import (
     ConnectionSettings,
     SupervisorWorkload,
@@ -58,12 +65,6 @@ class ConnectionSupervisor:
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
     _resets_blocked: bool = field(default=False, init=False, repr=False)
     _delay_next_restart: bool = field(default=False, init=False, repr=False)
-
-    BROKER_WAIT_CODES = frozenset({1100, 2110})
-    WEAK_DATA_FARM_CODES = frozenset({2103, 2105, 2157, 10182, 2104, 2106, 2158})
-    DATA_LOST_CODE = 1101
-    DATA_MAINTAINED_CODE = 1102
-    SOCKET_RESET_CODE = 1300
 
     def __post_init__(self) -> None:
         OnionLayer.set_context(self)
@@ -520,9 +521,7 @@ class ConnectionIssueManager:
                     )
                     continue
                 if broker_outcome is BrokerRecoveryOutcome.DATA_LOST:
-                    self.restart(
-                        "Broker re-connected with data lost; restarting."
-                    )
+                    self.restart("Broker re-connected with data lost; restarting.")
                     break
             else:
                 await self.probe()
@@ -538,7 +537,7 @@ class ConnectionIssueManager:
     def onErrEvent(
         self, reqId: int, code: int, message: str, contract: ibi.Contract
     ) -> None:
-        if code in self.ct.BROKER_WAIT_CODES:
+        if code in BROKER_CONNECTIVITY_LOST_CODES:
             log.debug(f"Broker recovery wait requested by code {code}: {message}")
             self._broker_wait_requested = True
             self.ct.mark_connection_unavailable(
@@ -546,10 +545,10 @@ class ConnectionIssueManager:
             )
             self.ct.block_resets_set()
             self.wakeup.set()
-        if code == self.ct.SOCKET_RESET_CODE:
+        if code == SOCKET_RESET_CODE:
             log.debug(f"Broker reports API socket reset: {message}")
             self.restart(f"broker reset API socket port ({code})")
-        elif code == self.ct.DATA_MAINTAINED_CODE:
+        elif code == DATA_MAINTAINED_CODE:
             log.debug(f"Broker reports data maintained after recovery: {message}")
             if self._broker_wait_requested:
                 self._broker_outcome = BrokerRecoveryOutcome.DATA_MAINTAINED
@@ -558,14 +557,14 @@ class ConnectionIssueManager:
                 self.restart(
                     f"broker connectivity restored with data maintained ({code})"
                 )
-        elif code == self.ct.DATA_LOST_CODE:
+        elif code == DATA_LOST_CODE:
             log.debug(f"Broker reports data lost after recovery: {message}")
             if self._broker_wait_requested:
                 self._broker_outcome = BrokerRecoveryOutcome.DATA_LOST
                 self._broker_recovery_event.set()
             else:
                 self.restart(f"broker connectivity restored with data lost ({code})")
-        elif code in self.ct.WEAK_DATA_FARM_CODES:
+        elif code in WEAK_DATA_FARM_CODES:
             if self.ct.settings.log_datafarm_status:
                 log.debug(f"broker message {code}: {message}")
 

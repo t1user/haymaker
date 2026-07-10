@@ -135,7 +135,7 @@ restart requests at the source, and restart cleanup, ``Stopping``, or
 ``Stopped`` also ignore them.
 
 Broker connectivity loss is not a hidden connected sub-state. ``1100`` and
-``2110`` move the state machine to ``BrokerConnectivityLost`` immediately. From
+``2110`` move the state machine to ``ConnectionLost`` immediately. From
 there, ``1102`` or the grace-period timeout probes the connection. Weak
 data-farm messages are ignored or logged as context depending on
 ``app.log_datafarm_status``. ``10182`` can additionally trigger the configured

@@ -14,6 +14,13 @@ from .settings import (
     SupervisorWorkload,
     bind_supervisor_controls,
 )
+from .codes import (
+    DATA_LOST_CODE,
+    DATA_MAINTAINED_CODE,
+    LIVE_UPDATE_FAILURE_CODE,
+    SOCKET_RESET_CODE,
+    WEAK_DATA_FARM_CODES,
+)
 from .states import (
     AbstractState,
     ConnectingState,
@@ -231,15 +238,6 @@ class ConnectionSupervisor:
     # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
 
-    BROKER_CONNECTIVITY_LOST_CODES = frozenset({1100, 2110})
-    LIVE_UPDATE_FAILURE_CODE = 10182
-    WEAK_DATA_FARM_CODES = frozenset(
-        {2103, 2105, 2157, LIVE_UPDATE_FAILURE_CODE, 2104, 2106, 2158}
-    )
-    DATA_LOST_CODE = 1101
-    DATA_MAINTAINED_CODE = 1102
-    SOCKET_RESET_CODE = 1300
-
     def __post_init__(self) -> None:
         self._state = INITIAL_STATE(self)
         self.connection_unavailable.set()
@@ -350,21 +348,21 @@ class ConnectionSupervisor:
     ) -> None:
         """Translate selected broker messages into supervisor signals."""
 
-        if code == self.DATA_LOST_CODE:
+        if code == DATA_LOST_CODE:
             self.request_restart(
                 f"broker connectivity restored with data lost ({code})"
             )
-        elif code == self.SOCKET_RESET_CODE:
+        elif code == SOCKET_RESET_CODE:
             self.request_restart(f"broker reset API socket port ({code})")
-        elif code == self.DATA_MAINTAINED_CODE:
+        elif code == DATA_MAINTAINED_CODE:
             if self.settings.restart_on_recovered_connection:
                 self.request_restart(
                     f"broker connectivity restored with data maintained ({code})"
                 )
             else:
                 self._state.on_broker_message(code, message)
-        elif code in self.WEAK_DATA_FARM_CODES:
-            if code == self.LIVE_UPDATE_FAILURE_CODE:
+        elif code in WEAK_DATA_FARM_CODES:
+            if code == LIVE_UPDATE_FAILURE_CODE:
                 self._state.on_broker_message(code, message)
             if self.settings.log_datafarm_status:
                 log.debug(f"broker message {code}: {message}")
