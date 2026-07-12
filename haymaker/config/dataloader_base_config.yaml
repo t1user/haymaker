@@ -7,11 +7,11 @@ supervisor: state # one of: state, onion
 number_of_workers: 20
 gap_fill_mode: off # off, heuristic, schedule, auto
 useRTH: False
-auto_save_interval: 900 # in secs, zero=off
+save_every_chunks: 10 # persist after this many downloaded chunks
 restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
 max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
 pacer_no_restriction: False # toggle to quickly switch off client-side pacing
-pacer_allowance_fraction: 1.0 # scale client-side pacing capacity; may be below or above 1.0
+pacer_allowance_fraction: 1.0 # values above 1.0 deliberately exceed published IB limits
 
 # ---- futures config ----
 # contfuture, fullchain, current, exact, current_and_expired, current_and_contfuture

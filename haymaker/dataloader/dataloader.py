@@ -57,7 +57,7 @@ BARSIZE: str = bar_size_validator(CONFIG["barSize"])
 WTS: str = wts_validator(CONFIG["wts"])
 GAP_FILL_MODE: GapFillMode = CONFIG.get("gap_fill_mode", "off")
 USE_RTH: bool = CONFIG.get("useRTH", False)
-AUTO_SAVE_INTERVAL: int = CONFIG.get("auto_save_interval", 0)
+SAVE_EVERY_CHUNKS: int = CONFIG.get("save_every_chunks", 10)
 NUMBER_OF_WORKERS: int = CONFIG.get("number_of_workers", 20)
 SOURCE: str = CONFIG["source"]
 PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
@@ -69,7 +69,7 @@ if PACER_ALLOWANCE_FRACTION <= 0:
 
 log.debug(
     f"settings: {BARSIZE=}, {WTS=}, {GAP_FILL_MODE=}, {USE_RTH=}, "
-    f"{AUTO_SAVE_INTERVAL=}, {NUMBER_OF_WORKERS=}, {MAX_LOOKBACK_DAYS=}, "
+    f"{SAVE_EVERY_CHUNKS=}, {NUMBER_OF_WORKERS=}, {MAX_LOOKBACK_DAYS=}, "
     f"{PACER_ALLOWANCE_FRACTION=}"
 )
 
@@ -123,6 +123,7 @@ class DownloadFailureRegistry:
 CONNECTION_FAILURE_ERRORS = (ConnectionError, TimeoutError)
 SCHEDULE_CHUNK_DAYS = 120
 LEARNED_GAP_FAILURES = 2
+HEADSTAMP_FALLBACK_DAYS = 5 * 365
 
 
 class DownloadRequestError(Exception):
@@ -150,12 +151,6 @@ class RunGapLearner:
             for pattern, count in self.failures.items()
             if count >= LEARNED_GAP_FAILURES
         }
-
-
-def pulse_factory(interval: int) -> ibi.Event | None:
-    if interval:
-        return ibi.Event().timerange(interval, None, interval)
-    return None
 
 
 @dataclass
@@ -194,7 +189,7 @@ class DownloadJob:
         bar_size: IB bar size used to calculate request durations.
         target_bars_per_request: Target chunk size used before applying IB's
             hard duration limits.
-        auto_save_interval: Optional interval for flushing buffered bars.
+        save_every_chunks: Number of downloaded chunks buffered before writing.
     """
 
     contract: ibi.Contract
@@ -202,21 +197,13 @@ class DownloadJob:
     queue: list[DownloadContainer] = field(default_factory=list, repr=False)
     bar_size: str = BARSIZE
     target_bars_per_request: int = helpers.DEFAULT_TARGET_BARS_PER_REQUEST
-    auto_save_interval: int = AUTO_SAVE_INTERVAL
+    save_every_chunks: int = SAVE_EVERY_CHUNKS
     gap_learner: RunGapLearner | None = field(default=None, repr=False)
-    _pulse: ibi.Event | None = field(default=None, repr=False, init=False)
 
     def __post_init__(self) -> None:
-        self._pulse = pulse_factory(self.auto_save_interval)
-        if self._pulse:
-            self._pulse += self._onPulse
+        if self.save_every_chunks <= 0:
+            raise ValueError("save_every_chunks must be a positive integer")
         log.debug(f"{self!r} initialized.")
-
-    async def _onPulse(self, time: datetime):
-        if self.is_done():
-            self._pulse -= self._onPulse  # type: ignore
-        else:
-            await self.write_to_store()
 
     def is_done(self) -> bool:
         while True:
@@ -243,19 +230,21 @@ class DownloadJob:
             return None
 
     async def save_chunk(self, data: ibi.BarDataList | None) -> None:
+        container = self._container
         if data:
             log.info(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
-            self._container.save_chunk(data)
-            await self.write_to_store()
+            container.save_chunk(data)
+            range_complete = container.next_date is None or self.is_continuous_future
+            if len(container.bars) >= self.save_every_chunks or range_complete:
+                await self.write_to_store(container)
             if self.is_continuous_future:
                 self.queue.pop(0)
         else:
             learned_gap_pattern = self._learn_empty_gap_pattern()
-            if self._container.next_date:
-                log.warning(
-                    f"{self!s} cannot download data past {self._container.next_date}"
-                )
-            if self._container.kind == "backfill":
+            if container.next_date:
+                log.warning(f"{self!s} cannot download data past {container.next_date}")
+            await self.write_to_store(container)
+            if container.kind == "backfill":
                 await self.sink.mark_backfill_exhausted()
             self.queue.pop(0)
             self._drop_typical_gap_containers(learned_gap_pattern)
@@ -284,13 +273,10 @@ class DownloadJob:
             if container.kind != "gap" or container.gap_pattern != pattern
         ]
 
-    async def write_to_store(self) -> None:
-        """
-        This is the only method that actually saves data.  All other
-        'save' methods don't.
-        """
+    async def write_to_store(self, container: DownloadContainer) -> None:
+        """Persist buffered data from one download range."""
 
-        _data = self._container.flush_data()
+        _data = container.flush_data()
 
         if _data is not None:
             version = await self.sink.write(_data)
@@ -298,7 +284,13 @@ class DownloadJob:
                 f"{self!s} written to store {_data.index[0]} - {_data.index[-1]} "
                 f"{version}"
             )
-            self._container.clear()
+            container.clear()
+
+    async def flush_pending(self) -> None:
+        """Persist all chunks buffered by this job."""
+
+        for container in self.queue:
+            await self.write_to_store(container)
 
     @property
     def params(self) -> Params:
@@ -440,7 +432,7 @@ class Manager:
     gap_fill_mode: GapFillMode = GAP_FILL_MODE
     use_rth: bool = USE_RTH
     max_lookback_days: int | None = MAX_LOOKBACK_DAYS
-    auto_save_interval: int = AUTO_SAVE_INTERVAL
+    save_every_chunks: int = SAVE_EVERY_CHUNKS
     wts: str = WTS
     bar_size: str = BARSIZE
     now: date | datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -454,6 +446,8 @@ class Manager:
         self.wts = wts_validator(self.wts)
         if self.max_lookback_days is not None and self.max_lookback_days <= 0:
             raise ValueError("max_lookback_days must be a positive integer or None")
+        if self.save_every_chunks <= 0:
+            raise ValueError("save_every_chunks must be a positive integer")
         self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
             self.pacing = RequestPacing(
@@ -663,7 +657,7 @@ class Manager:
                 sink,
                 tasks,
                 bar_size=self.bar_size,
-                auto_save_interval=self.auto_save_interval,
+                save_every_chunks=self.save_every_chunks,
                 gap_learner=self.gap_learner,
             )
             if new_job.is_done():
@@ -678,7 +672,7 @@ class Manager:
 
     async def headstamp(self, contract: ibi.Contract) -> date | datetime:
         assert self.pacing is not None
-        headTimeStamp = await self.pacing.head_timestamp(
+        broker_headstamp = await self.pacing.head_timestamp(
             contract,
             whatToShow=self.wts,
             useRTH=self.use_rth,
@@ -686,18 +680,38 @@ class Manager:
         )
 
         # empty response after pacing retries means no headstamp is available
-        if not headTimeStamp:
-            headTimeStamp = datetime.now(tz=timezone.utc) - timedelta(days=5 * 250)
+        if broker_headstamp is None:
+            headstamp = self.headstamp_fallback(contract)
             log.warning(
                 (
                     f"Unavailable headTimeStamp for {contract}. "
-                    f"Will use {headTimeStamp}"
+                    f"Will probe historical data from fallback {headstamp}"
                 )
             )
+        else:
+            headstamp = broker_headstamp
 
-        hs = normalize_point(headTimeStamp, self.bar_size)
+        hs = normalize_point(headstamp, self.bar_size)
         log.debug(f"Headstamp for: {contract.localSymbol}: {hs}")
         return hs
+
+    def headstamp_fallback(self, contract: ibi.Contract) -> date | datetime:
+        """Return a bounded historical start when IB provides no head timestamp."""
+
+        expiry = _contract_expiry(contract, self.bar_size)
+        latest = min(expiry, self.now) if expiry is not None else self.now
+        candidates = [latest - timedelta(days=HEADSTAMP_FALLBACK_DAYS)]
+        if self.max_lookback_days is not None:
+            candidates.append(latest - timedelta(days=self.max_lookback_days))
+        if helpers.duration_in_secs(self.bar_size) <= 30:
+            candidates.append(self.now - SMALL_BAR_MAX_AGE)
+        if (
+            getattr(contract, "secType", "").upper() == "FUT"
+            and expiry is not None
+            and expiry <= self.now
+        ):
+            candidates.append(expiry - timedelta(days=2 * 365))
+        return max(candidates)
 
 
 def request_age_available(job: DownloadJob, now: date | datetime) -> bool:
@@ -782,6 +796,7 @@ class DataloaderSession:
                 raise self.fatal_error
         finally:
             await self.cancel_execution()
+            await self.flush_pending()
             self.failures.log_summary()
 
     async def producer(self, queue: asyncio.Queue) -> None:
@@ -908,6 +923,13 @@ class DataloaderSession:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def flush_pending(self) -> None:
+        """Persist chunks buffered by active jobs after execution has stopped."""
+
+        assert self.manager is not None
+        for job in self.manager.active_jobs:
+            await job.flush_pending()
+
 
 def shutdown_queue(queue: asyncio.Queue) -> None:
     while True:
@@ -927,16 +949,21 @@ def _days_between(start: date | datetime, end: date | datetime) -> int:
     return (end_date - start_date).days
 
 
+def _contract_expiry(contract: ibi.Contract, bar_size: str) -> date | datetime | None:
+    """Return an exact normalized contract expiry when one is available."""
+
+    raw_expiry = str(getattr(contract, "lastTradeDateOrContractMonth", "") or "")
+    if len(raw_expiry) < 8:
+        return None
+    expiry = datetime.strptime(raw_expiry[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
+    return normalize_point(expiry, bar_size)
+
+
 def start():
     ibi.util.patchAsyncio()
     ib = ibi.IB()
     session = DataloaderSession(ib)
     ib.errorEvent += session.pacing.onErrEvent
-    asyncio.get_event_loop().set_debug(True)
     log.debug("Will start...")
 
     DataloaderConnection(ib, session.run, session.cancel_tasks).run()
-
-    log.info("script finished, about to disconnect")
-    ib.disconnect()
-    log.debug("disconnected")

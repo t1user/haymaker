@@ -22,7 +22,7 @@ def dataloader_module(monkeypatch):
         "wts": "TRADES",
         "gap_fill_mode": "off",
         "useRTH": False,
-        "auto_save_interval": 0,
+        "save_every_chunks": 10,
         "number_of_workers": 2,
         "clientId": 1,
         "source": "contracts.csv",
@@ -258,6 +258,101 @@ async def test_contfuture_download_job_uses_empty_end_datetime_once(dataloader_m
 
     assert job.is_done()
     assert len(sink.writes) == 1
+
+
+@pytest.mark.asyncio
+async def test_download_job_persists_at_chunk_threshold(dataloader_module):
+    """Downloaded chunks should be written only when the batch threshold is met."""
+
+    dataloader = dataloader_module
+
+    class FakeSink:
+        def __init__(self):
+            self.writes = []
+
+        async def write(self, data):
+            self.writes.append(data)
+            return "version"
+
+    sink = FakeSink()
+    container = dataloader.DownloadContainer(
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        datetime(2025, 1, 10, tzinfo=timezone.utc),
+        bar_size="30 secs",
+    )
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=sink,
+        queue=[container],
+        bar_size="30 secs",
+        save_every_chunks=2,
+    )
+
+    def bars(timestamp):
+        return ibi.BarDataList(
+            [
+                ibi.BarData(
+                    date=timestamp,
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                )
+            ]
+        )
+
+    await job.save_chunk(bars(datetime(2025, 1, 8, tzinfo=timezone.utc)))
+    assert sink.writes == []
+
+    await job.save_chunk(bars(datetime(2025, 1, 6, tzinfo=timezone.utc)))
+    assert len(sink.writes) == 1
+    assert container.bars == []
+
+
+@pytest.mark.asyncio
+async def test_download_job_flushes_incomplete_batch_on_cleanup(dataloader_module):
+    """Session cleanup should be able to persist a partial chunk batch."""
+
+    dataloader = dataloader_module
+
+    class FakeSink:
+        def __init__(self):
+            self.writes = []
+
+        async def write(self, data):
+            self.writes.append(data)
+            return "version"
+
+    sink = FakeSink()
+    container = dataloader.DownloadContainer(
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        datetime(2025, 1, 10, tzinfo=timezone.utc),
+        bar_size="30 secs",
+    )
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=sink,
+        queue=[container],
+        bar_size="30 secs",
+        save_every_chunks=10,
+    )
+    bars = ibi.BarDataList(
+        [
+            ibi.BarData(
+                date=datetime(2025, 1, 8, tzinfo=timezone.utc),
+                open=1,
+                high=1,
+                low=1,
+                close=1,
+            )
+        ]
+    )
+
+    await job.save_chunk(bars)
+    await job.flush_pending()
+
+    assert len(sink.writes) == 1
+    assert container.bars == []
 
 
 @pytest.mark.asyncio
@@ -855,14 +950,14 @@ async def test_headstamp_empty_response_uses_fallback_once(dataloader_module):
             return None
 
     ib = FakeIB()
-    manager = dataloader.Manager(ib)
+    now = datetime(2025, 7, 1, tzinfo=timezone.utc)
+    manager = dataloader.Manager(ib, now=now, bar_size="30 secs")
     manager.pacing.no_restriction = True
 
     headstamp = await manager.headstamp(FakeContract())
 
     assert ib.requests == 1
-    assert isinstance(headstamp, datetime)
-    assert headstamp.tzinfo is timezone.utc
+    assert headstamp == now - dataloader.SMALL_BAR_MAX_AGE
 
 
 @pytest.mark.asyncio

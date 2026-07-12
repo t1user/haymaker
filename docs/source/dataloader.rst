@@ -203,6 +203,11 @@ Common settings:
    positive integer, such as ``30``, to deliberately limit a run to recent
    history.
 
+   When IB does not provide a head timestamp, the dataloader still probes for
+   historical data because IB can return bars in that situation. The fallback
+   starts at most five calendar years back and remains clamped by this setting
+   and known IB small-bar or expired-future availability limits.
+
 ``gap_fill_mode``
    Gap-fill behavior for already stored data. See :ref:`dataloader-gap-fill`.
 
@@ -217,9 +222,17 @@ Common settings:
    Number of worker tasks consuming planned downloads. Pacing still limits
    outbound IB requests.
 
+``save_every_chunks``
+   Number of downloaded chunks buffered before creating a new datastore
+   version. A range completion or dataloader shutdown also flushes any remaining
+   chunks. Larger values reduce full-series rewrites but increase the amount of
+   data that an ungraceful process failure may lose.
+
 ``pacer_allowance_fraction``
    Multiplies the dataloader's local pacing capacity. Use values below ``1.0``
-   to leave more room for other IB clients.
+   to leave more room for other IB clients. Values above ``1.0`` are allowed for
+   experimentation, but deliberately exceed IB's published pacing limits and
+   may trigger broker throttling or pacing violations.
 
 Example: daily stock bars:
 

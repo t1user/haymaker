@@ -33,7 +33,7 @@ def dataloader_module(monkeypatch):
         "wts": "TRADES",
         "gap_fill_mode": "off",
         "useRTH": False,
-        "auto_save_interval": 0,
+        "save_every_chunks": 10,
         "number_of_workers": 2,
         "clientId": 1,
         "source": "contracts.csv",
