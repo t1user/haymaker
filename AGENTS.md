@@ -86,11 +86,11 @@ python -m mypy haymaker/research tests/test_research
 python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E501
 ```
 
-- In Codex sandbox runs, prefer a `/tmp` Black cache to avoid hangs caused by
-  restricted access to the normal user cache:
+- Run Black normally across all relevant paths. If sandbox restrictions prevent
+  Black from completing, run the same command outside the sandbox:
 
 ```bash
-BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fast --target-version py312 --workers 1 <paths>
+.venv/bin/python -m black --check --fast --target-version py312 <paths>
 ```
 
 # Project Notes

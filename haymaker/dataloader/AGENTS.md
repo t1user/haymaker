@@ -135,4 +135,5 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   `.venv/bin/python -m mypy haymaker/dataloader tests/test_dataloader*.py tests/test_dataloder_helpers.py`.
 - For lifecycle, persistence, or shared-boundary changes, also run the full
   suite with `.venv/bin/python -m pytest --tb=short`.
-- Use the repository's `/tmp` Black cache command from the root `AGENTS.md`.
+- Run the package-wide Black command from the root `AGENTS.md`; use an
+  outside-sandbox execution if sandbox restrictions prevent completion.
