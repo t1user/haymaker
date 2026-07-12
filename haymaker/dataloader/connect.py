@@ -46,7 +46,7 @@ class DataloaderRuntime:
             try:
                 await self._work_task
             except asyncio.CancelledError:
-                log.debug("Dataloader work interrupted during connection recovery.")
+                pass
 
     async def _run_work(self) -> None:
         """Run one dataloader workload and stop after normal completion."""
@@ -54,7 +54,7 @@ class DataloaderRuntime:
         try:
             await self.func()
         except asyncio.CancelledError:
-            log.debug("Dataloader work interrupted during connection recovery.")
+            log.debug("Dataloader work interrupted.")
             raise
 
     async def stop(self, reason: str) -> None:
@@ -110,4 +110,9 @@ class DataloaderConnection:
             Exception: Propagates terminal supervisor or workload failures.
         """
 
-        asyncio.run(self.supervisor.run())
+        try:
+            asyncio.run(self.supervisor.run())
+        except KeyboardInterrupt:
+            # asyncio.run translates the completed SIGINT cancellation into
+            # KeyboardInterrupt after the supervisor has finished cleanup.
+            log.debug("Dataloader stopped by user.")

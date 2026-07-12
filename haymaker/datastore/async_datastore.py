@@ -100,6 +100,11 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
     def enqueue(self, fn: Callable[..., Any], *args) -> None:
         self._queue.enqueue(fn, *args)
 
+    async def close(self) -> None:
+        """Drain and stop the shared datastore write queue."""
+
+        await self._queue.close()
+
     def write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> None:

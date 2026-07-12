@@ -16,7 +16,7 @@ import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import AsyncGenerator, Optional, TypedDict, cast
+from typing import AsyncGenerator, Literal, Optional, TypedDict, cast
 
 import ib_insync as ibi
 import pandas as pd
@@ -99,15 +99,21 @@ class DownloadFailureRegistry:
 
         self.failures.append(DownloadFailure(job, error))
 
-    def log_summary(self) -> None:
-        """Log a summary of failed download jobs."""
+    def log_summary(
+        self, *, outcome: Literal["completed", "interrupted", "failed"] = "completed"
+    ) -> None:
+        """Log the run outcome and any failed download jobs."""
 
         if not self.failures:
-            log.info("Dataloader completed with no failed download jobs.")
+            log.info("Dataloader %s with no failed download jobs.", outcome)
             return
 
+        relation = "with" if outcome == "completed" else "after"
         log.warning(
-            f"Dataloader completed with {len(self.failures)} failed download jobs."
+            "Dataloader %s %s %d failed download jobs.",
+            outcome,
+            relation,
+            len(self.failures),
         )
         for failure in self.failures:
             log.warning(
@@ -456,6 +462,15 @@ class Manager:
             self.store = AsyncArcticStore(lib=lib, host=get_mongo_client())
         return self.store
 
+    async def close_datastore(self) -> None:
+        """Close the session-owned datastore background queue when available."""
+
+        if self.store is None:
+            return
+        close = getattr(self.store, "close", None)
+        if close is not None:
+            await close()
+
     @functools.cached_property
     def sources(self) -> list[dict]:
         return pd.read_csv(self.source, keep_default_na=False).to_dict("records")
@@ -793,6 +808,7 @@ class DataloaderSession:
             name="producer",
         )
 
+        outcome: Literal["completed", "interrupted", "failed"] = "failed"
         try:
             try:
                 await self.producer_task
@@ -803,10 +819,18 @@ class DataloaderSession:
             await self.queue.join()
             if self.fatal_error is not None:
                 raise self.fatal_error
+            outcome = "completed"
+        except asyncio.CancelledError:
+            outcome = "interrupted"
+            raise
         finally:
             await self.cancel_execution()
-            await self.flush_pending()
-            self.failures.log_summary()
+            try:
+                await self.flush_pending()
+            finally:
+                assert self.manager is not None
+                await self.manager.close_datastore()
+            self.failures.log_summary(outcome=outcome)
 
     async def producer(self, queue: asyncio.Queue) -> None:
         """Queue unfinished active jobs and then discover new jobs."""
@@ -971,7 +995,6 @@ def _contract_expiry(contract: ibi.Contract, bar_size: str) -> date | datetime |
 def start() -> None:
     """Run the configured standalone dataloader command until completion."""
 
-    ibi.util.patchAsyncio()
     ib = ibi.IB()
     session = DataloaderSession(ib)
     ib.errorEvent += session.pacing.onErrEvent

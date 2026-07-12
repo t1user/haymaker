@@ -586,6 +586,25 @@ def test_manager_default_now_is_normalized_without_optional_sentinel(dataloader_
 
 
 @pytest.mark.asyncio
+async def test_manager_closes_owned_datastore_queue(dataloader_module):
+    """Session shutdown should drain and stop datastore background work."""
+
+    class FakeStore:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    store = FakeStore()
+    manager = dataloader_module.Manager(object(), store=store)
+
+    await manager.close_datastore()
+
+    assert store.closed
+
+
+@pytest.mark.asyncio
 async def test_manager_policy_flows_to_store_and_download_job(
     monkeypatch, dataloader_module
 ):

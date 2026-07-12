@@ -114,3 +114,18 @@ def test_connection_module_exposes_app_like_connection_object_only():
     """The obsolete function wrapper should not duplicate the connection object."""
 
     assert not hasattr(connect, "connection")
+
+
+def test_connection_run_suppresses_keyboard_interrupt_after_cleanup(
+    supervisor, monkeypatch
+):
+    """A completed Ctrl-C cancellation should exit without a traceback."""
+
+    def interrupt(coroutine):
+        coroutine.close()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(connect.asyncio, "run", interrupt)
+    connection = connect.DataloaderConnection(object(), lambda: None)
+
+    connection.run()

@@ -400,6 +400,11 @@ log summary for failed download jobs before treating a large run as complete.
 Re-running the same command plans remaining work again from the data already
 saved in Arctic.
 
+Pressing ``Ctrl-C`` requests an orderly supervisor stop. Active requests are
+cancelled, downloaded chunks are flushed, and queued datastore metadata writes
+are drained before the process exits. Avoid sending a second forced interrupt
+while these final writes are being logged.
+
 The run stops rather than continuing when it cannot safely plan or persist data,
 including these cases:
 

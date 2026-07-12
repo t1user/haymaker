@@ -104,6 +104,10 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   correctness boundaries.
 - Stop workers before the final flush so persistence cannot race an active
   download.
+- Standalone Ctrl-C cancellation must finish the session flush and close the
+  datastore background queue before the event loop exits. Do not restore
+  `ib_insync.util.patchAsyncio()` in the CLI; nested-loop patching is for
+  notebooks, not this standalone command.
 - A supervisor restart preserves active jobs in memory. A new process derives
   remaining work from persisted datastore boundaries; there is no separate
   checkpoint file.
