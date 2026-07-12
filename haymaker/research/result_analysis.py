@@ -385,9 +385,9 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = False) -> pd.DataF
         cumsum: If ``True``, return running sums suitable for a path chart.
             With ``log_return=True``, these are cumulative log returns. With
             ``log_return=False``, these are cumulative price-point/PnL values.
-        log_return: If ``True``, use bar log returns from the strategy and
-            underlying asset. If ``False``, use absolute price-point movement
-            for the underlying and absolute PnL for the strategy.
+        log_return: If ``True``, use changes in log account balance for the
+            strategy and log returns for the underlying. If ``False``, use
+            absolute price-point movement and strategy PnL.
 
     Returns:
         DataFrame with four columns:
@@ -406,7 +406,16 @@ def paths(r: Results, cumsum: bool = True, log_return: bool = False) -> pd.DataF
     rdf = r.df.copy()
     price_column = "price" if "price" in rdf.columns else "bar_price"
     if log_return:
-        field = "lreturn"
+        if "balance" in rdf.columns:
+            valid_balance = rdf["balance"].where(rdf["balance"] > 0)
+            rdf["_account_log_return"] = np.log(valid_balance).diff()
+            if len(rdf) and pd.notna(valid_balance.iloc[0]):
+                rdf.at[rdf.index[0], "_account_log_return"] = np.log(
+                    valid_balance.iloc[0]
+                )
+            field = "_account_log_return"
+        else:
+            field = "lreturn"
         price = np.log(rdf[price_column].pct_change() + 1)  # type: ignore
     else:
         field = "pnl"

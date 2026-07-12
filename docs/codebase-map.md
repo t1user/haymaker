@@ -82,7 +82,7 @@ The research package is intentionally separate from live execution. It works dir
   events, filters, or desired exposure. `haymaker/indicators.py` remains a
   compatibility facade for older notebooks and live strategy imports.
 - `haymaker/research/stop/`: public `stop_loss()`, lazy `before_close()` / `BeforeClose`, Python reference stop engine, and Numba stop engine.
-- `haymaker/research/backtester/`: transaction-frame pipeline, Numba/Python perf engine, Pyfolio statistics, and legacy utilities.
+- `haymaker/research/backtester/`: transaction-frame pipeline, Numba/Python PnL engine, and session/account/fixed-capital performance metrics.
 - `haymaker/research/bootstrap/`: block and regime/state bootstrap generators for synthetic OHLC paths.
 - `haymaker/research/grid_search.py`, `tester.py`, `plotting.py`, `grouper.py`, `candlesticks.py`: research workflow helpers around `GridSearch` parameter/dataframe sweeps, plotting, grouping, and indicators.
 
@@ -132,7 +132,8 @@ The research package is intentionally separate from live execution. It works dir
 - MongoDB through `pymongo`.
 - Arctic through `arctic` for dataframe time-series storage.
 - pandas, NumPy, and Numba for dataframe research and kernels.
-- Pyfolio Reloaded for research performance statistics.
+- Empyrical Reloaded for standard research return statistics; local helpers
+  provide account construction, fixed-capital metrics, and intraday drawdowns.
 - Sphinx/Furo for docs.
 - Optional research extras include Jupyter, matplotlib, `arch`, and `hmmlearn`.
 

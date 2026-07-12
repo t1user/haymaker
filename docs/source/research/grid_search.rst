@@ -295,8 +295,7 @@ returns, or ``missing="drop"`` to average over available sleeves only.
     Returns ``(result.combined_returns(...) + 1).cumprod()``.
 
 ``result.combined_stats(keys, missing="zero")``
-    Returns pyfolio statistics for the combined return stream. Pyfolio is
-    imported lazily only when this method is called.
+    Returns the standard lean metric set for the combined return stream.
 
 The module-level ``combined_returns(result, keys)``,
 ``combined_path(result, keys)``, and ``combined_stats(result, keys)`` functions

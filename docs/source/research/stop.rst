@@ -2,7 +2,8 @@
 Stop Engine
 ===========
 
-The stop engine sits between strategy generation and :func:`haymaker.research.perf`.
+The stop engine sits between strategy generation and
+:func:`haymaker.research.backtester.perf`.
 It accepts a dataframe with either ``position`` or ``blip`` input, applies stop
 logic, and emits the same transaction-frame schema consumed by the backtester.
 
@@ -25,7 +26,7 @@ Typical Pattern
 
 .. code-block:: python
 
-   from haymaker.research import perf
+   from haymaker.research.backtester import perf
    from haymaker.research.stop import stop_loss
 
    tx = stop_loss(
@@ -39,4 +40,3 @@ Typical Pattern
 If ``distance`` is supplied as a series, it must already have the same index as
 the input dataframe. Align or upsample it explicitly before calling
 ``stop_loss``.
-

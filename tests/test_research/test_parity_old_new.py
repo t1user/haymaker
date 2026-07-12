@@ -49,12 +49,6 @@ def _assert_old_new_perf_equal(tx: pd.DataFrame, slippage: float = 0.0) -> None:
     pd.testing.assert_frame_equal(old_positions, new_positions)
     np.testing.assert_allclose(old.df["g_pnl"].sum(), new.df["g_pnl"].sum())
     np.testing.assert_allclose(old.df["pnl"].sum(), new.df["pnl"].sum())
-    np.testing.assert_allclose(
-        np.asarray(old.daily["returns"], dtype=float),
-        np.asarray(new.daily["returns"], dtype=float),
-        rtol=1e-12,
-        atol=1e-12,
-    )
 
 
 def _make_test_data(seed: int = 42, length: int = 500) -> pd.DataFrame:
@@ -106,14 +100,6 @@ def test_parity_simple_positions() -> None:
     old_total_pnl = res_old.positions.pnl.sum()
     new_total_pnl = res_new.positions.pnl.sum()
     np.testing.assert_allclose(old_total_pnl, new_total_pnl, rtol=1e-5, atol=1e-5)
-
-    # 4. Compare daily returns
-    np.testing.assert_allclose(
-        np.asarray(res_old.daily["returns"], dtype=float),
-        np.asarray(res_new.daily["returns"], dtype=float),
-        rtol=1e-5,
-        atol=1e-5,
-    )
 
 
 def test_parity_always_on_reversals() -> None:

@@ -80,7 +80,8 @@ def test_transaction_frame_accepts_valid_df() -> None:
             "close_price": [0.0],
             "stop_price": [0.0],
             "position": [1],
-        }
+        },
+        index=pd.DatetimeIndex(["2026-01-01"]),
     )
     _TransactionFrame(df)  # must not raise
 
@@ -213,9 +214,8 @@ def _make_engine_inputs(
 @pytest.mark.parametrize("seed", [0, 7, 42])
 def test_numba_and_python_engines_produce_identical_results(seed: int) -> None:
     price, op, cp, sp, cost = _make_engine_inputs(seed=seed)
-    lret_nb, pnl_nb, trades_nb = _perf_engine(price, op, cp, sp, cost)
-    lret_py, pnl_py, trades_py = _perf_engine_python(price, op, cp, sp, cost)
-    np.testing.assert_allclose(lret_nb, lret_py, rtol=1e-12, atol=1e-12)
+    pnl_nb, trades_nb = _perf_engine(price, op, cp, sp, cost)
+    pnl_py, trades_py = _perf_engine_python(price, op, cp, sp, cost)
     np.testing.assert_allclose(pnl_nb, pnl_py, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(trades_nb, trades_py, rtol=1e-12, atol=1e-12)
 
@@ -268,13 +268,12 @@ def test_same_bar_cases_keep_numba_python_engine_parity(
     sp: list[float],
 ) -> None:
     cost = 1.0
-    lret_nb, pnl_nb, trades_nb = _perf_engine(
+    pnl_nb, trades_nb = _perf_engine(
         np.asarray(price), np.asarray(op), np.asarray(cp), np.asarray(sp), cost
     )
-    lret_py, pnl_py, trades_py = _perf_engine_python(
+    pnl_py, trades_py = _perf_engine_python(
         np.asarray(price), np.asarray(op), np.asarray(cp), np.asarray(sp), cost
     )
-    np.testing.assert_allclose(lret_nb, lret_py, rtol=1e-12, atol=1e-12, err_msg=name)
     np.testing.assert_allclose(pnl_nb, pnl_py, rtol=1e-12, atol=1e-12, err_msg=name)
     np.testing.assert_allclose(
         trades_nb, trades_py, rtol=1e-12, atol=1e-12, err_msg=name
@@ -302,9 +301,11 @@ def test_perf_positions_pnl_sum_matches_bar_df_pnl_sum() -> None:
     tx = no_stop(df, price_column="open")
     result = perf(tx, slippage=1.5, use_numba=False)
     diff = abs(result.positions.pnl.sum() - result.df.pnl.sum())
-    assert (
-        diff < 1e-8
-    ), f"PnL mismatch: positions={result.positions.pnl.sum():.6f}, bar_df={result.df.pnl.sum():.6f}"
+    message = (
+        f"PnL mismatch: positions={result.positions.pnl.sum():.6f}, "
+        f"bar_df={result.df.pnl.sum():.6f}"
+    )
+    assert diff < 1e-8, message
 
 
 def test_perf_no_positions_emits_warning() -> None:
@@ -318,7 +319,7 @@ def test_perf_no_positions_emits_warning() -> None:
     )
     tx = no_stop(df, price_column="open")
     result = perf(tx, slippage=1.5, use_numba=False)
-    assert any("No positions" in w for w in result.warnings)
+    assert any("No trades" in w for w in result.warnings)
 
 
 def test_perf_numba_and_python_produce_same_positions_pnl() -> None:
@@ -332,6 +333,95 @@ def test_perf_numba_and_python_produce_same_positions_pnl() -> None:
         rtol=1e-10,
         atol=1e-10,
     )
+
+
+def test_perf_uses_explicit_capital_for_account_and_fixed_returns() -> None:
+    tx = _tx_frame(
+        [100.0, 100.0, 110.0],
+        [0, 1, 0],
+        [0.0, 100.0, 0.0],
+        [0.0, 0.0, -110.0],
+        [0.0, 0.0, 0.0],
+    )
+
+    result = perf(
+        tx,
+        slippage=0,
+        capital=200.0,
+        min_tick=0.25,
+        use_numba=False,
+    )
+
+    assert result.daily["pnl"].iloc[0] == 10.0
+    assert result.daily["returns"].iloc[0] == 0.05
+    assert result.daily["fixed_return"].iloc[0] == 0.05
+    assert result.daily["equity"].iloc[0] == 210.0
+    assert result.stats["total_return"] == 0.05
+    assert result.stats["trade_expectancy_ticks"] == 40.0
+
+
+def test_perf_can_combine_or_retain_sunday_reporting() -> None:
+    index = pd.to_datetime(
+        [
+            "2026-01-04 18:00",
+            "2026-01-04 19:00",
+            "2026-01-05 10:00",
+            "2026-01-05 11:00",
+        ]
+    )
+    tx = pd.DataFrame(
+        {
+            "bar_price": [100.0, 102.0, 102.0, 105.0],
+            "position": [1, 0, 1, 0],
+            "open_price": [100.0, 0.0, 102.0, 0.0],
+            "close_price": [0.0, -102.0, 0.0, -105.0],
+            "stop_price": 0.0,
+        },
+        index=index,
+    )
+
+    combined = perf(tx, slippage=0, min_tick=1.0, use_numba=False)
+    separate = perf(
+        tx,
+        slippage=0,
+        min_tick=1.0,
+        sunday_to_monday=False,
+        use_numba=False,
+    )
+
+    assert combined.daily.index.tolist() == [pd.Timestamp("2026-01-05")]
+    assert combined.daily["pnl"].tolist() == [5.0]
+    assert separate.daily.index.tolist() == list(
+        pd.to_datetime(["2026-01-04", "2026-01-05"])
+    )
+    assert separate.daily["pnl"].tolist() == [2.0, 3.0]
+
+
+def test_perf_allows_unavailable_tick_only_when_slippage_is_zero() -> None:
+    index = pd.date_range("2026-01-01", periods=3, freq="h")
+    tx = pd.DataFrame(
+        {
+            "bar_price": 100.0,
+            "position": 0,
+            "open_price": 0.0,
+            "close_price": 0.0,
+            "stop_price": 0.0,
+        },
+        index=index,
+    )
+
+    result = perf(tx, slippage=0, use_numba=False)
+    assert np.isnan(result.stats["trade_expectancy_ticks"])
+    assert any("Minimum tick" in warning for warning in result.warnings)
+
+    with pytest.raises(ValueError, match="Minimum tick could not be inferred"):
+        perf(tx, slippage=1, use_numba=False)
+
+
+def test_perf_rejects_nonpositive_capital() -> None:
+    tx = no_stop(_simple_df(), price_column="open")
+    with pytest.raises(ValueError, match="capital must be positive"):
+        perf(tx, slippage=0, capital=0, use_numba=False)
 
 
 def test_auto_perf_passes_ready_transaction_frame_to_perf() -> None:

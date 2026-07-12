@@ -11,8 +11,8 @@ testing hypothetical trading strategies. The central workflow is:
 #. Start with OHLC data in a dataframe.
 #. Add strategy information such as ``signal``, ``blip``, or ``position``.
 #. Convert the strategy dataframe into the transaction schema expected by
-   :func:`haymaker.research.perf`, either directly with
-   :func:`haymaker.research.no_stop` or through
+   :func:`haymaker.research.backtester.perf`, either directly with
+   :func:`haymaker.research.backtester.no_stop` or through
    :func:`haymaker.research.stop.stop_loss`.
 #. Inspect performance statistics, trade records, enriched bar-level results,
    and path plots.

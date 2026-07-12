@@ -660,6 +660,7 @@ name = "haymaker"
 source = { editable = "." }
 dependencies = [
     { name = "arctic" },
+    { name = "empyrical-reloaded" },
     { name = "ib-insync" },
     { name = "numba" },
     { name = "numpy" },
@@ -684,9 +685,9 @@ all = [
     { name = "mongomock" },
     { name = "mypy" },
     { name = "pandas-stubs" },
-    { name = "pyfolio-reloaded" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "seaborn" },
     { name = "sphinx" },
     { name = "sphinx-argparse" },
     { name = "sphinx-autodoc-typehints" },
@@ -704,7 +705,6 @@ dev = [
     { name = "mongomock" },
     { name = "mypy" },
     { name = "pandas-stubs" },
-    { name = "pyfolio-reloaded" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "sphinx" },
@@ -724,7 +724,7 @@ notebook = [
     { name = "ipykernel" },
     { name = "itables" },
     { name = "matplotlib" },
-    { name = "pyfolio-reloaded" },
+    { name = "seaborn" },
 ]
 
 [package.metadata]
@@ -732,6 +732,7 @@ requires-dist = [
     { name = "arch", marker = "extra == 'notebook'", specifier = "==8.0.0" },
     { name = "arctic", git = "https://github.com/man-group/arctic.git?rev=3cf2a9ce3a7f2c2544ececd20d0f4f5b917f7b2a" },
     { name = "black", marker = "extra == 'dev'", specifier = "==26.3.1" },
+    { name = "empyrical-reloaded", specifier = "==0.5.12" },
     { name = "flake8", marker = "extra == 'dev'", specifier = "==7.3.0" },
     { name = "furo", marker = "extra == 'docs'", specifier = "==2025.9.25" },
     { name = "haymaker", extras = ["dashboard", "dev", "notebook"], marker = "extra == 'all'" },
@@ -749,11 +750,10 @@ requires-dist = [
     { name = "pandas", specifier = "==2.3.3" },
     { name = "pandas-market-calendars", specifier = "==5.1.1" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = "==2.3.2.250926" },
-    { name = "pyfolio-reloaded", marker = "extra == 'dev'", specifier = "==0.9.9" },
-    { name = "pyfolio-reloaded", marker = "extra == 'notebook'", specifier = "==0.9.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "<9" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = "==1.3.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "seaborn", marker = "extra == 'notebook'", specifier = "==0.13.2" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = "==8.2.3" },
     { name = "sphinx-argparse", marker = "extra == 'docs'", specifier = "==0.5.2" },
     { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = "==3.5.2" },
@@ -1825,26 +1825,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/45/dc/fd034dc20b4b264b3d015808458391acbf9df40b1e54750ef175d39180b1/pyflakes-3.4.0.tar.gz", hash = "sha256:b24f96fafb7d2ab0ec5075b7350b3d2d2218eab42003821c06344973d3ea2f58", size = 64669, upload-time = "2025-06-20T18:45:27.834Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/2f/81d580a0fb83baeb066698975cb14a618bdbed7720678566f1b046a95fe8/pyflakes-3.4.0-py2.py3-none-any.whl", hash = "sha256:f742a7dbd0d9cb9ea41e9a24a918996e8170c799fa528688d40dd582c8265f4f", size = 63551, upload-time = "2025-06-20T18:45:26.937Z" },
-]
-
-[[package]]
-name = "pyfolio-reloaded"
-version = "0.9.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "empyrical-reloaded" },
-    { name = "ipython" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pytz" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-    { name = "seaborn" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ef/b3/b37201fe90e8ce7e375fd451f7e7c1f70c79e9dba0fd43362b08609a6d9b/pyfolio_reloaded-0.9.9.tar.gz", hash = "sha256:4dcd0bc6e07249458685e6591a105daafaa87c6b79a0680f71ba8e58435b5c0c", size = 7062191, upload-time = "2025-06-02T13:00:58.8Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/0f/66a8f8daec52c242d3cfda7886d72103c5ac0c6793fd185082309985f2a6/pyfolio_reloaded-0.9.9-py3-none-any.whl", hash = "sha256:aa0e136b379bc6c7a48a74746c784c263de986575af5377348330eb1aed8791c", size = 6221185, upload-time = "2025-06-02T13:00:56.316Z" },
 ]
 
 [[package]]

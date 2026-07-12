@@ -27,7 +27,7 @@ def _perf_engine(
     close_price: np.ndarray,
     stop_price: np.ndarray,
     cost: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Single-pass PnL engine over price bars.
 
     Uses pure mark-to-market for per-bar PnL so that bar PnL sums equal
@@ -41,14 +41,11 @@ def _perf_engine(
         cost:        Slippage cost per transaction leg (price units).
 
     Returns:
-        bar_log_returns: shape ``(n,)`` – per-bar log return.
-        bar_net_pnl:     shape ``(n,)`` – per-bar net dollar PnL (after slippage).
-        trade_records:   shape ``(n_trades, 7)`` – columns:
-                         entry_bar, exit_bar, entry_price, exit_price,
-                         gross_pnl, slippage, direction.
+        A pair containing bar-level net PnL and trade records. Trade-record
+        columns are entry bar, exit bar, entry price, exit price, gross PnL,
+        total slippage, and direction.
     """
     n = len(bar_price)
-    bar_log_returns = np.zeros(n, dtype=np.float64)
     bar_net_pnl = np.zeros(n, dtype=np.float64)
 
     max_trades = n * 2
@@ -157,11 +154,6 @@ def _perf_engine(
                 bar_pnl += current_position * (bp - prev_bar_price)
             prev_bar_price = bp
 
-        # ------------------------------------------------------------------
-        # 4. Log return
-        # ------------------------------------------------------------------
-        denom = bar_price[i - 1] if i > 0 else bar_price[i]
-        bar_log_returns[i] = np.log1p(bar_pnl / denom) if denom != 0.0 else 0.0
         bar_net_pnl[i] = bar_pnl
 
         # Update prev_bar_price for bars with no open (already set above otherwise)
@@ -182,20 +174,10 @@ def _perf_engine(
         trade_records[trade_count, 6] = float(current_position)
         trade_count += 1
 
-        # Adjust last bar PnL to include the closing slippage
         bar_net_pnl[n - 1] -= cost
-        # The MtM for the last bar is already computed correctly up to prev_bar_price (which is the last bar_price)
-        # We just need to deduct the final slippage from the log return as well
-        denom = (
-            bar_price[n - 2] if n >= 2 and bar_price[n - 2] != 0.0 else bar_price[n - 1]
-        )
-        if denom != 0.0:
-            # We subtract cost from the raw PnL and recompute
-            bar_pnl_last = bar_net_pnl[n - 1]
-            bar_log_returns[n - 1] = np.log1p(bar_pnl_last / denom)
 
     trade_records = trade_records[:trade_count]
-    return bar_log_returns, bar_net_pnl, trade_records
+    return bar_net_pnl, trade_records
 
 
 def _perf_engine_python(
@@ -204,13 +186,12 @@ def _perf_engine_python(
     close_price: np.ndarray,
     stop_price: np.ndarray,
     cost: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Pure-Python reference implementation of :func:`_perf_engine`.
 
     Produces identical results to the Numba version.
     """
     n = len(bar_price)
-    bar_log_returns = np.zeros(n, dtype=np.float64)
     bar_net_pnl = np.zeros(n, dtype=np.float64)
     trade_rows: list[list[float]] = []
 
@@ -304,8 +285,6 @@ def _perf_engine_python(
                 bar_pnl += current_position * (bp - prev_bar_price)
             prev_bar_price = bp
 
-        denom = bar_price[i - 1] if i > 0 else bar_price[i]
-        bar_log_returns[i] = np.log1p(bar_pnl / denom) if denom != 0.0 else 0.0
         bar_net_pnl[i] = bar_pnl
 
         if op == 0.0 and exit_price == 0.0 and current_position == 0:
@@ -327,16 +306,10 @@ def _perf_engine_python(
             ]
         )
         bar_net_pnl[n - 1] -= cost
-        denom = (
-            bar_price[n - 2] if n >= 2 and bar_price[n - 2] != 0.0 else bar_price[n - 1]
-        )
-        if denom != 0.0:
-            bar_pnl_last = bar_net_pnl[n - 1]
-            bar_log_returns[n - 1] = np.log1p(bar_pnl_last / denom)
 
     trade_records = (
         np.array(trade_rows, dtype=np.float64)
         if trade_rows
         else np.zeros((0, 7), dtype=np.float64)
     )
-    return bar_log_returns, bar_net_pnl, trade_records
+    return bar_net_pnl, trade_records

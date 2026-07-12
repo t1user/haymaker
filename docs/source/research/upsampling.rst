@@ -14,7 +14,7 @@ The typical workflow is:
 #. Use :func:`haymaker.research.upsample` to align generated information back
    to the source dataframe.
 #. Convert the upsampled dataframe to transactions with
-   :func:`haymaker.research.no_stop` or
+   :func:`haymaker.research.backtester.no_stop` or
    :func:`haymaker.research.stop.stop_loss`.
 
 Grouped lower-frequency values become available when their grouped bar is
@@ -49,4 +49,3 @@ Typical Pattern
 Do not pass ``position`` into :func:`haymaker.research.upsample`. A position is
 already executable state. Upsample generated signals or blips first, then derive
 or execute the resulting state on the upsampled dataframe.
-

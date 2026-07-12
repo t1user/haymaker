@@ -74,17 +74,34 @@ ParamPair = tuple[Any, Any]
 JobKey = tuple[Hashable, Hashable]
 MissingPolicy = Literal["zero", "raise", "drop"]
 
+_METRIC_LABELS: dict[str, str] = {
+    "annual_return": "Annual return",
+    "annual_volatility": "Annual volatility",
+    "calmar_ratio": "Calmar ratio",
+    "fixed_max_drawdown": "Fixed max drawdown",
+    "long_expectancy": "Long expectancy",
+    "max_drawdown": "Max drawdown",
+    "monthly_pnl": "Monthly PnL",
+    "payoff_ratio": "Payoff ratio",
+    "sharpe_ratio": "Sharpe ratio",
+    "short_expectancy": "Short expectancy",
+    "skew": "Skew",
+    "trade_expectancy": "Trade expectancy",
+    "win_rate": "Win rate",
+}
+
 DEFAULT_GRID_TABLE_FIELDS: list[str] = [
     "annual_return",
     "sharpe_ratio",
-    "position_ev",
-    "monthly_ev",
+    "trade_expectancy",
+    "monthly_pnl",
     "max_drawdown",
+    "fixed_max_drawdown",
     "skew",
-    "win_ratio",
+    "win_rate",
     "payoff_ratio",
-    "long_ev",
-    "short_ev",
+    "long_expectancy",
+    "short_expectancy",
     "calmar_ratio",
     "annual_volatility",
 ]
@@ -115,6 +132,11 @@ def _format_grid_label(value: Any) -> str:
     if isinstance(value, Real) and not isinstance(value, bool):
         return f"{float(value):.6g}"
     return str(value)
+
+
+def _metric_label(field: str) -> str:
+    """Return a readable display label for a canonical metric key."""
+    return _METRIC_LABELS.get(field, field.replace("_", " ").capitalize())
 
 
 @dataclass(frozen=True)
@@ -382,10 +404,7 @@ class GridSearchResult:
         *,
         missing: MissingPolicy = "zero",
     ) -> pd.Series:
-        """Return pyfolio return statistics for selected combined returns.
-
-        ``pyfolio.timeseries.perf_stats`` is imported lazily, so importing this
-        module does not load pyfolio unless this method is called.
+        """Return standard statistics for selected combined returns.
 
         Args:
             keys: Simulation keys to combine.
@@ -393,11 +412,11 @@ class GridSearchResult:
                 :meth:`combined_returns`.
 
         Returns:
-            Pyfolio statistics for the selected combined return stream.
+            Standard statistics for the selected combined return stream.
         """
-        from pyfolio.timeseries import perf_stats  # type: ignore[import-untyped]
+        from haymaker.research.backtester.metrics import return_stream_metrics
 
-        return perf_stats(self.combined_returns(keys, missing=missing))
+        return return_stream_metrics(self.combined_returns(keys, missing=missing))
 
     def _selected_returns(self, keys: Sequence[JobKey]) -> pd.DataFrame:
         if not keys:
@@ -877,10 +896,7 @@ def combined_stats(
     *,
     missing: MissingPolicy = "zero",
 ) -> pd.Series:
-    """Return pyfolio return statistics for selected combined returns.
-
-    ``pyfolio.timeseries.perf_stats`` is imported lazily, so importing this
-    module does not load pyfolio unless this function is called.
+    """Return standard statistics for selected combined returns.
 
     Args:
         result: Grid-search result containing daily simulation returns.
@@ -888,7 +904,7 @@ def combined_stats(
         missing: Missing-data policy forwarded to :func:`combined_returns`.
 
     Returns:
-        Pyfolio statistics for the selected combined return stream.
+        Standard statistics for the selected combined return stream.
     """
     return result.combined_stats(keys, missing=missing)
 
@@ -960,15 +976,14 @@ def plot_grid(
         if field in [
             "annual_return",
             "sharpe_ratio",
-            "cumulative_returns",
             "calmar_ratio",
             "sortino_ratio",
             "skew",
-            "position_ev",
-            "monthly_ev",
-            "annual_ev",
-            "long_ev",
-            "short_ev",
+            "trade_expectancy",
+            "monthly_pnl",
+            "annual_pnl",
+            "long_expectancy",
+            "short_expectancy",
         ]:
             kwargs_dict["center"] = 0
 
@@ -978,11 +993,12 @@ def plot_grid(
             kwargs_dict["fmt"] = ".2f"
 
         if field in [
+            "total_return",
             "annual_return",
-            "cummulative_return",
             "max_drawdown",
-            "daily_value_at_risk",
-            "win_percent",
+            "fixed_max_drawdown",
+            "win_rate",
+            "time_in_market",
         ]:
             kwargs_dict["fmt"] = ".0%"
 
@@ -992,9 +1008,7 @@ def plot_grid(
             kwargs_dict.update({"vmin": -1, "vmax": 1})
         elif field == "sortino_ratio":
             kwargs_dict.update({"vmin": -2, "vmax": 2})
-        elif field == "positions":
-            kwargs_dict.update({"center": 250, "vmin": 0, "vmax": 750})
-        elif field == "trades":
+        elif field == "trade_count":
             kwargs_dict.update({"center": 500, "vmin": 0, "vmax": 1500})
         else:
             kwargs_dict["robust"] = True
@@ -1035,11 +1049,11 @@ def plot_grid(
     )
 
     ax2 = fig.add_subplot(gs[0, 3])
-    ax2.set_title(fields[0])
+    ax2.set_title(_metric_label(fields[0]))
     sns.heatmap(table_one, **heatmap_kwargs, **table_1_kwargs)
 
     ax3 = fig.add_subplot(gs[0, 4])
-    ax3.set_title(fields[1])
+    ax3.set_title(_metric_label(fields[1]))
     sns.heatmap(table_two, **heatmap_kwargs, **table_2_kwargs)
 
     ax35 = fig.add_subplot(gs[0, 5])
@@ -1165,11 +1179,12 @@ def show_grid_table(
     ), f"Wrong field. Allowed fields are: {data.fields}"
 
     percent_fields = {
+        "total_return",
         "annual_return",
-        "cummulative_return",
         "max_drawdown",
-        "daily_value_at_risk",
-        "win_percent",
+        "fixed_max_drawdown",
+        "win_rate",
+        "time_in_market",
     }
 
     from IPython.display import display
@@ -1188,6 +1203,6 @@ def show_grid_table(
             table.style.format(fmt)
             .format_index(_format_grid_label, axis=0)
             .format_index(_format_grid_label, axis=1)
-            .set_caption(field)
+            .set_caption(_metric_label(field))
         )
         display(styled_table)

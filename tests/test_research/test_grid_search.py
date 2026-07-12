@@ -71,8 +71,8 @@ def _full_df_strategy(
 def _result_with_returns() -> GridSearchResult:
     index = pd.date_range("2020-01-01", periods=3, freq="D")
     raw_stats: dict[JobKey, pd.Series] = {
-        ("a", 1): pd.Series({"Annual return": 0.1, "Sharpe ratio": 1.0}),
-        ("b", 1): pd.Series({"Annual return": 0.2, "Sharpe ratio": 2.0}),
+        ("a", 1): pd.Series({"annual_return": 0.1, "sharpe_ratio": 1.0}),
+        ("b", 1): pd.Series({"annual_return": 0.2, "sharpe_ratio": 2.0}),
     }
     raw_dailys: dict[JobKey, pd.DataFrame] = {
         ("a", 1): pd.DataFrame(
@@ -107,8 +107,8 @@ def _plot_result() -> GridSearchResult:
         for second in range(10):
             raw_stats[(first, second)] = pd.Series(
                 {
-                    "Annual return": (first - second) / 100,
-                    "Sharpe ratio": (first + second) / 10,
+                    "annual_return": (first - second) / 100,
+                    "sharpe_ratio": (first + second) / 10,
                 }
             )
     return GridSearchResult(
@@ -208,7 +208,7 @@ def test_stats_frame_shows_all_perf_stats_by_simulation() -> None:
 
     frame = result.stats_frame
 
-    assert list(frame.index) == ["Annual return", "Sharpe ratio"]
+    assert list(frame.index) == ["annual_return", "sharpe_ratio"]
     assert list(frame.columns) == [("a", 1), ("b", 1)]
     assert frame.iloc[0, 0] == 0.1
     assert frame.iloc[0, 1] == 0.2

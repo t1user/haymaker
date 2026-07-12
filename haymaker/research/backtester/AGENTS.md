@@ -11,6 +11,9 @@ extending, or optimizing it.
   `auto_perf()`, `perf()`, and `Results`.
 - `engine.py` owns the single-pass accounting engine. Keep the Numba and Python
   implementations behaviorally identical.
+- `metrics.py` owns reporting-day aggregation, account/fixed returns,
+  drawdowns, and summary statistics. Keep these calculations pure and testable
+  from hand-calculated PnL examples.
 - Result-analysis helpers, including excursions and entry-time factor
   extraction, live in `haymaker.research.result_analysis` and are re-exported
   here only for compatibility.
@@ -21,8 +24,8 @@ extending, or optimizing it.
 
 - `perf()` accepts a bar-indexed transaction DataFrame containing
   `bar_price`, `open_price`, `close_price`, `stop_price`, and `position`.
-- `bar_price` is the reference price used for mark-to-market accounting and
-  return calculation.
+- `bar_price` is the reference price used for mark-to-market accounting. When
+  `capital` is omitted, its first value is also the initial capital assumption.
 - `position` is the position held at the end of the bar and is limited to
   `-1`, `0`, or `1` under the current contract.
 - `open_price` is signed by the opened position: positive for a long entry and
@@ -59,11 +62,31 @@ extending, or optimizing it.
   fill price.
 - Bar-level mark-to-market PnL must reconcile with trade-level PnL, including
   slippage and same-bar trades.
-- Preserve the prior-bar return denominator and current business-day aggregation
-  unless a deliberate API change is agreed and covered by tests.
+- Bar PnL is the canonical engine output. Do not calculate returns in the
+  engine or compound returns at bar frequency.
+- Reporting uses only observed calendar dates. By default Sunday observations
+  are combined with the following Monday; `sunday_to_monday=False` retains
+  Sunday as an independent reporting day. Do not synthesize missing weekdays.
+- Standard session return is session PnL divided by beginning session equity.
+  Fixed return is session PnL divided by unchanged initial capital. Capital and
+  PnL must use the same units.
+- Account equity and intraday drawdown are derived directly from cumulative bar
+  PnL. Standard account statistics become undefined after equity is
+  nonpositive, while fixed-capital and point-PnL analysis continues.
 - Do not change transaction ordering, price signs, timing, slippage, or final
   position treatment based on intuition alone. Add a focused example first and
   ask when the intended market semantics are unclear.
+
+## Deferred Portfolio Work
+
+- General portfolio construction is intentionally out of scope for the current
+  backtester and should not be added to `grid_search.py`.
+- A future portfolio module must distinguish capital-weighted strategy return
+  streams from fixed-contract portfolios. Fixed-contract aggregation requires
+  point PnL, quantities, reference prices, and contract point values; price-only
+  or equal-return weighting is not an economic substitute.
+- `GridSearchResult.combined_returns()` remains a convenience for equal-weight,
+  daily-rebalanced simulation sleeves, not a fixed-contract portfolio engine.
 
 ## Compatibility And Validation
 
