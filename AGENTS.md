@@ -106,20 +106,15 @@ BLACK_CACHE_DIR=/tmp/haymaker-black-cache .venv/bin/python -m black --check --fa
   should be reserved for failed recovery, unreconciled state, or confirmed
   order/position safety issues.
 - `haymaker.supervisor.ConnectionSupervisor` owns IB socket recovery for live
-  trading and managed dataloader runs. It does not manage or restart the gateway
+  trading and dataloader runs. It does not manage or restart the gateway
   process. Route new restart triggers through its `request_restart()` method.
   Broker messages are categorized as restart requests, broker-wait signals, or
   recovery hints: broker-wait signals move the supervisor into broker recovery
   wait while connected, `timeoutEvent` and probes remain active health checks,
   and `updateEvent` or `1102` may probe recovery while already waiting.
-  Future app/supervisor architecture decisions should leave room for attached
-  dataloader mode, where dataloader work borrows an externally managed `IB`
-  connection and has no right to restart or disconnect it; see
-  `docs/dataloader-connection-modes-plan.md`.
-  Future dataloader design should treat `managed` and `attached` as the only
-  connection modes. Legacy `reconnect`/`wait` behavior is a managed-mode recovery
-  concern handled by supervisor decisions such as broker data-maintained vs
-  data-lost messages, not a separate attached-mode policy.
+  The dataloader has no connection modes: its entrypoint creates its own `IB`
+  object and always runs through `DataloaderConnection` and the supervisor; see
+  `haymaker/dataloader/AGENTS.md`.
 - Graceful shutdown is not currently a broad architecture priority. Terminal
   `Ctrl-C` has historically been acceptable. Before service-manager deployment,
   prefer minimal signal hardening for `SIGINT`/`SIGTERM`: request supervisor stop,

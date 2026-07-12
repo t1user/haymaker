@@ -36,8 +36,8 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/app.py`: live application bootstrap, top-level `App.run()`, and `LiveRuntime`, which owns live workload startup/cleanup, the fixed daily contract-refresh restart timer, and futures-roll scheduling.
-- `haymaker/supervisor/`: IB socket supervisor package for owned managed
-  connections. It owns workload task lifecycle, broker auto-recovery waits,
+- `haymaker/supervisor/`: IB socket supervisor package for connections it owns.
+  It owns workload task lifecycle, broker auto-recovery waits,
   probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
   each state through a race between state completion, lifecycle requests, and
   workload completion. It does not manage the gateway process.
@@ -129,10 +129,12 @@ The research package is intentionally separate from live execution. It works dir
    and do not schedule internal gap-fill ranges.
 5. A producer submits work to an asyncio queue.
 6. Workers call IB historical-data requests under pacer restrictions.
-7. Downloaded chunks are passed to `HistorySink`, concatenated with stored data,
-   and written through the async datastore; Arctic owns final cleaning and
-   metadata updates. The returned first bar timestamp is validated before it
-   drives the next request boundary.
+7. Downloaded chunks are buffered by range and passed to `HistorySink` at the
+   configured chunk threshold or a correctness boundary such as range completion
+   or session cleanup. `HistorySink` concatenates each batch with stored data and
+   writes a complete new version through the async datastore; Arctic owns final
+   cleaning and metadata updates. The returned first bar timestamp is validated
+   before it drives the next request boundary.
 8. Supervisor recovery within the same process resumes in-memory active jobs
    before discovering new work. A full process stop writes no separate
    dataloader checkpoint; the next process rediscovers remaining work from
@@ -149,8 +151,8 @@ The research package is intentionally separate from live execution. It works dir
 ## External Integrations
 
 - Interactive Brokers TWS/Gateway through `ib_insync`.
-- Haymaker-owned `ConnectionSupervisor` instances for live and current managed
-  dataloader IB socket recovery. TWS or IB Gateway process management is
+- Haymaker-owned `ConnectionSupervisor` instances for live and dataloader IB
+  socket recovery. TWS or IB Gateway process management is
   external. Broker message codes are categorized into restart requests,
   broker-wait signals, and recovery hints; broker-wait signals move the
   supervisor into broker recovery wait while connected, while `timeoutEvent` and
