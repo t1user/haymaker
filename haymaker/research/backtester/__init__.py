@@ -1,12 +1,8 @@
-"""Vector backtesting from prepared pandas strategy data.
+"""Evaluate pandas-based strategies and inspect their performance.
 
-The package separates execution accounting from performance reporting:
-
-* :func:`no_stop` prepares ordinary position or event strategies.
-* :func:`perf` runs the Numba or Python mark-to-market engine and reports
-  account, fixed-capital, PnL, trade, and drawdown statistics.
-* :mod:`haymaker.research.backtester.metrics` derives returns only after
-  reconciled bar PnL has been grouped into observed reporting dates.
+Use :func:`no_stop` followed by :func:`perf` for ordinary position or event
+strategies. Use :func:`haymaker.research.stop.stop_loss` before :func:`perf`
+when exact stop, take-profit, or scheduled-close prices are needed.
 
 ``perf()`` uses the first instrument price as initial capital unless the caller
 passes ``capital`` explicitly. Standard session returns use beginning account
@@ -31,8 +27,8 @@ Example:
             capital=5_000,
         )
 
-The active implementation is in ``pipeline.py``, ``engine.py``, and
-``metrics.py``. Historical code under ``retired`` is non-public reference code.
+See the research backtester user guide for result columns, metric definitions,
+warnings, and examples of stock and futures capital assumptions.
 """
 
 from ..result_analysis import (

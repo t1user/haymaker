@@ -15,14 +15,19 @@ from .metrics import build_performance_frames, build_stats
 
 
 class Results(NamedTuple):
-    """Performance output returned by :func:`perf`.
+    """Strategy performance returned by :func:`perf` and :func:`auto_perf`.
 
     Attributes:
-        stats: Compact account, fixed-capital, PnL, and trade statistics.
-        daily: Reporting-session PnL, returns, equity, and balance paths.
-        positions: One row per completed trade.
-        df: Bar-level transaction, PnL, equity, and drawdown data.
-        warnings: Non-fatal limitations affecting reported statistics.
+        stats: Account, fixed-capital, PnL, and trade statistics indexed by
+            compact ``snake_case`` names.
+        daily: Reporting-day PnL, account returns, fixed returns, equity, and
+            normalized balance.
+        positions: One row per completed trade, with entry/exit timestamps,
+            signed prices, gross/net PnL, and duration.
+        df: Prepared input bars enriched with slippage, gross/net PnL, equity,
+            balance, and drawdown paths.
+        warnings: Non-fatal conditions affecting metric availability or
+            interpretation. Invalid input and accounting failures raise instead.
     """
 
     stats: pd.Series
@@ -399,38 +404,42 @@ def perf(
     sunday_to_monday: bool = True,
     use_numba: bool = True,
 ) -> Results:
-    """Evaluate strategy performance from a prepared transaction DataFrame.
+    """Evaluate a prepared strategy and return performance analysis.
 
-    The execution engine first produces reconciled one-unit PnL in price
-    points. PnL is then grouped over observed reporting dates. Standard returns
-    divide each session's PnL by beginning account equity; fixed returns divide
-    every session by unchanged initial capital. Returns are never calculated at
-    bar frequency.
+    Use :func:`no_stop` to prepare an ordinary position or event strategy, or
+    :func:`haymaker.research.stop.stop_loss` when exact stop and take-profit
+    prices are required. The result always includes two views of the same
+    one-unit PnL: conventional account returns based on beginning daily equity
+    and non-compounding fixed returns based on unchanged initial capital.
 
     Args:
         data: Output of :func:`no_stop` or
-            :func:`haymaker.research.stop.stop_loss`. Required columns are
-            ``bar_price``, ``open_price``, ``close_price``, ``stop_price``, and
-            ``position``.
+            :func:`haymaker.research.stop.stop_loss`, indexed by unique,
+            increasing timestamps. Required columns are ``bar_price``,
+            ``open_price``, ``close_price``, ``stop_price``, and ``position``.
         slippage: Non-negative transaction cost in multiples of ``min_tick``,
             charged for every entry and exit leg.
         skip_last_open: Exclude a position that remains open on the final input
             bar instead of reporting the engine's synthetic final close.
         capital: Positive initial capital in the same units as point PnL.
-            Defaults to the first ``bar_price``. A futures margin or another
-            capital assumption may be supplied explicitly, provided it uses
-            units consistent with PnL.
+            Defaults to the first ``bar_price`` for an initially unlevered
+            one-unit assumption. For futures, convert a dollar funding or
+            margin amount to point-equivalent capital before passing it; the
+            backtester does not apply contract multipliers.
         min_tick: Positive instrument tick size. When omitted, infer it from
             observed prices. It must be supplied when inference is impossible
             and ``slippage`` is non-zero.
         sunday_to_monday: Combine Sunday observations with the following
-            Monday. Disable it for markets where Sunday is an independent
-            reporting day.
+            Monday. This is useful for Sunday-evening futures data. Disable it
+            for markets where Sunday is an independent reporting day.
         use_numba: Use the optimized Numba engine. ``False`` selects the Python
             reference implementation.
 
     Returns:
-        Account, fixed-capital, trade, session, and bar-level results.
+        A :class:`Results` object. Inspect ``stats`` for summary metrics,
+        ``daily`` for return/equity series, ``positions`` for completed trades,
+        ``df`` for bar-level PnL/drawdowns, and ``warnings`` before accepting a
+        result.
 
     Raises:
         TypeError: If the transaction input is not numeric or does not use a
@@ -460,21 +469,33 @@ def auto_perf(
     sunday_to_monday: bool = True,
     use_numba: bool = True,
 ) -> Results:
-    """Evaluate prepared transactions or convert raw strategy data first.
+    """Evaluate either prepared transactions or an ordinary strategy frame.
+
+    This convenience entrypoint is useful in notebooks where ``data`` may
+    already contain the transaction columns required by :func:`perf`. If it
+    does not, ``auto_perf()`` passes it through :func:`no_stop` using
+    ``price_column``. Use :func:`perf` directly when explicit preparation is
+    preferable or when using :func:`haymaker.research.stop.stop_loss`.
 
     Args:
-        data: A transaction DataFrame accepted by :func:`perf`, or raw strategy
-            data accepted by :func:`no_stop`.
-        price_column: Price used only when converting raw strategy data.
-        slippage: Passed to :func:`perf`.
-        skip_last_open: Passed to :func:`perf`.
-        capital: Passed to :func:`perf`.
-        min_tick: Passed to :func:`perf`.
-        sunday_to_monday: Passed to :func:`perf`.
-        use_numba: Passed to :func:`perf`.
+        data: A transaction DataFrame accepted by :func:`perf`, or a raw frame
+            containing ``position`` or ``blip`` accepted by :func:`no_stop`.
+        price_column: Execution and mark-to-market price used only when raw
+            strategy data needs conversion.
+        slippage: Non-negative cost per transaction leg in multiples of
+            ``min_tick``.
+        skip_last_open: Exclude a position still open on the final input bar.
+        capital: Positive initial capital in the same units as point PnL.
+            Defaults to the first selected price.
+        min_tick: Positive instrument tick size. Supply it explicitly when
+            using sparse data or when it cannot be inferred.
+        sunday_to_monday: Combine Sunday observations with the following
+            Monday reporting day.
+        use_numba: Use the optimized engine. Set to ``False`` for the Python
+            reference implementation.
 
     Returns:
-        Backtester performance results.
+        The same :class:`Results` object returned by :func:`perf`.
 
     Raises:
         ValueError: If ``data`` is neither prepared transaction data nor valid
