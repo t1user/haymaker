@@ -108,3 +108,9 @@ def test_supervised_connection_uses_configured_client_id(supervisor, monkeypatch
     connection = connect.DataloaderConnection(object(), lambda: None)
 
     assert connection.supervisor.args[2].client_id == 7
+
+
+def test_connection_module_exposes_app_like_connection_object_only():
+    """The obsolete function wrapper should not duplicate the connection object."""
+
+    assert not hasattr(connect, "connection")

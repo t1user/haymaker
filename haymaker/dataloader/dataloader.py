@@ -29,7 +29,7 @@ from haymaker.logging import setup_logging
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
-from .connect import connection
+from .connect import DataloaderConnection
 from .contract_selectors import ContractSelector
 from .pacer import RequestPacing
 from .scheduling import (
@@ -445,13 +445,15 @@ class Manager:
     bar_size: str = BARSIZE
     now: date | datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     active_jobs: list[DownloadJob] = field(default_factory=list, repr=False)
-    _initiated_contracts: list[ibi.Contract] = field(default_factory=list, repr=False)
+    _initiated_contracts: set[ibi.Contract] = field(default_factory=set, repr=False)
     gap_learner: RunGapLearner = field(default_factory=RunGapLearner, repr=False)
     new_job_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
 
     def __post_init__(self) -> None:
         self.bar_size = bar_size_validator(self.bar_size)
         self.wts = wts_validator(self.wts)
+        if self.max_lookback_days is not None and self.max_lookback_days <= 0:
+            raise ValueError("max_lookback_days must be a positive integer or None")
         self.now = normalize_point(self.now, self.bar_size)
         if self.pacing is None:
             self.pacing = RequestPacing(
@@ -650,7 +652,7 @@ class Manager:
         async for contract, headstamp in self.headstamps():
             if contract in self._initiated_contracts:
                 continue
-            self._initiated_contracts.append(contract)
+            self._initiated_contracts.add(contract)
             store = await AsyncStoreView.create(
                 contract, self.datastore, self.now, self.bar_size
             )
@@ -933,7 +935,7 @@ def start():
     asyncio.get_event_loop().set_debug(True)
     log.debug("Will start...")
 
-    connection(ib, session.run, session.cancel_tasks)
+    DataloaderConnection(ib, session.run, session.cancel_tasks).run()
 
     log.info("script finished, about to disconnect")
     ib.disconnect()

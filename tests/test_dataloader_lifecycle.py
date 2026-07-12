@@ -460,6 +460,20 @@ def test_manager_preserves_injected_pacing_policy(dataloader_module):
     assert not hasattr(pacing, "wts")
 
 
+@pytest.mark.parametrize("max_lookback_days", [0, -1])
+def test_manager_rejects_non_positive_max_lookback(
+    dataloader_module, max_lookback_days
+):
+    """A configured lookback must be absent or a positive number of days."""
+
+    with pytest.raises(ValueError, match="max_lookback_days"):
+        dataloader_module.Manager(
+            object(),
+            max_lookback_days=max_lookback_days,
+            bar_size="1 day",
+        )
+
+
 def test_manager_default_now_is_normalized_without_optional_sentinel(dataloader_module):
     """Manager should expose a concrete normalized now value after construction."""
 

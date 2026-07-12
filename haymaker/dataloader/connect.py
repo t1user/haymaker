@@ -101,16 +101,3 @@ class DataloaderConnection:
         """Run until the dataloader workload finishes."""
 
         asyncio.run(self.supervisor.run())
-
-
-def connection(
-    ib: IB,
-    func: Callable,
-    cleanup: Callable | None = None,
-) -> DataloaderConnection:
-    """Run dataloader work under the connection supervisor."""
-
-    log.debug("Running dataloader under supervised connection.")
-    dataloader_connection = DataloaderConnection(ib, func, cleanup)
-    dataloader_connection.run()
-    return dataloader_connection

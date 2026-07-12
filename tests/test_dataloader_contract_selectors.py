@@ -2,6 +2,7 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.dataloader.contract_selectors import (
+    ContractQualificationError,
     ContractSelector,
     CurrentFutureContractSelector,
     FUTURES_FULLCHAIN_SPEC,
@@ -54,6 +55,38 @@ async def test_selector_qualifies_with_paced_contract_details():
     assert first_contract.exchange == "SMART"
     assert second_contract.exchange == "SMART"
     assert ib.details_calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "details",
+    [
+        [],
+        [
+            ibi.ContractDetails(contract=ibi.Stock("AAPL", "NYSE", "USD")),
+            ibi.ContractDetails(contract=ibi.Stock("AAPL", "NASDAQ", "USD")),
+        ],
+    ],
+)
+async def test_selector_rejects_unresolved_contracts(details):
+    """Unknown and ambiguous contracts must not reach historical requests."""
+
+    class FakeIB:
+        async def reqContractDetailsAsync(
+            self, contract: ibi.Contract
+        ) -> list[ibi.ContractDetails]:
+            return details
+
+    selector = ContractSelector(
+        pacing=RequestPacing(FakeIB(), no_restriction=True),
+        secType="STK",
+        symbol="AAPL",
+        exchange="SMART",
+        currency="USD",
+    )
+
+    with pytest.raises(ContractQualificationError):
+        await collect_contracts(selector)
 
 
 @pytest.mark.asyncio

@@ -179,7 +179,7 @@ stable and mark items off as they are addressed.
 
 9. **Make Gap-Fill Scheduling Session-Aware**
    - Fetch IB historical schedules in the async dataloader request path, not in
-     pure `BaseTask` scheduling objects.
+     pure range-planning objects.
    - Run `reqHistoricalScheduleAsync` under session-scoped `RequestPacing` so
      schedule lookups count against broker usage and can share retry/failure
      policy with other requests.

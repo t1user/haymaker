@@ -82,7 +82,7 @@ class GapCandidate:
 
 
 @dataclass
-class BaseTask(ABC):
+class BaseRangePlan(ABC):
     store: AsyncStoreView
     head: Union[date, datetime]  # HeadTimeStamp earliest point for which IB has data
 
@@ -111,7 +111,7 @@ class BaseTask(ABC):
 
 
 @dataclass
-class BackfillTask(BaseTask):
+class BackfillRangePlan(BaseRangePlan):
 
     @property
     def from_date(self) -> Union[date, datetime, None]:
@@ -129,7 +129,7 @@ class BackfillTask(BaseTask):
 
 
 @dataclass
-class UpdateTask(BaseTask):
+class UpdateRangePlan(BaseRangePlan):
     """
     If no data in datastore for this symbol, there is no update.  All
     download handles by backfill.
@@ -155,7 +155,7 @@ class UpdateTask(BaseTask):
 
 
 @dataclass
-class GapFillTask:
+class GapFillRangePlan:
     """Plan gap-fill ranges from stored-data gaps and optional sessions.
 
     Args:
@@ -243,9 +243,7 @@ class TaskPlanner:
         latest_available = self.store.expiry_or_now()
         candidates = [self.head]
         if self.max_lookback_days is not None:
-            candidates.append(
-                latest_available - timedelta(days=self.max_lookback_days)
-            )
+            candidates.append(latest_available - timedelta(days=self.max_lookback_days))
         if availability_start := historical_availability_start(self.store):
             candidates.append(availability_start)
         return max(candidates)
@@ -264,10 +262,10 @@ class TaskPlanner:
             return self.continuous_future_ranges()
 
         ranges: list[PlannedRange] = []
-        ranges.extend(UpdateTask(self.store, self.start).planned_ranges("update"))
+        ranges.extend(UpdateRangePlan(self.store, self.start).planned_ranges("update"))
         if not self.store.backfill_exhausted:
             ranges.extend(
-                BackfillTask(self.store, self.start).planned_ranges("backfill")
+                BackfillRangePlan(self.store, self.start).planned_ranges("backfill")
             )
         return ranges
 
@@ -275,15 +273,15 @@ class TaskPlanner:
         """Return the one latest-ended range allowed for continuous futures."""
 
         if self.store.to_date:
-            return UpdateTask(self.store, self.start).planned_ranges("update")
+            return UpdateRangePlan(self.store, self.start).planned_ranges("update")
         if self.store.backfill_exhausted:
             return []
-        return BackfillTask(self.store, self.start).planned_ranges("backfill")
+        return BackfillRangePlan(self.store, self.start).planned_ranges("backfill")
 
     def gap_candidates(self) -> list[GapCandidate]:
         """Return raw gap candidates for this planning window."""
 
-        return self.gap_task().candidates
+        return self.gap_plan().candidates
 
     def gap_ranges(self) -> list[PlannedRange]:
         """Return tagged gap-fill ranges for the configured gap mode."""
@@ -292,12 +290,12 @@ class TaskPlanner:
             return []
         if _sec_type(self.store) == "CONTFUT":
             return []
-        return self.gap_task().planned_ranges()
+        return self.gap_plan().planned_ranges()
 
-    def gap_task(self) -> GapFillTask:
-        """Return a gap-fill task configured from this planner."""
+    def gap_plan(self) -> GapFillRangePlan:
+        """Return a gap-fill range plan configured from this planner."""
 
-        return GapFillTask(
+        return GapFillRangePlan(
             self.store,
             self.start,
             timezone_name=self.timezone_name,

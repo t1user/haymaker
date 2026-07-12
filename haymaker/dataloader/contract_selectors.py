@@ -28,6 +28,10 @@ FUTURES_FULLCHAIN_SPEC = CONFIG.get("futures_fullchain_spec", "full")
 DESIRED_INDEX = CONFIG.get("futures_current_index", 0)
 
 
+class ContractQualificationError(ValueError):
+    """Raised when an IB contract specification cannot be resolved uniquely."""
+
+
 class ContractSelector:
     """
     Based on passed contract attributes and config parameters
@@ -95,39 +99,35 @@ class ContractSelector:
                 del kwargs[k]
             log.warning(
                 f"Removed incorrect contract parameters: {diff}, "
-                f"will attemp to get Contract anyway"
+                f"will attempt to get Contract anyway"
             )
         return kwargs
 
     async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
         """Yield contracts selected for historical download."""
 
-        if hasattr(self, "_objects"):
-            # this is present only in subclasses
-            async for ob in self._objects():
-                yield ob
-        else:
-            contract = ibi.Contract.create(**self.kwargs)
-            if contract.conId == 0:
-                await self.qualify(contract)
-            yield contract
+        contract = ibi.Contract.create(**self.kwargs)
+        if contract.conId == 0:
+            await self.qualify(contract)
+        yield contract
 
     async def qualify(self, contract: ibi.Contract) -> ibi.Contract:
         """Qualify a contract using paced contract details."""
 
         details = await self.pacing.contract_details(contract)
         if not details:
-            log.warning(f"Unknown contract: {contract}")
-            return contract
+            raise ContractQualificationError(f"Unknown contract: {contract}")
         if len(details) > 1:
             possibles = [detail.contract for detail in details]
-            log.warning(f"Ambiguous contract: {contract}, possibles are {possibles}")
-            return contract
+            raise ContractQualificationError(
+                f"Ambiguous contract: {contract}, possibles are {possibles}"
+            )
 
         qualified = details[0].contract
         if qualified is None:
-            log.warning(f"Missing contract details for: {contract}")
-            return contract
+            raise ContractQualificationError(
+                f"Missing contract details for: {contract}"
+            )
         expiry = qualified.lastTradeDateOrContractMonth
         if expiry:
             qualified.lastTradeDateOrContractMonth = expiry.split()[0]
@@ -136,7 +136,7 @@ class ContractSelector:
         ibi.util.dataclassUpdate(contract, qualified)
         return contract
 
-    def repr(self) -> str:
+    def __repr__(self) -> str:
         """Return a stable human-readable selector representation."""
 
         kwargs_str = ", ".join([f"{k}={v}" for k, v in self.kwargs.items()])
@@ -156,7 +156,7 @@ class FutureContractSelector(ContractSelector):
             "contfuture": ContfutureFutureContractSelector,
             "fullchain": FullchainFutureContractSelector,
             "current": CurrentFutureContractSelector,
-            "exact": ExactFutureContractSelector,
+            "exact": FutureContractSelector,
             "current_and_contfuture": CurrentContfutureFutureContractSelector,
             "current_and_expired": CurrentExpiredFutureContractSelector,
         }.get(FUTURES_SELECTOR, CurrentExpiredFutureContractSelector)
@@ -211,7 +211,7 @@ class FullchainFutureContractSelector(FutureContractSelector):
     def with_spec(cls, spec: str, pacing: RequestPacing, **kwargs) -> Self:
         return cls(pacing=pacing, spec=spec, **kwargs)
 
-    async def _objects(self) -> AsyncGenerator[ibi.Contract, None]:
+    async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
 
         today = date.today()
         contracts = await self._fullchain
@@ -239,7 +239,7 @@ class FullchainFutureContractSelector(FutureContractSelector):
 
 
 class CurrentFutureContractSelector(FutureContractSelector):
-    async def _objects(self) -> AsyncGenerator[ibi.Contract, None]:
+    async def objects(self) -> AsyncGenerator[ibi.Contract, None]:
         desired_index = DESIRED_INDEX
         if desired_index == 0:
             yield await self._current_contract
@@ -276,9 +276,3 @@ class CurrentExpiredFutureContractSelector(FutureContractSelector):
         for gen in (self.current, self.expired):
             async for contract in gen.objects():
                 yield contract
-
-
-class ExactFutureContractSelector(FutureContractSelector):
-    """Named selector mode that uses the base future contract exactly as configured."""
-
-    pass

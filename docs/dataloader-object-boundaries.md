@@ -29,7 +29,7 @@ remain separate work.
 ### TaskPlanner
 
 - Is the pure scheduling boundary.
-- Consumes an `AsyncStoreView`, a head timestamp, max-period policy, gap-fill
+- Consumes an `AsyncStoreView`, a head timestamp, optional lookback policy, gap-fill
   mode, optional cached timezone, optional historical sessions, and run-local
   learned gap patterns.
 - Owns the run lookback clamp and produces backfill, update, and gap-fill
@@ -81,9 +81,9 @@ Collection naming uses the datastore default `simple_collection_namer`.
 The current split is:
 
 - `Manager` owns source expansion, contract discovery, headstamp lookup, store
-  and sink construction, request policy (`bar_size`, `wts`, `max_bars`), the
+  and sink construction, request policy (`bar_size`, `wts`, `max_lookback_days`), the
   run-scoped `now` value, and active job tracking for restart/resume.
-- `TaskPlanner` owns pure scheduling, max-period clamping, and conversion from
+- `TaskPlanner` owns pure scheduling, lookback clamping, and conversion from
   stored gaps or supplied sessions into actionable gap-fill ranges.
 - `DownloadJob` owns request progression for one contract.
 - `DownloadContainer` owns per-range buffering and missing-range progress.
