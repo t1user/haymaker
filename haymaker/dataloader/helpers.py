@@ -3,8 +3,8 @@
 from datetime import timedelta
 
 # IBKR recommends only a few thousand bars per request. The dataloader uses a
-# deliberately moderate transitional target while preserving request throughput.
-DEFAULT_TARGET_BARS_PER_REQUEST = 25_000
+# moderate target to balance response latency against request throughput.
+DEFAULT_TARGET_BARS_PER_REQUEST = 10_000
 
 # source:
 # https://ibkrcampus.com/campus/ibkr-api-page/twsapi-doc/#historical-bars

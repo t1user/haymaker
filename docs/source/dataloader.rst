@@ -225,7 +225,7 @@ Common settings:
    live runtime's expected ``clientId=0``.
 
 ``number_of_workers``
-   Number of worker tasks consuming planned downloads. The default is ``20``.
+   Number of worker tasks consuming planned downloads. The default is ``10``.
    Increasing it can keep more contracts active, but does not bypass local or IB
    pacing limits.
 
@@ -347,7 +347,7 @@ dataloader avoids requests that are known to be unavailable:
   is known.
 
 Historical-data request chunk size is an internal dataloader policy. It is
-targeted at approximately 25,000 bars and remains capped by IB's documented
+targeted at approximately 10,000 bars and remains capped by IB's documented
 duration rules for the selected bar size. IB recommends smaller responses, so
 if large requests are slow, review the dataloader log before increasing worker
 count or pacing allowance.

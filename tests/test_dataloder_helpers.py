@@ -15,7 +15,7 @@ from haymaker.dataloader.helpers import (
 def test_default_target_bars_per_request_is_moderate():
     """The internal chunk target should avoid very large historical responses."""
 
-    assert DEFAULT_TARGET_BARS_PER_REQUEST == 25_000
+    assert DEFAULT_TARGET_BARS_PER_REQUEST == 10_000
 
 
 def test_duration_in_secs_1_hour():

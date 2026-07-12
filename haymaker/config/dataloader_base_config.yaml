@@ -4,7 +4,7 @@ wts: &wts TRADES
 max_lookback_days: null # optional run lookback cap; null loads all available data
 clientId: 1 # keep distinct from live runtime clientId=0
 supervisor: state # one of: state, onion
-number_of_workers: 20
+number_of_workers: 10
 gap_fill_mode: off # off, heuristic, schedule, auto
 useRTH: False
 save_every_chunks: 10 # persist after this many downloaded chunks
