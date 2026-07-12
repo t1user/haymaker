@@ -18,6 +18,7 @@ class FakeIB:
 
     def __init__(self) -> None:
         self.historical_requests = 0
+        self.head_timestamp_requests = 0
         self.contract_details_requests = 0
         self.last_historical_kwargs = None
 
@@ -51,6 +52,12 @@ class FakeIB:
         }
         return ["ok"]
 
+    async def reqHeadTimeStampAsync(self, contract, **kwargs):
+        """Record one head-timestamp request."""
+
+        self.head_timestamp_requests += 1
+        return datetime(2025, 1, 1, tzinfo=timezone.utc)
+
     async def reqContractDetailsAsync(self, contract):
         """Record one contract-details request."""
 
@@ -78,6 +85,47 @@ def test_historical_probe_reserve_does_not_reduce_same_key_limit():
         HISTORICAL_GLOBAL_LIMIT - HISTORICAL_PROBE_RESERVE
     )
     assert pacing.historical.rules[1].capacity == HISTORICAL_SAME_KEY_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_large_bars_do_not_consume_small_bar_rolling_limit():
+    """Bars above 30 seconds should bypass IB's lifted hard pacing rules."""
+
+    contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
+    pacing = RequestPacing(FakeIB())
+
+    await pacing.historical_data(
+        contract,
+        endDateTime="",
+        durationStr="1 D",
+        barSizeSetting="1 min",
+        whatToShow="TRADES",
+        useRTH=False,
+        formatDate=2,
+    )
+
+    assert not pacing.historical.rules[0].history
+    assert pacing.large_bar_historical.rules == []
+
+
+@pytest.mark.asyncio
+async def test_head_timestamps_use_discovery_pacing():
+    """Head timestamps should not consume small-bar historical capacity."""
+
+    contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
+    ib = FakeIB()
+    pacing = RequestPacing(ib)
+
+    await pacing.head_timestamp(
+        contract,
+        whatToShow="TRADES",
+        useRTH=False,
+        formatDate=2,
+    )
+
+    assert ib.head_timestamp_requests == 1
+    assert not pacing.historical.rules[0].history
+    assert len(pacing.metadata.rules[0].history) == 1
 
 
 def test_bid_ask_historical_profile_uses_weight_two():

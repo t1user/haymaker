@@ -15,6 +15,9 @@ log = logging.getLogger(__name__)
 
 SMALL_BAR_MAX_AGE = timedelta(days=180)
 EXPIRED_FUTURE_MAX_AGE = timedelta(days=365 * 2)
+# IBKR unavailable-history rule: expired options, futures options, and warrants
+# have no historical data. Structured products are left to IB because the API
+# does not expose one unambiguous security-type discriminator for the rule.
 UNAVAILABLE_EXPIRED_SECTYPES = {"OPT", "FOP", "WAR"}
 
 
@@ -216,7 +219,7 @@ class TaskPlanner:
 
     Args:
         store: Preloaded datastore view for the contract being planned.
-        head: Earliest available IB timestamp to consider.
+        head: Earliest available IB timestamp, or ``None`` before lazy discovery.
         max_lookback_days: Optional maximum lookback window for this planning
             run. ``None`` means no user-imposed lookback limit.
         gap_fill_mode: Gap-fill strategy selected for this planning run.
@@ -226,7 +229,7 @@ class TaskPlanner:
     """
 
     store: AsyncStoreView
-    head: Union[date, datetime]
+    head: Union[date, datetime, None]
     max_lookback_days: int | None
     gap_fill_mode: GapFillMode = "off"
     timezone_name: str | None = None
@@ -234,18 +237,44 @@ class TaskPlanner:
     typical_patterns: set[GapPattern] = field(default_factory=set)
 
     def __post_init__(self) -> None:
-        self.head = normalize_point(self.head, self.store.bar_size)
+        if self.head is not None:
+            self.head = normalize_point(self.head, self.store.bar_size)
+
+    def _known_start_candidates(self) -> list[date | datetime]:
+        """Return lower bounds known without requesting a head timestamp."""
+
+        latest_available = self.store.expiry_or_now()
+        candidates: list[date | datetime] = []
+        if self.max_lookback_days is not None:
+            candidates.append(latest_available - timedelta(days=self.max_lookback_days))
+        if availability_start := historical_availability_start(self.store):
+            candidates.append(availability_start)
+        return candidates
+
+    @property
+    def needs_headstamp(self) -> bool:
+        """Return whether an exact IB boundary is needed to plan backfill."""
+
+        if historical_data_unavailable(self.store) or self.store.backfill_exhausted:
+            return False
+        if _sec_type(self.store) == "CONTFUT" and self.store.to_date:
+            return False
+        boundary = self.store.backfill_boundary or self.store.expiry_or_now()
+        candidates = self._known_start_candidates()
+        return not candidates or max(candidates) < boundary
 
     @property
     def start(self) -> Union[date, datetime]:
         """Return the clamped earliest point for this planning run."""
 
-        latest_available = self.store.expiry_or_now()
-        candidates = [self.head]
-        if self.max_lookback_days is not None:
-            candidates.append(latest_available - timedelta(days=self.max_lookback_days))
-        if availability_start := historical_availability_start(self.store):
-            candidates.append(availability_start)
+        candidates = self._known_start_candidates()
+        if self.head is not None:
+            candidates.append(self.head)
+        if not candidates:
+            if self.store.data is not None and not self.store.data.empty:
+                candidates.append(self.store.data.index.min())
+            else:
+                candidates.append(self.store.expiry_or_now())
         return max(candidates)
 
     def planned_ranges(self) -> list[PlannedRange]:
@@ -263,7 +292,7 @@ class TaskPlanner:
 
         ranges: list[PlannedRange] = []
         ranges.extend(UpdateRangePlan(self.store, self.start).planned_ranges("update"))
-        if not self.store.backfill_exhausted:
+        if not self.store.backfill_exhausted and self.head is not None:
             ranges.extend(
                 BackfillRangePlan(self.store, self.start).planned_ranges("backfill")
             )
@@ -274,7 +303,7 @@ class TaskPlanner:
 
         if self.store.to_date:
             return UpdateRangePlan(self.store, self.start).planned_ranges("update")
-        if self.store.backfill_exhausted:
+        if self.store.backfill_exhausted or self.head is None:
             return []
         return BackfillRangePlan(self.store, self.start).planned_ranges("backfill")
 
@@ -325,7 +354,12 @@ def historical_data_unavailable(store: AsyncStoreView) -> bool:
     if _sec_type(store) == "FUT" and _is_expired(store):
         expiry = store.expiry
         assert expiry is not None
-        return store.now > expiry + EXPIRED_FUTURE_MAX_AGE
+        if store.now > expiry + EXPIRED_FUTURE_MAX_AGE:
+            return True
+    # IBKR unavailable-history rule: <=30-second bars stop at six months. If the
+    # contract ended before that boundary, no historical request can succeed.
+    if availability_start := historical_availability_start(store):
+        return availability_start >= store.expiry_or_now()
     return False
 
 
@@ -335,8 +369,10 @@ def historical_availability_start(
     """Return the earliest point IB availability rules allow requesting."""
 
     candidates: list[date | datetime] = []
+    # IBKR unavailable-history rule: <=30-second bars are limited to six months.
     if duration_in_secs(store.bar_size) <= 30 and isinstance(store.now, datetime):
         candidates.append(store.now - SMALL_BAR_MAX_AGE)
+    # IBKR unavailable-history rule: expired futures retain at most two years.
     if _sec_type(store) == "FUT" and _is_expired(store):
         expiry = store.expiry
         assert expiry is not None

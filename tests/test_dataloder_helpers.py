@@ -3,12 +3,19 @@ from datetime import timedelta
 import pytest
 
 from haymaker.dataloader.helpers import (
+    DEFAULT_TARGET_BARS_PER_REQUEST,
     duration_in_secs,
     duration_str,
     timedelta_and_barSize_to_duration_str,
     timedelta_normalizer,
     timedelta_to_duration_in_secs,
 )
+
+
+def test_default_target_bars_per_request_is_moderate():
+    """The internal chunk target should avoid very large historical responses."""
+
+    assert DEFAULT_TARGET_BARS_PER_REQUEST == 25_000
 
 
 def test_duration_in_secs_1_hour():

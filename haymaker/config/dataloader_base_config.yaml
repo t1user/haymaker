@@ -12,6 +12,7 @@ restart_on_recovered_connection: False # restart immediately on IB 1102 "data ma
 max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
 pacer_no_restriction: False # toggle to quickly switch off client-side pacing
 pacer_allowance_fraction: 1.0 # values above 1.0 deliberately exceed published IB limits
+appTimeout: 600 # time of inactivity before we start probing for connection correctnesss
 
 # ---- futures config ----
 # contfuture, fullchain, current, exact, current_and_expired, current_and_contfuture

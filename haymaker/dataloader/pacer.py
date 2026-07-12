@@ -6,10 +6,38 @@ process deterministic control over request ordering, reserves capacity for
 other clients through an allowance fraction, and keeps pacing retries out of
 the downloader workflow.
 
-The concrete limits are intentionally module-level constants rather than YAML
-configuration.  They model current IBKR guidance closely enough for the
-dataloader and can be updated in code when IBKR policy changes.  User-facing
-configuration is limited to disabling the pacer and scaling the allowance.
+IBKR historical-data limits relevant to this package, as documented in July
+2026, are summarized below:
+
+* TWS API messages are limited by the account's market-data lines; the default
+  allowance is 50 messages per second.
+* At most 50 historical-data requests may be open concurrently, and IBKR notes
+  that a substantially smaller number is usually more efficient.
+* For bars of 30 seconds or less: do not repeat an identical request within 15
+  seconds; do not make six or more requests for the same contract, exchange,
+  and tick type within two seconds; and do not make more than 60 requests in ten
+  minutes. ``BID_ASK`` requests count twice.
+* The hard small-bar pacing rules are lifted for bars of one minute or longer,
+  but IBKR still applies soft load balancing.
+* Request duration and bar size must form a valid step size. IBKR recommends
+  returning only a few thousand bars per request; its current maximum-duration
+  table separately caps one-second bars at ``2000 S``.
+* Bars of 30 seconds or less are unavailable beyond six months. Expired futures
+  are unavailable beyond two years after expiry. Expired options, futures
+  options, warrants, structured products, and future spreads are unavailable;
+  end-of-day data is unavailable for those derivative types.
+* Native combo history is unavailable, delisted-security history is unavailable,
+  and history before a security changed exchange is often unavailable.
+* Continuous futures require an empty ``endDateTime``.
+
+``reqHeadTimeStamp`` is documented separately and IBKR does not state that it
+shares the small-bar historical quota. It therefore uses the conservative
+discovery bucket together with contract-details requests.
+
+Sources:
+https://ibkrcampus.com/campus/ibkr-api-page/twsapi-doc/
+https://interactivebrokers.github.io/tws-api/historical_limitations.html
+https://ibkrcampus.com/campus/ibkr-api-page/contracts/
 """
 
 from __future__ import annotations
@@ -25,27 +53,32 @@ from typing import Protocol, TypeVar
 
 import ib_insync as ibi
 
+from .helpers import duration_in_secs
+
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 
-# Historical-family requests cover reqHistoricalData, reqHeadTimeStamp, and
-# reqHistoricalSchedule. IBKR documents these as sharing historical data pacing.
+# IBKR small-bar rule: at most 60 requests in a rolling ten-minute window.
+# One slot remains unused because the supervisor's historical probe is external.
 HISTORICAL_GLOBAL_LIMIT = 60  # 60 weighted historical requests.
 HISTORICAL_GLOBAL_WINDOW = 600.0  # Rolling 10-minute window, in seconds.
 HISTORICAL_PROBE_RESERVE = 1  # Leave room for supervised connection probes.
+# IBKR small-bar rule: fewer than six matching requests in two seconds.
 HISTORICAL_SAME_KEY_LIMIT = 5  # Same contract/exchange/data type requests.
 HISTORICAL_SAME_KEY_WINDOW = 2.0  # Rolling 2-second same-key window.
+# IBKR small-bar rule: no identical request within 15 seconds.
 HISTORICAL_IDENTICAL_COOLDOWN = 15.0  # Exact duplicate request cooldown.
+# IBKR permits 50 open historical requests and recommends using fewer.
 HISTORICAL_MAX_CONCURRENT = 20  # Open historical requests allowed at once.
 
-# Contract metadata requests are not documented as historical-data requests, but
-# they still go through TWS/Gateway message handling, so keep a conservative
-# lightweight bucket for reqContractDetails.
-METADATA_GLOBAL_LIMIT = 10  # Contract-details requests per metadata window.
+# Head timestamps and contract details are not documented as small-bar
+# historical requests. Keep them below the general TWS API message-rate limit.
+METADATA_GLOBAL_LIMIT = 10  # Discovery requests per metadata window.
 METADATA_GLOBAL_WINDOW = 1.0  # Metadata rolling window, in seconds.
 METADATA_MAX_CONCURRENT = 5  # Open contract-details requests allowed at once.
 
-BID_ASK_WEIGHT = 2  # IBKR counts BID_ASK historical requests twice.
+# IBKR small-bar pacing rule: BID_ASK consumes two request units.
+BID_ASK_WEIGHT = 2
 DEFAULT_PACING_RETRY_DELAY = 60.0  # Delay after an IB pacing violation, seconds.
 
 
@@ -309,7 +342,9 @@ class RequestBucket:
         async with self.lock:
             while True:
                 now = datetime.now(timezone.utc)
-                wait_time = max(rule.wait_time(profile, now) for rule in self.rules)
+                wait_time = max(
+                    (rule.wait_time(profile, now) for rule in self.rules), default=0.0
+                )
                 if wait_time <= 0:
                     break
                 log.debug(f"Will throttle {profile.kind}: {round(wait_time, 1)}s")
@@ -389,6 +424,7 @@ class RequestPacing:
         default_factory=dict, repr=False
     )
     historical: RequestBucket = field(init=False, repr=False)
+    large_bar_historical: RequestBucket = field(init=False, repr=False)
     metadata: RequestBucket = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -396,14 +432,16 @@ class RequestPacing:
 
         if self.allowance_fraction <= 0:
             raise ValueError("allowance_fraction must be greater than 0")
-        self.historical = self._historical_bucket()
+        self.historical = self._historical_bucket(small_bar_rules=True)
+        self.large_bar_historical = self._historical_bucket(small_bar_rules=False)
         self.metadata = self._metadata_bucket()
 
-    def _historical_bucket(self) -> RequestBucket:
+    def _historical_bucket(self, *, small_bar_rules: bool) -> RequestBucket:
         """Create the historical-data request bucket."""
 
-        return RequestBucket(
-            [
+        rules: list[PacingRule] = []
+        if small_bar_rules:
+            rules = [
                 RollingWindowRule(
                     historical_global_capacity(self.allowance_fraction),
                     HISTORICAL_GLOBAL_WINDOW,
@@ -413,7 +451,9 @@ class RequestPacing:
                     HISTORICAL_SAME_KEY_WINDOW,
                 ),
                 IdenticalCooldownRule(HISTORICAL_IDENTICAL_COOLDOWN),
-            ],
+            ]
+        return RequestBucket(
+            rules,
             scaled_capacity(HISTORICAL_MAX_CONCURRENT, self.allowance_fraction),
         )
 
@@ -468,6 +508,7 @@ class RequestPacing:
             "",
             None,
         ):
+            # IBKR continuous-future rule: endDateTime must be empty.
             raise ValueError(
                 "Continuous futures historical requests require empty endDateTime."
             )
@@ -485,8 +526,14 @@ class RequestPacing:
             keepUpToDate=keepUpToDate,
             chartOptions=options,
         )
+        # IBKR applies the hard historical pacing rules only through 30 seconds.
+        bucket = (
+            self.historical
+            if duration_in_secs(barSizeSetting) <= 30
+            else self.large_bar_historical
+        )
         return await self._run_with_pacing_retry(
-            self.historical,
+            bucket,
             profile,
             contract,
             lambda: self.ib.reqHistoricalDataAsync(
@@ -511,7 +558,7 @@ class RequestPacing:
         useRTH: bool,
         formatDate: int,
     ) -> datetime | None:
-        """Run a head-timestamp request under IB historical pacing rules.
+        """Run a head-timestamp request under conservative discovery pacing.
 
         Args:
             contract: Contract used by the head-timestamp request.
@@ -524,20 +571,9 @@ class RequestPacing:
             Head timestamp returned by IB, or ``None`` when IB returns no value.
         """
 
-        profile = self._historical_profile(
-            RequestKind.HEAD_TIMESTAMP,
-            contract,
-            endDateTime="",
-            durationStr="",
-            barSizeSetting="",
-            whatToShow=whatToShow,
-            useRTH=useRTH,
-            formatDate=formatDate,
-            keepUpToDate=False,
-            chartOptions=[],
-        )
+        profile = RequestProfile(RequestKind.HEAD_TIMESTAMP)
         return await self._run_with_pacing_retry(
-            self.historical,
+            self.metadata,
             profile,
             contract,
             lambda: self.ib.reqHeadTimeStampAsync(
@@ -569,6 +605,8 @@ class RequestPacing:
             Historical schedule returned by IB.
         """
 
+        # IB implements SCHEDULE through historical data and publishes no
+        # separate pacing quota, so keep schedule calls in the small-bar bucket.
         profile = self._historical_profile(
             RequestKind.HISTORICAL_SCHEDULE,
             contract,
@@ -745,9 +783,7 @@ def _contract_metadata(detail: ibi.ContractDetails) -> ContractMetadata | None:
     )
 
 
-def _metadata_keys(
-    detail: ibi.ContractDetails, metadata: ContractMetadata
-) -> set[str]:
+def _metadata_keys(detail: ibi.ContractDetails, metadata: ContractMetadata) -> set[str]:
     """Return symbol-family keys for a contract-details entry."""
 
     contract = detail.contract

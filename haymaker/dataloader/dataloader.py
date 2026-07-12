@@ -474,27 +474,12 @@ class Manager:
                         yield contract
                         contract_pbar.update(1)
 
-    async def headstamps(
-        self,
-    ) -> AsyncGenerator[tuple[ibi.Contract, date | datetime], None]:
-        async for contract in self.contracts():
-            headstamp = await self.headstamp(contract)
-            yield contract, headstamp
-
     async def tasks(
-        self, store: AsyncStoreView, headstamp: datetime | date
+        self, store: AsyncStoreView, headstamp: datetime | date | None
     ) -> list[DownloadContainer]:
         """Return planned download containers for one contract store view."""
 
-        assert self.pacing is not None
-        planner = TaskPlanner(
-            store,
-            headstamp,
-            max_lookback_days=self.max_lookback_days,
-            gap_fill_mode=self._sync_gap_fill_mode,
-            timezone_name=self.pacing.contract_timezone(store.contract),
-            typical_patterns=self.gap_learner.typical_patterns,
-        )
+        planner = self.task_planner(store, headstamp)
         planned_ranges = await self.planned_ranges(planner)
         return [
             DownloadContainer(
@@ -506,6 +491,21 @@ class Manager:
             )
             for t in planned_ranges
         ]
+
+    def task_planner(
+        self, store: AsyncStoreView, headstamp: datetime | date | None
+    ) -> TaskPlanner:
+        """Create a planner from preloaded store data and an optional IB head."""
+
+        assert self.pacing is not None
+        return TaskPlanner(
+            store,
+            headstamp,
+            max_lookback_days=self.max_lookback_days,
+            gap_fill_mode=self._sync_gap_fill_mode,
+            timezone_name=self.pacing.contract_timezone(store.contract),
+            typical_patterns=self.gap_learner.typical_patterns,
+        )
 
     async def planned_ranges(self, planner: TaskPlanner) -> list[PlannedRange]:
         """Return planned ranges, resolving async gap-fill inputs as needed."""
@@ -633,12 +633,19 @@ class Manager:
         )
 
     async def jobs(self) -> AsyncGenerator[DownloadJob, None]:
-        async for contract, headstamp in self.headstamps():
+        async for contract in self.contracts():
             if contract in self._initiated_contracts:
                 continue
             self._initiated_contracts.add(contract)
             store = await AsyncStoreView.create(
                 contract, self.datastore, self.now, self.bar_size
+            )
+            planner = self.task_planner(store, None)
+            if historical_data_unavailable(store):
+                log.debug("Skipping %s - IB historical data is unavailable.", contract)
+                continue
+            headstamp = (
+                await self.headstamp(contract) if planner.needs_headstamp else None
             )
             sink = HistorySink(contract, self.datastore)
             tasks = await self.tasks(store, headstamp)
@@ -771,7 +778,9 @@ class DataloaderSession:
         """Run producer and workers until all queued download work is finished."""
 
         log.debug("Initializing dataloader session.")
-        self.queue = asyncio.LifoQueue(maxsize=int(self.number_of_workers / 4))
+        # FIFO preserves source order so current contracts are not overtaken by
+        # later-discovered expired contracts while the queue is under pressure.
+        self.queue = asyncio.Queue(maxsize=int(self.number_of_workers / 4))
         self.workers = [
             asyncio.create_task(
                 self.worker(f"worker_{i}", self.queue),

@@ -69,7 +69,8 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
     monkeypatch.setattr(dataloader.DataloaderSession, "producer", fake_producer)
     monkeypatch.setattr(dataloader.DataloaderSession, "worker", fake_worker)
 
-    task = asyncio.create_task(dataloader.DataloaderSession(object()).run())
+    session = dataloader.DataloaderSession(object())
+    task = asyncio.create_task(session.run())
     await asyncio.wait_for(workers_started.wait(), timeout=1)
 
     task.cancel()
@@ -78,6 +79,7 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
 
     assert producer_cancelled.is_set()
     assert cancelled_workers == 2
+    assert type(session.queue) is asyncio.Queue
 
 
 def test_sessions_own_separate_pacing_state(dataloader_module):
@@ -612,10 +614,15 @@ async def test_manager_policy_flows_to_store_and_download_job(
         async def mark_backfill_exhausted(self):
             return None
 
-    async def fake_headstamps(self):
-        yield contract, datetime(2025, 1, 1, tzinfo=timezone.utc)
+    async def fake_contracts(self):
+        yield contract
 
-    monkeypatch.setattr(dataloader.Manager, "headstamps", fake_headstamps)
+    async def fake_headstamp(self, requested_contract):
+        assert requested_contract is contract
+        return datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(dataloader.Manager, "contracts", fake_contracts)
+    monkeypatch.setattr(dataloader.Manager, "headstamp", fake_headstamp)
     monkeypatch.setattr(dataloader, "get_mongo_client", lambda: "mongo")
     monkeypatch.setattr(dataloader, "AsyncArcticStore", FakeStore)
     monkeypatch.setattr(dataloader, "HistorySink", lambda contract, store: FakeSink())
@@ -641,6 +648,98 @@ async def test_manager_policy_flows_to_store_and_download_job(
         == dataloader.helpers.DEFAULT_TARGET_BARS_PER_REQUEST
     )
     assert job.params["endDateTime"] == date(2025, 1, 10)
+
+
+@pytest.mark.asyncio
+async def test_update_only_job_does_not_request_headstamp(
+    monkeypatch, dataloader_module
+):
+    """Backfill-exhausted series should plan updates without broker discovery."""
+
+    dataloader = dataloader_module
+    contract = FakeContract()
+    index = pd.DatetimeIndex(
+        [
+            datetime(2025, 1, 1, tzinfo=timezone.utc),
+            datetime(2025, 1, 2, tzinfo=timezone.utc),
+        ]
+    )
+
+    class FakeStore:
+        async def read(self, requested_contract):
+            return pd.DataFrame({"close": [1, 2]}, index=index)
+
+        async def read_metadata(self, requested_contract):
+            return {"backfill_exhausted": True}
+
+    class FakePacing:
+        def contract_timezone(self, requested_contract):
+            return None
+
+    async def fake_contracts(self):
+        yield contract
+
+    async def unexpected_headstamp(self, requested_contract):
+        raise AssertionError("head timestamp should not be requested")
+
+    monkeypatch.setattr(dataloader.Manager, "contracts", fake_contracts)
+    monkeypatch.setattr(dataloader.Manager, "headstamp", unexpected_headstamp)
+    manager = dataloader.Manager(
+        object(),
+        store=FakeStore(),
+        pacing=FakePacing(),
+        bar_size="30 secs",
+        now=datetime(2025, 1, 3, tzinfo=timezone.utc),
+    )
+
+    job = await anext(manager.jobs())
+
+    assert [container.kind for container in job.queue] == ["update"]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_small_bar_contract_skips_headstamp(
+    monkeypatch, dataloader_module
+):
+    """An expired contract outside six months should stop before discovery."""
+
+    dataloader = dataloader_module
+    contract = ibi.Future(
+        conId=123,
+        symbol="ES",
+        localSymbol="ESZ4",
+        lastTradeDateOrContractMonth="20241220",
+    )
+
+    class FakeStore:
+        async def read(self, requested_contract):
+            return None
+
+        async def read_metadata(self, requested_contract):
+            return {}
+
+    class FakePacing:
+        def contract_timezone(self, requested_contract):
+            return None
+
+    async def fake_contracts(self):
+        yield contract
+
+    async def unexpected_headstamp(self, requested_contract):
+        raise AssertionError("head timestamp should not be requested")
+
+    monkeypatch.setattr(dataloader.Manager, "contracts", fake_contracts)
+    monkeypatch.setattr(dataloader.Manager, "headstamp", unexpected_headstamp)
+    manager = dataloader.Manager(
+        object(),
+        store=FakeStore(),
+        pacing=FakePacing(),
+        bar_size="30 secs",
+        now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(manager.jobs())
 
 
 @pytest.mark.asyncio

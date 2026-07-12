@@ -2,7 +2,9 @@
 
 from datetime import timedelta
 
-DEFAULT_TARGET_BARS_PER_REQUEST = 100_000
+# IBKR recommends only a few thousand bars per request. The dataloader uses a
+# deliberately moderate transitional target while preserving request throughput.
+DEFAULT_TARGET_BARS_PER_REQUEST = 25_000
 
 # source:
 # https://ibkrcampus.com/campus/ibkr-api-page/twsapi-doc/#historical-bars
@@ -30,8 +32,9 @@ BAR_SIZE_SECONDS = {
     "1 month": 3600 * 23 * 22,
 }
 
-# IBKR's current max-duration table allows only seconds requests for 1-second
-# bars. Other supported dataloader bar sizes share the documented 68-year cap.
+# IBKR max-duration rule: one-second bars accept at most 2000 seconds. Other
+# supported dataloader bar sizes share the current table's 68-year outer cap;
+# the target above normally produces a much shorter duration first.
 MAX_DURATION_BY_BAR_SIZE = {
     **{bar_size: "68 Y" for bar_size in BAR_SIZE_SECONDS},
     "1 secs": "2000 S",

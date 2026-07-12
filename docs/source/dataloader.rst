@@ -347,8 +347,15 @@ dataloader avoids requests that are known to be unavailable:
   is known.
 
 Historical-data request chunk size is an internal dataloader policy. It is
-large enough for efficient backfills, but still capped by IB's documented
-duration rules for the selected bar size.
+targeted at approximately 25,000 bars and remains capped by IB's documented
+duration rules for the selected bar size. IB recommends smaller responses, so
+if large requests are slow, review the dataloader log before increasing worker
+count or pacing allowance.
+
+The dataloader reads existing data and applies known contract-age limits before
+requesting ``headTimeStamp``. It requests that timestamp only when older
+backfill remains possible; update-only and ``backfill_exhausted`` series do not
+spend a discovery request on it.
 
 When a backfill request reaches a no-data boundary for a series that already
 has stored data, the dataloader writes ``backfill_exhausted: true`` to that
@@ -376,10 +383,13 @@ There is no dataloader connection-mode setting. Configure the gateway address,
 port, and ``clientId`` used by this standalone connection. The default client ID
 is ``1``; choose another value when that ID is already in use.
 
-The dataloader also keeps a local pacer for historical data, head timestamps,
-historical schedules, and contract details. This reduces avoidable IB pacing
-violations while still allowing supervised connection probes to reserve one
-historical-data request slot.
+The dataloader locally enforces IB's hard historical pacing rules for bars of
+``30 secs`` or less. Bars of ``1 min`` or longer retain a concurrency bound but
+do not use the small-bar 60-request/10-minute window. Head timestamps and
+contract details use a separate conservative discovery allowance. Historical
+schedules remain in the historical bucket because IB exposes them through the
+historical-data API without publishing a separate quota. One small-bar request
+slot is reserved for supervised connection probes.
 
 Completion And Failures
 =======================

@@ -25,6 +25,7 @@ request, restart, and date-policy behavior with focused tests.
   code. Keep IB calls out of them; obtain broker inputs in `Manager` and pass
   ordinary values into the planner.
 - Planned work executes in `update`, `backfill`, then `gap` order.
+- Contract jobs preserve source order through a bounded FIFO queue.
 - `DownloadJob` owns request progression for one contract. `DownloadContainer`
   owns one range's buffered chunks and next request boundary.
 - `AsyncStoreView` is the read-only scheduling boundary. `HistorySink` is the
@@ -57,7 +58,12 @@ See `docs/source/dataloader.rst` for user-facing behavior and
 - Route historical data, head timestamps, schedules, and contract-details calls
   through the session-scoped `RequestPacing` object.
 - Keep documented IB capacities in code, not user YAML. The global historical
-  capacity reserves one slot for supervisor probes.
+  capacity applies to bars of `30 secs` or less and schedules, and reserves one
+  slot for supervisor probes. Bars of `1 min` or longer retain only the open
+  request bound because IB has lifted their hard historical pacing rules.
+- Head timestamps and contract details use the separate discovery bucket.
+  Preload the store and apply known availability rules first, then request a
+  head timestamp only when an older backfill range can still exist.
 - `pacer_allowance_fraction < 1.0` reserves capacity for other clients. Values
   above `1.0` are intentionally allowed for experimentation but exceed
   published IB limits and may trigger throttling.
