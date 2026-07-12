@@ -46,7 +46,6 @@ from .scheduling import (
     TaskPlanner,
 )
 from .store_wrapper import AsyncStoreView, HistorySink
-from .task_logger import create_task
 from .time_policy import normalize_point
 
 setup_logging(CONFIG.get("logging_config"))
@@ -769,19 +768,15 @@ class DataloaderSession:
         log.debug("Initializing dataloader session.")
         self.queue = asyncio.LifoQueue(maxsize=int(self.number_of_workers / 4))
         self.workers = [
-            create_task(
+            asyncio.create_task(
                 self.worker(f"worker_{i}", self.queue),
-                logger=log,
-                message="asyncio error",
-                message_args=(f"worker {i}",),
+                name=f"worker {i}",
             )
             for i in range(self.number_of_workers)
         ]
-        self.producer_task = create_task(
+        self.producer_task = asyncio.create_task(
             self.producer(self.queue),
-            logger=log,
-            message="asyncio error",
-            message_args=("producer",),
+            name="producer",
         )
 
         try:
