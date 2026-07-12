@@ -1,3 +1,5 @@
+"""Convert dataloader bar sizes and time spans to IB duration strings."""
+
 from datetime import timedelta
 
 DEFAULT_TARGET_BARS_PER_REQUEST = 100_000
@@ -44,16 +46,31 @@ def _validate_bar_size(barSize: str) -> None:
 
 
 def duration_in_secs(barSize: str) -> int:
-    """Given duration string return duration in seconds int"""
+    """Return the nominal number of seconds represented by an IB bar size.
+
+    Args:
+        barSize: Canonical IB bar-size string supported by the dataloader.
+
+    Returns:
+        Nominal bar duration in seconds. Daily and longer bars use the
+        dataloader's session-length estimates.
+
+    Raises:
+        ValueError: If ``barSize`` is unsupported.
+    """
 
     _validate_bar_size(barSize)
     return BAR_SIZE_SECONDS[barSize]
 
 
 def duration_str(duration_in_secs: int) -> str:
-    """
-    Given duration in seconds return duration str acceptable by IB.
+    """Return an IB-compatible duration string for a nominal time span.
 
+    Args:
+        duration_in_secs: Duration expressed in dataloader-normalized seconds.
+
+    Returns:
+        Duration using IB's ``S``, ``D``, ``M``, or ``Y`` unit syntax.
     """
 
     days = int(duration_in_secs / 60 / 60 / 23)
@@ -71,12 +88,16 @@ def duration_str(duration_in_secs: int) -> str:
 
 
 def timedelta_normalizer(seconds: float) -> int:
-    """
-    I'm assuming week is: 60secs * 60min * 23hour * 5days
-    timedelta assumes: 60secs * 60min * 24hours * 7days
-    So adjustments are needed...
+    """Convert calendar seconds to the dataloader's nominal session seconds.
 
-    Holidays are ignored (irrelevant error given the objective).
+    The estimate assumes a 23-hour session and five-session week. It is used to
+    shape requests, not to predict the exact number of bars IB will return.
+
+    Args:
+        seconds: Calendar duration in seconds.
+
+    Returns:
+        Estimated tradable-session duration in whole seconds.
     """
     # period shorter than one day
     if seconds < 23 * 60 * 60:
@@ -98,10 +119,19 @@ def timedelta_to_duration_in_secs(
     bar_size_in_secs: int,
     target_bars_per_request: int = DEFAULT_TARGET_BARS_PER_REQUEST,
 ) -> int:
+    """Clamp a requested span to the internal target bars per request.
+
+    Args:
+        duration: Calendar range that remains to be downloaded.
+        bar_size_in_secs: Nominal duration of one bar in seconds.
+        target_bars_per_request: Internal target number of bars in one request.
+
+    Returns:
+        Estimated request duration in seconds.
+    """
+
     target_duration_in_secs = target_bars_per_request * bar_size_in_secs
-    return min(
-        timedelta_normalizer(duration.total_seconds()), target_duration_in_secs
-    )
+    return min(timedelta_normalizer(duration.total_seconds()), target_duration_in_secs)
 
 
 def timedelta_and_barSize_to_duration_str(
@@ -109,18 +139,19 @@ def timedelta_and_barSize_to_duration_str(
     barSize: str,
     target_bars_per_request: int = DEFAULT_TARGET_BARS_PER_REQUEST,
 ) -> str:
-    """
-    Given bar size str and duration, return optimal duration str.
+    """Return a bounded IB duration for the remaining download range.
 
-    Parameters:
-    -----------
+    Args:
+        duration: Calendar range that remains to be downloaded.
+        barSize: Canonical IB bar-size string.
+        target_bars_per_request: Internal target number of bars in one request.
 
-    duration - timedelta of the period for which we're trying to
-               generate duration str barSize - IB's barSize param
+    Returns:
+        Duration string accepted by ``reqHistoricalData`` and capped by the
+        documented maximum span for ``barSize``.
 
-    barSize - barSize str acceptable by IB's reqHistoricalData
-
-    target_bars_per_request - target number of bars to request at once
+    Raises:
+        ValueError: If ``barSize`` is unsupported.
 
     """
     _validate_bar_size(barSize)
@@ -153,7 +184,18 @@ def _cap_duration_str(durationStr: str, maxDurationStr: str) -> str:
 
 
 def duration_to_timedelta(duration: str) -> timedelta:
-    """Convert duration string of reqHistoricalData into datetime.timedelta"""
+    """Convert an IB duration string to an approximate ``timedelta``.
+
+    Args:
+        duration: Number and unit separated by one space, for example ``2000 S``
+            or ``1 Y``.
+
+    Returns:
+        Approximate calendar duration. Months and years use fixed estimates.
+
+    Raises:
+        ValueError: If the duration unit is unknown.
+    """
     str_number, time = duration.split(" ")
     number = int(str_number)
     if time == "S":

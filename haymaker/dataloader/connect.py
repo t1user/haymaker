@@ -23,7 +23,8 @@ class DataloaderRuntime:
 
     Args:
         func: Async dataloader workload to run after connection.
-        cleanup: Optional callback used to release active work before restart.
+        cleanup: Optional synchronous callback used to request cancellation
+            before the supervisor stops the active workload.
     """
 
     func: Callable[[], Awaitable[None]]
@@ -74,12 +75,17 @@ class DataloaderRuntime:
 
 @dataclass
 class DataloaderConnection:
-    """Run dataloader work under an owned supervised IB connection.
+    """Compose a dataloader workload with its IB connection supervisor.
+
+    The dataloader entrypoint creates one instance and calls :meth:`run`. There
+    is no selectable connection mode: the supplied ``IB`` object is always
+    owned by this supervised dataloader process.
 
     Args:
         ib: Interactive Brokers client used by the dataloader.
-        func: Async dataloader workload to run after connection.
-        cleanup: Optional callback used to release work after disconnection.
+        func: Async dataloader workload started after connectivity is verified.
+        cleanup: Optional synchronous callback that requests workload cleanup
+            before a supervisor restart.
     """
 
     ib: IB
@@ -98,6 +104,10 @@ class DataloaderConnection:
         )
 
     def run(self) -> None:
-        """Run until the dataloader workload finishes."""
+        """Run the supervisor until the workload completes or fails.
+
+        Raises:
+            Exception: Propagates terminal supervisor or workload failures.
+        """
 
         asyncio.run(self.supervisor.run())

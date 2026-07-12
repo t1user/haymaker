@@ -154,32 +154,15 @@ class RunGapLearner:
 
 @dataclass
 class DownloadJob:
-    """
-    Keep track of planned downloads for one contract.
+    """Track request progression and buffered results for one contract.
 
     The job provides exact :meth:`ib.reqHistoricalData` params for each planned
     range, buffers downloaded bars until they are handed to persistence, and
     delegates writes to :class:`HistorySink`.
 
-    There are potentially 3 streams of data that a job might schedule:
-
-    * backfill - data older than the oldest data point available in
-    the store
-
-    * update - data newer than the newest data point available
-
-    * gap-fill - any data missing inside the range available in the
-    store
-
-    public methods/attributes:
-
-    * `contract`
-
-    * `next_date`
-
-    * `params`
-
-    * `save_chunk`
+    A job may contain update, backfill, and gap-fill ranges. Ranges are consumed
+    in queue order. Successful chunks are persisted at ``save_every_chunks``;
+    range completion and explicit cleanup flush any smaller remaining batch.
 
     Args:
         contract: IB contract this job downloads.
@@ -189,6 +172,9 @@ class DownloadJob:
         target_bars_per_request: Target chunk size used before applying IB's
             hard duration limits.
         save_every_chunks: Number of downloaded chunks buffered before writing.
+
+    Raises:
+        ValueError: If ``save_every_chunks`` is not positive.
     """
 
     contract: ibi.Contract
@@ -331,25 +317,16 @@ class DownloadJob:
 
 @dataclass
 class DownloadContainer:
-    """Hold downloaded bars before they are saved to the datastore.
+    """Hold request state and buffered bars for one planned date range.
 
     Args:
         from_date: Earliest point this range should cover.
         to_date: Latest point this range should cover.
+        bar_size: Canonical IB bar size controlling date normalization.
         kind: Download range kind used to distinguish backfill exhaustion from
             update and gap-fill misses.
-        bars: Downloaded chunks buffered before persistence.
-
-    Public methods/attributes:
-
-    * next_date
-
-    * save_chunk
-
-    * clear
-
-    * flush_data
-
+        gap_pattern: Optional run-local pattern used by heuristic gap filling.
+        bars: Downloaded chunks waiting for persistence.
     """
 
     from_date: datetime | date
@@ -388,10 +365,7 @@ class DownloadContainer:
             self._next_date = normalized
 
     def save_chunk(self, bars: Optional[ibi.BarDataList] | None) -> None:
-        """
-        Store downloaded data and if more data and update date point
-        for next download.
-        """
+        """Buffer returned bars and advance the next request boundary."""
 
         if bars:
             self.next_date = bars[0].date
@@ -400,10 +374,7 @@ class DownloadContainer:
             self.next_date = None
 
     def flush_data(self) -> Optional[pd.DataFrame]:
-        """
-        Return df ready to be written to datastore or date of end
-        point for additional downloads.
-        """
+        """Return buffered chunks as one chronological dataframe, if present."""
         if self.bars:
             df = ibi.util.df(
                 [b for bars in reversed(self.bars) for b in bars]
@@ -414,16 +385,36 @@ class DownloadContainer:
         else:
             return None
 
-    def clear(self):
-        """
-        Delete data stored in this object.  Should be called after
-        data is persisted to db.
-        """
+    def clear(self) -> None:
+        """Discard buffered chunks after successful persistence."""
         self.bars.clear()
 
 
 @dataclass
 class Manager:
+    """Discover contracts and create download jobs for one dataloader run.
+
+    Args:
+        ib: Connected IB client used through ``RequestPacing``.
+        pacing: Optional preconfigured request pacer. A session pacer is created
+            when omitted.
+        store: Optional async store, primarily for focused callers and tests.
+            Arctic is created lazily when omitted.
+        source: CSV path containing IB contract fields.
+        gap_fill_mode: One of ``off``, ``heuristic``, ``schedule``, or ``auto``.
+        use_rth: Restrict historical bars and schedules to regular hours.
+        max_lookback_days: Optional positive run lookback cap. ``None`` requests
+            all history permitted by IB and datastore state.
+        save_every_chunks: Positive number of chunks buffered per datastore
+            version.
+        wts: IB ``whatToShow`` value.
+        bar_size: Canonical IB historical bar size.
+        now: Run-scoped current point; normalized according to ``bar_size``.
+
+    Raises:
+        ValueError: If request policy values are invalid.
+    """
+
     ib: ibi.IB
     pacing: RequestPacing | None = None
     store: AsyncAbstractBaseStore | None = None
@@ -735,7 +726,21 @@ def request_age_available(job: DownloadJob, now: date | datetime) -> bool:
 
 @dataclass
 class DataloaderSession:
-    """Own one dataloader runtime session and its restartable execution state."""
+    """Run discovered jobs through a producer and paced worker pool.
+
+    Connection failures propagate for supervisor recovery. Individual broker
+    historical-request failures are recorded while other jobs continue. Local
+    processing and datastore failures terminate the session. Before returning
+    or propagating an error, the session stops workers and flushes buffered
+    chunks from active jobs.
+
+    Args:
+        ib: IB client used by this dataloader process.
+        manager: Optional preconfigured job manager.
+        number_of_workers: Number of concurrent worker tasks. Request pacing
+            still limits outbound broker calls.
+        failures: Registry receiving non-terminal historical-request failures.
+    """
 
     ib: ibi.IB
     manager: Manager | None = None
@@ -954,7 +959,9 @@ def _contract_expiry(contract: ibi.Contract, bar_size: str) -> date | datetime |
     return normalize_point(expiry, bar_size)
 
 
-def start():
+def start() -> None:
+    """Run the configured standalone dataloader command until completion."""
+
     ibi.util.patchAsyncio()
     ib = ibi.IB()
     session = DataloaderSession(ib)

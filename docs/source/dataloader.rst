@@ -214,25 +214,34 @@ Common settings:
 ``useRTH``
    Passed to IB historical-data and historical-schedule requests.
 
+``host``
+   Hostname or IP address of TWS or IB Gateway. The default is ``127.0.0.1``.
+
+``port``
+   TWS or IB Gateway API port. The default is ``4002``.
+
 ``clientId``
    IB API client ID. The dataloader default is ``1`` so it is distinct from the
    live runtime's expected ``clientId=0``.
 
 ``number_of_workers``
-   Number of worker tasks consuming planned downloads. Pacing still limits
-   outbound IB requests.
+   Number of worker tasks consuming planned downloads. The default is ``20``.
+   Increasing it can keep more contracts active, but does not bypass local or IB
+   pacing limits.
 
 ``save_every_chunks``
    Number of downloaded chunks buffered before creating a new datastore
-   version. A range completion or dataloader shutdown also flushes any remaining
-   chunks. Larger values reduce full-series rewrites but increase the amount of
-   data that an ungraceful process failure may lose.
+   version. The default is ``10``. A range completion or orderly dataloader
+   shutdown also saves any remaining chunks. Larger values reduce full-series
+   rewrites but increase the amount of recently downloaded data that a forced
+   process termination may lose.
 
 ``pacer_allowance_fraction``
-   Multiplies the dataloader's local pacing capacity. Use values below ``1.0``
-   to leave more room for other IB clients. Values above ``1.0`` are allowed for
-   experimentation, but deliberately exceed IB's published pacing limits and
-   may trigger broker throttling or pacing violations.
+   Multiplies the dataloader's local pacing capacity. The default is ``1.0``.
+   Use values below ``1.0`` to leave more room for other IB clients. Values above
+   ``1.0`` are allowed for experimentation, but deliberately exceed IB's
+   published pacing limits and may trigger broker throttling or pacing
+   violations.
 
 Example: daily stock bars:
 
@@ -305,6 +314,11 @@ library name is derived from ``wts`` and ``barSize``:
 
 Collections use Haymaker's default contract naming policy.
 
+Each save creates a complete new Arctic version of the series. The dataloader
+does not append fragments directly, so a saved version remains independently
+readable. ``save_every_chunks`` controls how frequently a long download creates
+these versions.
+
 Read data back with the datastore API:
 
 .. code-block:: python
@@ -358,10 +372,36 @@ The dataloader creates its own ``ib_insync.IB`` client and runs under the
 Haymaker connection supervisor. The supervisor reconnects the IB API socket but
 does not start, stop, or restart TWS/IB Gateway.
 
+There is no dataloader connection-mode setting. Configure the gateway address,
+port, and ``clientId`` used by this standalone connection. The default client ID
+is ``1``; choose another value when that ID is already in use.
+
 The dataloader also keeps a local pacer for historical data, head timestamps,
 historical schedules, and contract details. This reduces avoidable IB pacing
 violations while still allowing supervised connection probes to reserve one
 historical-data request slot.
+
+Completion And Failures
+=======================
+
+Normal completion means all planned contracts were processed, but individual
+historical requests can fail while other contracts continue. Review the final
+log summary for failed download jobs before treating a large run as complete.
+Re-running the same command plans remaining work again from the data already
+saved in Arctic.
+
+The run stops rather than continuing when it cannot safely plan or persist data,
+including these cases:
+
+* a source row identifies an unknown or ambiguous contract;
+* ``schedule`` gap mode cannot obtain a usable historical schedule;
+* local date or dataframe processing fails;
+* an Arctic read or write fails.
+
+IB connection failures are handled by the connection supervisor. During an
+orderly restart or shutdown, buffered chunks are saved before the session
+finishes. A forced process kill can lose only the chunks accumulated since the
+last threshold or range-completion save.
 
 Operational Notes
 =================
@@ -375,4 +415,4 @@ Operational Notes
 * If IB returns no older backfill data for an existing series, future runs will
   honor ``backfill_exhausted: true`` metadata.
 * A full process stop does not write a separate checkpoint. The next process
-  derives remaining work from the persisted datastore boundaries.
+   derives remaining work from the persisted datastore boundaries.

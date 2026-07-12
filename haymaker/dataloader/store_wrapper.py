@@ -12,7 +12,18 @@ from .time_policy import normalize_index, normalize_optional_point, normalize_po
 
 @dataclass
 class AsyncStoreView:
-    """Read-only async datastore view for one contract's persisted data."""
+    """Preloaded read-only scheduling view of one persisted contract series.
+
+    Use :meth:`create` so data and optional metadata are loaded before reading
+    boundary properties. Intraday indices are normalized to UTC-aware
+    datetimes; daily and longer indices are normalized to dates.
+
+    Args:
+        contract: Contract whose existing series is being planned.
+        store: Async datastore used for reads.
+        now: Run-scoped latest point considered by scheduling.
+        bar_size: Canonical IB bar size controlling date normalization.
+    """
 
     contract: ibi.Contract
     store: AsyncAbstractBaseStore
@@ -29,7 +40,7 @@ class AsyncStoreView:
         now: Union[date, datetime],
         bar_size: str,
     ) -> "AsyncStoreView":
-        """Create a wrapper and preload the existing dataframe once."""
+        """Create a view and preload its dataframe and optional metadata."""
 
         wrapper = cls(contract, store, normalize_point(now, bar_size), bar_size)
         await wrapper.read()
@@ -65,7 +76,7 @@ class AsyncStoreView:
 
     @property
     def to_date(self) -> date | datetime | None:
-        """Latest point in datastore"""
+        """Return the latest stored scheduling point, if any."""
         if self.data is None or self.data.empty:
             return None
         return self.data.index.max()
@@ -86,14 +97,8 @@ class AsyncStoreView:
         expiry = datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
         return normalize_optional_point(expiry, self.bar_size)
 
-    def expiry_or_now(self):
-        """
-        It's mean to set the latest point to which it's possible to
-        download data, which is either present moment or contract
-        expiry whichever is earlier.  Contract expiry exists only for
-        some types of contracts, if it doesn't exist, it should be
-        disregarded.
-        """
+    def expiry_or_now(self) -> date | datetime:
+        """Return the latest point eligible for this contract's download."""
         return min(self.expiry, self.now) if self.expiry else self.now
 
 
