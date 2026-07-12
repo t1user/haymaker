@@ -80,6 +80,13 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   recovery.
 - Dataloader logging is separate from live Telegram alerts. Reserve high
   severity for failures requiring attention, not ordinary recovery waits.
+- Preserve request-stage wording in diagnostics: `prepared` is pre-pacer,
+  `Local pacer delaying` is a client-side wait, and `Submitted ... to IB` means
+  broker response time has begun. Locally inferred availability skips must say
+  `local policy`; do not phrase them as broker responses.
+- Periodic status is an operational snapshot, not a dump of empty buckets. Keep
+  worker utilization, named IB waits, named queued contracts, and actual producer
+  backpressure visible; omit inactive request families.
 
 ## Availability And Contract Rules
 

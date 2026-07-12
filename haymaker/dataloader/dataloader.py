@@ -31,7 +31,7 @@ from haymaker.validators import bar_size_validator, wts_validator
 from . import helpers
 from .connect import DataloaderConnection
 from .contract_selectors import ContractSelector
-from .pacer import RequestPacing
+from .pacer import InFlightRequest, RequestPacing
 from .scheduling import (
     GapFillMode,
     GapPattern,
@@ -41,6 +41,7 @@ from .scheduling import (
     SMALL_BAR_MAX_AGE,
     SessionRange,
     historical_data_unavailable,
+    historical_unavailability_reason,
     schedule_timezone,
     sessions_from_historical_schedule,
     TaskPlanner,
@@ -129,6 +130,7 @@ CONNECTION_FAILURE_ERRORS = (ConnectionError, TimeoutError)
 SCHEDULE_CHUNK_DAYS = 120
 LEARNED_GAP_FAILURES = 2
 HEADSTAMP_FALLBACK_DAYS = 5 * 365
+STATUS_LOG_INTERVAL = 300.0
 
 
 class DownloadRequestError(Exception):
@@ -220,10 +222,23 @@ class DownloadJob:
         else:
             return None
 
-    async def save_chunk(self, data: ibi.BarDataList | None) -> None:
+    async def save_chunk(
+        self,
+        data: ibi.BarDataList | None,
+        *,
+        empty_reason: str = "IB returned no bars",
+    ) -> None:
+        """Buffer one response or stop the current range with an explicit reason."""
+
         container = self._container
         if data:
-            log.info(f"{self!s} received bars from: {data[0].date} to {data[-1].date}")
+            log.info(
+                "IB returned %d bars for %s from %s to %s.",
+                len(data),
+                self,
+                data[0].date,
+                data[-1].date,
+            )
             container.save_chunk(data)
             range_complete = container.next_date is None or self.is_continuous_future
             if len(container.bars) >= self.save_every_chunks or range_complete:
@@ -233,7 +248,13 @@ class DownloadJob:
         else:
             learned_gap_pattern = self._learn_empty_gap_pattern()
             if container.next_date:
-                log.warning(f"{self!s} cannot download data past {container.next_date}")
+                log.warning(
+                    "%s for %s; stopping %s range at %s.",
+                    empty_reason,
+                    self,
+                    container.kind,
+                    container.next_date,
+                )
             await self.write_to_store(container)
             if container.kind == "backfill":
                 await self.sink.mark_backfill_exhausted()
@@ -656,8 +677,13 @@ class Manager:
                 contract, self.datastore, self.now, self.bar_size
             )
             planner = self.task_planner(store, None)
-            if historical_data_unavailable(store):
-                log.debug("Skipping %s - IB historical data is unavailable.", contract)
+            if reason := historical_unavailability_reason(store):
+                log.debug(
+                    "Skipping %s without an IB historical request: local policy "
+                    "determined the series is unavailable; %s.",
+                    contract.localSymbol or contract.symbol,
+                    reason,
+                )
                 continue
             headstamp = (
                 await self.headstamp(contract) if planner.needs_headstamp else None
@@ -771,6 +797,11 @@ class DataloaderSession:
     queue: asyncio.Queue[DownloadJob] | None = field(default=None, init=False)
     workers: list[asyncio.Task] = field(default_factory=list, init=False)
     producer_task: asyncio.Task | None = field(default=None, init=False)
+    status_task: asyncio.Task | None = field(default=None, init=False)
+    producer_state: str = field(default="not_started", init=False)
+    producer_pending_job: str | None = field(default=None, init=False)
+    queued_jobs: dict[int, str] = field(default_factory=dict, init=False)
+    worker_jobs: dict[str, str] = field(default_factory=dict, init=False)
     fatal_error: BaseException | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -807,6 +838,9 @@ class DataloaderSession:
             self.producer(self.queue),
             name="producer",
         )
+        self.status_task = asyncio.create_task(
+            self.log_status(), name="dataloader-status"
+        )
 
         outcome: Literal["completed", "interrupted", "failed"] = "failed"
         try:
@@ -838,23 +872,41 @@ class DataloaderSession:
         assert self.manager is not None
         log.debug("Initializing PRODUCER")
         if self.manager.active_jobs:
+            self.producer_state = "resuming"
             log.debug("Will start queuing jobs, which are already initialized.")
         for job in self.manager.active_jobs:
             if not job.is_done():
-                await queue.put(job)
-                log.debug(f"Active job {job} added to queue.")
+                await self._enqueue_job(queue, job, active=True)
 
+        self.producer_state = "planning"
         log.debug("Will start queuing new jobs.")
         while True:
             try:
                 new_job = await anext(self.manager.new_job_generator)
-                await queue.put(new_job)
-                log.debug(f"New job {new_job} added to queue.")
+                await self._enqueue_job(queue, new_job, active=False)
             except StopAsyncIteration:
                 log.debug("No more jobs!")
                 break
 
+        self.producer_state = "finished"
         log.debug("Producer done!")
+
+    async def _enqueue_job(
+        self, queue: asyncio.Queue, job: DownloadJob, *, active: bool
+    ) -> None:
+        """Queue one job while exposing producer backpressure state."""
+
+        label = _job_label(job)
+        self.producer_pending_job = label
+        self.producer_state = "blocked_on_full_queue" if queue.full() else "enqueueing"
+        try:
+            await queue.put(job)
+        finally:
+            self.producer_pending_job = None
+        self.queued_jobs[id(job)] = label
+        self.producer_state = "resuming" if active else "planning"
+        source = "Active" if active else "New"
+        log.debug("%s job %s added to queue.", source, job)
 
     async def worker(self, name: str, queue: asyncio.Queue) -> None:
         """Download historical data chunks for queued jobs."""
@@ -862,6 +914,8 @@ class DataloaderSession:
         log.debug(f"Initializing {name.upper()}")
         while True:
             job = await queue.get()
+            self.queued_jobs.pop(id(job), None)
+            self.worker_jobs[name] = _job_label(job)
 
             try:
                 await self.download_job(name, job)
@@ -880,6 +934,7 @@ class DataloaderSession:
                 log.exception("%s hit fatal failure while loading %s.", name, job)
                 raise
             finally:
+                self.worker_jobs.pop(name, None)
                 queue.task_done()
 
     async def download_job(self, name: str, job: DownloadJob) -> None:
@@ -888,13 +943,20 @@ class DataloaderSession:
         assert self.manager is not None
         while True:
             if not request_age_available(job, self.manager.now):
-                await job.save_chunk(None)
+                await job.save_chunk(
+                    None,
+                    empty_reason="Local IB age policy rejected the request before submission",
+                )
                 log.debug(f"{job!s} dropped before request on age validation.")
                 break
             params = job.params
             log.debug(
-                f"{name} loading {job!s} ending: {job.next_date} "
-                f"duration: {params['durationStr']}"
+                "%s prepared %s historical request ending %s with duration %s; "
+                "handing it to the local pacer.",
+                name,
+                job,
+                job.next_date,
+                params["durationStr"],
             )
             try:
                 chunk = await self.pacing.historical_data(
@@ -912,7 +974,13 @@ class DataloaderSession:
 
             if job.next_date:
                 if not request_age_available(job, self.manager.now):
-                    await job.save_chunk(None)
+                    await job.save_chunk(
+                        None,
+                        empty_reason=(
+                            "Local IB age policy stopped the range after the last "
+                            "response"
+                        ),
+                    )
                     log.debug(f"{job!s} dropped on age validation.")
                     break
             else:
@@ -944,7 +1012,9 @@ class DataloaderSession:
         """Cancel active dataloader execution tasks and drain queued work."""
 
         tasks = [
-            task for task in [self.producer_task, *self.workers] if task is not None
+            task
+            for task in [self.producer_task, self.status_task, *self.workers]
+            if task is not None
         ]
         for task in tasks:
             if not task.done():
@@ -955,6 +1025,61 @@ class DataloaderSession:
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def log_status(self) -> None:
+        """Periodically explain whether work is locally queued or waiting on IB."""
+
+        while True:
+            await asyncio.sleep(STATUS_LOG_INTERVAL)
+            assert self.queue is not None
+            small = self.pacing.historical.status()
+            large = self.pacing.large_bar_historical.status()
+            discovery = self.pacing.metadata.status()
+            historical_requests = tuple(
+                sorted(
+                    (*small.requests, *large.requests),
+                    key=lambda request: request.elapsed_seconds,
+                    reverse=True,
+                )
+            )
+            workers_waiting_for_ib = sum(
+                request.owner.startswith("worker ") for request in historical_requests
+            )
+            producer = self.producer_state
+            if self.producer_pending_job:
+                producer = f"{producer} (next={self.producer_pending_job})"
+            log.debug(
+                "Dataloader status: workers_engaged=%d/%d, "
+                "workers_waiting_for_IB=%d, historical_requests_waiting_for_IB=%d, "
+                "waiting_for_local_pacer=%d, waiting_for_local_concurrency=%d, "
+                "contracts_waiting_for_worker=%d, producer=%s.",
+                len(self.worker_jobs),
+                self.number_of_workers,
+                workers_waiting_for_ib,
+                len(historical_requests),
+                small.pacing_waiters + large.pacing_waiters,
+                small.concurrency_waiters + large.concurrency_waiters,
+                self.queue.qsize(),
+                producer,
+            )
+            if historical_requests:
+                log.debug(
+                    "Waiting for IB (%d): %s.",
+                    len(historical_requests),
+                    _format_in_flight_requests(historical_requests),
+                )
+            if self.queued_jobs:
+                log.debug(
+                    "Waiting for worker (%d): %s.",
+                    len(self.queued_jobs),
+                    ", ".join(self.queued_jobs.values()),
+                )
+            if discovery.requests:
+                log.debug(
+                    "Discovery requests waiting for IB (%d): %s.",
+                    len(discovery.requests),
+                    _format_in_flight_requests(discovery.requests),
+                )
 
     async def flush_pending(self) -> None:
         """Persist chunks buffered by active jobs after execution has stopped."""
@@ -972,6 +1097,37 @@ def shutdown_queue(queue: asyncio.Queue) -> None:
         except (asyncio.QueueEmpty, ValueError):
             break
     log.debug("Queue has been shutdown.")
+
+
+def _job_label(job: DownloadJob) -> str:
+    """Return a compact instrument label for queue and worker diagnostics."""
+
+    contract = getattr(job, "contract", None)
+    if contract is None:
+        return str(getattr(job, "name", job))
+    return str(contract.localSymbol or contract.symbol or contract)
+
+
+def _format_in_flight_requests(requests: tuple[InFlightRequest, ...]) -> str:
+    """Format named IB requests with oldest waits first."""
+
+    return ", ".join(
+        f"{request.label}={_format_elapsed(request.elapsed_seconds)}"
+        for request in requests
+    )
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Return a compact elapsed duration for periodic status logs."""
+
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
 
 
 def _days_between(start: date | datetime, end: date | datetime) -> int:

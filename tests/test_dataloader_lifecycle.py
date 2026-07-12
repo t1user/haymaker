@@ -134,6 +134,50 @@ async def test_session_producer_requeues_active_jobs_before_new_discovery(
     assert queue.get_nowait() is new_job
 
 
+@pytest.mark.asyncio
+async def test_producer_reports_job_held_outside_full_queue(dataloader_module):
+    """Producer status should identify backpressure and its pending instrument."""
+
+    dataloader = dataloader_module
+
+    class FakeJob:
+        def __init__(self, name):
+            self.name = name
+
+        def is_done(self):
+            return False
+
+    first = FakeJob("first")
+    second = FakeJob("second")
+
+    async def new_jobs():
+        yield first
+        yield second
+
+    manager = SimpleNamespace(
+        ib=None,
+        active_jobs=[],
+        new_job_generator=new_jobs(),
+        pacing=dataloader.RequestPacing(object()),
+    )
+    session = dataloader.DataloaderSession(object(), manager=manager)
+    queue = asyncio.Queue(maxsize=1)
+    producer = asyncio.create_task(session.producer(queue))
+
+    for _ in range(10):
+        if session.producer_state == "blocked_on_full_queue":
+            break
+        await asyncio.sleep(0)
+
+    assert session.producer_state == "blocked_on_full_queue"
+    assert session.producer_pending_job == "second"
+    assert list(session.queued_jobs.values()) == ["first"]
+
+    producer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await producer
+
+
 def test_dataloader_config_validates_pacer_allowance_fraction(
     monkeypatch,
     dataloader_module,
@@ -506,6 +550,7 @@ async def test_worker_skips_small_bar_request_past_age_limit(dataloader_module):
 
         def __init__(self):
             self.saved_chunks = []
+            self.empty_reason = None
 
         @property
         def params(self):
@@ -515,8 +560,9 @@ async def test_worker_skips_small_bar_request_past_age_limit(dataloader_module):
                 "durationStr": "1 D",
             }
 
-        async def save_chunk(self, chunk):
+        async def save_chunk(self, chunk, *, empty_reason=None):
             self.saved_chunks.append(chunk)
+            self.empty_reason = empty_reason
             self.next_date = None
 
         def __str__(self):
@@ -535,6 +581,7 @@ async def test_worker_skips_small_bar_request_past_age_limit(dataloader_module):
 
     assert ib.requests == 0
     assert job.saved_chunks == [None]
+    assert job.empty_reason.startswith("Local IB age policy")
 
 
 def test_manager_preserves_injected_pacing_policy(dataloader_module):

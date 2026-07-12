@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 
 import ib_insync as ibi
@@ -9,7 +11,9 @@ from haymaker.dataloader.pacer import (
     HISTORICAL_PROBE_RESERVE,
     HISTORICAL_SAME_KEY_LIMIT,
     RequestKind,
+    RequestProfile,
     RequestPacing,
+    RollingWindowRule,
 )
 
 
@@ -126,6 +130,82 @@ async def test_head_timestamps_use_discovery_pacing():
     assert ib.head_timestamp_requests == 1
     assert not pacing.historical.rules[0].history
     assert len(pacing.metadata.rules[0].history) == 1
+
+
+@pytest.mark.asyncio
+async def test_request_status_distinguishes_waiting_for_ib():
+    """Bucket status should expose admitted requests awaiting broker responses."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class SlowIB(FakeIB):
+        async def reqHistoricalDataAsync(self, *args, **kwargs):
+            started.set()
+            await release.wait()
+            return ["ok"]
+
+    contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
+    pacing = RequestPacing(SlowIB(), no_restriction=True)
+    request = asyncio.create_task(
+        pacing.historical_data(
+            contract,
+            endDateTime="",
+            durationStr="1 D",
+            barSizeSetting="30 secs",
+            whatToShow="TRADES",
+            useRTH=False,
+            formatDate=2,
+        ),
+        name="worker 3",
+    )
+    await started.wait()
+
+    status = pacing.historical.status()
+    assert status.in_flight == 1
+    assert status.oldest_in_flight_seconds is not None
+    assert status.requests[0].label == "ES"
+    assert status.requests[0].owner == "worker 3"
+
+    release.set()
+    await request
+    assert pacing.historical.status().in_flight == 0
+
+
+@pytest.mark.asyncio
+async def test_long_pacer_wait_names_local_limiting_rule(caplog):
+    """A suspended request should identify the local rule responsible."""
+
+    contract = ibi.Future(symbol="ES", exchange="CME", currency="USD", conId=123)
+    pacing = RequestPacing(FakeIB())
+    rule = pacing.historical.rules[0]
+    assert isinstance(rule, RollingWindowRule)
+    now = datetime.now(timezone.utc)
+    profile = RequestProfile(RequestKind.HISTORICAL_DATA)
+    for _ in range(rule.capacity):
+        rule.register(profile, now)
+
+    caplog.set_level(logging.DEBUG, logger="haymaker.dataloader.pacer")
+    request = asyncio.create_task(
+        pacing.historical_data(
+            contract,
+            endDateTime="",
+            durationStr="1 D",
+            barSizeSetting="30 secs",
+            whatToShow="TRADES",
+            useRTH=False,
+            formatDate=2,
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert pacing.historical.status().pacing_waiters == 1
+    assert "Local pacer delaying" in caplog.text
+    assert "global 59 requests/600s" in caplog.text
+
+    request.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request
 
 
 def test_bid_ask_historical_profile_uses_weight_two():

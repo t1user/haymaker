@@ -15,6 +15,7 @@ from haymaker.dataloader.scheduling import (
     heuristic_gap_candidates,
     scheduled_gap_candidates,
     sessions_from_historical_schedule,
+    historical_unavailability_reason,
 )
 from haymaker.dataloader.helpers import duration_in_secs
 from haymaker.dataloader.store_wrapper import AsyncStoreView, HistorySink
@@ -287,6 +288,9 @@ async def test_task_planner_skips_expired_options():
         ).planned_ranges()
         == []
     )
+    reason = historical_unavailability_reason(wrapper)
+    assert reason is not None
+    assert "documented IB rule" in reason
 
 
 @pytest.mark.asyncio

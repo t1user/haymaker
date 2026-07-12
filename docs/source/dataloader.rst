@@ -391,6 +391,22 @@ schedules remain in the historical bucket because IB exposes them through the
 historical-data API without publishing a separate quota. One small-bar request
 slot is reserved for supervised connection probes.
 
+With DEBUG logging enabled, request messages distinguish these stages:
+
+* ``prepared ... handing it to the local pacer`` means a worker has built the
+  request but has not sent it;
+* ``Local pacer delaying`` names the local rule and remaining delay;
+* ``Submitted ... to IB; awaiting response`` means IB has received the request;
+* ``IB request ... completed`` reports broker response latency.
+
+Every five minutes, ``Dataloader status`` reports engaged workers, workers and
+requests waiting for IB, local pacing or concurrency waits, and contracts waiting
+for a worker. Follow-up lines name each outstanding IB request with its elapsed
+wait and each queued contract. Producer state distinguishes active planning from
+backpressure such as ``blocked_on_full_queue (next=...)``. Availability skips
+explicitly say ``local policy`` when they are inferred from documented IB limits
+rather than returned by IB.
+
 Completion And Failures
 =======================
 

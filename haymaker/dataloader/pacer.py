@@ -70,6 +70,7 @@ HISTORICAL_SAME_KEY_WINDOW = 2.0  # Rolling 2-second same-key window.
 HISTORICAL_IDENTICAL_COOLDOWN = 15.0  # Exact duplicate request cooldown.
 # IBKR permits 50 open historical requests and recommends using fewer.
 HISTORICAL_MAX_CONCURRENT = 20  # Open historical requests allowed at once.
+PACING_STATUS_INTERVAL = 60.0  # Repeat long local-wait diagnostics once per minute.
 
 # Head timestamps and contract details are not documented as small-bar
 # historical requests. Keep them below the general TWS API message-rate limit.
@@ -154,12 +155,14 @@ class RequestProfile:
         same_key: Optional key for per-contract/per-exchange/per-data-type
             historical request windows.
         identical_key: Optional key for exact duplicate request cooldowns.
+        label: Human-readable contract or request label used in diagnostics.
     """
 
     kind: RequestKind
     weight: int = 1
     same_key: Hashable | None = None
     identical_key: Hashable | None = None
+    label: str = ""
 
 
 class PacingRule(Protocol):
@@ -171,6 +174,11 @@ class PacingRule(Protocol):
 
     def register(self, profile: RequestProfile, now: datetime) -> None:
         """Record that a request has been made."""
+        ...
+
+    @property
+    def description(self) -> str:
+        """Return a concise diagnostic description of the rule."""
         ...
 
 
@@ -209,6 +217,12 @@ class RollingWindowRule:
 
         self._prune(now)
         self.history.append((now, profile.weight))
+
+    @property
+    def description(self) -> str:
+        """Return the rolling-window rule in log-friendly form."""
+
+        return f"global {self.capacity} requests/{self.window.total_seconds():g}s"
 
     def _prune(self, now: datetime) -> None:
         """Remove expired request timestamps."""
@@ -261,6 +275,15 @@ class KeyedRollingWindowRule:
         self._prune(history, now)
         history.append((now, profile.weight))
 
+    @property
+    def description(self) -> str:
+        """Return the keyed rolling-window rule in log-friendly form."""
+
+        return (
+            f"same contract/exchange/type {self.capacity} requests/"
+            f"{self.window.total_seconds():g}s"
+        )
+
     def _prune(self, history: deque[tuple[datetime, int]], now: datetime) -> None:
         """Remove expired request timestamps."""
 
@@ -293,6 +316,33 @@ class IdenticalCooldownRule:
         if profile.identical_key is not None:
             self.last_request[profile.identical_key] = now
 
+    @property
+    def description(self) -> str:
+        """Return the duplicate cooldown in log-friendly form."""
+
+        return f"identical-request cooldown {self.cooldown.total_seconds():g}s"
+
+
+@dataclass(frozen=True)
+class InFlightRequest:
+    """One request submitted to IB and still awaiting its response."""
+
+    label: str
+    kind: RequestKind
+    owner: str
+    elapsed_seconds: float
+
+
+@dataclass(frozen=True)
+class RequestBucketStatus:
+    """Current local queue and broker-wait counts for one request bucket."""
+
+    concurrency_waiters: int
+    pacing_waiters: int
+    in_flight: int
+    oldest_in_flight_seconds: float | None
+    requests: tuple[InFlightRequest, ...]
+
 
 class RequestBucket:
     """Apply pacing rules and a concurrency limit to one request family.
@@ -309,6 +359,9 @@ class RequestBucket:
         self.rules = rules
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.lock = asyncio.Lock()
+        self.concurrency_waiters = 0
+        self.pacing_waiters = 0
+        self.in_flight: dict[asyncio.Task, tuple[float, RequestProfile]] = {}
 
     async def run(
         self,
@@ -330,11 +383,24 @@ class RequestBucket:
         """
 
         if disabled:
-            return await request()
+            return await self._run_request(profile, request)
 
-        async with self.semaphore:
-            await self._wait_and_register(profile)
-            return await request()
+        self.concurrency_waiters += 1
+        waiting_for_slot = True
+        try:
+            async with self.semaphore:
+                self.concurrency_waiters -= 1
+                waiting_for_slot = False
+                self.pacing_waiters += 1
+                try:
+                    await self._wait_and_register(profile)
+                finally:
+                    self.pacing_waiters -= 1
+                return await self._run_request(profile, request)
+        except BaseException:
+            if waiting_for_slot:
+                self.concurrency_waiters -= 1
+            raise
 
     async def _wait_and_register(self, profile: RequestProfile) -> None:
         """Wait for all pacing rules, then register the request."""
@@ -342,17 +408,93 @@ class RequestBucket:
         async with self.lock:
             while True:
                 now = datetime.now(timezone.utc)
-                wait_time = max(
-                    (rule.wait_time(profile, now) for rule in self.rules), default=0.0
-                )
+                waits = [(rule.wait_time(profile, now), rule) for rule in self.rules]
+                wait_time = max((wait for wait, _ in waits), default=0.0)
                 if wait_time <= 0:
                     break
-                log.debug(f"Will throttle {profile.kind}: {round(wait_time, 1)}s")
-                await asyncio.sleep(wait_time)
+                limiting_rules = ", ".join(
+                    rule.description
+                    for wait, rule in waits
+                    if abs(wait - wait_time) < 0.001
+                )
+                sleep_for = min(wait_time, PACING_STATUS_INTERVAL)
+                log.debug(
+                    "Local pacer delaying %s for %s: %.1fs remaining; limiting "
+                    "rule: %s. Rechecking in %.1fs.",
+                    profile.kind,
+                    profile.label or "unlabelled request",
+                    wait_time,
+                    limiting_rules,
+                    sleep_for,
+                )
+                await asyncio.sleep(sleep_for)
 
             now = datetime.now(timezone.utc)
             for rule in self.rules:
                 rule.register(profile, now)
+
+    async def _run_request(
+        self, profile: RequestProfile, request: Callable[[], Awaitable[T]]
+    ) -> T:
+        """Submit one admitted request and track time spent waiting for IB."""
+
+        task = asyncio.current_task()
+        assert task is not None
+        started = asyncio.get_running_loop().time()
+        self.in_flight[task] = (started, profile)
+        label = profile.label or "unlabelled request"
+        log.debug("Submitted %s for %s to IB; awaiting response.", profile.kind, label)
+        try:
+            result = await request()
+        except BaseException:
+            elapsed = asyncio.get_running_loop().time() - started
+            log.debug(
+                "IB request %s for %s ended with an exception after %.1fs.",
+                profile.kind,
+                label,
+                elapsed,
+            )
+            raise
+        else:
+            elapsed = asyncio.get_running_loop().time() - started
+            log.debug(
+                "IB request %s for %s completed after %.1fs.",
+                profile.kind,
+                label,
+                elapsed,
+            )
+            return result
+        finally:
+            self.in_flight.pop(task, None)
+
+    def status(self) -> RequestBucketStatus:
+        """Return a snapshot suitable for aggregate dataloader diagnostics."""
+
+        now = asyncio.get_running_loop().time()
+        requests = tuple(
+            sorted(
+                (
+                    InFlightRequest(
+                        profile.label or "unlabelled request",
+                        profile.kind,
+                        task.get_name(),
+                        now - started,
+                    )
+                    for task, (started, profile) in self.in_flight.items()
+                ),
+                key=lambda request: request.elapsed_seconds,
+                reverse=True,
+            )
+        )
+        return RequestBucketStatus(
+            concurrency_waiters=self.concurrency_waiters,
+            pacing_waiters=self.pacing_waiters,
+            in_flight=len(requests),
+            oldest_in_flight_seconds=(
+                requests[0].elapsed_seconds if requests else None
+            ),
+            requests=requests,
+        )
 
 
 class PacingViolationRegistry:
@@ -571,7 +713,9 @@ class RequestPacing:
             Head timestamp returned by IB, or ``None`` when IB returns no value.
         """
 
-        profile = RequestProfile(RequestKind.HEAD_TIMESTAMP)
+        profile = RequestProfile(
+            RequestKind.HEAD_TIMESTAMP, label=_request_label(contract)
+        )
         return await self._run_with_pacing_retry(
             self.metadata,
             profile,
@@ -646,6 +790,7 @@ class RequestPacing:
 
         profile = RequestProfile(
             RequestKind.CONTRACT_DETAILS,
+            label=_request_label(contract),
         )
         details = await self.metadata.run(
             profile,
@@ -748,6 +893,7 @@ class RequestPacing:
                 keepUpToDate,
                 tuple((option.tag, option.value) for option in chartOptions),
             ),
+            label=_request_label(contract),
         )
 
     def verify(self, contract: ibi.Contract) -> bool:
@@ -780,6 +926,16 @@ def _contract_metadata(detail: ibi.ContractDetails) -> ContractMetadata | None:
         trading_hours=str(detail.tradingHours or ""),
         liquid_hours=str(detail.liquidHours or ""),
         real_expiration_date=str(detail.realExpirationDate or ""),
+    )
+
+
+def _request_label(contract: ibi.Contract) -> str:
+    """Return the shortest useful contract label for request diagnostics."""
+
+    return str(
+        getattr(contract, "localSymbol", "")
+        or getattr(contract, "symbol", "")
+        or contract
     )
 
 

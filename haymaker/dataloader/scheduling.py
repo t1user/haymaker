@@ -349,18 +349,35 @@ def _is_expired(store: AsyncStoreView) -> bool:
 def historical_data_unavailable(store: AsyncStoreView) -> bool:
     """Return whether IB documents this expired instrument as unavailable."""
 
+    return historical_unavailability_reason(store) is not None
+
+
+def historical_unavailability_reason(store: AsyncStoreView) -> str | None:
+    """Explain which local IB availability rule makes a series unavailable."""
+
     if _sec_type(store) in UNAVAILABLE_EXPIRED_SECTYPES and _is_expired(store):
-        return True
+        return (
+            f"documented IB rule excludes expired {_sec_type(store)} history "
+            f"(expiry={store.expiry})"
+        )
     if _sec_type(store) == "FUT" and _is_expired(store):
         expiry = store.expiry
         assert expiry is not None
         if store.now > expiry + EXPIRED_FUTURE_MAX_AGE:
-            return True
+            return (
+                "documented IB rule retains expired futures for at most two years "
+                f"(expiry={expiry}, retention_end={expiry + EXPIRED_FUTURE_MAX_AGE})"
+            )
     # IBKR unavailable-history rule: <=30-second bars stop at six months. If the
     # contract ended before that boundary, no historical request can succeed.
     if availability_start := historical_availability_start(store):
-        return availability_start >= store.expiry_or_now()
-    return False
+        latest_available = store.expiry_or_now()
+        if availability_start >= latest_available:
+            return (
+                f"documented IB availability window is empty for {store.bar_size} "
+                f"bars (earliest={availability_start}, latest={latest_available})"
+            )
+    return None
 
 
 def historical_availability_start(
