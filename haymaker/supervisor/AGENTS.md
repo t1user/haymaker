@@ -22,14 +22,12 @@ cases.
 - Futures roll scheduling is app-lifetime behavior. Do not recreate roll timers
   on each connection or workload cycle.
 
-## Supervisor Implementations
+## Supervisor Implementation
 
-- The state-machine implementation is the primary structure for current
-  supervisor work.
-- Keep `supervisor_one.py` usable until the user explicitly decides to delete
-  it, but do not copy new behavior there unless asked or required for parity.
-- Avoid broad redesign while both implementations exist. Prefer local fixes and
-  clear notes about behavior that should be ported or deliberately left behind.
+- `supervisor.py` and `states.py` contain the single supported state-machine
+  implementation.
+- Keep lifecycle policy visible in state classes and the supervisor race rather
+  than adding alternate recovery implementations.
 
 ## State-Machine Rules
 
@@ -125,8 +123,7 @@ cases.
 
 ## Validation Defaults
 
-- Focused supervisor checks:
-  `python -m pytest tests/test_supervisor.py tests/test_supervisor_one.py`.
+- Focused supervisor check: `python -m pytest tests/test_supervisor.py`.
 - Run controller tests as well when changing controller/supervisor interaction:
   `python -m pytest tests/test_controller.py tests/test_supervisor.py`.
 - Run mypy on touched modules when practical, especially after changing shared
