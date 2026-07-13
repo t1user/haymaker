@@ -1010,7 +1010,6 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
             "probeTimeout": 13,
             "connection_lost_retry": 15,
             "auto_recovery_grace_period": 17,
-            "max_recoveries": 21,
             "recovery_warning_after": 19,
             "recovery_warning_interval": 23,
             "restart_on_recovered_connection": True,
@@ -1028,7 +1027,6 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert settings.probe_timeout == 13
     assert settings.connection_lost_retry_delay == 15
     assert settings.auto_recovery_grace_period == 17
-    assert settings.max_recoveries == 21
     assert settings.restart_on_recovered_connection is True
     assert settings.log_datafarm_status is False
     assert not hasattr(settings, "restart_delay")

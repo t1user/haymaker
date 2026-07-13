@@ -51,9 +51,6 @@ immediate restart cycle anyway. The default is ``False``: Haymaker treats
 ``1102`` as a prompt to probe while broker connectivity is marked lost and
 leaves streamers to detect stale subscriptions. Set it to ``True`` to rebuild
 immediately after ``1102``.
-``max_recoveries`` limits consecutive unexpected supervisor-cycle recoveries
-before Haymaker stops trying to rebuild the same failing cycle. Planned restart
-requests and normal broker/socket recovery cycles do not consume this budget.
 For the current managed dataloader configuration, the same setting is top-level
 ``restart_on_recovered_connection`` because dataloader connection settings are
 read from a flat mapping.
