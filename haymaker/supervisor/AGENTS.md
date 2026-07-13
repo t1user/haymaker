@@ -69,12 +69,10 @@ cases.
 
 - Nightly `10182` clusters often indicate that existing
   `reqHistoricalData(..., keepUpToDate=True)` subscriptions have stopped.
-- `stale_subscription_restart_delay` is the single shortcut for this case. A
-  value greater than zero starts/resets a quiet-period timer after `10182`; if
-  the timer expires while the workload is otherwise running, request a normal
-  workload restart to rebuild subscriptions before streamer timeouts fire.
-- A value of `0` disables the shortcut and leaves streamer timeout/backfill as
-  the fallback recovery path.
+- `STALE_SUBSCRIPTION_RESTART_DELAY` in `states.py` defines the fixed quiet
+  period for this case. A `10182` starts or resets that timer; if it expires
+  while the workload is otherwise running, request a normal workload restart
+  to rebuild subscriptions before streamer timeouts fire.
 - Keep logging around this path concise. Log enough to reconstruct the sequence,
   but avoid per-message noise during broker-code clusters.
 

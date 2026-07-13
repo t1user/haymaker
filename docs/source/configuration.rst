@@ -49,11 +49,8 @@ that state, and weak data-farm messages such as ``2103``, ``2105``, ``2157``,
 ``app.log_datafarm_status`` is ``True``. Set it to ``False`` to ignore those
 non-actionable messages silently while keeping the same recovery behavior.
 IB ``10182`` live-update failures are also logged as data-farm context, but
-``app.stale_subscription_restart_delay`` can treat them as stale-subscription
-evidence: when this value is greater than zero, Haymaker waits that many
-seconds after the last ``10182`` and then restarts the workload to rebuild
-subscriptions. A value of ``0`` disables this shortcut and leaves streamer
-timeouts as the recovery path.
+Haymaker treats them as stale-subscription evidence. It waits 180 seconds after
+the last ``10182`` and then restarts the workload to rebuild subscriptions.
 Restart cycles after failed probes wait ``app.connection_lost_retry`` before
 reconnecting; ``app.retryDelay`` controls the pause between failed connection
 attempts.

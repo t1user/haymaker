@@ -92,10 +92,8 @@ Broker messages are grouped into three categories:
 ``app.log_datafarm_status`` controls whether informational data-farm messages
 are written to the supervisor log. Turning it off silences those messages only;
 it does not make them restart triggers. ``10182`` is logged as a
-stale-subscription warning; with ``app.stale_subscription_restart_delay`` set
-above zero, the state supervisor waits that many quiet seconds after the last
-``10182`` and then restarts the workload to rebuild subscriptions. ``0``
-disables this shortcut.
+stale-subscription warning. The state supervisor waits 180 seconds after the
+last ``10182`` and then restarts the workload to rebuild subscriptions.
 
 ``timeoutEvent`` remains an active health check while connected. It triggers a
 probe rather than an immediate reconnect. While broker connectivity is reported
@@ -154,8 +152,6 @@ Important recovery settings are documented in :doc:`configuration`, including:
 * ``auto_recovery_grace_period``: broker-connectivity-lost duration before
   probing;
 * ``restart_on_recovered_connection``: whether ``1102`` forces rebuild;
-* ``stale_subscription_restart_delay``: quiet seconds after IB ``10182`` before
-  rebuilding stale subscriptions; ``0`` disables this shortcut;
 * ``max_recoveries``: consecutive unexpected cycle recoveries before stopping.
 
 Use :doc:`ib_message_codes` when reviewing broker-code behavior in logs.

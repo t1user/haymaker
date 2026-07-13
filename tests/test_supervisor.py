@@ -5,6 +5,7 @@ import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
+import haymaker.supervisor.states as supervisor_states
 from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
 from haymaker.supervisor.supervisor import SupervisorRace
 from haymaker.supervisor.states import (
@@ -640,33 +641,14 @@ async def test_weak_data_farm_logging_can_be_disabled(
 
 
 @pytest.mark.asyncio
-async def test_stale_subscription_restart_is_disabled_by_zero_delay() -> None:
-    fake_ib = FakeIB()
-    workload = FakeWorkload()
-    supervisor = make_supervisor(fake_ib, workload, stale_subscription_restart_delay=0)
-    task = asyncio.create_task(supervisor.run())
-
-    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
-
-    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
-    await asyncio.sleep(0.05)
-
-    assert current_state(supervisor) is ConnectedState
-    assert fake_ib.disconnect_count == 0
-    assert workload.starts == 1
-
-    await stop_and_wait(supervisor, task)
-
-
-@pytest.mark.asyncio
 async def test_stale_subscription_restart_after_quiet_period(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(supervisor_states, "STALE_SUBSCRIPTION_RESTART_DELAY", 0.01)
     fake_ib = FakeIB()
     workload = FakeWorkload()
-    supervisor = make_supervisor(
-        fake_ib, workload, stale_subscription_restart_delay=0.01
-    )
+    supervisor = make_supervisor(fake_ib, workload)
     task = asyncio.create_task(supervisor.run())
 
     assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
@@ -686,12 +668,13 @@ async def test_stale_subscription_restart_after_quiet_period(
 
 
 @pytest.mark.asyncio
-async def test_stale_subscription_quiet_period_resets_on_repeated_message() -> None:
+async def test_stale_subscription_quiet_period_resets_on_repeated_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_states, "STALE_SUBSCRIPTION_RESTART_DELAY", 0.05)
     fake_ib = FakeIB()
     workload = FakeWorkload()
-    supervisor = make_supervisor(
-        fake_ib, workload, stale_subscription_restart_delay=0.05
-    )
+    supervisor = make_supervisor(fake_ib, workload)
     task = asyncio.create_task(supervisor.run())
 
     assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
@@ -709,13 +692,15 @@ async def test_stale_subscription_quiet_period_resets_on_repeated_message() -> N
 
 
 @pytest.mark.asyncio
-async def test_stale_subscription_timer_stops_when_connected_state_exits() -> None:
+async def test_stale_subscription_timer_stops_when_connected_state_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_states, "STALE_SUBSCRIPTION_RESTART_DELAY", 0.05)
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(
         fake_ib,
         workload,
-        stale_subscription_restart_delay=0.05,
         probe_timeout=1,
     )
     task = asyncio.create_task(supervisor.run())
@@ -737,13 +722,15 @@ async def test_stale_subscription_timer_stops_when_connected_state_exits() -> No
 
 
 @pytest.mark.asyncio
-async def test_broker_connectivity_loss_wins_over_pending_stale_subscription() -> None:
+async def test_broker_connectivity_loss_wins_over_pending_stale_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_states, "STALE_SUBSCRIPTION_RESTART_DELAY", 0.05)
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(
         fake_ib,
         workload,
-        stale_subscription_restart_delay=0.05,
         auto_recovery_grace_period=1,
     )
     task = asyncio.create_task(supervisor.run())
@@ -1027,7 +1014,6 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
             "recovery_warning_after": 19,
             "recovery_warning_interval": 23,
             "restart_on_recovered_connection": True,
-            "stale_subscription_restart_delay": 29,
             "log_datafarm_status": False,
         },
         client_id=42,
@@ -1044,7 +1030,6 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert settings.auto_recovery_grace_period == 17
     assert settings.max_recoveries == 21
     assert settings.restart_on_recovered_connection is True
-    assert settings.stale_subscription_restart_delay == 29
     assert settings.log_datafarm_status is False
     assert not hasattr(settings, "restart_delay")
     assert not hasattr(settings, "recovery_warning_after")

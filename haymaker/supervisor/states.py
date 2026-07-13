@@ -27,6 +27,8 @@ StateResult: TypeAlias = "type[AbstractState]"
 
 log = getLogger(__name__)
 
+STALE_SUBSCRIPTION_RESTART_DELAY = 180
+
 
 class StoppedError(Exception):
     """Raised by the terminal stopped state."""
@@ -262,8 +264,7 @@ class ConnectedState(AbstractState):
     def _register_stale_subscription_signal(self, message: str) -> None:
         """Start or reset the quiet-period timer after IB ``10182``."""
 
-        delay = self.settings.stale_subscription_restart_delay
-        if delay <= 0 or not self.context.has_workload:
+        if not self.context.has_workload:
             return
 
         if self._stale_subscription_signal is None:
@@ -271,7 +272,7 @@ class ConnectedState(AbstractState):
                 "connection-supervisor-stale-subscription"
             )
             self._stale_subscription_timeout = self._stale_subscription_signal.timeout(
-                delay
+                STALE_SUBSCRIPTION_RESTART_DELAY
             )
             self._stale_subscription_timeout.connect(
                 self._on_stale_subscription_quiet_period_elapsed
@@ -279,7 +280,8 @@ class ConnectedState(AbstractState):
             if self.settings.log_datafarm_status:
                 log.debug(
                     "Stale subscription restart scheduled in "
-                    f"{delay}s after quiet period: {message}"
+                    f"{STALE_SUBSCRIPTION_RESTART_DELAY}s after quiet period: "
+                    f"{message}"
                 )
 
         self._stale_subscription_signal.emit()

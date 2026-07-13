@@ -137,8 +137,7 @@ The research package is intentionally separate from live execution. It works dir
   broker-connectivity-lost signals, and informational farm/live-update messages.
   Connectivity-lost signals move the supervisor into broker recovery wait while
   connected; informational farm messages are log context only. IB `10182`
-  warnings can request a delayed stale-subscription restart when
-  `stale_subscription_restart_delay` is configured above zero.
+  warnings request a stale-subscription restart after a 180-second quiet period.
   `timeoutEvent` and probes remain active health checks, and `1102` can end a
   broker-connectivity wait when IB reports data maintained.
 - MongoDB through `pymongo`.
