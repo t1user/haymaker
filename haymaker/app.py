@@ -52,11 +52,16 @@ class LiveRuntime:
         self.context.controller.set_hold()
         log.debug(f"Stopping live runtime: {reason}")
 
+    def __str__(self) -> str:
+        """Return a compact live-runtime description suitable for logs."""
+
+        return f"LiveRuntime<{self.context!s}>"
+
 
 @dataclass
 class App:
     context: RuntimeContext
-    runtime: LiveRuntime | None = None
+    runtime: LiveRuntime | None = field(default=None, repr=False)
     settings: ConnectionSettings | None = None
     supervisor: ConnectionSupervisor = field(init=False, repr=False)
 
@@ -70,15 +75,7 @@ class App:
         self.supervisor = ConnectionSupervisor(
             self.context.ib, self.runtime, self.settings
         )
-        startup_jobs = self.context.startup_jobs
-        log.debug(
-            "App initialized: client_id=%s, contracts=%d, streamers=%d, "
-            "future_roll_exclusions=%d.",
-            self.settings.client_id,
-            len(self.context.contract_registry.blueprints),
-            len(startup_jobs.streamers) if startup_jobs is not None else 0,
-            len(self.context.no_future_roll_strategies),
-        )
+        log.debug("App initialized: %s", self)
 
     def run(self) -> None:
         # this is the main entry point into strategy
@@ -88,3 +85,17 @@ class App:
         except KeyboardInterrupt:
             log.info("Keyboard interrupt received; stopping application.")
             self.supervisor.stop()
+
+    def __str__(self) -> str:
+        """Return a compact application description suitable for logs."""
+
+        client_id = self.settings.client_id if self.settings is not None else None
+        startup_jobs = self.context.startup_jobs
+        streamer_count = len(startup_jobs.streamers) if startup_jobs else 0
+        return (
+            f"App<client_id={client_id}, "
+            f"contracts={len(self.context.contract_registry.blueprints)}, "
+            f"streamers={streamer_count}, "
+            f"future_roll_exclusions="
+            f"{len(self.context.no_future_roll_strategies)}>"
+        )

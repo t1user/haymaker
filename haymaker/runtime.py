@@ -122,12 +122,20 @@ class StartupJobs:
             ]
         )
 
-    def __repr__(self) -> str:
-        """Return a compact representation of registered streamer jobs."""
+    def __str__(self) -> str:
+        """Return a compact description of registered streamer jobs."""
 
         return (
             f"{self.__class__.__qualname__}"
             f"({'| '.join([str(streamer) for streamer in self.streamers])})"
+        )
+
+    def __repr__(self) -> str:
+        """Return a diagnostic representation of startup job dependencies."""
+
+        return (
+            f"{self.__class__.__qualname__}(init_data={self.init_data!r}, "
+            f"ib={self.ib!r}, streamers={self.streamers!r})"
         )
 
 
@@ -135,14 +143,16 @@ class StartupJobs:
 class RuntimeContext:
     """Process-owned live runtime services shared by Haymaker atoms."""
 
-    config: MutableMapping
+    config: MutableMapping = field(repr=False)
     ib: ibi.IB = field(default_factory=ibi.IB)
-    contract_registry: ContractRegistry = field(default_factory=ContractRegistry)
-    sm: StateMachine = field(default_factory=StateMachine)
+    contract_registry: ContractRegistry = field(
+        default_factory=ContractRegistry, repr=False
+    )
+    sm: StateMachine = field(default_factory=StateMachine, repr=False)
     log_broker: bool = field(default=False, init=False)
-    trader: Trader = field(init=False)
-    controller: Controller = field(init=False)
-    startup_jobs: StartupJobs | None = field(default=None, init=False)
+    trader: Trader = field(init=False, repr=False)
+    controller: Controller = field(init=False, repr=False)
+    startup_jobs: StartupJobs | None = field(default=None, init=False, repr=False)
     no_future_roll_strategies: list[str] = field(default_factory=list)
     _restart_handler: Callable[[str], bool | None] | None = field(
         default=None, init=False, repr=False
@@ -210,3 +220,13 @@ class RuntimeContext:
         if self.startup_jobs is None:
             raise RuntimeError("Startup jobs have not been initialized.")
         return self.startup_jobs
+
+    def __str__(self) -> str:
+        """Return a compact runtime summary suitable for logs."""
+
+        streamer_count = len(self.startup_jobs.streamers) if self.startup_jobs else 0
+        return (
+            f"RuntimeContext<contracts={len(self.contract_registry.blueprints)}, "
+            f"streamers={streamer_count}, "
+            f"startup_jobs_bound={self.startup_jobs is not None}>"
+        )

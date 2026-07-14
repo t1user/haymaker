@@ -251,6 +251,23 @@ class ConnectionSupervisor:
         self.ib.timeoutEvent += self.onTimeoutEvent
         self.ib.updateEvent += self.onUpdateEvent
 
+    def __str__(self) -> str:
+        """Return a compact supervisor status suitable for logs."""
+
+        return (
+            f"ConnectionSupervisor<state={type(self._state).__name__}, "
+            f"connected={self.ib.isConnected()}, "
+            f"workload={type(self.workload).__name__}>"
+        )
+
+    def __repr__(self) -> str:
+        """Return a diagnostic representation of supervisor dependencies."""
+
+        return (
+            f"ConnectionSupervisor(ib={self.ib!r}, workload={self.workload!r}, "
+            f"settings={self.settings!r}, state={type(self._state).__name__})"
+        )
+
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""
 

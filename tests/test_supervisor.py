@@ -167,6 +167,19 @@ def make_supervisor(
     )
 
 
+def test_supervisor_has_compact_log_and_diagnostic_representations() -> None:
+    """Supervisor representations should expose state without internal events."""
+
+    supervisor = make_supervisor(FakeIB())
+
+    assert str(supervisor) == (
+        "ConnectionSupervisor<state=ConnectingState, connected=False, "
+        "workload=FakeWorkload>"
+    )
+    assert "state=ConnectingState" in repr(supervisor)
+    assert "_stop_requested" not in repr(supervisor)
+
+
 async def stop_and_wait(
     supervisor: ConnectionSupervisor, task: asyncio.Task[None]
 ) -> None:
