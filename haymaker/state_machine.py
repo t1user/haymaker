@@ -292,12 +292,14 @@ class StrategyContainer(UserDict):
         save_delay=SAVE_DELAY,
         save_async: bool = True,
     ) -> None:
+        self._save_is_pending = False
         self._strategyChangeEvent = ev.Event("strategyChangeEvent")
         self.strategyChangeEvent = self._strategyChangeEvent.debounce(save_delay, False)
+        self._strategyChangeEvent += self._mark_save_pending
         self._strategyChangeEvent += self.strategyChangeEvent
         # will automatically save strategies to db on every change
         # (but not more often than defined in CONFIG['state_machine']['save_delay'])
-        self.strategyChangeEvent += self.save
+        self.strategyChangeEvent += self.flush_pending_save
         self.saver = (
             AsyncSaveManager(saver, name="StrategyContainer") if save_async else saver
         )
@@ -384,6 +386,16 @@ class StrategyContainer(UserDict):
     def save(self) -> None:
         """Save data to database."""
         self.saver.save(self.encode())
+        self._save_is_pending = False
+
+    def _mark_save_pending(self) -> None:
+        """Record that the debounced strategy snapshot has not been saved yet."""
+        self._save_is_pending = True
+
+    def flush_pending_save(self) -> None:
+        """Save the current strategy snapshot when debounce has delayed it."""
+        if self._save_is_pending:
+            self.save()
 
     async def read(self) -> None:
         """
@@ -461,6 +473,10 @@ class StateMachine:
         # used by sync routines/error handlers
         self._strategies.save()
         log.debug("STRATEGIES SAVED")
+
+    def flush_pending_save(self) -> None:
+        """Flush a strategy snapshot still waiting on the debounce timer."""
+        self._strategies.flush_pending_save()
 
     def save_order(self, oi: OrderInfo) -> OrderInfo:
         self._orders.save(oi)

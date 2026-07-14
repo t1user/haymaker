@@ -7,14 +7,15 @@ base decisions on current code, focused tests, and complete incident timelines.
 ## Scope And Ownership
 
 - `ConnectionSupervisor` owns one `ib_insync.IB` socket and one supervised
-  workload. It connects, probes, starts work, handles recovery, and performs
-  final cleanup.
+  runtime. It connects, probes, starts work, handles recovery, and performs
+  connection/workload cleanup.
 - It does not start, stop, or restart TWS or IB Gateway.
 - Use it only when Haymaker owns the socket. Attached dataloader work borrows an
   external connection and must not connect, disconnect, or restart it.
-- `App` owns app-lifetime behavior. In particular, futures-roll scheduling is
-  created once for the process and must not be recreated during workload
-  restarts.
+- `App` is the single process runner for live and dataloader runtimes. It owns
+  final runtime, detached-task, queue, and logging cleanup. In particular,
+  futures-roll scheduling is created once for the process and must not be
+  recreated during workload restarts.
 - The workload owns component cleanup. For live trading, `LiveRuntime.stop()`
   sets the controller hold before the supervisor cancels the workload task.
 
@@ -24,7 +25,7 @@ base decisions on current code, focused tests, and complete incident timelines.
   routing, workload task ownership, socket cleanup, and `SupervisorRace`.
 - `states.py`: connection, probe, connected, recovery, restart, backoff, and
   shutdown behavior. Temporary timers and event-specific flags belong here.
-- `settings.py`: connection settings, workload protocol, and optional control
+- `settings.py`: connection settings, runtime protocol, and optional control
   binding.
 - `codes.py`: broker-code groups shared with controller logging policy.
 - `tests/test_supervisor.py`: focused lifecycle, race, cleanup, and broker-code
@@ -93,6 +94,13 @@ When adding or changing a state, define these three flags deliberately and add a
 race regression test for any non-default combination.
 
 ## Workload And Cleanup Contract
+
+- A runtime implements `start()` and `stop()` for reconnectable workload
+  cycles, and `close()` for one-time final process cleanup. `App` calls
+  `close()` only after the supervisor has finished.
+- Queue runners declare `DRAIN` for persistence or `DISCARD` for transient
+  processing. Final queue shutdown is bounded and terminal; it must not run
+  during an ordinary supervisor reconnect.
 
 - Route restart triggers through `request_restart(reason)`; do not set the
   internal event directly.

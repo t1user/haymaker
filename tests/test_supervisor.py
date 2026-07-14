@@ -86,6 +86,7 @@ class FakeWorkload:
     """Controllable workload used to observe supervisor lifecycle calls."""
 
     def __init__(self, complete_immediately: bool = False) -> None:
+        self.ib = ibi.IB()
         self.complete_immediately = complete_immediately
         self.starts = 0
         self.stops: list[str] = []
@@ -123,6 +124,9 @@ class FakeWorkload:
             await self.release_stop.wait()
         if self._release is not None:
             self._release.set()
+
+    async def close(self) -> None:
+        """Satisfy the final runtime cleanup contract."""
 
 
 class RestartAfterHandleState(AbstractState):

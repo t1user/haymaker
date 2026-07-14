@@ -8,6 +8,8 @@ import logging.handlers
 from queue import SimpleQueue
 from typing import List
 
+_listener: logging.handlers.QueueListener | None = None
+
 
 class LocalQueueHandler(logging.handlers.QueueHandler):
     def emit(self, record: logging.LogRecord) -> None:
@@ -28,6 +30,10 @@ def setup_logging_queue() -> None:
     handlers.
 
     """
+    global _listener
+    if _listener is not None:
+        return
+
     queue: SimpleQueue[logging.LogRecord] = SimpleQueue()
     root = logging.getLogger()
 
@@ -40,7 +46,16 @@ def setup_logging_queue() -> None:
             root.removeHandler(h)
             handlers.append(h)
 
-    listener = logging.handlers.QueueListener(
+    _listener = logging.handlers.QueueListener(
         queue, *handlers, respect_handler_level=True
     )
-    listener.start()
+    _listener.start()
+
+
+def shutdown_logging_queue() -> None:
+    """Flush queued log records and stop the logging listener thread."""
+    global _listener
+    if _listener is None:
+        return
+    _listener.stop()
+    _listener = None

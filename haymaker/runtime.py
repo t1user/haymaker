@@ -191,9 +191,7 @@ class RuntimeContext:
         """Apply strategy-module metadata after module-level pipelines exist."""
 
         self.no_future_roll_strategies = self._read_no_future_roll_strategies(module)
-        self.controller.set_no_future_roll_strategies(
-            self.no_future_roll_strategies
-        )
+        self.controller.set_no_future_roll_strategies(self.no_future_roll_strategies)
         self.startup_jobs = StartupJobs(
             InitData(self.ib, self.contract_registry),
             self.ib,
@@ -220,6 +218,10 @@ class RuntimeContext:
         if self.startup_jobs is None:
             raise RuntimeError("Startup jobs have not been initialized.")
         return self.startup_jobs
+
+    def close(self) -> None:
+        """Flush runtime-owned state before process-level resources close."""
+        self.sm.flush_pending_save()
 
     def __str__(self) -> str:
         """Return a compact runtime summary suitable for logs."""

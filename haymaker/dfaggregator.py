@@ -11,7 +11,7 @@ import ib_insync as ibi
 import pandas as pd
 
 from haymaker import misc
-from haymaker.async_wrappers import QueueRunner
+from haymaker.async_wrappers import QueueRunner, QueueShutdownPolicy
 from haymaker.base import Atom
 from haymaker.config import CONFIG
 from haymaker.contract_selector import FutureSelector, custom_bday
@@ -95,7 +95,11 @@ class DfAggregator(Atom):
         assert isinstance(
             self.save_frequency, int
         ), f"{self!s} save_frequency must be an int, not {type(self.save_frequency)}"
-        self._queue = QueueRunner(self.process_data, f"{self!s}")
+        self._queue = QueueRunner(
+            self.process_data,
+            f"{self!s}",
+            shutdown_policy=QueueShutdownPolicy.DISCARD,
+        )
         super().__init__()
 
     @property

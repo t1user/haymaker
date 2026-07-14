@@ -6,6 +6,7 @@ import eventkit as ev  # type: ignore
 import pytest
 
 from haymaker.logging import setup_asyncio_logger
+from haymaker.logging import queue_logger
 from haymaker.logging.setup import TelegramHandler
 
 
@@ -96,6 +97,18 @@ def test_telegram_handler_reports_rejected_delivery(capsys, monkeypatch):
     assert "bad html" in err
     assert b"chat_id=123" in connection.sent_data
     assert b"parse_mode" not in connection.sent_data
+
+
+def test_shutdown_logging_queue_stops_listener(monkeypatch):
+    """Logging shutdown should flush and release its owned listener."""
+
+    listener = Mock()
+    monkeypatch.setattr(queue_logger, "_listener", listener)
+
+    queue_logger.shutdown_logging_queue()
+    queue_logger.shutdown_logging_queue()
+
+    listener.stop.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -26,10 +26,12 @@ from haymaker.config import CONFIG
 from haymaker.databases import get_mongo_client
 from haymaker.datastore import AsyncAbstractBaseStore, AsyncArcticStore
 from haymaker.logging import setup_logging
+from haymaker.app import App
+from haymaker.supervisor import ConnectionSettings
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
-from .connect import DataloaderConnection
+from .connect import DataloaderRuntime
 from .contract_selectors import ContractSelector
 from .pacer import InFlightRequest, RequestPacing
 from .scheduling import (
@@ -52,6 +54,8 @@ from .time_policy import normalize_point
 setup_logging(CONFIG.get("logging_config"))
 
 log = logging.getLogger(__name__)
+
+DEFAULT_CLIENT_ID = 1
 
 BARSIZE: str = bar_size_validator(CONFIG["barSize"])
 WTS: str = wts_validator(CONFIG["wts"])
@@ -483,15 +487,6 @@ class Manager:
             self.store = AsyncArcticStore(lib=lib, host=get_mongo_client())
         return self.store
 
-    async def close_datastore(self) -> None:
-        """Close the session-owned datastore background queue when available."""
-
-        if self.store is None:
-            return
-        close = getattr(self.store, "close", None)
-        if close is not None:
-            await close()
-
     @functools.cached_property
     def sources(self) -> list[dict]:
         return pd.read_csv(self.source, keep_default_na=False).to_dict("records")
@@ -859,11 +854,7 @@ class DataloaderSession:
             raise
         finally:
             await self.cancel_execution()
-            try:
-                await self.flush_pending()
-            finally:
-                assert self.manager is not None
-                await self.manager.close_datastore()
+            await self.flush_pending()
             self.failures.log_summary(outcome=outcome)
 
     async def producer(self, queue: asyncio.Queue) -> None:
@@ -1156,4 +1147,8 @@ def start() -> None:
     ib.errorEvent += session.pacing.onErrEvent
     log.debug("Will start...")
 
-    DataloaderConnection(ib, session.run, session.cancel_tasks).run()
+    runtime = DataloaderRuntime(ib, session.run, session.cancel_tasks)
+    settings = ConnectionSettings.from_config(
+        CONFIG, CONFIG.get("clientId", DEFAULT_CLIENT_ID)
+    )
+    App(runtime, settings).run()

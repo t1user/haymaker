@@ -60,9 +60,12 @@ def main(argv: list[str] | None = None) -> None:
     strategy_module = load_user_module(parsed["module_path"])
     context.bind_strategy_module(strategy_module)
 
-    from .app import App
+    from .app import App, LiveRuntime
+    from .supervisor import ConnectionSettings
 
-    App(context).run()
+    runtime = LiveRuntime.from_context(context)
+    settings = ConnectionSettings.from_config(config.get("app") or {}, 0)
+    App(runtime, settings).run()
 
 
 def dataloader_main(argv: list[str] | None = None) -> None:

@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 import haymaker.async_wrappers as async_wrappers
+from haymaker.async_wrappers import QueueRunner, QueueShutdownPolicy
 
 
 def sync_add(x: int, y: int) -> int:
@@ -113,3 +114,87 @@ async def test_fire_and_forget_logs_exceptions(caplog):
     assert any(
         "async_wrappers_queue" in record.message for record in error_logs
     ), "Expected 'async_wrappers_queue' in the error log message"
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_drains_pending_items_on_close():
+    processed = []
+
+    async def process(item):
+        processed.append(item)
+
+    queue = QueueRunner(process, "drain-test")
+
+    await queue.put("first")
+    await queue.put("second")
+    await queue.close()
+
+    assert processed == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_discards_pending_items_on_close():
+    processed = []
+
+    async def process(item):
+        processed.append(item)
+
+    queue = QueueRunner(
+        process,
+        "discard-test",
+        shutdown_policy=QueueShutdownPolicy.DISCARD,
+    )
+    queue._queue.put_nowait("pending")
+
+    await queue.close()
+
+    assert processed == []
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_close_is_bounded_after_worker_halts():
+    async def fail(item):
+        raise RuntimeError(item)
+
+    queue = QueueRunner(fail, "failed-worker", max_failures=1)
+    for item in range(3):
+        await queue.put(item)
+    await asyncio.sleep(0)
+
+    await asyncio.wait_for(queue.close(timeout=0.01), timeout=0.1)
+
+    assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_rejects_work_after_close():
+    async def process(item):
+        pass
+
+    queue = QueueRunner(process, "closed-test")
+    await queue.close()
+
+    with pytest.raises(RuntimeError, match="is closed"):
+        queue.push("late")
+    assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_background_tasks_are_cancelled_during_shutdown():
+    cancelled = asyncio.Event()
+
+    async def background_work():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    task = async_wrappers.create_background_task(
+        background_work(), name="background-test"
+    )
+    await asyncio.sleep(0)
+
+    await async_wrappers.cancel_background_tasks()
+
+    assert task.cancelled()
+    assert cancelled.is_set()

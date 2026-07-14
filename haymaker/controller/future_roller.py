@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .controller import Controller
 
 from haymaker import misc
+from haymaker.async_wrappers import create_background_task
 from haymaker.state_machine import OrderInfo, Strategy
 
 log = logging.getLogger(__name__)
@@ -212,10 +213,11 @@ class FutureRoller:
             )
             del self._trade_generator[new_contract.conId]
 
-        asyncio.create_task(
+        create_background_task(
             self.handle_strategies_not_to_trade(
                 strategies_not_to_trade, old_contract, new_contract
-            )
+            ),
+            name="future-roll-record-adjustment",
         )
 
     def handle_strategies_to_trade(

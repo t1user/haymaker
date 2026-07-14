@@ -3,8 +3,15 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+import ib_insync as ibi
+
+from .async_wrappers import (
+    QueueRunner,
+    cancel_background_tasks,
+)
+from .logging import shutdown_logging_queue
 from .runtime import RuntimeContext
-from .supervisor import ConnectionSettings, ConnectionSupervisor
+from .supervisor import ConnectionSettings, ConnectionSupervisor, Runtime
 
 log = logging.getLogger(__name__)
 
@@ -14,6 +21,11 @@ class LiveRuntime:
     """Run live controller and streamer work for one supervisor cycle."""
 
     context: RuntimeContext
+
+    @property
+    def ib(self) -> ibi.IB:
+        """Return the broker connection owned by this runtime."""
+        return self.context.ib
 
     @classmethod
     def from_context(cls, context: RuntimeContext) -> "LiveRuntime":
@@ -52,6 +64,10 @@ class LiveRuntime:
         self.context.controller.set_hold()
         log.debug(f"Stopping live runtime: {reason}")
 
+    async def close(self) -> None:
+        """Flush final live-runtime state before process shutdown."""
+        self.context.close()
+
     def __str__(self) -> str:
         """Return a compact live-runtime description suitable for logs."""
 
@@ -60,42 +76,38 @@ class LiveRuntime:
 
 @dataclass
 class App:
-    context: RuntimeContext
-    runtime: LiveRuntime | None = field(default=None, repr=False)
-    settings: ConnectionSettings | None = None
+    runtime: Runtime = field(repr=False)
+    settings: ConnectionSettings
     supervisor: ConnectionSupervisor = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if self.runtime is None:
-            self.runtime = LiveRuntime.from_context(self.context)
-        if self.settings is None:
-            self.settings = ConnectionSettings.from_config(
-                self.context.config.get("app") or {}, 0
-            )
         self.supervisor = ConnectionSupervisor(
-            self.context.ib, self.runtime, self.settings
+            self.runtime.ib, self.runtime, self.settings
         )
         log.debug("App initialized: %s", self)
+
+    async def _run(self) -> None:
+        """Run the supervisor and complete process-level async cleanup."""
+        try:
+            await self.supervisor.run()
+        finally:
+            try:
+                await self.runtime.close()
+            finally:
+                await cancel_background_tasks()
+                await QueueRunner.close_all()
 
     def run(self) -> None:
         # this is the main entry point into strategy
         log.debug("Initializing connection supervisor.")
         try:
-            asyncio.run(self.supervisor.run())
+            asyncio.run(self._run())
         except KeyboardInterrupt:
             log.info("Keyboard interrupt received; stopping application.")
-            self.supervisor.stop()
+        finally:
+            shutdown_logging_queue()
 
     def __str__(self) -> str:
         """Return a compact application description suitable for logs."""
 
-        client_id = self.settings.client_id if self.settings is not None else None
-        startup_jobs = self.context.startup_jobs
-        streamer_count = len(startup_jobs.streamers) if startup_jobs else 0
-        return (
-            f"App<client_id={client_id}, "
-            f"contracts={len(self.context.contract_registry.blueprints)}, "
-            f"streamers={streamer_count}, "
-            f"future_roll_exclusions="
-            f"{len(self.context.no_future_roll_strategies)}>"
-        )
+        return f"App<client_id={self.settings.client_id}, runtime={self.runtime!s}>"

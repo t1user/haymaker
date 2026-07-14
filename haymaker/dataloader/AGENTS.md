@@ -7,12 +7,12 @@ request, restart, and date-policy behavior with focused tests.
 
 ## Architecture
 
-- `DataloaderConnection` is the app-like composition root for this package.
-  `DataloaderRuntime` adapts resumable work to `ConnectionSupervisor`'s
-  `start()` / `stop()` contract.
+- The shared `App` is the process composition root. `DataloaderRuntime` adapts
+  resumable work to the common runtime `start()` / `stop()` / `close()`
+  contract.
 - The dataloader has no connection-mode abstraction or setting. Its entrypoint
-  creates its own `IB` object and always runs `DataloaderSession` through
-  `DataloaderConnection` and `ConnectionSupervisor`.
+  creates its own `IB` object and always runs `DataloaderSession` through the
+  shared `App` and `ConnectionSupervisor`.
 - The dataloader defaults to client ID `1`, distinct from the live runtime's
   expected client ID `0`. A duplicate client ID is a configuration failure; do
   not retry automatically with another ID.
@@ -111,8 +111,8 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   correctness boundaries.
 - Stop workers before the final flush so persistence cannot race an active
   download.
-- Standalone Ctrl-C cancellation must finish the session flush and close the
-  datastore background queue before the event loop exits. Do not restore
+- Standalone Ctrl-C cancellation must finish the session flush before shared
+  application shutdown drains datastore background queues. Do not restore
   `ib_insync.util.patchAsyncio()` in the CLI; nested-loop patching is for
   notebooks, not this standalone command.
 - A supervisor restart preserves active jobs in memory. A new process derives

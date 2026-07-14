@@ -5,39 +5,21 @@ import pytest
 from haymaker.dataloader import connect
 
 
-class FakeSupervisor:
-    def __init__(self, *args):
-        self.args = args
-        self.stopped = False
-
-    async def run(self):
-        pass
-
-    def stop(self):
-        self.stopped = True
-
-
-@pytest.fixture
-def supervisor(monkeypatch):
-    monkeypatch.setattr(connect, "ConnectionSupervisor", FakeSupervisor)
-
-
 @pytest.mark.asyncio
-async def test_supervised_connection_runs_work_and_stops_supervisor(supervisor):
+async def test_runtime_runs_work():
     runs = []
 
     async def run_work():
         runs.append("run")
 
-    connection = connect.DataloaderConnection(object(), run_work)
-    await connection.runtime.start()
+    runtime = connect.DataloaderRuntime(object(), run_work)
+    await runtime.start()
 
     assert runs == ["run"]
-    assert isinstance(connection.supervisor, FakeSupervisor)
 
 
 @pytest.mark.asyncio
-async def test_restart_resumes_by_starting_same_workload_again(supervisor):
+async def test_restart_resumes_by_starting_same_workload_again():
     release = asyncio.Event()
     runs = []
 
@@ -45,15 +27,15 @@ async def test_restart_resumes_by_starting_same_workload_again(supervisor):
         runs.append("run")
         await release.wait()
 
-    connection = connect.DataloaderConnection(object(), run_work)
-    first_start = asyncio.create_task(connection.runtime.start())
+    runtime = connect.DataloaderRuntime(object(), run_work)
+    first_start = asyncio.create_task(runtime.start())
     while runs != ["run"]:
         await asyncio.sleep(0)
-    await connection.runtime.stop("socket disconnected")
+    await runtime.stop("socket disconnected")
     await first_start
 
     release = asyncio.Event()
-    second_start = asyncio.create_task(connection.runtime.start())
+    second_start = asyncio.create_task(runtime.start())
     while runs != ["run", "run"]:
         await asyncio.sleep(0)
 
@@ -63,20 +45,20 @@ async def test_restart_resumes_by_starting_same_workload_again(supervisor):
 
 
 @pytest.mark.asyncio
-async def test_supervised_connection_runs_cleanup_before_restart(supervisor):
+async def test_runtime_runs_cleanup_before_restart():
     release = asyncio.Event()
     cleanups = []
 
     async def run_work():
         await release.wait()
 
-    connection = connect.DataloaderConnection(
+    runtime = connect.DataloaderRuntime(
         object(), run_work, lambda: cleanups.append("cleanup")
     )
-    run_task = asyncio.create_task(connection.runtime.start())
+    run_task = asyncio.create_task(runtime.start())
     await asyncio.sleep(0)
 
-    await connection.runtime.stop("socket disconnected")
+    await runtime.stop("socket disconnected")
 
     assert cleanups == ["cleanup"]
     release.set()
@@ -84,48 +66,36 @@ async def test_supervised_connection_runs_cleanup_before_restart(supervisor):
 
 
 @pytest.mark.asyncio
-async def test_workload_failure_propagates(supervisor):
+async def test_workload_failure_propagates():
     async def run_work():
         raise RuntimeError("broken workload")
 
-    connection = connect.DataloaderConnection(object(), run_work)
+    runtime = connect.DataloaderRuntime(object(), run_work)
 
     with pytest.raises(RuntimeError, match="broken workload"):
-        await connection.runtime.start()
+        await runtime.start()
 
 
-def test_supervised_connection_uses_default_client_id(supervisor, monkeypatch):
-    monkeypatch.delitem(connect.CONFIG.maps[0], "clientId", raising=False)
+def test_connection_module_exposes_runtime_only():
+    """Dataloader connection handling should use the shared application."""
 
-    connection = connect.DataloaderConnection(object(), lambda: None)
-
-    assert connection.supervisor.args[2].client_id == 1
+    assert not hasattr(connect, "DataloaderConnection")
 
 
-def test_supervised_connection_uses_configured_client_id(supervisor, monkeypatch):
-    monkeypatch.setitem(connect.CONFIG.maps[0], "clientId", 7)
+async def test_runtime_close_stops_active_work():
+    """Final runtime cleanup should collect any active dataloader work."""
 
-    connection = connect.DataloaderConnection(object(), lambda: None)
+    release = asyncio.Event()
 
-    assert connection.supervisor.args[2].client_id == 7
+    async def run_work():
+        await release.wait()
 
+    runtime = connect.DataloaderRuntime(object(), run_work)
+    run_task = asyncio.create_task(runtime.start())
+    await asyncio.sleep(0)
 
-def test_connection_module_exposes_app_like_connection_object_only():
-    """The obsolete function wrapper should not duplicate the connection object."""
+    await runtime.close()
+    await run_task
 
-    assert not hasattr(connect, "connection")
-
-
-def test_connection_run_suppresses_keyboard_interrupt_after_cleanup(
-    supervisor, monkeypatch
-):
-    """A completed Ctrl-C cancellation should exit without a traceback."""
-
-    def interrupt(coroutine):
-        coroutine.close()
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(connect.asyncio, "run", interrupt)
-    connection = connect.DataloaderConnection(object(), lambda: None)
-
-    connection.run()
+    assert runtime._work_task is not None
+    assert runtime._work_task.done()

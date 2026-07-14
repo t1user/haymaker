@@ -18,7 +18,7 @@ from .codes import (
 )
 from .settings import (
     ConnectionSettings,
-    SupervisorWorkload,
+    Runtime,
     bind_supervisor_controls,
 )
 from .states import (
@@ -219,7 +219,7 @@ class ConnectionSupervisor:
     """
 
     ib: ibi.IB
-    workload: SupervisorWorkload
+    workload: Runtime
     settings: ConnectionSettings = field(default_factory=ConnectionSettings)
     _state: AbstractState = field(init=False)
     _workload_task: asyncio.Task[None] | None = field(

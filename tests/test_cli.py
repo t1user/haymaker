@@ -1,5 +1,6 @@
 import sys
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -28,9 +29,7 @@ def test_read_no_future_roll_strategies_accepts_module_list(tmp_path):
     assert RuntimeContext._read_no_future_roll_strategies(module) == ["one", "two"]
 
 
-def test_bind_strategy_module_sets_controller_roll_exclusions(
-    tmp_path, atom_runtime
-):
+def test_bind_strategy_module_sets_controller_roll_exclusions(tmp_path, atom_runtime):
     strategy = tmp_path / "strategy.py"
     strategy.write_text("no_future_roll_strategies = ['one', 'two']\n")
     module = load_user_module(strategy)
@@ -84,11 +83,17 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
             calls.append(("bind_strategy_module", module))
 
     class FakeApp:
-        def __init__(self, context: object) -> None:
-            calls.append(("app", context))
+        def __init__(self, runtime: object, settings: Any) -> None:
+            calls.append(("app", (runtime, settings.client_id)))
 
         def run(self) -> None:
             calls.append(("run", None))
+
+    class FakeLiveRuntime:
+        @classmethod
+        def from_context(cls, context: object) -> object:
+            calls.append(("runtime", context))
+            return "live-runtime"
 
     fake_logging = ModuleType("haymaker.logging")
     setattr(fake_logging, "setup_logging", setup_logging)
@@ -96,6 +101,7 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
     setattr(fake_runtime, "RuntimeContext", FakeRuntimeContext)
     fake_app = ModuleType("haymaker.app")
     setattr(fake_app, "App", FakeApp)
+    setattr(fake_app, "LiveRuntime", FakeLiveRuntime)
 
     monkeypatch.setattr(cli, "configure", configure)
     monkeypatch.setattr(cli.ibi.util, "patchAsyncio", patch_asyncio)
@@ -113,6 +119,7 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
         ("context", {"logging_config": "logging.yaml", "use_blotter": False}),
         ("load", "strategy.py"),
         ("bind_strategy_module", strategy_module),
-        ("app", contexts[0]),
+        ("runtime", contexts[0]),
+        ("app", ("live-runtime", 0)),
         ("run", None),
     ]

@@ -14,7 +14,7 @@ from typing import Literal
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
-from .async_wrappers import QueueRunner
+from .async_wrappers import QueueRunner, QueueShutdownPolicy
 from .base import Atom
 from .dfaggregator import WrongStreamer
 from .streamers import Streamer
@@ -66,7 +66,11 @@ class BarAggregator(Atom):
         # reference point for last bar processed
         self._last_data_point: datetime | date | None = None
         # data queued during long backfills
-        self._queue: QueueRunner = QueueRunner(self._process, f"{self!s}")
+        self._queue: QueueRunner = QueueRunner(
+            self._process,
+            f"{self!s}",
+            shutdown_policy=QueueShutdownPolicy.DISCARD,
+        )
         # used to determine if backfill in progress
         self._backfill_event: asyncio.Event = asyncio.Event()
         # start with cleared state (will not block)

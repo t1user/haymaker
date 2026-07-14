@@ -225,9 +225,7 @@ def test_OrderContainer_saves_zero_order_id_under_perm_id(order_saver):
 
     assert orders[12345] is order_info
     assert 0 not in orders
-    saved_order = order_saver.store["orders"][12345]["trade"]["Trade"]["order"][
-        "Order"
-    ]
+    saved_order = order_saver.store["orders"][12345]["trade"]["Trade"]["order"]["Order"]
     assert saved_order["permId"] == 12345
     assert "orderId" not in saved_order
 
@@ -644,6 +642,19 @@ def test_strategy_has_position_attribute():
     strat = cont["new_strategy"]  # noqa
     s = cont["new_strategy"]
     assert isinstance(s.position, float)
+
+
+def test_strategy_container_flushes_only_pending_save(strategy_saver):
+    """Final cleanup should persist a delayed strategy change exactly once."""
+
+    cont = StrategyContainer(strategy_saver, save_delay=60)
+    cont.saver = strategy_saver
+    cont["new_strategy"].position = 1
+
+    cont.flush_pending_save()
+    cont.flush_pending_save()
+
+    assert len(strategy_saver.store["models"]) == 1
 
 
 def test_empty_strategy_contains_defaults():

@@ -10,8 +10,12 @@ from typing import Any, Protocol
 import ib_insync as ibi
 
 
-class SupervisorWorkload(Protocol):
-    """Workload run by a connection supervisor after IB is usable."""
+class Runtime(Protocol):
+    """Application runtime managed by a connection supervisor."""
+
+    @property
+    def ib(self) -> ibi.IB:
+        """Return the broker connection owned by this runtime."""
 
     async def start(self) -> None:
         """Start or resume work after a usable IB connection is available."""
@@ -19,9 +23,12 @@ class SupervisorWorkload(Protocol):
     async def stop(self, reason: str) -> None:
         """Release active work before the supervisor reconnects or exits."""
 
+    async def close(self) -> None:
+        """Release runtime-owned resources before application shutdown."""
 
-class SupervisorControlsWorkload(Protocol):
-    """Optional workload protocol for supervisor lifecycle controls."""
+
+class SupervisorControlsRuntime(Protocol):
+    """Optional runtime protocol for supervisor lifecycle controls."""
 
     def bind_supervisor(
         self,
@@ -32,7 +39,7 @@ class SupervisorControlsWorkload(Protocol):
 
 
 def bind_supervisor_controls(
-    workload: SupervisorWorkload,
+    workload: Runtime,
     request_restart: Callable[[str], bool | None],
     connection_unavailable: asyncio.Event,
 ) -> None:

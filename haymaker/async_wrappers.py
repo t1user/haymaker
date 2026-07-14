@@ -5,12 +5,21 @@ import itertools
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, ClassVar, Coroutine, Generic, TypeAlias, TypeVar
 
 log = logging.getLogger(__name__)
 
 
 T = TypeVar("T")
+QUEUE_SHUTDOWN_TIMEOUT = 10.0
+
+
+class QueueShutdownPolicy(Enum):
+    """Determine how a queue handles pending items during final shutdown."""
+
+    DRAIN = "drain"
+    DISCARD = "discard"
 
 
 @dataclass
@@ -33,6 +42,8 @@ class QueueRunner(Generic[T]):
             the queue size is infinite.
         max_failures: The number of consecutive failures after which the queue will
             crash
+        shutdown_policy: Whether pending items are processed or discarded when the
+            application closes.
         _queue: The underlying asyncio.Queue instance.
         _worker_task: The asyncio.Task handle for the background consumer loop.
         _counter: A thread-safe class-level iterator for generating default owners.
@@ -62,9 +73,11 @@ class QueueRunner(Generic[T]):
     owner: str = ""
     maxsize: int = 0
     max_failures: int = 3
+    shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DRAIN
 
     _queue: asyncio.Queue[T] = field(repr=False, init=False)
     _worker_task: asyncio.Task | None = field(repr=False, init=False, default=None)
+    _closed: bool = field(repr=False, init=False, default=False)
     _counter: ClassVar[itertools.count] = itertools.count()
     _instances: ClassVar[list[QueueRunner]] = []
 
@@ -75,6 +88,11 @@ class QueueRunner(Generic[T]):
         self.__class__._instances.append(self)
 
     def _ensure_running_task(self) -> None:
+        if self._closed:
+            raise RuntimeError(f"{self!s} is closed")
+        self._start_worker()
+
+    def _start_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(
                 self._process_queue(), name=f"{self!s}"
@@ -82,11 +100,15 @@ class QueueRunner(Generic[T]):
 
     async def put(self, data: T) -> None:
         """Adds data to the queue. Awaits if maxsize is reached."""
+        if self._closed:
+            raise RuntimeError(f"{self!s} is closed")
         await self._queue.put(data)
         self._ensure_running_task()
 
     def push(self, data: T) -> None:
         """Synchronous method to add data to the queue."""
+        if self._closed:
+            raise RuntimeError(f"{self!s} is closed")
         self._queue.put_nowait(data)
         self._ensure_running_task()
 
@@ -114,15 +136,43 @@ class QueueRunner(Generic[T]):
         except asyncio.CancelledError:
             log.debug(f"{self!s} cancelled.")
 
-    async def close(self) -> None:
-        """Wait for remaining tasks and cancel the worker."""
-        await self._queue.join()
+    async def close(self, timeout: float = QUEUE_SHUTDOWN_TIMEOUT) -> None:
+        """Apply the queue's shutdown policy and stop its worker."""
+        if self._closed:
+            return
+        self._closed = True
+
+        if self.shutdown_policy is QueueShutdownPolicy.DRAIN:
+            if self._queue.qsize() and (
+                self._worker_task is None or self._worker_task.done()
+            ):
+                self._start_worker()
+            try:
+                await asyncio.wait_for(self._queue.join(), timeout)
+            except TimeoutError:
+                log.error(
+                    "%s did not drain within %.1fs; discarding %d pending items.",
+                    self,
+                    timeout,
+                    self._queue.qsize(),
+                )
+
+        self._discard_pending()
         if self._worker_task:
             self._worker_task.cancel()
+            await asyncio.gather(self._worker_task, return_exceptions=True)
+        if self in self.__class__._instances:
+            self.__class__._instances.remove(self)
+
+    def _discard_pending(self) -> None:
+        """Remove queued items without processing them."""
+        while True:
             try:
-                await self._worker_task
-            except asyncio.CancelledError:
-                pass
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            else:
+                self._queue.task_done()
 
     @classmethod
     async def close_all(cls) -> None:
@@ -130,7 +180,7 @@ class QueueRunner(Generic[T]):
         Can be used system-level to ensure all queues have a chance to
         complete their tasks.
         """
-        tasks = [qr.close() for qr in cls._instances]
+        tasks = [qr.close() for qr in list(cls._instances)]
         await asyncio.gather(*tasks)
 
     def qsize(self) -> int:
@@ -214,7 +264,10 @@ async def _async_runner(func: Callable[..., R], *args: Any) -> R:
     return await loop.run_in_executor(None, func, *args)
 
 
-def _create_task(coroutine: Coroutine[Any, Any, R], *, name: str | None = None) -> None:
+def create_background_task(
+    coroutine: Coroutine[Any, Any, R], *, name: str | None = None
+) -> asyncio.Task[R]:
+    """Create and retain a detached task until it has completed."""
     task: asyncio.Task[R] = asyncio.create_task(coroutine, name=name)
 
     # Below is preventing tasks from being prematurely garbage collected
@@ -222,13 +275,25 @@ def _create_task(coroutine: Coroutine[Any, Any, R], *, name: str | None = None) 
 
     def _on_done(t: asyncio.Task[R]) -> None:
         try:
+            if t.cancelled():
+                return
             exc = t.exception()
             if exc:
-                log.error(f"fire_and_forget error: {exc}")
+                log.error("Background task failed: %s", exc)
         finally:
             _tasks.discard(t)
 
     task.add_done_callback(_on_done)
+    return task
+
+
+async def cancel_background_tasks() -> None:
+    """Cancel and collect all detached framework background tasks."""
+    tasks = [task for task in _tasks if not task.done()]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def make_async(fn: Callable[..., R], *args) -> R:

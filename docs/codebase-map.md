@@ -24,7 +24,7 @@ Live runtime services are assembled in `haymaker/runtime.py` by `RuntimeContext`
 - controller for broker/state reconciliation and order gateway,
 - startup contract-detail initialization and streamer startup jobs.
 
-The `haymaker` console command owns live execution: it configures Haymaker, creates `RuntimeContext`, installs it on `Atom`, imports the user strategy module so module-level pipelines are built, reads module metadata such as `no_future_roll_strategies`, and then starts `haymaker/app.py`. The app-lifetime `Controller` schedules the daily UTC futures roll once during initialization, and `LiveRuntime` runs the supervised controller/startup-job workload under a Haymaker-owned connection supervisor.
+The `haymaker` console command owns live composition: it configures Haymaker, creates `RuntimeContext`, installs it on `Atom`, imports the user strategy module so module-level pipelines are built, reads module metadata such as `no_future_roll_strategies`, and then passes a `LiveRuntime` to the shared `App`. The app-lifetime `Controller` schedules the daily UTC futures roll once during initialization. Live and dataloader runtimes use the same application and supervisor lifecycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `Manager` owns the historical request policy (`bar_size`, `wts`, `max_lookback_days`, `useRTH`, `gap_fill_mode`) and the run-scoped `now` value; worker sessions execute generated jobs rather than carrying independent request-policy defaults. The current supported dataloader backend is Arctic, with the library name derived from `wts` and `barSize`.
 
@@ -36,7 +36,7 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints, explicit command-profile config setup, and user strategy module loading.
-- `haymaker/app.py`: framework-internal live application bootstrap, top-level `App.run()`, and `LiveRuntime`, which owns live workload startup/cleanup for each supervised connection cycle.
+- `haymaker/app.py`: shared top-level `App.run()` lifecycle and `LiveRuntime`, which owns live workload startup, reconnect cleanup, and final state flushing.
 - `haymaker/runtime.py`: process-owned live runtime context, IB/state/controller construction, contract-detail initialization, and streamer job assembly.
 - `haymaker/supervisor/`: IB socket supervisor package for connections it owns.
   It owns workload task lifecycle, broker auto-recovery waits,
@@ -122,7 +122,7 @@ The research package is intentionally separate from live execution. It works dir
 
 ### Dataloader Flow
 
-1. `dataloader` loads config, creates an `ib_insync.IB` client, and runs a dataloader runtime under the shared connection supervisor.
+1. `dataloader` loads config, creates an `ib_insync.IB` client, and passes a dataloader runtime to the shared `App` and connection supervisor.
 2. The supervisor connects the socket and waits for a successful historical-data probe before starting dataloader work.
 3. Contract source data is expanded into IB contracts.
 4. The async store view inspects the Arctic-backed store and normalizes
