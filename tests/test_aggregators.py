@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import ib_insync as ibi
@@ -6,10 +7,48 @@ import pytest
 from helpers import wait_for_condition
 from sample_barDataList import sample_barDataList
 
-from haymaker.aggregators import BarAggregator, NoFilter, WrongStreamer
+from haymaker.aggregators import (
+    BarAggregator,
+    CountBars,
+    NoFilter,
+    VolumeBars,
+    WrongStreamer,
+)
 from haymaker.base import Atom as BaseAtom
 from haymaker.base import Pipe
 from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
+
+
+@pytest.mark.parametrize("bar_filter", [CountBars(2), VolumeBars(20)])
+def test_grouping_filter_does_not_mutate_shared_source_bars(bar_filter):
+    """Grouping filters must not modify bars shared with other consumers."""
+    first = ibi.BarData(
+        open=100,
+        high=102,
+        low=99,
+        close=101,
+        volume=10,
+        average=100.5,
+        barCount=4,
+    )
+    second = ibi.BarData(
+        open=101,
+        high=103,
+        low=100,
+        close=102,
+        volume=10,
+        average=101.5,
+        barCount=5,
+    )
+    expected_first = replace(first)
+    expected_second = replace(second)
+
+    bar_filter.on_source(first)
+    bar_filter.on_source(second)
+
+    assert first == expected_first
+    assert second == expected_second
+    assert bar_filter.bars[0] is not first
 
 
 def test_onStart_receives_streamer(Atom):

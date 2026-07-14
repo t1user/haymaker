@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import itertools
 import logging
 import operator as op
@@ -285,7 +286,7 @@ class CountBars(ev.Op):
 
     def on_source(self, new_bar: ibi.BarData, *args) -> None:
         if not self.bars or self.bars[-1].barCount == self._count:
-            bar = new_bar
+            bar = copy.copy(new_bar)
             bar.average = new_bar.average * new_bar.volume
             bar.barCount = 1
             self.bars.append(bar)
@@ -340,7 +341,7 @@ class VolumeBars(ev.Op):
         if new_bar.volume < 0 or new_bar.barCount < 0:
             return
         if not self.bars or self.bars[-1].volume >= self._volume:
-            bar = new_bar
+            bar = copy.copy(new_bar)
             bar.average = bar.average * bar.volume
             self.bars.append(bar)
         else:
