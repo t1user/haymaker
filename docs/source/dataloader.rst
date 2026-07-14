@@ -11,7 +11,7 @@ The current managed dataloader path uses the same Interactive Brokers socket
 connection supervisor package as live execution, but with its own supervisor
 instance and owned socket. The supervisor reconnects the API client but does not
 manage or restart the TWS or IB Gateway process.
-See :doc:`supervisor` for the supervisor lifecycle and state transition chart.
+See :doc:`supervisor` for connection recovery policies and settings.
 
 The ``run_mode`` configuration option accepts:
 

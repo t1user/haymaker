@@ -48,7 +48,6 @@ class LiveRuntime:
     request_restart: Callable[[str], bool | None] | None = field(
         default=None, init=False, repr=False
     )
-    exit_on_failed_sync: bool = False
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
 
     @classmethod
@@ -93,10 +92,7 @@ class LiveRuntime:
 
         log.debug("Will run controller...")
         try:
-            controller_started = await self.controller.run()
-            if not controller_started and self.exit_on_failed_sync:
-                log.debug("Controller did not start; jobs will not be started.")
-                return
+            await self.controller.run()
             await self.jobs()
         except asyncio.CancelledError:
             log.debug("Live runtime task cancelled.")

@@ -74,7 +74,6 @@ class ConnectionSettings:
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
     log_datafarm_status: bool = True
-    exit_on_failed_sync: bool = False
 
     @classmethod
     def from_config(
@@ -102,5 +101,4 @@ class ConnectionSettings:
                 "restart_on_recovered_connection", False
             ),
             log_datafarm_status=config.get("log_datafarm_status", True),
-            exit_on_failed_sync=config.get("exit_on_failed_sync", False),
         )
