@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Any
+from typing import Any, Protocol
 
 import ib_insync as ibi
 
@@ -16,11 +16,7 @@ from .codes import (
     SOCKET_RESET_CODE,
     WEAK_DATA_FARM_CODES,
 )
-from .settings import (
-    ConnectionSettings,
-    Runtime,
-    bind_supervisor_controls,
-)
+from .settings import ConnectionSettings
 from .states import (
     AbstractState,
     ConnectingState,
@@ -33,6 +29,16 @@ log = getLogger(__name__)
 
 
 INITIAL_STATE = ConnectingState
+
+
+class SupervisorWorkload(Protocol):
+    """Workload managed by a connection supervisor."""
+
+    async def start(self) -> None:
+        """Start or resume work after a usable IB connection is available."""
+
+    async def stop(self, reason: str) -> None:
+        """Release active work before the supervisor reconnects or exits."""
 
 
 class SupervisorRace:
@@ -219,7 +225,7 @@ class ConnectionSupervisor:
     """
 
     ib: ibi.IB
-    workload: Runtime
+    workload: SupervisorWorkload
     settings: ConnectionSettings = field(default_factory=ConnectionSettings)
     _state: AbstractState = field(init=False)
     _workload_task: asyncio.Task[None] | None = field(
@@ -241,11 +247,6 @@ class ConnectionSupervisor:
     def __post_init__(self) -> None:
         self._state = INITIAL_STATE(self)
         self.connection_unavailable.set()
-        bind_supervisor_controls(
-            self.workload,
-            self.request_restart,
-            self.connection_unavailable,
-        )
         self.ib.errorEvent += self.onErrEvent
         self.ib.disconnectedEvent += self.onDisconnectedEvent
         self.ib.timeoutEvent += self.onTimeoutEvent

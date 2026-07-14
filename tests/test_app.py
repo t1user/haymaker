@@ -1,3 +1,6 @@
+import asyncio
+from collections.abc import Callable
+
 import ib_insync as ibi
 import pytest
 
@@ -74,6 +77,16 @@ async def test_app_closes_runtime_tasks_and_queues(monkeypatch) -> None:
 
     class FakeRuntime:
         ib = ibi.IB()
+        request_restart: Callable[[str], bool | None] | None = None
+        connection_unavailable: asyncio.Event | None = None
+
+        def bind_supervisor(
+            self,
+            request_restart: Callable[[str], bool | None],
+            connection_unavailable: asyncio.Event,
+        ) -> None:
+            self.request_restart = request_restart
+            self.connection_unavailable = connection_unavailable
 
         async def start(self) -> None:
             pass
@@ -86,7 +99,10 @@ async def test_app_closes_runtime_tasks_and_queues(monkeypatch) -> None:
 
     class FakeSupervisor:
         def __init__(self, *args) -> None:
-            pass
+            self.connection_unavailable = asyncio.Event()
+
+        def request_restart(self, reason: str) -> bool:
+            return True
 
         async def run(self) -> None:
             events.append("supervisor")
@@ -101,7 +117,10 @@ async def test_app_closes_runtime_tasks_and_queues(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "cancel_background_tasks", cancel_tasks)
     monkeypatch.setattr(app_module.QueueRunner, "close_all", close_queues)
 
-    app = App(FakeRuntime(), ConnectionSettings())
+    runtime = FakeRuntime()
+    app = App(runtime, ConnectionSettings())
     await app._run()
 
+    assert runtime.request_restart == app.supervisor.request_restart
+    assert runtime.connection_unavailable is app.supervisor.connection_unavailable
     assert events == ["supervisor", "runtime", "tasks", "queues"]

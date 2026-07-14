@@ -36,15 +36,17 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints, explicit command-profile config setup, and user strategy module loading.
-- `haymaker/app.py`: shared top-level `App.run()` lifecycle and `LiveRuntime`, which owns live workload startup, reconnect cleanup, and final state flushing.
+- `haymaker/app.py`: shared top-level `App.run()` lifecycle, application runtime protocol, and `LiveRuntime`, which owns live workload startup, reconnect cleanup, and final state flushing. As the process composition root, `App` explicitly binds supervisor restart and connection-availability controls to each runtime.
 - `haymaker/runtime.py`: process-owned live runtime context, IB/state/controller construction, contract-detail initialization, and streamer job assembly.
 - `haymaker/supervisor/`: IB socket supervisor package for connections it owns.
   It owns workload task lifecycle, broker auto-recovery waits,
   probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
   each state through a race between state completion, lifecycle requests, and
-  workload completion. Workloads can optionally bind to a restart callback and
-  connection-unavailable event so live controller sync can abort during broker
-  recovery, restart, or shutdown. It does not manage the gateway process.
+  workload completion. The supervisor consumes only the narrow `start()` and
+  `stop()` workload contract. `App` binds its restart callback and
+  connection-unavailable event to the application runtime so live controller
+  sync can abort during broker recovery, restart, or shutdown. It does not
+  manage the gateway process.
 - `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, back-reports known fills before position comparison, can request one reconnect before corrective mutations on the first sync after hold/startup, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/state_machine.py`: persisted strategy and order state, rejection tracking, active positions, and locks.

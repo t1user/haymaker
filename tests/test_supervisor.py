@@ -86,23 +86,12 @@ class FakeWorkload:
     """Controllable workload used to observe supervisor lifecycle calls."""
 
     def __init__(self, complete_immediately: bool = False) -> None:
-        self.ib = ibi.IB()
         self.complete_immediately = complete_immediately
         self.starts = 0
         self.stops: list[str] = []
-        self.request_restart: Any = None
-        self.connection_unavailable: asyncio.Event | None = None
         self.stop_started: asyncio.Event | None = None
         self.release_stop: asyncio.Event | None = None
         self._release: asyncio.Event | None = None
-
-    def bind_supervisor(
-        self, request_restart: Any, connection_unavailable: asyncio.Event
-    ) -> None:
-        """Record supervisor controls supplied to the workload."""
-
-        self.request_restart = request_restart
-        self.connection_unavailable = connection_unavailable
 
     async def start(self) -> None:
         """Run until stopped unless configured to complete immediately."""
@@ -124,9 +113,6 @@ class FakeWorkload:
             await self.release_stop.wait()
         if self._release is not None:
             self._release.set()
-
-    async def close(self) -> None:
-        """Satisfy the final runtime cleanup contract."""
 
 
 class RestartAfterHandleState(AbstractState):
@@ -211,18 +197,6 @@ async def run_supervisor_race(
         supervisor._workload_task,
     ) as race:
         return await race.wait()
-
-
-def test_workload_is_bound_to_supervisor_controls() -> None:
-    fake_ib = FakeIB()
-    workload = FakeWorkload()
-    supervisor = make_supervisor(fake_ib, workload)
-    supervisor._state = ConnectedState(supervisor)
-
-    assert workload.request_restart("bound restart")
-    assert supervisor._restart_requested.is_set()
-    assert workload.connection_unavailable is supervisor.connection_unavailable
-    assert supervisor.connection_unavailable.is_set()
 
 
 @pytest.mark.asyncio

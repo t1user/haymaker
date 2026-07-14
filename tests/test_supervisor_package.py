@@ -7,4 +7,3 @@ def test_package_exports_connection_supervisor() -> None:
 
     assert supervisor_package.ConnectionSupervisor is supervisor.ConnectionSupervisor
     assert supervisor_package.ConnectionSettings is supervisor.ConnectionSettings
-    assert supervisor_package.Runtime.__name__ == "Runtime"

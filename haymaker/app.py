@@ -2,6 +2,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import ib_insync as ibi
 
@@ -11,9 +12,33 @@ from .async_wrappers import (
 )
 from .logging import shutdown_logging_queue
 from .runtime import RuntimeContext
-from .supervisor import ConnectionSettings, ConnectionSupervisor, Runtime
+from .supervisor import ConnectionSettings, ConnectionSupervisor
 
 log = logging.getLogger(__name__)
+
+
+class Runtime(Protocol):
+    """Application runtime managed by the shared process runner."""
+
+    @property
+    def ib(self) -> ibi.IB:
+        """Return the broker connection owned by this runtime."""
+
+    def bind_supervisor(
+        self,
+        request_restart: Callable[[str], bool | None],
+        connection_unavailable: asyncio.Event,
+    ) -> None:
+        """Receive supervisor restart and connection lifecycle controls."""
+
+    async def start(self) -> None:
+        """Start or resume work after a usable IB connection is available."""
+
+    async def stop(self, reason: str) -> None:
+        """Release active work before the supervisor reconnects or exits."""
+
+    async def close(self) -> None:
+        """Release runtime-owned resources before application shutdown."""
 
 
 @dataclass
@@ -83,6 +108,10 @@ class App:
     def __post_init__(self) -> None:
         self.supervisor = ConnectionSupervisor(
             self.runtime.ib, self.runtime, self.settings
+        )
+        self.runtime.bind_supervisor(
+            self.supervisor.request_restart,
+            self.supervisor.connection_unavailable,
         )
         log.debug("App initialized: %s", self)
 

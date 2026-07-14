@@ -22,11 +22,11 @@ base decisions on current code, focused tests, and complete incident timelines.
 ## Code Layout
 
 - `supervisor.py`: supervisor object, lifecycle request events, broker-event
-  routing, workload task ownership, socket cleanup, and `SupervisorRace`.
+  routing, workload task ownership, socket cleanup, `SupervisorRace`, and the
+  narrow supervised-workload protocol.
 - `states.py`: connection, probe, connected, recovery, restart, backoff, and
   shutdown behavior. Temporary timers and event-specific flags belong here.
-- `settings.py`: connection settings, runtime protocol, and optional control
-  binding.
+- `settings.py`: connection and recovery settings.
 - `codes.py`: broker-code groups shared with controller logging policy.
 - `tests/test_supervisor.py`: focused lifecycle, race, cleanup, and broker-code
   regression coverage.
@@ -95,9 +95,10 @@ race regression test for any non-default combination.
 
 ## Workload And Cleanup Contract
 
-- A runtime implements `start()` and `stop()` for reconnectable workload
-  cycles, and `close()` for one-time final process cleanup. `App` calls
-  `close()` only after the supervisor has finished.
+- The supervisor workload contract contains `start()` and `stop()` for
+  reconnectable cycles. The application runtime contract additionally contains
+  `ib`, `bind_supervisor()`, and `close()` for process composition and final
+  cleanup. `App` calls `close()` only after the supervisor has finished.
 - Queue runners declare `DRAIN` for persistence or `DISCARD` for transient
   processing. Final queue shutdown is bounded and terminal; it must not run
   during an ordinary supervisor reconnect.
@@ -107,8 +108,9 @@ race regression test for any non-default combination.
 - `connection_unavailable` is set from startup through successful probe, and
   during broker loss, restart, disconnect, and shutdown. A successful probe
   clears it.
-- Workloads may receive `request_restart` and `connection_unavailable`
-  through `bind_supervisor()`.
+- `App` explicitly supplies every runtime with `request_restart` and
+  `connection_unavailable` through `bind_supervisor()` after constructing the
+  supervisor.
 - `Controller.sync()` races its sync task against `connection_unavailable`.
   Restart or stop must abort an in-progress sync without disabling trading.
 - `cleanup_workload()` calls `workload.stop(reason)` even when the tracked task

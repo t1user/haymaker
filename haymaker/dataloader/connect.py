@@ -28,6 +28,13 @@ class DataloaderRuntime:
     cleanup: Callable | None = None
     _work_task: asyncio.Task | None = field(default=None, init=False)
 
+    def bind_supervisor(
+        self,
+        request_restart: Callable[[str], bool | None],
+        connection_unavailable: asyncio.Event,
+    ) -> None:
+        """Accept lifecycle controls unused by the dataloader runtime."""
+
     async def start(self) -> None:
         """Start or resume dataloader work after connection."""
 

@@ -9,7 +9,7 @@ from .codes import (
     SUPERVISOR_OWNED_BROKER_CODES,
     WEAK_DATA_FARM_CODES,
 )
-from .settings import ConnectionSettings, Runtime
+from .settings import ConnectionSettings
 from .supervisor import ConnectionSupervisor
 
 __all__ = [
@@ -20,7 +20,6 @@ __all__ = [
     "DATA_MAINTAINED_CODE",
     "LIVE_UPDATE_FAILURE_CODE",
     "SOCKET_RESET_CODE",
-    "Runtime",
     "SUPERVISOR_OWNED_BROKER_CODES",
     "WEAK_DATA_FARM_CODES",
 ]

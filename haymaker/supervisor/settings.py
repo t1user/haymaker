@@ -1,53 +1,12 @@
-"""Shared supervisor settings and workload protocol."""
+"""Connection and recovery settings for the supervisor."""
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 import ib_insync as ibi
-
-
-class Runtime(Protocol):
-    """Application runtime managed by a connection supervisor."""
-
-    @property
-    def ib(self) -> ibi.IB:
-        """Return the broker connection owned by this runtime."""
-
-    async def start(self) -> None:
-        """Start or resume work after a usable IB connection is available."""
-
-    async def stop(self, reason: str) -> None:
-        """Release active work before the supervisor reconnects or exits."""
-
-    async def close(self) -> None:
-        """Release runtime-owned resources before application shutdown."""
-
-
-class SupervisorControlsRuntime(Protocol):
-    """Optional runtime protocol for supervisor lifecycle controls."""
-
-    def bind_supervisor(
-        self,
-        request_restart: Callable[[str], bool | None],
-        connection_unavailable: asyncio.Event,
-    ) -> None:
-        """Receive supervisor restart and connection lifecycle controls."""
-
-
-def bind_supervisor_controls(
-    workload: Runtime,
-    request_restart: Callable[[str], bool | None],
-    connection_unavailable: asyncio.Event,
-) -> None:
-    """Bind optional supervisor controls when the workload supports them."""
-
-    bind_supervisor = getattr(workload, "bind_supervisor", None)
-    if bind_supervisor is not None:
-        bind_supervisor(request_restart, connection_unavailable)
 
 
 @dataclass(frozen=True)
