@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-06-10.
+Last updated: 2026-06-22.
 
 ## High-Level Purpose
 
@@ -26,7 +26,7 @@ Live runtime services are assembled in `haymaker/runtime.py` by `RuntimeContext`
 
 The `haymaker` console command owns live execution: it configures Haymaker, creates `RuntimeContext`, installs it on `Atom`, imports the user strategy module so module-level pipelines are built, reads module metadata such as `no_future_roll_strategies`, and then starts `haymaker/app.py`. The app-lifetime `Controller` schedules the daily UTC futures roll once during initialization, and `LiveRuntime` runs the supervised controller/startup-job workload under a Haymaker-owned connection supervisor.
 
-The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames to a configured datastore.
+The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `Manager` owns the historical request policy (`bar_size`, `wts`, `max_lookback_days`, `useRTH`, `gap_fill_mode`) and the run-scoped `now` value; worker sessions execute generated jobs rather than carrying independent request-policy defaults. The current supported dataloader backend is Arctic, with the library name derived from `wts` and `barSize`.
 
 The research package is intentionally separate from live execution. It works directly with pandas dataframes and NumPy/Numba kernels to validate signal timing, stops, synthetic data, and performance without depending on live `Atom` pipelines.
 
@@ -38,8 +38,8 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints, explicit command-profile config setup, and user strategy module loading.
 - `haymaker/app.py`: framework-internal live application bootstrap, top-level `App.run()`, and `LiveRuntime`, which owns live workload startup/cleanup for each supervised connection cycle.
 - `haymaker/runtime.py`: process-owned live runtime context, IB/state/controller construction, contract-detail initialization, and streamer job assembly.
-- `haymaker/supervisor/`: IB socket supervisor package for owned managed
-  connections. It owns workload task lifecycle, broker auto-recovery waits,
+- `haymaker/supervisor/`: IB socket supervisor package for connections it owns.
+  It owns workload task lifecycle, broker auto-recovery waits,
   probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
   each state through a race between state completion, lifecycle requests, and
   workload completion. Workloads can optionally bind to a restart callback and
@@ -69,12 +69,20 @@ The research package is intentionally separate from live execution. It works dir
 
 ### Dataloader
 
-- `haymaker/dataloader/dataloader.py`: dataloader runtime, producer/worker queue, download task orchestration, and store writes.
-- `haymaker/dataloader/connect.py`: dataloader adapter for shared IB connection supervision, with `reconnect` and `wait` modes.
+- `haymaker/dataloader/dataloader.py`: `dataloader` console-script entrypoint, producer/worker queue, download task orchestration, and store writes.
+- `haymaker/dataloader/connect.py`: dataloader adapter for supervised IB
+  connection ownership, using dataloader client ID `1` by default.
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
-- `haymaker/dataloader/scheduling.py`: task generation for backfill, updates, and optional gap filling.
-- `haymaker/dataloader/store_wrapper.py`: datastore access wrapper used by download writers.
+- `haymaker/dataloader/scheduling.py`: `TaskPlanner`, `BackfillRangePlan`,
+  `UpdateRangePlan`, `GapFillRangePlan`, and pure heuristic or schedule/session gap
+  filtering helpers.
+- `haymaker/dataloader/store_wrapper.py`: `AsyncStoreView` for read-only
+  scheduling boundaries with explicit bar-size policy and `HistorySink` for
+  raw historical-data persistence.
+- `haymaker/dataloader/time_policy.py`: canonical historical-date policy for
+  `formatDate=2`, keeping intraday points as UTC-aware datetimes and
+  daily/weekly/monthly points as dates.
 
 ### Research and Backtesting
 
@@ -117,10 +125,24 @@ The research package is intentionally separate from live execution. It works dir
 1. `dataloader` loads config, creates an `ib_insync.IB` client, and runs a dataloader runtime under the shared connection supervisor.
 2. The supervisor connects the socket and waits for a successful historical-data probe before starting dataloader work.
 3. Contract source data is expanded into IB contracts.
-4. Writers inspect the target store and schedule backfill, update, and optional gap-fill download containers.
+4. The async store view inspects the Arctic-backed store and normalizes
+   scheduling boundaries according to the dataloader date policy.
+   `Manager` obtains any async schedule inputs and passes them to
+   `TaskPlanner`, which creates update, backfill, and optional gap-fill ranges.
+   Continuous futures use IB's empty-`endDateTime` latest-ended request shape
+   and do not schedule internal gap-fill ranges.
 5. A producer submits work to an asyncio queue.
 6. Workers call IB historical-data requests under pacer restrictions.
-7. Downloaded chunks are normalized, concatenated with stored data, cleaned, and written through the configured datastore.
+7. Downloaded chunks are buffered by range and passed to `HistorySink` at the
+   configured chunk threshold or a correctness boundary such as range completion
+   or session cleanup. `HistorySink` concatenates each batch with stored data and
+   writes a complete new version through the async datastore; Arctic owns final
+   cleaning and metadata updates. The returned first bar timestamp is validated
+   before it drives the next request boundary.
+8. Supervisor recovery within the same process resumes in-memory active jobs
+   before discovering new work. A full process stop writes no separate
+   dataloader checkpoint; the next process rediscovers remaining work from
+   persisted datastore boundaries.
 
 ### Research Flow
 
@@ -133,15 +155,16 @@ The research package is intentionally separate from live execution. It works dir
 ## External Integrations
 
 - Interactive Brokers TWS/Gateway through `ib_insync`.
-- Haymaker-owned `ConnectionSupervisor` instances for live and current managed
-  dataloader IB socket recovery. TWS or IB Gateway process management is
-  external. Broker message codes are categorized into hard restart requests,
+- Haymaker-owned `ConnectionSupervisor` instances for live and dataloader IB
+  socket recovery. TWS or IB Gateway process management is
+  external. Broker message codes are categorized into restart requests,
   broker-connectivity-lost signals, and informational farm/live-update messages.
   Connectivity-lost signals move the supervisor into broker recovery wait while
   connected; informational farm messages are log context only. IB `10182`
   warnings request a stale-subscription restart after a 180-second quiet period.
   `timeoutEvent` and probes remain active health checks, and `1102` can end a
-  broker-connectivity wait when IB reports data maintained.
+  broker-connectivity wait when IB reports data maintained. Generic
+  `updateEvent` traffic does not advance broker recovery.
 - MongoDB through `pymongo`.
 - Arctic through `arctic` for dataframe time-series storage.
 - pandas, NumPy, and Numba for dataframe research and kernels.

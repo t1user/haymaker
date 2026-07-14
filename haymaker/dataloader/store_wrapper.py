@@ -1,101 +1,138 @@
-import asyncio
-import functools
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from functools import wraps
-from typing import Callable, Union
+from typing import Any, Union
 
 import ib_insync as ibi
 import pandas as pd
 
-from haymaker.datastore import AbstractBaseStore
-from haymaker.misc import async_cached_property
+from haymaker.datastore import AsyncAbstractBaseStore
+
+from .time_policy import normalize_index, normalize_optional_point, normalize_point
 
 
 @dataclass
-class StoreWrapper:
+class AsyncStoreView:
+    """Preloaded read-only scheduling view of one persisted contract series.
+
+    Use :meth:`create` so data and optional metadata are loaded before reading
+    boundary properties. Intraday indices are normalized to UTC-aware
+    datetimes; daily and longer indices are normalized to dates.
+
+    Args:
+        contract: Contract whose existing series is being planned.
+        store: Async datastore used for reads.
+        now: Run-scoped latest point considered by scheduling.
+        bar_size: Canonical IB bar size controlling date normalization.
+    """
+
     contract: ibi.Contract
-    store: AbstractBaseStore
+    store: AsyncAbstractBaseStore
     now: Union[date, datetime]
-    _loop: asyncio.AbstractEventLoop = field(
-        default_factory=asyncio.get_running_loop, repr=False
-    )
+    bar_size: str
+    data: pd.DataFrame | None = field(default=None, init=False, repr=False)
+    metadata: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
-    async def data_async(self) -> pd.DataFrame | None:
-        """Available data in datastore for contract or None"""
-        return await self._loop.run_in_executor(None, self.store.read, self.contract)
+    @classmethod
+    async def create(
+        cls,
+        contract: ibi.Contract,
+        store: AsyncAbstractBaseStore,
+        now: Union[date, datetime],
+        bar_size: str,
+    ) -> "AsyncStoreView":
+        """Create a view and preload its dataframe and optional metadata."""
 
-    async def write_async(self, contract: ibi.Contract, data: pd.DataFrame) -> str:
-        # save asynchronously to a synchronous store using executor
-        return await self._loop.run_in_executor(None, self.write, contract, data)
-
-    @async_cached_property
-    async def from_date_async(self) -> datetime | None:
-        # not in use
-        data = await self.data_async()
-        if data is not None:
-            return data.index[1]
-        else:
-            return None
-
-    @async_cached_property
-    async def to_date_async(self) -> datetime | None:
-        # not in use
-        data = await self.data_async()
-        if data is not None:
-            return data.index[1]
-        else:
-            return None
-
-    @property
-    def data(self) -> pd.DataFrame | None:
-        """Available data in datastore for contract or None"""
-        return self.store.read(self.contract)
-
-    @functools.cached_property
-    def from_date(self) -> datetime | None:
-        """Earliest point in datastore"""
-        # second point in the df to avoid 1 point gap
-        return self.data.index[1] if self.data is not None else None  # type: ignore
-
-    @functools.cached_property
-    def to_date(self) -> datetime | None:
-        """Latest point in datastore"""
-        date = self.data.index.max() if self.data is not None else None
-        return date
-
-    @staticmethod
-    def cast_expiry(func: Callable, *args, **kwargs) -> Callable:
-        @wraps(func)
-        def wrapper(self):
-            d = func(self, *args, **kwargs)
-            if isinstance(self.now, datetime):
-                d = datetime(d.year, d.month, d.day).replace(tzinfo=timezone.utc)
-            return d
-
+        wrapper = cls(contract, store, normalize_point(now, bar_size), bar_size)
+        await wrapper.read()
+        await wrapper.read_metadata()
         return wrapper
 
-    @functools.cached_property
-    @cast_expiry
-    def expiry(self) -> datetime | None:  # this maybe an error
-        """Expiry date for expirable contracts or ''"""
-        e = self.contract.lastTradeDateOrContractMonth
-        return (
-            None
-            if not e
-            else datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
-        )
+    async def read(self) -> pd.DataFrame | None:
+        """Read and cache available datastore data for this contract."""
 
-    def expiry_or_now(self):
-        """
-        It's mean to set the latest point to which it's possible to
-        download data, which is either present moment or contract
-        expiry whichever is earlier.  Contract expiry exists only for
-        some types of contracts, if it doesn't exist, it should be
-        disregarded.
-        """
+        data = await self.store.read(self.contract)
+        if data is not None and not data.empty:
+            data = data.copy()
+            data.index = normalize_index(data.index, self.bar_size)
+        self.data = data
+        return data
+
+    async def read_metadata(self) -> dict[str, Any]:
+        """Read and cache optional datastore metadata for this contract."""
+
+        self.metadata = await self.store.read_metadata(self.contract) or {}
+        return self.metadata
+
+    @property
+    def backfill_boundary(self) -> date | datetime | None:
+        """Earliest stored point safe to use as a backfill request boundary."""
+
+        if self.data is None or self.data.empty:
+            return None
+        if len(self.data.index) == 1:
+            return self.data.index[0]
+        # second point in the df to avoid 1 point gap
+        return self.data.index[1]
+
+    @property
+    def to_date(self) -> date | datetime | None:
+        """Return the latest stored scheduling point, if any."""
+        if self.data is None or self.data.empty:
+            return None
+        return self.data.index.max()
+
+    @property
+    def backfill_exhausted(self) -> bool:
+        """Return whether older backfill was marked unavailable."""
+
+        return self.metadata.get("backfill_exhausted") is True
+
+    @property
+    def expiry(self) -> date | datetime | None:
+        """Return precise contract expiry when available."""
+
+        e = self.contract.lastTradeDateOrContractMonth
+        if not e or len(e) == 6:
+            return None
+        expiry = datetime.strptime(e, "%Y%m%d").replace(tzinfo=timezone.utc)
+        return normalize_optional_point(expiry, self.bar_size)
+
+    def expiry_or_now(self) -> date | datetime:
+        """Return the latest point eligible for this contract's download."""
         return min(self.expiry, self.now) if self.expiry else self.now
 
-    def __getattr__(self, attr):
-        # everything not defined delegate to the wrapped object
-        return getattr(self.store, attr)
+
+@dataclass
+class HistorySink:
+    """Persist raw downloaded historical chunks for one contract."""
+
+    contract: ibi.Contract
+    store: AsyncAbstractBaseStore
+
+    async def write(self, new_data: pd.DataFrame) -> Any:
+        """Merge downloaded data with stored history and rewrite the collection.
+
+        The sink preserves the dataframe exactly as supplied by IB-side callers.
+        Index normalization for scheduling lives in :class:`AsyncStoreView`;
+        final sorting, duplicate removal, and metadata belong to the datastore.
+
+        Args:
+            new_data: Newly downloaded bars indexed by bar timestamp.
+
+        Returns:
+            Datastore-specific write result.
+        """
+
+        existing = await self.store.read(self.contract)
+        if existing is None:
+            existing = pd.DataFrame()
+        data = pd.concat([existing, new_data])
+        return await self.store.async_write(self.contract, data)
+
+    async def mark_backfill_exhausted(self) -> Any:
+        """Mark this series as unavailable for older backfills."""
+
+        existing = await self.store.read(self.contract)
+        if existing is None or existing.empty:
+            return None
+        return self.store.write_metadata(self.contract, {"backfill_exhausted": True})
