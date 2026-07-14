@@ -142,6 +142,25 @@ def test_dataloader_positional_source_is_config_value(monkeypatch):
     assert config_maps.cmdline["source"] == "contracts.csv"
 
 
+def test_dataloader_gap_fill_mode_respects_config_and_cli_precedence(tmp_path):
+    """An omitted CLI option must not override the configured gap-fill mode."""
+
+    config_file = tmp_path / "dataloader.yaml"
+    config_file.write_text("gap_fill_mode: schedule\n")
+
+    configured = ConfigMaps("dataloader", ["-f", str(config_file)])
+    configured_values = ChainMap(*configured.maps)
+    overridden = ConfigMaps(
+        "dataloader", ["-f", str(config_file), "-g", "heuristic"]
+    )
+    overridden_values = ChainMap(*overridden.maps)
+
+    assert "gap_fill_mode" not in configured.cmdline
+    assert configured_values["gap_fill_mode"] == "schedule"
+    assert overridden.cmdline["gap_fill_mode"] == "heuristic"
+    assert overridden_values["gap_fill_mode"] == "heuristic"
+
+
 def test_live_positional_module_is_not_config_value():
     config_maps = ConfigMaps("live", ["strategy.py"])
     assert "module_path" not in config_maps.cmdline

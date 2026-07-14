@@ -112,7 +112,6 @@ options_by_module: dict[str, list] = {
             ("-g", "--gap_fill_mode"),
             {
                 "choices": ("off", "heuristic", "schedule", "auto"),
-                "default": "off",
                 "help": "Gap-fill mode for existing stored historical data.",
             },
         ),
