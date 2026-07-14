@@ -491,7 +491,9 @@ async def test_restart_interrupts_in_flight_probe() -> None:
 
 @pytest.mark.parametrize("code", [1100, 2110])
 @pytest.mark.asyncio
-async def test_broker_connectivity_lost_message_enters_lost_state(code: int) -> None:
+async def test_broker_connectivity_lost_message_enters_lost_state(
+    code: int, caplog: pytest.LogCaptureFixture
+) -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload, auto_recovery_grace_period=60)
@@ -500,6 +502,7 @@ async def test_broker_connectivity_lost_message_enters_lost_state(code: int) -> 
     assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
     assert not supervisor.connection_unavailable.is_set()
 
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.states")
     fake_ib.errorEvent.emit(-1, code, "Connectivity lost", ibi.Contract())
     assert supervisor.connection_unavailable.is_set()
 
@@ -508,12 +511,17 @@ async def test_broker_connectivity_lost_message_enters_lost_state(code: int) -> 
     )
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
+    assert (
+        f"Broker connectivity lost by code {code}; waiting for recovery." in caplog.text
+    )
 
     await stop_and_wait(supervisor, task)
 
 
 @pytest.mark.asyncio
-async def test_broker_connectivity_lost_1102_moves_to_probing() -> None:
+async def test_broker_connectivity_lost_1102_moves_to_probing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload, auto_recovery_grace_period=60)
@@ -527,12 +535,18 @@ async def test_broker_connectivity_lost_1102_moves_to_probing() -> None:
         lambda: current_state(supervisor) is ConnectionLostState
     )
 
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.states")
+    caplog.clear()
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
 
     assert await wait_for_condition(lambda: fake_ib.probe_count == 2)
     assert current_state(supervisor) is ProbingState
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
+    assert (
+        "Broker connectivity restored with data maintained (1102); probing."
+        in caplog.text
+    )
 
     await stop_and_wait(supervisor, task)
 

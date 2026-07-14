@@ -39,7 +39,6 @@ controller:
   broker_request_timeout: 10 # seconds to wait for broker sync requests
   sync_max_attempts: 3
   sync_resync_delay: 1 # seconds to wait before retrying sync after failures/corrections
-  startup_delay: 2 # seconds to wait before first sync after controller startup
   cancel_unknown_trades: False # broker-reported active orders not known to local state
   missing_brackets: "ignore" # one of: "remove", "warn", "ignore"
 

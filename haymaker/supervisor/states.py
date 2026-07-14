@@ -73,6 +73,7 @@ class AbstractState(ABC):
         if code not in BROKER_CONNECTIVITY_LOST_CODES:
             return False
 
+        log.debug(f"Broker connectivity lost by code {code}; waiting for recovery.")
         self.context.mark_connection_unavailable(
             f"broker connectivity lost by code {code}"
         )
@@ -325,6 +326,9 @@ class ConnectionLostState(AbstractState):
         """Request a probe when IB reports data-maintained recovery."""
 
         if code == DATA_MAINTAINED_CODE:
+            log.debug(
+                f"Broker connectivity restored with data maintained ({code}); probing."
+            )
             self.wakeup.set()
 
 

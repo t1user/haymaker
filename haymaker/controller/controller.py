@@ -79,7 +79,6 @@ class Controller(Atom):
     broker_request_timeout: int = 10
     sync_max_attempts: int = 3
     sync_resync_delay: float = 1
-    startup_delay: float = 1
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
     ignore_errors: tuple[int, ...] | list[int] = field(default_factory=tuple)
@@ -270,12 +269,6 @@ class Controller(Atom):
                 log.exception(e)
                 self.disable_trading("state store read failed")
                 return False
-
-        if self.startup_delay:
-            log.debug(f"Startup delay before sync: {self.startup_delay}s")
-            await asyncio.sleep(self.startup_delay)
-        else:
-            log.debug(f"No startup delay.")
 
         sync_outcome = await self.sync()
         if not sync_outcome:

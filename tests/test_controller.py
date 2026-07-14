@@ -361,27 +361,6 @@ async def test_run_stops_before_sync_when_state_store_read_fails(
 
 
 @pytest.mark.asyncio
-async def test_run_waits_startup_delay_before_sync(controller, monkeypatch):
-    calls = []
-
-    async def sleep(delay):
-        calls.append(("sleep", delay))
-
-    async def sync():
-        calls.append(("sync", None))
-        return True
-
-    controller.startup_delay = 2
-    monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
-    monkeypatch.setattr(controller, "sync", sync)
-
-    result = await controller.run()
-
-    assert result
-    assert calls == [("sleep", 2), ("sync", None)]
-
-
-@pytest.mark.asyncio
 async def test_commission_report_skips_unknown_zero_order_id(
     controller, monkeypatch, caplog
 ):
@@ -615,7 +594,6 @@ def test_from_config_loads_controller_sync_options(Atom):
                 "broker_request_timeout": 3,
                 "sync_max_attempts": 2,
                 "sync_resync_delay": 0,
-                "startup_delay": 2,
                 "cancel_unknown_trades": True,
                 "missing_brackets": "warn",
             },
@@ -625,7 +603,6 @@ def test_from_config_loads_controller_sync_options(Atom):
     assert controller.broker_request_timeout == 3
     assert controller.sync_max_attempts == 2
     assert controller.sync_resync_delay == 0
-    assert controller.startup_delay == 2
     assert controller.cancel_unknown_trades
     assert controller.missing_brackets == "warn"
     assert set(controller.ignore_errors) == SUPERVISOR_OWNED_BROKER_CODES | {202, 321}
@@ -648,9 +625,7 @@ def test_ignored_broker_message_is_not_logged(controller, caplog):
     assert "Order cancelled" not in caplog.text
 
 
-def test_supervisor_owned_broker_message_is_ignored_by_controller(
-    controller, caplog
-):
+def test_supervisor_owned_broker_message_is_ignored_by_controller(controller, caplog):
     caplog.set_level(logging.DEBUG)
 
     controller.onErrEvent(
