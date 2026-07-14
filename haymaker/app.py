@@ -70,7 +70,15 @@ class App:
         self.supervisor = ConnectionSupervisor(
             self.context.ib, self.runtime, self.settings
         )
-        log.debug(f"App initiated: {self}")
+        startup_jobs = self.context.startup_jobs
+        log.debug(
+            "App initialized: client_id=%s, contracts=%d, streamers=%d, "
+            "future_roll_exclusions=%d.",
+            self.settings.client_id,
+            len(self.context.contract_registry.blueprints),
+            len(startup_jobs.streamers) if startup_jobs is not None else 0,
+            len(self.context.no_future_roll_strategies),
+        )
 
     def run(self) -> None:
         # this is the main entry point into strategy

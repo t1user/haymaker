@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import eventkit as ev  # type: ignore
@@ -400,6 +401,19 @@ def test_StrategyContainer_contains_only_Strategies(strategy_saver):
     cont.update({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
     assert isinstance(cont["b"], Strategy)
     assert cont["a"].x == 1
+
+
+def test_StrategyContainer_decode_logs_strategy_count(strategy_saver, caplog):
+    source = StrategyContainer(strategy_saver)
+    source["one"] = {"position": 1}
+    data = source.encode()
+    data["_id"] = "record-id"
+    target = StrategyContainer(strategy_saver)
+
+    with caplog.at_level(logging.DEBUG):
+        target.decode(data)
+
+    assert "will decode data: 1 keys" in caplog.text
 
 
 def test_StrategyContainer_add_key(strategy_saver):

@@ -358,7 +358,8 @@ class StrategyContainer(UserDict):
         if data is None:
             return
         try:
-            log.debug(f"{self} will decode data: {len(data.keys())-1} keys.")
+            strategy_count = len(set(data) - {"_id", "timestamp"})
+            log.debug(f"{self} will decode data: {strategy_count} keys.")
         except Exception:
             log.debug(f"data for decoding: {data}")
             raise
