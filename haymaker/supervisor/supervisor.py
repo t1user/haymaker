@@ -9,6 +9,13 @@ from typing import Any
 
 import ib_insync as ibi
 
+from .codes import (
+    DATA_LOST_CODE,
+    DATA_MAINTAINED_CODE,
+    LIVE_UPDATE_FAILURE_CODE,
+    SOCKET_RESET_CODE,
+    WEAK_DATA_FARM_CODES,
+)
 from .settings import (
     ConnectionSettings,
     SupervisorWorkload,
@@ -231,12 +238,6 @@ class ConnectionSupervisor:
     # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
 
-    BROKER_CONNECTIVITY_LOST_CODES = frozenset({1100, 2110})
-    WEAK_DATA_FARM_CODES = frozenset({2103, 2105, 2157, 10182, 2104, 2106, 2158})
-    DATA_LOST_CODE = 1101
-    DATA_MAINTAINED_CODE = 1102
-    SOCKET_RESET_CODE = 1300
-
     def __post_init__(self) -> None:
         self._state = INITIAL_STATE(self)
         self.connection_unavailable.set()
@@ -278,10 +279,7 @@ class ConnectionSupervisor:
         """Transition to a new state class and return the state instance."""
 
         if next_state != type(self._state):
-            log.debug(
-                f"{self.__class__.__name__}: {type(self._state).__name__} -> "
-                f"{next_state.__name__}"
-            )
+            log.debug(f"{type(self._state).__name__} -> {next_state.__name__}")
         self._state = next_state(self)
         return self._state
 
@@ -310,15 +308,11 @@ class ConnectionSupervisor:
     def mark_connection_available(self, reason: str) -> None:
         """Allow workload sync after the supervisor has a usable connection."""
 
-        if self.connection_unavailable.is_set():
-            log.debug(f"Connection marked available: {reason}")
         self.connection_unavailable.clear()
 
     def mark_connection_unavailable(self, reason: str) -> None:
         """Abort workload sync while the supervisor cannot trust the connection."""
 
-        if not self.connection_unavailable.is_set():
-            log.debug(f"Connection marked unavailable: {reason}")
         self.connection_unavailable.set()
 
     def onDisconnectedEvent(self) -> None:
@@ -347,20 +341,22 @@ class ConnectionSupervisor:
     ) -> None:
         """Translate selected broker messages into supervisor signals."""
 
-        if code == self.DATA_LOST_CODE:
+        if code == DATA_LOST_CODE:
             self.request_restart(
                 f"broker connectivity restored with data lost ({code})"
             )
-        elif code == self.SOCKET_RESET_CODE:
+        elif code == SOCKET_RESET_CODE:
             self.request_restart(f"broker reset API socket port ({code})")
-        elif code == self.DATA_MAINTAINED_CODE:
+        elif code == DATA_MAINTAINED_CODE:
             if self.settings.restart_on_recovered_connection:
                 self.request_restart(
                     f"broker connectivity restored with data maintained ({code})"
                 )
             else:
                 self._state.on_broker_message(code, message)
-        elif code in self.WEAK_DATA_FARM_CODES:
+        elif code in WEAK_DATA_FARM_CODES:
+            if code == LIVE_UPDATE_FAILURE_CODE:
+                self._state.on_broker_message(code, message)
             if self.settings.log_datafarm_status:
                 log.debug(f"broker message {code}: {message}")
         else:
@@ -387,12 +383,13 @@ class ConnectionSupervisor:
         if task is None:
             return
 
+        await self.workload.stop(reason)
+
         if task.done():
             self._log_workload_result(task)
             self._workload_task = None
             return
 
-        await self.workload.stop(reason)
         task.cancel()
         try:
             await task

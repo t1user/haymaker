@@ -4,12 +4,10 @@ wts: &wts TRADES
 max_bars: 100_000 # max number of bars pulled in one request
 max_period: 120 # max duration of downloaded data in days
 run_mode: "reconnect"
-supervisor: state # one of: state, onion
 number_of_workers: 20
 fill_gaps: False
 auto_save_interval: 900 # in secs, zero=off
 restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
-max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
 pacer_restrictions:
   - !!python/tuple [5, 2] # [max requests, seconds]
   - !!python/tuple [60, 600]

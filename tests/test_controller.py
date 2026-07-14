@@ -22,6 +22,7 @@ from haymaker.controller.sync_coordinator import (
     SyncCoordinator,
 )
 from haymaker.state_machine import OrderInfo
+from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
 
 
@@ -360,27 +361,6 @@ async def test_run_stops_before_sync_when_state_store_read_fails(
 
 
 @pytest.mark.asyncio
-async def test_run_waits_startup_delay_before_sync(controller, monkeypatch):
-    calls = []
-
-    async def sleep(delay):
-        calls.append(("sleep", delay))
-
-    async def sync():
-        calls.append(("sync", None))
-        return True
-
-    controller.startup_delay = 2
-    monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
-    monkeypatch.setattr(controller, "sync", sync)
-
-    result = await controller.run()
-
-    assert result
-    assert calls == [("sleep", 2), ("sync", None)]
-
-
-@pytest.mark.asyncio
 async def test_commission_report_skips_unknown_zero_order_id(
     controller, monkeypatch, caplog
 ):
@@ -609,12 +589,11 @@ def test_from_config_loads_controller_sync_options(atom_runtime):
     controller = Controller.from_config(
         Trader(atom_runtime.ib),
         top_config={
-            "ignore_errors": [202, 321],
             "controller": {
+                "ignore_errors": [202, 321, 10182, 1102],
                 "broker_request_timeout": 3,
                 "sync_max_attempts": 2,
                 "sync_resync_delay": 0,
-                "startup_delay": 2,
                 "cancel_unknown_trades": True,
                 "missing_brackets": "warn",
             },
@@ -624,10 +603,9 @@ def test_from_config_loads_controller_sync_options(atom_runtime):
     assert controller.broker_request_timeout == 3
     assert controller.sync_max_attempts == 2
     assert controller.sync_resync_delay == 0
-    assert controller.startup_delay == 2
     assert controller.cancel_unknown_trades
     assert controller.missing_brackets == "warn"
-    assert controller.ignore_errors == [202, 321]
+    assert set(controller.ignore_errors) == SUPERVISOR_OWNED_BROKER_CODES | {202, 321}
 
 
 def test_direct_controller_does_not_schedule_future_roll(controller):
@@ -708,6 +686,19 @@ def test_ignored_broker_message_is_not_logged(controller, caplog):
     controller.onErrEvent(123, 202, "Order cancelled", ibi.Contract())
 
     assert "Order cancelled" not in caplog.text
+
+
+def test_supervisor_owned_broker_message_is_ignored_by_controller(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    controller.onErrEvent(
+        -1,
+        10182,
+        "Failed to request live updates (disconnected).",
+        ibi.Contract(),
+    )
+
+    assert "Failed to request live updates" not in caplog.text
 
 
 def test_ignored_order_cancellation_does_not_hide_failed_order(controller, caplog):

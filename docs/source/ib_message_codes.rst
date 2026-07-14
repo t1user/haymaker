@@ -67,7 +67,8 @@ These codes are most relevant to Haymaker connection supervision.
      - Informational recovery/startup message.
    * - ``10182``
      - Failed to request live updates because IB reports disconnected state.
-     - Informational data-farm message; rely on timeout/probe behavior.
+     - Stale-subscription warning. Restart the workload after a 180-second
+       quiet period to rebuild subscriptions.
 
 Order and Request Messages
 --------------------------
@@ -103,8 +104,9 @@ Operational Rule of Thumb
 Use ``timeoutEvent`` and probes as active health checks. Broker-degraded message
 codes are not all equal: only ``1100`` and ``2110`` enter broker-connectivity
 recovery immediately while connected. Weak data-farm messages are useful log
-context, not supervisor control signals. During broker-connectivity recovery,
-``1102`` triggers a probe and generic ``updateEvent`` traffic is ignored. A
-failed probe enters a delayed restart cycle. A successful probe only proves
-current connectivity; stale subscriptions may still be detected later by
-streamer timeouts.
+context, not supervisor control signals, except that ``10182`` can request a
+stale-subscription restart after a 180-second quiet period.
+During broker-connectivity recovery, ``1102`` triggers a probe and generic
+``updateEvent`` traffic is ignored. A failed probe enters a delayed restart
+cycle. A successful probe only proves current connectivity; stale subscriptions
+may still be detected later by streamer timeouts.

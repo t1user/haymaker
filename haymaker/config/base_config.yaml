@@ -1,24 +1,9 @@
 coldstart: False # meant to be set from CLI, if necessary
 reset: False # doesn't really make sense to change here
 
-ignore_errors:
-  - 1102  # Connectivity restored
-  - 2104  # Market data farm connection is ok
-  - 2106  # Data farm connection is OK
-  - 2107  # Data farm connection is inactive but should be available upon demand
-  - 2108  # Market data farm [...] is inactive but [...~ok]
-  - 2158  # Sec-def data farm connection is OK
-  - 2110  # Connectivity between Trader Workstation and server is broken. It will be restored automatically.
-  - 2109  # outside RTH ignored -> market doesn't distinguish regular trading hours
-  - 202  # Order cancelled
-  - 321 # Server error while validating an API request; frequently fired for no reason
-  # Consider silencing 2103 - Market data connection is broken
-
 log_broker: False # if additional logger with all broker messages should be created
 
-
 app:
-  supervisor: state # one of: state, onion
   host: 127.0.0.1
   port: 4002
   connectTimeout: 15
@@ -32,10 +17,14 @@ app:
   auto_recovery_grace_period: 120
   restart_on_recovered_connection: False # restart immediately on IB 1102 "data maintained"
   log_datafarm_status: True # log non-actionable data-farm status messages
-  max_recoveries: 10 # max consecutive unexpected supervisor recoveries before stopping
-  exit_on_failed_sync: False
   
 controller:
+  ignore_errors:
+    - 2107  # Data farm connection is inactive but should be available upon demand
+    - 2108  # Market data farm [...] is inactive but [...~ok]
+    - 2109  # outside RTH ignored -> market doesn't distinguish regular trading hours
+    - 202  # Order cancelled
+    - 321 # Server error while validating an API request; frequently fired for no reason
   log_order_events: False
   future_roll_time: [14, 0] # UTC time when future rolls are executed, list [hour, minute]
   # interval at which sync will be performed
@@ -48,10 +37,8 @@ controller:
   broker_request_timeout: 10 # seconds to wait for broker sync requests
   sync_max_attempts: 3
   sync_resync_delay: 1 # seconds to wait before retrying sync after failures/corrections
-  startup_delay: 2 # seconds to wait before first sync after controller startup
   cancel_unknown_trades: False # broker-reported active orders not known to local state
   missing_brackets: "ignore" # one of: "remove", "warn", "ignore"
-
 
 # best left untouched
 state_machine:
@@ -60,12 +47,10 @@ state_machine:
   order_collection_name: "orders"
   # number of attempts after which failed type of order for a contract will be suppressed
   max_rejected_orders: 3 
-  
 
 dfaggregator:
   market_data_lib: live_data # where market data will be saved
   save_frequency: 900 # how frequently data will be saved (in secs)
-
   
 # timeout triggered after no data have been received for given amount of seconds
 timeout:
@@ -73,7 +58,6 @@ timeout:
   debug: False # debug: True -> log; debug: False -> restart
   # number of seconds after which timeout triggered
   time: 300 # zero means no timeout
-
 
 use_blotter: True
 

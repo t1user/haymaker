@@ -48,10 +48,12 @@ what was still working afterward.
 - `2110`: Broker connectivity between TWS/Gateway and IB servers is broken.
   Check whether Haymaker enters broker-connectivity recovery and probes after
   `1102` or grace expiry.
-- `2103`, `2105`, `2157`, `10182`, `2104`, `2106`, `2158`: Data-farm or live
-  update status messages. These are log context only; look for `timeoutEvent`,
-  failed probes, `1100`/`2110`, `1101`, `1300`, or `disconnectedEvent` before
-  attributing a restart to them.
+- `2103`, `2105`, `2157`, `2104`, `2106`, `2158`: Data-farm status messages.
+  These are log context only; look for `timeoutEvent`, failed probes,
+  `1100`/`2110`, `1101`, `1300`, or `disconnectedEvent` before attributing a
+  restart to them.
+- `10182`: Stale-subscription warning. A `10182` message starts a 180-second
+  stale-subscription restart timer, and later `10182` messages reset that timer.
 
 Also note repeated request errors, pacing violations, `ConnectionError`,
 streamer timeout messages, controller sync skips, and order/position mismatch

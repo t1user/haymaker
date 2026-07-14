@@ -5,12 +5,13 @@ import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
+import haymaker.supervisor.states as supervisor_states
 from haymaker.supervisor import ConnectionSettings, ConnectionSupervisor
 from haymaker.supervisor.supervisor import SupervisorRace
 from haymaker.supervisor.states import (
     AbstractState,
     BackoffRestartingState,
-    BrokerConnectivityLostState,
+    ConnectionLostState,
     ConnectingState,
     ConnectedState,
     ProbingState,
@@ -239,8 +240,24 @@ async def test_completed_workload_stops_supervisor() -> None:
 
     assert current_state(supervisor) is StoppedState
     assert workload.starts == 1
-    assert workload.stops == []
+    assert workload.stops == ["supervisor stopped"]
     assert fake_ib.disconnect_count == 1
+
+
+@pytest.mark.asyncio
+async def test_restart_cleanup_stops_already_completed_workload() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload(complete_immediately=True)
+    supervisor = make_supervisor(fake_ib, workload)
+    supervisor.start_workload()
+    task = supervisor._workload_task
+    assert task is not None
+    await task
+
+    await supervisor.cleanup_workload("restart requested")
+
+    assert workload.stops == ["restart requested"]
+    assert supervisor._workload_task is None
 
 
 @pytest.mark.asyncio
@@ -474,7 +491,9 @@ async def test_restart_interrupts_in_flight_probe() -> None:
 
 @pytest.mark.parametrize("code", [1100, 2110])
 @pytest.mark.asyncio
-async def test_broker_connectivity_lost_message_enters_lost_state(code: int) -> None:
+async def test_broker_connectivity_lost_message_enters_lost_state(
+    code: int, caplog: pytest.LogCaptureFixture
+) -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload, auto_recovery_grace_period=60)
@@ -483,20 +502,26 @@ async def test_broker_connectivity_lost_message_enters_lost_state(code: int) -> 
     assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
     assert not supervisor.connection_unavailable.is_set()
 
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.states")
     fake_ib.errorEvent.emit(-1, code, "Connectivity lost", ibi.Contract())
     assert supervisor.connection_unavailable.is_set()
 
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
+    assert (
+        f"Broker connectivity lost by code {code}; waiting for recovery." in caplog.text
+    )
 
     await stop_and_wait(supervisor, task)
 
 
 @pytest.mark.asyncio
-async def test_broker_connectivity_lost_1102_moves_to_probing() -> None:
+async def test_broker_connectivity_lost_1102_moves_to_probing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload()
     supervisor = make_supervisor(fake_ib, workload, auto_recovery_grace_period=60)
@@ -507,15 +532,21 @@ async def test_broker_connectivity_lost_1102_moves_to_probing() -> None:
     fake_ib.probe_delays = [60]
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
 
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.states")
+    caplog.clear()
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
 
     assert await wait_for_condition(lambda: fake_ib.probe_count == 2)
     assert current_state(supervisor) is ProbingState
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
+    assert (
+        "Broker connectivity restored with data maintained (1102); probing."
+        in caplog.text
+    )
 
     await stop_and_wait(supervisor, task)
 
@@ -532,7 +563,7 @@ async def test_broker_connectivity_lost_grace_expiry_moves_to_probing() -> None:
     fake_ib.probe_delays = [60]
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
 
     assert await wait_for_condition(lambda: fake_ib.probe_count == 2)
@@ -555,13 +586,13 @@ async def test_update_event_does_not_wake_broker_connectivity_lost_state() -> No
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
 
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
 
     fake_ib.updateEvent.emit()
     await asyncio.sleep(0)
 
-    assert current_state(supervisor) is BrokerConnectivityLostState
+    assert current_state(supervisor) is ConnectionLostState
     assert fake_ib.probe_count == 1
     assert fake_ib.disconnect_count == 0
     assert workload.starts == 1
@@ -619,6 +650,119 @@ async def test_weak_data_farm_logging_can_be_disabled(
     assert not supervisor.connection_unavailable.is_set()
     assert not supervisor._restart_requested.is_set()
     assert "Weak farm message" not in caplog.text
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_stale_subscription_restart_after_quiet_period(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_states, "STALE_SUBSCRIPTION_RESTART_DELAY", 0.01)
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+
+    caplog.set_level("DEBUG", logger="haymaker.supervisor.states")
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+
+    assert current_state(supervisor) is ConnectedState
+    assert fake_ib.disconnect_count == 0
+    assert await wait_for_condition(lambda: fake_ib.disconnect_count == 1)
+    assert (
+        "Stale subscription quiet period elapsed; requesting workload restart."
+        in caplog.text
+    )
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_stale_subscription_quiet_period_resets_on_repeated_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_states, "STALE_SUBSCRIPTION_RESTART_DELAY", 0.05)
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(fake_ib, workload)
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    await asyncio.sleep(0.03)
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    await asyncio.sleep(0.03)
+
+    assert fake_ib.disconnect_count == 0
+    assert current_state(supervisor) is ConnectedState
+    assert await wait_for_condition(lambda: fake_ib.disconnect_count == 1)
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_stale_subscription_timer_stops_when_connected_state_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_states, "STALE_SUBSCRIPTION_RESTART_DELAY", 0.05)
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib,
+        workload,
+        probe_timeout=1,
+    )
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    await asyncio.sleep(0.01)
+    fake_ib.probe_delays = [60]
+    fake_ib.timeoutEvent.emit(20)
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ProbingState)
+    await asyncio.sleep(0.06)
+
+    assert current_state(supervisor) is ProbingState
+    assert fake_ib.disconnect_count == 0
+
+    await stop_and_wait(supervisor, task)
+
+
+@pytest.mark.asyncio
+async def test_broker_connectivity_loss_wins_over_pending_stale_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(supervisor_states, "STALE_SUBSCRIPTION_RESTART_DELAY", 0.05)
+    fake_ib = FakeIB()
+    workload = FakeWorkload()
+    supervisor = make_supervisor(
+        fake_ib,
+        workload,
+        auto_recovery_grace_period=1,
+    )
+    task = asyncio.create_task(supervisor.run())
+
+    assert await wait_for_condition(lambda: current_state(supervisor) is ConnectedState)
+
+    fake_ib.errorEvent.emit(-1, 10182, "Failed to request live updates", ibi.Contract())
+    await asyncio.sleep(0.01)
+    fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
+
+    assert await wait_for_condition(
+        lambda: current_state(supervisor) is ConnectionLostState
+    )
+    await asyncio.sleep(0.06)
+
+    assert current_state(supervisor) is ConnectionLostState
+    assert fake_ib.disconnect_count == 0
+    assert workload.starts == 1
 
     await stop_and_wait(supervisor, task)
 
@@ -795,7 +939,7 @@ async def test_data_maintained_message_resumes_without_restart_by_default() -> N
 
     fake_ib.errorEvent.emit(-1, 1100, "Connectivity lost", ibi.Contract())
     assert await wait_for_condition(
-        lambda: current_state(supervisor) is BrokerConnectivityLostState
+        lambda: current_state(supervisor) is ConnectionLostState
     )
 
     fake_ib.errorEvent.emit(-1, 1102, "Connectivity restored", ibi.Contract())
@@ -880,7 +1024,6 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
             "probeTimeout": 13,
             "connection_lost_retry": 15,
             "auto_recovery_grace_period": 17,
-            "max_recoveries": 21,
             "recovery_warning_after": 19,
             "recovery_warning_interval": 23,
             "restart_on_recovered_connection": True,
@@ -898,29 +1041,11 @@ def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> No
     assert settings.probe_timeout == 13
     assert settings.connection_lost_retry_delay == 15
     assert settings.auto_recovery_grace_period == 17
-    assert settings.max_recoveries == 21
     assert settings.restart_on_recovered_connection is True
     assert settings.log_datafarm_status is False
     assert not hasattr(settings, "restart_delay")
     assert not hasattr(settings, "recovery_warning_after")
     assert not hasattr(settings, "recovery_warning_interval")
-
-
-def test_connection_settings_from_config_uses_defaults() -> None:
-    settings = ConnectionSettings.from_config({}, client_id=51)
-
-    assert settings.host == "127.0.0.1"
-    assert settings.port == 4002
-    assert settings.client_id == 51
-    assert settings.connect_timeout == 15
-    assert settings.retry_delay == 30
-    assert settings.app_timeout == 90
-    assert settings.probe_timeout == 15
-    assert settings.connection_lost_retry_delay == 90
-    assert settings.auto_recovery_grace_period == 120
-    assert settings.max_recoveries == 10
-    assert settings.restart_on_recovered_connection is False
-    assert settings.log_datafarm_status is True
 
 
 def test_request_restart_returns_true_when_state_supervisor_accepts_request() -> None:

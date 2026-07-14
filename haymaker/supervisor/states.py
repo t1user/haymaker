@@ -12,12 +12,22 @@ from collections.abc import Awaitable
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+import eventkit as ev  # type: ignore
+
+from .codes import (
+    BROKER_CONNECTIVITY_LOST_CODES,
+    DATA_MAINTAINED_CODE,
+    LIVE_UPDATE_FAILURE_CODE,
+)
+
 if TYPE_CHECKING:
     from .supervisor import ConnectionSupervisor
 
 StateResult: TypeAlias = "type[AbstractState]"
 
 log = getLogger(__name__)
+
+STALE_SUBSCRIPTION_RESTART_DELAY = 180
 
 
 class StoppedError(Exception):
@@ -60,9 +70,10 @@ class AbstractState(ABC):
             True if the code indicated broker connectivity loss, otherwise False.
         """
 
-        if code not in self.context.BROKER_CONNECTIVITY_LOST_CODES:
+        if code not in BROKER_CONNECTIVITY_LOST_CODES:
             return False
 
+        log.debug(f"Broker connectivity lost by code {code}; waiting for recovery.")
         self.context.mark_connection_unavailable(
             f"broker connectivity lost by code {code}"
         )
@@ -157,7 +168,7 @@ class ProbingState(AbstractState):
         done = await self.wait_for_wakeup_or(probe_task)
 
         if self._connectivity_lost_requested:
-            return BrokerConnectivityLostState
+            return ConnectionLostState
 
         if probe_task not in done:
             return ProbingState
@@ -207,18 +218,31 @@ class ConnectedState(AbstractState):
         super().__init__(context)
         self._timeout_registered = False
         self._connectivity_lost_requested = False
+        self._stale_subscription_signal: ev.Event | None = None
+        self._stale_subscription_timeout: ev.Timeout | None = None
+        self._stale_subscription_restart_due = False
 
     async def handle(self) -> StateResult:
         if self.settings.app_timeout:
             self.ib.setTimeout(self.settings.app_timeout)
 
-        await self.wait_for_wakeup_or()
+        try:
+            await self.wait_for_wakeup_or()
+        finally:
+            self._cancel_stale_subscription_timer()
 
         if self._connectivity_lost_requested:
-            return BrokerConnectivityLostState
+            return ConnectionLostState
 
         if self._timeout_registered:
             return ProbingState
+
+        if self._stale_subscription_restart_due:
+            log.debug(
+                "Stale subscription quiet period elapsed; "
+                "requesting workload restart."
+            )
+            return RestartingState
 
         return ConnectedState
 
@@ -229,13 +253,62 @@ class ConnectedState(AbstractState):
         self.wakeup.set()
 
     def on_broker_message(self, code: int, message: str) -> None:
-        """Wait for broker connectivity recovery if loss is reported."""
+        """React to broker messages that matter while connected."""
+
+        if code == LIVE_UPDATE_FAILURE_CODE:
+            self._register_stale_subscription_signal(message)
+            return
 
         if self.handle_broker_connectivity_lost_code(code):
             self._connectivity_lost_requested = True
 
+    def _register_stale_subscription_signal(self, message: str) -> None:
+        """Start or reset the quiet-period timer after IB ``10182``."""
 
-class BrokerConnectivityLostState(AbstractState):
+        if not self.context.has_workload:
+            return
+
+        if self._stale_subscription_signal is None:
+            self._stale_subscription_signal = ev.Event(
+                "connection-supervisor-stale-subscription"
+            )
+            self._stale_subscription_timeout = self._stale_subscription_signal.timeout(
+                STALE_SUBSCRIPTION_RESTART_DELAY
+            )
+            self._stale_subscription_timeout.connect(
+                self._on_stale_subscription_quiet_period_elapsed
+            )
+            if self.settings.log_datafarm_status:
+                log.debug(
+                    "Stale subscription restart scheduled in "
+                    f"{STALE_SUBSCRIPTION_RESTART_DELAY}s after quiet period: "
+                    f"{message}"
+                )
+
+        self._stale_subscription_signal.emit()
+
+    def _on_stale_subscription_quiet_period_elapsed(self) -> None:
+        """Wake the state after the configured quiet period expires."""
+
+        self._stale_subscription_restart_due = True
+        self.wakeup.set()
+
+    def _cancel_stale_subscription_timer(self) -> None:
+        """Cancel pending stale-subscription timeout owned by this state."""
+
+        if self._stale_subscription_signal is not None:
+            self._stale_subscription_signal.set_done()
+        elif (
+            self._stale_subscription_timeout is not None
+            and not self._stale_subscription_timeout.done()
+        ):
+            self._stale_subscription_timeout.set_done()
+
+        self._stale_subscription_signal = None
+        self._stale_subscription_timeout = None
+
+
+class ConnectionLostState(AbstractState):
     """Wait briefly for broker-side connectivity to recover before probing."""
 
     async def handle(self) -> StateResult:
@@ -252,7 +325,10 @@ class BrokerConnectivityLostState(AbstractState):
     def on_broker_message(self, code: int, message: str) -> None:
         """Request a probe when IB reports data-maintained recovery."""
 
-        if code == self.context.DATA_MAINTAINED_CODE:
+        if code == DATA_MAINTAINED_CODE:
+            log.debug(
+                f"Broker connectivity restored with data maintained ({code}); probing."
+            )
             self.wakeup.set()
 
 

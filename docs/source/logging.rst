@@ -39,8 +39,9 @@ By default, the Execution Module creates three loggers:
 Broker messages reported through ``IB.errorEvent`` are not necessarily
 actionable failures. Normal execution logging classifies known actionable
 messages and otherwise keeps them at debug level. Codes listed under the
-top-level ``ignore_errors`` configuration key are omitted from normal logs to
-avoid noise.
+``controller.ignore_errors`` configuration key are omitted from normal
+controller logs to avoid noise. Supervisor-owned connection and data-farm status
+codes are handled by the supervisor instead.
 
 Set ``log_broker`` to ``true`` to enable the separate ``broker`` audit logger.
 It records the raw broker event stream to ``broker.log``, including codes

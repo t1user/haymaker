@@ -22,63 +22,20 @@ Sensible starting configurations are defined in default configuration files loca
 Connection Recovery
 ===================
 
-Live execution and the current managed dataloader path use the same socket
-connection supervisor package, with separate supervisor instances for separately
-owned sockets. The supervisor reconnects to the configured TWS or IB Gateway API
-endpoint but does not start, stop, or restart the gateway process.
-The default ``state`` supervisor verifies broker usability with a short
-historical-data probe before starting the supervised workload. The alternative
-``onion`` supervisor starts the workload after the socket connects, arms the IB
-idle timeout, and defers historical-data probes until a health signal such as
-``timeoutEvent`` or broker recovery wait requires one.
+Live execution and managed dataloader runs automatically recover Haymaker-owned
+Interactive Brokers API connections. The supervisor reconnects to the
+configured TWS or IB Gateway endpoint but does not manage the gateway process.
 
-``app.supervisor`` selects the live supervisor implementation. ``state`` is the
-default state-machine implementation; ``onion`` selects the alternative layered
-implementation. For the current managed dataloader configuration, the equivalent
-setting is top-level ``supervisor`` because dataloader connection settings are
-read from a flat mapping.
+Live connection settings belong under ``app``. Managed dataloader connection
+settings use the same names at the top level. See :doc:`supervisor` for the
+available settings and recovery policies, and :doc:`ib_message_codes` when
+interpreting broker messages.
 
-For live execution, ``timeoutEvent`` is the active health signal after the IB
-client has received no traffic for ``app.appTimeout`` seconds. Haymaker probes
-the connection and enters a delayed restart cycle if the probe fails. For the
-default ``state`` supervisor, only broker connectivity-loss messages ``1100``
-and ``2110`` move Haymaker into broker-connectivity recovery while connected.
-``app.auto_recovery_grace_period`` controls how long Haymaker waits there
-before probing the connection. Generic ``updateEvent`` traffic does not wake
-that state, and weak data-farm messages such as ``2103``, ``2105``, ``2157``,
-``10182``, ``2104``, ``2106``, and ``2158`` are logged as context only when
-``app.log_datafarm_status`` is ``True``. Set it to ``False`` to ignore those
-non-actionable messages silently while keeping the same recovery behavior.
-Restart cycles after failed probes wait ``app.connection_lost_retry`` before
-reconnecting; ``app.retryDelay`` controls the pause between failed connection
-attempts.
-When IB sends ``1102`` (connectivity restored, data maintained),
-``app.restart_on_recovered_connection`` controls whether Haymaker requests an
-immediate restart cycle anyway. The default is ``False``: Haymaker treats
-``1102`` as a prompt to probe while broker connectivity is marked lost and
-leaves streamers to detect stale subscriptions. Set it to ``True`` to rebuild
-immediately after ``1102``.
-``max_recoveries`` limits consecutive unexpected supervisor-cycle recoveries
-before Haymaker stops trying to rebuild the same failing cycle. Planned restart
-requests and normal broker/socket recovery cycles do not consume this budget.
-For the current managed dataloader configuration, the same setting is top-level
-``restart_on_recovered_connection`` because dataloader connection settings are
-read from a flat mapping.
-
-See :doc:`ib_message_codes` for the broker message codes most relevant to
-connection recovery and logging.
-See :doc:`supervisor` for the supervisor lifecycle, workload contract, and state
-transition chart.
-
-Contract details are refreshed during successful live startup. The live
-controller also schedules a fixed daily futures roll at the UTC time configured
-by ``controller.future_roll_time`` so normal socket recovery cannot leave
-futures selectors unchanged indefinitely.
-
-The top-level ``ignore_errors`` setting lists noisy broker message codes that
-should be omitted from normal logs. It does not suppress supervisor actions or
-the optional raw ``broker.log`` audit trail.
-
+The ``controller.ignore_errors`` setting lists noisy controller-owned broker
+message codes that should be omitted from normal logs. Connection and data-farm
+status codes are owned by the supervisor and should not be listed here. This
+setting does not suppress supervisor actions or the optional raw ``broker.log``
+audit trail.
 
 User-Provided Configuration File
 ================================

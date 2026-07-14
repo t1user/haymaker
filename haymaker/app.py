@@ -14,17 +14,12 @@ class LiveRuntime:
     """Run live controller and streamer work for one supervisor cycle."""
 
     context: RuntimeContext
-    exit_on_failed_sync: bool = False
 
     @classmethod
     def from_context(cls, context: RuntimeContext) -> "LiveRuntime":
         """Create live runtime settings from the process context."""
 
-        app_config = context.config.get("app") or {}
-        return cls(
-            context=context,
-            exit_on_failed_sync=app_config.get("exit_on_failed_sync", False),
-        )
+        return cls(context=context)
 
     def bind_supervisor(
         self,
@@ -41,10 +36,7 @@ class LiveRuntime:
 
         log.debug("Will run controller...")
         try:
-            controller_started = await self.context.controller.run()
-            if not controller_started and self.exit_on_failed_sync:
-                log.debug("Controller did not start; jobs will not be started.")
-                return
+            await self.context.controller.run()
             await self.context.require_startup_jobs()()
         except asyncio.CancelledError:
             log.debug("Live runtime task cancelled.")

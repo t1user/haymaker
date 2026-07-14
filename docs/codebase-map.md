@@ -138,7 +138,8 @@ The research package is intentionally separate from live execution. It works dir
   external. Broker message codes are categorized into hard restart requests,
   broker-connectivity-lost signals, and informational farm/live-update messages.
   Connectivity-lost signals move the supervisor into broker recovery wait while
-  connected; informational farm/live-update messages are log context only.
+  connected; informational farm messages are log context only. IB `10182`
+  warnings request a stale-subscription restart after a 180-second quiet period.
   `timeoutEvent` and probes remain active health checks, and `1102` can end a
   broker-connectivity wait when IB reports data maintained.
 - MongoDB through `pymongo`.
