@@ -16,7 +16,7 @@ The package is still alpha-stage. Some public docs describe the live backtester 
 
 The live execution side is built around `Atom` pipelines. `Atom` provides event wiring, contract lookup, and shared access to process-owned runtime services. Strategy code composes streamers, signal processors, portfolio sizing, and execution models into event chains.
 
-Live runtime services are assembled in `haymaker/runtime.py` by `RuntimeContext`:
+Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
 
 - shared `ib_insync.IB` client,
 - contract registry for qualified current/next contracts,
@@ -24,13 +24,17 @@ Live runtime services are assembled in `haymaker/runtime.py` by `RuntimeContext`
 - controller for broker/state reconciliation and order gateway,
 - startup contract-detail initialization and streamer startup jobs.
 
+`RuntimeContext` is the passive container exposed to `Atom` instances. It
+holds only ready runtime services, the supervisor restart callback, and
+strategy futures-roll policies; it does not construct services or inspect the
+user module.
+
 The `haymaker` console command owns live composition and logging: it configures
-Haymaker, starts threaded logging handlers, creates `RuntimeContext`, installs
-it on `Atom`, imports the user strategy module so module-level pipelines are
-built, reads module metadata such as `no_future_roll_strategies`, and then
-passes the validated values to runtime services before handing a `LiveRuntime`
-to the shared `App`. `RuntimeContext` does not inspect imported modules. The
-app-lifetime `Controller` starts
+Haymaker, starts threaded logging handlers, creates `LiveRuntime`, and imports
+the user strategy module so module-level pipelines are built against its
+already-installed `RuntimeContext`. Blocks register their futures-roll policy
+as they are constructed. The CLI then hands the composed runtime to the shared
+`App`. The app-lifetime `Controller` starts
 its periodic sync, health-check, and daily UTC futures-roll timers once on the
 active event loop when `Controller.run()` first executes. Live and dataloader
 runtimes use the same application and supervisor lifecycle.
@@ -45,18 +49,17 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints,
-  explicit command-profile config and threaded-logging lifecycles, and user
-  strategy module loading, metadata validation, and failed-import rollback in
+  a shared command shell for explicit profile config and threaded-logging
+  lifecycles, and user strategy module loading with failed-import rollback in
   `sys.modules`.
 - `haymaker/app.py`: shared Linux top-level `App.run()` lifecycle, application
-  runtime protocol, and `LiveRuntime`, which owns live workload startup,
-  reconnect cleanup, and final state flushing. As the process composition root,
-  `App` explicitly binds supervisor restart and connection-availability controls
-  to each runtime, handles graceful `SIGTERM`, and propagates unexpected
-  workload failures after cleanup.
-- `haymaker/runtime.py`: process-owned live runtime context,
-  IB/state/controller construction, contract-detail initialization, and startup
-  jobs that retain the live streamer registry populated during strategy import.
+  runtime protocol, supervisor composition, graceful `SIGTERM`, and propagation
+  of unexpected workload failures after cleanup.
+- `haymaker/runtime.py`: `LiveRuntime`, the live composition root that builds
+  IB/state/controller services, installs a passive `RuntimeContext`, and owns
+  contract-detail initialization, workload startup, reconnect cleanup, and
+  final state flushing. Startup jobs retain the live streamer registry
+  populated during strategy import.
 - `haymaker/supervisor/`: IB socket supervisor package for connections it owns.
   It owns workload task lifecycle, broker auto-recovery waits,
   probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
@@ -74,7 +77,8 @@ The research package is intentionally separate from live execution. It works dir
 ### Strategy Pipeline Components
 
 - `haymaker/streamers.py`: historical, market-data, real-time-bar, and tick streamers that emit `Atom` events.
-- `haymaker/block.py`: dataframe-to-signal strategy block base classes; can persist generated bar data.
+- `haymaker/block.py`: dataframe-to-signal strategy block base classes; can
+  persist generated bar data and register per-strategy futures-roll policy.
 - `haymaker/signals.py`: binary signal processors converting strategy output into `OPEN`, `CLOSE`, or `REVERSE` actions.
 - `haymaker/portfolio.py`: position sizing layer.
 - `haymaker/execution_models.py`: converts portfolio/action data into IB orders, including bracket/stop/take-profit handling.
@@ -100,7 +104,8 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 
 ### Dataloader
 
-- `haymaker/dataloader/dataloader.py`: `dataloader` console-script entrypoint, producer/worker queue, download task orchestration, and store writes.
+- `haymaker/dataloader/dataloader.py`: dataloader runtime factory,
+  producer/worker queue, download task orchestration, and store writes.
 - `haymaker/dataloader/connect.py`: dataloader adapter for supervised IB
   connection ownership, using dataloader client ID `1` by default.
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
@@ -126,13 +131,15 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 
 ## Entry Points
 
-- `haymaker strategy.py [options]` imports the user strategy module and then
-  starts the framework-owned `App`. `App.run()` runs the top-level supervisor
+- `haymaker strategy.py [options]` builds the live runtime, imports the user
+  strategy module, and then starts the framework-owned `App`. `App.run()` runs
+  the top-level supervisor
   coroutine through standard `asyncio.run()`; nested-loop patching is not used.
   The CLI flushes threaded logging after application, construction, or strategy-
   import failure. One user strategy per process is the supported lifecycle.
-- `dataloader contracts.csv [options]` maps the positional source file into
-  dataloader configuration before importing the dataloader runtime.
+- `dataloader contracts.csv [options]` uses the same command shell, maps the
+  positional source file into dataloader configuration, and builds a
+  dataloader runtime for the shared `App`.
 - Research code usually imports from `haymaker.research`, `haymaker.research.stop`, or `haymaker.research.backtester`.
 - Sphinx docs are built from `docs/source` with `make html` from the `docs/` directory.
 
@@ -140,11 +147,11 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 
 ### Live Execution Flow
 
-1. The `haymaker` CLI creates `RuntimeContext`, which also creates
-   `StartupJobs` around the live streamer registry, installs the context on
-   `Atom`, imports the user strategy module, validates its metadata, and passes
-   the ready values to the context and controller.
+1. The `haymaker` CLI creates `LiveRuntime`. It assembles live services, creates
+   `StartupJobs` around the live streamer registry, and installs the passive
+   `RuntimeContext` on `Atom` before importing the user strategy module.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
+   Each block also registers its `auto_roll_futures` policy in the context.
 3. `App` starts the IB watchdog and waits for a successful historical-data probe.
 4. `Controller.run()` starts its app-lifetime timers once on the active event
    loop, reads or initializes state, then `Controller.sync()` races the

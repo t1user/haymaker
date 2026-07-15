@@ -140,7 +140,26 @@ class StartupJobs:
 
 @dataclass
 class RuntimeContext:
-    """Process-owned live runtime services shared by Haymaker atoms."""
+    """Ready live runtime services and metadata shared by Haymaker atoms."""
+
+    ib: ibi.IB
+    contract_registry: ContractRegistry = field(repr=False)
+    sm: StateMachine = field(repr=False)
+    trader: Trader = field(repr=False)
+    controller: Controller = field(init=False, repr=False)
+    request_restart: Callable[[str], bool | None] | None = field(
+        default=None, repr=False
+    )
+    future_roll_policies: dict[str, bool] = field(default_factory=dict, repr=False)
+
+    def __str__(self) -> str:
+        """Return a compact runtime summary suitable for logs."""
+        return f"RuntimeContext<contracts={len(self.contract_registry.blueprints)}>"
+
+
+@dataclass
+class LiveRuntime:
+    """Construct and coordinate one process-owned live runtime."""
 
     config: MutableMapping = field(repr=False)
     ib: ibi.IB = field(default_factory=ibi.IB)
@@ -148,22 +167,23 @@ class RuntimeContext:
         default_factory=ContractRegistry, repr=False
     )
     sm: StateMachine = field(default_factory=StateMachine, repr=False)
-    log_broker: bool = field(default=False, init=False)
-    trader: Trader = field(init=False, repr=False)
-    controller: Controller = field(init=False, repr=False)
+    context: RuntimeContext = field(init=False, repr=False)
     startup_jobs: StartupJobs = field(init=False, repr=False)
-    no_future_roll_strategies: list[str] = field(default_factory=list)
-    _restart_handler: Callable[[str], bool | None] | None = field(
-        default=None, init=False, repr=False
-    )
     _broker_logger: IBHandlers | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.log_broker = self.config.get("log_broker", False)
-        Atom.set_runtime_context(self)
-        self.trader = Trader(self.ib)
-        self.controller = Controller.from_config(
-            self.trader,
+        """Build services and install a complete Atom context before returning."""
+
+        trader = Trader(self.ib)
+        self.context = RuntimeContext(
+            self.ib,
+            self.contract_registry,
+            self.sm,
+            trader,
+        )
+        Atom.set_runtime_context(self.context)
+        self.context.controller = Controller.from_config(
+            trader,
             blotter_factory(self.config["use_blotter"]),
             self.config,
             [HEALTH_CHECK_OBSERVABLES],
@@ -173,33 +193,44 @@ class RuntimeContext:
             self.ib,
             Streamer.instances,
         )
-        if self.log_broker:
+        if self.config.get("log_broker", False):
             self._broker_logger = IBHandlers(self.ib)
 
-    def bind_restart_handler(
-        self, restart_handler: Callable[[str], bool | None]
+    def bind_supervisor(
+        self,
+        request_restart: Callable[[str], bool | None],
+        connection_unavailable: asyncio.Event,
     ) -> None:
-        """Bind the supervisor restart callback for runtime components."""
+        """Bind supervisor controls used by live runtime components."""
 
-        self._restart_handler = restart_handler
+        self.context.request_restart = request_restart
+        self.context.controller.set_sync_abort_event(connection_unavailable)
 
-    def request_restart(self, reason: str = "") -> bool | None:
-        """Request a supervised restart when the supervisor is available."""
+    async def start(self) -> None:
+        """Start controller and strategy jobs after connectivity is verified."""
 
-        if self._restart_handler is None:
-            log.error("Cannot restart: no supervisor restart handler configured.")
-            return False
-        return self._restart_handler(reason)
+        log.debug("Will run controller...")
+        self.context.controller.set_future_roll_policies(
+            self.context.future_roll_policies
+        )
+        await self.context.controller.run()
+        await self.startup_jobs.run()
 
-    def close(self) -> None:
-        """Flush runtime-owned state before process-level resources close."""
-        self.sm.flush_pending_save()
+    async def stop(self, reason: str) -> None:
+        """Put the controller on hold while supervised work stops."""
+
+        self.context.controller.set_hold()
+        log.debug("Stopping live runtime: %s", reason)
+
+    async def close(self) -> None:
+        """Flush final live-runtime state before process shutdown."""
+
+        self.context.sm.flush_pending_save()
 
     def __str__(self) -> str:
-        """Return a compact runtime summary suitable for logs."""
+        """Return a compact live-runtime description suitable for logs."""
 
-        streamer_count = len(self.startup_jobs.streamers)
         return (
-            f"RuntimeContext<contracts={len(self.contract_registry.blueprints)}, "
-            f"streamers={streamer_count}>"
+            f"LiveRuntime<contracts={len(self.contract_registry.blueprints)}, "
+            f"streamers={len(self.startup_jobs.streamers)}>"
         )

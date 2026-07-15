@@ -25,8 +25,6 @@ from tqdm import tqdm
 from haymaker.config import CONFIG
 from haymaker.databases import get_mongo_client
 from haymaker.datastore import AsyncAbstractBaseStore, AsyncArcticStore
-from haymaker.app import App
-from haymaker.supervisor import ConnectionSettings
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
@@ -1136,16 +1134,12 @@ def _contract_expiry(contract: ibi.Contract, bar_size: str) -> date | datetime |
     return normalize_point(expiry, bar_size)
 
 
-def start() -> None:
-    """Run the configured standalone dataloader command until completion."""
+def create_runtime() -> DataloaderRuntime:
+    """Create the configured standalone dataloader runtime."""
 
     ib = ibi.IB()
     session = DataloaderSession(ib)
     ib.errorEvent += session.pacing.onErrEvent
     log.debug("Will start...")
 
-    runtime = DataloaderRuntime(ib, session.run, session.cancel_tasks)
-    settings = ConnectionSettings.from_config(
-        CONFIG, CONFIG.get("clientId", DEFAULT_CLIENT_ID)
-    )
-    App(runtime, settings).run()
+    return DataloaderRuntime(ib, session.run, session.cancel_tasks)

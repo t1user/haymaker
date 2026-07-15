@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from collections.abc import MutableMapping
 from pathlib import Path
 from types import ModuleType
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from .config import configure
-from .config.cli_options import CustomArgParser
+from .config.cli_options import CustomArgParser, ParserProfile
+
+if TYPE_CHECKING:
+    from .app import Runtime
+    from .supervisor import ConnectionSettings
 
 
 def load_user_module(module_path: str | Path) -> ModuleType:
@@ -52,29 +57,59 @@ def load_user_module(module_path: str | Path) -> ModuleType:
     return module
 
 
-def read_no_future_roll_strategies(module: ModuleType) -> list[str]:
-    """Read and validate futures-roll exclusions from a strategy module.
+def _build_live_runtime(
+    config: MutableMapping, module_path: str | Path
+) -> tuple[Runtime, ConnectionSettings]:
+    """Build a live runtime, then import its user strategy module."""
 
-    Args:
-        module: Imported user strategy module.
+    from .runtime import LiveRuntime
+    from .supervisor import ConnectionSettings
 
-    Returns:
-        Strategy names excluded from automatic futures rolling.
+    runtime = LiveRuntime(config)
+    load_user_module(module_path)
+    settings = ConnectionSettings.from_config(config.get("app") or {}, 0)
+    return runtime, settings
 
-    Raises:
-        TypeError: If the module value is not a list of strings.
-    """
 
-    strategies = getattr(module, "no_future_roll_strategies", [])
-    if strategies is None:
-        return []
-    if not isinstance(strategies, list) or not all(
-        isinstance(strategy, str) for strategy in strategies
-    ):
-        raise TypeError(
-            "Strategy module variable no_future_roll_strategies must be a list[str]."
-        )
-    return list(strategies)
+def _build_dataloader_runtime(
+    config: MutableMapping,
+) -> tuple[Runtime, ConnectionSettings]:
+    """Build the configured standalone dataloader runtime."""
+
+    from .dataloader import dataloader
+    from .supervisor import ConnectionSettings
+
+    runtime = dataloader.create_runtime()
+    settings = ConnectionSettings.from_config(
+        config, config.get("clientId", dataloader.DEFAULT_CLIENT_ID)
+    )
+    return runtime, settings
+
+
+def _run_command(
+    profile: ParserProfile,
+    args: list[str],
+    module_path: str | Path | None = None,
+) -> None:
+    """Configure and run one command profile through the shared application."""
+
+    config = configure(profile, args)
+
+    from .logging import setup_logging, shutdown_logging_queue
+
+    setup_logging(config.get("logging_config"))
+    try:
+        from .app import App
+
+        if profile == "live":
+            if module_path is None:
+                raise ValueError("Live execution requires a strategy module path.")
+            runtime, settings = _build_live_runtime(config, module_path)
+        else:
+            runtime, settings = _build_dataloader_runtime(config)
+        App(runtime, settings).run()
+    finally:
+        shutdown_logging_queue()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -82,45 +117,11 @@ def main(argv: list[str] | None = None) -> None:
 
     args = list(sys.argv[1:] if argv is None else argv)
     parsed = CustomArgParser.from_profile("live", args).output
-    config = configure("live", args)
-
-    from .logging import setup_logging, shutdown_logging_queue
-
-    setup_logging(config.get("logging_config"))
-    try:
-        from .runtime import RuntimeContext
-
-        context = RuntimeContext(config)
-        strategy_module = load_user_module(parsed["module_path"])
-        context.no_future_roll_strategies = read_no_future_roll_strategies(
-            strategy_module
-        )
-        context.controller.set_no_future_roll_strategies(
-            context.no_future_roll_strategies
-        )
-
-        from .app import App, LiveRuntime
-        from .supervisor import ConnectionSettings
-
-        runtime = LiveRuntime(context)
-        settings = ConnectionSettings.from_config(config.get("app") or {}, 0)
-        App(runtime, settings).run()
-    finally:
-        shutdown_logging_queue()
+    _run_command("live", args, parsed["module_path"])
 
 
 def dataloader_main(argv: list[str] | None = None) -> None:
     """Run the dataloader with explicit dataloader CLI/config profile."""
 
     args = list(sys.argv[1:] if argv is None else argv)
-    config = configure("dataloader", args)
-
-    from .logging import setup_logging, shutdown_logging_queue
-
-    setup_logging(config.get("logging_config"))
-    try:
-        from .dataloader import dataloader
-
-        dataloader.start()
-    finally:
-        shutdown_logging_queue()
+    _run_command("dataloader", args)

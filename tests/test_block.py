@@ -29,6 +29,81 @@ def test_block_instantiates(block: AbstractBaseBlock):
     assert isinstance(b, AbstractBaseBlock)
 
 
+def test_block_registers_default_future_roll_policy(atom_runtime) -> None:
+    """Blocks should opt into automatic futures rolling by default."""
+
+    class Block(AbstractBaseBlock):
+        def _signal(self, data):
+            return {}
+
+    Block("default-roll", ibi.Future("NQ", "CME"))
+
+    assert atom_runtime.future_roll_policies == {"default-roll": True}
+
+
+def test_block_registers_explicit_future_roll_opt_out(atom_runtime) -> None:
+    """A Block keyword should declare a strategy-level roll exclusion."""
+
+    class Block(AbstractBaseBlock):
+        def _signal(self, data):
+            return {}
+
+    Block(
+        "manual-roll",
+        ibi.Future("NQ", "CME"),
+        auto_roll_futures=False,
+    )
+
+    assert atom_runtime.future_roll_policies == {"manual-roll": False}
+
+
+def test_block_allows_repeated_consistent_future_roll_policy(atom_runtime) -> None:
+    """Multiple Blocks may share a strategy when their policies agree."""
+
+    class Block(AbstractBaseBlock):
+        def _signal(self, data):
+            return {}
+
+    Block("shared", ibi.Future("NQ", "CME"), auto_roll_futures=False)
+    Block("shared", ibi.Future("ES", "CME"), auto_roll_futures=False)
+
+    assert atom_runtime.future_roll_policies == {"shared": False}
+
+
+def test_block_rejects_conflicting_future_roll_policy(atom_runtime) -> None:
+    """Conflicting declarations for one persisted strategy should fail."""
+
+    class Block(AbstractBaseBlock):
+        def _signal(self, data):
+            return {}
+
+    Block("shared", ibi.Future("NQ", "CME"), auto_roll_futures=False)
+
+    with pytest.raises(ValueError, match="Conflicting auto_roll_futures"):
+        Block("shared", ibi.Future("ES", "CME"), auto_roll_futures=True)
+
+
+def test_future_roll_policy_is_keyword_only_for_block_subclasses(atom_runtime) -> None:
+    """Default policy must not prevent subclasses from adding required fields."""
+
+    @dataclass
+    class ParameterizedBlock(AbstractBaseBlock):
+        lookback: int
+
+        def _signal(self, data):
+            return {}
+
+    block = ParameterizedBlock(
+        "parameterized",
+        ibi.Future("NQ", "CME"),
+        20,
+        auto_roll_futures=False,
+    )
+
+    assert block.lookback == 20
+    assert atom_runtime.future_roll_policies == {"parameterized": False}
+
+
 def test_AbstractBaseBlock_is_abstract():
     with pytest.raises(TypeError):
         AbstractBaseBlock()  # type: ignore

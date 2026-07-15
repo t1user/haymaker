@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from functools import cached_property, partial
 from typing import TYPE_CHECKING, Generator
 
@@ -20,11 +21,13 @@ log = logging.getLogger(__name__)
 class FutureRoller:
 
     def __init__(
-        self, controller: Controller, excluded_strategies: list[str] = []
+        self,
+        controller: Controller,
+        future_roll_policies: Mapping[str, bool] | None = None,
     ) -> None:
         self.controller = controller
         self.sm = controller.sm
-        self.excluded_strategies = excluded_strategies
+        self.future_roll_policies = dict(future_roll_policies or {})
         self._trade_generator: dict[int, Generator] = {}
         self._fill_prices: dict[ibi.Future, float] = {}
         log.debug("FutureRoller initiated")
@@ -52,14 +55,31 @@ class FutureRoller:
         shouldn't be rolled.  Future will appear in the dict only if
         at least one strategy has active position in it.
         """
-        strategies = {
-            fut: [
-                i
-                for i in strategy_list
-                if (i not in self.excluded_strategies) and strategy_list
-            ]
+        strategies_by_contract = {
+            fut: strategy_list
             for fut, strategy_list in self.sm.strategy.strategies_by_contract().items()
             if isinstance(fut, ibi.Future)
+        }
+        declared_strategies = self.future_roll_policies.keys()
+        active_strategies = {
+            strategy
+            for strategy_list in strategies_by_contract.values()
+            for strategy in strategy_list
+        }
+        if undeclared := sorted(active_strategies - declared_strategies):
+            log.warning(
+                "Automatic futures-roll policy is undeclared for active "
+                "strategies %s; defaulting to enabled.",
+                undeclared,
+            )
+
+        strategies = {
+            fut: [
+                strategy
+                for strategy in strategy_list
+                if self.future_roll_policies.get(strategy, True)
+            ]
+            for fut, strategy_list in strategies_by_contract.items()
         }
 
         debug_string = {
@@ -559,5 +579,5 @@ class FutureRoller:
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__qualname__}(controller={self.controller}, "
-            f"excluded_strategies={self.excluded_strategies})"
+            f"future_roll_policies={self.future_roll_policies})"
         )

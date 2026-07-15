@@ -59,6 +59,26 @@ def test_timeout_created_from_atom(Atom, Timeout):
     assert "MyAtom" in str(t)
 
 
+def test_restart_timeout_from_atom_requires_bound_supervisor(
+    Atom, Timeout, atom_runtime
+) -> None:
+    """Restart-enabled Atom timeouts must be created during startup or later."""
+
+    class FakeDetails(Details):
+        def __post_init__(self):
+            pass
+
+    class MyAtom(Atom):
+        @property
+        def contract_details(self):
+            return FakeDetails(ibi.ContractDetails(contract=ibi.Future("NQ", "CME")))
+
+    setattr(atom_runtime, "request_restart", None)
+
+    with pytest.raises(RuntimeError, match="onStart"):
+        Timeout.from_atom(MyAtom(), ev.Event(), time=1)
+
+
 def test_timeout_from_atom_raises_when_no_details(Timeout, Atom):
     class MyAtom(Atom):
         def __str__(self):

@@ -84,7 +84,7 @@ class Controller(Atom):
     missing_brackets: MissingBracketsPolicy = "ignore"
     ignore_errors: tuple[int, ...] | list[int] = field(default_factory=tuple)
     future_roll_time: tuple[int, int] | None = None
-    no_future_roll_strategies: list[str] = field(default_factory=list)
+    future_roll_policies: dict[str, bool] = field(default_factory=dict)
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
@@ -254,8 +254,10 @@ class Controller(Atom):
             self._hold = False
             log.debug("hold released")
 
-    def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
-        self.no_future_roll_strategies = list(strategies)
+    def set_future_roll_policies(self, policies: abc.Mapping[str, bool]) -> None:
+        """Replace strategy futures-roll policies with a defensive copy."""
+
+        self.future_roll_policies = dict(policies)
 
     async def run(self) -> bool:
         """
@@ -327,7 +329,7 @@ class Controller(Atom):
         This method is scheduled to run once a day.
         """
         log.info(f"Running roll on controller object: {id(self)}")
-        roller = FutureRoller(self, self.no_future_roll_strategies)
+        roller = FutureRoller(self, self.future_roll_policies)
         roller.roll()
 
     def schedule_future_roll(self) -> None:

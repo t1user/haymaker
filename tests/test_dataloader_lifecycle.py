@@ -36,6 +36,25 @@ def dataloader_module(monkeypatch):
     return importlib.import_module("haymaker.dataloader.dataloader")
 
 
+def test_create_runtime_wires_one_dataloader_session(
+    monkeypatch, dataloader_module
+) -> None:
+    """Dataloader factory should return a runtime around one wired session."""
+
+    dataloader = dataloader_module
+    ib = ibi.IB()
+    initial_error_handlers = len(ib.errorEvent)
+    monkeypatch.setattr(dataloader.ibi, "IB", lambda: ib)
+
+    runtime = dataloader.create_runtime()
+    session = getattr(runtime.func, "__self__")
+
+    assert runtime.ib is ib
+    assert isinstance(session, dataloader.DataloaderSession)
+    assert getattr(runtime.cleanup, "__self__") is session
+    assert len(ib.errorEvent) == initial_error_handlers + 1
+
+
 @pytest.mark.asyncio
 async def test_main_cleans_up_producer_and_workers_on_cancellation(
     monkeypatch, dataloader_module

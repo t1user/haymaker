@@ -7,23 +7,31 @@ import ib_insync as ibi
 import pytest
 
 import haymaker.app as app_module
-from haymaker.app import App, LiveRuntime
+from haymaker.app import App
+from haymaker.base import Atom
 from haymaker.contract_registry import ContractRegistry
-from haymaker.runtime import InitData, RuntimeContext, StartupJobs
+from haymaker.runtime import InitData, LiveRuntime, RuntimeContext, StartupJobs
 from haymaker.streamers import Streamer
 from haymaker.supervisor import ConnectionSettings
+from haymaker.trader import Trader
 
 
-def make_runtime_context(atom_runtime) -> RuntimeContext:
-    """Create an initialized runtime context for representation tests."""
+def live_config() -> dict[str, object]:
+    """Return minimal live configuration for runtime construction tests."""
 
-    return RuntimeContext(
-        config={
-            "use_blotter": False,
-            "controller": {},
-            "app": {},
-            "secret_value": "must-not-appear",
-        },
+    return {
+        "use_blotter": False,
+        "controller": {},
+        "app": {},
+        "secret_value": "must-not-appear",
+    }
+
+
+def make_live_runtime(atom_runtime) -> LiveRuntime:
+    """Create a live runtime from injected test services."""
+
+    return LiveRuntime(
+        live_config(),
         ib=atom_runtime.ib,
         contract_registry=atom_runtime.contract_registry,
         sm=atom_runtime.sm,
@@ -33,34 +41,51 @@ def make_runtime_context(atom_runtime) -> RuntimeContext:
 def test_runtime_context_has_compact_repr_and_log_string(atom_runtime) -> None:
     """Runtime context representations must not dump its service graph."""
 
-    context = make_runtime_context(atom_runtime)
+    context = RuntimeContext(
+        atom_runtime.ib,
+        atom_runtime.contract_registry,
+        atom_runtime.sm,
+        Trader(atom_runtime.ib),
+    )
 
-    assert "must-not-appear" not in repr(context)
     assert "controller=" not in repr(context)
     assert "contract_registry=" not in repr(context)
-    assert context.no_future_roll_strategies == []
-    assert context.startup_jobs.streamers is Streamer.instances
-    assert str(context) == (
-        f"RuntimeContext<contracts=0, streamers={len(Streamer.instances)}>"
-    )
+    assert context.request_restart is None
+    assert context.future_roll_policies == {}
+    assert str(context) == "RuntimeContext<contracts=0>"
+
+
+def test_live_runtime_builds_and_installs_ready_context(atom_runtime) -> None:
+    """Live runtime should assemble services before user strategy import."""
+
+    runtime = make_live_runtime(atom_runtime)
+
+    assert Atom.runtime is runtime.context
+    assert runtime.context.ib is atom_runtime.ib
+    assert runtime.context.sm is atom_runtime.sm
+    assert runtime.context.contract_registry is atom_runtime.contract_registry
+    assert runtime.context.controller is not None
+    assert runtime.startup_jobs.streamers is Streamer.instances
+    assert not hasattr(runtime.context, "config")
+    assert not hasattr(runtime.context, "startup_jobs")
 
 
 def test_app_repr_avoids_duplicate_runtime_context(atom_runtime) -> None:
     """Application repr must not repeat its context through LiveRuntime."""
 
-    context = make_runtime_context(atom_runtime)
-    app = App(LiveRuntime(context), settings=ConnectionSettings(client_id=77))
+    runtime = make_live_runtime(atom_runtime)
+    app = App(runtime, settings=ConnectionSettings(client_id=77))
 
     assert "RuntimeContext(" not in repr(app)
     assert "runtime=" not in repr(app)
     assert "supervisor=" not in repr(app)
-    context_description = (
-        f"RuntimeContext<contracts=0, streamers={len(Streamer.instances)}>"
-    )
     assert str(app) == (
-        f"App<client_id=77, runtime=LiveRuntime<{context_description}>>"
+        f"App<client_id=77, runtime=LiveRuntime<contracts=0, "
+        f"streamers={len(Streamer.instances)}>>"
     )
-    assert str(app.runtime) == f"LiveRuntime<{context_description}>"
+    assert str(app.runtime) == (
+        f"LiveRuntime<contracts=0, streamers={len(Streamer.instances)}>"
+    )
 
 
 def test_startup_jobs_separates_log_and_diagnostic_representations() -> None:
@@ -77,7 +102,7 @@ def test_startup_jobs_observes_streamers_registered_after_construction() -> None
     """Startup jobs created before strategy import must see later streamers."""
 
     ib = ibi.IB()
-    streamers = []
+    streamers: list[Any] = []
     jobs = StartupJobs(InitData(ib, ContractRegistry()), ib, streamers)
     streamer = cast(Any, object())
 
@@ -90,7 +115,7 @@ def test_startup_jobs_observes_streamers_registered_after_construction() -> None
 async def test_app_closes_runtime_tasks_and_queues(monkeypatch) -> None:
     """Application shutdown should follow the shared process cleanup order."""
 
-    events = []
+    events: list[object] = []
 
     class FakeRuntime:
         ib = ibi.IB()
@@ -148,11 +173,20 @@ async def test_live_runtime_propagates_startup_failure() -> None:
     """Unexpected controller failures must reach the supervisor task."""
 
     class FailingController:
+        def set_future_roll_policies(self, policies: dict[str, bool]) -> None:
+            pass
+
         async def run(self) -> bool:
             raise RuntimeError("controller failed")
 
-    context = cast(RuntimeContext, SimpleNamespace(controller=FailingController()))
-    runtime = LiveRuntime(context)
+    runtime = object.__new__(LiveRuntime)
+    runtime.context = cast(
+        RuntimeContext,
+        SimpleNamespace(
+            controller=FailingController(),
+            future_roll_policies={},
+        ),
+    )
 
     with pytest.raises(RuntimeError, match="controller failed"):
         await runtime.start()
@@ -160,26 +194,54 @@ async def test_live_runtime_propagates_startup_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_live_runtime_runs_startup_jobs_after_controller() -> None:
-    """Live startup should use the explicit StartupJobs.run entrypoint."""
+    """Live startup should apply policies and run monitoring after controller."""
 
-    events = []
+    events: list[object] = []
 
     class FakeController:
-        async def run(self) -> None:
+        def set_future_roll_policies(self, policies: dict[str, bool]) -> None:
+            events.append(("policies", dict(policies)))
+
+        async def run(self) -> bool:
             events.append("controller")
+            return False
 
     class FakeStartupJobs:
         async def run(self) -> None:
             events.append("startup-jobs")
 
-    context = cast(
+    runtime = object.__new__(LiveRuntime)
+    runtime.context = cast(
         RuntimeContext,
-        SimpleNamespace(controller=FakeController(), startup_jobs=FakeStartupJobs()),
+        SimpleNamespace(
+            controller=FakeController(),
+            future_roll_policies={"manual": False},
+        ),
     )
+    runtime.startup_jobs = cast(StartupJobs, FakeStartupJobs())
 
-    await LiveRuntime(context).start()
+    await runtime.start()
 
-    assert events == ["controller", "startup-jobs"]
+    assert events == [
+        ("policies", {"manual": False}),
+        "controller",
+        "startup-jobs",
+    ]
+
+
+def test_live_runtime_binds_supervisor_controls(atom_runtime) -> None:
+    """Supervisor controls should be installed on their owning services."""
+
+    runtime = make_live_runtime(atom_runtime)
+    unavailable = asyncio.Event()
+
+    def request_restart(reason: str) -> bool:
+        return True
+
+    runtime.bind_supervisor(request_restart, unavailable)
+
+    assert runtime.context.request_restart is request_restart
+    assert runtime.context.controller._sync_abort_event is unavailable
 
 
 def test_app_run_propagates_unexpected_failure(monkeypatch) -> None:

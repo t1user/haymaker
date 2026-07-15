@@ -137,9 +137,13 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - The supported live execution model is one user strategy and one
   `RuntimeContext` per process. Process-global registries such as
   `Streamer.instances` are not reset for same-process application reuse.
-- The live CLI owns strategy-module parsing. Runtime services receive validated
-  values such as `no_future_roll_strategies`; `RuntimeContext` does not inspect
-  imported modules.
+- `LiveRuntime` assembles live services and installs a ready, passive
+  `RuntimeContext` before the CLI imports the strategy module. Blocks register
+  their own `auto_roll_futures` policy while they are constructed; the runtime
+  does not inspect imported module data.
+- Create restart-enabled `Timeout.from_atom()` instances from `onStart()` or
+  later, after the supervisor restart callback has been bound. Zero-time and
+  debug timeouts remain safe during pipeline construction.
 - CLI entrypoints own logging setup and shutdown. Every configured destination
   handler runs behind its own queue/listener thread; messenger handlers such as
   Telegram are optional YAML configuration, not runtime dependencies.

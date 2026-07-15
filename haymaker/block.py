@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property, singledispatchmethod
 from typing import Any, ClassVar
 
@@ -25,11 +25,38 @@ DATA_LIB: str | None = CONFIG.get("block_data_library", None)
 
 @dataclass
 class AbstractBaseBlock(Atom, ABC):
+    """Base strategy block that emits strategy-labelled signal data.
+
+    Args:
+        strategy: Unique strategy name used in runtime and persisted state.
+        contract: Broker contract processed by this strategy.
+        auto_roll_futures: Whether positions for this strategy participate in
+            automatic futures rolling. This option is keyword-only.
+    """
+
     strategy: str
     contract: ibi.Contract
+    auto_roll_futures: bool = field(default=True, kw_only=True)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Initialize Atom services and register this strategy's roll policy."""
+
         Atom.__init__(self)
+        self._register_future_roll_policy()
+
+    def _register_future_roll_policy(self) -> None:
+        """Register one consistent automatic futures-roll policy."""
+
+        policies = self.runtime.future_roll_policies
+        if (
+            self.strategy in policies
+            and policies[self.strategy] != self.auto_roll_futures
+        ):
+            raise ValueError(
+                "Conflicting auto_roll_futures values for strategy "
+                f"{self.strategy!r}."
+            )
+        policies[self.strategy] = self.auto_roll_futures
 
     def onStart(self, data, *args):
         if isinstance(data, dict):

@@ -142,13 +142,20 @@ Save the pipeline in a Python strategy file, for example ``strategy.py``. This
 file is the trading setup passed to Haymaker: it contains the contracts,
 strategy components, and pipeline wiring for one or more strategies.
 
-To exclude a strategy from the daily futures roll, add its strategy name to
-``no_future_roll_strategies``:
+To exclude a strategy from the daily futures roll, set
+``auto_roll_futures=False`` on its block:
 
 .. code-block:: python
-   :caption: Optional strategy metadata
+   :caption: Optional strategy policy
 
-   no_future_roll_strategies = ["ema_cross_ES"]
+   strategy = EMACrossStrategy(
+       "ema_cross_ES",
+       es_contract,
+       12,
+       48,
+       24,
+       auto_roll_futures=False,
+   )
 
 Run the strategy file with the ``haymaker`` command:
 

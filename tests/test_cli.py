@@ -1,11 +1,13 @@
 import sys
 from types import ModuleType
 from typing import Any
+from unittest.mock import ANY
 
 import pytest
 
 from haymaker import cli
-from haymaker.cli import load_user_module, read_no_future_roll_strategies
+from haymaker.cli import load_user_module
+from haymaker.supervisor import ConnectionSettings
 
 
 def test_load_user_module_supports_sibling_imports(tmp_path):
@@ -17,25 +19,6 @@ def test_load_user_module_supports_sibling_imports(tmp_path):
     module = load_user_module(strategy)
 
     assert module.result == 42
-
-
-def test_read_no_future_roll_strategies_accepts_module_list(tmp_path):
-    strategy = tmp_path / "strategy.py"
-    strategy.write_text("no_future_roll_strategies = ['one', 'two']\n")
-
-    module = load_user_module(strategy)
-
-    assert read_no_future_roll_strategies(module) == ["one", "two"]
-
-
-def test_read_no_future_roll_strategies_rejects_wrong_type(tmp_path):
-    strategy = tmp_path / "strategy.py"
-    strategy.write_text("no_future_roll_strategies = 'one'\n")
-
-    module = load_user_module(strategy)
-
-    with pytest.raises(TypeError):
-        read_no_future_roll_strategies(module)
 
 
 def test_load_user_module_restores_previous_module_after_failure(tmp_path):
@@ -56,7 +39,7 @@ def test_load_user_module_restores_previous_module_after_failure(tmp_path):
 
 def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
-    contexts: list[object] = []
+    runtimes: list[object] = []
     strategy_module = ModuleType("strategy")
     setattr(strategy_module, "no_future_roll_strategies", ["one", "two"])
 
@@ -74,16 +57,10 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
         calls.append(("load", module_path))
         return strategy_module
 
-    class FakeController:
-        def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
-            calls.append(("roll_exclusions", strategies))
-
-    class FakeRuntimeContext:
+    class FakeLiveRuntime:
         def __init__(self, config: object) -> None:
-            contexts.append(self)
-            calls.append(("context", config))
-            self.no_future_roll_strategies: list[str] = []
-            self.controller = FakeController()
+            runtimes.append(self)
+            calls.append(("runtime", config))
 
     class FakeApp:
         def __init__(self, runtime: object, settings: Any) -> None:
@@ -92,18 +69,13 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
         def run(self) -> None:
             calls.append(("run", None))
 
-    def fake_live_runtime(context: object) -> object:
-        calls.append(("runtime", context))
-        return "live-runtime"
-
     fake_logging = ModuleType("haymaker.logging")
     setattr(fake_logging, "setup_logging", setup_logging)
     setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
     fake_runtime = ModuleType("haymaker.runtime")
-    setattr(fake_runtime, "RuntimeContext", FakeRuntimeContext)
+    setattr(fake_runtime, "LiveRuntime", FakeLiveRuntime)
     fake_app = ModuleType("haymaker.app")
     setattr(fake_app, "App", FakeApp)
-    setattr(fake_app, "LiveRuntime", fake_live_runtime)
 
     monkeypatch.setattr(cli, "configure", configure)
     monkeypatch.setattr(cli, "load_user_module", fake_load_user_module)
@@ -116,15 +88,14 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
     assert calls == [
         ("configure", ("live", ["strategy.py", "-f", "config.yaml"])),
         ("setup_logging", "logging.yaml"),
-        ("context", {"logging_config": "logging.yaml", "use_blotter": False}),
+        ("runtime", {"logging_config": "logging.yaml", "use_blotter": False}),
         ("load", "strategy.py"),
-        ("roll_exclusions", ["one", "two"]),
-        ("runtime", contexts[0]),
-        ("app", ("live-runtime", 0)),
+        ("app", (ANY, 0)),
         ("run", None),
         ("shutdown_logging", None),
     ]
-    assert getattr(contexts[0], "no_future_roll_strategies") == ["one", "two"]
+    assert len(runtimes) == 1
+    assert calls[4] == ("app", (runtimes[0], 0))
 
 
 def test_main_flushes_logging_when_runtime_construction_fails(monkeypatch) -> None:
@@ -139,22 +110,72 @@ def test_main_flushes_logging_when_runtime_construction_fails(monkeypatch) -> No
     def shutdown_logging_queue() -> None:
         calls.append("shutdown")
 
-    class FailingRuntimeContext:
+    class FailingLiveRuntime:
         def __init__(self, config: object) -> None:
-            calls.append("context")
-            raise RuntimeError("context failed")
+            calls.append("runtime")
+            raise RuntimeError("runtime failed")
 
     fake_logging = ModuleType("haymaker.logging")
     setattr(fake_logging, "setup_logging", setup_logging)
     setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
     fake_runtime = ModuleType("haymaker.runtime")
-    setattr(fake_runtime, "RuntimeContext", FailingRuntimeContext)
+    setattr(fake_runtime, "LiveRuntime", FailingLiveRuntime)
 
     monkeypatch.setattr(cli, "configure", configure)
     monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
     monkeypatch.setitem(sys.modules, "haymaker.runtime", fake_runtime)
 
-    with pytest.raises(RuntimeError, match="context failed"):
+    with pytest.raises(RuntimeError, match="runtime failed"):
         cli.main(["strategy.py"])
 
-    assert calls == ["setup", "context", "shutdown"]
+    assert calls == ["setup", "runtime", "shutdown"]
+
+
+def test_dataloader_main_uses_shared_application_shell(monkeypatch) -> None:
+    """Dataloader command should share configuration, App, and logging flow."""
+
+    calls: list[tuple[str, object]] = []
+    runtime = object()
+
+    def configure(profile: str, args: list[str]) -> dict[str, object]:
+        calls.append(("configure", (profile, args)))
+        return {"logging_config": "dataloader-logging.yaml"}
+
+    def setup_logging(logging_config: object) -> None:
+        calls.append(("setup_logging", logging_config))
+
+    def shutdown_logging_queue() -> None:
+        calls.append(("shutdown_logging", None))
+
+    def build_runtime(config: object) -> tuple[object, ConnectionSettings]:
+        calls.append(("build", config))
+        return runtime, ConnectionSettings(client_id=1)
+
+    class FakeApp:
+        def __init__(self, received_runtime: object, settings: Any) -> None:
+            calls.append(("app", (received_runtime, settings.client_id)))
+
+        def run(self) -> None:
+            calls.append(("run", None))
+
+    fake_logging = ModuleType("haymaker.logging")
+    setattr(fake_logging, "setup_logging", setup_logging)
+    setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
+    fake_app = ModuleType("haymaker.app")
+    setattr(fake_app, "App", FakeApp)
+
+    monkeypatch.setattr(cli, "configure", configure)
+    monkeypatch.setattr(cli, "_build_dataloader_runtime", build_runtime)
+    monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
+    monkeypatch.setitem(sys.modules, "haymaker.app", fake_app)
+
+    cli.dataloader_main(["contracts.csv"])
+
+    assert calls == [
+        ("configure", ("dataloader", ["contracts.csv"])),
+        ("setup_logging", "dataloader-logging.yaml"),
+        ("build", {"logging_config": "dataloader-logging.yaml"}),
+        ("app", (runtime, 1)),
+        ("run", None),
+        ("shutdown_logging", None),
+    ]

@@ -37,6 +37,11 @@ Usage
 
 The live-trading command and managed dataloader create and run the supervisor
 automatically. Strategy modules do not need to instantiate or control it.
+Custom restart-enabled :class:`haymaker.timeout.Timeout` instances created with
+``Timeout.from_atom()`` must be created from ``onStart()`` or later, after the
+runtime has bound the supervisor restart callback. Zero-time timeouts may still
+be constructed while the pipeline is being defined.
+
 Configure live trading under the ``app`` section of the YAML file. Managed
 dataloader connection settings use the same names at the top level.
 

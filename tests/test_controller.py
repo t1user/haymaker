@@ -5,6 +5,7 @@ import random
 from copy import deepcopy
 from itertools import count
 from types import SimpleNamespace
+from typing import cast
 
 import ib_insync as ibi
 import pytest
@@ -1439,6 +1440,49 @@ def test_future_roll_replacement_order_preserves_order_info_params():
     assert captured["order"].trailStopPrice == 101250.0
     assert captured["order"].orderId == 0
     assert captured["order"].permId == 0
+
+
+def test_controller_copies_future_roll_policies(controller) -> None:
+    """Controller policy should not alias mutable runtime metadata."""
+
+    policies = {"automatic": True, "manual": False}
+
+    controller.set_future_roll_policies(policies)
+    policies["manual"] = True
+
+    assert controller.future_roll_policies == {
+        "automatic": True,
+        "manual": False,
+    }
+
+
+def test_future_roller_filters_declared_policy_and_warns_for_undeclared(
+    caplog,
+) -> None:
+    """Undeclared persisted strategies should roll with one diagnostic warning."""
+
+    contract = ibi.Future(conId=1, symbol="NQ", exchange="CME")
+    strategy_registry = SimpleNamespace(
+        strategies_by_contract=lambda: {contract: ["automatic", "manual", "persisted"]}
+    )
+    controller = cast(
+        Controller,
+        SimpleNamespace(sm=SimpleNamespace(strategy=strategy_registry)),
+    )
+    roller = FutureRoller(
+        controller,
+        {"automatic": True, "manual": False},
+    )
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING):
+        strategies = roller.strategies
+
+    assert strategies == {contract: ["automatic", "persisted"]}
+    assert caplog.messages == [
+        "Automatic futures-roll policy is undeclared for active strategies "
+        "['persisted']; defaulting to enabled."
+    ]
 
 
 # def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):

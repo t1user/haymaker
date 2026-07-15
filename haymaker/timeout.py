@@ -65,23 +65,29 @@ class Timeout:
     def from_atom(
         cls, atom: Atom, event: ev.Event, key: str = "", time: float = TIMEOUT_TIME
     ) -> Self:
-        """
-        Extract relevant information from passed `atom`.
+        """Create a timeout from Atom services after runtime startup begins.
 
         Args:
-        =====
+            atom: Atom whose contract details and restart callback are used.
+            event: Event to monitor.
+            key: Optional label appended to the Atom name.
+            time: Timeout interval in seconds.
 
-        atom: atom object from which information is to be extracted
+        Returns:
+            Configured timeout instance.
 
-        even: event to be monitored
-
-        key: if given, it will be concatinated with atom name to
-        create timout name
-
-        time: time after which timeout will be triggered, if not given
-        default value will be used from config
+        Raises:
+            RuntimeError: If a restart-enabled timeout is created before the
+                supervisor restart callback has been bound. Create Atom-derived
+                timeouts from ``onStart()`` or later.
         """
 
+        request_restart = atom.request_restart
+        if time and not TIMEOUT_DEBUG and request_restart is None:
+            raise RuntimeError(
+                "Restart-enabled Timeout.from_atom() must be created from "
+                "onStart() or later, after the supervisor is bound."
+            )
         assert atom.contract_details.contract is not None, (
             f"{atom} is missing correct contract details."
             f"`Timeout.from_atom` can be used only with atoms that have details."
@@ -91,7 +97,7 @@ class Timeout:
             time,
             f"{str(atom)}-<<{key}>>",
             atom.contract_details,
-            request_restart=atom.request_restart,
+            request_restart=request_restart,
         )
 
     @classmethod

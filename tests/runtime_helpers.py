@@ -84,6 +84,7 @@ class AtomRuntimeHarness:
     controller: Controller | None = None
     trader: Trader | None = None
     restart_requests: list[str] = field(default_factory=list)
+    future_roll_policies: dict[str, bool] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Create the default trader around the harness IB client."""

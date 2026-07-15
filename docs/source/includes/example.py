@@ -34,14 +34,15 @@ class EMACrossStrategy(block.AbstractDfBlock):
 
 
 es_contract = ibi.ContFuture("ES", "CME")
-no_future_roll_strategies: list[str] = []
 
 portfolio.FixedPortfolio(1)
 
 pipe = base.Pipe(
     streamers.HistoricalDataStreamer(es_contract, "10 D", "1 hours", "TRADES"),
     aggregators.BarAggregator(aggregators.NoFilter()),
-    EMACrossStrategy("ema_cross_ES", es_contract, 12, 48, 24),
+    EMACrossStrategy(
+        "ema_cross_ES", es_contract, 12, 48, 24, auto_roll_futures=False
+    ),
     signals.BinarySignalProcessor(),
     portfolio.PortfolioWrapper(),
     execution_models.EventDrivenExecModel(

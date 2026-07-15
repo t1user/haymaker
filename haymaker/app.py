@@ -12,7 +12,6 @@ from .async_wrappers import (
     cancel_background_tasks,
 )
 from .logging import setup_asyncio_logging
-from .runtime import RuntimeContext
 from .supervisor import ConnectionSettings, ConnectionSupervisor
 
 log = logging.getLogger(__name__)
@@ -40,50 +39,6 @@ class Runtime(Protocol):
 
     async def close(self) -> None:
         """Release runtime-owned resources before application shutdown."""
-
-
-@dataclass
-class LiveRuntime:
-    """Run live controller and streamer work for one supervisor cycle."""
-
-    context: RuntimeContext
-
-    @property
-    def ib(self) -> ibi.IB:
-        """Return the broker connection owned by this runtime."""
-        return self.context.ib
-
-    def bind_supervisor(
-        self,
-        request_restart: Callable[[str], bool | None],
-        connection_unavailable: asyncio.Event,
-    ) -> None:
-        """Bind supervisor controls used by runtime components."""
-
-        self.context.bind_restart_handler(request_restart)
-        self.context.controller.set_sync_abort_event(connection_unavailable)
-
-    async def start(self) -> None:
-        """Start controller and strategy jobs after connectivity is verified."""
-
-        log.debug("Will run controller...")
-        await self.context.controller.run()
-        await self.context.startup_jobs.run()
-
-    async def stop(self, reason: str) -> None:
-        """Put controller on hold while supervised runtime work stops."""
-
-        self.context.controller.set_hold()
-        log.debug(f"Stopping live runtime: {reason}")
-
-    async def close(self) -> None:
-        """Flush final live-runtime state before process shutdown."""
-        self.context.close()
-
-    def __str__(self) -> str:
-        """Return a compact live-runtime description suitable for logs."""
-
-        return f"LiveRuntime<{self.context!s}>"
 
 
 @dataclass
