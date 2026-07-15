@@ -9,12 +9,12 @@ formatters:
 
 handlers:
   console:
-    class: haymaker.logging.setup.TqdmLoggingHandler
+    class: haymaker.logging.handlers.TqdmLoggingHandler
     level: DEBUG
     formatter: default
 
   file:
-    (): haymaker.logging.setup.file_setup
+    (): haymaker.logging.handlers.file_handler_setup
     level: DEBUG
     formatter: default
     delay: true
@@ -24,4 +24,3 @@ loggers:
   haymaker:
     level: DEBUG
     handlers: [console, file]
-

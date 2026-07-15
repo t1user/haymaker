@@ -6,7 +6,6 @@ from collections import defaultdict
 from collections.abc import Callable, MutableMapping, Sequence
 from copy import copy
 from dataclasses import dataclass, field
-from types import ModuleType
 from typing import Self
 
 import ib_insync as ibi
@@ -90,9 +89,9 @@ class StartupJobs:
     ) -> None:
         self.init_data = init_data
         self.ib = ib
-        self.streamers = list(streamers)
+        self.streamers = streamers
 
-    async def __call__(self) -> None:
+    async def run(self) -> None:
         """Initialize contract data and run all registered streamers."""
 
         await self.init_data()
@@ -152,7 +151,7 @@ class RuntimeContext:
     log_broker: bool = field(default=False, init=False)
     trader: Trader = field(init=False, repr=False)
     controller: Controller = field(init=False, repr=False)
-    startup_jobs: StartupJobs | None = field(default=None, init=False, repr=False)
+    startup_jobs: StartupJobs = field(init=False, repr=False)
     no_future_roll_strategies: list[str] = field(default_factory=list)
     _restart_handler: Callable[[str], bool | None] | None = field(
         default=None, init=False, repr=False
@@ -168,6 +167,11 @@ class RuntimeContext:
             blotter_factory(self.config["use_blotter"]),
             self.config,
             [HEALTH_CHECK_OBSERVABLES],
+        )
+        self.startup_jobs = StartupJobs(
+            InitData(self.ib, self.contract_registry),
+            self.ib,
+            Streamer.instances,
         )
         if self.log_broker:
             self._broker_logger = IBHandlers(self.ib)
@@ -187,38 +191,6 @@ class RuntimeContext:
             return False
         return self._restart_handler(reason)
 
-    def bind_strategy_module(self, module: ModuleType) -> None:
-        """Apply strategy-module metadata after module-level pipelines exist."""
-
-        self.no_future_roll_strategies = self._read_no_future_roll_strategies(module)
-        self.controller.set_no_future_roll_strategies(self.no_future_roll_strategies)
-        self.startup_jobs = StartupJobs(
-            InitData(self.ib, self.contract_registry),
-            self.ib,
-            Streamer.instances,
-        )
-
-    @staticmethod
-    def _read_no_future_roll_strategies(module: ModuleType) -> list[str]:
-        strategies = getattr(module, "no_future_roll_strategies", [])
-        if strategies is None:
-            return []
-        if not isinstance(strategies, list) or not all(
-            isinstance(strategy, str) for strategy in strategies
-        ):
-            raise TypeError(
-                "Strategy module variable no_future_roll_strategies must be "
-                "a list[str]."
-            )
-        return list(strategies)
-
-    def require_startup_jobs(self) -> StartupJobs:
-        """Return startup jobs after strategy module loading has completed."""
-
-        if self.startup_jobs is None:
-            raise RuntimeError("Startup jobs have not been initialized.")
-        return self.startup_jobs
-
     def close(self) -> None:
         """Flush runtime-owned state before process-level resources close."""
         self.sm.flush_pending_save()
@@ -226,9 +198,8 @@ class RuntimeContext:
     def __str__(self) -> str:
         """Return a compact runtime summary suitable for logs."""
 
-        streamer_count = len(self.startup_jobs.streamers) if self.startup_jobs else 0
+        streamer_count = len(self.startup_jobs.streamers)
         return (
             f"RuntimeContext<contracts={len(self.contract_registry.blueprints)}, "
-            f"streamers={streamer_count}, "
-            f"startup_jobs_bound={self.startup_jobs is not None}>"
+            f"streamers={streamer_count}>"
         )

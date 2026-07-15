@@ -5,8 +5,7 @@ from typing import Any
 import pytest
 
 from haymaker import cli
-from haymaker.cli import load_user_module
-from haymaker.runtime import RuntimeContext
+from haymaker.cli import load_user_module, read_no_future_roll_strategies
 
 
 def test_load_user_module_supports_sibling_imports(tmp_path):
@@ -26,23 +25,7 @@ def test_read_no_future_roll_strategies_accepts_module_list(tmp_path):
 
     module = load_user_module(strategy)
 
-    assert RuntimeContext._read_no_future_roll_strategies(module) == ["one", "two"]
-
-
-def test_bind_strategy_module_sets_controller_roll_exclusions(tmp_path, atom_runtime):
-    strategy = tmp_path / "strategy.py"
-    strategy.write_text("no_future_roll_strategies = ['one', 'two']\n")
-    module = load_user_module(strategy)
-    context = RuntimeContext(
-        config={"use_blotter": False, "controller": {}, "app": {}},
-        ib=atom_runtime.ib,
-        contract_registry=atom_runtime.contract_registry,
-        sm=atom_runtime.sm,
-    )
-
-    context.bind_strategy_module(module)
-
-    assert context.controller.no_future_roll_strategies == ["one", "two"]
+    assert read_no_future_roll_strategies(module) == ["one", "two"]
 
 
 def test_read_no_future_roll_strategies_rejects_wrong_type(tmp_path):
@@ -52,7 +35,7 @@ def test_read_no_future_roll_strategies_rejects_wrong_type(tmp_path):
     module = load_user_module(strategy)
 
     with pytest.raises(TypeError):
-        RuntimeContext._read_no_future_roll_strategies(module)
+        read_no_future_roll_strategies(module)
 
 
 def test_load_user_module_restores_previous_module_after_failure(tmp_path):
@@ -75,6 +58,7 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
     contexts: list[object] = []
     strategy_module = ModuleType("strategy")
+    setattr(strategy_module, "no_future_roll_strategies", ["one", "two"])
 
     def configure(profile: str, args: list[str]) -> dict[str, object]:
         calls.append(("configure", (profile, args)))
@@ -90,13 +74,16 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
         calls.append(("load", module_path))
         return strategy_module
 
+    class FakeController:
+        def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
+            calls.append(("roll_exclusions", strategies))
+
     class FakeRuntimeContext:
         def __init__(self, config: object) -> None:
             contexts.append(self)
             calls.append(("context", config))
-
-        def bind_strategy_module(self, module: object) -> None:
-            calls.append(("bind_strategy_module", module))
+            self.no_future_roll_strategies: list[str] = []
+            self.controller = FakeController()
 
     class FakeApp:
         def __init__(self, runtime: object, settings: Any) -> None:
@@ -131,12 +118,13 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
         ("setup_logging", "logging.yaml"),
         ("context", {"logging_config": "logging.yaml", "use_blotter": False}),
         ("load", "strategy.py"),
-        ("bind_strategy_module", strategy_module),
+        ("roll_exclusions", ["one", "two"]),
         ("runtime", contexts[0]),
         ("app", ("live-runtime", 0)),
         ("run", None),
         ("shutdown_logging", None),
     ]
+    assert getattr(contexts[0], "no_future_roll_strategies") == ["one", "two"]
 
 
 def test_main_flushes_logging_when_runtime_construction_fails(monkeypatch) -> None:

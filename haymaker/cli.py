@@ -52,6 +52,31 @@ def load_user_module(module_path: str | Path) -> ModuleType:
     return module
 
 
+def read_no_future_roll_strategies(module: ModuleType) -> list[str]:
+    """Read and validate futures-roll exclusions from a strategy module.
+
+    Args:
+        module: Imported user strategy module.
+
+    Returns:
+        Strategy names excluded from automatic futures rolling.
+
+    Raises:
+        TypeError: If the module value is not a list of strings.
+    """
+
+    strategies = getattr(module, "no_future_roll_strategies", [])
+    if strategies is None:
+        return []
+    if not isinstance(strategies, list) or not all(
+        isinstance(strategy, str) for strategy in strategies
+    ):
+        raise TypeError(
+            "Strategy module variable no_future_roll_strategies must be a list[str]."
+        )
+    return list(strategies)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run a live Haymaker strategy module under framework control."""
 
@@ -67,7 +92,12 @@ def main(argv: list[str] | None = None) -> None:
 
         context = RuntimeContext(config)
         strategy_module = load_user_module(parsed["module_path"])
-        context.bind_strategy_module(strategy_module)
+        context.no_future_roll_strategies = read_no_future_roll_strategies(
+            strategy_module
+        )
+        context.controller.set_no_future_roll_strategies(
+            context.no_future_roll_strategies
+        )
 
         from .app import App, LiveRuntime
         from .supervisor import ConnectionSettings

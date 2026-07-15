@@ -28,7 +28,9 @@ The `haymaker` console command owns live composition and logging: it configures
 Haymaker, starts threaded logging handlers, creates `RuntimeContext`, installs
 it on `Atom`, imports the user strategy module so module-level pipelines are
 built, reads module metadata such as `no_future_roll_strategies`, and then
-passes a `LiveRuntime` to the shared `App`. The app-lifetime `Controller` starts
+passes the validated values to runtime services before handing a `LiveRuntime`
+to the shared `App`. `RuntimeContext` does not inspect imported modules. The
+app-lifetime `Controller` starts
 its periodic sync, health-check, and daily UTC futures-roll timers once on the
 active event loop when `Controller.run()` first executes. Live and dataloader
 runtimes use the same application and supervisor lifecycle.
@@ -44,14 +46,17 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints,
   explicit command-profile config and threaded-logging lifecycles, and user
-  strategy module loading with failed-import rollback in `sys.modules`.
+  strategy module loading, metadata validation, and failed-import rollback in
+  `sys.modules`.
 - `haymaker/app.py`: shared Linux top-level `App.run()` lifecycle, application
   runtime protocol, and `LiveRuntime`, which owns live workload startup,
   reconnect cleanup, and final state flushing. As the process composition root,
   `App` explicitly binds supervisor restart and connection-availability controls
   to each runtime, handles graceful `SIGTERM`, and propagates unexpected
   workload failures after cleanup.
-- `haymaker/runtime.py`: process-owned live runtime context, IB/state/controller construction, contract-detail initialization, and streamer job assembly.
+- `haymaker/runtime.py`: process-owned live runtime context,
+  IB/state/controller construction, contract-detail initialization, and startup
+  jobs that retain the live streamer registry populated during strategy import.
 - `haymaker/supervisor/`: IB socket supervisor package for connections it owns.
   It owns workload task lifecycle, broker auto-recovery waits,
   probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
@@ -81,9 +86,11 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/datastore/`: synchronous and asynchronous store abstractions, ArcticStore, collection naming, futures readers, and deprecated store helpers.
 - `haymaker/databases.py`: cached MongoDB client and health-check registration.
 - `haymaker/blotter.py`, `saver.py`: transaction logging sinks such as CSV and Mongo-backed savers.
-- `haymaker/logging/`: YAML logging setup, one queue/listener thread per
-  configured destination handler, optional Telegram delivery, and asyncio
-  exception handling installed on the active application loop.
+- `haymaker/logging/`: centralized YAML and queue-listener lifecycle setup,
+  custom handler implementations, one listener thread per configured
+  destination, and optional Telegram delivery. `App` installs the package's
+  compact asyncio exception callback on the active loop so otherwise-unhandled
+  loop failures use the same configured destinations.
 
 Background queues use one shutdown policy. `DRAIN` queues are critical: item
 failures and drain timeouts escape final cleanup. `DISCARD` queues are
@@ -133,7 +140,10 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 
 ### Live Execution Flow
 
-1. The `haymaker` CLI creates `RuntimeContext`, installs it on `Atom`, and imports the user strategy module.
+1. The `haymaker` CLI creates `RuntimeContext`, which also creates
+   `StartupJobs` around the live streamer registry, installs the context on
+   `Atom`, imports the user strategy module, validates its metadata, and passes
+   the ready values to the context and controller.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
 3. `App` starts the IB watchdog and waits for a successful historical-data probe.
 4. `Controller.run()` starts its app-lifetime timers once on the active event

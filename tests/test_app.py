@@ -10,6 +10,7 @@ import haymaker.app as app_module
 from haymaker.app import App, LiveRuntime
 from haymaker.contract_registry import ContractRegistry
 from haymaker.runtime import InitData, RuntimeContext, StartupJobs
+from haymaker.streamers import Streamer
 from haymaker.supervisor import ConnectionSettings
 
 
@@ -37,8 +38,10 @@ def test_runtime_context_has_compact_repr_and_log_string(atom_runtime) -> None:
     assert "must-not-appear" not in repr(context)
     assert "controller=" not in repr(context)
     assert "contract_registry=" not in repr(context)
+    assert context.no_future_roll_strategies == []
+    assert context.startup_jobs.streamers is Streamer.instances
     assert str(context) == (
-        "RuntimeContext<contracts=0, streamers=0, startup_jobs_bound=False>"
+        f"RuntimeContext<contracts=0, streamers={len(Streamer.instances)}>"
     )
 
 
@@ -51,14 +54,13 @@ def test_app_repr_avoids_duplicate_runtime_context(atom_runtime) -> None:
     assert "RuntimeContext(" not in repr(app)
     assert "runtime=" not in repr(app)
     assert "supervisor=" not in repr(app)
+    context_description = (
+        f"RuntimeContext<contracts=0, streamers={len(Streamer.instances)}>"
+    )
     assert str(app) == (
-        "App<client_id=77, runtime=LiveRuntime<"
-        "RuntimeContext<contracts=0, streamers=0, startup_jobs_bound=False>>>"
+        f"App<client_id=77, runtime=LiveRuntime<{context_description}>>"
     )
-    assert str(app.runtime) == (
-        "LiveRuntime<"
-        "RuntimeContext<contracts=0, streamers=0, startup_jobs_bound=False>>"
-    )
+    assert str(app.runtime) == f"LiveRuntime<{context_description}>"
 
 
 def test_startup_jobs_separates_log_and_diagnostic_representations() -> None:
@@ -69,6 +71,19 @@ def test_startup_jobs_separates_log_and_diagnostic_representations() -> None:
 
     assert str(jobs) == "StartupJobs()"
     assert repr(jobs).startswith("StartupJobs(init_data=InitData(")
+
+
+def test_startup_jobs_observes_streamers_registered_after_construction() -> None:
+    """Startup jobs created before strategy import must see later streamers."""
+
+    ib = ibi.IB()
+    streamers = []
+    jobs = StartupJobs(InitData(ib, ContractRegistry()), ib, streamers)
+    streamer = cast(Any, object())
+
+    streamers.append(streamer)
+
+    assert jobs.streamers == [streamer]
 
 
 @pytest.mark.asyncio
@@ -141,6 +156,30 @@ async def test_live_runtime_propagates_startup_failure() -> None:
 
     with pytest.raises(RuntimeError, match="controller failed"):
         await runtime.start()
+
+
+@pytest.mark.asyncio
+async def test_live_runtime_runs_startup_jobs_after_controller() -> None:
+    """Live startup should use the explicit StartupJobs.run entrypoint."""
+
+    events = []
+
+    class FakeController:
+        async def run(self) -> None:
+            events.append("controller")
+
+    class FakeStartupJobs:
+        async def run(self) -> None:
+            events.append("startup-jobs")
+
+    context = cast(
+        RuntimeContext,
+        SimpleNamespace(controller=FakeController(), startup_jobs=FakeStartupJobs()),
+    )
+
+    await LiveRuntime(context).start()
+
+    assert events == ["controller", "startup-jobs"]
 
 
 def test_app_run_propagates_unexpected_failure(monkeypatch) -> None:

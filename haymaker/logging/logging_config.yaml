@@ -20,7 +20,7 @@ handlers:
 
 
   timed_rotating_file: &file
-    (): haymaker.logging.setup.timed_rotating_file_setup
+    (): haymaker.logging.handlers.timed_rotating_file_handler_setup
     level: 5
     formatter: default
     when: midnight

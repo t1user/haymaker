@@ -11,7 +11,7 @@ from .async_wrappers import (
     QueueRunner,
     cancel_background_tasks,
 )
-from .logging import setup_asyncio_logger
+from .logging import setup_asyncio_logging
 from .runtime import RuntimeContext
 from .supervisor import ConnectionSettings, ConnectionSupervisor
 
@@ -68,7 +68,7 @@ class LiveRuntime:
 
         log.debug("Will run controller...")
         await self.context.controller.run()
-        await self.context.require_startup_jobs()()
+        await self.context.startup_jobs.run()
 
     async def stop(self, reason: str) -> None:
         """Put controller on hold while supervised runtime work stops."""
@@ -106,7 +106,7 @@ class App:
         """Run the supervisor and complete process-level async cleanup."""
 
         loop = asyncio.get_running_loop()
-        setup_asyncio_logger(loop)
+        setup_asyncio_logging(loop)
 
         def request_sigterm_stop() -> None:
             """Request graceful cleanup; a second SIGTERM uses Linux defaults."""

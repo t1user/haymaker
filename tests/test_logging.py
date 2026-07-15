@@ -1,14 +1,21 @@
 import asyncio
+import importlib
 import logging
 import threading
+from pathlib import Path
 from unittest.mock import Mock
 
 import eventkit as ev  # type: ignore
 import pytest
+import yaml
 
-from haymaker.logging import setup_asyncio_logger
-from haymaker.logging import queue_logger
-from haymaker.logging.setup import TelegramHandler
+import haymaker.logging as haymaker_logging
+from haymaker.logging.handlers import TelegramHandler
+from haymaker.logging.setup import (
+    setup_asyncio_logging,
+    setup_logging_queue,
+    shutdown_logging_queue,
+)
 
 
 class _TelegramResponse:
@@ -41,6 +48,53 @@ class _TelegramConnection:
 
     def getresponse(self):
         return self.response
+
+
+@pytest.mark.parametrize(
+    "config_name", ["logging_config.yaml", "dataloader_logging_config.yaml"]
+)
+def test_builtin_logging_config_components_resolve(config_name):
+    """Bundled YAML must resolve every Haymaker logging component."""
+
+    config_path = Path(haymaker_logging.__file__).parent / config_name
+    config = yaml.safe_load(config_path.read_text())
+    components = [
+        section.get("()") or section.get("class")
+        for category in ("formatters", "handlers")
+        for section in config.get(category, {}).values()
+    ]
+
+    for component in components:
+        if not component or not component.startswith("haymaker."):
+            continue
+        module_name, attribute = component.rsplit(".", maxsplit=1)
+        assert getattr(importlib.import_module(module_name), attribute)
+
+
+def test_asyncio_exception_handler_routes_failures_to_haymaker_logging(caplog):
+    """Unhandled loop failures should reach configured Haymaker destinations."""
+
+    loop = Mock()
+    setup_asyncio_logging(loop)
+    handler = loop.set_exception_handler.call_args.args[0]
+    exception = RuntimeError("task failed")
+
+    with caplog.at_level(logging.ERROR, logger=setup_asyncio_logging.__module__):
+        handler(
+            loop,
+            {
+                "message": "Task exception was never retrieved",
+                "exception": exception,
+            },
+        )
+
+    assert any(
+        "Task exception was never retrieved" in record.message
+        for record in caplog.records
+    )
+    assert any(
+        record.exc_info and record.exc_info[1] is exception for record in caplog.records
+    )
 
 
 def test_telegram_handler_sends_plain_text_without_parse_mode():
@@ -104,7 +158,7 @@ def test_telegram_handler_reports_rejected_delivery(capsys, monkeypatch):
 def test_shutdown_logging_queue_stops_listener():
     """Logging output should run on a listener thread and restore handlers."""
 
-    queue_logger.shutdown_logging_queue()
+    shutdown_logging_queue()
     logger = logging.getLogger("threaded-logging-test")
     logger.propagate = False
     logger.setLevel(logging.INFO)
@@ -121,11 +175,11 @@ def test_shutdown_logging_queue_stops_listener():
     caller_thread = threading.get_ident()
 
     try:
-        queue_logger.setup_logging_queue([logger])
+        setup_logging_queue([logger])
         logger.info("threaded record")
         assert emitted.wait(timeout=1)
     finally:
-        queue_logger.shutdown_logging_queue()
+        shutdown_logging_queue()
 
     assert len(emitting_threads) == 1
     assert emitting_threads[0] != caller_thread
@@ -135,7 +189,7 @@ def test_shutdown_logging_queue_stops_listener():
 def test_slow_optional_handler_does_not_block_other_handlers():
     """Each configured destination should have an independent listener."""
 
-    queue_logger.shutdown_logging_queue()
+    shutdown_logging_queue()
     logger = logging.getLogger("isolated-logging-handlers-test")
     logger.propagate = False
     logger.setLevel(logging.INFO)
@@ -155,19 +209,19 @@ def test_slow_optional_handler_does_not_block_other_handlers():
     logger.handlers = [SlowHandler(), FastHandler()]
 
     try:
-        queue_logger.setup_logging_queue([logger])
+        setup_logging_queue([logger])
         logger.warning("record for both handlers")
         assert slow_started.wait(timeout=1)
         assert fast_emitted.wait(timeout=0.2)
     finally:
         release_slow.set()
-        queue_logger.shutdown_logging_queue()
+        shutdown_logging_queue()
 
 
 def test_handler_failure_does_not_stop_listener_thread():
     """One destination failure should not prevent later record delivery."""
 
-    queue_logger.shutdown_logging_queue()
+    shutdown_logging_queue()
     logger = logging.getLogger("resilient-logging-handler-test")
     logger.propagate = False
     logger.setLevel(logging.INFO)
@@ -188,18 +242,17 @@ def test_handler_failure_does_not_stop_listener_thread():
     logger.handlers = [FailsOnceHandler()]
 
     try:
-        queue_logger.setup_logging_queue([logger])
+        setup_logging_queue([logger])
         logger.warning("first")
         logger.warning("second")
         assert second_record.wait(timeout=1)
     finally:
-        queue_logger.shutdown_logging_queue()
+        shutdown_logging_queue()
 
 
 @pytest.mark.asyncio
-async def test_asyncio_exception_handler_with_eventkit_event(caplog):
-    # this proves that eventkit logs even without setting custom handler
-    # asyncio loop
+async def test_eventkit_logs_async_callback_failure_without_custom_handler(caplog):
+    """EventKit should report callback failures through its own logging path."""
 
     event = ev.Event()
 
@@ -215,215 +268,3 @@ async def test_asyncio_exception_handler_with_eventkit_event(caplog):
     await asyncio.sleep(0.001)
     assert any("This is the error" in record.message for record in caplog.records)
     assert any(record.levelname == "ERROR" for record in caplog.records)
-
-
-@pytest.mark.asyncio
-async def test_asyncio_exception_handler_with_eventkit_event_and_asyncio_handler(
-    caplog,
-):
-    # make sure errors are not logged twice
-    setup_asyncio_logger()
-    event = ev.Event()
-
-    class MyError(Exception):
-        pass
-
-    async def failing_coroutine(*args):
-        raise MyError("This is the error.")
-
-    event += failing_coroutine
-
-    event.emit()
-    await asyncio.sleep(0.001)
-    assert len(caplog.records) == 1
-
-
-# #################################
-# These are generated by llm
-# #################################
-
-
-def test_asyncio_exception_handler_with_exception_and_task():
-    """Test handler with a full exception and task."""
-    from haymaker.logging.asyncio_exception_handler import asyncio_exception_handler
-
-    mock_logger = Mock()
-    loop = Mock()
-    test_exception = ValueError("Test error")
-    mock_task = Mock()
-    mock_task.get_name.return_value = "test-task"
-    mock_task.__repr__ = Mock(return_value="<Task test-task>")
-
-    context = {
-        "message": "Task exception was never retrieved",
-        "exception": test_exception,
-        "task": mock_task,
-    }
-
-    asyncio_exception_handler(loop, context, logger=mock_logger)
-
-    # Check that error was called with exc_info
-    mock_logger.error.assert_called_once()
-    call_args = mock_logger.error.call_args
-
-    # Check the error message contains expected parts
-    error_message = call_args[0][0]
-    assert "Asyncio exception: Task exception was never retrieved" in error_message
-    assert "Task: test-task" in error_message
-    assert "Task repr: <Task test-task>" in error_message
-    assert f"Exception: {test_exception!r}" in error_message
-
-    # Check exc_info was passed
-    assert call_args[1]["exc_info"] == test_exception
-
-
-def test_asyncio_exception_handler_with_source_traceback():
-    """Test handler includes source traceback when available."""
-    from haymaker.logging.asyncio_exception_handler import asyncio_exception_handler
-
-    mock_logger = Mock()
-    loop = Mock()
-    test_exception = RuntimeError("Test error")
-    mock_task = Mock()
-    mock_task.get_name.return_value = "traced-task"
-
-    # Create fake traceback
-    fake_tb = [
-        ("file.py", 10, "function_name", "some_code()"),
-        ("other.py", 20, "other_function", "other_code()"),
-    ]
-
-    context = {
-        "message": "Test message",
-        "exception": test_exception,
-        "task": mock_task,
-        "source_traceback": fake_tb,
-    }
-
-    asyncio_exception_handler(loop, context, logger=mock_logger)
-
-    error_message = mock_logger.error.call_args[0][0]
-    assert "Task was created at:" in error_message
-    assert "file.py" in error_message
-
-
-def test_asyncio_exception_handler_with_future_instead_of_task():
-    """Test handler works with 'future' key instead of 'task'."""
-    from haymaker.logging.asyncio_exception_handler import asyncio_exception_handler
-
-    mock_logger = Mock()
-    loop = Mock()
-    test_exception = KeyError("missing_key")
-    mock_future = Mock()
-    mock_future.get_name.return_value = "future-1"
-
-    context = {
-        "message": "Future exception",
-        "exception": test_exception,
-        "future": mock_future,
-    }
-
-    asyncio_exception_handler(loop, context, logger=mock_logger)
-
-    error_message = mock_logger.error.call_args[0][0]
-    assert "Task: future-1" in error_message
-    mock_logger.error.assert_called_once()
-
-
-def test_asyncio_exception_handler_without_exception_object():
-    """Test handler when no exception object is present."""
-    from haymaker.logging.asyncio_exception_handler import asyncio_exception_handler
-
-    mock_logger = Mock()
-    loop = Mock()
-
-    context = {
-        "message": "Some error without exception object",
-        "other_info": "additional context",
-    }
-
-    asyncio_exception_handler(loop, context, logger=mock_logger)
-
-    error_message = mock_logger.error.call_args[0][0]
-    assert "Some error without exception object" in error_message
-    assert "Full context:" in error_message
-    assert "other_info" in error_message
-
-    # Should NOT have exc_info
-    assert "exc_info" not in mock_logger.error.call_args[1]
-
-
-def test_asyncio_exception_handler_with_unnamed_task():
-    """Test handler with task that has no get_name method."""
-    from haymaker.logging.asyncio_exception_handler import asyncio_exception_handler
-
-    mock_logger = Mock()
-    loop = Mock()
-    test_exception = Exception("Test")
-    mock_task = Mock(spec=[])  # No get_name method
-
-    context = {
-        "exception": test_exception,
-        "task": mock_task,
-    }
-
-    asyncio_exception_handler(loop, context, logger=mock_logger)
-
-    error_message = mock_logger.error.call_args[0][0]
-    assert "Task: unnamed" in error_message
-
-
-def test_asyncio_exception_handler_default_message():
-    """Test handler uses default message when none provided."""
-    from haymaker.logging.asyncio_exception_handler import asyncio_exception_handler
-
-    mock_logger = Mock()
-    loop = Mock()
-    test_exception = ValueError("error")
-
-    context = {
-        "exception": test_exception,
-    }
-
-    asyncio_exception_handler(loop, context, logger=mock_logger)
-
-    error_message = mock_logger.error.call_args[0][0]
-    assert "Unhandled exception in async task" in error_message
-
-
-@pytest.mark.asyncio
-async def test_asyncio_exception_handler_integration_with_real_task():
-    """Integration test simulating a real task exception."""
-    from haymaker.logging.asyncio_exception_handler import asyncio_exception_handler
-
-    mock_logger = Mock()
-
-    # Simulate what asyncio would pass to the exception handler
-    async def failing_task():
-        raise RuntimeError("Real task failure")
-
-    # Create the task
-    task = asyncio.create_task(failing_task(), name="integration-test-task")
-
-    # Wait for it to fail
-    try:
-        await task
-    except RuntimeError:
-        pass  # Expected
-
-    # Manually call our handler with a realistic context
-    # (simulating what asyncio would do)
-    context = {
-        "message": "Task exception was never retrieved",
-        "exception": task.exception(),
-        "task": task,
-    }
-
-    loop = asyncio.get_event_loop()
-    asyncio_exception_handler(loop, context, logger=mock_logger)
-
-    # Check that our handler was called correctly
-    mock_logger.error.assert_called_once()
-    error_message = mock_logger.error.call_args[0][0]
-    assert "integration-test-task" in error_message
-    assert "RuntimeError" in error_message or "Real task failure" in error_message

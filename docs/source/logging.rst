@@ -57,7 +57,7 @@ https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.y
 - `haymaker/logging/logging_config.yaml <https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml>`_
 
 Messenger handlers are optional. Telegram is available through
-``haymaker.logging.setup.TelegramHandler`` when declared in a custom logging
+``haymaker.logging.handlers.TelegramHandler`` when declared in a custom logging
 YAML file, but neither Telegram nor another messenger is required by the live
 runtime. The built-in Telegram handler uses a finite network timeout, and its
 queue/listener thread is independent from local output handlers.
