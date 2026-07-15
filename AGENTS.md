@@ -122,9 +122,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   recovery hints: broker-wait signals move the supervisor into broker recovery
   wait while connected, `timeoutEvent` and probes remain active health checks,
   and `updateEvent` or `1102` may probe recovery while already waiting.
-  The dataloader has no connection modes: its entrypoint creates its own `IB`
-  object and always runs through `DataloaderConnection` and the supervisor; see
-  `haymaker/dataloader/AGENTS.md`.
+  The dataloader has no connection modes: `DataloaderRuntime` creates its own
+  `IB` object and always runs through the shared application and supervisor;
+  see `haymaker/dataloader/AGENTS.md`.
 - Graceful shutdown is not currently a broad architecture priority. Terminal
   `Ctrl-C` has historically been acceptable. Before service-manager deployment,
   prefer minimal signal hardening for `SIGINT`/`SIGTERM`: request supervisor stop,

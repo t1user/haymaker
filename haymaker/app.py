@@ -43,6 +43,20 @@ class Runtime(Protocol):
 
 @dataclass
 class App:
+    """Run one application runtime under broker connection supervision.
+
+    ``App`` is the process-level runner shared by live trading and the
+    dataloader. It creates and binds the connection supervisor, owns the
+    top-level asyncio event loop, handles graceful ``SIGTERM`` requests, and
+    coordinates final runtime, task, and queue cleanup.
+
+    Attributes:
+        runtime: Workload implementing the shared runtime lifecycle protocol.
+        settings: Broker connection and recovery settings for the supervisor.
+        supervisor: Connection supervisor created and bound during
+            initialization.
+    """
+
     runtime: Runtime = field(repr=False)
     settings: ConnectionSettings
     supervisor: ConnectionSupervisor = field(init=False, repr=False)

@@ -120,10 +120,13 @@ def test_main_flushes_logging_when_runtime_construction_fails(monkeypatch) -> No
     setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
     fake_runtime = ModuleType("haymaker.runtime")
     setattr(fake_runtime, "LiveRuntime", FailingLiveRuntime)
+    fake_app = ModuleType("haymaker.app")
+    setattr(fake_app, "App", object)
 
     monkeypatch.setattr(cli, "configure", configure)
     monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
     monkeypatch.setitem(sys.modules, "haymaker.runtime", fake_runtime)
+    monkeypatch.setitem(sys.modules, "haymaker.app", fake_app)
 
     with pytest.raises(RuntimeError, match="runtime failed"):
         cli.main(["strategy.py"])

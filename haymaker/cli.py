@@ -76,12 +76,12 @@ def _build_dataloader_runtime(
 ) -> tuple[Runtime, ConnectionSettings]:
     """Build the configured standalone dataloader runtime."""
 
-    from .dataloader import dataloader
+    from .dataloader.runtime import DEFAULT_CLIENT_ID, DataloaderRuntime
     from .supervisor import ConnectionSettings
 
-    runtime = dataloader.create_runtime()
+    runtime = DataloaderRuntime()
     settings = ConnectionSettings.from_config(
-        config, config.get("clientId", dataloader.DEFAULT_CLIENT_ID)
+        config, config.get("clientId", DEFAULT_CLIENT_ID)
     )
     return runtime, settings
 

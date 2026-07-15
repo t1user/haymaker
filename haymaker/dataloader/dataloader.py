@@ -28,7 +28,6 @@ from haymaker.datastore import AsyncAbstractBaseStore, AsyncArcticStore
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
-from .connect import DataloaderRuntime
 from .contract_selectors import ContractSelector
 from .pacer import InFlightRequest, RequestPacing
 from .scheduling import (
@@ -49,8 +48,6 @@ from .store_wrapper import AsyncStoreView, HistorySink
 from .time_policy import normalize_point
 
 log = logging.getLogger(__name__)
-
-DEFAULT_CLIENT_ID = 1
 
 BARSIZE: str = bar_size_validator(CONFIG["barSize"])
 WTS: str = wts_validator(CONFIG["wts"])
@@ -1132,14 +1129,3 @@ def _contract_expiry(contract: ibi.Contract, bar_size: str) -> date | datetime |
         return None
     expiry = datetime.strptime(raw_expiry[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
     return normalize_point(expiry, bar_size)
-
-
-def create_runtime() -> DataloaderRuntime:
-    """Create the configured standalone dataloader runtime."""
-
-    ib = ibi.IB()
-    session = DataloaderSession(ib)
-    ib.errorEvent += session.pacing.onErrEvent
-    log.debug("Will start...")
-
-    return DataloaderRuntime(ib, session.run, session.cancel_tasks)

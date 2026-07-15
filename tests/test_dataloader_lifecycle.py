@@ -36,22 +36,23 @@ def dataloader_module(monkeypatch):
     return importlib.import_module("haymaker.dataloader.dataloader")
 
 
-def test_create_runtime_wires_one_dataloader_session(
+def test_runtime_construction_wires_one_dataloader_session(
     monkeypatch, dataloader_module
 ) -> None:
-    """Dataloader factory should return a runtime around one wired session."""
+    """Dataloader runtime should construct and wire one owned session."""
 
     dataloader = dataloader_module
+    from haymaker.dataloader import runtime as runtime_module
+
     ib = ibi.IB()
     initial_error_handlers = len(ib.errorEvent)
-    monkeypatch.setattr(dataloader.ibi, "IB", lambda: ib)
+    monkeypatch.setattr(runtime_module, "IB", lambda: ib)
 
-    runtime = dataloader.create_runtime()
-    session = getattr(runtime.func, "__self__")
+    runtime = runtime_module.DataloaderRuntime()
+    session = runtime.session
 
     assert runtime.ib is ib
     assert isinstance(session, dataloader.DataloaderSession)
-    assert getattr(runtime.cleanup, "__self__") is session
     assert len(ib.errorEvent) == initial_error_handlers + 1
 
 

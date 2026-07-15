@@ -104,10 +104,10 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 
 ### Dataloader
 
-- `haymaker/dataloader/dataloader.py`: dataloader runtime factory,
-  producer/worker queue, download task orchestration, and store writes.
-- `haymaker/dataloader/connect.py`: dataloader adapter for supervised IB
-  connection ownership, using dataloader client ID `1` by default.
+- `haymaker/dataloader/dataloader.py`: producer/worker queue, download task
+  orchestration, and store writes.
+- `haymaker/dataloader/runtime.py`: dataloader runtime construction and adapter
+  for supervised IB connection ownership, using client ID `1` by default.
 - `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
 - `haymaker/dataloader/scheduling.py`: `TaskPlanner`, `BackfillRangePlan`,
@@ -180,7 +180,9 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 
 ### Dataloader Flow
 
-1. `dataloader` loads config, creates an `ib_insync.IB` client, and passes a dataloader runtime to the shared `App` and connection supervisor.
+1. `dataloader` loads config, constructs `DataloaderRuntime`, and passes it to
+   the shared `App`. The runtime creates its owned `ib_insync.IB` client and
+   session before the connection supervisor is assembled.
 2. The supervisor connects the socket and waits for a successful historical-data probe before starting dataloader work.
 3. Contract source data is expanded into IB contracts.
 4. The async store view inspects the Arctic-backed store and normalizes

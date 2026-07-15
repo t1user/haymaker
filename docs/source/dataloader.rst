@@ -375,9 +375,9 @@ The dataloader uses IB ``formatDate=2``.
 Connection And Pacing
 =====================
 
-The dataloader creates its own ``ib_insync.IB`` client and runs under the
-Haymaker connection supervisor. The supervisor reconnects the IB API socket but
-does not start, stop, or restart TWS/IB Gateway.
+``DataloaderRuntime`` creates its own ``ib_insync.IB`` client and session, then
+runs under the Haymaker connection supervisor. The supervisor reconnects the
+IB API socket but does not start, stop, or restart TWS/IB Gateway.
 
 There is no dataloader connection-mode setting. Configure the gateway address,
 port, and ``clientId`` used by this standalone connection. The default client ID

@@ -345,7 +345,7 @@ inferences, and missing evidence.
 - Controller interaction:
   `.venv/bin/python -m pytest tests/test_controller.py tests/test_supervisor.py`
 - Dataloader ownership:
-  `.venv/bin/python -m pytest tests/test_dataloader_connect.py tests/test_supervisor.py`
+  `.venv/bin/python -m pytest tests/test_dataloader_runtime.py tests/test_supervisor.py`
 - Type checking:
   `.venv/bin/python -m mypy haymaker/supervisor tests/test_supervisor.py`
 - For package exports, configuration, or broadly shared lifecycle changes, run
