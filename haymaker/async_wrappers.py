@@ -16,10 +16,18 @@ QUEUE_SHUTDOWN_TIMEOUT = 10.0
 
 
 class QueueShutdownPolicy(Enum):
-    """Determine how a queue handles pending items during final shutdown."""
+    """Determine queue failure and pending-item behavior at shutdown."""
 
     DRAIN = "drain"
     DISCARD = "discard"
+
+
+class QueueProcessingError(RuntimeError):
+    """Raised when a draining queue failed to process an item."""
+
+
+class QueueDrainTimeoutError(TimeoutError):
+    """Raised when a draining queue cannot finish within its shutdown timeout."""
 
 
 @dataclass
@@ -42,8 +50,9 @@ class QueueRunner(Generic[T]):
             the queue size is infinite.
         max_failures: The number of consecutive failures after which the queue will
             crash
-        shutdown_policy: Whether pending items are processed or discarded when the
-            application closes.
+        shutdown_policy: Whether final work is drained as critical or discarded
+            as best effort. Draining queues propagate processing and timeout
+            failures; discarding queues only log processing failures.
         _queue: The underlying asyncio.Queue instance.
         _worker_task: The asyncio.Task handle for the background consumer loop.
         _counter: A thread-safe class-level iterator for generating default owners.
@@ -78,6 +87,8 @@ class QueueRunner(Generic[T]):
     _queue: asyncio.Queue[T] = field(repr=False, init=False)
     _worker_task: asyncio.Task | None = field(repr=False, init=False, default=None)
     _closed: bool = field(repr=False, init=False, default=False)
+    _processing_error: Exception | None = field(repr=False, init=False, default=None)
+    _fatal_error: Exception | None = field(repr=False, init=False, default=None)
     _counter: ClassVar[itertools.count] = itertools.count()
     _instances: ClassVar[list[QueueRunner]] = []
 
@@ -87,10 +98,18 @@ class QueueRunner(Generic[T]):
             self.owner = str(next(self._counter))
         self.__class__._instances.append(self)
 
-    def _ensure_running_task(self) -> None:
+    def _ensure_accepting_work(self) -> None:
+        """Raise when this queue can no longer accept work."""
+
         if self._closed:
             raise RuntimeError(f"{self!s} is closed")
-        self._start_worker()
+        if (
+            self.shutdown_policy is QueueShutdownPolicy.DRAIN
+            and self._fatal_error is not None
+        ):
+            raise QueueProcessingError(f"{self!s} processing has halted") from (
+                self._fatal_error
+            )
 
     def _start_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -100,17 +119,15 @@ class QueueRunner(Generic[T]):
 
     async def put(self, data: T) -> None:
         """Adds data to the queue. Awaits if maxsize is reached."""
-        if self._closed:
-            raise RuntimeError(f"{self!s} is closed")
+        self._ensure_accepting_work()
         await self._queue.put(data)
-        self._ensure_running_task()
+        self._start_worker()
 
     def push(self, data: T) -> None:
         """Synchronous method to add data to the queue."""
-        if self._closed:
-            raise RuntimeError(f"{self!s} is closed")
+        self._ensure_accepting_work()
         self._queue.put_nowait(data)
-        self._ensure_running_task()
+        self._start_worker()
 
     async def _process_queue(self) -> None:
         consecutive_failures = 0
@@ -123,12 +140,17 @@ class QueueRunner(Generic[T]):
                     consecutive_failures = 0  # Reset on success
                 except Exception as e:
                     consecutive_failures += 1
-                    log.error(
-                        f"{self!s} failed "
-                        f"({consecutive_failures}/{self.max_failures}): {e}"
+                    if self._processing_error is None:
+                        self._processing_error = e
+                    log.exception(
+                        "%s failed (%d/%d).",
+                        self,
+                        consecutive_failures,
+                        self.max_failures,
                     )
 
                     if consecutive_failures >= self.max_failures:
+                        self._fatal_error = e
                         log.critical(f"{self!s} halting due to repeated failures.")
                         break  # Kill the worker task
                 finally:
@@ -142,27 +164,43 @@ class QueueRunner(Generic[T]):
             return
         self._closed = True
 
-        if self.shutdown_policy is QueueShutdownPolicy.DRAIN:
-            if self._queue.qsize() and (
-                self._worker_task is None or self._worker_task.done()
-            ):
-                self._start_worker()
-            try:
-                await asyncio.wait_for(self._queue.join(), timeout)
-            except TimeoutError:
-                log.error(
-                    "%s did not drain within %.1fs; discarding %d pending items.",
-                    self,
-                    timeout,
-                    self._queue.qsize(),
-                )
+        drain_timeout: QueueDrainTimeoutError | None = None
+        try:
+            if self.shutdown_policy is QueueShutdownPolicy.DRAIN:
+                if (
+                    self._fatal_error is None
+                    and self._queue.qsize()
+                    and (self._worker_task is None or self._worker_task.done())
+                ):
+                    self._start_worker()
+                if self._fatal_error is None:
+                    try:
+                        await asyncio.wait_for(self._queue.join(), timeout)
+                    except TimeoutError:
+                        drain_timeout = QueueDrainTimeoutError(
+                            f"{self!s} did not drain within {timeout:.1f}s"
+                        )
+                        log.exception(
+                            "%s; discarding %d pending items.",
+                            drain_timeout,
+                            self._queue.qsize(),
+                        )
 
-        self._discard_pending()
-        if self._worker_task:
-            self._worker_task.cancel()
-            await asyncio.gather(self._worker_task, return_exceptions=True)
-        if self in self.__class__._instances:
-            self.__class__._instances.remove(self)
+            self._discard_pending()
+            if self._worker_task:
+                self._worker_task.cancel()
+                await asyncio.gather(self._worker_task, return_exceptions=True)
+        finally:
+            if self in self.__class__._instances:
+                self.__class__._instances.remove(self)
+
+        if self.shutdown_policy is QueueShutdownPolicy.DRAIN:
+            if drain_timeout is not None:
+                raise drain_timeout
+            if self._processing_error is not None:
+                raise QueueProcessingError(
+                    f"{self!s} failed to process queued work"
+                ) from self._processing_error
 
     def _discard_pending(self) -> None:
         """Remove queued items without processing them."""
@@ -181,7 +219,10 @@ class QueueRunner(Generic[T]):
         complete their tasks.
         """
         tasks = [qr.close() for qr in list(cls._instances)]
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        failures = [result for result in results if isinstance(result, Exception)]
+        if failures:
+            raise ExceptionGroup("Queue shutdown failed", failures)
 
     def qsize(self) -> int:
         return self._queue.qsize()
@@ -212,13 +253,15 @@ class SyncQueueRunner:
             the producer.
         max_failures: Number of consecutive failures after which the background
             worker halts. Defaults to 3.
+        shutdown_policy: Whether final work is drained as critical or discarded
+            as best effort.
 
     Methods:
     --------
         enqueue(fn, *args) - Schedule fn(*args) to run in a background thread.
             Safe to call from synchronous code. Preserves call order.
-        close() - Drain all pending items and shut down the background worker.
-            Must be awaited. Call on application shutdown to avoid dropped tasks.
+        close() - Apply the shutdown policy and stop the background worker. Must
+            be awaited during application shutdown.
 
     Example:
     --------
@@ -233,12 +276,17 @@ class SyncQueueRunner:
     owner: str = ""
     maxsize: int = 0
     max_failures: int = 3
+    shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DRAIN
 
     _queue_runner: QueueRunner[_SyncTask] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._queue_runner = QueueRunner(
-            self._execute_store_task, self.owner, self.maxsize, self.max_failures
+            self._execute_store_task,
+            self.owner,
+            self.maxsize,
+            self.max_failures,
+            self.shutdown_policy,
         )
 
     def enqueue(self, fn: Callable[..., None], *args: Any) -> None:
@@ -256,7 +304,9 @@ R = TypeVar("R")
 
 # Registry for active tasks
 _tasks: set[asyncio.Task] = set()
-_queue = SyncQueueRunner("async_wrappers_queue")
+_queue = SyncQueueRunner(
+    "async_wrappers_queue", shutdown_policy=QueueShutdownPolicy.DISCARD
+)
 
 
 async def _async_runner(func: Callable[..., R], *args: Any) -> R:

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import signal
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -10,8 +11,8 @@ from .async_wrappers import (
     QueueRunner,
     cancel_background_tasks,
 )
-from .logging import shutdown_logging_queue
-from .runtime import NotConnectedError, RuntimeContext
+from .logging import setup_asyncio_logger
+from .runtime import RuntimeContext
 from .supervisor import ConnectionSettings, ConnectionSupervisor
 
 log = logging.getLogger(__name__)
@@ -52,12 +53,6 @@ class LiveRuntime:
         """Return the broker connection owned by this runtime."""
         return self.context.ib
 
-    @classmethod
-    def from_context(cls, context: RuntimeContext) -> "LiveRuntime":
-        """Create live runtime settings from the process context."""
-
-        return cls(context=context)
-
     def bind_supervisor(
         self,
         request_restart: Callable[[str], bool | None],
@@ -72,16 +67,8 @@ class LiveRuntime:
         """Start controller and strategy jobs after connectivity is verified."""
 
         log.debug("Will run controller...")
-        try:
-            await self.context.controller.run()
-            await self.context.require_startup_jobs()()
-        except asyncio.CancelledError:
-            log.debug("Live runtime task cancelled.")
-            raise
-        except (ConnectionError, NotConnectedError):
-            log.info("Live runtime startup interrupted by connection loss.")
-        except Exception as e:
-            log.exception(e)
+        await self.context.controller.run()
+        await self.context.require_startup_jobs()()
 
     async def stop(self, reason: str) -> None:
         """Put controller on hold while supervised runtime work stops."""
@@ -117,14 +104,30 @@ class App:
 
     async def _run(self) -> None:
         """Run the supervisor and complete process-level async cleanup."""
+
+        loop = asyncio.get_running_loop()
+        setup_asyncio_logger(loop)
+
+        def request_sigterm_stop() -> None:
+            """Request graceful cleanup; a second SIGTERM uses Linux defaults."""
+
+            loop.remove_signal_handler(signal.SIGTERM)
+            self.supervisor.stop()
+
+        loop.add_signal_handler(signal.SIGTERM, request_sigterm_stop)
         try:
             await self.supervisor.run()
         finally:
             try:
                 await self.runtime.close()
             finally:
-                await cancel_background_tasks()
-                await QueueRunner.close_all()
+                try:
+                    await cancel_background_tasks()
+                finally:
+                    try:
+                        await QueueRunner.close_all()
+                    finally:
+                        loop.remove_signal_handler(signal.SIGTERM)
 
     def run(self) -> None:
         # this is the main entry point into strategy
@@ -133,8 +136,6 @@ class App:
             asyncio.run(self._run())
         except KeyboardInterrupt:
             log.info("Keyboard interrupt received; stopping application.")
-        finally:
-            shutdown_logging_queue()
 
     def __str__(self) -> str:
         """Return a compact application description suitable for logs."""

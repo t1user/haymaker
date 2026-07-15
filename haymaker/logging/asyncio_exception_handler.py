@@ -58,6 +58,14 @@ def asyncio_exception_handler(
         logger.error("\n".join(error_parts))
 
 
-def setup_asyncio_logger() -> None:
-    loop = asyncio.get_event_loop()
+def setup_asyncio_logger(loop: asyncio.AbstractEventLoop | None = None) -> None:
+    """Install Haymaker's exception handler on the active asyncio loop.
+
+    Args:
+        loop: Running application loop. When omitted, use the loop currently
+            executing the caller.
+    """
+
+    if loop is None:
+        loop = asyncio.get_running_loop()
     loop.set_exception_handler(asyncio_exception_handler)

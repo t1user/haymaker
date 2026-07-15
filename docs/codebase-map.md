@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-06-22.
+Last updated: 2026-07-15.
 
 ## High-Level Purpose
 
@@ -24,7 +24,14 @@ Live runtime services are assembled in `haymaker/runtime.py` by `RuntimeContext`
 - controller for broker/state reconciliation and order gateway,
 - startup contract-detail initialization and streamer startup jobs.
 
-The `haymaker` console command owns live composition: it configures Haymaker, creates `RuntimeContext`, installs it on `Atom`, imports the user strategy module so module-level pipelines are built, reads module metadata such as `no_future_roll_strategies`, and then passes a `LiveRuntime` to the shared `App`. The app-lifetime `Controller` schedules the daily UTC futures roll once during initialization. Live and dataloader runtimes use the same application and supervisor lifecycle.
+The `haymaker` console command owns live composition and logging: it configures
+Haymaker, starts threaded logging handlers, creates `RuntimeContext`, installs
+it on `Atom`, imports the user strategy module so module-level pipelines are
+built, reads module metadata such as `no_future_roll_strategies`, and then
+passes a `LiveRuntime` to the shared `App`. The app-lifetime `Controller` starts
+its periodic sync, health-check, and daily UTC futures-roll timers once on the
+active event loop when `Controller.run()` first executes. Live and dataloader
+runtimes use the same application and supervisor lifecycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `Manager` owns the historical request policy (`bar_size`, `wts`, `max_lookback_days`, `useRTH`, `gap_fill_mode`) and the run-scoped `now` value; worker sessions execute generated jobs rather than carrying independent request-policy defaults. The current supported dataloader backend is Arctic, with the library name derived from `wts` and `barSize`.
 
@@ -35,8 +42,15 @@ The research package is intentionally separate from live execution. It works dir
 ### Live Execution Core
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
-- `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints, explicit command-profile config setup, and user strategy module loading.
-- `haymaker/app.py`: shared top-level `App.run()` lifecycle, application runtime protocol, and `LiveRuntime`, which owns live workload startup, reconnect cleanup, and final state flushing. As the process composition root, `App` explicitly binds supervisor restart and connection-availability controls to each runtime.
+- `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints,
+  explicit command-profile config and threaded-logging lifecycles, and user
+  strategy module loading with failed-import rollback in `sys.modules`.
+- `haymaker/app.py`: shared Linux top-level `App.run()` lifecycle, application
+  runtime protocol, and `LiveRuntime`, which owns live workload startup,
+  reconnect cleanup, and final state flushing. As the process composition root,
+  `App` explicitly binds supervisor restart and connection-availability controls
+  to each runtime, handles graceful `SIGTERM`, and propagates unexpected
+  workload failures after cleanup.
 - `haymaker/runtime.py`: process-owned live runtime context, IB/state/controller construction, contract-detail initialization, and streamer job assembly.
 - `haymaker/supervisor/`: IB socket supervisor package for connections it owns.
   It owns workload task lifecycle, broker auto-recovery waits,
@@ -67,7 +81,15 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/datastore/`: synchronous and asynchronous store abstractions, ArcticStore, collection naming, futures readers, and deprecated store helpers.
 - `haymaker/databases.py`: cached MongoDB client and health-check registration.
 - `haymaker/blotter.py`, `saver.py`: transaction logging sinks such as CSV and Mongo-backed savers.
-- `haymaker/logging/`: logging setup, queue logging, asyncio exception handling, and YAML logging configs.
+- `haymaker/logging/`: YAML logging setup, one queue/listener thread per
+  configured destination handler, optional Telegram delivery, and asyncio
+  exception handling installed on the active application loop.
+
+Background queues use one shutdown policy. `DRAIN` queues are critical: item
+failures and drain timeouts escape final cleanup. `DISCARD` queues are
+best-effort: failures are logged and pending final work is dropped. State saves
+use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
+`DISCARD`.
 
 ### Dataloader
 
@@ -99,8 +121,9 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker strategy.py [options]` imports the user strategy module and then
   starts the framework-owned `App`. `App.run()` runs the top-level supervisor
-  coroutine directly through `asyncio.run()` so `ib_insync` global socket errors
-  remain inside the supervisor recovery path.
+  coroutine through standard `asyncio.run()`; nested-loop patching is not used.
+  The CLI flushes threaded logging after application, construction, or strategy-
+  import failure. One user strategy per process is the supported lifecycle.
 - `dataloader contracts.csv [options]` maps the positional source file into
   dataloader configuration before importing the dataloader runtime.
 - Research code usually imports from `haymaker.research`, `haymaker.research.stop`, or `haymaker.research.backtester`.
@@ -113,7 +136,23 @@ The research package is intentionally separate from live execution. It works dir
 1. The `haymaker` CLI creates `RuntimeContext`, installs it on `Atom`, and imports the user strategy module.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
 3. `App` starts the IB watchdog and waits for a successful historical-data probe.
-4. `Controller.run()` reads or initializes state, then `Controller.sync()` races the reconciliation pass against the supervisor's connection-unavailable event. If the supervisor enters broker recovery, restart, or shutdown, sync aborts without disabling trading. Otherwise the internal sync pass runs a bounded retry loop around a sync coordinator. Each coordinator pass first checks broker connection and validates broker position freshness, relinks current `ibi.Trade` objects to local records, back-reports known completed fills, runs order/position reconciliation against direct broker and state-machine reads, and returns `False` after broker verification failures or recovery actions so sync can retry the checks before disabling trading. If unresolved order or position mismatches remain on the first pass, the coordinator can ask the controller to reconnect before local order pruning, broker order cancellation, or strategy-position correction is allowed on a later pass. Non-retryable unsafe states raise `SyncBrokenStateError`, which disables trading immediately.
+4. `Controller.run()` starts its app-lifetime timers once on the active event
+   loop, reads or initializes state, then `Controller.sync()` races the
+   reconciliation pass against the supervisor's connection-unavailable event.
+   If the supervisor enters broker recovery, restart, or shutdown, sync aborts
+   without disabling trading. Otherwise the internal sync pass runs a bounded
+   retry loop around a sync coordinator. Each coordinator pass first checks
+   broker connection and validates broker position freshness, relinks current
+   `ibi.Trade` objects to local records, back-reports known completed fills,
+   runs order/position reconciliation against direct broker and state-machine
+   reads, and returns `False` after broker verification failures or recovery
+   actions so sync can retry the checks before disabling trading. If unresolved
+   order or position mismatches remain on the first pass, the coordinator can
+   ask the controller to reconnect before local order pruning, broker order
+   cancellation, or strategy-position correction is allowed on a later pass.
+   Non-retryable unsafe states raise `SyncBrokenStateError`, which disables
+   trading immediately. A failed controller run still permits startup jobs to
+   provide monitoring while outbound trading remains disabled.
 5. `StartupJobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
 6. Streamers emit market data into strategy blocks.
 7. Blocks add strategy fields and emit dictionaries.

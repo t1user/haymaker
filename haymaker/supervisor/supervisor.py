@@ -304,7 +304,7 @@ class ConnectionSupervisor:
     def stop(self) -> None:
         """Request supervisor shutdown; the run loop performs cleanup."""
 
-        self.mark_connection_unavailable("supervisor stop requested")
+        self.mark_connection_unavailable()
         self._stop_requested.set()
 
     def request_restart(self, reason: str = "") -> bool:
@@ -319,16 +319,16 @@ class ConnectionSupervisor:
             return False
 
         log.debug(f"Restart requested: {restart_reason}")
-        self.mark_connection_unavailable(restart_reason)
+        self.mark_connection_unavailable()
         self._restart_requested.set()
         return True
 
-    def mark_connection_available(self, reason: str) -> None:
+    def mark_connection_available(self) -> None:
         """Allow workload sync after the supervisor has a usable connection."""
 
         self.connection_unavailable.clear()
 
-    def mark_connection_unavailable(self, reason: str) -> None:
+    def mark_connection_unavailable(self) -> None:
         """Abort workload sync while the supervisor cannot trust the connection."""
 
         self.connection_unavailable.set()
@@ -401,35 +401,42 @@ class ConnectionSupervisor:
         if task is None:
             return
 
-        await self.workload.stop(reason)
-
         if task.done():
-            self._log_workload_result(task)
             self._workload_task = None
+            task.result()
             return
 
-        task.cancel()
+        stop_error: BaseException | None = None
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            await self.workload.stop(reason)
+        except BaseException as exc:
+            stop_error = exc
+
+        if not task.done():
+            task.cancel()
+        task_result = (await asyncio.gather(task, return_exceptions=True))[0]
         self._workload_task = None
 
-    def _log_workload_result(self, task: asyncio.Task[None]) -> None:
-        """Log failure from a completed workload task."""
-
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            log.debug("Connection workload task cancelled.")
-        except Exception:
-            log.exception("Connection workload task failed.")
+        task_error = (
+            task_result
+            if isinstance(task_result, BaseException)
+            and not isinstance(task_result, asyncio.CancelledError)
+            else None
+        )
+        if stop_error is not None and task_error is not None:
+            raise BaseExceptionGroup(
+                "Workload stop and execution both failed", [stop_error, task_error]
+            )
+        if stop_error is not None:
+            raise stop_error
+        if task_error is not None:
+            raise task_error
 
     def disconnect(self) -> None:
         """Disconnect the owned IB socket without triggering restart handling."""
 
         if self.ib.isConnected():
-            self.mark_connection_unavailable("disconnecting IB socket")
+            self.mark_connection_unavailable()
             self._intentional_disconnect = True
             try:
                 self.ib.disconnect()

@@ -4,8 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
-
-import ib_insync as ibi
+from typing import cast
 
 from .config import configure
 from .config.cli_options import CustomArgParser
@@ -39,8 +38,17 @@ def load_user_module(module_path: str | Path) -> ModuleType:
         raise ImportError(f"Cannot load strategy module from: {path}")
 
     module = importlib.util.module_from_spec(spec)
+    had_previous_module = module_name in sys.modules
+    previous_module = sys.modules.get(module_name)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if had_previous_module:
+            sys.modules[module_name] = cast(ModuleType, previous_module)
+        else:
+            sys.modules.pop(module_name, None)
+        raise
     return module
 
 
@@ -51,29 +59,38 @@ def main(argv: list[str] | None = None) -> None:
     parsed = CustomArgParser.from_profile("live", args).output
     config = configure("live", args)
 
-    from .logging import setup_logging
-    from .runtime import RuntimeContext
+    from .logging import setup_logging, shutdown_logging_queue
 
     setup_logging(config.get("logging_config"))
-    ibi.util.patchAsyncio()
-    context = RuntimeContext(config)
-    strategy_module = load_user_module(parsed["module_path"])
-    context.bind_strategy_module(strategy_module)
+    try:
+        from .runtime import RuntimeContext
 
-    from .app import App, LiveRuntime
-    from .supervisor import ConnectionSettings
+        context = RuntimeContext(config)
+        strategy_module = load_user_module(parsed["module_path"])
+        context.bind_strategy_module(strategy_module)
 
-    runtime = LiveRuntime.from_context(context)
-    settings = ConnectionSettings.from_config(config.get("app") or {}, 0)
-    App(runtime, settings).run()
+        from .app import App, LiveRuntime
+        from .supervisor import ConnectionSettings
+
+        runtime = LiveRuntime(context)
+        settings = ConnectionSettings.from_config(config.get("app") or {}, 0)
+        App(runtime, settings).run()
+    finally:
+        shutdown_logging_queue()
 
 
 def dataloader_main(argv: list[str] | None = None) -> None:
     """Run the dataloader with explicit dataloader CLI/config profile."""
 
     args = list(sys.argv[1:] if argv is None else argv)
-    configure("dataloader", args)
+    config = configure("dataloader", args)
 
-    from .dataloader import dataloader
+    from .logging import setup_logging, shutdown_logging_queue
 
-    dataloader.start()
+    setup_logging(config.get("logging_config"))
+    try:
+        from .dataloader import dataloader
+
+        dataloader.start()
+    finally:
+        shutdown_logging_queue()

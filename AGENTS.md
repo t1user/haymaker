@@ -131,6 +131,19 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   allow normal runtime cleanup to unwind, and drain critical async save queues
   with a short timeout. Do not introduce a broad shutdown framework unless a
   concrete cleanup need is identified.
+- Linux is the supported runtime OS. The shared `App` handles the first
+  `SIGTERM` as a graceful supervisor stop and restores default signal handling
+  so a second `SIGTERM` can terminate stuck cleanup.
+- The supported live execution model is one user strategy and one
+  `RuntimeContext` per process. Process-global registries such as
+  `Streamer.instances` are not reset for same-process application reuse.
+- CLI entrypoints own logging setup and shutdown. Every configured destination
+  handler runs behind its own queue/listener thread; messenger handlers such as
+  Telegram are optional YAML configuration, not runtime dependencies.
+- Queue shutdown uses one policy: `DRAIN` is critical and propagates processing
+  failures or drain timeouts, while `DISCARD` is best effort and logs failures.
+  State-save queues drain; Arctic fire-and-forget writes discard pending final
+  work.
 - Configuration is primarily YAML-driven. Do not change real local `.env` files
   or credential files.
 - Use `tests/runtime_helpers.py` and the `atom_runtime` /

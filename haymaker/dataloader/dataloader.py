@@ -25,7 +25,6 @@ from tqdm import tqdm
 from haymaker.config import CONFIG
 from haymaker.databases import get_mongo_client
 from haymaker.datastore import AsyncAbstractBaseStore, AsyncArcticStore
-from haymaker.logging import setup_logging
 from haymaker.app import App
 from haymaker.supervisor import ConnectionSettings
 from haymaker.validators import bar_size_validator, wts_validator
@@ -50,8 +49,6 @@ from .scheduling import (
 )
 from .store_wrapper import AsyncStoreView, HistorySink
 from .time_policy import normalize_point
-
-setup_logging(CONFIG.get("logging_config"))
 
 log = logging.getLogger(__name__)
 

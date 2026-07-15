@@ -74,9 +74,7 @@ class AbstractState(ABC):
             return False
 
         log.debug(f"Broker connectivity lost by code {code}; waiting for recovery.")
-        self.context.mark_connection_unavailable(
-            f"broker connectivity lost by code {code}"
-        )
+        self.context.mark_connection_unavailable()
         self.wakeup.set()
         return True
 
@@ -182,7 +180,7 @@ class ProbingState(AbstractState):
         probe_succeeded = probe_task.result()
 
         if probe_succeeded:
-            self.context.mark_connection_available("connection probe succeeded")
+            self.context.mark_connection_available()
             if not self.context.has_workload:
                 return StartingWorkloadState
             return ConnectedState
@@ -321,7 +319,7 @@ class ConnectionLostState(AbstractState):
     """Wait briefly for broker-side connectivity to recover before probing."""
 
     async def handle(self) -> StateResult:
-        self.context.mark_connection_unavailable("broker connectivity lost")
+        self.context.mark_connection_unavailable()
         await self.wait_for_wakeup_or(
             asyncio.sleep(self.settings.auto_recovery_grace_period)
         )
@@ -360,7 +358,7 @@ class RestartingState(AbstractState):
     async def _cleanup_for_restart(self) -> None:
         """Stop active work and disconnect the owned socket before reconnecting."""
 
-        self.context.mark_connection_unavailable("restart requested")
+        self.context.mark_connection_unavailable()
         await self.context.cleanup_workload("restart requested")
         self.context.disconnect()
 
@@ -396,7 +394,7 @@ class StoppingState(AbstractState):
     observes_workload = False
 
     async def handle(self) -> StateResult:
-        self.context.mark_connection_unavailable("supervisor stopped")
+        self.context.mark_connection_unavailable()
         await self.context.cleanup_workload("supervisor stopped")
         self.context.disconnect()
         return StoppedState

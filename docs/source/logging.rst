@@ -1,7 +1,10 @@
 Logging
 =======
 
-All logging in Haymaker is performed asynchronously in a separate thread, ensuring that logging operations do not block or interfere with other actions.
+Every configured logging destination runs behind its own queue and listener
+thread. Formatting, file output, console output, and network delivery therefore
+do not block the asyncio application loop. Separate destination threads also
+prevent a slow network messenger from delaying file logs.
 
 Custom Logging Levels
 ---------------------
@@ -52,6 +55,12 @@ To customize logging, copy the default configuration file and override it as nee
 https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml
 
 - `haymaker/logging/logging_config.yaml <https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml>`_
+
+Messenger handlers are optional. Telegram is available through
+``haymaker.logging.setup.TelegramHandler`` when declared in a custom logging
+YAML file, but neither Telegram nor another messenger is required by the live
+runtime. The built-in Telegram handler uses a finite network timeout, and its
+queue/listener thread is independent from local output handlers.
 
 Dataloader Module
 -----------------

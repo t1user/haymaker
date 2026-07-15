@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 import ib_insync as ibi
 import pandas as pd
 
-from haymaker.async_wrappers import QueueRunner, SyncQueueRunner, make_async
+from haymaker.async_wrappers import (
+    QueueRunner,
+    QueueShutdownPolicy,
+    SyncQueueRunner,
+    make_async,
+)
 
 from .datastore import AbstractBaseStore, ArcticStore
 
@@ -80,7 +85,9 @@ class AsyncAbstractBaseStore(ABC):
 
 class AsyncArcticStore(AsyncAbstractBaseStore):
 
-    _queue = SyncQueueRunner("AsyncArcticStore_queue")
+    _queue = SyncQueueRunner(
+        "AsyncArcticStore_queue", shutdown_policy=QueueShutdownPolicy.DISCARD
+    )
     _sync_class = ArcticStore
 
     from_params = _sync_class.from_params
@@ -101,7 +108,7 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         self._queue.enqueue(fn, *args)
 
     async def close(self) -> None:
-        """Drain and stop the shared datastore write queue."""
+        """Discard pending best-effort datastore writes and stop the queue."""
 
         await self._queue.close()
 

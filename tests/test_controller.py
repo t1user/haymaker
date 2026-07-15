@@ -612,7 +612,7 @@ def test_direct_controller_does_not_schedule_future_roll(controller):
     assert controller._future_roll_timer is None
 
 
-def test_from_config_schedules_future_roll_in_utc(atom_runtime, monkeypatch):
+def test_from_config_defers_future_roll_until_runtime_start(atom_runtime, monkeypatch):
     timeranges = []
 
     class FakeTimerange:
@@ -636,12 +636,20 @@ def test_from_config_schedules_future_roll_in_utc(atom_runtime, monkeypatch):
         top_config={"controller": {"future_roll_time": [14, 0]}},
     )
 
+    assert timeranges == []
+    assert controller._future_roll_timer is None
+
+    controller._ensure_runtime_timers_started()
+
     start, step, timerange = timeranges[0]
     assert controller.future_roll_time == (14, 0)
     assert start == datetime.time(hour=14, minute=0, tzinfo=datetime.UTC)
     assert step == datetime.timedelta(days=1)
     assert timerange.callback == controller.roll_futures
     assert controller._future_roll_timer is timerange
+
+    controller._ensure_runtime_timers_started()
+    assert len(timeranges) == 1
 
 
 def test_schedule_future_roll_ignores_duplicate_request(atom_runtime, monkeypatch):

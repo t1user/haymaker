@@ -13,7 +13,7 @@ from tqdm import tqdm
 from haymaker.config import CONFIG
 from haymaker.misc import default_path
 
-from . import setup_asyncio_logger, setup_logging_queue
+from .queue_logger import setup_logging_queue, shutdown_logging_queue
 
 LOGGING_PATH = CONFIG.get("logging_path", "logs")
 
@@ -39,10 +39,20 @@ class TqdmLoggingHandler(logging.Handler):
 
 
 class TelegramHandler(logging.handlers.HTTPHandler):
+    """Send formatted log records to one Telegram chat."""
 
-    def __init__(self, host, url, chat_id, secure=True, method="POST"):
+    def __init__(
+        self,
+        host,
+        url,
+        chat_id,
+        secure=True,
+        method="POST",
+        timeout: float = 5.0,
+    ):
         super().__init__(host=host, url=url, method=method, secure=secure)
         self.chat_id = chat_id
+        self.timeout = timeout
 
     def mapLogRecord(self, record):
         return {
@@ -58,6 +68,7 @@ class TelegramHandler(logging.handlers.HTTPHandler):
 
             host = self.host
             h = self.getConnection(host, self.secure)
+            h.timeout = self.timeout
             url = self.url
             data = urllib.parse.urlencode(self.mapLogRecord(record))
             if self.method == "GET":
@@ -122,6 +133,9 @@ def file_setup(**kwargs):
 def setup_logging(
     config_file: Union[str, Path, None] = None, level: Union[str, int, None] = None
 ) -> None:
+    """Configure logging and move output handlers onto listener threads."""
+
+    shutdown_logging_queue()
     if not config_file:
         config_file = module_directory / "logging_config.yaml"
     elif Path(config_file).is_file():
@@ -138,7 +152,6 @@ def setup_logging(
         logging.basicConfig()
         log.exception(e)
         raise
-        sys.exit(1)
 
     logging.config.dictConfig(config)
 
@@ -146,8 +159,4 @@ def setup_logging(
         level = logging._nameToLevel.get(level.upper(), 0)
     if level:
         logging.getLogger("haymaker").setLevel(level)
-
-
-setup_logging_queue()
-
-setup_asyncio_logger()
+    setup_logging_queue()

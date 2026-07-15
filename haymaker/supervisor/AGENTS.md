@@ -13,7 +13,9 @@ base decisions on current code, focused tests, and complete incident timelines.
 - Use it only when Haymaker owns the socket. Attached dataloader work borrows an
   external connection and must not connect, disconnect, or restart it.
 - `App` is the single process runner for live and dataloader runtimes. It owns
-  final runtime, detached-task, queue, and logging cleanup. In particular,
+  final runtime, detached-task, and queue cleanup. The command-line entrypoint
+  owns threaded logging setup and final flushing so strategy-import and runtime-
+  construction failures are also delivered. In particular,
   futures-roll scheduling is created once for the process and must not be
   recreated during workload restarts.
 - The workload owns component cleanup. For live trading, `LiveRuntime.stop()`
@@ -99,9 +101,12 @@ race regression test for any non-default combination.
   reconnectable cycles. The application runtime contract additionally contains
   `ib`, `bind_supervisor()`, and `close()` for process composition and final
   cleanup. `App` calls `close()` only after the supervisor has finished.
-- Queue runners declare `DRAIN` for persistence or `DISCARD` for transient
-  processing. Final queue shutdown is bounded and terminal; it must not run
-  during an ordinary supervisor reconnect.
+- Queue runners declare `DRAIN` for critical persistence or `DISCARD` for
+  best-effort processing. `DRAIN` makes processing failures and drain timeouts
+  terminal; `DISCARD` logs processing failures and drops pending final work.
+  Final queue shutdown is bounded and must not run during an ordinary
+  supervisor reconnect. Arctic's queued fire-and-forget writes are `DISCARD`;
+  state-saver queues are `DRAIN`.
 
 - Route restart triggers through `request_restart(reason)`; do not set the
   internal event directly.
@@ -113,11 +118,12 @@ race regression test for any non-default combination.
   supervisor.
 - `Controller.sync()` races its sync task against `connection_unavailable`.
   Restart or stop must abort an in-progress sync without disabling trading.
-- `cleanup_workload()` calls `workload.stop(reason)` even when the tracked task
-  has already completed. This preserves controller hold and component cleanup.
+- `cleanup_workload()` calls `workload.stop(reason)` only while the tracked task
+  is still active. If it already completed, the supervisor collects its result
+  without a redundant stop callback.
 - If the workload task is still running after `stop()`, the supervisor cancels
-  and awaits it. If it already completed, the supervisor collects and logs its
-  result.
+  and awaits it. Unexpected workload or stop failures escape after terminal
+  cleanup so the process exits unsuccessfully.
 - Intentional socket closure is guarded by `_intentional_disconnect` so the
   resulting `disconnectedEvent` does not request another restart.
 - Event handlers are attached once in `ConnectionSupervisor.__post_init__`.

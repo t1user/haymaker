@@ -15,7 +15,12 @@ from typing import Any
 import pytest
 
 import haymaker.async_wrappers as async_wrappers
-from haymaker.async_wrappers import QueueRunner, QueueShutdownPolicy
+from haymaker.async_wrappers import (
+    QueueDrainTimeoutError,
+    QueueProcessingError,
+    QueueRunner,
+    QueueShutdownPolicy,
+)
 
 
 def sync_add(x: int, y: int) -> int:
@@ -161,9 +166,72 @@ async def test_queue_runner_close_is_bounded_after_worker_halts():
         await queue.put(item)
     await asyncio.sleep(0)
 
-    await asyncio.wait_for(queue.close(timeout=0.01), timeout=0.1)
+    with pytest.raises(QueueProcessingError, match="failed to process queued work"):
+        await asyncio.wait_for(queue.close(timeout=0.01), timeout=0.1)
 
     assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_discard_queue_logs_processing_failure_without_raising():
+    async def fail(item):
+        raise RuntimeError(item)
+
+    queue = QueueRunner(
+        fail,
+        "best-effort",
+        max_failures=1,
+        shutdown_policy=QueueShutdownPolicy.DISCARD,
+    )
+    await queue.put("broken")
+    await asyncio.sleep(0)
+
+    await queue.close()
+
+    assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_draining_queue_timeout_is_terminal():
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def process(item):
+        started.set()
+        await release.wait()
+
+    queue = QueueRunner(process, "timed-out-drain")
+    await queue.put("pending")
+    await started.wait()
+
+    with pytest.raises(QueueDrainTimeoutError, match="did not drain"):
+        await queue.close(timeout=0.001)
+
+
+@pytest.mark.asyncio
+async def test_close_all_closes_every_queue_before_raising(monkeypatch):
+    monkeypatch.setattr(QueueRunner, "_instances", [])
+
+    async def fail(item):
+        raise RuntimeError(item)
+
+    critical = QueueRunner(fail, "critical", max_failures=1)
+    best_effort = QueueRunner(
+        fail,
+        "best-effort-all",
+        max_failures=1,
+        shutdown_policy=QueueShutdownPolicy.DISCARD,
+    )
+    await critical.put("critical failure")
+    await best_effort.put("best effort failure")
+    await asyncio.sleep(0)
+
+    with pytest.raises(ExceptionGroup, match="Queue shutdown failed"):
+        await QueueRunner.close_all()
+
+    assert critical._closed
+    assert best_effort._closed
+    assert QueueRunner._instances == []
 
 
 @pytest.mark.asyncio

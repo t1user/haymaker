@@ -185,18 +185,6 @@ class Controller(Atom):
                 self.onCommissionReport, self._log_event_error
             )
 
-        if self.sync_frequency:
-            self._sync_timer = ev.Timer(self.sync_frequency)
-            self._sync_timer.connect(self.sync, error=self._log_event_error)
-
-        if self.health_check_frequency:
-            self._health_check_timer = ev.Timer(self.health_check_frequency)
-            self._health_check_timer.connect(
-                self.run_health_check, error=self._log_event_error
-            )
-
-        self.schedule_future_roll()
-
         if self.log_order_events:
             self._order_loggers = OrderLoggers(self.ib)
 
@@ -275,6 +263,7 @@ class Controller(Atom):
         date and any remaining initialization complete.
         """
         log.debug("Running controller...")
+        self._ensure_runtime_timers_started()
         self.set_hold()
         if self.nuke:
             await self.run_nuke()
@@ -316,6 +305,22 @@ class Controller(Atom):
         self._restart_before_correction = True
         # now Streamers will run
         return True
+
+    def _ensure_runtime_timers_started(self) -> None:
+        """Start app-lifetime controller timers on the active event loop."""
+
+        if self.sync_frequency and self._sync_timer is None:
+            self._sync_timer = ev.Timer(self.sync_frequency)
+            self._sync_timer.connect(self.sync, error=self._log_event_error)
+
+        if self.health_check_frequency and self._health_check_timer is None:
+            self._health_check_timer = ev.Timer(self.health_check_frequency)
+            self._health_check_timer.connect(
+                self.run_health_check, error=self._log_event_error
+            )
+
+        if self._future_roll_timer is None:
+            self.schedule_future_roll()
 
     def roll_futures(self, *args) -> None:
         """

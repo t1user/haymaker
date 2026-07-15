@@ -4,7 +4,7 @@ This module connects all `ib_insync` events to logger:
 """
 
 import logging
-from typing import Dict, Set, Tuple
+from typing import Set
 
 import ib_insync as ibi
 
@@ -37,10 +37,7 @@ class IBHandlers:
         ib.scannerDataEvent += self.onScannerData
         ib.errorEvent += self.onErrEvent
         ib.timeoutEvent += self.onTimeout
-        scheduledUpdate = ibi.Event().timerange(300, None, 600)
-        scheduledUpdate += self.onScheduledUpdate
         self.ib = ib
-        self.portfolio_items: Dict[str, Tuple[float, float, float]] = {}
 
     async def onConnected(self):
         self.log.info("Connection established")
@@ -103,7 +100,6 @@ class IBHandlers:
         total = round(realized + unrealized)
         report = (item.contract.localSymbol, realized, unrealized, total)
         self.log.info(f"Portfolio item: {report}")
-        self.portfolio_items[item.contract.localSymbol] = (realized, unrealized, total)
 
     def onPosition(self, position: ibi.Position):
         self.log.info(
@@ -159,20 +155,6 @@ class IBHandlers:
 
     def onTimeout(self, idlePeriod: float):
         self.log.debug(f"timeout: {idlePeriod}")
-
-    def onScheduledUpdate(self, time):
-        self.log.info(f"pnl: {self.ib.pnl()}")
-        summary = [0, 0, 0]
-        for _contract, value in self.portfolio_items.items():
-            summary[0] += value[0]
-            summary[1] += value[1]
-            summary[2] += value[2]
-        message = (
-            f"realized: {summary[0]}, " f"unrealized: {summary[1]}, total: {summary[2]}"
-        )
-        self.log.info(message)
-        positions = [(p.contract.localSymbol, p.position) for p in self.ib.positions()]
-        self.log.info(f"POSITIONS: {positions}")
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"

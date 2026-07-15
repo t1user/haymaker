@@ -1,5 +1,7 @@
 import asyncio
 from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any, cast
 
 import ib_insync as ibi
 import pytest
@@ -124,3 +126,99 @@ async def test_app_closes_runtime_tasks_and_queues(monkeypatch) -> None:
     assert runtime.request_restart == app.supervisor.request_restart
     assert runtime.connection_unavailable is app.supervisor.connection_unavailable
     assert events == ["supervisor", "runtime", "tasks", "queues"]
+
+
+@pytest.mark.asyncio
+async def test_live_runtime_propagates_startup_failure() -> None:
+    """Unexpected controller failures must reach the supervisor task."""
+
+    class FailingController:
+        async def run(self) -> bool:
+            raise RuntimeError("controller failed")
+
+    context = cast(RuntimeContext, SimpleNamespace(controller=FailingController()))
+    runtime = LiveRuntime(context)
+
+    with pytest.raises(RuntimeError, match="controller failed"):
+        await runtime.start()
+
+
+def test_app_run_propagates_unexpected_failure(monkeypatch) -> None:
+    """Application failures must produce a failing process outcome."""
+
+    failure = RuntimeError("application failed")
+
+    def fail_run(coroutine) -> None:
+        coroutine.close()
+        raise failure
+
+    monkeypatch.setattr(app_module.asyncio, "run", fail_run)
+
+    app = object.__new__(App)
+    with pytest.raises(RuntimeError, match="application failed"):
+        app.run()
+
+
+@pytest.mark.asyncio
+async def test_sigterm_requests_supervisor_stop_and_restores_default(
+    monkeypatch,
+) -> None:
+    """The first SIGTERM should request cleanup and expose default handling."""
+
+    events: list[Any] = []
+
+    class FakeLoop:
+        signal_handler = None
+
+        def set_exception_handler(self, handler) -> None:
+            events.append("exception-handler")
+
+        def add_signal_handler(self, signum, handler) -> None:
+            events.append(("add-signal", signum))
+            self.signal_handler = handler
+
+        def remove_signal_handler(self, signum) -> bool:
+            events.append(("remove-signal", signum))
+            return True
+
+    loop = FakeLoop()
+
+    class FakeSupervisor:
+        async def run(self) -> None:
+            assert loop.signal_handler is not None
+            loop.signal_handler()
+            events.append("supervisor")
+
+        def stop(self) -> None:
+            events.append("stop")
+
+    class FakeRuntime:
+        async def close(self) -> None:
+            events.append("runtime")
+
+    async def cancel_tasks() -> None:
+        events.append("tasks")
+
+    async def close_queues() -> None:
+        events.append("queues")
+
+    monkeypatch.setattr(app_module.asyncio, "get_running_loop", lambda: loop)
+    monkeypatch.setattr(app_module, "cancel_background_tasks", cancel_tasks)
+    monkeypatch.setattr(app_module.QueueRunner, "close_all", close_queues)
+
+    app = object.__new__(App)
+    app.supervisor = cast(Any, FakeSupervisor())
+    app.runtime = cast(Any, FakeRuntime())
+    await app._run()
+
+    assert events == [
+        "exception-handler",
+        ("add-signal", app_module.signal.SIGTERM),
+        ("remove-signal", app_module.signal.SIGTERM),
+        "stop",
+        "supervisor",
+        "runtime",
+        "tasks",
+        "queues",
+        ("remove-signal", app_module.signal.SIGTERM),
+    ]

@@ -55,6 +55,22 @@ def test_read_no_future_roll_strategies_rejects_wrong_type(tmp_path):
         RuntimeContext._read_no_future_roll_strategies(module)
 
 
+def test_load_user_module_restores_previous_module_after_failure(tmp_path):
+    strategy = tmp_path / "strategy.py"
+    strategy.write_text("raise RuntimeError('broken strategy')\n")
+    module_name = "haymaker_user_strategy"
+    previous = ModuleType(module_name)
+    sys.modules[module_name] = previous
+
+    try:
+        with pytest.raises(RuntimeError, match="broken strategy"):
+            load_user_module(strategy)
+
+        assert sys.modules[module_name] is previous
+    finally:
+        sys.modules.pop(module_name, None)
+
+
 def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
     contexts: list[object] = []
@@ -67,8 +83,8 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
     def setup_logging(logging_config: object) -> None:
         calls.append(("setup_logging", logging_config))
 
-    def patch_asyncio() -> None:
-        calls.append(("patch", None))
+    def shutdown_logging_queue() -> None:
+        calls.append(("shutdown_logging", None))
 
     def fake_load_user_module(module_path: object) -> ModuleType:
         calls.append(("load", module_path))
@@ -89,22 +105,20 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
         def run(self) -> None:
             calls.append(("run", None))
 
-    class FakeLiveRuntime:
-        @classmethod
-        def from_context(cls, context: object) -> object:
-            calls.append(("runtime", context))
-            return "live-runtime"
+    def fake_live_runtime(context: object) -> object:
+        calls.append(("runtime", context))
+        return "live-runtime"
 
     fake_logging = ModuleType("haymaker.logging")
     setattr(fake_logging, "setup_logging", setup_logging)
+    setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
     fake_runtime = ModuleType("haymaker.runtime")
     setattr(fake_runtime, "RuntimeContext", FakeRuntimeContext)
     fake_app = ModuleType("haymaker.app")
     setattr(fake_app, "App", FakeApp)
-    setattr(fake_app, "LiveRuntime", FakeLiveRuntime)
+    setattr(fake_app, "LiveRuntime", fake_live_runtime)
 
     monkeypatch.setattr(cli, "configure", configure)
-    monkeypatch.setattr(cli.ibi.util, "patchAsyncio", patch_asyncio)
     monkeypatch.setattr(cli, "load_user_module", fake_load_user_module)
     monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
     monkeypatch.setitem(sys.modules, "haymaker.runtime", fake_runtime)
@@ -115,11 +129,44 @@ def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
     assert calls == [
         ("configure", ("live", ["strategy.py", "-f", "config.yaml"])),
         ("setup_logging", "logging.yaml"),
-        ("patch", None),
         ("context", {"logging_config": "logging.yaml", "use_blotter": False}),
         ("load", "strategy.py"),
         ("bind_strategy_module", strategy_module),
         ("runtime", contexts[0]),
         ("app", ("live-runtime", 0)),
         ("run", None),
+        ("shutdown_logging", None),
     ]
+
+
+def test_main_flushes_logging_when_runtime_construction_fails(monkeypatch) -> None:
+    calls = []
+
+    def configure(profile: str, args: list[str]) -> dict[str, object]:
+        return {"logging_config": "logging.yaml"}
+
+    def setup_logging(logging_config: object) -> None:
+        calls.append("setup")
+
+    def shutdown_logging_queue() -> None:
+        calls.append("shutdown")
+
+    class FailingRuntimeContext:
+        def __init__(self, config: object) -> None:
+            calls.append("context")
+            raise RuntimeError("context failed")
+
+    fake_logging = ModuleType("haymaker.logging")
+    setattr(fake_logging, "setup_logging", setup_logging)
+    setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
+    fake_runtime = ModuleType("haymaker.runtime")
+    setattr(fake_runtime, "RuntimeContext", FailingRuntimeContext)
+
+    monkeypatch.setattr(cli, "configure", configure)
+    monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
+    monkeypatch.setitem(sys.modules, "haymaker.runtime", fake_runtime)
+
+    with pytest.raises(RuntimeError, match="context failed"):
+        cli.main(["strategy.py"])
+
+    assert calls == ["setup", "context", "shutdown"]

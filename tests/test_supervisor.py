@@ -85,8 +85,13 @@ class FakeIB:
 class FakeWorkload:
     """Controllable workload used to observe supervisor lifecycle calls."""
 
-    def __init__(self, complete_immediately: bool = False) -> None:
+    def __init__(
+        self,
+        complete_immediately: bool = False,
+        start_error: Exception | None = None,
+    ) -> None:
         self.complete_immediately = complete_immediately
+        self.start_error = start_error
         self.starts = 0
         self.stops: list[str] = []
         self.stop_started: asyncio.Event | None = None
@@ -97,6 +102,8 @@ class FakeWorkload:
         """Run until stopped unless configured to complete immediately."""
 
         self.starts += 1
+        if self.start_error is not None:
+            raise self.start_error
         if self.complete_immediately:
             return
 
@@ -231,12 +238,12 @@ async def test_completed_workload_stops_supervisor() -> None:
 
     assert current_state(supervisor) is StoppedState
     assert workload.starts == 1
-    assert workload.stops == ["supervisor stopped"]
+    assert workload.stops == []
     assert fake_ib.disconnect_count == 1
 
 
 @pytest.mark.asyncio
-async def test_restart_cleanup_stops_already_completed_workload() -> None:
+async def test_restart_cleanup_collects_already_completed_workload() -> None:
     fake_ib = FakeIB()
     workload = FakeWorkload(complete_immediately=True)
     supervisor = make_supervisor(fake_ib, workload)
@@ -247,8 +254,23 @@ async def test_restart_cleanup_stops_already_completed_workload() -> None:
 
     await supervisor.cleanup_workload("restart requested")
 
-    assert workload.stops == ["restart requested"]
+    assert workload.stops == []
     assert supervisor._workload_task is None
+
+
+@pytest.mark.asyncio
+async def test_workload_failure_is_terminal_after_cleanup() -> None:
+    fake_ib = FakeIB()
+    workload = FakeWorkload(start_error=RuntimeError("broken workload"))
+    supervisor = make_supervisor(fake_ib, workload)
+
+    with pytest.raises(RuntimeError, match="broken workload"):
+        await supervisor.run()
+
+    assert current_state(supervisor) is StoppedState
+    assert workload.starts == 1
+    assert workload.stops == []
+    assert fake_ib.disconnect_count == 1
 
 
 @pytest.mark.asyncio
