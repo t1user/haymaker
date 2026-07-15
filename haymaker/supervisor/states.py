@@ -145,8 +145,14 @@ class ConnectingState(AbstractState):
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                log.debug(f"IB connection attempt failed: {exc!r}")
+            except TimeoutError:
+                log.debug("IB connection attempt failed: Timeout")
+                await asyncio.sleep(self.settings.retry_delay)
+            except ConnectionError:
+                log.debug("IB connection attempt failed: Connection unavailable")
+                await asyncio.sleep(self.settings.retry_delay)
+            except Exception:
+                log.exception("Unexpected IB connection attempt failure.")
                 await asyncio.sleep(self.settings.retry_delay)
         return self.ib.isConnected()
 
@@ -191,8 +197,11 @@ class ProbingState(AbstractState):
                 self.settings.probe_contract, "", "30 S", "5 secs", "MIDPOINT", False
             )
             bars = await asyncio.wait_for(probe, self.settings.probe_timeout)
-        except (asyncio.TimeoutError, ConnectionError) as exc:
-            log.debug(f"Connection probe did not complete: {exc!r}")
+        except asyncio.TimeoutError:
+            log.debug("Connection probe did not complete: Timeout")
+            return False
+        except ConnectionError:
+            log.debug("Connection probe did not complete: Connection unavailable")
             return False
         return bool(bars)
 

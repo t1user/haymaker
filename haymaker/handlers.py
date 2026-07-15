@@ -35,7 +35,7 @@ class IBHandlers:
         ib.tickNewsEvent += self.onTickNews
         ib.newsBulletinEvent += self.onNewsBulletin
         ib.scannerDataEvent += self.onScannerData
-        ib.errorEvent += self.onError
+        ib.errorEvent += self.onErrEvent
         ib.timeoutEvent += self.onTimeout
         scheduledUpdate = ibi.Event().timerange(300, None, 600)
         scheduledUpdate += self.onScheduledUpdate
@@ -46,7 +46,7 @@ class IBHandlers:
         self.log.info("Connection established")
         self.account = self.ib.client.getAccounts()[0]
         await self.ib.accountSummaryAsync()
-        self._reset_pnl_subscription
+        self._reset_pnl_subscription()
 
     def _reset_pnl_subscription(self) -> None:
         key = (self.account, "")
@@ -139,7 +139,7 @@ class IBHandlers:
     def onScannerData(self, data: ibi.ScanData):
         pass
 
-    def onError(
+    def onErrEvent(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ):
         # if errorCode not in (
@@ -155,7 +155,7 @@ class IBHandlers:
         #     10182,
         #     1100,
         # ):
-        self.log.error(f"ERROR: {errorCode} {errorString} {contract}")
+        self.log.debug(f"Broker message {errorCode}: {errorString} {contract}")
 
     def onTimeout(self, idlePeriod: float):
         self.log.debug(f"timeout: {idlePeriod}")

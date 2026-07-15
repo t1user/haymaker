@@ -11,7 +11,7 @@ from .async_wrappers import (
     cancel_background_tasks,
 )
 from .logging import shutdown_logging_queue
-from .runtime import RuntimeContext
+from .runtime import NotConnectedError, RuntimeContext
 from .supervisor import ConnectionSettings, ConnectionSupervisor
 
 log = logging.getLogger(__name__)
@@ -78,8 +78,8 @@ class LiveRuntime:
         except asyncio.CancelledError:
             log.debug("Live runtime task cancelled.")
             raise
-        except ConnectionError as ce:
-            log.info(f"Connection fault: {ce}")
+        except (ConnectionError, NotConnectedError):
+            log.info("Live runtime startup interrupted by connection loss.")
         except Exception as e:
             log.exception(e)
 

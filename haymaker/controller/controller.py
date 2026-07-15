@@ -205,8 +205,22 @@ class Controller(Atom):
                 f"No qualified contracts for open position: {missing_contracts}"
             )
 
-        log.debug(f"Controller initiated: {self}")
-        log.debug(f"{self.contract_registry.current_contracts=}")
+        log.debug("Controller initialized: %s", self)
+
+    def __str__(self) -> str:
+        """Return a compact controller description suitable for logs."""
+
+        if self.future_roll_time is None:
+            future_roll = "off"
+        else:
+            hour, minute = self.future_roll_time
+            future_roll = f"{hour:02}:{minute:02} UTC"
+        return (
+            f"Controller<sync={self.sync_frequency}s, "
+            f"health_check={self.health_check_frequency}s, "
+            f"future_roll={future_roll}, "
+            f"missing_brackets={self.missing_brackets}>"
+        )
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)

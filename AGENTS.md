@@ -64,6 +64,13 @@
 - Internal lifecycle hooks, injected callbacks, helpers, and ordinary methods
   should use standard Python snake_case.
 
+# Logging
+
+- Normal operational logs must not contain the word `error` unless they report
+  a genuine error requiring attention. Expected, successfully recovered
+  connection interruptions are lifecycle events, not errors. Avoid leaking
+  exception class names such as `TimeoutError` into routine recovery messages.
+
 # Validation
 
 - Run the narrowest meaningful test command for the changed area first.

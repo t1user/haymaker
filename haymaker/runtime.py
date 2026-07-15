@@ -60,7 +60,6 @@ class InitData:
         details: list[list[ibi.ContractDetails]] = []
         while len(details) != len(contracts):
             if not self.ib.isConnected():
-                log.error("No connection, no contract details. Waiting for restart...")
                 raise NotConnectedError()
 
             try:
@@ -121,6 +120,7 @@ class StartupJobs:
                 for streamer in self.streamers
             ]
         )
+        log.info("Live workload startup completed; all streamers initialized.")
 
     def __str__(self) -> str:
         """Return a compact description of registered streamer jobs."""
