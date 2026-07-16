@@ -14,10 +14,7 @@ from typing import Any
 
 from tqdm import tqdm
 
-from haymaker.config import CONFIG
 from haymaker.misc import default_path
-
-LOGGING_PATH = CONFIG.get("logging_path", "logs")
 
 
 class LocalQueueHandler(logging.handlers.QueueHandler):
@@ -123,13 +120,24 @@ class TelegramHandler(logging.handlers.HTTPHandler):
             self.handleError(record)
 
 
-def filename_from_kwargs(**kwargs: Any) -> dict[str, Any]:
+def filename_from_kwargs(
+    *,
+    _haymaker_base_directory: str = "ib_data",
+    _haymaker_logging_directory: str = "logs",
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Resolve a configured handler filename against the logging directory."""
 
+    directory = Path(
+        default_path(
+            _haymaker_logging_directory,
+            base_directory=_haymaker_base_directory,
+        )
+    )
     if "filename" not in kwargs:
-        kwargs["filename"] = str(Path(default_path(LOGGING_PATH)) / "haymakerLog")
+        kwargs["filename"] = str(directory / "haymakerLog")
     elif Path(kwargs["filename"]).parent == Path("."):
-        kwargs["filename"] = str(Path(default_path(LOGGING_PATH)) / kwargs["filename"])
+        kwargs["filename"] = str(directory / kwargs["filename"])
     return kwargs
 
 

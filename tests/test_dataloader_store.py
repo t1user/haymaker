@@ -1,5 +1,3 @@
-import importlib
-import sys
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -22,30 +20,12 @@ from haymaker.dataloader.store_wrapper import AsyncStoreView, HistorySink
 
 
 @pytest.fixture
-def dataloader_module(monkeypatch):
-    """Import dataloader with hermetic config for store-factory tests."""
+def dataloader_module():
+    """Return the side-effect-free dataloader module."""
 
-    from haymaker.config import CONFIG
-    import haymaker.logging as logging_package
+    from haymaker.dataloader import dataloader
 
-    config_values = {
-        "logging_config": None,
-        "barSize": "30 secs",
-        "wts": "TRADES",
-        "gap_fill_mode": "off",
-        "useRTH": False,
-        "save_every_chunks": 10,
-        "number_of_workers": 2,
-        "clientId": 1,
-        "source": "contracts.csv",
-        "pacer_no_restriction": False,
-        "pacer_allowance_fraction": 1.0,
-    }
-    for key, value in config_values.items():
-        monkeypatch.setitem(CONFIG.maps[0], key, value)
-    monkeypatch.setattr(logging_package, "setup_logging", lambda config: None)
-    sys.modules.pop("haymaker.dataloader.dataloader", None)
-    return importlib.import_module("haymaker.dataloader.dataloader")
+    return dataloader
 
 
 class FakeAsyncStore:
@@ -623,24 +603,23 @@ def test_manager_datastore_builds_async_arctic_store(monkeypatch, dataloader_mod
     dataloader = dataloader_module
     created: dict[str, object] = {}
 
-    class FakeAsyncArcticStore:
-        """Capture constructor values without opening Arctic."""
+    class FakeStoreFactory:
+        """Capture store construction without opening Arctic."""
 
-        def __init__(self, lib: str, host: object) -> None:
-            created["lib"] = lib
-            created["host"] = host
-
-    monkeypatch.setattr(dataloader_module, "get_mongo_client", lambda: "mongo")
-    monkeypatch.setattr(dataloader_module, "AsyncArcticStore", FakeAsyncArcticStore)
+        def arctic_store(self, library: str) -> object:
+            created["lib"] = library
+            created["host"] = "mongo"
+            return self
 
     manager = dataloader.Manager(
         object(),
+        store_factory=FakeStoreFactory(),
         wts="TRADES",
         bar_size="30 secs",
     )
     store = manager.datastore
 
-    assert isinstance(store, FakeAsyncArcticStore)
+    assert isinstance(store, FakeStoreFactory)
     assert created == {"lib": "TRADES_30_secs", "host": "mongo"}
 
 

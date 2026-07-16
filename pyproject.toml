@@ -72,6 +72,9 @@ all = ["haymaker[dev,notebook,dashboard]"]
 [tool.setuptools.packages.find]
 include = ["haymaker*", "dashboard*"]
 
+[tool.setuptools.package-data]
+haymaker = ["config/*.yaml", "logging/*.yaml"]
+
 [project.urls]
 Repository = "https://github.com/t1user/haymaker"
 

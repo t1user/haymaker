@@ -4,12 +4,11 @@ import asyncio
 import datetime
 import itertools
 import logging
-from collections import abc
-from collections.abc import Callable
-from dataclasses import dataclass, field, fields
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import partial
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Literal
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -31,8 +30,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class ControllerError(Exception):
-    pass
+class ControllerError(ValueError):
+    """Raised when direct controller construction receives invalid policy."""
 
 
 class SyncOutcome(Enum):
@@ -101,63 +100,6 @@ class Controller(Atom):
     _restart_before_correction: bool = True
     _sync_abort_event: asyncio.Event | None = field(default=None, repr=False)
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
-
-    @classmethod
-    def from_config(
-        cls,
-        trader: Trader,
-        blotter: Blotter | None = None,
-        top_config: abc.MutableMapping | None = None,
-        health_check_observables: list[list[Callable[[], bool]]] | None = None,
-    ) -> Self:
-        """
-        Extract proper attributes from configuration file and perform
-        required initializations based on it.
-        """
-        log.debug("Initializing Controller with config.")
-        if top_config is None:
-            top_config = {}
-
-        if health_check_observables is None:
-            health_check_observables = []
-
-        valid_fields = {field.name for field in fields(cls)}
-        config = {
-            k: v
-            for k, v in top_config.get("controller", {}).items()
-            if k in valid_fields
-        } or {}
-
-        field_names = [field.name for field in fields(cls)]
-        for param in config:
-            if param not in field_names:
-                raise ControllerError(
-                    f"Wrong parameter: {param} in 'controller' section of config."
-                )
-        if (future_roll_time := config.get("future_roll_time")) is not None:
-            roll_hour, roll_minute = future_roll_time
-            config["future_roll_time"] = (roll_hour, roll_minute)
-
-        ignore_errors = config.pop("ignore_errors", ())
-
-        top_kwargs = {
-            i: top_config.get(i, False)
-            for i in [
-                "cold_start",
-                "reset",
-                "zero",
-                "nuke",
-            ]
-        }
-
-        return cls(
-            trader=trader,
-            blotter=blotter,
-            health_check_observables=health_check_observables,
-            ignore_errors=_broker_messages_to_ignore(ignore_errors),
-            **config,
-            **top_kwargs,
-        )
 
     def __post_init__(self) -> None:
         super().__init__()
@@ -254,7 +196,7 @@ class Controller(Atom):
             self._hold = False
             log.debug("hold released")
 
-    def set_future_roll_policies(self, policies: abc.Mapping[str, bool]) -> None:
+    def set_future_roll_policies(self, policies: Mapping[str, bool]) -> None:
         """Replace strategy futures-roll policies with a defensive copy."""
 
         self.future_roll_policies = dict(policies)

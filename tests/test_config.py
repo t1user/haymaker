@@ -1,179 +1,245 @@
-import os
-import sys
-import tempfile
-from collections import ChainMap
+"""Tests for strict typed framework configuration loading."""
+
+from __future__ import annotations
+
 from pathlib import Path
 
+import ib_insync as ibi
 import pytest
-import yaml
 
-from haymaker.config.config import ConfigMaps
-
-
-def test_pytest_does_not_inherit_live_config_overrides():
-    """Verify pytest starts from repo/test config instead of local overrides.
-
-    This protects the suite from inheriting a developer's live-trading config
-    through ``HAYMAKER_*_CONFIG_OVERRIDES`` during import-time config loading.
-    """
-    assert "HAYMAKER_HAYMAKER_CONFIG_OVERRIDES" not in os.environ
-    assert "HAYMAKER_DATALOADER_CONFIG_OVERRIDES" not in os.environ
+import haymaker.config as config_package
+from haymaker.config import (
+    ConfigError,
+    DataloaderCommand,
+    LiveCommand,
+    load_dataloader_settings,
+    load_live_settings,
+    parse_live_args,
+)
+from haymaker.config.loader import deep_merge, load_yaml
 
 
-@pytest.fixture
-def temp_yaml_file(tmp_path):
-    """Creates a temporary YAML file for testing."""
-    data = {"key": "value", "nested": {"subkey": "subvalue"}}
-    file_path = tmp_path / "test_config.yaml"
-    print(tmp_path)
-    with open(file_path, "w") as f:
-        yaml.dump(data, f)
-    return file_path
+def live_command(
+    config_file: Path | None = None,
+    *overrides: tuple[str, object],
+) -> LiveCommand:
+    """Return a minimal live loader command."""
+
+    return LiveCommand(Path("strategy.py"), config_file, overrides)
 
 
-@pytest.fixture
-def clear_env():
-    """Ensure environment variables are cleared before each test."""
-    old_env = os.environ.copy()
-    os.environ = {k: v for k, v in os.environ.items() if not k.startswith("HAYMAKER_")}
-    yield
-    os.environ.clear()
-    os.environ.update(old_env)
+def test_process_global_config_singleton_is_not_exported() -> None:
+    """Importing configuration must not create process-owned settings."""
+
+    assert not hasattr(config_package, "CONFIG")
 
 
-@pytest.fixture
-def reset_sys_argv():
-    """Ensure sys.argv is restored after tests."""
-    original_argv = sys.argv.copy()
-    yield
-    sys.argv = original_argv
+def test_live_defaults_are_typed() -> None:
+    settings = load_live_settings(live_command(), environ={})
 
-
-def test_env_variable_loading(clear_env):
-    # `HAYMAKER_` needs to be chopped off
-    # all keys are small caps
-    os.environ["HAYMAKER_TEST_KEY"] = "test_value"
-    config = ConfigMaps("live", ["strategy.py"])
-    assert config.environ["test_key"] == "test_value"
-
-
-def test_cmdline_parsing(reset_sys_argv):
-    with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as temp_file:
-        temp_path = Path(temp_file.name)  # Get the temporary file path
-
-    try:
-        args = [
-            "strategy.py",
-            "--file",
-            str(temp_path),
-            "--set_option",
-            "option",
-            "value",
-        ]
-        config = ConfigMaps("live", args)
-
-        assert config.cmdline["file"] == str(temp_path)
-        assert config.cmdline["option"] == "value"
-        assert "module_path" not in config.cmdline
-    finally:
-        temp_path.unlink()  # Cleanup the temporary file
-
-
-def test_yaml_parsing(temp_yaml_file):
-    config = ConfigMaps("live", ["strategy.py"])
-    parsed_yaml = config.parse_yaml(temp_yaml_file)
-    assert parsed_yaml["key"] == "value"
-    assert parsed_yaml["nested"]["subkey"] == "subvalue"
-
-
-def test_missing_yaml_file():
-    config = ConfigMaps("live", ["strategy.py"])
-    with pytest.raises(FileNotFoundError):
-        config.parse_yaml("non_existent.yaml")
-
-
-def test_config_merging(monkeypatch):
-    monkeypatch.setenv("HAYMAKER_TEST_KEY", "env_value")
-    config_maps = ConfigMaps(
-        "live", ["strategy.py", "--set_option", "option", "cmdline_value"]
-    )
-    merged = ChainMap(*config_maps.maps)
-    assert merged["option"] == "cmdline_value"
-    assert merged.get("test_key") == "env_value"
-
-
-def test_priorities_1(monkeypatch):
-    # cmdline overrides env value
-    monkeypatch.setenv("HAYMAKER_TEST_KEY", "env_value")
-    config_maps = ConfigMaps(
-        "live", ["strategy.py", "--set_option", "test_key", "cmdline_value"]
-    )
-    merged = ChainMap(*config_maps.maps)
-    assert merged["test_key"] == "cmdline_value"
-
-
-def test_priorities_2(monkeypatch, temp_yaml_file, reset_sys_argv):
-    # config file has priority before env
-    monkeypatch.setenv("HAYMAKER_KEY", "env_value")
-    # config file name passed as cli argument
-    args = [
-        "strategy.py",
-        "--file",
-        str(temp_yaml_file),
+    assert settings.connection.client_id == 0
+    assert settings.connection.probe_contract == ibi.Forex("EURUSD")
+    assert settings.timeout.seconds == 300
+    assert settings.orders.open["algoParams"] == [
+        ibi.TagValue("adaptivePriority", "Normal")
     ]
-    config_maps = ConfigMaps("live", args)
-    merged = ChainMap(*config_maps.maps)
-    assert merged.get("key") == "value"
 
 
-def test_config_file_read_from_env(monkeypatch, temp_yaml_file, reset_sys_argv):
-    # config file is read from env
-    monkeypatch.setenv("HAYMAKER_KEY", "env_value")
-    monkeypatch.setenv("HAYMAKER_HAYMAKER_CONFIG_OVERRIDES", str(temp_yaml_file))
-    config_maps = ConfigMaps("live", ["strategy.py"])
-    merged = ChainMap(*config_maps.maps)
-    # it would be 'env_value' if it wasn't overridden with config file
-    assert merged.get("key") == "value"
+def test_dataloader_defaults_are_profile_specific() -> None:
+    settings = load_dataloader_settings(DataloaderCommand(None, ()), environ={})
+
+    assert settings.connection.client_id == 1
+    assert settings.download.source == "contracts.csv"
+    assert settings.download.gap_fill_mode == "off"
 
 
-def test_dataloader_positional_source_is_config_value(monkeypatch):
-    monkeypatch.setattr(ConfigMaps, "get_defaults", lambda self: {})
-    config_maps = ConfigMaps("dataloader", ["contracts.csv"])
-    assert config_maps.cmdline["source"] == "contracts.csv"
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("futures.selector", "unknown"),
+        ("futures.full_chain_spec", "unknown"),
+    ],
+)
+def test_dataloader_rejects_unknown_futures_policy(path: str, value: str) -> None:
+    command = DataloaderCommand(None, ((path, value),))
+
+    with pytest.raises(ConfigError, match=path):
+        load_dataloader_settings(command, environ={})
 
 
-def test_dataloader_gap_fill_mode_respects_config_and_cli_precedence(tmp_path):
-    """An omitted CLI option must not override the configured gap-fill mode."""
-
-    config_file = tmp_path / "dataloader.yaml"
-    config_file.write_text("gap_fill_mode: schedule\n")
-
-    configured = ConfigMaps("dataloader", ["-f", str(config_file)])
-    configured_values = ChainMap(*configured.maps)
-    overridden = ConfigMaps(
-        "dataloader", ["-f", str(config_file), "-g", "heuristic"]
-    )
-    overridden_values = ChainMap(*overridden.maps)
-
-    assert "gap_fill_mode" not in configured.cmdline
-    assert configured_values["gap_fill_mode"] == "schedule"
-    assert overridden.cmdline["gap_fill_mode"] == "heuristic"
-    assert overridden_values["gap_fill_mode"] == "heuristic"
-
-
-def test_live_positional_module_is_not_config_value():
-    config_maps = ConfigMaps("live", ["strategy.py"])
-    assert "module_path" not in config_maps.cmdline
-    assert "source" not in config_maps.cmdline
-
-
-def test_sphinx_import_does_not_parse_sphinx_arguments(monkeypatch):
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["sphinx-build", "-b", "html", "source", "build/html"],
+def test_deep_merge_recurses_and_replaces_lists() -> None:
+    merged = deep_merge(
+        {"section": {"kept": 1, "values": [1]}, "root": "old"},
+        {"section": {"values": [2]}, "root": "new"},
     )
 
-    config_maps = ConfigMaps("live")
+    assert merged == {
+        "section": {"kept": 1, "values": [2]},
+        "root": "new",
+    }
 
-    assert config_maps.cmdline == {}
+
+def test_deep_merge_replaces_discriminated_mapping_when_type_changes() -> None:
+    merged = deep_merge(
+        {"saver": {"type": "csv", "options": {"name": "blotter"}}},
+        {"saver": {"type": "mongo", "options": {"collection": "blotter"}}},
+    )
+
+    assert merged == {"saver": {"type": "mongo", "options": {"collection": "blotter"}}}
+
+
+def test_dotted_overrides_replace_discriminated_mapping_as_one_layer() -> None:
+    settings = load_live_settings(
+        live_command(
+            None,
+            ("blotter.saver.type", "mongo"),
+            ("blotter.saver.options.collection", "audit"),
+        ),
+        environ={},
+    )
+
+    assert settings.blotter.saver is not None
+    assert settings.blotter.saver.type == "mongo"
+    assert settings.blotter.saver.options == {"collection": "audit"}
+
+
+def test_source_precedence_environment_yaml_then_cli_yaml_then_cli_values(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "environment.yaml"
+    environment_file.write_text(
+        "controller:\n  sync_frequency: 10\n  broker_request_timeout: 20\n"
+    )
+    cli_file = tmp_path / "cli.yaml"
+    cli_file.write_text("controller:\n  sync_frequency: 30\n")
+    command = live_command(
+        cli_file,
+        ("controller.sync_frequency", 40),
+    )
+
+    settings = load_live_settings(
+        command,
+        environ={"HAYMAKER_HAYMAKER_CONFIG_OVERRIDES": str(environment_file)},
+    )
+
+    assert settings.controller.sync_frequency == 40
+    assert settings.controller.broker_request_timeout == 20
+
+
+def test_direct_environment_values_are_ignored() -> None:
+    settings = load_live_settings(
+        live_command(),
+        environ={
+            "HAYMAKER_CONNECTION__PORT": "9999",
+            "HAYMAKER_LOGGING_CONFIG": "other.yaml",
+        },
+    )
+
+    assert settings.connection.port == 4002
+    assert settings.logging.config_file == Path("logging_config.yaml")
+
+
+def test_dedicated_cli_option_wins_over_generic_override() -> None:
+    command = parse_live_args(
+        ["strategy.py", "--set-option", "startup.reset", "false", "--reset"]
+    )
+
+    settings = load_live_settings(command, environ={})
+
+    assert settings.startup.reset is True
+
+
+def test_cli_values_preserve_yaml_scalar_and_collection_types() -> None:
+    command = parse_live_args(
+        [
+            "strategy.py",
+            "--set-option",
+            "logging.log_broker",
+            "true",
+            "--set-option",
+            "controller.future_roll_time",
+            "[15, 30]",
+        ]
+    )
+
+    settings = load_live_settings(command, environ={})
+
+    assert settings.logging.log_broker is True
+    assert settings.controller.future_roll_time == (15, 30)
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("- one\n- two\n", "root"),
+        ("value: 1\nvalue: 2\n", "Duplicate YAML key"),
+        (
+            "value: !!python/object/apply:ib_insync.Forex [EURUSD]\n",
+            "constructor",
+        ),
+    ],
+)
+def test_yaml_rejects_invalid_document_shapes(
+    tmp_path: Path, text: str, message: str
+) -> None:
+    config_file = tmp_path / "invalid.yaml"
+    config_file.write_text(text)
+
+    with pytest.raises(ConfigError, match=message):
+        load_yaml(config_file)
+
+
+def test_safe_yaml_loader_supports_standard_mapping_merges(tmp_path: Path) -> None:
+    config_file = tmp_path / "merged.yaml"
+    config_file.write_text(
+        "defaults: &defaults\n"
+        "  sync_frequency: 10\n"
+        "  health_check_frequency: 20\n"
+        "controller:\n"
+        "  <<: *defaults\n"
+        "  sync_frequency: 30\n"
+    )
+
+    config = load_yaml(config_file)
+
+    assert config["controller"] == {
+        "sync_frequency": 30,
+        "health_check_frequency": 20,
+    }
+
+
+def test_unknown_old_key_is_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "old.yaml"
+    config_file.write_text("coldstart: true\n")
+
+    with pytest.raises(ConfigError, match="coldstart"):
+        load_live_settings(live_command(config_file), environ={})
+
+
+def test_wrong_type_reports_dotted_path(tmp_path: Path) -> None:
+    config_file = tmp_path / "wrong.yaml"
+    config_file.write_text("connection:\n  port: '4002'\n")
+
+    with pytest.raises(ConfigError, match="connection.port"):
+        load_live_settings(live_command(config_file), environ={})
+
+
+def test_missing_config_file_is_reported(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="Cannot load configuration"):
+        load_live_settings(live_command(tmp_path / "missing.yaml"), environ={})
+
+
+def test_plain_probe_contract_mapping_is_converted(tmp_path: Path) -> None:
+    config_file = tmp_path / "probe.yaml"
+    config_file.write_text(
+        "connection:\n"
+        "  probe_contract:\n"
+        "    secType: STK\n"
+        "    symbol: SPY\n"
+        "    exchange: SMART\n"
+        "    currency: USD\n"
+    )
+
+    settings = load_live_settings(live_command(config_file), environ={})
+
+    assert settings.connection.probe_contract == ibi.Stock("SPY", "SMART", "USD")

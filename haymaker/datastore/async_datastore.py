@@ -90,8 +90,6 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
     )
     _sync_class = ArcticStore
 
-    from_params = _sync_class.from_params
-
     def __init__(
         self,
         lib: str,

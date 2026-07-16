@@ -1,62 +1,63 @@
+"""Tests for runtime-owned persistence services."""
+
 from unittest.mock import MagicMock
 
 import pytest
 
 from haymaker import databases
+from haymaker.config.settings import MongoSettings, StorageSettings
+from haymaker.databases import StoreFactory
 
 
-def test_real_mongo_client_blocked_by_default():
-    """Verify the global pytest guard blocks accidental real Mongo access.
+def storage_settings(**client: object) -> StorageSettings:
+    """Return storage settings with one test Mongo database."""
 
-    Ordinary tests should see an immediate assertion with instructions to use
-    mocks, ``mongomock``, or ``@pytest.mark.mongo`` instead of attempting a
-    networked database connection.
-    """
-    databases.get_mongo_client.cache_clear()
-    try:
-        with pytest.raises(AssertionError, match="real MongoDB"):
-            databases.get_mongo_client()
-    finally:
-        databases.get_mongo_client.cache_clear()
+    return StorageSettings(mongodb=MongoSettings(client=client, database="test_data"))
 
 
-def test_get_mongo_client_uses_public_mongo_client_symbol(monkeypatch):
-    """Verify that client construction goes through the public MongoClient import."""
+def test_real_mongo_client_blocked_by_default() -> None:
+    factory = StoreFactory(storage_settings())
+
+    with pytest.raises(AssertionError, match="real MongoDB"):
+        factory.mongo_client()
+
+
+def test_store_factory_creates_and_reuses_one_probed_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = MagicMock()
-    created_with = {}
+    created_with: dict[str, object] = {}
 
-    def fake_mongo_client(**kwargs):
-        """Capture constructor kwargs and return a mock client."""
+    def fake_mongo_client(**kwargs: object) -> object:
         created_with.update(kwargs)
         return client
 
-    monkeypatch.setattr(databases, "MONGODB_CONFIG", {"host": "mongodb://example"})
     monkeypatch.setattr(databases, "MongoClient", fake_mongo_client)
-    monkeypatch.setattr(databases, "HEALTH_CHECK_OBSERVABLES", [])
-    databases.get_mongo_client.cache_clear()
+    factory = StoreFactory(storage_settings(host="mongodb://example"))
 
-    try:
-        assert databases.get_mongo_client() is client
-    finally:
-        databases.get_mongo_client.cache_clear()
+    assert factory.mongo_client() is client
+    assert factory.mongo_client() is client
 
     assert created_with == {"host": "mongodb://example"}
     client.admin.command.assert_called_once_with("ping")
-    assert databases.HEALTH_CHECK_OBSERVABLES == [databases.mongodb_health_check]
+    assert factory.health_checks == [factory.mongodb_health_check]
 
 
-def test_get_mongo_client_reraises_configuration_error(monkeypatch):
-    """Verify that PyMongo configuration errors are preserved for callers."""
-
-    def fake_mongo_client(**kwargs):
-        """Raise the same public PyMongo error type used by the production import."""
+def test_store_factory_reraises_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_mongo_client(**kwargs: object) -> object:
         raise databases.ConfigurationError("bad mongo configuration")
 
     monkeypatch.setattr(databases, "MongoClient", fake_mongo_client)
-    databases.get_mongo_client.cache_clear()
+    factory = StoreFactory(storage_settings())
 
-    try:
-        with pytest.raises(databases.ConfigurationError):
-            databases.get_mongo_client()
-    finally:
-        databases.get_mongo_client.cache_clear()
+    with pytest.raises(databases.ConfigurationError):
+        factory.mongo_client()
+
+
+def test_database_name_is_required_only_for_savers() -> None:
+    factory = StoreFactory(StorageSettings())
+
+    with pytest.raises(ValueError, match="database"):
+        _ = factory.database

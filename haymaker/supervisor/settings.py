@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
 
 import ib_insync as ibi
 
@@ -40,31 +38,3 @@ class ConnectionSettings:
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
     log_datafarm_status: bool = True
-
-    @classmethod
-    def from_config(
-        cls, config: Mapping[str, Any], client_id: int
-    ) -> ConnectionSettings:
-        """Create connection settings from a flat config mapping.
-
-        Args:
-            config: Mapping with connection keys directly available.
-            client_id: IB API client ID chosen by the caller.
-        """
-
-        return cls(
-            host=config.get("host", "127.0.0.1"),
-            port=config.get("port", 4002),
-            client_id=client_id,
-            connect_timeout=config.get("connectTimeout", 15),
-            retry_delay=config.get("retryDelay", 30),
-            app_timeout=config.get("appTimeout", 90),
-            probe_contract=config.get("probeContract") or ibi.Forex("EURUSD"),
-            probe_timeout=config.get("probeTimeout", 15),
-            connection_lost_retry_delay=config.get("connection_lost_retry", 90),
-            auto_recovery_grace_period=config.get("auto_recovery_grace_period", 120),
-            restart_on_recovered_connection=config.get(
-                "restart_on_recovered_connection", False
-            ),
-            log_datafarm_status=config.get("log_datafarm_status", True),
-        )

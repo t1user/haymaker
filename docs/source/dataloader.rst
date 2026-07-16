@@ -31,14 +31,17 @@ Example settings file:
 .. code-block:: yaml
    :caption: nq_30s.yaml
 
-   source: nq.csv
-   barSize: 30 secs
-   wts: TRADES
-   max_lookback_days: null
-   gap_fill_mode: off
-   useRTH: false
-   clientId: 1
-   futures_selector: current_and_expired
+   connection:
+     client_id: 1
+   download:
+     source: nq.csv
+     bar_size: 30 secs
+     what_to_show: TRADES
+     max_lookback_days: null
+     gap_fill_mode: "off"
+     use_rth: false
+   futures:
+     selector: current_and_expired
 
 Run it:
 
@@ -101,19 +104,19 @@ Futures Selection
 =================
 
 Rows with ``secType`` set to ``FUT`` or ``CONTFUT`` use the dataloader futures
-selector. Configure it with ``futures_selector``:
+selector. Configure it with ``futures.selector``:
 
 ``current_and_expired``
    Default. Download the current contract and expired contracts returned by IB.
    This is the usual choice for building a historical futures library.
 
 ``current``
-   Download the current contract. Use ``futures_current_index`` to offset from
+   Download the current contract. Use ``futures.current_index`` to offset from
    the current contract in the futures chain.
 
 ``fullchain``
    Download contracts from the full chain returned by IB. Use
-   ``futures_fullchain_spec`` with ``full``, ``active``, or ``expired`` to narrow
+   ``futures.full_chain_spec`` with ``full``, ``active``, or ``expired`` to narrow
    the chain.
 
 ``exact``
@@ -132,19 +135,23 @@ Common futures setup:
 
 .. code-block:: yaml
 
-   source: nq.csv
-   barSize: 30 secs
-   wts: TRADES
-   futures_selector: current_and_expired
+   download:
+     source: nq.csv
+     bar_size: 30 secs
+     what_to_show: TRADES
+   futures:
+     selector: current_and_expired
 
 Exact-contract setup:
 
 .. code-block:: yaml
 
-   source: exact_futures.csv
-   barSize: 1 hour
-   wts: TRADES
-   futures_selector: exact
+   download:
+     source: exact_futures.csv
+     bar_size: 1 hour
+     what_to_show: TRADES
+   futures:
+     selector: exact
 
 Command Line
 ============
@@ -171,11 +178,12 @@ Set simple config values from the command line:
 
 .. code-block:: bash
 
-   dataloader contracts.csv -s barSize "1 hour" -s wts MIDPOINT
+   dataloader contracts.csv \
+       -s download.bar_size "1 hour" \
+       -s download.what_to_show MIDPOINT
 
-For booleans and numbers, prefer a YAML settings file. Command-line
-``-s KEY VALUE`` values are strings, while YAML preserves types like
-``false``, ``365``, and ``null``.
+Command-line values are parsed as YAML, preserving booleans, numbers, lists,
+and ``null``. Quote values containing spaces.
 
 Configuration
 =============
@@ -185,18 +193,18 @@ the values needed for a run.
 
 Common settings:
 
-``source``
+``download.source``
    CSV file containing contract rows.
 
-``barSize``
+``download.bar_size``
    IB bar size. Examples: ``30 secs``, ``1 min``, ``1 hour``, ``1 day``,
    ``1 week``, ``1 month``.
 
-``wts``
+``download.what_to_show``
    IB ``whatToShow`` value. Common choices are ``TRADES``, ``MIDPOINT``,
    ``BID``, ``ASK``, and ``BID_ASK``.
 
-``max_lookback_days``
+``download.max_lookback_days``
    Optional maximum lookback span, in calendar days, considered by one
    dataloader run. Omit it or set it to ``null`` to load all data available
    under IB's limits and the datastore's own backfill state. Set it to a
@@ -208,35 +216,35 @@ Common settings:
    starts at most five calendar years back and remains clamped by this setting
    and known IB small-bar or expired-future availability limits.
 
-``gap_fill_mode``
+``download.gap_fill_mode``
    Gap-fill behavior for already stored data. See :ref:`dataloader-gap-fill`.
 
-``useRTH``
+``download.use_rth``
    Passed to IB historical-data and historical-schedule requests.
 
-``host``
+``connection.host``
    Hostname or IP address of TWS or IB Gateway. The default is ``127.0.0.1``.
 
-``port``
+``connection.port``
    TWS or IB Gateway API port. The default is ``4002``.
 
-``clientId``
+``connection.client_id``
    IB API client ID. The dataloader default is ``1`` so it is distinct from the
-   live runtime's expected ``clientId=0``.
+   live runtime's expected ``connection.client_id=0``.
 
-``number_of_workers``
+``download.number_of_workers``
    Number of worker tasks consuming planned downloads. The default is ``10``.
    Increasing it can keep more contracts active, but does not bypass local or IB
    pacing limits.
 
-``save_every_chunks``
+``download.save_every_chunks``
    Number of downloaded chunks buffered before creating a new datastore
    version. The default is ``10``. A range completion or orderly dataloader
    shutdown also saves any remaining chunks. Larger values reduce full-series
    rewrites but increase the amount of recently downloaded data that a forced
    process termination may lose.
 
-``pacer_allowance_fraction``
+``pacing.allowance_fraction``
    Multiplies the dataloader's local pacing capacity. The default is ``1.0``.
    Use values below ``1.0`` to leave more room for other IB clients. Values above
    ``1.0`` are allowed for experimentation, but deliberately exceed IB's
@@ -248,24 +256,26 @@ Example: daily stock bars:
 .. code-block:: yaml
    :caption: stocks_daily.yaml
 
-   source: stocks.csv
-   barSize: 1 day
-   wts: TRADES
-   max_lookback_days: null
-   gap_fill_mode: off
-   useRTH: true
+   download:
+     source: stocks.csv
+     bar_size: 1 day
+     what_to_show: TRADES
+     max_lookback_days: null
+     gap_fill_mode: "off"
+     use_rth: true
 
 Example: hourly FX midpoint bars:
 
 .. code-block:: yaml
    :caption: fx_hourly.yaml
 
-   source: fx.csv
-   barSize: 1 hour
-   wts: MIDPOINT
-   max_lookback_days: 365
-   gap_fill_mode: auto
-   useRTH: false
+   download:
+     source: fx.csv
+     bar_size: 1 hour
+     what_to_show: MIDPOINT
+     max_lookback_days: 365
+     gap_fill_mode: auto
+     use_rth: false
 
 .. _dataloader-gap-fill:
 
@@ -306,7 +316,8 @@ Datastore
 =========
 
 The dataloader currently writes to the Arctic-backed Haymaker datastore. The
-library name is derived from ``wts`` and ``barSize``:
+library name is derived from ``download.what_to_show`` and
+``download.bar_size``:
 
 * ``TRADES`` + ``30 secs`` -> ``TRADES_30_secs``
 * ``MIDPOINT`` + ``1 hour`` -> ``MIDPOINT_1_hour``
@@ -380,7 +391,7 @@ runs under the Haymaker connection supervisor. The supervisor reconnects the
 IB API socket but does not start, stop, or restart TWS/IB Gateway.
 
 There is no dataloader connection-mode setting. Configure the gateway address,
-port, and ``clientId`` used by this standalone connection. The default client ID
+port, and ``connection.client_id`` used by this standalone connection. The default client ID
 is ``1``; choose another value when that ID is already in use.
 
 The dataloader locally enforces IB's hard historical pacing rules for bars of
@@ -437,10 +448,10 @@ last threshold or range-completion save.
 Operational Notes
 =================
 
-* Use a distinct ``clientId`` if another process already uses ``1``.
-* Keep ``gap_fill_mode: off`` for initial large downloads unless you are
+* Use a distinct ``connection.client_id`` if another process already uses ``1``.
+* Keep ``download.gap_fill_mode: off`` for initial large downloads unless you are
   intentionally running a gap pass.
-* Use ``useRTH: true`` only when you want regular-trading-hours data and
+* Use ``download.use_rth: true`` only when you want regular-trading-hours data and
   schedules.
 * Re-run the same settings file to update an existing library.
 * If IB returns no older backfill data for an existing series, future runs will

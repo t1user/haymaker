@@ -10,8 +10,6 @@ import ib_insync as ibi
 import pandas as pd
 
 from .base import Atom
-from .config import CONFIG
-from .databases import get_mongo_client
 from .datastore import (
     AsyncAbstractBaseStore,
     AsyncArcticStore,
@@ -19,8 +17,6 @@ from .datastore import (
 )
 
 log = logging.getLogger(__name__)
-
-DATA_LIB: str | None = CONFIG.get("block_data_library", None)
 
 
 @dataclass
@@ -111,11 +107,12 @@ class AbstractDfBlock(AbstractBaseBlock):
     def _datastore(self) -> AsyncAbstractBaseStore:
         datastore: AsyncAbstractBaseStore
         if self.datastore is None:
-            assert DATA_LIB, (
+            library = self.runtime.store_factory.settings.block_library
+            assert library, (
                 f"{self} cannot initialize datastore because block_data_library "
                 "was not given."
             )
-            datastore = AsyncArcticStore(DATA_LIB, host=get_mongo_client())
+            datastore = self.runtime.store_factory.arctic_store(library)
         else:
             datastore = self.datastore
         datastore.override_collection_namer(
@@ -125,7 +122,7 @@ class AbstractDfBlock(AbstractBaseBlock):
 
     @cached_property
     def store(self) -> None | AsyncAbstractBaseStore:
-        if DATA_LIB:
+        if self.runtime.store_factory.settings.block_library:
             return self._datastore
         else:
             return None

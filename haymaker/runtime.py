@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from collections.abc import Callable, MutableMapping, Sequence
+from collections.abc import Callable, Sequence
 from copy import copy
 from dataclasses import dataclass, field
 from typing import Self
@@ -12,10 +12,12 @@ import ib_insync as ibi
 
 from .base import Atom
 from .blotter import blotter_factory
+from .config.settings import LiveSettings, OrderDefaults, TimeoutPolicy
 from .contract_registry import ContractRegistry
 from .controller import Controller
-from .databases import HEALTH_CHECK_OBSERVABLES
+from .databases import StoreFactory
 from .handlers import IBHandlers
+from .saver import MongoLatestSaver, MongoSaver
 from .state_machine import StateMachine
 from .streamers import Streamer
 from .timeout import Timeout
@@ -140,12 +142,30 @@ class StartupJobs:
 
 @dataclass
 class RuntimeContext:
-    """Ready live runtime services and metadata shared by Haymaker atoms."""
+    """Ready live runtime services and metadata shared by Haymaker atoms.
+
+    Attributes:
+        ib: Broker client owned by the live process.
+        contract_registry: Qualified contract and contract-details registry.
+        sm: Persistent strategy and order state.
+        trader: Thin broker order gateway.
+        store_factory: Runtime-owned persistence service factory.
+        order_defaults: Validated default order fields for execution models.
+        timeout_policy: Default timeout interval and action.
+        dataframe_save_frequency: Default aggregation save interval in seconds.
+        controller: Live controller installed by ``LiveRuntime``.
+        request_restart: Supervisor restart callback, bound before startup.
+        future_roll_policies: Per-strategy automatic futures-roll policy.
+    """
 
     ib: ibi.IB
     contract_registry: ContractRegistry = field(repr=False)
     sm: StateMachine = field(repr=False)
     trader: Trader = field(repr=False)
+    store_factory: StoreFactory = field(repr=False)
+    order_defaults: OrderDefaults = field(repr=False)
+    timeout_policy: TimeoutPolicy = field(repr=False)
+    dataframe_save_frequency: int = field(repr=False)
     controller: Controller = field(init=False, repr=False)
     request_restart: Callable[[str], bool | None] | None = field(
         default=None, repr=False
@@ -159,14 +179,21 @@ class RuntimeContext:
 
 @dataclass
 class LiveRuntime:
-    """Construct and coordinate one process-owned live runtime."""
+    """Construct and coordinate one process-owned live runtime.
 
-    config: MutableMapping = field(repr=False)
+    Args:
+        settings: Validated framework settings for this live process.
+        ib: Optional broker client owned by the runtime.
+        store_factory: Optional persistence factory for focused callers and tests.
+        contract_registry: Optional preconfigured contract registry.
+        sm: Optional preconfigured state machine.
+    """
+
+    settings: LiveSettings = field(repr=False)
     ib: ibi.IB = field(default_factory=ibi.IB)
-    contract_registry: ContractRegistry = field(
-        default_factory=ContractRegistry, repr=False
-    )
-    sm: StateMachine = field(default_factory=StateMachine, repr=False)
+    store_factory: StoreFactory | None = field(default=None, repr=False)
+    contract_registry: ContractRegistry | None = field(default=None, repr=False)
+    sm: StateMachine | None = field(default=None, repr=False)
     context: RuntimeContext = field(init=False, repr=False)
     startup_jobs: StartupJobs = field(init=False, repr=False)
     _broker_logger: IBHandlers | None = field(default=None, init=False, repr=False)
@@ -174,26 +201,76 @@ class LiveRuntime:
     def __post_init__(self) -> None:
         """Build services and install a complete Atom context before returning."""
 
+        if self.store_factory is None:
+            self.store_factory = StoreFactory(self.settings.storage)
+        if self.contract_registry is None:
+            self.contract_registry = ContractRegistry(
+                self.settings.futures.roll_bdays,
+                self.settings.futures.roll_margin_bdays,
+            )
+        if self.sm is None:
+            state_settings = self.settings.state_machine
+            mongo_client = self.store_factory.mongo_client()
+            self.sm = StateMachine(
+                order_saver=MongoSaver(
+                    state_settings.order_collection_name,
+                    query_key="orderId",
+                    client=mongo_client,
+                    database=self.store_factory.database,
+                ),
+                strategy_saver=MongoLatestSaver(
+                    state_settings.strategy_collection_name,
+                    client=mongo_client,
+                    database=self.store_factory.database,
+                ),
+                save_delay=state_settings.save_delay,
+                max_rejected_orders=state_settings.max_rejected_orders,
+            )
         trader = Trader(self.ib)
         self.context = RuntimeContext(
             self.ib,
             self.contract_registry,
             self.sm,
             trader,
+            self.store_factory,
+            self.settings.orders,
+            self.settings.timeout,
+            self.settings.storage.dataframe_save_frequency,
         )
         Atom.set_runtime_context(self.context)
-        self.context.controller = Controller.from_config(
-            trader,
-            blotter_factory(self.config["use_blotter"]),
-            self.config,
-            [HEALTH_CHECK_OBSERVABLES],
+        controller_settings = self.settings.controller
+        startup = self.settings.startup
+        self.context.controller = Controller(
+            trader=trader,
+            blotter=blotter_factory(self.settings.blotter, self.store_factory),
+            cold_start=startup.cold_start,
+            reset=startup.reset,
+            zero=startup.zero,
+            nuke=startup.nuke,
+            log_order_events=controller_settings.log_order_events,
+            sync_frequency=controller_settings.sync_frequency,
+            health_check_frequency=controller_settings.health_check_frequency,
+            execution_verification_delay=(
+                controller_settings.execution_verification_delay
+            ),
+            execution_verification_max_retries=(
+                controller_settings.execution_verification_max_retries
+            ),
+            broker_request_timeout=controller_settings.broker_request_timeout,
+            sync_max_attempts=controller_settings.sync_max_attempts,
+            sync_resync_delay=controller_settings.sync_resync_delay,
+            cancel_unknown_trades=controller_settings.cancel_unknown_trades,
+            missing_brackets=controller_settings.missing_brackets,
+            ignore_errors=controller_settings.ignore_errors,
+            future_roll_time=controller_settings.future_roll_time,
+            health_check_observables=[self.store_factory.health_checks],
         )
         self.startup_jobs = StartupJobs(
             InitData(self.ib, self.contract_registry),
             self.ib,
             Streamer.instances,
         )
-        if self.config.get("log_broker", False):
+        if self.settings.logging.log_broker:
             self._broker_logger = IBHandlers(self.ib)
 
     def bind_supervisor(
@@ -231,6 +308,6 @@ class LiveRuntime:
         """Return a compact live-runtime description suitable for logs."""
 
         return (
-            f"LiveRuntime<contracts={len(self.contract_registry.blueprints)}, "
+            f"LiveRuntime<contracts={len(self.context.contract_registry.blueprints)}, "
             f"streamers={len(self.startup_jobs.streamers)}>"
         )

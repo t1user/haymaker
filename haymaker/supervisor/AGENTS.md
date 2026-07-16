@@ -40,11 +40,11 @@ The normal startup path is:
 
 `Connecting -> Probing -> StartingWorkload -> Connected`
 
-- `Connecting` retries `connectAsync()` after `retryDelay` until connected
+- `Connecting` retries `connectAsync()` after `retry_delay` until connected
   or stopped. Redundant restart requests are ignored while connection attempts
   are already in progress.
 - `Probing` requests 30 seconds of five-second `MIDPOINT` historical data and
-  waits up to `probeTimeout`. A non-empty response marks the connection
+  waits up to `probe_timeout`. A non-empty response marks the connection
   available.
 - `StartingWorkload` creates one tracked workload task.
 - `Connected` arms the IB idle timeout and waits for timeout, broker, restart,
@@ -192,10 +192,10 @@ broker-message policy.
 
 ## Backoff And Efficiency
 
-- Failed connection attempts use `retryDelay`; this loop should remain
+- Failed connection attempts use `retry_delay`; this loop should remain
   interruptible by stop.
 - A failed probe performs cleanup first, then waits
-  `connection_lost_retry` before reconnecting. Cleanup must finish even if stop
+  `connection_lost_retry_delay` before reconnecting. Cleanup must finish even if stop
   arrives; the subsequent wait is interruptible.
 - Broker connectivity loss waits up to `auto_recovery_grace_period`, unless
   `1102` wakes it earlier, then probes before deciding whether to rebuild.

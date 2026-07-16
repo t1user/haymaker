@@ -10,8 +10,8 @@ request, restart, and date-policy behavior with focused tests.
 - The shared `App` is the process composition root. `DataloaderRuntime` creates
   its owned `IB` client and `DataloaderSession`, then adapts resumable work to
   the common runtime `start()` / `stop()` / `close()` contract.
-- The dataloader has no connection-mode abstraction or setting. Its CLI creates
-  `DataloaderRuntime()` and always runs it through the shared `App` and
+- The dataloader has no connection-mode abstraction or setting. Its CLI loads
+  `DataloaderSettings`, creates `DataloaderRuntime(settings)`, and always runs it through the shared `App` and
   `ConnectionSupervisor`.
 - The dataloader defaults to client ID `1`, distinct from the live runtime's
   expected client ID `0`. A duplicate client ID is a configuration failure; do
@@ -64,7 +64,7 @@ See `docs/source/dataloader.rst` for user-facing behavior and
 - Head timestamps and contract details use the separate discovery bucket.
   Preload the store and apply known availability rules first, then request a
   head timestamp only when an older backfill range can still exist.
-- `pacer_allowance_fraction < 1.0` reserves capacity for other clients. Values
+- `pacing.allowance_fraction < 1.0` reserves capacity for other clients. Values
   above `1.0` are intentionally allowed for experimentation but exceed
   published IB limits and may trigger throttling.
 - `BID_ASK` historical requests consume double pacing weight.
@@ -131,7 +131,7 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   `off`.
 - `schedule` must fail if no usable IB schedule is available. `auto` falls back
   to the fixed two-pass heuristic.
-- Schedule requests use the same `useRTH` setting as historical-data requests.
+- Schedule requests use the same `download.use_rth` setting as historical-data requests.
 - Weekend gaps are ignored. Repeated short no-data patterns are learned only
   for the current run and must not be persisted in datastore metadata.
 - Keep heuristic and schedule comparison functions pure and testable without an

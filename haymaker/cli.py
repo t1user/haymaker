@@ -1,18 +1,28 @@
+"""Haymaker live and dataloader command entrypoints."""
+
 from __future__ import annotations
 
 import importlib.util
 import sys
-from collections.abc import MutableMapping
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
-from .config import configure
-from .config.cli_options import CustomArgParser, ParserProfile
-
-if TYPE_CHECKING:
-    from .app import Runtime
-    from .supervisor import ConnectionSettings
+from .app import App, Runtime
+from .config import (
+    DataloaderCommand,
+    DataloaderSettings,
+    LiveCommand,
+    LiveSettings,
+    load_dataloader_settings,
+    load_live_settings,
+    parse_dataloader_args,
+    parse_live_args,
+)
+from .dataloader.runtime import DataloaderRuntime
+from .logging import setup_logging, shutdown_logging_queue
+from .runtime import LiveRuntime
+from .supervisor import ConnectionSettings
 
 
 def load_user_module(module_path: str | Path) -> ModuleType:
@@ -58,56 +68,42 @@ def load_user_module(module_path: str | Path) -> ModuleType:
 
 
 def _build_live_runtime(
-    config: MutableMapping, module_path: str | Path
+    settings: LiveSettings, module_path: str | Path
 ) -> tuple[Runtime, ConnectionSettings]:
-    """Build a live runtime, then import its user strategy module."""
+    """Build a complete live runtime, then import its strategy module."""
 
-    from .runtime import LiveRuntime
-    from .supervisor import ConnectionSettings
-
-    runtime = LiveRuntime(config)
+    runtime = LiveRuntime(settings)
     load_user_module(module_path)
-    settings = ConnectionSettings.from_config(config.get("app") or {}, 0)
-    return runtime, settings
+    return runtime, settings.connection
 
 
 def _build_dataloader_runtime(
-    config: MutableMapping,
+    settings: DataloaderSettings,
 ) -> tuple[Runtime, ConnectionSettings]:
     """Build the configured standalone dataloader runtime."""
 
-    from .dataloader.runtime import DEFAULT_CLIENT_ID, DataloaderRuntime
-    from .supervisor import ConnectionSettings
-
-    runtime = DataloaderRuntime()
-    settings = ConnectionSettings.from_config(
-        config, config.get("clientId", DEFAULT_CLIENT_ID)
-    )
-    return runtime, settings
+    return DataloaderRuntime(settings), settings.connection
 
 
-def _run_command(
-    profile: ParserProfile,
-    args: list[str],
-    module_path: str | Path | None = None,
-) -> None:
-    """Configure and run one command profile through the shared application."""
+def _run_live(command: LiveCommand, settings: LiveSettings) -> None:
+    """Run one validated live command through the shared application."""
 
-    config = configure(profile, args)
-
-    from .logging import setup_logging, shutdown_logging_queue
-
-    setup_logging(config.get("logging_config"))
+    setup_logging(settings.logging, settings.storage.base_directory)
     try:
-        from .app import App
+        runtime, connection = _build_live_runtime(settings, command.module_path)
+        App(runtime, connection).run()
+    finally:
+        shutdown_logging_queue()
 
-        if profile == "live":
-            if module_path is None:
-                raise ValueError("Live execution requires a strategy module path.")
-            runtime, settings = _build_live_runtime(config, module_path)
-        else:
-            runtime, settings = _build_dataloader_runtime(config)
-        App(runtime, settings).run()
+
+def _run_dataloader(command: DataloaderCommand, settings: DataloaderSettings) -> None:
+    """Run one validated dataloader command through the shared application."""
+
+    del command
+    setup_logging(settings.logging, settings.storage.base_directory)
+    try:
+        runtime, connection = _build_dataloader_runtime(settings)
+        App(runtime, connection).run()
     finally:
         shutdown_logging_queue()
 
@@ -115,13 +111,12 @@ def _run_command(
 def main(argv: list[str] | None = None) -> None:
     """Run a live Haymaker strategy module under framework control."""
 
-    args = list(sys.argv[1:] if argv is None else argv)
-    parsed = CustomArgParser.from_profile("live", args).output
-    _run_command("live", args, parsed["module_path"])
+    command = parse_live_args(list(sys.argv[1:] if argv is None else argv))
+    _run_live(command, load_live_settings(command))
 
 
 def dataloader_main(argv: list[str] | None = None) -> None:
-    """Run the dataloader with explicit dataloader CLI/config profile."""
+    """Run the dataloader with explicit dataloader settings."""
 
-    args = list(sys.argv[1:] if argv is None else argv)
-    _run_command("dataloader", args)
+    command = parse_dataloader_args(list(sys.argv[1:] if argv is None else argv))
+    _run_dataloader(command, load_dataloader_settings(command))

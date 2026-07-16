@@ -5,7 +5,7 @@ import random
 from copy import deepcopy
 from itertools import count
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import ib_insync as ibi
 import pytest
@@ -586,19 +586,15 @@ async def test_sync_coordinator_requests_restart_before_unknown_order_correction
     assert not controller._trading_disabled
 
 
-def test_from_config_loads_controller_sync_options(atom_runtime):
-    controller = Controller.from_config(
+def test_direct_construction_loads_controller_sync_options(atom_runtime):
+    controller = Controller(
         Trader(atom_runtime.ib),
-        top_config={
-            "controller": {
-                "ignore_errors": [202, 321, 10182, 1102],
-                "broker_request_timeout": 3,
-                "sync_max_attempts": 2,
-                "sync_resync_delay": 0,
-                "cancel_unknown_trades": True,
-                "missing_brackets": "warn",
-            },
-        },
+        ignore_errors=[202, 321, 10182, 1102],
+        broker_request_timeout=3,
+        sync_max_attempts=2,
+        sync_resync_delay=0,
+        cancel_unknown_trades=True,
+        missing_brackets="warn",
     )
 
     assert controller.broker_request_timeout == 3
@@ -613,7 +609,9 @@ def test_direct_controller_does_not_schedule_future_roll(controller):
     assert controller._future_roll_timer is None
 
 
-def test_from_config_defers_future_roll_until_runtime_start(atom_runtime, monkeypatch):
+def test_direct_construction_defers_future_roll_until_runtime_start(
+    atom_runtime, monkeypatch
+):
     timeranges = []
 
     class FakeTimerange:
@@ -632,10 +630,7 @@ def test_from_config_defers_future_roll_until_runtime_start(atom_runtime, monkey
         "haymaker.controller.controller.ev.Event.timerange", fake_timerange
     )
 
-    controller = Controller.from_config(
-        Trader(atom_runtime.ib),
-        top_config={"controller": {"future_roll_time": [14, 0]}},
-    )
+    controller = Controller(Trader(atom_runtime.ib), future_roll_time=(14, 0))
 
     assert timeranges == []
     assert controller._future_roll_timer is None
@@ -756,26 +751,11 @@ def test_order_rejection_is_visible_and_registered(controller, caplog, monkeypat
     assert rejected == [""]
 
 
-def test_from_config_ignores_unknown_controller_config(atom_runtime):
-    controller = Controller.from_config(
-        Trader(atom_runtime.ib),
-        top_config={
-            "controller": {
-                "invalid": True,
-                "broker_request_timeout": 3,
-            }
-        },
-    )
-
-    assert controller.broker_request_timeout == 3
-    assert not hasattr(controller, "invalid")
-
-
-def test_from_config_rejects_invalid_missing_brackets_value(atom_runtime):
+def test_direct_construction_rejects_invalid_missing_brackets_value(atom_runtime):
     with pytest.raises(ControllerError, match="missing_brackets"):
-        Controller.from_config(
+        Controller(
             Trader(atom_runtime.ib),
-            top_config={"controller": {"missing_brackets": "close"}},
+            missing_brackets=cast(Any, "close"),
         )
 
 

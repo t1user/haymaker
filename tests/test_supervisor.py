@@ -38,6 +38,8 @@ class FakeIB:
         self.probe_results: list[list[object]] = [[object()]]
         self.probe_delays: list[float] = []
         self.probe_count = 0
+        self.qualify_count = 0
+        self.qualification_results: list[list[ibi.Contract]] = []
 
     async def connectAsync(self, *args: object, **kwargs: object) -> None:
         """Connect unless configured to fail this attempt."""
@@ -80,6 +82,18 @@ class FakeIB:
             return [object()]
 
         return request()
+
+    async def qualifyContractsAsync(
+        self, *contracts: ibi.Contract
+    ) -> list[ibi.Contract]:
+        """Return one qualified probe contract unless a result was configured."""
+
+        self.qualify_count += 1
+        if self.qualification_results:
+            return self.qualification_results.pop(0)
+        contract = contracts[0]
+        contract.conId = 1
+        return [contract]
 
 
 class FakeWorkload:
@@ -1024,41 +1038,27 @@ async def test_socket_reset_message_restarts_immediately() -> None:
     await stop_and_wait(supervisor, task)
 
 
-def test_connection_settings_from_config_uses_flat_mapping_and_client_id() -> None:
-    settings = ConnectionSettings.from_config(
-        {
-            "host": "gateway",
-            "port": 4001,
-            "clientId": 999,
-            "connectTimeout": 3,
-            "restart_time": 5,
-            "retryDelay": 7,
-            "appTimeout": 11,
-            "probeTimeout": 13,
-            "connection_lost_retry": 15,
-            "auto_recovery_grace_period": 17,
-            "recovery_warning_after": 19,
-            "recovery_warning_interval": 23,
-            "restart_on_recovered_connection": True,
-            "log_datafarm_status": False,
-        },
-        client_id=42,
-    )
+@pytest.mark.asyncio
+async def test_probe_contract_is_qualified_once_per_supervisor() -> None:
+    fake_ib = FakeIB()
+    supervisor = make_supervisor(fake_ib)
 
-    assert settings.host == "gateway"
-    assert settings.port == 4001
-    assert settings.client_id == 42
-    assert settings.connect_timeout == 3
-    assert settings.retry_delay == 7
-    assert settings.app_timeout == 11
-    assert settings.probe_timeout == 13
-    assert settings.connection_lost_retry_delay == 15
-    assert settings.auto_recovery_grace_period == 17
-    assert settings.restart_on_recovered_connection is True
-    assert settings.log_datafarm_status is False
-    assert not hasattr(settings, "restart_delay")
-    assert not hasattr(settings, "recovery_warning_after")
-    assert not hasattr(settings, "recovery_warning_interval")
+    first = await supervisor.probe_contract()
+    second = await supervisor.probe_contract()
+
+    assert first is second
+    assert first.conId == 1
+    assert fake_ib.qualify_count == 1
+
+
+@pytest.mark.asyncio
+async def test_unqualified_probe_contract_is_terminal_configuration_failure() -> None:
+    fake_ib = FakeIB()
+    fake_ib.qualification_results = [[]]
+    supervisor = make_supervisor(fake_ib)
+
+    with pytest.raises(ValueError, match="probe_contract"):
+        await supervisor.probe_contract()
 
 
 def test_request_restart_returns_true_when_state_supervisor_accepts_request() -> None:

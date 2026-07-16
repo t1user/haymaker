@@ -10,12 +10,13 @@ from typing import TYPE_CHECKING
 
 from ib_insync import IB
 
+from haymaker.config.settings import DataloaderSettings
+from haymaker.databases import StoreFactory
+
 if TYPE_CHECKING:
     from .dataloader import DataloaderSession
 
 log = getLogger(__name__)
-
-DEFAULT_CLIENT_ID = 1
 
 
 def _create_ib() -> IB:
@@ -29,22 +30,52 @@ class DataloaderRuntime:
     """Construct and run dataloader work under connection supervision.
 
     Args:
+        settings: Validated framework settings for this dataloader process.
         ib: Optional broker connection owned by this runtime.
         session: Optional preconfigured dataloader session. When omitted, the
             runtime constructs its own session for ``ib``.
     """
 
+    settings: DataloaderSettings = field(repr=False)
     ib: IB = field(default_factory=_create_ib)
     session: DataloaderSession | None = field(default=None, repr=False)
+    store_factory: StoreFactory = field(init=False, repr=False)
     _work_task: asyncio.Task | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         """Create and wire the configured dataloader session when needed."""
 
+        self.store_factory = StoreFactory(self.settings.storage)
         if self.session is None:
-            from .dataloader import DataloaderSession
+            from .dataloader import DataloaderSession, Manager
+            from .pacer import RequestPacing
 
-            self.session = DataloaderSession(self.ib)
+            download = self.settings.download
+            pacing = RequestPacing(
+                self.ib,
+                no_restriction=self.settings.pacing.no_restriction,
+                allowance_fraction=self.settings.pacing.allowance_fraction,
+            )
+            manager = Manager(
+                self.ib,
+                pacing=pacing,
+                store_factory=self.store_factory,
+                futures=self.settings.futures,
+                source=download.source,
+                gap_fill_mode=download.gap_fill_mode,
+                use_rth=download.use_rth,
+                max_lookback_days=download.max_lookback_days,
+                save_every_chunks=download.save_every_chunks,
+                wts=download.what_to_show,
+                bar_size=download.bar_size,
+                pacer_no_restriction=self.settings.pacing.no_restriction,
+                pacer_allowance_fraction=self.settings.pacing.allowance_fraction,
+            )
+            self.session = DataloaderSession(
+                self.ib,
+                manager=manager,
+                number_of_workers=download.number_of_workers,
+            )
         self.ib.errorEvent += self.session.pacing.onErrEvent
         log.debug("Dataloader runtime initialized.")
 

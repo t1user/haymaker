@@ -6,17 +6,12 @@ from typing import TypeAlias
 
 import ib_insync as ibi
 
-from .config import CONFIG
 from .contract_selector import AbstractBaseContractSelector, selector_factory
 from .details_processor import Details
 from .enums import ActiveNext
 from .misc import general_to_specific_contract_class
 
 log = getLogger(__name__)
-
-
-FUTURES_ROLL_BDAYS = CONFIG["futures_roll_bdays"]
-FUTURES_ROLL_MARGIN_BDAYS = CONFIG["futures_roll_margin_bdays"]
 
 
 ContractKey: TypeAlias = str
@@ -31,6 +26,8 @@ class DetailsContainer(UserDict):
 
 @dataclass
 class ContractRegistry:
+    futures_roll_bdays: int = 3
+    futures_roll_margin_bdays: int = 3
     # mapping of contract object saved on Atom instance to hash used by ContractRegistry
     __blueprints: dict[ContractKey, ibi.Contract] = field(default_factory=dict)
     __selectors: dict[ContractKey, AbstractBaseContractSelector] = field(
@@ -81,8 +78,8 @@ class ContractRegistry:
         for blueprint, details_list in zip(self.__blueprints, input_details):
             self.__selectors[blueprint] = selector_factory(
                 details_list,
-                FUTURES_ROLL_BDAYS,
-                FUTURES_ROLL_MARGIN_BDAYS,
+                self.futures_roll_bdays,
+                self.futures_roll_margin_bdays,
                 today=self._today,
             )
 

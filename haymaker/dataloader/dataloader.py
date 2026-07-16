@@ -22,9 +22,9 @@ import ib_insync as ibi
 import pandas as pd
 from tqdm import tqdm
 
-from haymaker.config import CONFIG
-from haymaker.databases import get_mongo_client
-from haymaker.datastore import AsyncAbstractBaseStore, AsyncArcticStore
+from haymaker.config.settings import DataloaderFuturesSettings, StorageSettings
+from haymaker.databases import StoreFactory
+from haymaker.datastore import AsyncAbstractBaseStore
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
@@ -48,26 +48,6 @@ from .store_wrapper import AsyncStoreView, HistorySink
 from .time_policy import normalize_point
 
 log = logging.getLogger(__name__)
-
-BARSIZE: str = bar_size_validator(CONFIG["barSize"])
-WTS: str = wts_validator(CONFIG["wts"])
-GAP_FILL_MODE: GapFillMode = CONFIG.get("gap_fill_mode", "off")
-USE_RTH: bool = CONFIG.get("useRTH", False)
-SAVE_EVERY_CHUNKS: int = CONFIG.get("save_every_chunks", 10)
-NUMBER_OF_WORKERS: int = CONFIG.get("number_of_workers", 10)
-SOURCE: str = CONFIG["source"]
-PACER_NO_RESTRICTION: bool = CONFIG.get("pacer_no_restriction", False)
-PACER_ALLOWANCE_FRACTION: float = CONFIG.get("pacer_allowance_fraction", 1.0)
-MAX_LOOKBACK_DAYS: int | None = CONFIG.get("max_lookback_days")
-
-if PACER_ALLOWANCE_FRACTION <= 0:
-    raise ValueError("pacer_allowance_fraction must be greater than 0")
-
-log.debug(
-    f"settings: {BARSIZE=}, {WTS=}, {GAP_FILL_MODE=}, {USE_RTH=}, "
-    f"{SAVE_EVERY_CHUNKS=}, {NUMBER_OF_WORKERS=}, {MAX_LOOKBACK_DAYS=}, "
-    f"{PACER_ALLOWANCE_FRACTION=}"
-)
 
 
 class Params(TypedDict):
@@ -184,9 +164,9 @@ class DownloadJob:
     contract: ibi.Contract
     sink: HistorySink = field(repr=False)
     queue: list[DownloadContainer] = field(default_factory=list, repr=False)
-    bar_size: str = BARSIZE
+    bar_size: str = "30 secs"
     target_bars_per_request: int = helpers.DEFAULT_TARGET_BARS_PER_REQUEST
-    save_every_chunks: int = SAVE_EVERY_CHUNKS
+    save_every_chunks: int = 10
     gap_learner: RunGapLearner | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -354,7 +334,7 @@ class DownloadContainer:
 
     from_date: datetime | date
     to_date: datetime | date
-    bar_size: str = BARSIZE
+    bar_size: str = "30 secs"
     kind: RangeKind = "backfill"
     gap_pattern: GapPattern | None = None
     _next_date: datetime | date | None = field(init=False, repr=False)
@@ -441,13 +421,21 @@ class Manager:
     ib: ibi.IB
     pacing: RequestPacing | None = None
     store: AsyncAbstractBaseStore | None = None
-    source: str = SOURCE
-    gap_fill_mode: GapFillMode = GAP_FILL_MODE
-    use_rth: bool = USE_RTH
-    max_lookback_days: int | None = MAX_LOOKBACK_DAYS
-    save_every_chunks: int = SAVE_EVERY_CHUNKS
-    wts: str = WTS
-    bar_size: str = BARSIZE
+    store_factory: StoreFactory = field(
+        default_factory=lambda: StoreFactory(StorageSettings()), repr=False
+    )
+    futures: DataloaderFuturesSettings = field(
+        default_factory=DataloaderFuturesSettings, repr=False
+    )
+    source: str = "contracts.csv"
+    gap_fill_mode: GapFillMode = "off"
+    use_rth: bool = False
+    max_lookback_days: int | None = None
+    save_every_chunks: int = 10
+    wts: str = "TRADES"
+    bar_size: str = "30 secs"
+    pacer_no_restriction: bool = False
+    pacer_allowance_fraction: float = 1.0
     now: date | datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     active_jobs: list[DownloadJob] = field(default_factory=list, repr=False)
     _initiated_contracts: set[ibi.Contract] = field(default_factory=set, repr=False)
@@ -465,8 +453,8 @@ class Manager:
         if self.pacing is None:
             self.pacing = RequestPacing(
                 self.ib,
-                no_restriction=PACER_NO_RESTRICTION,
-                allowance_fraction=PACER_ALLOWANCE_FRACTION,
+                no_restriction=self.pacer_no_restriction,
+                allowance_fraction=self.pacer_allowance_fraction,
             )
         self.new_job_generator = self._job_generator()
 
@@ -476,7 +464,7 @@ class Manager:
 
         if self.store is None:
             lib = f"{self.wts}_{self.bar_size}".replace(" ", "_")
-            self.store = AsyncArcticStore(lib=lib, host=get_mongo_client())
+            self.store = self.store_factory.arctic_store(lib)
         return self.store
 
     @functools.cached_property
@@ -488,7 +476,7 @@ class Manager:
             for s in source_pbar:
                 assert self.pacing is not None
                 contract_selector = ContractSelector.from_kwargs(
-                    pacing=self.pacing, **s
+                    pacing=self.pacing, futures=self.futures, **s
                 )
                 with tqdm(
                     desc=f"Contracts_{s.get('symbol')}", leave=False, total=None
@@ -779,7 +767,7 @@ class DataloaderSession:
 
     ib: ibi.IB
     manager: Manager | None = None
-    number_of_workers: int = NUMBER_OF_WORKERS
+    number_of_workers: int = 10
     failures: DownloadFailureRegistry = field(default_factory=DownloadFailureRegistry)
     queue: asyncio.Queue[DownloadJob] | None = field(default=None, init=False)
     workers: list[asyncio.Task] = field(default_factory=list, init=False)

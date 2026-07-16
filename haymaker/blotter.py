@@ -2,21 +2,16 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Type, cast
+from typing import Any
 
 import ib_insync as ibi
 
 from . import misc
-from .config import CONFIG
-from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver  # noqa
+from .config.settings import BlotterSettings
+from .databases import StoreFactory
+from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver
 
 log = logging.getLogger(__name__)
-
-
-blotter_dict = cast(dict, CONFIG.get("blotter"))
-blotter_class = blotter_dict["class"]
-blotter_kwargs = blotter_dict["kwds"]
-BLOTTER_SAVER = eval(f"{blotter_class}(**{blotter_kwargs})")
 
 
 class Blotter:
@@ -35,7 +30,7 @@ class Blotter:
     def __init__(
         self,
         save_immediately: bool = True,
-        saver: AbstractBaseSaver = BLOTTER_SAVER,
+        saver: AbstractBaseSaver | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -44,6 +39,8 @@ class Blotter:
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
         self.done_trades: list[int] = []
+        if saver is None:
+            saver = CsvSaver(name="blotter", folder="blotter", use_timestamp=False)
         self.saver = saver
         # ensure async saving
         self.save = AsyncSaveManager(saver).save
@@ -135,31 +132,24 @@ class Blotter:
         return f"Blotter(save_immediately={self.save_immediately}, saver={self.saver})"
 
 
-def blotter_factory(param: Type[Blotter] | bool | None) -> Blotter | None:
-    """
-    Instantiate Blotter based on passed param.
+def blotter_factory(
+    settings: BlotterSettings, store_factory: StoreFactory
+) -> Blotter | None:
+    """Construct the configured built-in blotter and saver."""
 
-    Args:
-        param: value read from config `use_blotter` key, which accepts
-            either a bool (wheather standard blotter should be used or not) or
-            a custom Blotter class
-    Returns:
-        An instance of :class:`Blotter` or `None`.
-    """
-
-    match param:
-        case False | None:
-            return None
-        case True:
-            return Blotter()
-    try:
-        blotter_instance = param()
-    except Exception as e:
-        log.exception(e)
+    if not settings.enabled:
         return None
-    if isinstance(blotter_instance, Blotter):
-        return blotter_instance
-    else:
-        raise TypeError(
-            f"Custom Blotter object recevied from config is not a Blotter: {param}"
+    if settings.saver is None:
+        raise ValueError("Enabled blotter requires saver settings")
+    options = dict(settings.saver.options)
+    if settings.saver.type == "csv":
+        saver: AbstractBaseSaver = CsvSaver(
+            **options, base_directory=store_factory.settings.base_directory
         )
+    else:
+        saver = MongoSaver(
+            **options,
+            client=store_factory.mongo_client(),
+            database=store_factory.database,
+        )
+    return Blotter(saver=saver)

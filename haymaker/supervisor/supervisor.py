@@ -208,9 +208,9 @@ class ConnectionSupervisor:
     State-facing helpers such as ``start_workload()``,
     ``cleanup_workload()``, ``has_workload``, and ``disconnect()`` are
     part of the supervisor/state contract, not the external lifecycle
-    API. Use one supervisor for one owned IB socket. Attached
-    dataloader work should run without a supervisor because it must not
-    connect, disconnect, or restart an externally owned socket.
+    API. Use one supervisor for one runtime-owned IB socket. Both the
+    live runtime and standalone dataloader own their socket and run
+    through this supervisor.
 
     The supervisor does not start, stop, or restart TWS/IB Gateway
     itself, and it does not know whether the workload is live trading
@@ -243,6 +243,7 @@ class ConnectionSupervisor:
     # True while the supervisor closes its own socket, so disconnectedEvent is
     # not classified as an unexpected outage.
     _intentional_disconnect: bool = field(default=False, init=False, repr=False)
+    _probe_contract: ibi.Contract | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._state = INITIAL_STATE(self)
@@ -268,6 +269,23 @@ class ConnectionSupervisor:
             f"ConnectionSupervisor(ib={self.ib!r}, workload={self.workload!r}, "
             f"settings={self.settings!r}, state={type(self._state).__name__})"
         )
+
+    async def probe_contract(self) -> ibi.Contract:
+        """Return the configured readiness probe contract after qualification."""
+
+        if self._probe_contract is not None:
+            return self._probe_contract
+        configured = self.settings.probe_contract
+        if configured.conId:
+            self._probe_contract = configured
+            return configured
+        qualified = await self.ib.qualifyContractsAsync(configured)
+        if len(qualified) != 1 or not qualified[0].conId:
+            raise ValueError(
+                "connection.probe_contract did not qualify to exactly one contract"
+            )
+        self._probe_contract = qualified[0]
+        return self._probe_contract
 
     async def run(self) -> None:
         """Run connection, workload, restart, and shutdown states."""

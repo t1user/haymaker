@@ -68,8 +68,10 @@ from typing import Any, Self
 import ib_insync as ibi
 
 from haymaker.base import Atom
+from haymaker.config.settings import OrderDefaults, StorageSettings, TimeoutPolicy
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
+from haymaker.databases import StoreFactory
 from haymaker.state_machine import StateMachine
 from haymaker.trader import Trader
 
@@ -83,6 +85,10 @@ class AtomRuntimeHarness:
     contract_registry: ContractRegistry
     controller: Controller | None = None
     trader: Trader | None = None
+    store_factory: StoreFactory | None = None
+    order_defaults: OrderDefaults = field(default_factory=OrderDefaults)
+    timeout_policy: TimeoutPolicy = field(default_factory=TimeoutPolicy)
+    dataframe_save_frequency: int = 900
     restart_requests: list[str] = field(default_factory=list)
     future_roll_policies: dict[str, bool] = field(default_factory=dict)
 
@@ -91,6 +97,8 @@ class AtomRuntimeHarness:
 
         if self.trader is None:
             self.trader = Trader(self.ib)
+        if self.store_factory is None:
+            self.store_factory = StoreFactory(StorageSettings())
 
     def install(self, monkeypatch: Any, atom_cls: type[Atom] = Atom) -> Self:
         """Install this harness on an Atom class for the current test."""

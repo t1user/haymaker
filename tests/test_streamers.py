@@ -1,6 +1,6 @@
 import importlib
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import ib_insync as ibi
 import pandas as pd
@@ -91,15 +91,13 @@ class FakeStore:
 
 
 @pytest.fixture()
-def mock_arctic_store():
-    with (
-        patch("haymaker.streamers.AsyncArcticStore") as mock_store_class,
-        patch("haymaker.streamers.get_mongo_client"),
-    ):
-        instance = mock_store_class.return_value
-        instance.read = AsyncMock()
-        instance.read_metadata = AsyncMock(return_value={})
-        yield mock_store_class
+def mock_arctic_store(monkeypatch, atom_runtime):
+    mock_store_class = Mock()
+    instance = mock_store_class.return_value
+    instance.read = AsyncMock()
+    instance.read_metadata = AsyncMock(return_value={})
+    monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", mock_store_class)
+    return mock_store_class
 
 
 def test_timer_true():

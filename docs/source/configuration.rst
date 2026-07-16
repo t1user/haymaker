@@ -2,208 +2,221 @@
 Configuration
 *************
 
-Haymaker is highly configurable. Parameters can be set in the following order of priority:
+Haymaker configuration describes framework infrastructure and operating policy:
+connections, logging, persistence, controller behavior, order defaults, and
+historical downloads. Strategy-specific parameters remain ordinary Python data
+in the user's strategy module; Haymaker does not parse or inject them.
 
-#. Command-line options (highest priority).
-#. User-provided configuration YAML file passed on the command line.
-#. User-provided configuration YAML file selected by environment variable.
-#. System environment variables.
-#. Default configuration YAML file (fallback for undefined variables).
+Configuration is loaded once by the command-line entrypoint. The resulting
+validated settings are passed to the live or dataloader runtime, so importing a
+Haymaker module does not inspect command-line arguments or environment values.
+
+Precedence
+==========
+
+Values are merged in this order, from lowest to highest priority:
+
+#. Bundled profile defaults.
+#. A YAML file selected by the profile's environment variable.
+#. A YAML file supplied with ``--file`` or ``-f``.
+#. Repeatable dotted-path ``--set-option`` or ``-s`` overrides.
+#. Dedicated command-line switches such as ``--reset`` or
+   ``--gap-fill-mode``.
+
+Mappings are merged recursively. Lists and scalar values replace the lower
+priority value. A typed mapping such as ``blotter.saver`` is replaced as a
+whole when its ``type`` changes, which prevents options for one saver type from
+leaking into another.
 
 Default Configuration Files
 ===========================
 
-Sensible starting configurations are defined in default configuration files located here:
+The complete schemas and defaults are defined in:
 
-- For the Execution Module: https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml 
+* ``haymaker/config/live_base_config.yaml`` for live execution.
+* ``haymaker/config/dataloader_base_config.yaml`` for historical downloads.
 
-- For the Dataloader Module: https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml 
+Override files only need to contain values that differ from these defaults.
+Unknown sections, unknown keys, invalid types, and duplicate YAML keys are
+reported as configuration errors before the runtime is created.
 
-Connection Recovery
+Framework and Strategy Configuration
+====================================
+
+Keep framework overrides in YAML and strategy construction in Python. For
+example:
+
+.. code-block:: yaml
+   :caption: live_config.yaml
+
+   connection:
+     port: 4002
+   controller:
+     sync_frequency: 60
+   logging:
+     directory: production_logs
+
+.. code-block:: python
+   :caption: strategy.py
+
+   strategy = MyStrategy(fast_period=10, slow_period=30)
+
+The strategy parameters are not part of the Haymaker configuration schema and
+should not be placed in the framework YAML file.
+
+YAML Override Files
 ===================
 
-Live execution and managed dataloader runs automatically recover Haymaker-owned
-Interactive Brokers API connections. The supervisor reconnects to the
-configured TWS or IB Gateway endpoint but does not manage the gateway process.
-
-Live connection settings belong under ``app``. Managed dataloader connection
-settings use the same names at the top level. See :doc:`supervisor` for the
-available settings and recovery policies, and :doc:`ib_message_codes` when
-interpreting broker messages.
-
-The ``controller.ignore_errors`` setting lists noisy controller-owned broker
-message codes that should be omitted from normal logs. Connection and data-farm
-status codes are owned by the supervisor and should not be listed here. This
-setting does not suppress supervisor actions or the optional raw ``broker.log``
-audit trail.
-
-User-Provided Configuration File
-================================
-
-The easiest way to create an override YAML file is to copy the default file and
-modify the desired values. Haymaker must be directed to the location of the
-overridden config file in one of two ways:
-
-* From the command line using the ``--file`` or ``-f`` option.
-* Via environment variables: ``HAYMAKER_HAYMAKER_CONFIG_OVERRIDES`` for live
-  execution or ``HAYMAKER_DATALOADER_CONFIG_OVERRIDES`` for the dataloader.
-
-The live command always takes the strategy file path as its first positional
-argument:
+Pass a profile-specific YAML file on the command line:
 
 .. code-block:: bash
-   :caption: Live execution with a YAML override
 
    haymaker strategy.py --file live_config.yaml
-
-The dataloader command uses its optional positional argument as the source file
-for contracts:
-
-.. code-block:: bash
-   :caption: Dataloader with a YAML override
-
    dataloader contracts.csv --file dataloader_config.yaml
 
-Environment Variables
-=====================
-
-All Haymaker-related environment variables are prefixed with ``HAYMAKER_``. This prefix is removed when reading the variables, signaling to the framework which variables to load into its configuration environment. This prevents Haymaker from importing unrelated variables.
-
-.. note::
-   Environment variable names are **case-insensitive**.
-
-.. warning::
-   For nested variables, only top-level settings can be overridden via CLI or environment variables. These are intended for quick overrides; the framework is primarily configured via YAML files.
-
-Use environment-selected YAML files when the same command should run with a
-stable deployment-specific configuration:
+Alternatively, select a deployment-specific file with one of the two supported
+environment variables:
 
 .. code-block:: bash
-   :caption: Selecting live configuration from the environment
 
    export HAYMAKER_HAYMAKER_CONFIG_OVERRIDES=/path/to/live_config.yaml
-   haymaker strategy.py
-
-.. code-block:: bash
-   :caption: Selecting dataloader configuration from the environment
-
    export HAYMAKER_DATALOADER_CONFIG_OVERRIDES=/path/to/dataloader_config.yaml
-   dataloader contracts.csv
 
-Top-level scalar values can also be overridden directly through environment
-variables. For example, ``HAYMAKER_LOGGING_PATH=/tmp/haymaker.log`` provides a
-quick override for ``logging_path``.
+The live and dataloader selectors are independent. Direct setting overrides
+such as ``HAYMAKER_LOGGING_PATH`` are not supported; use YAML or a dotted CLI
+override instead. Environment variable names are case-sensitive.
 
-Overriding Defaults - Examples
-==============================
+Command-Line Overrides
+======================
 
-To override defaults, copy a configuration file, modify the desired parameters, and pass the new file’s location to Haymaker via:
-
-* Environment variable:
-
-  .. code-block:: bash
-     :caption: Setting the config override via environment variable
-
-     export HAYMAKER_HAYMAKER_CONFIG_OVERRIDES=config.yaml
-
-* Command-line argument:
-
-  .. code-block:: bash
-     :caption: Passing the config file via CLI
-
-     haymaker strategy.py --file config.yaml
-
-.. note::
-   Command-line arguments take precedence over environment variables.
-
-Passing Key-Value Pairs from Command Line
-=========================================
-
-Use ``-s`` or ``--set-option`` to temporarily override top-level parameters.
-This is useful for short-lived operational overrides:
+Use ``-s`` or ``--set-option`` with a dotted setting path and a YAML value.
+The option may be repeated:
 
 .. code-block:: bash
-   :caption: Overriding a parameter via CLI
 
-   haymaker strategy.py --set-option logging_path /tmp/haymaker.log
+   haymaker strategy.py \
+       --set-option controller.sync_frequency 60 \
+       --set-option logging.log_broker true
 
-For dataloader, the source file is the positional argument:
+   dataloader contracts.csv \
+       --set-option download.bar_size '1 hour' \
+       --set-option download.number_of_workers 4
 
-.. code-block:: bash
-   :caption: Running dataloader from a source file
+Values are parsed as YAML, so booleans and numbers are typed rather than stored
+as strings. Quote values containing spaces or values that the shell could
+interpret. A path must already exist in the profile schema; command-line
+overrides cannot invent new settings.
 
-   dataloader my_list.csv
-
-Available command-line options can be listed with:
-
-.. code-block:: bash
-   :caption: Displaying help for CLI options
-
-   haymaker --help
-
-CLI Options
------------
-
-Assuming your strategy is in ``your_module.py``, the following options are
-available from the command line:
+Dedicated live switches are ``--cold-start``, ``--reset``, ``--zero``, and
+``--nuke``. The dataloader provides ``--gap-fill-mode`` and accepts the contract
+source CSV as its optional positional argument. Dedicated switches have the
+highest precedence.
 
 .. argparse::
    :module: haymaker.config.cli_options
    :func: get_parser_for_other_module
    :prog: haymaker
 
-Examples
-^^^^^^^^
+Run ``dataloader --help`` for the complete dataloader option list.
 
-.. code-block:: bash
-   :caption: Running a strategy with a config override
+Live Settings
+=============
 
-   haymaker my_strategy.py -f config_overrides.yaml
+Live configuration is grouped into these sections:
 
-This runs the strategy defined in ``my_strategy.py`` with configuration
-overrides from ``config_overrides.yaml`` in the current directory.
+``startup``
+   One-run startup actions: ``cold_start``, ``reset``, ``zero``, and ``nuke``.
 
-.. code-block:: bash
-   :caption: Triggering the emergency circuit breaker
+``connection``
+   IB endpoint, client ID, timeouts, connection probe, and recovery policy. See
+   :doc:`supervisor`.
 
-   haymaker my_strategy.py --nuke
+``logging``
+   ``config_file``, output ``directory``, and optional raw broker logging. See
+   :doc:`logging`.
 
-This activates the emergency circuit breaker, closing all open positions, canceling resting orders, and preventing new positions.
+``controller``
+   Synchronization, health checks, execution verification, error filtering,
+   unknown-trade policy, bracket policy, and futures-roll time.
 
-.. code-block:: bash
-   :caption: Changing the log location
+``state_machine``
+   Save delay, Mongo collection names, and rejected-order limit.
 
-   haymaker my_strategy.py -s logging_path /path/to/log
+``storage``
+   Base directory, Mongo client arguments and database, Arctic libraries, and
+   dataframe save frequency.
 
-This changes the log location to ``/path/to/log``.
+``blotter``
+   Enablement and a safe built-in ``csv`` or ``mongo`` saver specification.
 
-Dataloader CLI Options
-----------------------
+``orders``
+   Default IB fields for open, close, stop, and take-profit orders, plus the
+   default OCA type.
 
-Dataloader options differ from those of other modules:
+``timeout``
+   Default streamer timeout in seconds and the ``restart`` or ``log`` action.
 
-.. argparse::
-   :module: haymaker.config.cli_options
-   :func: get_parser_for_dataloader
-   :prog: dataloader
+``futures``
+   Business-day offsets used to select and roll live futures contracts.
 
-Examples
-^^^^^^^^
+Dataloader Settings
+===================
 
-.. code-block:: bash
-   :caption: Collecting historical data from a CSV
+Dataloader configuration shares the ``connection``, ``logging``, and
+``storage`` sections and adds:
 
-   dataloader my_list.csv
+``download``
+   Source CSV, bar size, data type, lookback and gap-fill policy, RTH selection,
+   save cadence, and worker count.
 
-This runs the dataloader to collect historical data for contracts defined in ``my_list.csv``.
+``pacing``
+   Optional pacing bypass and the fraction of IB request capacity assigned to
+   the dataloader.
 
-.. code-block:: bash
-   :caption: Running dataloader with a custom settings file
+``futures``
+   Contract selector, full-chain marker, and current-contract index.
 
-   dataloader my_list.csv -f settings.yaml
+Safe Object Conversion
+======================
 
-This runs the dataloader for contracts in ``my_list.csv`` with settings from
-``settings.yaml`` in the current directory. This file should be a modified copy of:
-https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml
+YAML contains plain data only. The loader converts the ``connection``
+``probe_contract`` mapping to an :class:`ib_insync.contract.Contract`, and
+converts order ``algoParams`` entries to :class:`ib_insync.objects.TagValue`
+instances. Arbitrary Python object constructors and executable YAML tags are
+rejected.
 
-specifying the source file with defined contracts, data type, frequency, etc.
+Migration from the Legacy Schema
+================================
+
+The former flat configuration API and import-time ``CONFIG`` object have been
+removed. Common migrations include:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Legacy key or command
+     - Replacement
+   * - ``app.host`` / top-level ``host``
+     - ``connection.host``
+   * - ``clientId``
+     - ``connection.client_id``
+   * - ``logging_config``
+     - ``logging.config_file``
+   * - ``logging_path``
+     - ``logging.directory``
+   * - ``data_folder``
+     - ``storage.base_directory``
+   * - ``barSize``
+     - ``download.bar_size``
+   * - ``wts``
+     - ``download.what_to_show``
+   * - ``useRTH``
+     - ``download.use_rth``
+   * - ``pacer_allowance_fraction``
+     - ``pacing.allowance_fraction``
+   * - ``-s key value`` with a flat key
+     - ``-s section.key value``
+
+Code that imported ``haymaker.config.CONFIG`` should instead receive the
+specific typed settings or ready runtime service it needs. User strategy code
+normally does not need direct access to framework settings.

@@ -13,9 +13,7 @@ import pandas as pd
 from haymaker import misc
 from haymaker.async_wrappers import QueueRunner, QueueShutdownPolicy
 from haymaker.base import Atom
-from haymaker.config import CONFIG
 from haymaker.contract_selector import FutureSelector, custom_bday
-from haymaker.databases import get_mongo_client
 from haymaker.datastore import (
     AsyncAbstractBaseStore,
     AsyncArcticStore,
@@ -34,10 +32,6 @@ from haymaker.streamers import Streamer
 from .stitcher import FuturesStitcher
 
 log = logging.getLogger(__name__)
-
-AGG_CONFIG = CONFIG.get("dfaggregator", {})
-MARKET_DATA_LIB_NAME = AGG_CONFIG.get("market_data_lib", "market_data")
-SAVE_FREQUENCY = AGG_CONFIG.get("aggregator_save_frequency", 900)
 
 
 class MissingStreamerParam(Exception):
@@ -58,8 +52,9 @@ class DfAggregator(Atom):
     For futures contracts ensure that a conitinuous series is created
     using appropriate back contracts.
 
-    Both arguments can be set either directly while instantiating the
-    class or system-wide in config in `dfaggregator` section.
+    A custom datastore and save frequency can be supplied directly. When
+    omitted, the aggregator uses the store factory and dataframe save
+    frequency installed in its ready runtime context.
 
     Args:
     -----
@@ -91,7 +86,7 @@ class DfAggregator(Atom):
 
     def __post_init__(self) -> None:
         if self.save_frequency is None:
-            self.save_frequency = SAVE_FREQUENCY
+            self.save_frequency = self.runtime.dataframe_save_frequency
         assert isinstance(
             self.save_frequency, int
         ), f"{self!s} save_frequency must be an int, not {type(self.save_frequency)}"
@@ -109,13 +104,13 @@ class DfAggregator(Atom):
             f" datastore because barSizeSetting is not defined"
         )
         if self.datastore is None:
-            assert MARKET_DATA_LIB_NAME, (
+            library = self.runtime.store_factory.settings.market_data_library
+            assert library, (
                 f"{self} cannot initialize datastore because "
-                f"MARKET_DATA_LIB_NAME was not given"
+                f"market_data_library was not given"
             )
-            self.datastore = AsyncArcticStore(
-                lib=MARKET_DATA_LIB_NAME,
-                host=get_mongo_client(),
+            self.datastore = self.runtime.store_factory.arctic_store(
+                library,
                 collection_namer=CollectionNamerBarsizeSetting(barSizeSetting),
             )
         self.datastore.override_collection_namer(

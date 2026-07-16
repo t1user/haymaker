@@ -3,6 +3,7 @@ import importlib
 import logging
 import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import eventkit as ev  # type: ignore
@@ -10,9 +11,11 @@ import pytest
 import yaml
 
 import haymaker.logging as haymaker_logging
+from haymaker.config.settings import LoggingSettings
 from haymaker.logging.handlers import TelegramHandler
 from haymaker.logging.setup import (
     setup_asyncio_logging,
+    setup_logging,
     setup_logging_queue,
     shutdown_logging_queue,
 )
@@ -69,6 +72,37 @@ def test_builtin_logging_config_components_resolve(config_name):
             continue
         module_name, attribute = component.rsplit(".", maxsplit=1)
         assert getattr(importlib.import_module(module_name), attribute)
+
+
+def test_setup_logging_injects_runtime_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Built-in file factories should receive runtime-owned output paths."""
+
+    config_file = tmp_path / "logging.yaml"
+    config_file.write_text(
+        "version: 1\n"
+        "handlers:\n"
+        "  file:\n"
+        "    '()': haymaker.logging.handlers.file_handler_setup\n"
+        "    filename: application.log\n"
+    )
+    configured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        logging.config,
+        "dictConfig",
+        lambda config: configured.update(config),
+    )
+    monkeypatch.setattr("haymaker.logging.setup.setup_logging_queue", lambda: None)
+
+    setup_logging(
+        LoggingSettings(config_file=config_file, directory="runtime_logs"),
+        base_directory="runtime_data",
+    )
+
+    handler = configured["handlers"]["file"]
+    assert handler["_haymaker_base_directory"] == "runtime_data"
+    assert handler["_haymaker_logging_directory"] == "runtime_logs"
 
 
 def test_asyncio_exception_handler_routes_failures_to_haymaker_logging(caplog):

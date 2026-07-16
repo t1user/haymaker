@@ -1,6 +1,4 @@
 import asyncio
-import importlib
-import sys
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -10,30 +8,12 @@ import pytest
 
 
 @pytest.fixture
-def dataloader_module(monkeypatch):
-    """Import dataloader with minimal hermetic config for lifecycle tests."""
+def dataloader_module():
+    """Return the side-effect-free dataloader module."""
 
-    from haymaker.config import CONFIG
-    import haymaker.logging as logging_package
+    from haymaker.dataloader import dataloader
 
-    config_values = {
-        "logging_config": None,
-        "barSize": "30 secs",
-        "wts": "TRADES",
-        "gap_fill_mode": "off",
-        "useRTH": False,
-        "save_every_chunks": 10,
-        "number_of_workers": 2,
-        "clientId": 1,
-        "source": "contracts.csv",
-        "pacer_no_restriction": False,
-        "pacer_allowance_fraction": 1.0,
-    }
-    for key, value in config_values.items():
-        monkeypatch.setitem(CONFIG.maps[0], key, value)
-    monkeypatch.setattr(logging_package, "setup_logging", lambda config: None)
-    sys.modules.pop("haymaker.dataloader.dataloader", None)
-    return importlib.import_module("haymaker.dataloader.dataloader")
+    return dataloader
 
 
 def test_runtime_construction_wires_one_dataloader_session(
@@ -43,12 +23,14 @@ def test_runtime_construction_wires_one_dataloader_session(
 
     dataloader = dataloader_module
     from haymaker.dataloader import runtime as runtime_module
+    from haymaker.config import DataloaderCommand, load_dataloader_settings
 
     ib = ibi.IB()
     initial_error_handlers = len(ib.errorEvent)
     monkeypatch.setattr(runtime_module, "IB", lambda: ib)
 
-    runtime = runtime_module.DataloaderRuntime()
+    settings = load_dataloader_settings(DataloaderCommand(None, ()), environ={})
+    runtime = runtime_module.DataloaderRuntime(settings)
     session = runtime.session
 
     assert runtime.ib is ib
@@ -89,7 +71,7 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
     monkeypatch.setattr(dataloader.DataloaderSession, "producer", fake_producer)
     monkeypatch.setattr(dataloader.DataloaderSession, "worker", fake_worker)
 
-    session = dataloader.DataloaderSession(object())
+    session = dataloader.DataloaderSession(object(), number_of_workers=2)
     task = asyncio.create_task(session.run())
     await asyncio.wait_for(workers_started.wait(), timeout=1)
 
@@ -199,28 +181,17 @@ async def test_producer_reports_job_held_outside_full_queue(dataloader_module):
 
 
 def test_dataloader_config_validates_pacer_allowance_fraction(
-    monkeypatch,
     dataloader_module,
 ):
-    """Pacing scale should come from config and allow values above one."""
+    """Manager should pass an explicit positive pacing scale to its pacer."""
 
-    from haymaker.config import CONFIG
+    manager = dataloader_module.Manager(ibi.IB(), pacer_allowance_fraction=2)
 
-    assert dataloader_module.PACER_ALLOWANCE_FRACTION == 1.0
+    assert manager.pacing is not None
+    assert manager.pacing.allowance_fraction == 2
 
-    monkeypatch.setitem(CONFIG.maps[0], "pacer_allowance_fraction", 2)
-    sys.modules.pop("haymaker.dataloader.dataloader", None)
-    assert (
-        importlib.import_module(
-            "haymaker.dataloader.dataloader"
-        ).PACER_ALLOWANCE_FRACTION
-        == 2
-    )
-
-    monkeypatch.setitem(CONFIG.maps[0], "pacer_allowance_fraction", 0)
-    sys.modules.pop("haymaker.dataloader.dataloader", None)
-    with pytest.raises(ValueError, match="pacer_allowance_fraction"):
-        importlib.import_module("haymaker.dataloader.dataloader")
+    with pytest.raises(ValueError, match="allowance_fraction"):
+        dataloader_module.Manager(ibi.IB(), pacer_allowance_fraction=0)
 
 
 def test_download_container_rejects_mixed_intraday_points(dataloader_module):
@@ -690,12 +661,15 @@ async def test_manager_policy_flows_to_store_and_download_job(
 
     monkeypatch.setattr(dataloader.Manager, "contracts", fake_contracts)
     monkeypatch.setattr(dataloader.Manager, "headstamp", fake_headstamp)
-    monkeypatch.setattr(dataloader, "get_mongo_client", lambda: "mongo")
-    monkeypatch.setattr(dataloader, "AsyncArcticStore", FakeStore)
     monkeypatch.setattr(dataloader, "HistorySink", lambda contract, store: FakeSink())
+
+    class FakeStoreFactory:
+        def arctic_store(self, library):
+            return FakeStore(library, "mongo")
 
     manager = dataloader.Manager(
         object(),
+        store_factory=FakeStoreFactory(),
         bar_size="1 day",
         wts="MIDPOINT",
         now=datetime(2025, 1, 10, tzinfo=timezone.utc),

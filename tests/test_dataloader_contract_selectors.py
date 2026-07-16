@@ -1,11 +1,11 @@
 import ib_insync as ibi
 import pytest
 
+from haymaker.config.settings import DataloaderFuturesSettings
 from haymaker.dataloader.contract_selectors import (
     ContractQualificationError,
     ContractSelector,
     CurrentFutureContractSelector,
-    FUTURES_FULLCHAIN_SPEC,
     FullchainFutureContractSelector,
 )
 from haymaker.dataloader.pacer import RequestPacing
@@ -166,4 +166,4 @@ def test_fullchain_selector_spec_is_instance_scoped():
     )
 
     assert expired.spec == "expired"
-    assert fresh.spec == FUTURES_FULLCHAIN_SPEC
+    assert fresh.spec == DataloaderFuturesSettings().full_chain_spec

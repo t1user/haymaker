@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -9,6 +10,7 @@ import pytest
 import haymaker.app as app_module
 from haymaker.app import App
 from haymaker.base import Atom
+from haymaker.config import LiveCommand, load_live_settings
 from haymaker.contract_registry import ContractRegistry
 from haymaker.runtime import InitData, LiveRuntime, RuntimeContext, StartupJobs
 from haymaker.streamers import Streamer
@@ -16,22 +18,24 @@ from haymaker.supervisor import ConnectionSettings
 from haymaker.trader import Trader
 
 
-def live_config() -> dict[str, object]:
-    """Return minimal live configuration for runtime construction tests."""
+def live_settings():
+    """Return typed live settings without persistence-backed blotter creation."""
 
-    return {
-        "use_blotter": False,
-        "controller": {},
-        "app": {},
-        "secret_value": "must-not-appear",
-    }
+    return load_live_settings(
+        LiveCommand(
+            module_path=Path("strategy.py"),
+            config_file=None,
+            overrides=(("blotter.enabled", False),),
+        ),
+        environ={},
+    )
 
 
 def make_live_runtime(atom_runtime) -> LiveRuntime:
     """Create a live runtime from injected test services."""
 
     return LiveRuntime(
-        live_config(),
+        live_settings(),
         ib=atom_runtime.ib,
         contract_registry=atom_runtime.contract_registry,
         sm=atom_runtime.sm,
@@ -46,6 +50,10 @@ def test_runtime_context_has_compact_repr_and_log_string(atom_runtime) -> None:
         atom_runtime.contract_registry,
         atom_runtime.sm,
         Trader(atom_runtime.ib),
+        atom_runtime.store_factory,
+        atom_runtime.order_defaults,
+        atom_runtime.timeout_policy,
+        atom_runtime.dataframe_save_frequency,
     )
 
     assert "controller=" not in repr(context)

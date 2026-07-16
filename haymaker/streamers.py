@@ -15,8 +15,6 @@ import ib_insync as ibi
 from haymaker.misc import format_timestamp
 
 from .base import Atom
-from .config import CONFIG
-from .databases import get_mongo_client
 from .datastore import (
     AsyncAbstractBaseStore,
     AsyncArcticStore,
@@ -33,8 +31,6 @@ log = logging.getLogger(__name__)
 
 
 _counter = itertools.count().__next__
-
-MARKET_DATA_LIB_NAME = CONFIG.get("market_data_lib", "market_data")
 
 
 def bar_filter(bar: ibi.BarData) -> bool:
@@ -213,13 +209,13 @@ class HistoricalDataStreamer(Streamer):
         if self.datastore is False:
             return None
         elif self.datastore is True:
-            assert MARKET_DATA_LIB_NAME, (
+            library = self.runtime.store_factory.settings.market_data_library
+            assert library, (
                 f"{self} cannot initialize datastore because "
-                f"MARKET_DATA_LIB_NAME was not given."
+                f"market_data_library was not given."
             )
-            return AsyncArcticStore(
-                lib=MARKET_DATA_LIB_NAME,
-                host=get_mongo_client(),
+            return self.runtime.store_factory.arctic_store(
+                library,
                 collection_namer=CollectionNamerBarsizeSetting(self.barSizeSetting),
             )
         elif (

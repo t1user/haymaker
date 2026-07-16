@@ -42,19 +42,25 @@ Custom restart-enabled :class:`haymaker.timeout.Timeout` instances created with
 runtime has bound the supervisor restart callback. Zero-time timeouts may still
 be constructed while the pipeline is being defined.
 
-Configure live trading under the ``app`` section of the YAML file. Managed
-dataloader connection settings use the same names at the top level.
+Configure both live trading and managed dataloader runs under the
+``connection`` section of their profile-specific YAML file.
 
 .. code-block:: yaml
 
-   app:
+   connection:
      host: 127.0.0.1
      port: 4002
-     connectTimeout: 15
-     retryDelay: 30
-     appTimeout: 90
-     probeTimeout: 15
-     connection_lost_retry: 90
+     client_id: 0
+     connect_timeout: 15
+     retry_delay: 30
+     app_timeout: 90
+     probe_contract:
+       secType: CASH
+       symbol: EUR
+       currency: USD
+       exchange: IDEALPRO
+     probe_timeout: 15
+     connection_lost_retry_delay: 90
      auto_recovery_grace_period: 120
      restart_on_recovered_connection: false
      log_datafarm_status: true
@@ -79,22 +85,27 @@ Settings
    * - ``port``
      - ``4002``
      - TWS or IB Gateway API port.
-   * - ``connectTimeout``
+   * - ``client_id``
+     - ``0`` live, ``1`` dataloader
+     - IB API client ID owned by this Haymaker process.
+   * - ``connect_timeout``
      - ``15``
      - Seconds allowed for one connection attempt.
-   * - ``retryDelay``
+   * - ``retry_delay``
      - ``30``
      - Seconds between failed connection attempts.
-   * - ``appTimeout``
+   * - ``app_timeout``
      - ``90``
      - Seconds without IB traffic before Haymaker tests the connection.
-   * - ``probeContract``
-     - ``EURUSD``
-     - Contract used for the small historical-data connection test.
-   * - ``probeTimeout``
+   * - ``probe_contract``
+     - ``EUR.USD CASH``
+     - Plain contract mapping used for the small historical-data connection
+       test. It is qualified once after connecting; a qualification failure is
+       a terminal configuration/startup error.
+   * - ``probe_timeout``
      - ``15``
      - Seconds allowed for a connection test.
-   * - ``connection_lost_retry``
+   * - ``connection_lost_retry_delay``
      - ``90``
      - Delay before reconnecting after a failed connection test.
    * - ``auto_recovery_grace_period``

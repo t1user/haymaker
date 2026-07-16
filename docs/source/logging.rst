@@ -19,16 +19,30 @@ These levels are not used by the framework itself but are available for strategy
 Logging Configuration
 ---------------------
 
-You can customize logging by defining a `logging configuration <https://docs.python.org/3/library/logging.config.html#configuration-file-format>`_ in YAML format. Point Haymaker to this file by setting the ``logging_config`` configuration variable to its absolute path. This can be done via:
+You can customize logging by defining a `logging configuration <https://docs.python.org/3/library/logging.config.html#configuration-file-format>`_ in YAML format. Point Haymaker to this file with ``logging.config_file`` in the framework configuration:
 
-- A YAML configuration file (e.g., under ``logging_config``).
-- Command-line option (e.g., ``-s logging_config /path/to/config.yaml``).
-- Environment variable (e.g., ``HAYMAKER_LOGGING_CONFIG=/path/to/config.yaml``).
+.. code-block:: yaml
 
-The log file location (when logging to a file) is set with the ``logging_path`` configuration variable. This specifies a subdirectory within the folder defined by the ``data_folder`` variable. If the subdirectory doesn’t exist, Haymaker creates it.
+   logging:
+     config_file: /path/to/logging.yaml
+     directory: production_logs
+     log_broker: false
+   storage:
+     base_directory: /var/lib/haymaker
 
-.. note::
-   Both ``logging_config`` and ``logging_path`` can be set in your configuration YAML file, via CLI with ``-s``, or as environment variables prefixed with ``HAYMAKER_``.
+``logging.directory`` is interpreted relative to ``storage.base_directory``.
+Haymaker creates missing output directories used by its built-in handlers.
+The same settings can be changed temporarily with dotted CLI overrides:
+
+.. code-block:: bash
+
+   haymaker strategy.py \
+       --set-option logging.config_file /path/to/logging.yaml \
+       --set-option logging.directory production_logs
+
+Direct environment-value overrides are not supported. An environment variable
+may select a complete framework YAML file as described in
+:doc:`configuration`.
 
 Execution Module
 ----------------
@@ -46,7 +60,7 @@ messages and otherwise keeps them at debug level. Codes listed under the
 controller logs to avoid noise. Supervisor-owned connection and data-farm status
 codes are handled by the supervisor instead.
 
-Set ``log_broker`` to ``true`` to enable the separate ``broker`` audit logger.
+Set ``logging.log_broker`` to ``true`` to enable the separate ``broker`` audit logger.
 It records the raw broker event stream to ``broker.log``, including codes
 omitted from normal logs.
 

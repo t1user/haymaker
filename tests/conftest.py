@@ -46,15 +46,6 @@ def pytest_configure(config):
     )
 
 
-def clear_mongo_client_cache() -> None:
-    """Clear cached Mongo clients when the current object supports it."""
-    from haymaker import databases
-
-    cache_clear = getattr(databases.get_mongo_client, "cache_clear", None)
-    if cache_clear is not None:
-        cache_clear()
-
-
 @pytest.fixture(autouse=True)
 def block_real_mongo_access(monkeypatch, request):
     """Fail fast if an unmarked test tries to open real Mongo-backed storage.
@@ -90,11 +81,9 @@ def block_real_mongo_access(monkeypatch, request):
                 "Use a fake datastore or mark the test with @pytest.mark.mongo."
             )
 
-    clear_mongo_client_cache()
     monkeypatch.setattr(databases, "MongoClient", forbidden_mongo_client)
     monkeypatch.setattr(datastore_module, "Arctic", ForbiddenArctic)
     yield
-    clear_mongo_client_cache()
 
 
 class FakeMongoSaver(AbstractBaseSaver):

@@ -6,6 +6,7 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.dataloader import runtime
+from haymaker.config import DataloaderCommand, load_dataloader_settings
 
 
 class FakePacing:
@@ -46,7 +47,8 @@ def make_runtime(
     """Return a runtime using an isolated fake dataloader session."""
 
     session = cast(Any, FakeSession(run_work, cleanup))
-    return runtime.DataloaderRuntime(ibi.IB(), session)
+    settings = load_dataloader_settings(DataloaderCommand(None, ()), environ={})
+    return runtime.DataloaderRuntime(settings, ibi.IB(), session)
 
 
 @pytest.mark.asyncio

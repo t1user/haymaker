@@ -151,8 +151,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   failures or drain timeouts, while `DISCARD` is best effort and logs failures.
   State-save queues drain; Arctic fire-and-forget writes discard pending final
   work.
-- Configuration is primarily YAML-driven. Do not change real local `.env` files
-  or credential files.
+- CLI entrypoints load framework configuration once into validated typed
+  settings and inject those settings into the live or dataloader runtime.
+  Environment variables may select a profile YAML file but must not directly
+  override individual settings. Strategy parameters remain user-module Python
+  data. Do not change real local `.env` files or credential files.
 - Use `tests/runtime_helpers.py` and the `atom_runtime` /
   `atom_runtime_factory` fixtures for tests that need `Atom` runtime services.
   Install custom `ib`, state machine, contract registry, controller, restart

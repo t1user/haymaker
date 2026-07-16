@@ -1,16 +1,25 @@
+"""Tests for side-effect-free CLI composition."""
+
+from __future__ import annotations
+
 import sys
+from pathlib import Path
 from types import ModuleType
 from typing import Any
-from unittest.mock import ANY
 
 import pytest
 
 from haymaker import cli
 from haymaker.cli import load_user_module
-from haymaker.supervisor import ConnectionSettings
+from haymaker.config import (
+    DataloaderCommand,
+    LiveCommand,
+    load_dataloader_settings,
+    load_live_settings,
+)
 
 
-def test_load_user_module_supports_sibling_imports(tmp_path):
+def test_load_user_module_supports_sibling_imports(tmp_path: Path) -> None:
     helper = tmp_path / "helper.py"
     helper.write_text("VALUE = 42\n")
     strategy = tmp_path / "strategy.py"
@@ -21,7 +30,9 @@ def test_load_user_module_supports_sibling_imports(tmp_path):
     assert module.result == 42
 
 
-def test_load_user_module_restores_previous_module_after_failure(tmp_path):
+def test_load_user_module_restores_previous_module_after_failure(
+    tmp_path: Path,
+) -> None:
     strategy = tmp_path / "strategy.py"
     strategy.write_text("raise RuntimeError('broken strategy')\n")
     module_name = "haymaker_user_strategy"
@@ -37,96 +48,100 @@ def test_load_user_module_restores_previous_module_after_failure(tmp_path):
         sys.modules.pop(module_name, None)
 
 
-def test_main_runs_strategy_module_under_framework_control(monkeypatch) -> None:
+def test_build_live_runtime_installs_context_before_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = load_live_settings(
+        LiveCommand(Path("strategy.py"), None, ()), environ={}
+    )
     calls: list[tuple[str, object]] = []
-    runtimes: list[object] = []
-    strategy_module = ModuleType("strategy")
-    setattr(strategy_module, "no_future_roll_strategies", ["one", "two"])
+    runtime = object()
 
-    def configure(profile: str, args: list[str]) -> dict[str, object]:
-        calls.append(("configure", (profile, args)))
-        return {"logging_config": "logging.yaml", "use_blotter": False}
+    def create_runtime(received: object) -> object:
+        calls.append(("runtime", received))
+        return runtime
 
-    def setup_logging(logging_config: object) -> None:
-        calls.append(("setup_logging", logging_config))
-
-    def shutdown_logging_queue() -> None:
-        calls.append(("shutdown_logging", None))
-
-    def fake_load_user_module(module_path: object) -> ModuleType:
+    def load(module_path: object) -> ModuleType:
         calls.append(("load", module_path))
-        return strategy_module
+        return ModuleType("strategy")
 
-    class FakeLiveRuntime:
-        def __init__(self, config: object) -> None:
-            runtimes.append(self)
-            calls.append(("runtime", config))
+    monkeypatch.setattr(cli, "LiveRuntime", create_runtime)
+    monkeypatch.setattr(cli, "load_user_module", load)
+
+    built, connection = cli._build_live_runtime(settings, "strategy.py")
+
+    assert built is runtime
+    assert connection is settings.connection
+    assert calls == [("runtime", settings), ("load", "strategy.py")]
+
+
+def test_main_runs_validated_settings_under_framework_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = LiveCommand(Path("strategy.py"), None, ())
+    settings = load_live_settings(command, environ={})
+    runtime = object()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(cli, "parse_live_args", lambda argv: command)
+
+    def load_settings(received: LiveCommand) -> object:
+        calls.append(("load_settings", received))
+        return settings
+
+    def setup_logging(logging: object, base_directory: str) -> None:
+        calls.append(("setup_logging", (logging, base_directory)))
+
+    def build(received: object, module_path: object) -> tuple[object, object]:
+        calls.append(("build", (received, module_path)))
+        return runtime, settings.connection
 
     class FakeApp:
-        def __init__(self, runtime: object, settings: Any) -> None:
-            calls.append(("app", (runtime, settings.client_id)))
+        def __init__(self, received_runtime: object, connection: object) -> None:
+            calls.append(("app", (received_runtime, connection)))
 
         def run(self) -> None:
             calls.append(("run", None))
 
-    fake_logging = ModuleType("haymaker.logging")
-    setattr(fake_logging, "setup_logging", setup_logging)
-    setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
-    fake_runtime = ModuleType("haymaker.runtime")
-    setattr(fake_runtime, "LiveRuntime", FakeLiveRuntime)
-    fake_app = ModuleType("haymaker.app")
-    setattr(fake_app, "App", FakeApp)
+    monkeypatch.setattr(cli, "load_live_settings", load_settings)
+    monkeypatch.setattr(cli, "setup_logging", setup_logging)
+    monkeypatch.setattr(cli, "_build_live_runtime", build)
+    monkeypatch.setattr(cli, "App", FakeApp)
+    monkeypatch.setattr(
+        cli,
+        "shutdown_logging_queue",
+        lambda: calls.append(("shutdown", None)),
+    )
 
-    monkeypatch.setattr(cli, "configure", configure)
-    monkeypatch.setattr(cli, "load_user_module", fake_load_user_module)
-    monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
-    monkeypatch.setitem(sys.modules, "haymaker.runtime", fake_runtime)
-    monkeypatch.setitem(sys.modules, "haymaker.app", fake_app)
-
-    cli.main(["strategy.py", "-f", "config.yaml"])
+    cli.main(["strategy.py"])
 
     assert calls == [
-        ("configure", ("live", ["strategy.py", "-f", "config.yaml"])),
-        ("setup_logging", "logging.yaml"),
-        ("runtime", {"logging_config": "logging.yaml", "use_blotter": False}),
-        ("load", "strategy.py"),
-        ("app", (ANY, 0)),
+        ("load_settings", command),
+        ("setup_logging", (settings.logging, settings.storage.base_directory)),
+        ("build", (settings, command.module_path)),
+        ("app", (runtime, settings.connection)),
         ("run", None),
-        ("shutdown_logging", None),
+        ("shutdown", None),
     ]
-    assert len(runtimes) == 1
-    assert calls[4] == ("app", (runtimes[0], 0))
 
 
-def test_main_flushes_logging_when_runtime_construction_fails(monkeypatch) -> None:
-    calls = []
+def test_main_flushes_logging_when_runtime_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = LiveCommand(Path("strategy.py"), None, ())
+    settings = load_live_settings(command, environ={})
+    calls: list[str] = []
 
-    def configure(profile: str, args: list[str]) -> dict[str, object]:
-        return {"logging_config": "logging.yaml"}
+    monkeypatch.setattr(cli, "parse_live_args", lambda argv: command)
+    monkeypatch.setattr(cli, "load_live_settings", lambda command: settings)
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: calls.append("setup"))
 
-    def setup_logging(logging_config: object) -> None:
-        calls.append("setup")
+    def fail(*args: object) -> tuple[Any, Any]:
+        calls.append("runtime")
+        raise RuntimeError("runtime failed")
 
-    def shutdown_logging_queue() -> None:
-        calls.append("shutdown")
-
-    class FailingLiveRuntime:
-        def __init__(self, config: object) -> None:
-            calls.append("runtime")
-            raise RuntimeError("runtime failed")
-
-    fake_logging = ModuleType("haymaker.logging")
-    setattr(fake_logging, "setup_logging", setup_logging)
-    setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
-    fake_runtime = ModuleType("haymaker.runtime")
-    setattr(fake_runtime, "LiveRuntime", FailingLiveRuntime)
-    fake_app = ModuleType("haymaker.app")
-    setattr(fake_app, "App", object)
-
-    monkeypatch.setattr(cli, "configure", configure)
-    monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
-    monkeypatch.setitem(sys.modules, "haymaker.runtime", fake_runtime)
-    monkeypatch.setitem(sys.modules, "haymaker.app", fake_app)
+    monkeypatch.setattr(cli, "_build_live_runtime", fail)
+    monkeypatch.setattr(cli, "shutdown_logging_queue", lambda: calls.append("shutdown"))
 
     with pytest.raises(RuntimeError, match="runtime failed"):
         cli.main(["strategy.py"])
@@ -134,51 +149,44 @@ def test_main_flushes_logging_when_runtime_construction_fails(monkeypatch) -> No
     assert calls == ["setup", "runtime", "shutdown"]
 
 
-def test_dataloader_main_uses_shared_application_shell(monkeypatch) -> None:
-    """Dataloader command should share configuration, App, and logging flow."""
-
-    calls: list[tuple[str, object]] = []
+def test_dataloader_main_uses_typed_runtime_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = DataloaderCommand(None, ())
+    settings = load_dataloader_settings(command, environ={})
     runtime = object()
+    calls: list[tuple[str, object]] = []
 
-    def configure(profile: str, args: list[str]) -> dict[str, object]:
-        calls.append(("configure", (profile, args)))
-        return {"logging_config": "dataloader-logging.yaml"}
-
-    def setup_logging(logging_config: object) -> None:
-        calls.append(("setup_logging", logging_config))
-
-    def shutdown_logging_queue() -> None:
-        calls.append(("shutdown_logging", None))
-
-    def build_runtime(config: object) -> tuple[object, ConnectionSettings]:
-        calls.append(("build", config))
-        return runtime, ConnectionSettings(client_id=1)
+    monkeypatch.setattr(cli, "parse_dataloader_args", lambda argv: command)
+    monkeypatch.setattr(cli, "load_dataloader_settings", lambda command: settings)
+    monkeypatch.setattr(
+        cli,
+        "setup_logging",
+        lambda logging, directory: calls.append(("setup", (logging, directory))),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_build_dataloader_runtime",
+        lambda received: (runtime, received.connection),
+    )
 
     class FakeApp:
-        def __init__(self, received_runtime: object, settings: Any) -> None:
-            calls.append(("app", (received_runtime, settings.client_id)))
+        def __init__(self, received_runtime: object, connection: object) -> None:
+            calls.append(("app", (received_runtime, connection)))
 
         def run(self) -> None:
             calls.append(("run", None))
 
-    fake_logging = ModuleType("haymaker.logging")
-    setattr(fake_logging, "setup_logging", setup_logging)
-    setattr(fake_logging, "shutdown_logging_queue", shutdown_logging_queue)
-    fake_app = ModuleType("haymaker.app")
-    setattr(fake_app, "App", FakeApp)
+    monkeypatch.setattr(cli, "App", FakeApp)
+    monkeypatch.setattr(
+        cli, "shutdown_logging_queue", lambda: calls.append(("shutdown", None))
+    )
 
-    monkeypatch.setattr(cli, "configure", configure)
-    monkeypatch.setattr(cli, "_build_dataloader_runtime", build_runtime)
-    monkeypatch.setitem(sys.modules, "haymaker.logging", fake_logging)
-    monkeypatch.setitem(sys.modules, "haymaker.app", fake_app)
-
-    cli.dataloader_main(["contracts.csv"])
+    cli.dataloader_main([])
 
     assert calls == [
-        ("configure", ("dataloader", ["contracts.csv"])),
-        ("setup_logging", "dataloader-logging.yaml"),
-        ("build", {"logging_config": "dataloader-logging.yaml"}),
-        ("app", (runtime, 1)),
+        ("setup", (settings.logging, settings.storage.base_directory)),
+        ("app", (runtime, settings.connection)),
         ("run", None),
-        ("shutdown_logging", None),
+        ("shutdown", None),
     ]

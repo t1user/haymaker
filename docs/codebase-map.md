@@ -39,7 +39,7 @@ its periodic sync, health-check, and daily UTC futures-roll timers once on the
 active event loop when `Controller.run()` first executes. Live and dataloader
 runtimes use the same application and supervisor lifecycle.
 
-The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `Manager` owns the historical request policy (`bar_size`, `wts`, `max_lookback_days`, `useRTH`, `gap_fill_mode`) and the run-scoped `now` value; worker sessions execute generated jobs rather than carrying independent request-policy defaults. The current supported dataloader backend is Arctic, with the library name derived from `wts` and `barSize`.
+The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `Manager` receives the historical request policy from typed `DataloaderSettings` (`download.bar_size`, `download.what_to_show`, `download.max_lookback_days`, `download.use_rth`, and `download.gap_fill_mode`) and owns the run-scoped `now` value; worker sessions execute generated jobs rather than carrying independent request-policy defaults. The current supported dataloader backend is Arctic, with the library name derived from the data type and bar size.
 
 The research package is intentionally separate from live execution. It works directly with pandas dataframes and NumPy/Numba kernels to validate signal timing, stops, synthetic data, and performance without depending on live `Atom` pipelines.
 
@@ -48,10 +48,13 @@ The research package is intentionally separate from live execution. It works dir
 ### Live Execution Core
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
-- `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints,
-  a shared command shell for explicit profile config and threaded-logging
-  lifecycles, and user strategy module loading with failed-import rollback in
-  `sys.modules`.
+- `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints.
+  Each parses its command once, loads and validates typed profile settings,
+  starts threaded logging, builds the appropriate runtime, and owns user
+  strategy module loading with failed-import rollback in `sys.modules`.
+- `haymaker/config/`: frozen live and dataloader settings dataclasses, safe YAML
+  loading, deterministic profile merging, explicit object conversion, and
+  side-effect-free command-line parsers.
 - `haymaker/app.py`: shared Linux top-level `App.run()` lifecycle, application
   runtime protocol, supervisor composition, graceful `SIGTERM`, and propagation
   of unexpected workload failures after cleanup.
@@ -88,8 +91,10 @@ The research package is intentionally separate from live execution. It works dir
 ### Persistence and Logging
 
 - `haymaker/datastore/`: synchronous and asynchronous store abstractions, ArcticStore, collection naming, futures readers, and deprecated store helpers.
-- `haymaker/databases.py`: cached MongoDB client and health-check registration.
-- `haymaker/blotter.py`, `saver.py`: transaction logging sinks such as CSV and Mongo-backed savers.
+- `haymaker/databases.py`: runtime-owned `StoreFactory`, lazy MongoDB client,
+  datastore construction, paths, and health-check registration.
+- `haymaker/blotter.py`, `saver.py`: explicitly configured transaction logging
+  sinks such as CSV and Mongo-backed savers.
 - `haymaker/logging/`: centralized YAML and queue-listener lifecycle setup,
   custom handler implementations, one listener thread per configured
   destination, and optional Telegram delivery. `App` installs the package's
@@ -234,26 +239,38 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 
 ## Configuration and Environment
 
-Config is assembled in `haymaker/config/config.py` from:
+The CLI assembles framework configuration once through
+`haymaker/config/loader.py`, validates it into frozen `LiveSettings` or
+`DataloaderSettings`, and injects that object into the appropriate runtime.
+Runtime components receive their specific settings or ready services; they do
+not read a process-global configuration object. Strategy-specific parameters
+remain ordinary Python data in the user module.
 
-1. command-line options,
-2. YAML override file selected from the command line,
-3. YAML override file selected through environment configuration,
-4. `HAYMAKER_` environment variables,
-5. default YAML files.
+Configuration precedence, from lowest to highest, is:
+
+1. bundled profile defaults,
+2. an environment-selected profile YAML file,
+3. a command-line `--file` YAML file,
+4. repeatable typed dotted-path `--set-option` overrides,
+5. dedicated command-line switches.
+
+YAML is parsed with a safe duplicate-key-rejecting loader. Mappings merge
+recursively, while lists and scalars replace lower-priority values. Unknown
+keys and invalid types fail before runtime construction.
 
 Important config files:
 
-- `haymaker/config/base_config.yaml`: live execution defaults.
+- `haymaker/config/live_base_config.yaml`: live execution defaults.
 - `haymaker/config/dataloader_base_config.yaml`: dataloader defaults.
 - `haymaker/logging/logging_config.yaml`: live logging defaults.
 - `haymaker/logging/dataloader_logging_config.yaml`: dataloader logging defaults.
 
 Important environment variables:
 
-- `HAYMAKER_HAYMAKER_CONFIG_OVERRIDES`: live execution YAML override path after `HAYMAKER_` prefix stripping.
-- `HAYMAKER_DATALOADER_CONFIG_OVERRIDES`: dataloader YAML override path after `HAYMAKER_` prefix stripping.
-- `HAYMAKER_LOGGING_CONFIG`, `HAYMAKER_LOGGING_PATH`, and other top-level `HAYMAKER_` keys: quick overrides.
+- `HAYMAKER_HAYMAKER_CONFIG_OVERRIDES`: live execution YAML override path.
+- `HAYMAKER_DATALOADER_CONFIG_OVERRIDES`: dataloader YAML override path.
+
+Environment variables do not directly override individual settings.
 
 Do not commit real `.env` files. `.gitignore` already ignores `.env`, `.venv`, generated builds, local backtests, and credential files.
 
@@ -309,7 +326,6 @@ dataloader contracts.csv -f settings.yaml
 - `pyproject.toml` has a mypy ignore override for `backtester` with a comment to remove after fixing it.
 - Several modules contain explicit TODO/deprecated comments, especially dataloader futures selection, research numba tools, store deprecations, and old backtester utilities.
 - `haymaker/__init__.py` is empty; most public imports are exposed through subpackages, especially `haymaker.research`.
-- `ConfigMaps.parse_yaml()` uses `yaml.unsafe_load`, which supports Python object construction in config files but makes config files trusted code.
 
 ## Risky Areas
 
@@ -320,7 +336,6 @@ dataloader contracts.csv -f settings.yaml
 - Controller sync and reconciliation touches live broker state, state-machine records, blotter output, and order cancellation/close logic. Sync correction actions should only run after broker position sources agree and after known completed fills have been replayed into local position records; if broker connection or broker position validation fails, the coordinator returns a retryable failed pass and sync retries before disabling trading for non-convergence. If the supervisor marks the connection unavailable during broker recovery, restart, or shutdown, the public sync wrapper cancels the in-flight pass without treating it as unsafe state. On unresolved order or position mismatches, the first pass can request a broker reconnect before corrective mutations are attempted. Later sync checks query broker/local state directly; broker stop-loss exposure is reported by bracket sync, while missing-local-bracket emergency closes are based on the affected local strategy position.
 - Futures rolling changes active contracts, next-contract selection, and strategy state; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.
-- Config files can instantiate Python objects through YAML tags; operational config must be treated as trusted and reviewed.
 
 ## AGENTS.md Notes
 

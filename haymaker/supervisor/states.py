@@ -191,8 +191,9 @@ class ProbingState(AbstractState):
         """Return whether the broker accepted a small historical-data request."""
 
         try:
+            probe_contract = await self.context.probe_contract()
             probe = self.ib.reqHistoricalDataAsync(
-                self.settings.probe_contract, "", "30 S", "5 secs", "MIDPOINT", False
+                probe_contract, "", "30 S", "5 secs", "MIDPOINT", False
             )
             bars = await asyncio.wait_for(probe, self.settings.probe_timeout)
         except asyncio.TimeoutError:

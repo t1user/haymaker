@@ -10,16 +10,9 @@ from typing import Callable, ClassVar, Self
 import eventkit as ev  # type: ignore
 
 from haymaker.base import Atom
-from haymaker.config import CONFIG as config
 from haymaker.contract_registry import Details
 
 log = logging.getLogger(__name__)
-
-CONFIG = config.get("timeout", {})
-# debug means log, otherwise restart
-TIMEOUT_DEBUG = CONFIG.get("debug", False)
-# zero means no timeout
-TIMEOUT_TIME = CONFIG.get("time", 0)
 
 _counter = itertools.count().__next__
 
@@ -52,10 +45,10 @@ class Timeout:
     instances: ClassVar[list["Timeout"]] = []
 
     event: ev.Event
-    time: float = TIMEOUT_TIME
+    time: float = 0
     name: str = ""
     details: Details | None = None
-    debug: bool = TIMEOUT_DEBUG
+    debug: bool = False
     request_restart: Callable[[str], bool | None] | None = None
     _timeout: ev.Event | None = field(repr=False, default=None)
     _now: datetime | None = None  # for testing only
@@ -63,7 +56,7 @@ class Timeout:
 
     @classmethod
     def from_atom(
-        cls, atom: Atom, event: ev.Event, key: str = "", time: float = TIMEOUT_TIME
+        cls, atom: Atom, event: ev.Event, key: str = "", time: float | None = None
     ) -> Self:
         """Create a timeout from Atom services after runtime startup begins.
 
@@ -82,8 +75,11 @@ class Timeout:
                 timeouts from ``onStart()`` or later.
         """
 
+        policy = atom.runtime.timeout_policy
+        if time is None:
+            time = policy.seconds
         request_restart = atom.request_restart
-        if time and not TIMEOUT_DEBUG and request_restart is None:
+        if time and not policy.log_only and request_restart is None:
             raise RuntimeError(
                 "Restart-enabled Timeout.from_atom() must be created from "
                 "onStart() or later, after the supervisor is bound."
@@ -97,6 +93,7 @@ class Timeout:
             time,
             f"{str(atom)}-<<{key}>>",
             atom.contract_details,
+            debug=policy.log_only,
             request_restart=request_restart,
         )
 

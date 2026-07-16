@@ -197,38 +197,6 @@ class ArcticStore(AbstractBaseStore):
         if collection_namer is not None:
             self.collection_namer = collection_namer  # type: ignore
 
-    @classmethod
-    def from_params(
-        cls,
-        wts: str,
-        barSize: str,
-        prefix: str = "",
-        collection_namer: Callable[[ibi.Contract], str] | None = None,
-    ) -> Self:
-        """
-        Initiate store with standardized lib name and shared mongo
-        host.
-
-        Args:
-        ----
-
-        * wts:
-            `whatToShow` parameter of :meth:`ib_insync.ib.reqHistoricalData`
-
-        * barSize:
-            `barSize` parameter of :meth:`ib_insync.ib.reqHistoricalData`
-
-        """
-        from haymaker.databases import get_mongo_client
-
-        _wts = wts_validator(wts)
-        _barSize = bar_size_validator(barSize)
-        client = get_mongo_client()
-        if prefix:
-            return cls(f"{prefix}_{_wts}_{_barSize}", client, collection_namer)
-        else:
-            return cls(f"{_wts}_{_barSize}", client, collection_namer)
-
     def write(
         self,
         symbol: str | ibi.Contract,
