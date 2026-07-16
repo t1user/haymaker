@@ -18,6 +18,9 @@ from .saver import AbstractBaseSaver, AsyncSaveManager, MongoLatestSaver, MongoS
 
 log = logging.getLogger(__name__)
 
+DEFAULT_ORDER_COLLECTION_NAME = "orders"
+DEFAULT_STRATEGY_COLLECTION_NAME = "strategies"
+
 
 class UnknownZeroOrderIdError(ValueError):
     """Raised when an unknown broker trade still has placeholder orderId 0."""
@@ -435,9 +438,9 @@ class StateMachine:
     ) -> None:
 
         if order_saver is None:
-            order_saver = MongoSaver("orders", query_key="orderId")
+            order_saver = MongoSaver(DEFAULT_ORDER_COLLECTION_NAME, query_key="orderId")
         if strategy_saver is None:
-            strategy_saver = MongoLatestSaver("strategies")
+            strategy_saver = MongoLatestSaver(DEFAULT_STRATEGY_COLLECTION_NAME)
 
         # dict of OrderInfo
         self._orders = OrderContainer(order_saver, save_async=save_async)

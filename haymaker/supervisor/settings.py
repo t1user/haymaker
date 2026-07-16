@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any, Self
 
 import ib_insync as ibi
 
@@ -38,3 +40,20 @@ class ConnectionSettings:
     auto_recovery_grace_period: float = 120
     restart_on_recovered_connection: bool = False
     log_datafarm_status: bool = True
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> Self:
+        """Construct connection settings from a plain configuration section.
+
+        Args:
+            values: Merged ``connection`` configuration section.
+
+        Returns:
+            Settings with a reconstructed IB probe contract.
+        """
+
+        options = dict(values)
+        probe_contract = options.get("probe_contract")
+        if isinstance(probe_contract, Mapping):
+            options["probe_contract"] = ibi.Contract.create(**dict(probe_contract))
+        return cls(**options)

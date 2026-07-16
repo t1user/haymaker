@@ -7,8 +7,9 @@ connections, logging, persistence, controller behavior, order defaults, and
 historical downloads. Strategy-specific parameters remain ordinary Python data
 in the user's strategy module; Haymaker does not parse or inject them.
 
-Configuration is loaded once by the command-line entrypoint. The resulting
-validated settings are passed to the live or dataloader runtime, so importing a
+Configuration is loaded once by the command-line entrypoint. Live configuration
+remains grouped into plain section mappings until each target constructs itself;
+the dataloader temporarily retains its typed settings aggregate. Importing a
 Haymaker module does not inspect command-line arguments or environment values.
 
 Precedence
@@ -31,14 +32,22 @@ leaking into another.
 Default Configuration Files
 ===========================
 
-The complete schemas and defaults are defined in:
+The bundled profiles are defined in:
 
 * ``haymaker/config/live_base_config.yaml`` for live execution.
 * ``haymaker/config/dataloader_base_config.yaml`` for historical downloads.
 
-Override files only need to contain values that differ from these defaults.
-Unknown sections, unknown keys, invalid types, and duplicate YAML keys are
-reported as configuration errors before the runtime is created.
+The live profile is intentionally sparse: target constructors own intrinsic
+defaults, while the bundled YAML contains only intentional live-profile
+overrides. The dataloader profile still describes its complete typed settings.
+Override files only need to contain values that differ from the resulting
+defaults.
+
+Duplicate YAML keys and unknown top-level sections are rejected while loading.
+For live configuration, section keys and values are interpreted by the target
+that consumes them; ordinary constructor errors therefore report invalid target
+arguments during runtime construction. Dataloader configuration retains its
+central typed validation during this staged migration.
 
 Framework and Strategy Configuration
 ====================================
@@ -104,8 +113,9 @@ The option may be repeated:
 
 Values are parsed as YAML, so booleans and numbers are typed rather than stored
 as strings. Quote values containing spaces or values that the shell could
-interpret. A path must already exist in the profile schema; command-line
-overrides cannot invent new settings.
+interpret. A valid live target option need not appear in the sparse bundled
+profile; unknown options fail when their target is constructed. Dataloader
+paths must still conform to its typed settings schema.
 
 Dedicated live switches are ``--cold-start``, ``--reset``, ``--zero``, and
 ``--nuke``. The dataloader provides ``--gap-fill-mode`` and accepts the contract
@@ -119,8 +129,8 @@ highest precedence.
 
 Run ``dataloader --help`` for the complete dataloader option list.
 
-Live Settings
-=============
+Live Configuration
+==================
 
 Live configuration is grouped into these sections:
 
@@ -179,11 +189,13 @@ Dataloader configuration shares the ``connection``, ``logging``, and
 Safe Object Conversion
 ======================
 
-YAML contains plain data only. The loader converts the ``connection``
-``probe_contract`` mapping to an :class:`ib_insync.contract.Contract`, and
-converts order ``algoParams`` entries to :class:`ib_insync.objects.TagValue`
-instances. Arbitrary Python object constructors and executable YAML tags are
-rejected.
+YAML contains plain data only. ``ConnectionSettings.from_mapping()`` converts
+the ``connection.probe_contract`` mapping to an
+:class:`ib_insync.contract.Contract`, while ``OrderDefaults.from_mapping()``
+converts order ``algoParams`` entries to
+:class:`ib_insync.objects.TagValue` instances and verifies that each mapping can
+construct an IB order. Arbitrary Python object constructors and executable YAML
+tags are rejected.
 
 Migration from the Legacy Schema
 ================================
@@ -217,6 +229,7 @@ removed. Common migrations include:
    * - ``-s key value`` with a flat key
      - ``-s section.key value``
 
-Code that imported ``haymaker.config.CONFIG`` should instead receive the
-specific typed settings or ready runtime service it needs. User strategy code
-normally does not need direct access to framework settings.
+Code that imported ``haymaker.config.CONFIG`` should instead receive a ready
+runtime service. Framework composition uses ``load_live_config()`` and passes
+each section to its owning target; user strategy code normally does not need
+direct access to framework configuration.

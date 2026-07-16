@@ -1,4 +1,4 @@
-"""Typed framework settings produced by the configuration loader."""
+"""Configuration aggregates retained by the live and dataloader loaders."""
 
 from __future__ import annotations
 
@@ -11,50 +11,12 @@ from haymaker.supervisor.settings import ConnectionSettings
 
 
 @dataclass(frozen=True)
-class StartupSettings:
-    """Operational behavior requested for one live startup."""
-
-    cold_start: bool = False
-    reset: bool = False
-    zero: bool = False
-    nuke: bool = False
-
-
-@dataclass(frozen=True)
 class LoggingSettings:
-    """Logging configuration file and output policy."""
+    """Dataloader logging configuration retained during staged migration."""
 
     config_file: Path | None = None
     directory: str = "logs"
     log_broker: bool = False
-
-
-@dataclass(frozen=True)
-class ControllerSettings:
-    """Validated settings used to construct the live controller."""
-
-    log_order_events: bool = False
-    sync_frequency: int = 0
-    health_check_frequency: int = 0
-    execution_verification_delay: int = 0
-    execution_verification_max_retries: int = 5
-    broker_request_timeout: int = 10
-    sync_max_attempts: int = 3
-    sync_resync_delay: float = 1
-    cancel_unknown_trades: bool = False
-    missing_brackets: Literal["ignore", "warn", "remove"] = "ignore"
-    ignore_errors: tuple[int, ...] = ()
-    future_roll_time: tuple[int, int] | None = None
-
-
-@dataclass(frozen=True)
-class StateMachineSettings:
-    """Persistence and rejection settings for the live state machine."""
-
-    save_delay: float = 1
-    strategy_collection_name: str = "strategies"
-    order_collection_name: str = "orders"
-    max_rejected_orders: int = 3
 
 
 @dataclass(frozen=True)
@@ -77,68 +39,32 @@ class StorageSettings:
 
 
 @dataclass(frozen=True)
-class SaverSettings:
-    """Safe built-in saver specification."""
+class LiveConfig:
+    """Merged live framework configuration grouped by original section.
 
-    type: Literal["csv", "mongo"]
-    options: Mapping[str, Any]
+    Attributes:
+        startup: One-run controller startup requests.
+        connection: Broker connection and recovery options.
+        logging: Logging setup and broker-log options.
+        controller: Controller reconciliation and scheduling options.
+        state_machine: State persistence and rejection options.
+        storage: Retained typed storage settings pending datastore refactoring.
+        blotter: Blotter enablement and saver specification.
+        orders: Default IB order fields.
+        timeout: Default streamer timeout policy.
+        futures: Live futures selection offsets.
+    """
 
-
-@dataclass(frozen=True)
-class BlotterSettings:
-    """Blotter enablement and persistence settings."""
-
-    enabled: bool = True
-    saver: SaverSettings | None = None
-
-
-@dataclass(frozen=True)
-class OrderDefaults:
-    """IB order defaults shared by execution models."""
-
-    open: Mapping[str, Any] = field(default_factory=dict)
-    close: Mapping[str, Any] = field(default_factory=dict)
-    stop: Mapping[str, Any] = field(default_factory=dict)
-    take_profit: Mapping[str, Any] = field(default_factory=dict)
-    oca_type: int = 1
-
-
-@dataclass(frozen=True)
-class TimeoutPolicy:
-    """Default stale-data timeout interval and action."""
-
-    seconds: float = 0
-    action: Literal["restart", "log"] = "restart"
-
-    @property
-    def log_only(self) -> bool:
-        """Return whether a timeout should only be logged."""
-
-        return self.action == "log"
-
-
-@dataclass(frozen=True)
-class FuturesSettings:
-    """Live futures roll-selection offsets."""
-
-    roll_bdays: int = 3
-    roll_margin_bdays: int = 3
-
-
-@dataclass(frozen=True)
-class LiveSettings:
-    """Complete validated settings for one live process."""
-
-    startup: StartupSettings
-    connection: ConnectionSettings
-    logging: LoggingSettings
-    controller: ControllerSettings
-    state_machine: StateMachineSettings
+    startup: Mapping[str, Any]
+    connection: Mapping[str, Any]
+    logging: Mapping[str, Any]
+    controller: Mapping[str, Any]
+    state_machine: Mapping[str, Any]
     storage: StorageSettings
-    blotter: BlotterSettings
-    orders: OrderDefaults
-    timeout: TimeoutPolicy
-    futures: FuturesSettings
+    blotter: Mapping[str, Any]
+    orders: Mapping[str, Any]
+    timeout: Mapping[str, Any]
+    futures: Mapping[str, Any]
 
 
 @dataclass(frozen=True)

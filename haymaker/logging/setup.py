@@ -15,8 +15,6 @@ from typing import Any, Iterable
 
 import yaml
 
-from haymaker.config.settings import LoggingSettings
-
 from .handlers import LocalQueueHandler, SafeQueueListener
 
 __all__ = [
@@ -176,14 +174,21 @@ def setup_asyncio_logging(loop: asyncio.AbstractEventLoop) -> None:
 
 
 def setup_logging(
-    settings: LoggingSettings,
+    config_file: str | Path | None = None,
+    directory: str = "logs",
     base_directory: str = "ib_data",
     level: str | int | None = None,
 ) -> None:
-    """Configure logging and move output handlers onto listener threads."""
+    """Configure logging and move output handlers onto listener threads.
+
+    Args:
+        config_file: Logging dictionary configuration file.
+        directory: Logging directory below ``base_directory``.
+        base_directory: Application data directory below the user's home.
+        level: Optional package log level override.
+    """
 
     shutdown_logging_queue()
-    config_file = settings.config_file
     if not config_file:
         config_file = module_directory / "logging_config.yaml"
     elif Path(config_file).is_file():
@@ -208,7 +213,7 @@ def setup_logging(
             "haymaker.logging.handlers.timed_rotating_file_handler_setup",
         }:
             handler["_haymaker_base_directory"] = base_directory
-            handler["_haymaker_logging_directory"] = settings.directory
+            handler["_haymaker_logging_directory"] = directory
 
     logging.config.dictConfig(config)
 

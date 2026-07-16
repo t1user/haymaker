@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
 import ib_insync as ibi
 
 from . import misc
-from .config.settings import BlotterSettings
 from .databases import StoreFactory
 from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver
 
@@ -133,23 +133,49 @@ class Blotter:
 
 
 def blotter_factory(
-    settings: BlotterSettings, store_factory: StoreFactory
+    settings: Mapping[str, Any], store_factory: StoreFactory
 ) -> Blotter | None:
-    """Construct the configured built-in blotter and saver."""
+    """Construct a built-in blotter and saver from plain configuration.
 
-    if not settings.enabled:
+    Args:
+        settings: Merged ``blotter`` configuration section.
+        store_factory: Runtime persistence services used by built-in savers.
+
+    Returns:
+        Configured blotter, or ``None`` when disabled.
+    """
+
+    config = dict(settings)
+    enabled = config.pop("enabled", True)
+    saver_config = config.pop("saver", None)
+    if config:
+        names = ", ".join(sorted(config))
+        raise TypeError(f"Unknown blotter configuration: {names}")
+    if not enabled:
         return None
-    if settings.saver is None:
+    if not isinstance(saver_config, Mapping):
         raise ValueError("Enabled blotter requires saver settings")
-    options = dict(settings.saver.options)
-    if settings.saver.type == "csv":
+
+    saver_settings = dict(saver_config)
+    saver_type = saver_settings.pop("type", None)
+    saver_options = saver_settings.pop("options", {})
+    if saver_settings:
+        names = ", ".join(sorted(saver_settings))
+        raise TypeError(f"Unknown blotter saver configuration: {names}")
+    if not isinstance(saver_options, Mapping):
+        raise TypeError("blotter.saver.options must be a mapping")
+    options = dict(saver_options)
+
+    if saver_type == "csv":
         saver: AbstractBaseSaver = CsvSaver(
             **options, base_directory=store_factory.settings.base_directory
         )
-    else:
+    elif saver_type == "mongo":
         saver = MongoSaver(
             **options,
             client=store_factory.mongo_client(),
             database=store_factory.database,
         )
+    else:
+        raise ValueError("blotter.saver.type must be csv or mongo")
     return Blotter(saver=saver)

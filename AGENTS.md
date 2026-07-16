@@ -151,8 +151,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   failures or drain timeouts, while `DISCARD` is best effort and logs failures.
   State-save queues drain; Arctic fire-and-forget writes discard pending final
   work.
-- CLI entrypoints load framework configuration once into validated typed
-  settings and inject those settings into the live or dataloader runtime.
+- CLI entrypoints load framework configuration once. Live configuration stays
+  grouped by section until each target constructs itself from its mapping;
+  dataloader configuration temporarily retains validated typed settings.
   Environment variables may select a profile YAML file but must not directly
   override individual settings. Strategy parameters remain user-module Python
   data. Do not change real local `.env` files or credential files.

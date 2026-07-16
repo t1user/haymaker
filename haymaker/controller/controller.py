@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import partial
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -100,6 +100,41 @@ class Controller(Atom):
     _restart_before_correction: bool = True
     _sync_abort_event: asyncio.Event | None = field(default=None, repr=False)
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
+
+    @classmethod
+    def from_mapping(
+        cls,
+        values: Mapping[str, Any],
+        *,
+        startup: Mapping[str, Any],
+        trader: Trader,
+        blotter: Blotter | None = None,
+        health_check_observables: list[list[Callable[[], bool]]] | None = None,
+    ) -> Self:
+        """Construct a controller from configuration and runtime dependencies.
+
+        Args:
+            values: Merged ``controller`` configuration section.
+            startup: Merged one-run ``startup`` configuration section.
+            trader: Runtime broker order gateway.
+            blotter: Optional transaction logger.
+            health_check_observables: Runtime-owned health-check collections.
+
+        Returns:
+            Controller ready to install in a runtime context.
+        """
+
+        options = dict(startup)
+        options.update(values)
+        roll_time = options.get("future_roll_time")
+        if isinstance(roll_time, list):
+            options["future_roll_time"] = tuple(roll_time)
+        return cls(
+            trader=trader,
+            blotter=blotter,
+            health_check_observables=health_check_observables or [],
+            **options,
+        )
 
     def __post_init__(self) -> None:
         super().__init__()

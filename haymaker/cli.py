@@ -12,10 +12,10 @@ from .app import App, Runtime
 from .config import (
     DataloaderCommand,
     DataloaderSettings,
+    LiveConfig,
     LiveCommand,
-    LiveSettings,
     load_dataloader_settings,
-    load_live_settings,
+    load_live_config,
     parse_dataloader_args,
     parse_live_args,
 )
@@ -68,13 +68,14 @@ def load_user_module(module_path: str | Path) -> ModuleType:
 
 
 def _build_live_runtime(
-    settings: LiveSettings, module_path: str | Path
+    config: LiveConfig, module_path: str | Path
 ) -> tuple[Runtime, ConnectionSettings]:
     """Build a complete live runtime, then import its strategy module."""
 
-    runtime = LiveRuntime(settings)
+    connection = ConnectionSettings.from_mapping(config.connection)
+    runtime = LiveRuntime(config)
     load_user_module(module_path)
-    return runtime, settings.connection
+    return runtime, connection
 
 
 def _build_dataloader_runtime(
@@ -85,12 +86,17 @@ def _build_dataloader_runtime(
     return DataloaderRuntime(settings), settings.connection
 
 
-def _run_live(command: LiveCommand, settings: LiveSettings) -> None:
-    """Run one validated live command through the shared application."""
+def _run_live(command: LiveCommand, config: LiveConfig) -> None:
+    """Run one merged live configuration through the shared application."""
 
-    setup_logging(settings.logging, settings.storage.base_directory)
+    logging_options = dict(config.logging)
+    logging_options.pop("log_broker", None)
+    setup_logging(
+        **logging_options,
+        base_directory=config.storage.base_directory,
+    )
     try:
-        runtime, connection = _build_live_runtime(settings, command.module_path)
+        runtime, connection = _build_live_runtime(config, command.module_path)
         App(runtime, connection).run()
     finally:
         shutdown_logging_queue()
@@ -100,7 +106,11 @@ def _run_dataloader(command: DataloaderCommand, settings: DataloaderSettings) ->
     """Run one validated dataloader command through the shared application."""
 
     del command
-    setup_logging(settings.logging, settings.storage.base_directory)
+    setup_logging(
+        config_file=settings.logging.config_file,
+        directory=settings.logging.directory,
+        base_directory=settings.storage.base_directory,
+    )
     try:
         runtime, connection = _build_dataloader_runtime(settings)
         App(runtime, connection).run()
@@ -112,7 +122,7 @@ def main(argv: list[str] | None = None) -> None:
     """Run a live Haymaker strategy module under framework control."""
 
     command = parse_live_args(list(sys.argv[1:] if argv is None else argv))
-    _run_live(command, load_live_settings(command))
+    _run_live(command, load_live_config(command))
 
 
 def dataloader_main(argv: list[str] | None = None) -> None:

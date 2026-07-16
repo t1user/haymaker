@@ -60,6 +60,33 @@ def set_broker_state(
     monkeypatch.setattr(controller.ib, "fills", lambda: list(fills))
 
 
+def test_from_mapping_combines_startup_and_controller_config(atom_runtime) -> None:
+    controller = Controller.from_mapping(
+        {
+            "sync_frequency": 30,
+            "future_roll_time": [14, 0],
+            "missing_brackets": "warn",
+        },
+        startup={"cold_start": False, "reset": True},
+        trader=Trader(atom_runtime.ib),
+    )
+
+    assert controller.sync_frequency == 30
+    assert controller.future_roll_time == (14, 0)
+    assert controller.missing_brackets == "warn"
+    assert controller.cold_start is False
+    assert controller.reset is True
+
+
+def test_from_mapping_rejects_unknown_controller_key(atom_runtime) -> None:
+    with pytest.raises(TypeError, match="unknown"):
+        Controller.from_mapping(
+            {"unknown": True},
+            startup={},
+            trader=Trader(atom_runtime.ib),
+        )
+
+
 # @pytest.fixture()
 # def controller(Controller):
 #     return Controller()

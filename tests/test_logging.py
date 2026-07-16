@@ -11,7 +11,6 @@ import pytest
 import yaml
 
 import haymaker.logging as haymaker_logging
-from haymaker.config.settings import LoggingSettings
 from haymaker.logging.handlers import TelegramHandler
 from haymaker.logging.setup import (
     setup_asyncio_logging,
@@ -96,7 +95,8 @@ def test_setup_logging_injects_runtime_directories(
     monkeypatch.setattr("haymaker.logging.setup.setup_logging_queue", lambda: None)
 
     setup_logging(
-        LoggingSettings(config_file=config_file, directory="runtime_logs"),
+        config_file=config_file,
+        directory="runtime_logs",
         base_directory="runtime_data",
     )
 

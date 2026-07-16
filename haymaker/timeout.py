@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, ClassVar, Self
+from typing import Any, Callable, ClassVar, Literal, Self
 
 import eventkit as ev  # type: ignore
 
@@ -15,6 +16,38 @@ from haymaker.contract_registry import Details
 log = logging.getLogger(__name__)
 
 _counter = itertools.count().__next__
+
+
+@dataclass(frozen=True)
+class TimeoutPolicy:
+    """Default stale-data timeout interval and action."""
+
+    seconds: float = 0
+    action: Literal["restart", "log"] = "restart"
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> Self:
+        """Construct and validate a timeout policy from plain configuration.
+
+        Args:
+            values: Merged ``timeout`` configuration section.
+
+        Returns:
+            Timeout policy ready to install in a runtime context.
+        """
+
+        policy = cls(**dict(values))
+        if policy.seconds < 0:
+            raise ValueError("timeout.seconds cannot be negative")
+        if policy.action not in ("restart", "log"):
+            raise ValueError("timeout.action must be restart or log")
+        return policy
+
+    @property
+    def log_only(self) -> bool:
+        """Return whether a timeout should only be logged."""
+
+        return self.action == "log"
 
 
 @dataclass

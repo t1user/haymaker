@@ -1,4 +1,4 @@
-"""Tests for strict typed framework configuration loading."""
+"""Tests for live configuration merging and target-owned construction."""
 
 from __future__ import annotations
 
@@ -8,15 +8,21 @@ import ib_insync as ibi
 import pytest
 
 import haymaker.config as config_package
+from haymaker.blotter import blotter_factory
 from haymaker.config import (
     ConfigError,
     DataloaderCommand,
     LiveCommand,
     load_dataloader_settings,
-    load_live_settings,
+    load_live_config,
     parse_live_args,
 )
 from haymaker.config.loader import deep_merge, load_yaml
+from haymaker.config.settings import StorageSettings
+from haymaker.databases import StoreFactory
+from haymaker.order_defaults import OrderDefaults
+from haymaker.supervisor import ConnectionSettings
+from haymaker.timeout import TimeoutPolicy
 
 
 def live_command(
@@ -32,17 +38,37 @@ def test_process_global_config_singleton_is_not_exported() -> None:
     """Importing configuration must not create process-owned settings."""
 
     assert not hasattr(config_package, "CONFIG")
+    assert not hasattr(config_package, "load_live_settings")
 
 
-def test_live_defaults_are_typed() -> None:
-    settings = load_live_settings(live_command(), environ={})
+def test_live_defaults_are_composed_by_target_objects() -> None:
+    config = load_live_config(live_command(), environ={})
+    connection = ConnectionSettings.from_mapping(config.connection)
+    timeout = TimeoutPolicy.from_mapping(config.timeout)
+    orders = OrderDefaults.from_mapping(config.orders)
 
-    assert settings.connection.client_id == 0
-    assert settings.connection.probe_contract == ibi.Forex("EURUSD")
-    assert settings.timeout.seconds == 300
-    assert settings.orders.open["algoParams"] == [
-        ibi.TagValue("adaptivePriority", "Normal")
-    ]
+    assert connection.client_id == 0
+    assert connection.probe_contract == ibi.Forex("EURUSD")
+    assert timeout.seconds == 300
+    assert orders.open["algoParams"] == [ibi.TagValue("adaptivePriority", "Normal")]
+
+
+def test_order_defaults_reject_invalid_order_fields_during_construction() -> None:
+    with pytest.raises(TypeError):
+        OrderDefaults.from_mapping({"open": {"notAnOrderField": True}})
+
+
+def test_timeout_policy_rejects_unknown_action() -> None:
+    with pytest.raises(ValueError, match="restart or log"):
+        TimeoutPolicy.from_mapping({"action": "ignore"})
+
+
+def test_blotter_factory_rejects_unknown_saver_type() -> None:
+    with pytest.raises(ValueError, match="csv or mongo"):
+        blotter_factory(
+            {"enabled": True, "saver": {"type": "unknown", "options": {}}},
+            StoreFactory(StorageSettings()),
+        )
 
 
 def test_dataloader_defaults_are_profile_specific() -> None:
@@ -89,7 +115,7 @@ def test_deep_merge_replaces_discriminated_mapping_when_type_changes() -> None:
 
 
 def test_dotted_overrides_replace_discriminated_mapping_as_one_layer() -> None:
-    settings = load_live_settings(
+    config = load_live_config(
         live_command(
             None,
             ("blotter.saver.type", "mongo"),
@@ -98,9 +124,10 @@ def test_dotted_overrides_replace_discriminated_mapping_as_one_layer() -> None:
         environ={},
     )
 
-    assert settings.blotter.saver is not None
-    assert settings.blotter.saver.type == "mongo"
-    assert settings.blotter.saver.options == {"collection": "audit"}
+    assert config.blotter["saver"] == {
+        "type": "mongo",
+        "options": {"collection": "audit"},
+    }
 
 
 def test_source_precedence_environment_yaml_then_cli_yaml_then_cli_values(
@@ -117,17 +144,17 @@ def test_source_precedence_environment_yaml_then_cli_yaml_then_cli_values(
         ("controller.sync_frequency", 40),
     )
 
-    settings = load_live_settings(
+    config = load_live_config(
         command,
         environ={"HAYMAKER_HAYMAKER_CONFIG_OVERRIDES": str(environment_file)},
     )
 
-    assert settings.controller.sync_frequency == 40
-    assert settings.controller.broker_request_timeout == 20
+    assert config.controller["sync_frequency"] == 40
+    assert config.controller["broker_request_timeout"] == 20
 
 
 def test_direct_environment_values_are_ignored() -> None:
-    settings = load_live_settings(
+    config = load_live_config(
         live_command(),
         environ={
             "HAYMAKER_CONNECTION__PORT": "9999",
@@ -135,8 +162,8 @@ def test_direct_environment_values_are_ignored() -> None:
         },
     )
 
-    assert settings.connection.port == 4002
-    assert settings.logging.config_file == Path("logging_config.yaml")
+    assert ConnectionSettings.from_mapping(config.connection).port == 4002
+    assert config.logging == {}
 
 
 def test_dedicated_cli_option_wins_over_generic_override() -> None:
@@ -144,9 +171,9 @@ def test_dedicated_cli_option_wins_over_generic_override() -> None:
         ["strategy.py", "--set-option", "startup.reset", "false", "--reset"]
     )
 
-    settings = load_live_settings(command, environ={})
+    config = load_live_config(command, environ={})
 
-    assert settings.startup.reset is True
+    assert config.startup["reset"] is True
 
 
 def test_cli_values_preserve_yaml_scalar_and_collection_types() -> None:
@@ -162,10 +189,10 @@ def test_cli_values_preserve_yaml_scalar_and_collection_types() -> None:
         ]
     )
 
-    settings = load_live_settings(command, environ={})
+    config = load_live_config(command, environ={})
 
-    assert settings.logging.log_broker is True
-    assert settings.controller.future_roll_time == (15, 30)
+    assert config.logging["log_broker"] is True
+    assert config.controller["future_roll_time"] == [15, 30]
 
 
 @pytest.mark.parametrize(
@@ -213,20 +240,21 @@ def test_unknown_old_key_is_rejected(tmp_path: Path) -> None:
     config_file.write_text("coldstart: true\n")
 
     with pytest.raises(ConfigError, match="coldstart"):
-        load_live_settings(live_command(config_file), environ={})
+        load_live_config(live_command(config_file), environ={})
 
 
-def test_wrong_type_reports_dotted_path(tmp_path: Path) -> None:
-    config_file = tmp_path / "wrong.yaml"
-    config_file.write_text("connection:\n  port: '4002'\n")
+def test_target_rejects_unknown_section_key(tmp_path: Path) -> None:
+    config_file = tmp_path / "unknown.yaml"
+    config_file.write_text("connection:\n  unknown: true\n")
+    config = load_live_config(live_command(config_file), environ={})
 
-    with pytest.raises(ConfigError, match="connection.port"):
-        load_live_settings(live_command(config_file), environ={})
+    with pytest.raises(TypeError, match="unknown"):
+        ConnectionSettings.from_mapping(config.connection)
 
 
 def test_missing_config_file_is_reported(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="Cannot load configuration"):
-        load_live_settings(live_command(tmp_path / "missing.yaml"), environ={})
+        load_live_config(live_command(tmp_path / "missing.yaml"), environ={})
 
 
 def test_plain_probe_contract_mapping_is_converted(tmp_path: Path) -> None:
@@ -240,6 +268,7 @@ def test_plain_probe_contract_mapping_is_converted(tmp_path: Path) -> None:
         "    currency: USD\n"
     )
 
-    settings = load_live_settings(live_command(config_file), environ={})
+    config = load_live_config(live_command(config_file), environ={})
+    settings = ConnectionSettings.from_mapping(config.connection)
 
-    assert settings.connection.probe_contract == ibi.Stock("SPY", "SMART", "USD")
+    assert settings.probe_contract == ibi.Stock("SPY", "SMART", "USD")

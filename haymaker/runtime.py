@@ -3,24 +3,29 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass, field
-from typing import Self
+from typing import Any, Self
 
 import ib_insync as ibi
 
 from .base import Atom
 from .blotter import blotter_factory
-from .config.settings import LiveSettings, OrderDefaults, TimeoutPolicy
+from .config.settings import LiveConfig
 from .contract_registry import ContractRegistry
 from .controller import Controller
 from .databases import StoreFactory
 from .handlers import IBHandlers
+from .order_defaults import OrderDefaults
 from .saver import MongoLatestSaver, MongoSaver
-from .state_machine import StateMachine
+from .state_machine import (
+    DEFAULT_ORDER_COLLECTION_NAME,
+    DEFAULT_STRATEGY_COLLECTION_NAME,
+    StateMachine,
+)
 from .streamers import Streamer
-from .timeout import Timeout
+from .timeout import Timeout, TimeoutPolicy
 from .trader import Trader
 
 log = logging.getLogger(__name__)
@@ -181,14 +186,14 @@ class LiveRuntime:
     """Construct and coordinate one process-owned live runtime.
 
     Args:
-        settings: Validated framework settings for this live process.
+        config: Merged framework configuration for this live process.
         ib: Optional broker client owned by the runtime.
         store_factory: Optional persistence factory for focused callers and tests.
         contract_registry: Optional preconfigured contract registry.
         sm: Optional preconfigured state machine.
     """
 
-    settings: LiveSettings = field(repr=False)
+    config: LiveConfig = field(repr=False)
     ib: ibi.IB = field(default_factory=ibi.IB)
     store_factory: StoreFactory | None = field(default=None, repr=False)
     contract_registry: ContractRegistry | None = field(default=None, repr=False)
@@ -201,30 +206,11 @@ class LiveRuntime:
         """Build services and install a complete Atom context before returning."""
 
         if self.store_factory is None:
-            self.store_factory = StoreFactory(self.settings.storage)
+            self.store_factory = StoreFactory(self.config.storage)
         if self.contract_registry is None:
-            self.contract_registry = ContractRegistry(
-                self.settings.futures.roll_bdays,
-                self.settings.futures.roll_margin_bdays,
-            )
+            self.contract_registry = ContractRegistry(**dict(self.config.futures))
         if self.sm is None:
-            state_settings = self.settings.state_machine
-            mongo_client = self.store_factory.mongo_client()
-            self.sm = StateMachine(
-                order_saver=MongoSaver(
-                    state_settings.order_collection_name,
-                    query_key="orderId",
-                    client=mongo_client,
-                    database=self.store_factory.database,
-                ),
-                strategy_saver=MongoLatestSaver(
-                    state_settings.strategy_collection_name,
-                    client=mongo_client,
-                    database=self.store_factory.database,
-                ),
-                save_delay=state_settings.save_delay,
-                max_rejected_orders=state_settings.max_rejected_orders,
-            )
+            self.sm = self._create_state_machine(self.config.state_machine)
         trader = Trader(self.ib)
         self.context = RuntimeContext(
             self.ib,
@@ -232,36 +218,16 @@ class LiveRuntime:
             self.sm,
             trader,
             self.store_factory,
-            self.settings.orders,
-            self.settings.timeout,
-            self.settings.storage.dataframe_save_frequency,
+            OrderDefaults.from_mapping(self.config.orders),
+            TimeoutPolicy.from_mapping(self.config.timeout),
+            self.config.storage.dataframe_save_frequency,
         )
         Atom.set_runtime_context(self.context)
-        controller_settings = self.settings.controller
-        startup = self.settings.startup
-        self.context.controller = Controller(
+        self.context.controller = Controller.from_mapping(
+            self.config.controller,
+            startup=self.config.startup,
             trader=trader,
-            blotter=blotter_factory(self.settings.blotter, self.store_factory),
-            cold_start=startup.cold_start,
-            reset=startup.reset,
-            zero=startup.zero,
-            nuke=startup.nuke,
-            log_order_events=controller_settings.log_order_events,
-            sync_frequency=controller_settings.sync_frequency,
-            health_check_frequency=controller_settings.health_check_frequency,
-            execution_verification_delay=(
-                controller_settings.execution_verification_delay
-            ),
-            execution_verification_max_retries=(
-                controller_settings.execution_verification_max_retries
-            ),
-            broker_request_timeout=controller_settings.broker_request_timeout,
-            sync_max_attempts=controller_settings.sync_max_attempts,
-            sync_resync_delay=controller_settings.sync_resync_delay,
-            cancel_unknown_trades=controller_settings.cancel_unknown_trades,
-            missing_brackets=controller_settings.missing_brackets,
-            ignore_errors=controller_settings.ignore_errors,
-            future_roll_time=controller_settings.future_roll_time,
+            blotter=blotter_factory(self.config.blotter, self.store_factory),
             health_check_observables=[self.store_factory.health_checks],
         )
         self.startup_jobs = StartupJobs(
@@ -269,8 +235,42 @@ class LiveRuntime:
             self.ib,
             Streamer.instances,
         )
-        if self.settings.logging.log_broker:
+        if self.config.logging.get("log_broker", False):
             self._broker_logger = IBHandlers(self.ib)
+
+    def _create_state_machine(self, settings: Mapping[str, Any]) -> StateMachine:
+        """Construct state services from configuration and injected storage.
+
+        Args:
+            settings: Merged ``state_machine`` configuration section.
+
+        Returns:
+            State machine using runtime-owned Mongo savers.
+        """
+
+        assert self.store_factory is not None
+        options = dict(settings)
+        order_collection_name = options.pop(
+            "order_collection_name", DEFAULT_ORDER_COLLECTION_NAME
+        )
+        strategy_collection_name = options.pop(
+            "strategy_collection_name", DEFAULT_STRATEGY_COLLECTION_NAME
+        )
+        mongo_client = self.store_factory.mongo_client()
+        return StateMachine(
+            order_saver=MongoSaver(
+                order_collection_name,
+                query_key="orderId",
+                client=mongo_client,
+                database=self.store_factory.database,
+            ),
+            strategy_saver=MongoLatestSaver(
+                strategy_collection_name,
+                client=mongo_client,
+                database=self.store_factory.database,
+            ),
+            **options,
+        )
 
     def bind_supervisor(
         self,

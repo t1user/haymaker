@@ -15,7 +15,7 @@ from haymaker.config import (
     DataloaderCommand,
     LiveCommand,
     load_dataloader_settings,
-    load_live_settings,
+    load_live_config,
 )
 
 
@@ -51,9 +51,7 @@ def test_load_user_module_restores_previous_module_after_failure(
 def test_build_live_runtime_installs_context_before_import(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = load_live_settings(
-        LiveCommand(Path("strategy.py"), None, ()), environ={}
-    )
+    config = load_live_config(LiveCommand(Path("strategy.py"), None, ()), environ={})
     calls: list[tuple[str, object]] = []
     runtime = object()
 
@@ -68,33 +66,34 @@ def test_build_live_runtime_installs_context_before_import(
     monkeypatch.setattr(cli, "LiveRuntime", create_runtime)
     monkeypatch.setattr(cli, "load_user_module", load)
 
-    built, connection = cli._build_live_runtime(settings, "strategy.py")
+    built, connection = cli._build_live_runtime(config, "strategy.py")
 
     assert built is runtime
-    assert connection is settings.connection
-    assert calls == [("runtime", settings), ("load", "strategy.py")]
+    assert connection.client_id == 0
+    assert calls == [("runtime", config), ("load", "strategy.py")]
 
 
-def test_main_runs_validated_settings_under_framework_control(
+def test_main_runs_merged_config_under_framework_control(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     command = LiveCommand(Path("strategy.py"), None, ())
-    settings = load_live_settings(command, environ={})
+    config = load_live_config(command, environ={})
     runtime = object()
+    connection = object()
     calls: list[tuple[str, object]] = []
 
     monkeypatch.setattr(cli, "parse_live_args", lambda argv: command)
 
     def load_settings(received: LiveCommand) -> object:
         calls.append(("load_settings", received))
-        return settings
+        return config
 
-    def setup_logging(logging: object, base_directory: str) -> None:
-        calls.append(("setup_logging", (logging, base_directory)))
+    def setup_logging(**kwargs: object) -> None:
+        calls.append(("setup_logging", kwargs))
 
     def build(received: object, module_path: object) -> tuple[object, object]:
         calls.append(("build", (received, module_path)))
-        return runtime, settings.connection
+        return runtime, connection
 
     class FakeApp:
         def __init__(self, received_runtime: object, connection: object) -> None:
@@ -103,7 +102,7 @@ def test_main_runs_validated_settings_under_framework_control(
         def run(self) -> None:
             calls.append(("run", None))
 
-    monkeypatch.setattr(cli, "load_live_settings", load_settings)
+    monkeypatch.setattr(cli, "load_live_config", load_settings)
     monkeypatch.setattr(cli, "setup_logging", setup_logging)
     monkeypatch.setattr(cli, "_build_live_runtime", build)
     monkeypatch.setattr(cli, "App", FakeApp)
@@ -117,9 +116,9 @@ def test_main_runs_validated_settings_under_framework_control(
 
     assert calls == [
         ("load_settings", command),
-        ("setup_logging", (settings.logging, settings.storage.base_directory)),
-        ("build", (settings, command.module_path)),
-        ("app", (runtime, settings.connection)),
+        ("setup_logging", {"base_directory": config.storage.base_directory}),
+        ("build", (config, command.module_path)),
+        ("app", (runtime, connection)),
         ("run", None),
         ("shutdown", None),
     ]
@@ -129,12 +128,12 @@ def test_main_flushes_logging_when_runtime_construction_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     command = LiveCommand(Path("strategy.py"), None, ())
-    settings = load_live_settings(command, environ={})
+    config = load_live_config(command, environ={})
     calls: list[str] = []
 
     monkeypatch.setattr(cli, "parse_live_args", lambda argv: command)
-    monkeypatch.setattr(cli, "load_live_settings", lambda command: settings)
-    monkeypatch.setattr(cli, "setup_logging", lambda *args: calls.append("setup"))
+    monkeypatch.setattr(cli, "load_live_config", lambda command: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda **kwargs: calls.append("setup"))
 
     def fail(*args: object) -> tuple[Any, Any]:
         calls.append("runtime")
@@ -162,7 +161,7 @@ def test_dataloader_main_uses_typed_runtime_settings(
     monkeypatch.setattr(
         cli,
         "setup_logging",
-        lambda logging, directory: calls.append(("setup", (logging, directory))),
+        lambda **kwargs: calls.append(("setup", kwargs)),
     )
     monkeypatch.setattr(
         cli,
@@ -185,7 +184,14 @@ def test_dataloader_main_uses_typed_runtime_settings(
     cli.dataloader_main([])
 
     assert calls == [
-        ("setup", (settings.logging, settings.storage.base_directory)),
+        (
+            "setup",
+            {
+                "config_file": settings.logging.config_file,
+                "directory": settings.logging.directory,
+                "base_directory": settings.storage.base_directory,
+            },
+        ),
         ("app", (runtime, settings.connection)),
         ("run", None),
         ("shutdown", None),

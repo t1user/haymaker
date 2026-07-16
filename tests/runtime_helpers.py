@@ -68,11 +68,13 @@ from typing import Any, Self
 import ib_insync as ibi
 
 from haymaker.base import Atom
-from haymaker.config.settings import OrderDefaults, StorageSettings, TimeoutPolicy
+from haymaker.config.settings import StorageSettings
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
 from haymaker.databases import StoreFactory
+from haymaker.order_defaults import OrderDefaults
 from haymaker.state_machine import StateMachine
+from haymaker.timeout import TimeoutPolicy
 from haymaker.trader import Trader
 
 

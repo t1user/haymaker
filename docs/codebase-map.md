@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-07-15.
+Last updated: 2026-07-16.
 
 ## High-Level Purpose
 
@@ -49,12 +49,13 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/base.py`: `Atom`, event connection primitives, contract descriptor, contract-change handling, and `Pipe` composition support.
 - `haymaker/cli.py`: `haymaker` and `dataloader` console-script entrypoints.
-  Each parses its command once, loads and validates typed profile settings,
-  starts threaded logging, builds the appropriate runtime, and owns user
-  strategy module loading with failed-import rollback in `sys.modules`.
-- `haymaker/config/`: frozen live and dataloader settings dataclasses, safe YAML
-  loading, deterministic profile merging, explicit object conversion, and
-  side-effect-free command-line parsers.
+  Each parses its command once, loads its profile configuration, starts
+  threaded logging, builds the appropriate runtime, and owns user strategy
+  module loading with failed-import rollback in `sys.modules`.
+- `haymaker/config/`: safe YAML loading, deterministic profile merging, a
+  section-based `LiveConfig`, retained typed dataloader settings, and
+  side-effect-free command-line parsers. Live targets own their field defaults
+  and necessary mapping conversion.
 - `haymaker/app.py`: shared Linux top-level `App.run()` lifecycle, application
   runtime protocol, supervisor composition, graceful `SIGTERM`, and propagation
   of unexpected workload failures after cleanup.
@@ -240,11 +241,13 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 ## Configuration and Environment
 
 The CLI assembles framework configuration once through
-`haymaker/config/loader.py`, validates it into frozen `LiveSettings` or
-`DataloaderSettings`, and injects that object into the appropriate runtime.
-Runtime components receive their specific settings or ready services; they do
-not read a process-global configuration object. Strategy-specific parameters
-remain ordinary Python data in the user module.
+`haymaker/config/loader.py`. Live loading returns `LiveConfig`, whose original
+sections remain mappings until the owning target constructs itself; storage
+temporarily retains `StorageSettings` pending the separate datastore refactor.
+The dataloader still receives validated `DataloaderSettings`. Runtime components
+receive their specific section or ready service and do not read a process-global
+configuration object. Strategy-specific parameters remain ordinary Python data
+in the user module.
 
 Configuration precedence, from lowest to highest, is:
 
@@ -256,7 +259,8 @@ Configuration precedence, from lowest to highest, is:
 
 YAML is parsed with a safe duplicate-key-rejecting loader. Mappings merge
 recursively, while lists and scalars replace lower-priority values. Unknown
-keys and invalid types fail before runtime construction.
+top-level sections fail during loading. Live leaf values are interpreted by
+target constructors; dataloader leaf values retain central typed validation.
 
 Important config files:
 

@@ -1,51 +1,17 @@
 startup:
   cold_start: false
-  reset: false
-  zero: false
-  nuke: false
 
-connection:
-  host: 127.0.0.1
-  port: 4002
-  client_id: 0
-  connect_timeout: 15
-  retry_delay: 30
-  app_timeout: 90
-  probe_contract:
-    secType: CASH
-    symbol: EUR
-    currency: USD
-    exchange: IDEALPRO
-  probe_timeout: 15
-  connection_lost_retry_delay: 90
-  auto_recovery_grace_period: 120
-  restart_on_recovered_connection: false
-  log_datafarm_status: true
+connection: {}
 
-logging:
-  config_file: logging_config.yaml
-  directory: logs
-  log_broker: false
+logging: {}
 
 controller:
   ignore_errors: [2107, 2108, 2109, 202, 321]
-  log_order_events: false
   future_roll_time: [14, 0]
   sync_frequency: 900
-  health_check_frequency: 0
   execution_verification_delay: 15
-  execution_verification_max_retries: 5
-  broker_request_timeout: 10
-  sync_max_attempts: 3
-  sync_resync_delay: 1
-  cancel_unknown_trades: false
-  missing_brackets: ignore
 
-state_machine:
-  save_delay: 1
-  strategy_collection_name: strategies
-  order_collection_name: orders
-  max_rejected_orders: 3
+state_machine: {}
 
 storage:
   base_directory: ib_data
@@ -85,8 +51,5 @@ orders:
 
 timeout:
   seconds: 300
-  action: restart
 
-futures:
-  roll_bdays: 3
-  roll_margin_bdays: 3
+futures: {}
