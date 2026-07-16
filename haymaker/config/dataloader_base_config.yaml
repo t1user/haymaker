@@ -1,24 +1,9 @@
 connection:
-  host: 127.0.0.1
-  port: 4002
   client_id: 1
-  connect_timeout: 15
-  retry_delay: 30
   app_timeout: 600
-  probe_contract:
-    secType: CASH
-    symbol: EUR
-    currency: USD
-    exchange: IDEALPRO
-  probe_timeout: 15
-  connection_lost_retry_delay: 90
-  auto_recovery_grace_period: 120
-  restart_on_recovered_connection: false
-  log_datafarm_status: true
 
 logging:
   config_file: dataloader_logging_config.yaml
-  directory: logs
 
 storage:
   base_directory: ib_data
@@ -31,21 +16,8 @@ storage:
   market_data_library: market_data
   dataframe_save_frequency: 900
 
-download:
-  source: contracts.csv
-  bar_size: 30 secs
-  what_to_show: TRADES
-  max_lookback_days: null
-  gap_fill_mode: "off"
-  use_rth: false
-  save_every_chunks: 10
-  number_of_workers: 10
+download: {}
 
-pacing:
-  no_restriction: false
-  allowance_fraction: 1.0
+pacing: {}
 
-futures:
-  selector: current_and_expired
-  full_chain_spec: full
-  current_index: 0
+futures: {}

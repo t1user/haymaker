@@ -11,10 +11,10 @@ from typing import cast
 from .app import App, Runtime
 from .config import (
     DataloaderCommand,
-    DataloaderSettings,
+    DataloaderConfig,
     LiveConfig,
     LiveCommand,
-    load_dataloader_settings,
+    load_dataloader_config,
     load_live_config,
     parse_dataloader_args,
     parse_live_args,
@@ -79,11 +79,12 @@ def _build_live_runtime(
 
 
 def _build_dataloader_runtime(
-    settings: DataloaderSettings,
+    config: DataloaderConfig,
 ) -> tuple[Runtime, ConnectionSettings]:
     """Build the configured standalone dataloader runtime."""
 
-    return DataloaderRuntime(settings), settings.connection
+    connection = ConnectionSettings.from_mapping(config.connection)
+    return DataloaderRuntime(config), connection
 
 
 def _run_live(command: LiveCommand, config: LiveConfig) -> None:
@@ -102,17 +103,16 @@ def _run_live(command: LiveCommand, config: LiveConfig) -> None:
         shutdown_logging_queue()
 
 
-def _run_dataloader(command: DataloaderCommand, settings: DataloaderSettings) -> None:
-    """Run one validated dataloader command through the shared application."""
+def _run_dataloader(command: DataloaderCommand, config: DataloaderConfig) -> None:
+    """Run one merged dataloader configuration through the shared application."""
 
     del command
     setup_logging(
-        config_file=settings.logging.config_file,
-        directory=settings.logging.directory,
-        base_directory=settings.storage.base_directory,
+        **dict(config.logging),
+        base_directory=config.storage.base_directory,
     )
     try:
-        runtime, connection = _build_dataloader_runtime(settings)
+        runtime, connection = _build_dataloader_runtime(config)
         App(runtime, connection).run()
     finally:
         shutdown_logging_queue()
@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def dataloader_main(argv: list[str] | None = None) -> None:
-    """Run the dataloader with explicit dataloader settings."""
+    """Run the dataloader with explicit dataloader configuration."""
 
     command = parse_dataloader_args(list(sys.argv[1:] if argv is None else argv))
-    _run_dataloader(command, load_dataloader_settings(command))
+    _run_dataloader(command, load_dataloader_config(command))

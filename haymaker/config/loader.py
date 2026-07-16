@@ -4,23 +4,15 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, MutableMapping, Sequence
-from dataclasses import fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
-import ib_insync as ibi
 import yaml
 
-from haymaker.supervisor.settings import ConnectionSettings
-
 from .settings import (
-    DataloaderFuturesSettings,
-    DataloaderSettings,
-    DownloadSettings,
+    DataloaderConfig,
     LiveConfig,
-    LoggingSettings,
     MongoSettings,
-    PacingSettings,
     StorageSettings,
 )
 
@@ -205,92 +197,6 @@ def _optional_str(value: Any, path: str) -> str | None:
     return _typed(value, str, path)
 
 
-def _positive_int(value: Any, path: str) -> int:
-    """Validate a strictly positive integer value."""
-
-    result = _typed(value, int, path)
-    if result <= 0:
-        raise ConfigError(f"{path} must be a positive integer")
-    return result
-
-
-def _non_negative_number(value: Any, path: str) -> float:
-    """Validate a non-negative numeric value and normalize it to float."""
-
-    result = _typed(value, float, path)
-    if result < 0:
-        raise ConfigError(f"{path} cannot be negative")
-    return result
-
-
-def _parse_logging(data: Mapping[str, Any], *, default_file: str) -> LoggingSettings:
-    """Build validated logging settings from plain configuration data."""
-
-    _reject_unknown(data, {"config_file", "directory", "log_broker"}, "logging")
-    config_file = data.get("config_file", default_file)
-    return LoggingSettings(
-        config_file=(
-            Path(_typed(config_file, str, "logging.config_file")).expanduser()
-            if config_file is not None
-            else None
-        ),
-        directory=_typed(data.get("directory", "logs"), str, "logging.directory"),
-        log_broker=_typed(data.get("log_broker", False), bool, "logging.log_broker"),
-    )
-
-
-def _parse_connection(data: Mapping[str, Any]) -> ConnectionSettings:
-    """Build supervisor settings and explicitly construct its probe contract."""
-
-    allowed = {field.name for field in fields(ConnectionSettings)}
-    _reject_unknown(data, allowed, "connection")
-    probe_data = _mapping(data.get("probe_contract", {}), "connection.probe_contract")
-    contract_fields = {field.name for field in fields(ibi.Contract)}
-    _reject_unknown(probe_data, contract_fields, "connection.probe_contract")
-    try:
-        probe_contract = (
-            ibi.Contract.create(**probe_data) if probe_data else ibi.Forex("EURUSD")
-        )
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"Invalid connection.probe_contract: {exc}") from exc
-    return ConnectionSettings(
-        host=_typed(data.get("host", "127.0.0.1"), str, "connection.host"),
-        port=_positive_int(data.get("port", 4002), "connection.port"),
-        client_id=_typed(data.get("client_id", 0), int, "connection.client_id"),
-        connect_timeout=_non_negative_number(
-            data.get("connect_timeout", 15), "connection.connect_timeout"
-        ),
-        retry_delay=_non_negative_number(
-            data.get("retry_delay", 30), "connection.retry_delay"
-        ),
-        app_timeout=_non_negative_number(
-            data.get("app_timeout", 90), "connection.app_timeout"
-        ),
-        probe_contract=probe_contract,
-        probe_timeout=_non_negative_number(
-            data.get("probe_timeout", 15), "connection.probe_timeout"
-        ),
-        connection_lost_retry_delay=_non_negative_number(
-            data.get("connection_lost_retry_delay", 90),
-            "connection.connection_lost_retry_delay",
-        ),
-        auto_recovery_grace_period=_non_negative_number(
-            data.get("auto_recovery_grace_period", 120),
-            "connection.auto_recovery_grace_period",
-        ),
-        restart_on_recovered_connection=_typed(
-            data.get("restart_on_recovered_connection", False),
-            bool,
-            "connection.restart_on_recovered_connection",
-        ),
-        log_datafarm_status=_typed(
-            data.get("log_datafarm_status", True),
-            bool,
-            "connection.log_datafarm_status",
-        ),
-    )
-
-
 def _parse_storage(data: Mapping[str, Any]) -> StorageSettings:
     """Build validated persistence and filesystem settings."""
 
@@ -363,105 +269,21 @@ def load_live_config(
     )
 
 
-def _parse_download(data: Mapping[str, Any]) -> DownloadSettings:
-    """Build validated historical-download policy settings."""
-
-    allowed = {field.name for field in fields(DownloadSettings)}
-    _reject_unknown(data, allowed, "download")
-    gap_fill_mode = data.get("gap_fill_mode", "off")
-    if gap_fill_mode not in {"off", "heuristic", "schedule", "auto"}:
-        raise ConfigError("download.gap_fill_mode has an invalid value")
-    max_lookback = data.get("max_lookback_days")
-    if max_lookback is not None:
-        max_lookback = _positive_int(max_lookback, "download.max_lookback_days")
-    return DownloadSettings(
-        source=_typed(data.get("source", "contracts.csv"), str, "download.source"),
-        bar_size=_typed(data.get("bar_size", "30 secs"), str, "download.bar_size"),
-        what_to_show=_typed(
-            data.get("what_to_show", "TRADES"), str, "download.what_to_show"
-        ),
-        max_lookback_days=max_lookback,
-        gap_fill_mode=cast(
-            Literal["off", "heuristic", "schedule", "auto"], gap_fill_mode
-        ),
-        use_rth=_typed(data.get("use_rth", False), bool, "download.use_rth"),
-        save_every_chunks=_positive_int(
-            data.get("save_every_chunks", 10), "download.save_every_chunks"
-        ),
-        number_of_workers=_positive_int(
-            data.get("number_of_workers", 10), "download.number_of_workers"
-        ),
-    )
-
-
-def _parse_pacing(data: Mapping[str, Any]) -> PacingSettings:
-    """Build validated dataloader request-pacing settings."""
-
-    _reject_unknown(data, {"no_restriction", "allowance_fraction"}, "pacing")
-    allowance = _typed(
-        data.get("allowance_fraction", 1.0), float, "pacing.allowance_fraction"
-    )
-    if allowance <= 0:
-        raise ConfigError("pacing.allowance_fraction must be positive")
-    return PacingSettings(
-        no_restriction=_typed(
-            data.get("no_restriction", False), bool, "pacing.no_restriction"
-        ),
-        allowance_fraction=allowance,
-    )
-
-
-def _parse_dataloader_futures(
-    data: Mapping[str, Any],
-) -> DataloaderFuturesSettings:
-    """Build validated dataloader futures-selection settings."""
-
-    allowed = {field.name for field in fields(DataloaderFuturesSettings)}
-    _reject_unknown(data, allowed, "futures")
-    selector = _typed(
-        data.get("selector", "current_and_expired"), str, "futures.selector"
-    )
-    if selector not in {
-        "contfuture",
-        "fullchain",
-        "current",
-        "exact",
-        "current_and_contfuture",
-        "current_and_expired",
-    }:
-        raise ConfigError("futures.selector has an invalid value")
-    full_chain_spec = _typed(
-        data.get("full_chain_spec", "full"), str, "futures.full_chain_spec"
-    )
-    if full_chain_spec not in {"full", "active", "expired"}:
-        raise ConfigError("futures.full_chain_spec has an invalid value")
-    return DataloaderFuturesSettings(
-        selector=selector,
-        full_chain_spec=full_chain_spec,
-        current_index=_typed(
-            data.get("current_index", 0), int, "futures.current_index"
-        ),
-    )
-
-
-def load_dataloader_settings(
+def load_dataloader_config(
     command: "DataloaderCommand", environ: Mapping[str, str] | None = None
-) -> DataloaderSettings:
-    """Load and validate settings for one dataloader command."""
+) -> DataloaderConfig:
+    """Load and merge configuration for one dataloader command."""
 
     config = _merged_config(
         "dataloader", command.config_file, command.overrides, environ
     )
     allowed = {"connection", "logging", "storage", "download", "pacing", "futures"}
     _reject_unknown(config, allowed, "root")
-    return DataloaderSettings(
-        connection=_parse_connection(_section(config, "connection")),
-        logging=_parse_logging(
-            _section(config, "logging"),
-            default_file="dataloader_logging_config.yaml",
-        ),
+    return DataloaderConfig(
+        connection=_section(config, "connection"),
+        logging=_section(config, "logging"),
         storage=_parse_storage(_section(config, "storage")),
-        download=_parse_download(_section(config, "download")),
-        pacing=_parse_pacing(_section(config, "pacing")),
-        futures=_parse_dataloader_futures(_section(config, "futures")),
+        download=_section(config, "download"),
+        pacing=_section(config, "pacing"),
+        futures=_section(config, "futures"),
     )

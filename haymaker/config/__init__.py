@@ -6,31 +6,23 @@ from .cli_options import (
     parse_dataloader_args,
     parse_live_args,
 )
-from .loader import ConfigError, load_dataloader_settings, load_live_config
+from .loader import ConfigError, load_dataloader_config, load_live_config
 from .settings import (
-    DataloaderFuturesSettings,
-    DataloaderSettings,
-    DownloadSettings,
+    DataloaderConfig,
     LiveConfig,
-    LoggingSettings,
     MongoSettings,
-    PacingSettings,
     StorageSettings,
 )
 
 __all__ = [
     "ConfigError",
     "DataloaderCommand",
-    "DataloaderFuturesSettings",
-    "DataloaderSettings",
-    "DownloadSettings",
+    "DataloaderConfig",
     "LiveCommand",
     "LiveConfig",
-    "LoggingSettings",
     "MongoSettings",
-    "PacingSettings",
     "StorageSettings",
-    "load_dataloader_settings",
+    "load_dataloader_config",
     "load_live_config",
     "parse_dataloader_args",
     "parse_live_args",

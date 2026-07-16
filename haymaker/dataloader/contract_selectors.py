@@ -9,13 +9,13 @@ contract-details lookups so broker requests share one pacing policy.
 from __future__ import annotations
 
 import logging
-from dataclasses import fields
+from collections.abc import Mapping
+from dataclasses import dataclass, fields
 from datetime import date
-from typing import AsyncGenerator, Self
+from typing import Any, AsyncGenerator, Self
 
 import ib_insync as ibi
 
-from haymaker.config.settings import DataloaderFuturesSettings
 from haymaker.misc import async_cached_property
 
 from .pacer import RequestPacing
@@ -25,6 +25,55 @@ log = logging.getLogger(__name__)
 
 class ContractQualificationError(ValueError):
     """Raised when an IB contract specification cannot be resolved uniquely."""
+
+
+@dataclass(frozen=True)
+class FuturesSelectionPolicy:
+    """Policy shared by dataloader futures contract selectors.
+
+    Attributes:
+        selector: Selector implementation used for futures rows.
+        full_chain_spec: Full-chain subset selected by full-chain expansion.
+        current_index: Offset from the contract IB identifies as current.
+    """
+
+    selector: str = "current_and_expired"
+    full_chain_spec: str = "full"
+    current_index: int = 0
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> Self:
+        """Construct futures selection policy from plain configuration.
+
+        Args:
+            values: Merged dataloader ``futures`` section.
+
+        Returns:
+            Validated futures selection policy.
+        """
+
+        return cls(**dict(values))
+
+    def __post_init__(self) -> None:
+        """Reject policy values that would otherwise select silently."""
+
+        if self.selector not in {
+            "contfuture",
+            "fullchain",
+            "current",
+            "exact",
+            "current_and_contfuture",
+            "current_and_expired",
+        }:
+            raise ValueError(f"Unknown futures selector: {self.selector!r}")
+        if self.full_chain_spec not in {"full", "active", "expired"}:
+            raise ValueError(
+                f"Unknown futures full-chain policy: {self.full_chain_spec!r}"
+            )
+        if not isinstance(self.current_index, int) or isinstance(
+            self.current_index, bool
+        ):
+            raise TypeError("futures.current_index must be an integer")
 
 
 class ContractSelector:
@@ -65,12 +114,12 @@ class ContractSelector:
     def from_kwargs(
         cls,
         pacing: RequestPacing,
-        futures: DataloaderFuturesSettings | None = None,
+        futures: FuturesSelectionPolicy | None = None,
         **kwargs,
     ) -> Self:
         """Create the selector appropriate for a contract specification."""
 
-        futures = futures or DataloaderFuturesSettings()
+        futures = futures or FuturesSelectionPolicy()
         secType = kwargs.get("secType")
         if secType not in cls.sec_types:
             raise TypeError(f"secType must be one of {cls.sec_types} not: {secType}")
@@ -82,7 +131,7 @@ class ContractSelector:
 
     @classmethod
     def from_future_kwargs(
-        cls, pacing: RequestPacing, futures: DataloaderFuturesSettings, **kwargs
+        cls, pacing: RequestPacing, futures: FuturesSelectionPolicy, **kwargs
     ):
         """Create the configured futures selector."""
 
@@ -91,13 +140,13 @@ class ContractSelector:
     def __init__(
         self,
         pacing: RequestPacing,
-        futures: DataloaderFuturesSettings | None = None,
+        futures: FuturesSelectionPolicy | None = None,
         **kwargs,
     ) -> None:
         """Initialize a selector for one contract specification."""
 
         self.pacing = pacing
-        self.futures = futures or DataloaderFuturesSettings()
+        self.futures = futures or FuturesSelectionPolicy()
         self.kwargs = self.clean_fields(**kwargs)
 
     def clean_fields(self, **kwargs) -> dict:
@@ -157,16 +206,14 @@ class FutureContractSelector(ContractSelector):
     def __init__(
         self,
         pacing: RequestPacing,
-        futures: DataloaderFuturesSettings | None = None,
+        futures: FuturesSelectionPolicy | None = None,
         **kwargs,
     ):
         kwargs.update(includeExpired=True)
         super().__init__(pacing=pacing, futures=futures, **kwargs)
 
     @classmethod
-    def create(
-        cls, pacing: RequestPacing, futures: DataloaderFuturesSettings, **kwargs
-    ):
+    def create(cls, pacing: RequestPacing, futures: FuturesSelectionPolicy, **kwargs):
         # in case of any ambiguities just go for contfuture
         klass = {
             "contfuture": ContfutureFutureContractSelector,
@@ -220,11 +267,11 @@ class FullchainFutureContractSelector(FutureContractSelector):
     def __init__(
         self,
         pacing: RequestPacing,
-        futures: DataloaderFuturesSettings | None = None,
+        futures: FuturesSelectionPolicy | None = None,
         spec: str | None = None,
         **kwargs,
     ):
-        futures = futures or DataloaderFuturesSettings()
+        futures = futures or FuturesSelectionPolicy()
         self.spec = spec or futures.full_chain_spec
         super().__init__(pacing=pacing, futures=futures, **kwargs)
 
@@ -233,7 +280,7 @@ class FullchainFutureContractSelector(FutureContractSelector):
         cls,
         spec: str,
         pacing: RequestPacing,
-        futures: DataloaderFuturesSettings | None = None,
+        futures: FuturesSelectionPolicy | None = None,
         **kwargs,
     ) -> Self:
         return cls(pacing=pacing, futures=futures, spec=spec, **kwargs)
@@ -281,7 +328,7 @@ class CurrentContfutureFutureContractSelector(FutureContractSelector):
     def __init__(
         self,
         pacing: RequestPacing,
-        futures: DataloaderFuturesSettings | None = None,
+        futures: FuturesSelectionPolicy | None = None,
         **kwargs,
     ) -> None:
         super().__init__(pacing=pacing, futures=futures, **kwargs)
@@ -304,7 +351,7 @@ class CurrentExpiredFutureContractSelector(FutureContractSelector):
     def __init__(
         self,
         pacing: RequestPacing,
-        futures: DataloaderFuturesSettings | None = None,
+        futures: FuturesSelectionPolicy | None = None,
         **kwargs,
     ) -> None:
         super().__init__(pacing=pacing, futures=futures, **kwargs)

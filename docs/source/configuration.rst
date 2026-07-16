@@ -7,10 +7,10 @@ connections, logging, persistence, controller behavior, order defaults, and
 historical downloads. Strategy-specific parameters remain ordinary Python data
 in the user's strategy module; Haymaker does not parse or inject them.
 
-Configuration is loaded once by the command-line entrypoint. Live configuration
-remains grouped into plain section mappings until each target constructs itself;
-the dataloader temporarily retains its typed settings aggregate. Importing a
-Haymaker module does not inspect command-line arguments or environment values.
+Configuration is loaded once by the command-line entrypoint. Live and
+dataloader configuration remain grouped into plain section mappings until each
+target constructs itself. Importing a Haymaker module does not inspect
+command-line arguments or environment values.
 
 Precedence
 ==========
@@ -37,17 +37,15 @@ The bundled profiles are defined in:
 * ``haymaker/config/live_base_config.yaml`` for live execution.
 * ``haymaker/config/dataloader_base_config.yaml`` for historical downloads.
 
-The live profile is intentionally sparse: target constructors own intrinsic
-defaults, while the bundled YAML contains only intentional live-profile
-overrides. The dataloader profile still describes its complete typed settings.
+Both profiles are intentionally sparse: target constructors own intrinsic
+defaults, while the bundled YAML contains only intentional profile overrides.
 Override files only need to contain values that differ from the resulting
 defaults.
 
 Duplicate YAML keys and unknown top-level sections are rejected while loading.
-For live configuration, section keys and values are interpreted by the target
-that consumes them; ordinary constructor errors therefore report invalid target
-arguments during runtime construction. Dataloader configuration retains its
-central typed validation during this staged migration.
+Section keys and values are interpreted by the target that consumes them;
+ordinary constructor errors therefore report invalid target arguments during
+runtime construction.
 
 Framework and Strategy Configuration
 ====================================
@@ -113,9 +111,8 @@ The option may be repeated:
 
 Values are parsed as YAML, so booleans and numbers are typed rather than stored
 as strings. Quote values containing spaces or values that the shell could
-interpret. A valid live target option need not appear in the sparse bundled
-profile; unknown options fail when their target is constructed. Dataloader
-paths must still conform to its typed settings schema.
+interpret. A valid target option need not appear in the sparse bundled profile;
+unknown options fail when their target is constructed.
 
 Dedicated live switches are ``--cold-start``, ``--reset``, ``--zero``, and
 ``--nuke``. The dataloader provides ``--gap-fill-mode`` and accepts the contract
@@ -169,8 +166,8 @@ Live configuration is grouped into these sections:
 ``futures``
    Business-day offsets used to select and roll live futures contracts.
 
-Dataloader Settings
-===================
+Dataloader Configuration
+========================
 
 Dataloader configuration shares the ``connection``, ``logging``, and
 ``storage`` sections and adds:

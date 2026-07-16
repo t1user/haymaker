@@ -1,12 +1,12 @@
 import ib_insync as ibi
 import pytest
 
-from haymaker.config.settings import DataloaderFuturesSettings
 from haymaker.dataloader.contract_selectors import (
     ContractQualificationError,
     ContractSelector,
     CurrentFutureContractSelector,
     FullchainFutureContractSelector,
+    FuturesSelectionPolicy,
 )
 from haymaker.dataloader.pacer import RequestPacing
 
@@ -166,4 +166,12 @@ def test_fullchain_selector_spec_is_instance_scoped():
     )
 
     assert expired.spec == "expired"
-    assert fresh.spec == DataloaderFuturesSettings().full_chain_spec
+    assert fresh.spec == FuturesSelectionPolicy().full_chain_spec
+
+
+def test_futures_policy_requires_integer_current_index() -> None:
+    """Current-contract offsets must remain integers, including negatives."""
+
+    assert FuturesSelectionPolicy(current_index=-1).current_index == -1
+    with pytest.raises(TypeError, match="current_index"):
+        FuturesSelectionPolicy.from_mapping({"current_index": "1"})

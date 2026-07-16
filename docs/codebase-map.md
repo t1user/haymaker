@@ -39,7 +39,7 @@ its periodic sync, health-check, and daily UTC futures-roll timers once on the
 active event loop when `Controller.run()` first executes. Live and dataloader
 runtimes use the same application and supervisor lifecycle.
 
-The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `Manager` receives the historical request policy from typed `DataloaderSettings` (`download.bar_size`, `download.what_to_show`, `download.max_lookback_days`, `download.use_rth`, and `download.gap_fill_mode`) and owns the run-scoped `now` value; worker sessions execute generated jobs rather than carrying independent request-policy defaults. The current supported dataloader backend is Arctic, with the library name derived from the data type and bar size.
+The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count. `Manager` owns the run-scoped `now`, while contract selectors share a target-owned `FuturesSelectionPolicy`. The current supported dataloader backend is Arctic, with the library name derived from the data type and bar size.
 
 The research package is intentionally separate from live execution. It works directly with pandas dataframes and NumPy/Numba kernels to validate signal timing, stops, synthetic data, and performance without depending on live `Atom` pipelines.
 
@@ -52,10 +52,10 @@ The research package is intentionally separate from live execution. It works dir
   Each parses its command once, loads its profile configuration, starts
   threaded logging, builds the appropriate runtime, and owns user strategy
   module loading with failed-import rollback in `sys.modules`.
-- `haymaker/config/`: safe YAML loading, deterministic profile merging, a
-  section-based `LiveConfig`, retained typed dataloader settings, and
-  side-effect-free command-line parsers. Live targets own their field defaults
-  and necessary mapping conversion.
+- `haymaker/config/`: safe YAML loading, deterministic profile merging,
+  section-based `LiveConfig` and `DataloaderConfig` aggregates, retained typed
+  storage settings, and side-effect-free command-line parsers. Targets own
+  their field defaults and necessary mapping conversion.
 - `haymaker/app.py`: shared Linux top-level `App.run()` lifecycle, application
   runtime protocol, supervisor composition, graceful `SIGTERM`, and propagation
   of unexpected workload failures after cleanup.
@@ -241,11 +241,11 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 ## Configuration and Environment
 
 The CLI assembles framework configuration once through
-`haymaker/config/loader.py`. Live loading returns `LiveConfig`, whose original
-sections remain mappings until the owning target constructs itself; storage
-temporarily retains `StorageSettings` pending the separate datastore refactor.
-The dataloader still receives validated `DataloaderSettings`. Runtime components
-receive their specific section or ready service and do not read a process-global
+`haymaker/config/loader.py`. Live and dataloader loading return `LiveConfig`
+or `DataloaderConfig`; their original sections remain mappings until the
+owning target constructs itself. Storage temporarily retains `StorageSettings`
+pending the separate datastore refactor. Runtime components receive their
+specific section or ready service and do not read a process-global
 configuration object. Strategy-specific parameters remain ordinary Python data
 in the user module.
 
@@ -259,8 +259,8 @@ Configuration precedence, from lowest to highest, is:
 
 YAML is parsed with a safe duplicate-key-rejecting loader. Mappings merge
 recursively, while lists and scalars replace lower-priority values. Unknown
-top-level sections fail during loading. Live leaf values are interpreted by
-target constructors; dataloader leaf values retain central typed validation.
+top-level sections fail during loading. Live and dataloader leaf values are
+interpreted by target constructors.
 
 Important config files:
 

@@ -22,13 +22,13 @@ import ib_insync as ibi
 import pandas as pd
 from tqdm import tqdm
 
-from haymaker.config.settings import DataloaderFuturesSettings, StorageSettings
+from haymaker.config.settings import StorageSettings
 from haymaker.databases import StoreFactory
 from haymaker.datastore import AsyncAbstractBaseStore
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
-from .contract_selectors import ContractSelector
+from .contract_selectors import ContractSelector, FuturesSelectionPolicy
 from .pacer import InFlightRequest, RequestPacing
 from .scheduling import (
     GapFillMode,
@@ -424,8 +424,8 @@ class Manager:
     store_factory: StoreFactory = field(
         default_factory=lambda: StoreFactory(StorageSettings()), repr=False
     )
-    futures: DataloaderFuturesSettings = field(
-        default_factory=DataloaderFuturesSettings, repr=False
+    futures: FuturesSelectionPolicy = field(
+        default_factory=FuturesSelectionPolicy, repr=False
     )
     source: str = "contracts.csv"
     gap_fill_mode: GapFillMode = "off"
@@ -445,6 +445,8 @@ class Manager:
     def __post_init__(self) -> None:
         self.bar_size = bar_size_validator(self.bar_size)
         self.wts = wts_validator(self.wts)
+        if self.gap_fill_mode not in {"off", "heuristic", "schedule", "auto"}:
+            raise ValueError(f"Unknown gap-fill mode: {self.gap_fill_mode!r}")
         if self.max_lookback_days is not None and self.max_lookback_days <= 0:
             raise ValueError("max_lookback_days must be a positive integer or None")
         if self.save_every_chunks <= 0:
@@ -780,6 +782,12 @@ class DataloaderSession:
     fatal_error: BaseException | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.number_of_workers, int) or isinstance(
+            self.number_of_workers, bool
+        ):
+            raise TypeError("number_of_workers must be an integer")
+        if self.number_of_workers <= 0:
+            raise ValueError("number_of_workers must be positive")
         if self.manager is None:
             self.manager = Manager(self.ib)
         else:

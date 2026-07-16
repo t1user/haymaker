@@ -11,8 +11,10 @@ request, restart, and date-policy behavior with focused tests.
   its owned `IB` client and `DataloaderSession`, then adapts resumable work to
   the common runtime `start()` / `stop()` / `close()` contract.
 - The dataloader has no connection-mode abstraction or setting. Its CLI loads
-  `DataloaderSettings`, creates `DataloaderRuntime(settings)`, and always runs it through the shared `App` and
-  `ConnectionSupervisor`.
+  `DataloaderConfig`, creates `DataloaderRuntime(config)`, and always runs it
+  through the shared `App` and `ConnectionSupervisor`. The runtime decomposes
+  the `download` mapping across `Manager` and `DataloaderSession`; contract
+  selectors retain the target-owned `FuturesSelectionPolicy`.
 - The dataloader defaults to client ID `1`, distinct from the live runtime's
   expected client ID `0`. A duplicate client ID is a configuration failure; do
   not retry automatically with another ID.

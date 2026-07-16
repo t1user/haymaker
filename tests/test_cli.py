@@ -14,7 +14,7 @@ from haymaker.cli import load_user_module
 from haymaker.config import (
     DataloaderCommand,
     LiveCommand,
-    load_dataloader_settings,
+    load_dataloader_config,
     load_live_config,
 )
 
@@ -148,16 +148,38 @@ def test_main_flushes_logging_when_runtime_construction_fails(
     assert calls == ["setup", "runtime", "shutdown"]
 
 
-def test_dataloader_main_uses_typed_runtime_settings(
+def test_build_dataloader_runtime_constructs_connection_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_dataloader_config(DataloaderCommand(None, ()), environ={})
+    calls: list[object] = []
+    runtime = object()
+
+    def create_runtime(received: object) -> object:
+        calls.append(received)
+        return runtime
+
+    monkeypatch.setattr(cli, "DataloaderRuntime", create_runtime)
+
+    built, connection = cli._build_dataloader_runtime(config)
+
+    assert built is runtime
+    assert connection.client_id == 1
+    assert connection.app_timeout == 600
+    assert calls == [config]
+
+
+def test_dataloader_main_uses_merged_runtime_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     command = DataloaderCommand(None, ())
-    settings = load_dataloader_settings(command, environ={})
+    config = load_dataloader_config(command, environ={})
     runtime = object()
+    connection = object()
     calls: list[tuple[str, object]] = []
 
     monkeypatch.setattr(cli, "parse_dataloader_args", lambda argv: command)
-    monkeypatch.setattr(cli, "load_dataloader_settings", lambda command: settings)
+    monkeypatch.setattr(cli, "load_dataloader_config", lambda command: config)
     monkeypatch.setattr(
         cli,
         "setup_logging",
@@ -166,7 +188,7 @@ def test_dataloader_main_uses_typed_runtime_settings(
     monkeypatch.setattr(
         cli,
         "_build_dataloader_runtime",
-        lambda received: (runtime, received.connection),
+        lambda received: (runtime, connection),
     )
 
     class FakeApp:
@@ -187,12 +209,11 @@ def test_dataloader_main_uses_typed_runtime_settings(
         (
             "setup",
             {
-                "config_file": settings.logging.config_file,
-                "directory": settings.logging.directory,
-                "base_directory": settings.storage.base_directory,
+                "config_file": "dataloader_logging_config.yaml",
+                "base_directory": config.storage.base_directory,
             },
         ),
-        ("app", (runtime, settings.connection)),
+        ("app", (runtime, connection)),
         ("run", None),
         ("shutdown", None),
     ]

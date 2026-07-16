@@ -6,7 +6,7 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.dataloader import runtime
-from haymaker.config import DataloaderCommand, load_dataloader_settings
+from haymaker.config import DataloaderCommand, load_dataloader_config
 
 
 class FakePacing:
@@ -47,8 +47,80 @@ def make_runtime(
     """Return a runtime using an isolated fake dataloader session."""
 
     session = cast(Any, FakeSession(run_work, cleanup))
-    settings = load_dataloader_settings(DataloaderCommand(None, ()), environ={})
-    return runtime.DataloaderRuntime(settings, ibi.IB(), session)
+    config = load_dataloader_config(DataloaderCommand(None, ()), environ={})
+    return runtime.DataloaderRuntime(config, ibi.IB(), session)
+
+
+def test_runtime_decomposes_config_into_target_objects() -> None:
+    """Runtime should route each dataloader option to its owning target."""
+
+    config = load_dataloader_config(
+        DataloaderCommand(
+            None,
+            (
+                ("download.source", "custom.csv"),
+                ("download.bar_size", "1 min"),
+                ("download.what_to_show", "BID"),
+                ("download.max_lookback_days", 30),
+                ("download.gap_fill_mode", "heuristic"),
+                ("download.use_rth", True),
+                ("download.save_every_chunks", 3),
+                ("download.number_of_workers", 4),
+                ("pacing.no_restriction", True),
+                ("pacing.allowance_fraction", 0.5),
+                ("futures.selector", "current"),
+                ("futures.current_index", -1),
+            ),
+        ),
+        environ={},
+    )
+
+    dataloader_runtime = runtime.DataloaderRuntime(config, ibi.IB())
+    assert dataloader_runtime.session is not None
+    manager = dataloader_runtime.session.manager
+    assert manager is not None
+    assert dataloader_runtime.session.number_of_workers == 4
+    assert manager.source == "custom.csv"
+    assert manager.bar_size == "1 min"
+    assert manager.wts == "BID"
+    assert manager.max_lookback_days == 30
+    assert manager.gap_fill_mode == "heuristic"
+    assert manager.use_rth is True
+    assert manager.save_every_chunks == 3
+    assert manager.pacing is not None
+    assert manager.pacing.no_restriction is True
+    assert manager.pacing.allowance_fraction == 0.5
+    assert manager.futures.selector == "current"
+    assert manager.futures.current_index == -1
+
+
+@pytest.mark.parametrize("section", ["download", "pacing"])
+def test_runtime_rejects_unknown_target_option(section: str) -> None:
+    config = load_dataloader_config(
+        DataloaderCommand(None, ((f"{section}.unknown", True),)), environ={}
+    )
+
+    with pytest.raises(TypeError, match=f"Unknown {section} configuration"):
+        runtime.DataloaderRuntime(config, ibi.IB())
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        ("download.number_of_workers", 0, "number_of_workers"),
+        ("download.gap_fill_mode", "unknown", "gap-fill mode"),
+        ("pacing.allowance_fraction", 0, "allowance_fraction"),
+    ],
+)
+def test_runtime_preserves_target_policy_validation(
+    path: str, value: object, message: str
+) -> None:
+    config = load_dataloader_config(
+        DataloaderCommand(None, ((path, value),)), environ={}
+    )
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        runtime.DataloaderRuntime(config, ibi.IB())
 
 
 @pytest.mark.asyncio

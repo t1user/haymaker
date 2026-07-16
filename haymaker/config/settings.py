@@ -1,22 +1,10 @@
-"""Configuration aggregates retained by the live and dataloader loaders."""
+"""Configuration aggregates and retained storage settings."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Literal
-
-from haymaker.supervisor.settings import ConnectionSettings
-
-
-@dataclass(frozen=True)
-class LoggingSettings:
-    """Dataloader logging configuration retained during staged migration."""
-
-    config_file: Path | None = None
-    directory: str = "logs"
-    log_broker: bool = False
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -68,43 +56,21 @@ class LiveConfig:
 
 
 @dataclass(frozen=True)
-class DownloadSettings:
-    """Historical download planning and worker settings."""
+class DataloaderConfig:
+    """Merged dataloader configuration grouped by original section.
 
-    source: str = "contracts.csv"
-    bar_size: str = "30 secs"
-    what_to_show: str = "TRADES"
-    max_lookback_days: int | None = None
-    gap_fill_mode: Literal["off", "heuristic", "schedule", "auto"] = "off"
-    use_rth: bool = False
-    save_every_chunks: int = 10
-    number_of_workers: int = 10
+    Attributes:
+        connection: Broker connection and recovery options.
+        logging: Logging setup options.
+        storage: Retained typed storage settings pending datastore refactoring.
+        download: Historical request and worker options.
+        pacing: Client-side request pacing options.
+        futures: Futures contract-selection policy.
+    """
 
-
-@dataclass(frozen=True)
-class PacingSettings:
-    """Client-side historical-request pacing settings."""
-
-    no_restriction: bool = False
-    allowance_fraction: float = 1.0
-
-
-@dataclass(frozen=True)
-class DataloaderFuturesSettings:
-    """Futures expansion policy for dataloader contract rows."""
-
-    selector: str = "current_and_expired"
-    full_chain_spec: str = "full"
-    current_index: int = 0
-
-
-@dataclass(frozen=True)
-class DataloaderSettings:
-    """Complete validated settings for one dataloader process."""
-
-    connection: ConnectionSettings
-    logging: LoggingSettings
+    connection: Mapping[str, Any]
+    logging: Mapping[str, Any]
     storage: StorageSettings
-    download: DownloadSettings
-    pacing: PacingSettings
-    futures: DataloaderFuturesSettings
+    download: Mapping[str, Any]
+    pacing: Mapping[str, Any]
+    futures: Mapping[str, Any]

@@ -23,14 +23,14 @@ def test_runtime_construction_wires_one_dataloader_session(
 
     dataloader = dataloader_module
     from haymaker.dataloader import runtime as runtime_module
-    from haymaker.config import DataloaderCommand, load_dataloader_settings
+    from haymaker.config import DataloaderCommand, load_dataloader_config
 
     ib = ibi.IB()
     initial_error_handlers = len(ib.errorEvent)
     monkeypatch.setattr(runtime_module, "IB", lambda: ib)
 
-    settings = load_dataloader_settings(DataloaderCommand(None, ()), environ={})
-    runtime = runtime_module.DataloaderRuntime(settings)
+    config = load_dataloader_config(DataloaderCommand(None, ()), environ={})
+    runtime = runtime_module.DataloaderRuntime(config)
     session = runtime.session
 
     assert runtime.ib is ib

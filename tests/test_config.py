@@ -13,13 +13,14 @@ from haymaker.config import (
     ConfigError,
     DataloaderCommand,
     LiveCommand,
-    load_dataloader_settings,
+    load_dataloader_config,
     load_live_config,
     parse_live_args,
 )
 from haymaker.config.loader import deep_merge, load_yaml
 from haymaker.config.settings import StorageSettings
 from haymaker.databases import StoreFactory
+from haymaker.dataloader.contract_selectors import FuturesSelectionPolicy
 from haymaker.order_defaults import OrderDefaults
 from haymaker.supervisor import ConnectionSettings
 from haymaker.timeout import TimeoutPolicy
@@ -39,6 +40,7 @@ def test_process_global_config_singleton_is_not_exported() -> None:
 
     assert not hasattr(config_package, "CONFIG")
     assert not hasattr(config_package, "load_live_settings")
+    assert not hasattr(config_package, "load_dataloader_settings")
 
 
 def test_live_defaults_are_composed_by_target_objects() -> None:
@@ -72,11 +74,15 @@ def test_blotter_factory_rejects_unknown_saver_type() -> None:
 
 
 def test_dataloader_defaults_are_profile_specific() -> None:
-    settings = load_dataloader_settings(DataloaderCommand(None, ()), environ={})
+    config = load_dataloader_config(DataloaderCommand(None, ()), environ={})
+    connection = ConnectionSettings.from_mapping(config.connection)
+    futures = FuturesSelectionPolicy.from_mapping(config.futures)
 
-    assert settings.connection.client_id == 1
-    assert settings.download.source == "contracts.csv"
-    assert settings.download.gap_fill_mode == "off"
+    assert connection.client_id == 1
+    assert connection.app_timeout == 600
+    assert config.download == {}
+    assert config.pacing == {}
+    assert futures.selector == "current_and_expired"
 
 
 @pytest.mark.parametrize(
@@ -86,11 +92,12 @@ def test_dataloader_defaults_are_profile_specific() -> None:
         ("futures.full_chain_spec", "unknown"),
     ],
 )
-def test_dataloader_rejects_unknown_futures_policy(path: str, value: str) -> None:
+def test_futures_target_rejects_unknown_policy(path: str, value: str) -> None:
     command = DataloaderCommand(None, ((path, value),))
+    config = load_dataloader_config(command, environ={})
 
-    with pytest.raises(ConfigError, match=path):
-        load_dataloader_settings(command, environ={})
+    with pytest.raises(ValueError, match="futures"):
+        FuturesSelectionPolicy.from_mapping(config.futures)
 
 
 def test_deep_merge_recurses_and_replaces_lists() -> None:
