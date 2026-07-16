@@ -201,7 +201,17 @@
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../dataloader.html">Dataloader Module</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../../code.html">Source code</a><input aria-label="Toggle navigation of Source code" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../research/index.html">Research Package</a><input aria-label="Toggle navigation of Research Package" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../research/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/signals.html">Signals, Blips, Positions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/backtester.html">Backtester</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/stop.html">Stop Engine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/upsampling.html">Upsampling and Grouping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/bootstrap.html">Bootstrap</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/examples.html">Example Notebooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../code.html">Source code</a><input aria-label="Toggle navigation of Source code" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference external" href="https://github.com/t1user/haymaker">Download</a></li>
 </ul>
 </li>
@@ -548,7 +558,10 @@
         <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> requesting bars </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_durationStr</span><span class="si">=}</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">sync_last_bar_date</span><span class="p">()</span>
         <span class="n">bars</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> received historical bars, last bar date: </span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> received historical bars, last bar date: &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">bars</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="n">bars</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
 
         <span class="k">try</span><span class="p">:</span>

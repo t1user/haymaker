@@ -14,4 +14,5 @@ Haymaker Documentation
    logging
    execution
    dataloader
+   research/index
    code

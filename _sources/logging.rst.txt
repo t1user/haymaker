@@ -40,7 +40,7 @@ To customize logging, copy the default configuration file and override it as nee
 
 https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml
 
-- :source:`haymaker/logging/logging_config.yaml <t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml>`
+- `haymaker/logging/logging_config.yaml <https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml>`_
 
 Dataloader Module
 -----------------
@@ -50,4 +50,3 @@ The Dataloader Module creates a single logger that outputs to both stream and fi
 To customize logging, copy the default configuration file and override it as needed. The default file is located at:
 
 https://github.com/t1user/haymaker/blob/master/haymaker/logging/dataloader_logging_config.yaml
-

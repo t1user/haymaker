@@ -201,7 +201,17 @@
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../dataloader.html">Dataloader Module</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../../code.html">Source code</a><input aria-label="Toggle navigation of Source code" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../research/index.html">Research Package</a><input aria-label="Toggle navigation of Research Package" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../research/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/signals.html">Signals, Blips, Positions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/backtester.html">Backtester</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/stop.html">Stop Engine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/upsampling.html">Upsampling and Grouping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/bootstrap.html">Bootstrap</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../research/examples.html">Example Notebooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../code.html">Source code</a><input aria-label="Toggle navigation of Source code" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference external" href="https://github.com/t1user/haymaker">Download</a></li>
 </ul>
 </li>
@@ -245,6 +255,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">operator</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">op</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">deque</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">collections.abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">date</span><span class="p">,</span> <span class="n">datetime</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">cached_property</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
@@ -298,8 +309,8 @@
         <span class="n">future_adjust_type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;add&quot;</span><span class="p">,</span> <span class="s2">&quot;mul&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;add&quot;</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">filter</span> <span class="o">=</span> <span class="nb">filter</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">filter</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">onDataBar</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="p">:</span> <span class="n">CountBars</span> <span class="o">|</span> <span class="n">VolumeBars</span> <span class="o">|</span> <span class="n">TimeBars</span> <span class="o">|</span> <span class="n">NoFilter</span> <span class="o">=</span> <span class="nb">filter</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">onDataBar</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">future_adjust_type</span> <span class="o">=</span> <span class="n">future_adjust_type</span>
         <span class="c1"># if future needs to be adjusted; set by onContractChanged</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">False</span>
@@ -443,18 +454,18 @@
             <span class="k">raise</span>
 
     <span class="nd">@cached_property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">operator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">operator</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;add&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">add</span><span class="p">,</span> <span class="s2">&quot;mul&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">mul</span><span class="p">,</span> <span class="kc">None</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">future_adjust_type</span><span class="p">)</span>
 
     <span class="nd">@cached_property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">reverse_operator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">reverse_operator</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;add&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">sub</span><span class="p">,</span> <span class="s2">&quot;mul&quot;</span><span class="p">:</span> <span class="n">op</span><span class="o">.</span><span class="n">truediv</span><span class="p">,</span> <span class="kc">None</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">future_adjust_type</span>
         <span class="p">)</span>
 
 <div class="viewcode-block" id="BarAggregator.adjust_future">
 <a class="viewcode-back" href="../../execution.html#haymaker.aggregators.BarAggregator.adjust_future">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">adjust_future</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">adjust_future</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Create continuous future price series on future contract</span>
 <span class="sd">        change.</span>
@@ -470,21 +481,26 @@
         <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> adjusting future.&quot;</span><span class="p">)</span>
 
         <span class="n">old_bar</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="o">.</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">new_bar</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">for</span> <span class="n">bar_</span> <span class="ow">in</span> <span class="nb">reversed</span><span class="p">(</span><span class="n">bars</span><span class="p">):</span>
             <span class="k">if</span> <span class="n">bar_</span><span class="o">.</span><span class="n">date</span> <span class="o">==</span> <span class="n">old_bar</span><span class="o">.</span><span class="n">date</span><span class="p">:</span>
                 <span class="n">new_bar</span> <span class="o">=</span> <span class="n">bar_</span>
                 <span class="k">break</span>
         <span class="k">assert</span> <span class="n">new_bar</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> failed future adjustment: non-overlapping series.&quot;</span>
+        <span class="n">reverse_operator</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reverse_operator</span>
+        <span class="n">operator</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">operator</span>
+        <span class="k">assert</span> <span class="n">reverse_operator</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">assert</span> <span class="n">operator</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
 
-        <span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reverse_operator</span><span class="p">(</span><span class="n">new_bar</span><span class="o">.</span><span class="n">close</span><span class="p">,</span> <span class="n">old_bar</span><span class="o">.</span><span class="n">close</span><span class="p">)</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="n">reverse_operator</span><span class="p">(</span><span class="n">new_bar</span><span class="o">.</span><span class="n">close</span><span class="p">,</span> <span class="n">old_bar</span><span class="o">.</span><span class="n">close</span><span class="p">)</span>
         <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;FUTURES ADJUSTMENT | old bar: </span><span class="si">{</span><span class="n">old_bar</span><span class="si">}</span><span class="s2"> | new bar: </span><span class="si">{</span><span class="n">new_bar</span><span class="si">}</span><span class="s2"> &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;| adjustment basis: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2"> | operator: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">operator</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;| adjustment basis: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2"> | operator: </span><span class="si">{</span><span class="n">operator</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
 
         <span class="k">for</span> <span class="n">bar</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">filter</span><span class="o">.</span><span class="n">bars</span><span class="p">:</span>
             <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">,</span> <span class="s2">&quot;high&quot;</span><span class="p">,</span> <span class="s2">&quot;low&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="s2">&quot;average&quot;</span><span class="p">):</span>
-                <span class="nb">setattr</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">field</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">operator</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">field</span><span class="p">),</span> <span class="n">value</span><span class="p">))</span>
+                <span class="nb">setattr</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">field</span><span class="p">,</span> <span class="n">operator</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">field</span><span class="p">),</span> <span class="n">value</span><span class="p">))</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_future_adjust_flag</span> <span class="o">=</span> <span class="kc">False</span></div>
 
