@@ -121,7 +121,6 @@ class StartupJobs:
                 for streamer in self.streamers
             ]
         )
-        log.info("Live workload startup completed; all streamers initialized.")
 
     def __str__(self) -> str:
         """Return a compact description of registered streamer jobs."""
