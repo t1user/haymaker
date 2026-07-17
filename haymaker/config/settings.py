@@ -28,13 +28,12 @@ class StorageSettings:
 
 @dataclass(frozen=True)
 class LiveConfig:
-    """Merged live framework configuration grouped by original section.
+    """Merged live configuration grouped by target or subsystem boundary.
 
     Attributes:
-        startup: One-run controller startup requests.
         connection: Broker connection and recovery options.
         logging: Logging setup and broker-log options.
-        controller: Controller reconciliation and scheduling options.
+        controller: Controller startup, reconciliation, and scheduling options.
         state_machine: State persistence and rejection options.
         storage: Retained typed storage settings pending datastore refactoring.
         blotter: Blotter enablement and saver specification.
@@ -43,7 +42,6 @@ class LiveConfig:
         futures: Live futures selection offsets.
     """
 
-    startup: Mapping[str, Any]
     connection: Mapping[str, Any]
     logging: Mapping[str, Any]
     controller: Mapping[str, Any]
@@ -57,7 +55,7 @@ class LiveConfig:
 
 @dataclass(frozen=True)
 class DataloaderConfig:
-    """Merged dataloader configuration grouped by original section.
+    """Merged dataloader configuration grouped by target or subsystem boundary.
 
     Attributes:
         connection: Broker connection and recovery options.

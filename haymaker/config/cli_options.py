@@ -117,10 +117,10 @@ def parse_live_args(argv: list[str]) -> LiveCommand:
     namespace = live_parser().parse_args(argv)
     overrides = list(namespace.set_option)
     for option, path in (
-        (namespace.reset, "startup.reset"),
-        (namespace.zero, "startup.zero"),
-        (namespace.cold_start, "startup.cold_start"),
-        (namespace.nuke, "startup.nuke"),
+        (namespace.reset, "controller.startup.reset"),
+        (namespace.zero, "controller.startup.zero"),
+        (namespace.cold_start, "controller.startup.cold_start"),
+        (namespace.nuke, "controller.startup.nuke"),
     ):
         if option is not None:
             overrides.append((path, option))

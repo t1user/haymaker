@@ -39,10 +39,16 @@ def test_set_option_is_repeatable_and_typed() -> None:
 
 def test_live_dedicated_options_are_appended_after_generic_options() -> None:
     command = parse_live_args(
-        ["strategy.py", "--set-option", "startup.reset", "false", "--reset"]
+        [
+            "strategy.py",
+            "--set-option",
+            "controller.startup.reset",
+            "false",
+            "--reset",
+        ]
     )
 
-    assert command.overrides[-1] == ("startup.reset", True)
+    assert command.overrides[-1] == ("controller.startup.reset", True)
 
 
 def test_dataloader_positional_and_gap_options_are_explicit_overrides() -> None:

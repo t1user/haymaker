@@ -242,10 +242,11 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
 
 The CLI assembles framework configuration once through
 `haymaker/config/loader.py`. Live and dataloader loading return `LiveConfig`
-or `DataloaderConfig`; their original sections remain mappings until the
-owning target constructs itself. Storage temporarily retains `StorageSettings`
-pending the separate datastore refactor. Runtime components receive their
-specific section or ready service and do not read a process-global
+or `DataloaderConfig`; sections remain mappings until the owning target or
+subsystem composition boundary constructs them. Controller one-run actions are
+nested under `controller.startup`. Storage temporarily retains
+`StorageSettings` pending the separate datastore refactor. Runtime components
+receive their specific section or ready service and do not read a process-global
 configuration object. Strategy-specific parameters remain ordinary Python data
 in the user module.
 
@@ -260,7 +261,9 @@ Configuration precedence, from lowest to highest, is:
 YAML is parsed with a safe duplicate-key-rejecting loader. Mappings merge
 recursively, while lists and scalars replace lower-priority values. Unknown
 top-level sections fail during loading. Live and dataloader leaf values are
-interpreted by target constructors.
+interpreted by target constructors. The bundled profiles enumerate supported
+settings with concise comments and pin each command's effective defaults;
+deployment override files remain partial.
 
 Important config files:
 

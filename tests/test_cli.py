@@ -116,7 +116,15 @@ def test_main_runs_merged_config_under_framework_control(
 
     assert calls == [
         ("load_settings", command),
-        ("setup_logging", {"base_directory": config.storage.base_directory}),
+        (
+            "setup_logging",
+            {
+                "config_file": "logging_config.yaml",
+                "directory": "logs",
+                "level": None,
+                "base_directory": config.storage.base_directory,
+            },
+        ),
         ("build", (config, command.module_path)),
         ("app", (runtime, connection)),
         ("run", None),
@@ -210,6 +218,8 @@ def test_dataloader_main_uses_merged_runtime_config(
             "setup",
             {
                 "config_file": "dataloader_logging_config.yaml",
+                "directory": "logs",
+                "level": None,
                 "base_directory": config.storage.base_directory,
             },
         ),

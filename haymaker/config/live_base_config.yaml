@@ -1,55 +1,93 @@
-startup:
-  cold_start: false
+connection: # Supervised TWS or IB Gateway connection.
+  host: 127.0.0.1 # TWS or Gateway host name or IP address.
+  port: 4002 # TWS or Gateway API port.
+  client_id: 0 # IB API client ID for live trading.
+  connect_timeout: 15 # Seconds allowed for one socket connection attempt.
+  retry_delay: 30 # Seconds between failed connection attempts.
+  app_timeout: 90 # Idle seconds before checking connection health.
+  probe_contract: # Liquid contract used to test broker data readiness.
+    secType: CASH # IB security type for the probe contract.
+    symbol: EUR # Base currency or symbol for the probe contract.
+    currency: USD # Quote currency for the probe contract.
+    exchange: IDEALPRO # Exchange used for the probe request.
+  probe_timeout: 15 # Seconds allowed for one readiness probe.
+  connection_lost_retry_delay: 90 # Seconds before reconnecting after a failed probe.
+  auto_recovery_grace_period: 120 # Seconds allowed for broker-side recovery.
+  restart_on_recovered_connection: false # Rebuild after IB reports data maintained.
+  log_datafarm_status: true # Log informational IB data-farm status messages.
 
-connection: {}
+logging: # Framework logging setup and broker audit logging.
+  config_file: logging_config.yaml # Logging dictionary configuration file.
+  directory: logs # Log directory below storage.base_directory.
+  level: null # Optional Haymaker package log-level override.
+  log_broker: false # Enable the separate raw broker audit logger.
 
-logging: {}
+controller: # Trading reconciliation, startup actions, and scheduling.
+  startup: # One-run actions applied by Controller.run().
+    cold_start: false # Skip saved-state loading when true.
+    reset: false # Close positions and clear strategy state after startup sync.
+    zero: false # Clear all local strategy and order records after startup sync.
+    nuke: false # Cancel orders, close positions, and disable trading.
+  ignore_errors: [2107, 2108, 2109, 202, 321] # Suppress routine broker codes in controller logs.
+  log_order_events: false # Enable detailed order-event logging.
+  future_roll_time: [14, 0] # UTC hour and minute for the daily futures roll.
+  sync_frequency: 900 # Seconds between periodic broker/local synchronizations.
+  health_check_frequency: 0 # Seconds between health checks; zero disables them.
+  execution_verification_delay: 15 # Seconds before checking a submitted trade.
+  execution_verification_max_retries: 5 # Maximum transaction verification attempts.
+  broker_request_timeout: 10 # Seconds allowed for controller broker requests.
+  sync_max_attempts: 3 # Maximum reconciliation passes per sync cycle.
+  sync_resync_delay: 1 # Seconds between reconciliation passes.
+  cancel_unknown_trades: false # Cancel broker trades missing from local state.
+  missing_brackets: ignore # Action for missing protection: ignore, warn, or remove.
 
-controller:
-  ignore_errors: [2107, 2108, 2109, 202, 321]
-  future_roll_time: [14, 0]
-  sync_frequency: 900
-  execution_verification_delay: 15
+state_machine: # Persistent strategy and order state.
+  save_async: true # Save state through background queues.
+  save_delay: 1 # Seconds to debounce strategy-state saves.
+  strategy_collection_name: strategies # Mongo collection for strategy state.
+  order_collection_name: orders # Mongo collection for order state.
+  max_rejected_orders: 3 # Rejections allowed before blocking new orders.
 
-state_machine: {}
+storage: # Filesystem, MongoDB, and Arctic defaults.
+  base_directory: ib_data # Data directory below the user's home directory.
+  mongodb: # MongoDB client and framework database settings.
+    client: # Keyword arguments passed to pymongo.MongoClient.
+      host: localhost # MongoDB host name or IP address.
+      port: 27017 # MongoDB server port.
+    database: test_data # Database used by framework state and Mongo savers.
+  block_library: null # Optional Arctic library for saved block data.
+  market_data_library: live_data # Arctic library for live market data.
+  dataframe_save_frequency: 900 # Seconds between dataframe persistence attempts.
 
-storage:
-  base_directory: ib_data
-  mongodb:
-    client:
-      host: localhost
-      port: 27017
-    database: test_data
-  block_library: null
-  market_data_library: live_data
-  dataframe_save_frequency: 900
+blotter: # Completed-trade transaction logging.
+  enabled: true # Create and attach the live trade blotter.
+  saver: # Built-in saver used for blotter records.
+    type: csv # Saver backend: csv or mongo.
+    options: # Keyword arguments passed to the selected saver.
+      folder: blotter # Output folder below storage.base_directory.
+      name: blotter # Base name for the blotter file.
+      use_timestamp: false # Keep one stable filename instead of timestamping it.
 
-blotter:
-  enabled: true
-  saver:
-    type: csv
-    options:
-      folder: blotter
-      name: blotter
-      use_timestamp: false
+orders: # Default IB fields applied to generated orders.
+  open: # Fields applied to opening orders.
+    algoStrategy: Adaptive # Use IB's Adaptive execution algorithm.
+    algoParams: # Parameters passed to the opening-order algorithm.
+      - tag: adaptivePriority # IB Adaptive parameter name.
+        value: Normal # Default Adaptive execution priority.
+    tif: Day # Opening orders expire at the end of the trading day.
+  close: # Fields applied to closing orders.
+    tif: GTC # Closing orders remain active until cancelled.
+  stop: # Fields applied to protective stop orders.
+    outsideRth: true # Allow protective stops outside regular trading hours.
+    tif: GTC # Protective stops remain active until cancelled.
+  take_profit: # Fields applied to take-profit orders.
+    tif: GTC # Take-profit orders remain active until cancelled.
+  oca_type: 2 # IB one-cancels-all behavior for linked orders.
 
-orders:
-  open:
-    algoStrategy: Adaptive
-    algoParams:
-      - tag: adaptivePriority
-        value: Normal
-    tif: Day
-  close:
-    tif: GTC
-  stop:
-    outsideRth: true
-    tif: GTC
-  take_profit:
-    tif: GTC
-  oca_type: 2
+timeout: # Default stale-stream timeout policy.
+  seconds: 300 # Seconds without data before a stream is stale.
+  action: restart # Timeout response: restart or log.
 
-timeout:
-  seconds: 300
-
-futures: {}
+futures: # Live futures contract selection offsets.
+  futures_roll_bdays: 3 # Business days before expiry to select the next contract.
+  futures_roll_margin_bdays: 3 # Business-day margin around the roll boundary.

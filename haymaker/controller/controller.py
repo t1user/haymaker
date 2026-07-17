@@ -106,7 +106,6 @@ class Controller(Atom):
         cls,
         values: Mapping[str, Any],
         *,
-        startup: Mapping[str, Any],
         trader: Trader,
         blotter: Blotter | None = None,
         health_check_observables: list[list[Callable[[], bool]]] | None = None,
@@ -114,8 +113,8 @@ class Controller(Atom):
         """Construct a controller from configuration and runtime dependencies.
 
         Args:
-            values: Merged ``controller`` configuration section.
-            startup: Merged one-run ``startup`` configuration section.
+            values: Merged ``controller`` configuration section, including
+                the nested one-run ``startup`` options.
             trader: Runtime broker order gateway.
             blotter: Optional transaction logger.
             health_check_observables: Runtime-owned health-check collections.
@@ -124,8 +123,11 @@ class Controller(Atom):
             Controller ready to install in a runtime context.
         """
 
-        options = dict(startup)
-        options.update(values)
+        options = dict(values)
+        startup = options.pop("startup", {})
+        if not isinstance(startup, Mapping):
+            raise TypeError("controller.startup must be a mapping")
+        options.update(startup)
         roll_time = options.get("future_roll_time")
         if isinstance(roll_time, list):
             options["future_roll_time"] = tuple(roll_time)

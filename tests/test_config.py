@@ -19,6 +19,7 @@ from haymaker.config import (
 )
 from haymaker.config.loader import deep_merge, load_yaml
 from haymaker.config.settings import StorageSettings
+from haymaker.contract_registry import ContractRegistry
 from haymaker.databases import StoreFactory
 from haymaker.dataloader.contract_selectors import FuturesSelectionPolicy
 from haymaker.order_defaults import OrderDefaults
@@ -46,12 +47,24 @@ def test_process_global_config_singleton_is_not_exported() -> None:
 def test_live_defaults_are_composed_by_target_objects() -> None:
     config = load_live_config(live_command(), environ={})
     connection = ConnectionSettings.from_mapping(config.connection)
+    controller = config.controller
+    futures = ContractRegistry(**dict(config.futures))
     timeout = TimeoutPolicy.from_mapping(config.timeout)
     orders = OrderDefaults.from_mapping(config.orders)
 
     assert connection.client_id == 0
     assert connection.probe_contract == ibi.Forex("EURUSD")
+    assert controller["startup"] == {
+        "cold_start": False,
+        "reset": False,
+        "zero": False,
+        "nuke": False,
+    }
+    assert controller["sync_frequency"] == 900
+    assert futures.futures_roll_bdays == 3
+    assert futures.futures_roll_margin_bdays == 3
     assert timeout.seconds == 300
+    assert timeout.action == "restart"
     assert orders.open["algoParams"] == [ibi.TagValue("adaptivePriority", "Normal")]
 
 
@@ -80,8 +93,12 @@ def test_dataloader_defaults_are_profile_specific() -> None:
 
     assert connection.client_id == 1
     assert connection.app_timeout == 600
-    assert config.download == {}
-    assert config.pacing == {}
+    assert config.download["source"] == "contracts.csv"
+    assert config.download["number_of_workers"] == 10
+    assert config.pacing == {
+        "no_restriction": False,
+        "allowance_fraction": 1.0,
+    }
     assert futures.selector == "current_and_expired"
 
 
@@ -170,17 +187,31 @@ def test_direct_environment_values_are_ignored() -> None:
     )
 
     assert ConnectionSettings.from_mapping(config.connection).port == 4002
-    assert config.logging == {}
+    assert config.logging["config_file"] == "logging_config.yaml"
 
 
 def test_dedicated_cli_option_wins_over_generic_override() -> None:
     command = parse_live_args(
-        ["strategy.py", "--set-option", "startup.reset", "false", "--reset"]
+        [
+            "strategy.py",
+            "--set-option",
+            "controller.startup.reset",
+            "false",
+            "--reset",
+        ]
     )
 
     config = load_live_config(command, environ={})
 
-    assert config.startup["reset"] is True
+    assert config.controller["startup"]["reset"] is True
+
+
+def test_old_top_level_startup_section_is_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "old_startup.yaml"
+    config_file.write_text("startup:\n  reset: true\n")
+
+    with pytest.raises(ConfigError, match="startup"):
+        load_live_config(live_command(config_file), environ={})
 
 
 def test_cli_values_preserve_yaml_scalar_and_collection_types() -> None:

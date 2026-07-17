@@ -26,12 +26,15 @@ You can customize logging by defining a `logging configuration <https://docs.pyt
    logging:
      config_file: /path/to/logging.yaml
      directory: production_logs
+     level: null
      log_broker: false
    storage:
      base_directory: /var/lib/haymaker
 
 ``logging.directory`` is interpreted relative to ``storage.base_directory``.
 Haymaker creates missing output directories used by its built-in handlers.
+Set ``logging.level`` to a standard level name or number to override the
+``haymaker`` package logger, or leave it ``null`` to use the logging file.
 The same settings can be changed temporarily with dotted CLI overrides:
 
 .. code-block:: bash

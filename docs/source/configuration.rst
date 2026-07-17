@@ -37,10 +37,10 @@ The bundled profiles are defined in:
 * ``haymaker/config/live_base_config.yaml`` for live execution.
 * ``haymaker/config/dataloader_base_config.yaml`` for historical downloads.
 
-Both profiles are intentionally sparse: target constructors own intrinsic
-defaults, while the bundled YAML contains only intentional profile overrides.
-Override files only need to contain values that differ from the resulting
-defaults.
+Both files are complete, commented reference profiles. They enumerate the
+supported settings and pin the effective defaults used by their command. Target
+constructors still own intrinsic defaults and validation, while user override
+files only need to contain values that differ from the bundled profile.
 
 Duplicate YAML keys and unknown top-level sections are rejected while loading.
 Section keys and values are interpreted by the target that consumes them;
@@ -111,7 +111,7 @@ The option may be repeated:
 
 Values are parsed as YAML, so booleans and numbers are typed rather than stored
 as strings. Quote values containing spaces or values that the shell could
-interpret. A valid target option need not appear in the sparse bundled profile;
+interpret. Use the bundled profile comments to find supported setting paths;
 unknown options fail when their target is constructed.
 
 Dedicated live switches are ``--cold-start``, ``--reset``, ``--zero``, and
@@ -129,22 +129,22 @@ Run ``dataloader --help`` for the complete dataloader option list.
 Live Configuration
 ==================
 
-Live configuration is grouped into these sections:
-
-``startup``
-   One-run startup actions: ``cold_start``, ``reset``, ``zero``, and ``nuke``.
+Live configuration is grouped by the service or policy it configures. Logging
+and storage remain subsystem groups because their settings are composed across
+closely related runtime objects.
 
 ``connection``
    IB endpoint, client ID, timeouts, connection probe, and recovery policy. See
    :doc:`supervisor`.
 
 ``logging``
-   ``config_file``, output ``directory``, and optional raw broker logging. See
-   :doc:`logging`.
+   ``config_file``, output ``directory``, optional package ``level``, and raw
+   broker logging. See :doc:`logging`.
 
 ``controller``
-   Synchronization, health checks, execution verification, error filtering,
-   unknown-trade policy, bracket policy, and futures-roll time.
+   One-run actions under ``controller.startup``, synchronization, health checks,
+   execution verification, error filtering, unknown-trade policy, bracket
+   policy, and futures-roll time.
 
 ``state_machine``
    Save delay, Mongo collection names, and rejected-order limit.
@@ -164,7 +164,8 @@ Live configuration is grouped into these sections:
    Default streamer timeout in seconds and the ``restart`` or ``log`` action.
 
 ``futures``
-   Business-day offsets used to select and roll live futures contracts.
+   ``futures_roll_bdays`` and ``futures_roll_margin_bdays`` offsets used to
+   select and roll live futures contracts.
 
 Dataloader Configuration
 ========================
@@ -174,7 +175,8 @@ Dataloader configuration shares the ``connection``, ``logging``, and
 
 ``download``
    Source CSV, bar size, data type, lookback and gap-fill policy, RTH selection,
-   save cadence, and worker count.
+   save cadence, and worker count. This user-facing run group is composed into
+   the dataloader manager and worker session.
 
 ``pacing``
    Optional pacing bypass and the fraction of IB request capacity assigned to
@@ -223,10 +225,12 @@ removed. Common migrations include:
      - ``download.use_rth``
    * - ``pacer_allowance_fraction``
      - ``pacing.allowance_fraction``
+   * - top-level ``startup.reset`` and related startup paths
+     - ``controller.startup.reset`` and related startup paths
    * - ``-s key value`` with a flat key
      - ``-s section.key value``
 
 Code that imported ``haymaker.config.CONFIG`` should instead receive a ready
 runtime service. Framework composition uses ``load_live_config()`` and passes
-each section to its owning target; user strategy code normally does not need
-direct access to framework configuration.
+each section to its owning target or subsystem composition boundary; user
+strategy code normally does not need direct access to framework configuration.

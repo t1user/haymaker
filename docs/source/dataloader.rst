@@ -188,10 +188,10 @@ and ``null``. Quote values containing spaces.
 Configuration
 =============
 
-Target constructors own intrinsic defaults. The bundled
-``haymaker/config/dataloader_base_config.yaml`` is therefore a sparse profile
-containing only dataloader-specific overrides; user files need include only the
-values changed for a run.
+Target constructors own intrinsic defaults and validation. The bundled
+``haymaker/config/dataloader_base_config.yaml`` is a complete, commented
+reference profile that pins the dataloader's effective defaults; user files
+need include only the values changed for a run.
 
 Common settings:
 

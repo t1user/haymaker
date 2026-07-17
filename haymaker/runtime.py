@@ -225,7 +225,6 @@ class LiveRuntime:
         Atom.set_runtime_context(self.context)
         self.context.controller = Controller.from_mapping(
             self.config.controller,
-            startup=self.config.startup,
             trader=trader,
             blotter=blotter_factory(self.config.blotter, self.store_factory),
             health_check_observables=[self.store_factory.health_checks],

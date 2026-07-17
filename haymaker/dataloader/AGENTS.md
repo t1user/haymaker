@@ -14,7 +14,10 @@ request, restart, and date-policy behavior with focused tests.
   `DataloaderConfig`, creates `DataloaderRuntime(config)`, and always runs it
   through the shared `App` and `ConnectionSupervisor`. The runtime decomposes
   the `download` mapping across `Manager` and `DataloaderSession`; contract
-  selectors retain the target-owned `FuturesSelectionPolicy`.
+  selectors retain the target-owned `FuturesSelectionPolicy`. Keep `download`
+  as a user-facing run group rather than splitting out worker count solely to
+  mirror these internal constructors. The bundled dataloader profile must list
+  every supported setting with a concise inline comment.
 - The dataloader defaults to client ID `1`, distinct from the live runtime's
   expected client ID `0`. A duplicate client ID is a configuration failure; do
   not retry automatically with another ID.

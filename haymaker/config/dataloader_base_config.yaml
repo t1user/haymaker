@@ -1,23 +1,52 @@
-connection:
-  client_id: 1
-  app_timeout: 600
+connection: # Supervised TWS or IB Gateway connection.
+  host: 127.0.0.1 # TWS or Gateway host name or IP address.
+  port: 4002 # TWS or Gateway API port.
+  client_id: 1 # IB API client ID reserved for the dataloader.
+  connect_timeout: 15 # Seconds allowed for one socket connection attempt.
+  retry_delay: 30 # Seconds between failed connection attempts.
+  app_timeout: 600 # Idle seconds before checking connection health.
+  probe_contract: # Liquid contract used to test broker data readiness.
+    secType: CASH # IB security type for the probe contract.
+    symbol: EUR # Base currency or symbol for the probe contract.
+    currency: USD # Quote currency for the probe contract.
+    exchange: IDEALPRO # Exchange used for the probe request.
+  probe_timeout: 15 # Seconds allowed for one readiness probe.
+  connection_lost_retry_delay: 90 # Seconds before reconnecting after a failed probe.
+  auto_recovery_grace_period: 120 # Seconds allowed for broker-side recovery.
+  restart_on_recovered_connection: false # Rebuild after IB reports data maintained.
+  log_datafarm_status: true # Log informational IB data-farm status messages.
 
-logging:
-  config_file: dataloader_logging_config.yaml
+logging: # Dataloader logging setup.
+  config_file: dataloader_logging_config.yaml # Logging dictionary configuration file.
+  directory: logs # Log directory below storage.base_directory.
+  level: null # Optional Haymaker package log-level override.
 
-storage:
-  base_directory: ib_data
-  mongodb:
-    client:
-      host: localhost
-      port: 27017
-    database: null
-  block_library: null
-  market_data_library: market_data
-  dataframe_save_frequency: 900
+storage: # Filesystem, MongoDB, and Arctic defaults.
+  base_directory: ib_data # Data directory below the user's home directory.
+  mongodb: # MongoDB client and framework database settings.
+    client: # Keyword arguments passed to pymongo.MongoClient.
+      host: localhost # MongoDB host name or IP address.
+      port: 27017 # MongoDB server port.
+    database: null # Optional framework database; Arctic uses the client directly.
+  block_library: null # Optional Arctic library for saved block data.
+  market_data_library: market_data # Arctic library for downloaded market data.
+  dataframe_save_frequency: 900 # Default dataframe persistence interval in seconds.
 
-download: {}
+download: # Inputs and policies for one historical download run.
+  source: contracts.csv # CSV file containing IB contract specifications.
+  bar_size: 30 secs # IB historical bar size.
+  what_to_show: TRADES # IB historical data type such as TRADES or MIDPOINT.
+  max_lookback_days: null # Optional calendar-day limit for older history.
+  gap_fill_mode: "off" # Gap policy: off, heuristic, schedule, or auto.
+  use_rth: false # Request only regular-trading-hours data when true.
+  save_every_chunks: 10 # Downloaded chunks buffered before each datastore write.
+  number_of_workers: 10 # Concurrent workers consuming planned downloads.
 
-pacing: {}
+pacing: # Client-side IB request pacing policy.
+  no_restriction: false # Disable local pacing limits while retaining routing.
+  allowance_fraction: 1.0 # Fraction of local IB request capacity to use.
 
-futures: {}
+futures: # Futures contract expansion policy for source rows.
+  selector: current_and_expired # Futures selector implementation.
+  full_chain_spec: full # Full-chain subset: full, active, or expired.
+  current_index: 0 # Offset from the contract IB identifies as current.

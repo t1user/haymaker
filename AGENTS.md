@@ -152,9 +152,13 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   State-save queues drain; Arctic fire-and-forget writes discard pending final
   work.
 - CLI entrypoints load framework configuration once. Live and dataloader
-  configuration stay grouped by section until each target constructs itself
-  from its mapping. Storage temporarily retains typed settings pending its
-  separate refactor.
+  configuration stay grouped by owning target where practical until that target
+  constructs itself from its mapping. Controller one-run actions belong under
+  `controller.startup`. Logging and dataloader `download` remain user-facing
+  subsystem groups composed across closely related objects; storage temporarily
+  retains typed settings pending its separate refactor. Bundled base profiles
+  must enumerate supported settings, pin effective command defaults, and keep a
+  concise inline comment after every setting.
   Environment variables may select a profile YAML file but must not directly
   override individual settings. Strategy parameters remain user-module Python
   data. Do not change real local `.env` files or credential files.

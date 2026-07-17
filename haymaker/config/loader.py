@@ -243,7 +243,6 @@ def load_live_config(
 
     config = _merged_config("live", command.config_file, command.overrides, environ)
     allowed = {
-        "startup",
         "connection",
         "logging",
         "controller",
@@ -256,7 +255,6 @@ def load_live_config(
     }
     _reject_unknown(config, allowed, "root")
     return LiveConfig(
-        startup=_section(config, "startup"),
         connection=_section(config, "connection"),
         logging=_section(config, "logging"),
         controller=_section(config, "controller"),
