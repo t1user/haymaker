@@ -73,6 +73,23 @@ def test_builtin_logging_config_components_resolve(config_name):
         assert getattr(importlib.import_module(module_name), attribute)
 
 
+@pytest.mark.parametrize(
+    "config_name", ["logging_config.yaml", "dataloader_logging_config.yaml"]
+)
+def test_builtin_logging_config_consumes_ib_insync_wrapper_records(config_name):
+    """IB wrapper records must not escape through logging's stderr fallback."""
+
+    config_path = Path(haymaker_logging.__file__).parent / config_name
+    config = yaml.safe_load(config_path.read_text())
+
+    assert config["handlers"]["ib_insync_null"] == {"class": "logging.NullHandler"}
+    assert config["loggers"]["ib_insync.wrapper"] == {
+        "level": "DEBUG",
+        "handlers": ["ib_insync_null"],
+        "propagate": False,
+    }
+
+
 def test_setup_logging_injects_runtime_directories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

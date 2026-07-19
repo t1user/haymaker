@@ -12,6 +12,9 @@ formatters:
 
     
 handlers:
+  ib_insync_null:
+    class: logging.NullHandler
+
   console:
     class: logging.StreamHandler
     level: 5
@@ -44,4 +47,8 @@ loggers:
   broker:
     level: INFO
     handlers: [timed_rotating_file_specific_2]
+  ib_insync.wrapper:
+    level: DEBUG
+    handlers: [ib_insync_null]
+    propagate: false
   

@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
+from logging import LogRecord
 from typing import Any, cast
 
 import ib_insync as ibi
@@ -124,8 +125,9 @@ def test_runtime_preserves_target_policy_validation(
 
 
 @pytest.mark.asyncio
-async def test_runtime_runs_work():
+async def test_runtime_runs_work(caplog: pytest.LogCaptureFixture):
     runs = []
+    caplog.set_level("DEBUG", logger=runtime.__name__)
 
     async def run_work():
         runs.append("run")
@@ -134,6 +136,13 @@ async def test_runtime_runs_work():
     await dataloader_runtime.start()
 
     assert runs == ["run"]
+    records: list[LogRecord] = [
+        record for record in caplog.records if record.name == runtime.__name__
+    ]
+    assert any(
+        record.getMessage() == "Starting dataloader session." for record in records
+    )
+    assert all("DataloaderSession(" not in record.getMessage() for record in records)
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,9 @@ formatters:
     format:  "%(asctime)s | %(levelname)-8s | %(name)-23s | %(message)s | %(module)s %(funcName)s %(lineno)d"
 
 handlers:
+  ib_insync_null:
+    class: logging.NullHandler
+
   console:
     class: haymaker.logging.handlers.TqdmLoggingHandler
     level: DEBUG
@@ -24,3 +27,7 @@ loggers:
   haymaker:
     level: DEBUG
     handlers: [console, file]
+  ib_insync.wrapper:
+    level: DEBUG
+    handlers: [ib_insync_null]
+    propagate: false

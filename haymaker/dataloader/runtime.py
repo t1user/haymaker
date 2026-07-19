@@ -112,7 +112,7 @@ class DataloaderRuntime:
         if self._work_task and not self._work_task.done():
             log.debug("Dataloader work is still active after reconnection.")
         else:
-            log.debug("Running %s.", self.session.run)
+            log.debug("Starting dataloader session.")
             self._work_task = asyncio.create_task(
                 self._run_work(), name="dataloader-work"
             )
