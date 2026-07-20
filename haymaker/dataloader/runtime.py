@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from ib_insync import IB
 
-from haymaker.config.settings import DataloaderConfig
+from haymaker.config.settings import DataloaderConfig, MongoSettings, StorageSettings
 from haymaker.databases import StoreFactory
 
 if TYPE_CHECKING:
@@ -45,7 +45,12 @@ class DataloaderRuntime:
     def __post_init__(self) -> None:
         """Create and wire the configured dataloader session when needed."""
 
-        self.store_factory = StoreFactory(self.config.storage)
+        self.store_factory = StoreFactory(
+            StorageSettings(
+                base_directory=self.config.storage.base_directory,
+                mongodb=MongoSettings(client=self.config.storage.mongodb.client),
+            )
+        )
         if self.session is None:
             self.session = self._create_session()
         self.ib.errorEvent += self.session.pacing.onErrEvent

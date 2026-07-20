@@ -57,6 +57,8 @@ class FuturesSelectionPolicy:
     def __post_init__(self) -> None:
         """Reject policy values that would otherwise select silently."""
 
+        if not isinstance(self.selector, str):
+            raise TypeError("futures.selector must be a string")
         if self.selector not in {
             "contfuture",
             "fullchain",
@@ -66,6 +68,8 @@ class FuturesSelectionPolicy:
             "current_and_expired",
         }:
             raise ValueError(f"Unknown futures selector: {self.selector!r}")
+        if not isinstance(self.full_chain_spec, str):
+            raise TypeError("futures.full_chain_spec must be a string")
         if self.full_chain_spec not in {"full", "active", "expired"}:
             raise ValueError(
                 f"Unknown futures full-chain policy: {self.full_chain_spec!r}"
@@ -150,15 +154,11 @@ class ContractSelector:
         self.kwargs = self.clean_fields(**kwargs)
 
     def clean_fields(self, **kwargs) -> dict:
-        """Remove keys that are not accepted by ``ib_insync.Contract``."""
+        """Return contract fields after rejecting unsupported names."""
 
         if diff := (set(kwargs.keys()) - self.contract_fields):
-            for k in diff:
-                del kwargs[k]
-            log.warning(
-                f"Removed incorrect contract parameters: {diff}, "
-                f"will attempt to get Contract anyway"
-            )
+            names = ", ".join(sorted(diff))
+            raise ContractQualificationError(f"Unknown contract field(s): {names}")
         return kwargs
 
     async def objects(self) -> AsyncGenerator[ibi.Contract, None]:

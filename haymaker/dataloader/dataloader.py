@@ -22,13 +22,18 @@ import ib_insync as ibi
 import pandas as pd
 from tqdm import tqdm
 
+from haymaker.async_wrappers import QueueShutdownPolicy
 from haymaker.config.settings import StorageSettings
 from haymaker.databases import StoreFactory
 from haymaker.datastore import AsyncAbstractBaseStore
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
-from .contract_selectors import ContractSelector, FuturesSelectionPolicy
+from .contract_selectors import (
+    ContractQualificationError,
+    ContractSelector,
+    FuturesSelectionPolicy,
+)
 from .pacer import InFlightRequest, RequestPacing
 from .scheduling import (
     GapFillMode,
@@ -170,6 +175,10 @@ class DownloadJob:
     gap_learner: RunGapLearner | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.save_every_chunks, int) or isinstance(
+            self.save_every_chunks, bool
+        ):
+            raise TypeError("save_every_chunks must be an integer")
         if self.save_every_chunks <= 0:
             raise ValueError("save_every_chunks must be a positive integer")
         log.debug(f"{self!r} initialized.")
@@ -443,6 +452,19 @@ class Manager:
     new_job_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.source, str):
+            raise TypeError("source must be a string")
+        if not isinstance(self.use_rth, bool):
+            raise TypeError("use_rth must be a boolean")
+        if self.max_lookback_days is not None and (
+            not isinstance(self.max_lookback_days, int)
+            or isinstance(self.max_lookback_days, bool)
+        ):
+            raise TypeError("max_lookback_days must be an integer or None")
+        if not isinstance(self.save_every_chunks, int) or isinstance(
+            self.save_every_chunks, bool
+        ):
+            raise TypeError("save_every_chunks must be an integer")
         self.bar_size = bar_size_validator(self.bar_size)
         self.wts = wts_validator(self.wts)
         if self.gap_fill_mode not in {"off", "heuristic", "schedule", "auto"}:
@@ -466,12 +488,20 @@ class Manager:
 
         if self.store is None:
             lib = f"{self.wts}_{self.bar_size}".replace(" ", "_")
-            self.store = self.store_factory.arctic_store(lib)
+            self.store = self.store_factory.arctic_store(
+                lib, shutdown_policy=QueueShutdownPolicy.DRAIN
+            )
         return self.store
 
     @functools.cached_property
     def sources(self) -> list[dict]:
-        return pd.read_csv(self.source, keep_default_na=False).to_dict("records")
+        source = pd.read_csv(self.source, keep_default_na=False)
+        if unknown := set(source.columns) - ContractSelector.contract_fields:
+            names = ", ".join(sorted(unknown))
+            raise ContractQualificationError(
+                f"Unknown contract field(s) in {self.source}: {names}"
+            )
+        return source.to_dict("records")
 
     async def contracts(self) -> AsyncGenerator[ibi.Contract, None]:
         with tqdm(self.sources, desc="Sources") as source_pbar:
@@ -809,7 +839,7 @@ class DataloaderSession:
         log.debug("Initializing dataloader session.")
         # FIFO preserves source order so current contracts are not overtaken by
         # later-discovered expired contracts while the queue is under pressure.
-        self.queue = asyncio.Queue(maxsize=int(self.number_of_workers / 4))
+        self.queue = asyncio.Queue(maxsize=max(1, self.number_of_workers // 4))
         self.workers = [
             asyncio.create_task(
                 self.worker(f"worker_{i}", self.queue),

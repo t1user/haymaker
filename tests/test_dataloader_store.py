@@ -5,6 +5,7 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 
+from haymaker.async_wrappers import QueueShutdownPolicy
 from haymaker.dataloader.scheduling import (
     GapCandidate,
     PlannedRange,
@@ -606,9 +607,15 @@ def test_manager_datastore_builds_async_arctic_store(monkeypatch, dataloader_mod
     class FakeStoreFactory:
         """Capture store construction without opening Arctic."""
 
-        def arctic_store(self, library: str) -> object:
+        def arctic_store(
+            self,
+            library: str,
+            *,
+            shutdown_policy: QueueShutdownPolicy,
+        ) -> object:
             created["lib"] = library
             created["host"] = "mongo"
+            created["shutdown_policy"] = shutdown_policy
             return self
 
     manager = dataloader.Manager(
@@ -620,7 +627,11 @@ def test_manager_datastore_builds_async_arctic_store(monkeypatch, dataloader_mod
     store = manager.datastore
 
     assert isinstance(store, FakeStoreFactory)
-    assert created == {"lib": "TRADES_30_secs", "host": "mongo"}
+    assert created == {
+        "lib": "TRADES_30_secs",
+        "host": "mongo",
+        "shutdown_policy": QueueShutdownPolicy.DRAIN,
+    }
 
 
 def test_heuristic_suppresses_repeated_short_pair_but_keeps_long_gap():

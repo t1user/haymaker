@@ -105,8 +105,9 @@ The research package is intentionally separate from live execution. It works dir
 Background queues use one shutdown policy. `DRAIN` queues are critical: item
 failures and drain timeouts escape final cleanup. `DISCARD` queues are
 best-effort: failures are logged and pending final work is dropped. State saves
-use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
-`DISCARD`.
+use `DRAIN`; async Arctic stores default to `DISCARD`, but the dataloader gives
+its store a dedicated `DRAIN` queue for queued datastore writes. Transient
+aggregation uses `DISCARD`.
 
 ### Dataloader
 
@@ -114,7 +115,8 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
   orchestration, and store writes.
 - `haymaker/dataloader/runtime.py`: dataloader runtime construction and adapter
   for supervised IB connection ownership, using client ID `1` by default.
-- `haymaker/dataloader/contract_selectors.py`: contract selection from CSV/source inputs, especially futures.
+- `haymaker/dataloader/contract_selectors.py`: strict contract-field validation
+  and selection from CSV/source inputs, especially futures.
 - `haymaker/dataloader/pacer.py`: request throttling and pacing-violation tracking.
 - `haymaker/dataloader/scheduling.py`: `TaskPlanner`, `BackfillRangePlan`,
   `UpdateRangePlan`, `GapFillRangePlan`, and pure heuristic or schedule/session gap
@@ -197,14 +199,17 @@ use `DRAIN`; Arctic fire-and-forget writes and transient aggregation use
    `TaskPlanner`, which creates update, backfill, and optional gap-fill ranges.
    Continuous futures use IB's empty-`endDateTime` latest-ended request shape
    and do not schedule internal gap-fill ranges.
-5. A producer submits work to an asyncio queue.
+5. A producer submits work to a source-ordered asyncio queue bounded to
+   `max(1, number_of_workers // 4)` jobs. Unknown CSV headers fail before this
+   stage and before any broker contract-detail request.
 6. Workers call IB historical-data requests under pacer restrictions.
 7. Downloaded chunks are buffered by range and passed to `HistorySink` at the
    configured chunk threshold or a correctness boundary such as range completion
    or session cleanup. `HistorySink` concatenates each batch with stored data and
    writes a complete new version through the async datastore; Arctic owns final
    cleaning and metadata updates. The returned first bar timestamp is validated
-   before it drives the next request boundary.
+   before it drives the next request boundary. The dataloader's dedicated
+   `DRAIN` queue makes all queued datastore writes part of critical shutdown.
 8. Supervisor recovery within the same process resumes in-memory active jobs
    before discovering new work. A full process stop writes no separate
    dataloader checkpoint; the next process rediscovers remaining work from
@@ -244,11 +249,13 @@ The CLI assembles framework configuration once through
 `haymaker/config/loader.py`. Live and dataloader loading return `LiveConfig`
 or `DataloaderConfig`; sections remain mappings until the owning target or
 subsystem composition boundary constructs them. Controller one-run actions are
-nested under `controller.startup`. Storage temporarily retains
-`StorageSettings` pending the separate datastore refactor. Runtime components
-receive their specific section or ready service and do not read a process-global
-configuration object. Strategy-specific parameters remain ordinary Python data
-in the user module.
+nested under `controller.startup`. Live storage temporarily retains the broad
+`StorageSettings` pending the separate datastore refactor. Dataloader storage
+uses the narrower `DataloaderStorageSettings`, containing only a base directory
+and Mongo client arguments; `DataloaderRuntime` adapts it to the existing store
+factory. Runtime components receive their specific section or ready service and
+do not read a process-global configuration object. Strategy-specific parameters
+remain ordinary Python data in the user module.
 
 Configuration precedence, from lowest to highest, is:
 
@@ -260,10 +267,11 @@ Configuration precedence, from lowest to highest, is:
 
 YAML is parsed with a safe duplicate-key-rejecting loader. Mappings merge
 recursively, while lists and scalars replace lower-priority values. Unknown
-top-level sections fail during loading. Live and dataloader leaf values are
-interpreted by target constructors. The bundled profiles enumerate supported
-settings with concise comments and pin each command's effective defaults;
-deployment override files remain partial.
+top-level sections fail during loading. Dataloader storage structure is also
+validated by the loader; its runtime and target constructors validate
+`download`, `pacing`, and futures fields and values. The bundled profiles
+enumerate supported settings with concise comments and pin each command's
+effective defaults; deployment override files remain partial.
 
 Important config files:
 
@@ -346,8 +354,10 @@ dataloader contracts.csv -f settings.yaml
 
 ## AGENTS.md Notes
 
-The repo-root `AGENTS.md` contains the project-wide development rules. There is
-also a scoped `haymaker/research/AGENTS.md` for timing-sensitive research code.
+The repo-root `AGENTS.md` contains the project-wide development rules. Scoped
+guidance lives in `haymaker/dataloader/AGENTS.md` for historical request,
+persistence, schema, and validation invariants and in
+`haymaker/research/AGENTS.md` for timing-sensitive research code.
 The root guidance records the standard focused checks, warns against importing
 `haymaker.app` in focused tests, and identifies
 `haymaker.supervisor.ConnectionSupervisor` as the owner of IB socket recovery.

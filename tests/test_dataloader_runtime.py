@@ -109,8 +109,17 @@ def test_runtime_rejects_unknown_target_option(section: str) -> None:
     ("path", "value", "message"),
     [
         ("download.number_of_workers", 0, "number_of_workers"),
+        ("download.number_of_workers", True, "number_of_workers"),
         ("download.gap_fill_mode", "unknown", "gap-fill mode"),
+        ("download.source", 1, "source"),
+        ("download.use_rth", "false", "use_rth"),
+        ("download.max_lookback_days", True, "max_lookback_days"),
+        ("download.save_every_chunks", True, "save_every_chunks"),
         ("pacing.allowance_fraction", 0, "allowance_fraction"),
+        ("pacing.allowance_fraction", True, "allowance_fraction"),
+        ("pacing.allowance_fraction", float("inf"), "allowance_fraction"),
+        ("pacing.allowance_fraction", float("nan"), "allowance_fraction"),
+        ("pacing.no_restriction", "false", "no_restriction"),
     ],
 )
 def test_runtime_preserves_target_policy_validation(
@@ -122,6 +131,30 @@ def test_runtime_preserves_target_policy_validation(
 
     with pytest.raises((TypeError, ValueError), match=message):
         runtime.DataloaderRuntime(config, ibi.IB())
+
+
+def test_runtime_adapts_narrow_storage_settings_for_store_factory() -> None:
+    """Runtime should retain only the dataloader's Mongo client configuration."""
+
+    config = load_dataloader_config(
+        DataloaderCommand(
+            None,
+            (
+                ("storage.base_directory", "history"),
+                ("storage.mongodb.client.host", "mongo.example"),
+            ),
+        ),
+        environ={},
+    )
+
+    dataloader_runtime = runtime.DataloaderRuntime(config, ibi.IB())
+
+    assert dataloader_runtime.store_factory.settings.base_directory == "history"
+    assert dataloader_runtime.store_factory.settings.mongodb.client == {
+        "host": "mongo.example",
+        "port": 27017,
+    }
+    assert dataloader_runtime.store_factory.settings.mongodb.database is None
 
 
 @pytest.mark.asyncio

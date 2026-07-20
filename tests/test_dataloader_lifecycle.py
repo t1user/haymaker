@@ -6,6 +6,8 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 
+from haymaker.async_wrappers import QueueShutdownPolicy
+
 
 @pytest.fixture
 def dataloader_module():
@@ -82,6 +84,82 @@ async def test_main_cleans_up_producer_and_workers_on_cancellation(
     assert producer_cancelled.is_set()
     assert cancelled_workers == 2
     assert type(session.queue) is asyncio.Queue
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("number_of_workers", "expected_capacity"),
+    [(1, 1), (2, 1), (3, 1), (4, 1), (8, 2), (10, 2)],
+)
+async def test_session_queue_capacity_is_always_bounded(
+    monkeypatch,
+    dataloader_module,
+    number_of_workers: int,
+    expected_capacity: int,
+) -> None:
+    """Small worker pools must not accidentally create an unbounded queue."""
+
+    dataloader = dataloader_module
+    workers_started = 0
+    all_workers_started = asyncio.Event()
+
+    async def fake_producer(self, queue):
+        await asyncio.Event().wait()
+
+    async def fake_worker(self, name, queue):
+        nonlocal workers_started
+        workers_started += 1
+        if workers_started == number_of_workers:
+            all_workers_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(dataloader.DataloaderSession, "producer", fake_producer)
+    monkeypatch.setattr(dataloader.DataloaderSession, "worker", fake_worker)
+    session = dataloader.DataloaderSession(
+        object(), number_of_workers=number_of_workers
+    )
+
+    run_task = asyncio.create_task(session.run())
+    await asyncio.wait_for(all_workers_started.wait(), timeout=1)
+
+    assert session.queue is not None
+    assert session.queue.maxsize == expected_capacity
+
+    run_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+
+@pytest.mark.asyncio
+async def test_manager_rejects_unknown_csv_headers_before_broker_request(
+    tmp_path,
+    dataloader_module,
+) -> None:
+    """CSV schema mistakes must fail before contract qualification starts."""
+
+    class FakeIB:
+        def __init__(self) -> None:
+            self.details_calls = 0
+
+        async def reqContractDetailsAsync(self, contract):
+            self.details_calls += 1
+            return []
+
+    source = tmp_path / "contracts.csv"
+    source.write_text(
+        "secType,symbol,exchange,currencyCode\nSTK,AAPL,SMART,USD\n",
+        encoding="utf-8",
+    )
+    ib = FakeIB()
+    manager = dataloader_module.Manager(ib, source=str(source))
+
+    with pytest.raises(
+        dataloader_module.ContractQualificationError,
+        match="currencyCode",
+    ):
+        _ = [contract async for contract in manager.contracts()]
+
+    assert ib.details_calls == 0
 
 
 def test_sessions_own_separate_pacing_state(dataloader_module):
@@ -664,7 +742,8 @@ async def test_manager_policy_flows_to_store_and_download_job(
     monkeypatch.setattr(dataloader, "HistorySink", lambda contract, store: FakeSink())
 
     class FakeStoreFactory:
-        def arctic_store(self, library):
+        def arctic_store(self, library, *, shutdown_policy):
+            assert shutdown_policy is QueueShutdownPolicy.DRAIN
             return FakeStore(library, "mongo")
 
     manager = dataloader.Manager(

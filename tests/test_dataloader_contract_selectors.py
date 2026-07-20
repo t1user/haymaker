@@ -17,6 +17,19 @@ async def collect_contracts(selector: ContractSelector) -> list[ibi.Contract]:
     return [contract async for contract in selector.objects()]
 
 
+def test_selector_rejects_unknown_contract_fields() -> None:
+    """Programmatic selectors must not silently discard misspelled fields."""
+
+    with pytest.raises(ContractQualificationError, match="currencyCode"):
+        ContractSelector.from_kwargs(
+            pacing=RequestPacing(ibi.IB()),
+            secType="STK",
+            symbol="AAPL",
+            exchange="SMART",
+            currencyCode="USD",
+        )
+
+
 @pytest.mark.asyncio
 async def test_selector_qualifies_with_paced_contract_details():
     """Selectors should route qualification through paced reqContractDetails."""

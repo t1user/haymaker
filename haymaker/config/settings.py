@@ -8,11 +8,25 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class MongoSettings:
-    """Mongo client arguments and framework database name."""
+class MongoClientSettings:
+    """Keyword arguments used to construct a Mongo client."""
 
     client: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MongoSettings(MongoClientSettings):
+    """Mongo client arguments and framework database name."""
+
     database: str | None = None
+
+
+@dataclass(frozen=True)
+class DataloaderStorageSettings:
+    """Filesystem and Mongo client settings used by the dataloader."""
+
+    base_directory: str = "ib_data"
+    mongodb: MongoClientSettings = field(default_factory=MongoClientSettings)
 
 
 @dataclass(frozen=True)
@@ -60,7 +74,7 @@ class DataloaderConfig:
     Attributes:
         connection: Broker connection and recovery options.
         logging: Logging setup options.
-        storage: Retained typed storage settings pending datastore refactoring.
+        storage: Filesystem and Mongo client settings used by the dataloader.
         download: Historical request and worker options.
         pacing: Client-side request pacing options.
         futures: Futures contract-selection policy.
@@ -68,7 +82,7 @@ class DataloaderConfig:
 
     connection: Mapping[str, Any]
     logging: Mapping[str, Any]
-    storage: StorageSettings
+    storage: DataloaderStorageSettings
     download: Mapping[str, Any]
     pacing: Mapping[str, Any]
     futures: Mapping[str, Any]

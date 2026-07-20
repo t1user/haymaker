@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from pymongo import MongoClient  # type: ignore
 from pymongo.errors import ConfigurationError  # type: ignore
 
+from .async_wrappers import QueueShutdownPolicy
 from .config.settings import StorageSettings
 
 if TYPE_CHECKING:
@@ -77,6 +78,7 @@ class StoreFactory:
         self,
         library: str,
         collection_namer: Callable[..., str] | None = None,
+        shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DISCARD,
     ) -> AsyncArcticStore:
         """Construct an asynchronous Arctic store using the runtime client."""
 
@@ -86,6 +88,7 @@ class StoreFactory:
             lib=library,
             host=self.mongo_client(),
             collection_namer=collection_namer,
+            shutdown_policy=shutdown_policy,
         )
 
     @property

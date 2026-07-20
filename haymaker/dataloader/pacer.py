@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
@@ -572,6 +573,14 @@ class RequestPacing:
     def __post_init__(self) -> None:
         """Initialize request buckets from module-level IB pacing policy."""
 
+        if not isinstance(self.no_restriction, bool):
+            raise TypeError("no_restriction must be a boolean")
+        if not isinstance(self.allowance_fraction, (int, float)) or isinstance(
+            self.allowance_fraction, bool
+        ):
+            raise TypeError("allowance_fraction must be a number")
+        if not math.isfinite(self.allowance_fraction):
+            raise ValueError("allowance_fraction must be finite")
         if self.allowance_fraction <= 0:
             raise ValueError("allowance_fraction must be greater than 0")
         self.historical = self._historical_bucket(small_bar_rules=True)

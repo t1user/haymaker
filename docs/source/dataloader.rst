@@ -56,7 +56,9 @@ stored boundary.
 Source CSV
 ==========
 
-The source CSV columns should be valid ``ib_insync.Contract`` fields. The most
+The source CSV columns must be valid ``ib_insync.Contract`` fields. Unknown
+column names are rejected before any contract-detail request is sent to IB;
+this catches misspelled headers instead of silently ignoring them. The most
 important columns are usually:
 
 ``secType``
@@ -188,7 +190,9 @@ and ``null``. Quote values containing spaces.
 Configuration
 =============
 
-Target constructors own intrinsic defaults and validation. The bundled
+The configuration loader validates the root and dataloader storage schema;
+the dataloader runtime and target constructors validate the fields they own.
+The bundled
 ``haymaker/config/dataloader_base_config.yaml`` is a complete, commented
 reference profile that pins the dataloader's effective defaults; user files
 need include only the values changed for a run.
@@ -237,7 +241,9 @@ Common settings:
 ``download.number_of_workers``
    Number of worker tasks consuming planned downloads. The default is ``10``.
    Increasing it can keep more contracts active, but does not bypass local or IB
-   pacing limits.
+   pacing limits. The producer queue is bounded to
+   ``max(1, number_of_workers // 4)`` jobs, so even small worker counts apply
+   backpressure rather than creating an accidentally unbounded queue.
 
 ``download.save_every_chunks``
    Number of downloaded chunks buffered before creating a new datastore
@@ -252,6 +258,21 @@ Common settings:
    ``1.0`` are allowed for experimentation, but deliberately exceed IB's
    published pacing limits and may trigger broker throttling or pacing
    violations.
+
+``storage.base_directory``
+   Data directory below the user's home directory. The default is ``ib_data``.
+
+``storage.mongodb.client``
+   Keyword arguments passed to ``pymongo.MongoClient``, such as ``host`` and
+   ``port``. These are the only Mongo settings used by the dataloader. Database,
+   library-name, and dataframe-save-frequency settings belong to other runtime
+   services and are rejected in the dataloader profile.
+
+Unknown keys in ``download``, ``pacing``, ``futures``, or ``storage`` are
+rejected. Worker and save counts must be positive integers,
+``max_lookback_days`` must be a positive integer or ``null``, boolean settings
+must be YAML booleans, and ``pacing.allowance_fraction`` must be a finite
+positive number.
 
 Example: daily stock bars:
 
@@ -330,7 +351,10 @@ Collections use Haymaker's default contract naming policy.
 Each save creates a complete new Arctic version of the series. The dataloader
 does not append fragments directly, so a saved version remains independently
 readable. ``save_every_chunks`` controls how frequently a long download creates
-these versions.
+these versions. The dataloader gives its Arctic write queue critical ``DRAIN``
+shutdown semantics: orderly shutdown waits for queued datastore writes,
+including metadata, and reports a queued-write failure or drain timeout instead
+of treating final work as best effort.
 
 Read data back with the datastore API:
 
@@ -430,9 +454,9 @@ Re-running the same command plans remaining work again from the data already
 saved in Arctic.
 
 Pressing ``Ctrl-C`` requests an orderly supervisor stop. Active requests are
-cancelled, downloaded chunks are flushed, and queued datastore metadata writes
-are drained before the process exits. Avoid sending a second forced interrupt
-while these final writes are being logged.
+cancelled, downloaded chunks are flushed, and queued datastore writes,
+including metadata, are drained before the process exits. Avoid sending a
+second forced interrupt while these final writes are being logged.
 
 The run stops rather than continuing when it cannot safely plan or persist data,
 including these cases:

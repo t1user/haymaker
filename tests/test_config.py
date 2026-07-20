@@ -12,6 +12,7 @@ from haymaker.blotter import blotter_factory
 from haymaker.config import (
     ConfigError,
     DataloaderCommand,
+    DataloaderStorageSettings,
     LiveCommand,
     load_dataloader_config,
     load_live_config,
@@ -99,7 +100,53 @@ def test_dataloader_defaults_are_profile_specific() -> None:
         "no_restriction": False,
         "allowance_fraction": 1.0,
     }
+    assert isinstance(config.storage, DataloaderStorageSettings)
+    assert config.storage.base_directory == "ib_data"
+    assert config.storage.mongodb.client == {"host": "localhost", "port": 27017}
+    assert not hasattr(config.storage.mongodb, "database")
+    assert not hasattr(config.storage, "block_library")
+    assert not hasattr(config.storage, "market_data_library")
+    assert not hasattr(config.storage, "dataframe_save_frequency")
     assert futures.selector == "current_and_expired"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "storage.mongodb.database",
+        "storage.block_library",
+        "storage.market_data_library",
+        "storage.dataframe_save_frequency",
+    ],
+)
+def test_dataloader_rejects_irrelevant_storage_settings(path: str) -> None:
+    """Dataloader configuration should reject live-only storage settings."""
+
+    command = DataloaderCommand(None, ((path, "unused"),))
+
+    with pytest.raises(ConfigError, match=path.rsplit(".", maxsplit=1)[-1]):
+        load_dataloader_config(command, environ={})
+
+
+def test_dataloader_accepts_its_filesystem_and_mongo_client_settings() -> None:
+    """Retained dataloader storage fields should remain configurable."""
+
+    command = DataloaderCommand(
+        None,
+        (
+            ("storage.base_directory", "custom_data"),
+            ("storage.mongodb.client.host", "mongo.example"),
+            ("storage.mongodb.client.port", 27018),
+        ),
+    )
+
+    config = load_dataloader_config(command, environ={})
+
+    assert config.storage.base_directory == "custom_data"
+    assert config.storage.mongodb.client == {
+        "host": "mongo.example",
+        "port": 27018,
+    }
 
 
 @pytest.mark.parametrize(

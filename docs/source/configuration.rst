@@ -38,9 +38,11 @@ The bundled profiles are defined in:
 * ``haymaker/config/dataloader_base_config.yaml`` for historical downloads.
 
 Both files are complete, commented reference profiles. They enumerate the
-supported settings and pin the effective defaults used by their command. Target
-constructors still own intrinsic defaults and validation, while user override
-files only need to contain values that differ from the bundled profile.
+supported settings and pin the effective defaults used by their command. User
+override files only need to contain values that differ from the bundled
+profile. The loader validates configuration structure and typed storage
+settings; the runtime targets that consume the other sections validate their
+own fields and values.
 
 Duplicate YAML keys and unknown top-level sections are rejected while loading.
 Section keys and values are interpreted by the target that consumes them;
@@ -170,8 +172,17 @@ closely related runtime objects.
 Dataloader Configuration
 ========================
 
-Dataloader configuration shares the ``connection``, ``logging``, and
-``storage`` sections and adds:
+Dataloader configuration shares the ``connection`` and ``logging`` section
+shapes with live execution. Its narrower ``storage`` section contains only
+``base_directory`` and ``mongodb.client``; live-only database, library, and
+dataframe-save settings are rejected.
+
+``storage``
+   Base directory and keyword arguments passed to ``pymongo.MongoClient``. The
+   dataloader derives its Arctic library name from the requested data type and
+   bar size, so no library name is configured here.
+
+The remaining dataloader groups are:
 
 ``download``
    Source CSV, bar size, data type, lookback and gap-fill policy, RTH selection,
@@ -184,6 +195,13 @@ Dataloader configuration shares the ``connection``, ``logging``, and
 
 ``futures``
    Contract selector, full-chain marker, and current-contract index.
+
+Unknown dataloader ``storage`` keys fail during configuration loading; unknown
+keys in ``download``, ``pacing``, or ``futures`` fail during runtime
+construction. Target constructors also enforce value types and ranges,
+including positive worker/save counts, an optional positive lookback, booleans
+for boolean policies, a finite positive pacing allowance, and valid futures
+selector values.
 
 Safe Object Conversion
 ======================

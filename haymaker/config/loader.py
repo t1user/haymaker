@@ -11,7 +11,9 @@ import yaml
 
 from .settings import (
     DataloaderConfig,
+    DataloaderStorageSettings,
     LiveConfig,
+    MongoClientSettings,
     MongoSettings,
     StorageSettings,
 )
@@ -236,6 +238,23 @@ def _parse_storage(data: Mapping[str, Any]) -> StorageSettings:
     )
 
 
+def _parse_dataloader_storage(
+    data: Mapping[str, Any],
+) -> DataloaderStorageSettings:
+    """Build the filesystem and Mongo client settings used by the dataloader."""
+
+    _reject_unknown(data, {"base_directory", "mongodb"}, "storage")
+    mongo = _mapping(data.get("mongodb", {}), "storage.mongodb")
+    _reject_unknown(mongo, {"client"}, "storage.mongodb")
+    client = _mapping(mongo.get("client", {}), "storage.mongodb.client")
+    return DataloaderStorageSettings(
+        base_directory=_typed(
+            data.get("base_directory", "ib_data"), str, "storage.base_directory"
+        ),
+        mongodb=MongoClientSettings(client=client),
+    )
+
+
 def load_live_config(
     command: "LiveCommand", environ: Mapping[str, str] | None = None
 ) -> LiveConfig:
@@ -280,7 +299,7 @@ def load_dataloader_config(
     return DataloaderConfig(
         connection=_section(config, "connection"),
         logging=_section(config, "logging"),
-        storage=_parse_storage(_section(config, "storage")),
+        storage=_parse_dataloader_storage(_section(config, "storage")),
         download=_section(config, "download"),
         pacing=_section(config, "pacing"),
         futures=_section(config, "futures"),

@@ -95,8 +95,14 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         lib: str,
         host: str | MongoClient = "localhost",
         collection_namer: Callable[[ibi.Contract], str] | None = None,
+        shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DISCARD,
     ) -> None:
         self.store = self._sync_class(lib, host, collection_namer)
+        if shutdown_policy is not QueueShutdownPolicy.DISCARD:
+            self._queue = SyncQueueRunner(
+                f"AsyncArcticStore_queue_{lib}",
+                shutdown_policy=shutdown_policy,
+            )
 
     def override_collection_namer(self, collection_namer: Callable[..., str]) -> Self:
         self.store.collection_namer = collection_namer
@@ -106,7 +112,7 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         self._queue.enqueue(fn, *args)
 
     async def close(self) -> None:
-        """Discard pending best-effort datastore writes and stop the queue."""
+        """Apply this store's shutdown policy and stop its write queue."""
 
         await self._queue.close()
 

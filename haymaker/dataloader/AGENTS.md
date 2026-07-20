@@ -17,7 +17,9 @@ request, restart, and date-policy behavior with focused tests.
   selectors retain the target-owned `FuturesSelectionPolicy`. Keep `download`
   as a user-facing run group rather than splitting out worker count solely to
   mirror these internal constructors. The bundled dataloader profile must list
-  every supported setting with a concise inline comment.
+  every supported setting with a concise inline comment. Its `storage` group
+  is deliberately narrow: only `base_directory` and `mongodb.client` belong to
+  this runtime. The library name is derived from `what_to_show` and `bar_size`.
 - The dataloader defaults to client ID `1`, distinct from the live runtime's
   expected client ID `0`. A duplicate client ID is a configuration failure; do
   not retry automatically with another ID.
@@ -30,7 +32,9 @@ request, restart, and date-policy behavior with focused tests.
   code. Keep IB calls out of them; obtain broker inputs in `Manager` and pass
   ordinary values into the planner.
 - Planned work executes in `update`, `backfill`, then `gap` order.
-- Contract jobs preserve source order through a bounded FIFO queue.
+- Contract jobs preserve source order through a bounded FIFO queue sized as
+  `max(1, number_of_workers // 4)`. Keep the lower bound: asyncio treats a
+  queue size of zero as unbounded.
 - `DownloadJob` owns request progression for one contract. `DownloadContainer`
   owns one range's buffered chunks and next request boundary.
 - `AsyncStoreView` is the read-only scheduling boundary. `HistorySink` is the
@@ -80,6 +84,9 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   throttle for long periods.
 - Reject unknown or ambiguous contract specifications during discovery instead
   of sending predictable failed historical requests.
+- Reject unknown CSV headers before constructing selectors or making broker
+  requests. Programmatic selector construction must follow the same rule; do
+  not silently discard unsupported contract fields.
 - Keep `ConnectionSupervisor` workload-agnostic. Dataloader-specific behavior
   belongs in this package, and live runtime remains the owner of live-trading
   recovery.
@@ -116,6 +123,11 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   correctness boundaries.
 - Stop workers before the final flush so persistence cannot race an active
   download.
+- Dataloader Arctic stores use a dedicated `DRAIN` queue. All queued datastore
+  writes, including metadata, are critical and processing failures or drain
+  timeouts must propagate from orderly shutdown. The shared/default async
+  Arctic policy remains `DISCARD`; select the dataloader policy at store
+  construction without adding another async-store method.
 - Standalone Ctrl-C cancellation must finish the session flush before shared
   application shutdown drains datastore background queues. Do not restore
   `ib_insync.util.patchAsyncio()` in the CLI; nested-loop patching is for
@@ -143,6 +155,24 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   IB connection.
 
 ## Extension And Validation
+
+- Keep configuration validation at the nearest existing owner. The loader
+  rejects unknown root/storage keys and constructs `DataloaderStorageSettings`;
+  `DataloaderRuntime` rejects unknown `download` and `pacing` keys and composes
+  the targets; `FuturesSelectionPolicy`, `Manager`, `DataloaderSession`,
+  `DownloadJob`, and `RequestPacing` validate their own values.
+- Keep the dataloader schema limited to settings it consumes. Supported
+  `storage` leaves are `base_directory` and `mongodb.client`; supported
+  `download` leaves are `source`, `bar_size`, `what_to_show`,
+  `max_lookback_days`, `gap_fill_mode`, `use_rth`, `save_every_chunks`, and
+  `number_of_workers`; supported `pacing` leaves are `no_restriction` and
+  `allowance_fraction`; supported `futures` leaves are `selector`,
+  `full_chain_spec`, and `current_index`.
+- Treat booleans distinctly from integers during validation. Worker and save
+  counts are positive integers; lookback is a positive integer or `None`;
+  `use_rth` and pacing bypass are booleans; pacing allowance is finite and
+  positive. Preserve the existing bar-size, data-type, gap-mode, and futures
+  validators.
 
 - Do not change `haymaker/durationStr_converters.py` as part of dataloader
   helper cleanup; it is trading-specific and has separate risk.

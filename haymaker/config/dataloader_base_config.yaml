@@ -21,16 +21,12 @@ logging: # Dataloader logging setup.
   directory: logs # Log directory below storage.base_directory.
   level: null # Optional Haymaker package log-level override.
 
-storage: # Filesystem, MongoDB, and Arctic defaults.
+storage: # Dataloader filesystem and Mongo client settings.
   base_directory: ib_data # Data directory below the user's home directory.
-  mongodb: # MongoDB client and framework database settings.
+  mongodb: # MongoDB client settings used by Arctic.
     client: # Keyword arguments passed to pymongo.MongoClient.
       host: localhost # MongoDB host name or IP address.
       port: 27017 # MongoDB server port.
-    database: null # Optional framework database; Arctic uses the client directly.
-  block_library: null # Optional Arctic library for saved block data.
-  market_data_library: market_data # Arctic library for downloaded market data.
-  dataframe_save_frequency: 900 # Default dataframe persistence interval in seconds.
 
 download: # Inputs and policies for one historical download run.
   source: contracts.csv # CSV file containing IB contract specifications.

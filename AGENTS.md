@@ -149,16 +149,17 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   Telegram are optional YAML configuration, not runtime dependencies.
 - Queue shutdown uses one policy: `DRAIN` is critical and propagates processing
   failures or drain timeouts, while `DISCARD` is best effort and logs failures.
-  State-save queues drain; Arctic fire-and-forget writes discard pending final
-  work.
+  State-save queues drain. Async Arctic stores default to `DISCARD`, while the
+  dataloader selects a dedicated `DRAIN` queue for its queued datastore writes.
 - CLI entrypoints load framework configuration once. Live and dataloader
   configuration stay grouped by owning target where practical until that target
   constructs itself from its mapping. Controller one-run actions belong under
   `controller.startup`. Logging and dataloader `download` remain user-facing
-  subsystem groups composed across closely related objects; storage temporarily
-  retains typed settings pending its separate refactor. Bundled base profiles
-  must enumerate supported settings, pin effective command defaults, and keep a
-  concise inline comment after every setting.
+  subsystem groups composed across closely related objects. Live storage
+  temporarily retains its broader typed settings pending a separate refactor;
+  dataloader storage contains only `base_directory` and `mongodb.client`.
+  Bundled base profiles must enumerate supported settings, pin effective
+  command defaults, and keep a concise inline comment after every setting.
   Environment variables may select a profile YAML file but must not directly
   override individual settings. Strategy parameters remain user-module Python
   data. Do not change real local `.env` files or credential files.
