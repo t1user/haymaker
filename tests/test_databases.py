@@ -10,7 +10,21 @@ from haymaker import databases
 from haymaker.async_wrappers import QueueProcessingError, QueueShutdownPolicy
 from haymaker.config.settings import MongoSettings, StorageSettings
 from haymaker.databases import StoreFactory
-from haymaker.datastore import AbstractBaseStore, ArcticStore, AsyncArcticStore
+from haymaker.datastore import (
+    AbstractBaseStore,
+    ArcticStore,
+    AsyncArcticStore,
+    AsyncDataStore,
+    QueuedDataSink,
+)
+
+
+def accepts_async_datastore(store: AsyncDataStore) -> None:
+    """Type-check one structural async datastore implementation."""
+
+
+def accepts_queued_sink(store: QueuedDataSink) -> None:
+    """Type-check one structural queued datastore implementation."""
 
 
 def storage_settings(**client: object) -> StorageSettings:
@@ -102,12 +116,13 @@ async def test_awaited_arctic_mutations_return_backend_results(
     store = AsyncArcticStore("awaited")
     data = pd.DataFrame({"close": [1]})
 
-    assert await store.async_write("ES", data) == "write-version"
-    assert await store.async_append("ES", data) == "append-version"
-    assert (
-        await store.async_write_metadata("ES", {"complete": True}) == "metadata-version"
-    )
+    accepts_async_datastore(store)
+    accepts_queued_sink(store)
+    assert await store.write("ES", data) == "write-version"
+    assert await store.append("ES", data) == "append-version"
+    assert await store.write_metadata("ES", {"complete": True}) == "metadata-version"
     assert [name for name, _ in calls] == ["write", "append", "metadata"]
+    assert not hasattr(store, "async_write")
 
 
 @pytest.mark.asyncio
@@ -134,7 +149,7 @@ async def test_awaited_metadata_failure_is_reported_at_call_site(
     store = AsyncArcticStore("awaited-failure")
 
     with pytest.raises(RuntimeError, match="metadata write failed"):
-        await store.async_write_metadata("ES", {"complete": True})
+        await store.write_metadata("ES", {"complete": True})
 
 
 @pytest.mark.asyncio
@@ -165,9 +180,9 @@ async def test_critical_arctic_store_uses_a_dedicated_draining_queue(
     )
 
     assert store._queue is not AsyncArcticStore._queue
-    assert store._queue.shutdown_policy is QueueShutdownPolicy.DRAIN
+    assert store.shutdown_policy is QueueShutdownPolicy.DRAIN
 
-    store.write_metadata("ES", {"complete": True})
+    store.enqueue_write_metadata("ES", {"complete": True})
     await store.close()
 
     assert writes == [("ES", {"complete": True})]
@@ -197,7 +212,7 @@ async def test_critical_arctic_store_propagates_queued_write_failure(
         "critical-failure",
         shutdown_policy=QueueShutdownPolicy.DRAIN,
     )
-    store.write_metadata("ES", {"complete": True})
+    store.enqueue_write_metadata("ES", {"complete": True})
 
     with pytest.raises(QueueProcessingError, match="failed to process queued work"):
         await store.close()
@@ -247,8 +262,8 @@ async def test_queued_writes_keep_each_store_symbol_namer_isolated(
     contract = ibi.Future(localSymbol="NQH6")
     data = pd.DataFrame({"close": [1]})
 
-    alpha_store.write(contract, data)
-    beta_store.write(contract, data)
+    alpha_store.enqueue_write(contract, data)
+    beta_store.enqueue_write(contract, data)
     await alpha_store.close()
     await beta_store.close()
 

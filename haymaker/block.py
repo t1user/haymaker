@@ -11,9 +11,8 @@ import pandas as pd
 
 from .base import Atom
 from .datastore import (
-    AsyncAbstractBaseStore,
-    AsyncArcticStore,
     CollectionNamerStrategySymbol,
+    QueuedDataSink,
 )
 
 log = logging.getLogger(__name__)
@@ -102,12 +101,10 @@ class AbstractDfBlock(AbstractBaseBlock):
 
     strategy: str
     contract: ibi.Contract
-    datastore: AsyncAbstractBaseStore | None = field(
-        default=None, kw_only=True, repr=False
-    )
+    datastore: QueuedDataSink | None = field(default=None, kw_only=True, repr=False)
 
     @cached_property
-    def _datastore(self) -> AsyncAbstractBaseStore:
+    def _datastore(self) -> QueuedDataSink:
         if self.datastore is not None:
             return self.datastore
 
@@ -122,7 +119,7 @@ class AbstractDfBlock(AbstractBaseBlock):
         )
 
     @cached_property
-    def store(self) -> None | AsyncAbstractBaseStore:
+    def store(self) -> None | QueuedDataSink:
         if self.datastore is not None:
             return self._datastore
         elif self.runtime.store_factory.settings.block_library:
@@ -136,7 +133,7 @@ class AbstractDfBlock(AbstractBaseBlock):
     def df_row(self, data) -> pd.Series:
         df = self._create_df(data)
         if self.store:
-            self.store.append(self.contract, df)
+            self.store.enqueue_append(self.contract, df)
         return df.reset_index().iloc[-1]
 
     @singledispatchmethod

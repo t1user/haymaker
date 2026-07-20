@@ -13,7 +13,7 @@ from haymaker.base import Atom as BaseAtom
 from haymaker.block import AbstractBaseBlock, AbstractDfBlock
 from haymaker.config.settings import StorageSettings
 from haymaker.databases import StoreFactory
-from haymaker.datastore import AsyncAbstractBaseStore, CollectionNamerStrategySymbol
+from haymaker.datastore import CollectionNamerStrategySymbol, QueuedDataSink
 
 
 @pytest.fixture
@@ -248,7 +248,7 @@ def test_df_block_runtime_store_is_constructed_with_strategy_namer(
         def df(self, data):
             return pd.DataFrame(data)
 
-    store = Mock(spec=AsyncAbstractBaseStore)
+    store = Mock(spec=QueuedDataSink)
     factory = StoreFactory(StorageSettings(block_library="block_data"))
     arctic_store = Mock(return_value=store)
     monkeypatch.setattr(factory, "arctic_store", arctic_store)
@@ -270,8 +270,8 @@ def test_df_blocks_keep_explicit_datastores_isolated(atom_runtime, monkeypatch):
 
     factory = Mock()
     monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", factory)
-    first_store = Mock(spec=AsyncAbstractBaseStore)
-    second_store = Mock(spec=AsyncAbstractBaseStore)
+    first_store = Mock(spec=QueuedDataSink)
+    second_store = Mock(spec=QueuedDataSink)
 
     first = Block(
         "first",
@@ -287,6 +287,14 @@ def test_df_blocks_keep_explicit_datastores_isolated(atom_runtime, monkeypatch):
     assert first.store is first_store
     assert second.store is second_store
     factory.assert_not_called()
+
+    data = pd.DataFrame({"close": [1.0]})
+    first.df_row(data)
+    first_store.enqueue_append.assert_called_once()
+    contract, persisted = first_store.enqueue_append.call_args.args
+    assert contract is first.contract
+    pd.testing.assert_frame_equal(persisted, data)
+    second_store.enqueue_append.assert_not_called()
 
 
 def test_next_correct(atom_runtime_factory) -> None:

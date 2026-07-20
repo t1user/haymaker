@@ -149,12 +149,14 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   Telegram are optional YAML configuration, not runtime dependencies.
 - Queue shutdown uses one policy: `DRAIN` is critical and propagates processing
   failures or drain timeouts, while `DISCARD` is best effort and logs failures.
-  State-save queues drain. Async Arctic stores default to `DISCARD`, while the
-  dataloader selects a dedicated `DRAIN` queue for its queued datastore writes.
-  Awaited datastore mutations finish an already-started database call before
-  propagating cancellation. The dataloader uses awaited dataframe and metadata
-  mutations and completes each response's persistence and in-memory state
+  State-save queues drain. Async Arctic queued sinks default to `DISCARD`.
+  Awaited `AsyncDataStore` mutations finish an already-started database call
+  before propagating cancellation. The dataloader uses only this awaited
+  contract and completes each response's persistence and in-memory state
   transition before a supervised restart can resume the job.
+- `AsyncDataStore` methods are all awaited; successful mutation return means
+  backend completion. Queue-only persistence uses the separate `QueuedDataSink`
+  contract and explicit `enqueue_*` methods, whose return means queue acceptance.
 - Datastore symbol naming is supplied when a store is constructed and is not
   replaced afterward. Framework-provided naming policies are frozen, consumers
   treat injected stores as fully configured, and dataframe blocks hold their

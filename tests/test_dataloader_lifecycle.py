@@ -6,8 +6,6 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 
-from haymaker.async_wrappers import QueueShutdownPolicy
-
 
 @pytest.fixture
 def dataloader_module():
@@ -1035,8 +1033,7 @@ async def test_manager_policy_flows_to_store_and_download_job(
     monkeypatch.setattr(dataloader, "HistorySink", lambda contract, store: FakeSink())
 
     class FakeStoreFactory:
-        def arctic_store(self, library, *, shutdown_policy):
-            assert shutdown_policy is QueueShutdownPolicy.DRAIN
+        def arctic_store(self, library):
             return FakeStore(library, "mongo")
 
     manager = dataloader.Manager(
@@ -1220,7 +1217,7 @@ async def test_one_bar_past_expiry_marks_complete_without_request(
         async def read_metadata(self, requested_contract):
             return {"backfill_exhausted": True}
 
-        async def async_write_metadata(self, requested_contract, metadata):
+        async def write_metadata(self, requested_contract, metadata):
             self.metadata_writes.append((requested_contract, metadata))
             return "metadata-version"
 

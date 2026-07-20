@@ -16,8 +16,7 @@ from haymaker.misc import format_timestamp
 
 from .base import Atom
 from .datastore import (
-    AsyncAbstractBaseStore,
-    AsyncArcticStore,
+    AsyncDataStore,
     CollectionNamerBarsizeSetting,
 )
 from .details_processor import typical_session_length
@@ -139,7 +138,7 @@ class HistoricalDataStreamer(Streamer):
     that has been tested, other values may be incompatible with other
     framework components
 
-    * datastore: bool | AsyncAbstractBaseStore = False
+    * datastore: bool | AsyncDataStore = False
 
         ** if True, or a datastore is passed, last available datapoint
     will be ready from database and only newer data will be requested;
@@ -187,7 +186,7 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
-    datastore: bool | AsyncAbstractBaseStore = False
+    datastore: bool | AsyncDataStore = False
     timeout: bool | float = True
     _last_bar_date: datetime | None = None
 
@@ -208,7 +207,7 @@ class HistoricalDataStreamer(Streamer):
         )
 
     @cached_property
-    def _datastore(self) -> None | AsyncAbstractBaseStore:
+    def _datastore(self) -> None | AsyncDataStore:
         if self.datastore is False:
             return None
         elif self.datastore is True:
@@ -224,7 +223,7 @@ class HistoricalDataStreamer(Streamer):
         elif callable(getattr(self.datastore, "read", None)) and callable(
             getattr(self.datastore, "read_metadata", None)
         ):
-            return cast(AsyncAbstractBaseStore, self.datastore)
+            return cast(AsyncDataStore, self.datastore)
         else:
             raise ValueError(
                 f"datastore must be True, False or instance of async datastore, "

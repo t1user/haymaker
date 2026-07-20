@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-07-16.
+Last updated: 2026-07-20.
 
 ## High-Level Purpose
 
@@ -92,6 +92,7 @@ The research package is intentionally separate from live execution. It works dir
 ### Persistence and Logging
 
 - `haymaker/datastore/`: synchronous and asynchronous store abstractions,
+  the awaited `AsyncDataStore` and queued `QueuedDataSink` protocols,
   ArcticStore, immutable construction-time symbol naming, futures readers, and
   deprecated store helpers.
 - `haymaker/databases.py`: runtime-owned `StoreFactory`, lazy MongoDB client,
@@ -107,9 +108,14 @@ The research package is intentionally separate from live execution. It works dir
 Background queues use one shutdown policy. `DRAIN` queues are critical: item
 failures and drain timeouts escape final cleanup. `DISCARD` queues are
 best-effort: failures are logged and pending final work is dropped. State saves
-use `DRAIN`; async Arctic stores default to `DISCARD`, but the dataloader gives
-its store a dedicated `DRAIN` queue for queued datastore writes. Transient
-aggregation uses `DISCARD`.
+use `DRAIN`; async Arctic queued sinks default to `DISCARD`, and transient
+aggregation uses `DISCARD`. The dataloader uses only awaited datastore
+mutations and therefore owns no datastore queue policy.
+
+`AsyncDataStore` methods are all awaited: successful mutation return means the
+backend operation finished. `QueuedDataSink` uses explicit `enqueue_*` methods:
+return means queue acceptance, while final handling depends on the sink's
+`DRAIN` or `DISCARD` shutdown policy.
 
 Datastore symbol naming is fixed when each store wrapper is constructed.
 Framework-provided naming policies are frozen, stores expose the configured
@@ -220,9 +226,8 @@ consumer-injection refactor.
    and its buffer/range state transition finish before cancellation propagates,
    preventing restart cleanup from submitting an overlapping rewrite. Arctic
    owns final cleaning and metadata updates. The returned first bar timestamp is
-   validated before it drives the next request boundary. The dataloader's
-   dedicated `DRAIN` queue remains critical protection for queued datastore
-   calls.
+   validated before it drives the next request boundary. The dataloader submits
+   no queued datastore mutations.
 8. Supervisor recovery within the same process resumes in-memory active jobs
    before discovering new work. A full process stop writes no separate
    dataloader checkpoint; the next process rediscovers remaining work from

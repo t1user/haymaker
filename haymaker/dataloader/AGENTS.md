@@ -137,12 +137,10 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   failures must surface at the await site. Apply one downloaded response as a
   single cancellation-safe transition so successful persistence is followed by
   buffer clearing, completion metadata, and range progression before restart.
-- Dataloader Arctic stores retain a dedicated `DRAIN` queue as transitional
-  protection for any queued datastore calls. The shared/default async Arctic
-  policy remains `DISCARD`; queued calls are only accepted at their call site
-  and rely on their configured shutdown policy for final handling.
+- The dataloader consumes only the awaited `AsyncDataStore` contract and does
+  not submit datastore mutations through a background queue.
 - Standalone Ctrl-C cancellation must finish the session flush before shared
-  application shutdown drains datastore background queues. Do not restore
+  application shutdown closes other background queues. Do not restore
   `ib_insync.util.patchAsyncio()` in the CLI; nested-loop patching is for
   notebooks, not this standalone command.
 - A supervisor restart preserves active jobs in memory and queues those jobs

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, Protocol
 
 import ib_insync as ibi
 import pandas as pd
@@ -24,68 +22,101 @@ if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
 
 
-class AsyncAbstractBaseStore(ABC):
-    @abstractmethod
-    def write(
-        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
-    ) -> None: ...
+class AsyncDataStore(Protocol):
+    """Awaited dataframe datastore operations.
 
-    @abstractmethod
-    def append(
+    A mutation returning normally means the backend operation has completed.
+    Implementations must surface backend failures at the await site.
+    """
+
+    async def write(
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
+    ) -> Any:
+        """Write a dataframe and wait for backend completion."""
+
+        ...
+
+    async def append(
         self,
         symbol: str | ibi.Contract,
         data: pd.DataFrame,
         meta: dict | None = None,
         upsert: bool = True,
-    ) -> Any: ...
+    ) -> Any:
+        """Append a dataframe and wait for backend completion."""
 
-    @abstractmethod
+        ...
+
     async def read(
         self,
         symbol: str | ibi.Contract,
         start_date: str | datetime | None = None,
         end_date: str | datetime | None = None,
-    ) -> pd.DataFrame | None: ...
+    ) -> pd.DataFrame | None:
+        """Read a dataframe from the backend."""
 
-    @abstractmethod
-    async def keys(self) -> list[str]: ...
+        ...
 
-    @abstractmethod
-    async def read_metadata(self, symbol: ibi.Contract | str) -> dict: ...
+    async def keys(self) -> list[str]:
+        """Return persisted symbol names."""
 
-    @abstractmethod
-    def write_metadata(self, symbol: ibi.Contract | str, meta: dict) -> Any: ...
+        ...
 
-    @abstractmethod
-    def override_metadata(self, symbol: str, meta: dict[str, Any]) -> Any: ...
+    async def read_metadata(self, symbol: ibi.Contract | str) -> dict[str, Any]:
+        """Read metadata for one symbol."""
 
-    @abstractmethod
-    def delete(self, symbol: str | ibi.Contract) -> None: ...
+        ...
 
-    @abstractmethod
-    async def async_append(
+    async def write_metadata(
+        self, symbol: ibi.Contract | str, meta: dict[str, Any]
+    ) -> Any:
+        """Update metadata and wait for backend completion."""
+
+        ...
+
+
+class QueuedDataSink(Protocol):
+    """Queue dataframe mutations without waiting for backend completion.
+
+    Enqueue methods return after work has been accepted. Final durability and
+    failure handling depend on :attr:`shutdown_policy`; ``DRAIN`` reports
+    processing failures or drain timeouts during queue shutdown, while
+    ``DISCARD`` is best effort.
+    """
+
+    @property
+    def shutdown_policy(self) -> QueueShutdownPolicy:
+        """Return the policy applied when the underlying queue is closed."""
+
+        ...
+
+    def enqueue_write(
+        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
+    ) -> None:
+        """Queue a dataframe replacement."""
+
+        ...
+
+    def enqueue_append(
         self,
         symbol: str | ibi.Contract,
         data: pd.DataFrame,
         meta: dict | None = None,
         upsert: bool = True,
-    ) -> Any: ...
+    ) -> None:
+        """Queue a dataframe append."""
 
-    @abstractmethod
-    async def async_write(
-        self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
-    ) -> Any: ...
+        ...
 
-    @abstractmethod
-    async def async_write_metadata(
-        self, symbol: str | ibi.Contract, meta: dict[str, Any]
-    ) -> Any:
-        """Write metadata and wait until the database operation has finished."""
+    def enqueue_write_metadata(
+        self, symbol: ibi.Contract | str, meta: dict[str, Any]
+    ) -> None:
+        """Queue a metadata update."""
 
         ...
 
 
-class AsyncArcticStore(AsyncAbstractBaseStore):
+class AsyncArcticStore:
 
     _queue = SyncQueueRunner(
         "AsyncArcticStore_queue", shutdown_policy=QueueShutdownPolicy.DISCARD
@@ -112,7 +143,13 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
 
         return self.store.symbol_namer
 
-    def enqueue(self, fn: Callable[..., Any], *args) -> None:
+    @property
+    def shutdown_policy(self) -> QueueShutdownPolicy:
+        """Return the policy applied when this store's queue is closed."""
+
+        return self._queue.shutdown_policy
+
+    def _enqueue(self, fn: Callable[..., Any], *args: Any) -> None:
         self._queue.enqueue(fn, *args)
 
     async def close(self) -> None:
@@ -120,42 +157,46 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
 
         await self._queue.close()
 
-    def write(
+    def enqueue_write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> None:
-        return self.enqueue(self.store.write, symbol, data, meta)
+        """Queue a dataframe replacement without waiting for the backend."""
 
-    def append(
+        self._enqueue(self.store.write, symbol, data, meta)
+
+    def enqueue_append(
         self,
         symbol: str | ibi.Contract,
         data: pd.DataFrame,
         meta: dict | None = None,
         upsert: bool = True,
     ) -> None:
-        """
-        Warning: this is best efforts, may lead to race conditions for
-        very frequent writes.
-        """
-        # guaranteed to save in the same order as received
-        self.enqueue(self.store.append, symbol, data, meta, upsert)
+        """Queue a best-effort dataframe append."""
 
-    async def async_write(
+        # guaranteed to save in the same order as received
+        self._enqueue(self.store.append, symbol, data, meta, upsert)
+
+    async def write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
     ) -> Any:
+        """Write a dataframe and wait for backend completion."""
+
         return await finish_on_cancel(make_async(self.store.write, symbol, data, meta))
 
-    async def async_append(
+    async def append(
         self,
         symbol: str | ibi.Contract,
         data: pd.DataFrame,
         meta: dict | None = None,
         upsert: bool = True,
     ) -> Any:
+        """Append a dataframe and wait for backend completion."""
+
         return await finish_on_cancel(
             make_async(self.store.append, symbol, data, meta, upsert)
         )
 
-    async def async_write_metadata(
+    async def write_metadata(
         self, symbol: str | ibi.Contract, meta: dict[str, Any]
     ) -> Any:
         """Write metadata and wait until the database operation has finished."""
@@ -172,20 +213,28 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
     ) -> pd.DataFrame | None:
         return await make_async(self.store.read, symbol, start_date, end_date)
 
-    def delete(self, symbol: str | ibi.Contract) -> None:
-        self.enqueue(self.store.delete, symbol)
+    def enqueue_delete(self, symbol: str | ibi.Contract) -> None:
+        """Queue deletion of one symbol."""
+
+        self._enqueue(self.store.delete, symbol)
 
     async def keys(self) -> list[str]:
         return await make_async(self.store.keys)
 
-    async def read_metadata(self, symbol: str | ibi.Contract):
+    async def read_metadata(self, symbol: str | ibi.Contract) -> dict[str, Any]:
         return await make_async(self.store.read_metadata, symbol)
 
-    def write_metadata(self, symbol: str | ibi.Contract, meta: dict[str, Any]) -> None:
-        self.enqueue(self.store.write_metadata, symbol, meta)
+    def enqueue_write_metadata(
+        self, symbol: str | ibi.Contract, meta: dict[str, Any]
+    ) -> None:
+        """Queue a metadata update without waiting for the backend."""
 
-    def override_metadata(self, symbol: str, meta: dict[str, Any]) -> None:
-        self.enqueue(self.store.override_metadata, symbol, meta)
+        self._enqueue(self.store.write_metadata, symbol, meta)
+
+    def enqueue_override_metadata(self, symbol: str, meta: dict[str, Any]) -> None:
+        """Queue replacement of all metadata for one symbol."""
+
+        self._enqueue(self.store.override_metadata, symbol, meta)
 
     def __repr__(self) -> str:
         return (

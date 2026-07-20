@@ -1,6 +1,6 @@
 # flake8: noqa
 
-from .async_datastore import AsyncAbstractBaseStore, AsyncArcticStore
+from .async_datastore import AsyncArcticStore, AsyncDataStore, QueuedDataSink
 from .collection_namer import (
     CollectionNamerBarsizeSetting,
     CollectionNamerStrategySymbol,

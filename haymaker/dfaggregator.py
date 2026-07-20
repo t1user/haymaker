@@ -15,8 +15,8 @@ from haymaker.async_wrappers import QueueRunner, QueueShutdownPolicy
 from haymaker.base import Atom
 from haymaker.contract_selector import FutureSelector, custom_bday
 from haymaker.datastore import (
-    AsyncAbstractBaseStore,
     AsyncArcticStore,
+    AsyncDataStore,
     CollectionNamerBarsizeSetting,
 )
 from haymaker.details_processor import typical_session_length
@@ -69,7 +69,7 @@ class DfAggregator(Atom):
     in a way defies the purpose of the whole object)
     """
 
-    datastore: AsyncAbstractBaseStore | None = None
+    datastore: AsyncDataStore | None = None
     save_frequency: int | None = None  # in seconds
 
     # ================================================================================
@@ -98,7 +98,7 @@ class DfAggregator(Atom):
         super().__init__()
 
     @property
-    def store(self) -> AsyncAbstractBaseStore:
+    def store(self) -> AsyncDataStore:
         if self.datastore is not None:
             return self.datastore
 
@@ -192,7 +192,7 @@ class DfAggregator(Atom):
     async def save_data(self, *args) -> None:
         assert (contract := self.contract), f"Missing contract on {self}"
         if not self._df.empty:
-            await self.store.async_append(contract, self._df)
+            await self.store.append(contract, self._df)
 
     def process_current_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -382,7 +382,7 @@ class DfAggregator(Atom):
 
                 df = pd.DataFrame(bars).set_index("date")
                 try:
-                    self.store.write(contract, pd.DataFrame(df))
+                    await self.store.write(contract, pd.DataFrame(df))
                 except Exception:
                     log.exception(
                         "Error while writing data from broker to datastore. "

@@ -11,7 +11,7 @@ from sample_barDataList import sample_barDataList
 
 from haymaker.base import ActiveNext, Atom
 from haymaker.contract_registry import ContractRegistry
-from haymaker.datastore import AsyncAbstractBaseStore, CollectionNamerBarsizeSetting
+from haymaker.datastore import AsyncDataStore, CollectionNamerBarsizeSetting
 from haymaker.dfaggregator import DfAggregator, WrongStreamer, custom_bday
 from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
 
@@ -130,7 +130,7 @@ def test_params_extracted_from_streamer():
 
 
 def test_injected_datastore_is_used_without_reconfiguration(atom_runtime, monkeypatch):
-    store = Mock(spec=AsyncAbstractBaseStore)
+    store = Mock(spec=AsyncDataStore)
     arctic_store = Mock()
     monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", arctic_store)
 
@@ -141,7 +141,7 @@ def test_injected_datastore_is_used_without_reconfiguration(atom_runtime, monkey
 
 
 def test_default_datastore_is_constructed_with_barsize_namer(atom_runtime, monkeypatch):
-    store = Mock(spec=AsyncAbstractBaseStore)
+    store = Mock(spec=AsyncDataStore)
     arctic_store = Mock(return_value=store)
     monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", arctic_store)
     aggregator = DfAggregator(save_frequency=0)
@@ -152,6 +152,41 @@ def test_default_datastore_is_constructed_with_barsize_namer(atom_runtime, monke
         "market_data",
         collection_namer=CollectionNamerBarsizeSetting("30 secs"),
     )
+
+
+@pytest.mark.asyncio
+async def test_save_data_awaits_datastore_append(atom_runtime):
+    """Saving current data waits for append completion."""
+
+    store = Mock(spec=AsyncDataStore)
+    aggregator = DfAggregator(datastore=store, save_frequency=0)
+    aggregator.contract = ibi.Future(symbol="NQ", exchange="CME")
+    aggregator._df = pd.DataFrame({"close": [1.0]})
+
+    await aggregator.save_data()
+
+    store.append.assert_awaited_once_with(aggregator.contract, aggregator._df)
+
+
+@pytest.mark.asyncio
+async def test_backfill_write_awaits_datastore_completion(atom_runtime):
+    """A broker backfill waits for its datastore write."""
+
+    store = Mock(spec=AsyncDataStore)
+    store.read.return_value = None
+    aggregator = DfAggregator(datastore=store, save_frequency=0)
+    aggregator.contract = ibi.Future(symbol="NQ", exchange="CME")
+    back_contract = ibi.Future(symbol="ES", exchange="CME", localSymbol="ESZ5")
+    bars = [{"date": datetime(2025, 12, 1), "close": 1.0}]
+    aggregator._pull_history_from_broker = AsyncMock(return_value=bars)
+
+    await aggregator._acquire_data_for_contract(
+        back_contract,
+        datetime(2025, 12, 1),
+        datetime(2025, 12, 2),
+    )
+
+    store.write.assert_awaited_once()
 
 
 def test_expiry_from_contract():

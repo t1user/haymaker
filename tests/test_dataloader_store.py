@@ -5,7 +5,6 @@ import ib_insync as ibi
 import pandas as pd
 import pytest
 
-from haymaker.async_wrappers import QueueShutdownPolicy
 from haymaker.dataloader.scheduling import (
     GapCandidate,
     GapPattern,
@@ -53,14 +52,14 @@ class FakeAsyncStore:
 
         return self.metadata
 
-    async def async_write_metadata(self, contract: ibi.Contract, metadata: dict) -> str:
+    async def write_metadata(self, contract: ibi.Contract, metadata: dict) -> str:
         """Record a metadata write and merge it into latest metadata."""
 
         self.metadata_writes.append((contract, metadata))
         self.metadata.update(metadata)
         return "metadata-version"
 
-    async def async_write(self, contract: ibi.Contract, data: pd.DataFrame) -> str:
+    async def write(self, contract: ibi.Contract, data: pd.DataFrame) -> str:
         """Record a write and keep the dataframe as latest store state."""
 
         self.writes.append((contract, data))
@@ -798,15 +797,9 @@ def test_manager_datastore_builds_async_arctic_store(monkeypatch, dataloader_mod
     class FakeStoreFactory:
         """Capture store construction without opening Arctic."""
 
-        def arctic_store(
-            self,
-            library: str,
-            *,
-            shutdown_policy: QueueShutdownPolicy,
-        ) -> object:
+        def arctic_store(self, library: str) -> object:
             created["lib"] = library
             created["host"] = "mongo"
-            created["shutdown_policy"] = shutdown_policy
             return self
 
     manager = dataloader.Manager(
@@ -821,7 +814,6 @@ def test_manager_datastore_builds_async_arctic_store(monkeypatch, dataloader_mod
     assert created == {
         "lib": "TRADES_30_secs",
         "host": "mongo",
-        "shutdown_policy": QueueShutdownPolicy.DRAIN,
     }
 
 

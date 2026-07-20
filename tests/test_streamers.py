@@ -233,10 +233,9 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_False(mock_arctic
         datastore=False,
     )
 
-    with patch("haymaker.streamers.AsyncArcticStore") as mock_store_class:
-        assert streamer._datastore is None
-        assert await streamer.last_db_point() is None
-        mock_store_class.assert_not_called()
+    assert streamer._datastore is None
+    assert await streamer.last_db_point() is None
+    mock_arctic_store.assert_not_called()
 
 
 @pytest.mark.asyncio

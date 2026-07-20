@@ -5,7 +5,7 @@ from typing import Any, Union
 import ib_insync as ibi
 import pandas as pd
 
-from haymaker.datastore import AsyncAbstractBaseStore
+from haymaker.datastore import AsyncDataStore
 
 from .time_policy import normalize_index, normalize_optional_point, normalize_point
 
@@ -26,7 +26,7 @@ class AsyncStoreView:
     """
 
     contract: ibi.Contract
-    store: AsyncAbstractBaseStore
+    store: AsyncDataStore
     now: Union[date, datetime]
     bar_size: str
     data: pd.DataFrame | None = field(default=None, init=False, repr=False)
@@ -36,7 +36,7 @@ class AsyncStoreView:
     async def create(
         cls,
         contract: ibi.Contract,
-        store: AsyncAbstractBaseStore,
+        store: AsyncDataStore,
         now: Union[date, datetime],
         bar_size: str,
     ) -> "AsyncStoreView":
@@ -113,7 +113,7 @@ class HistorySink:
     """Persist raw downloaded historical chunks for one contract."""
 
     contract: ibi.Contract
-    store: AsyncAbstractBaseStore
+    store: AsyncDataStore
 
     async def write(self, new_data: pd.DataFrame) -> Any:
         """Merge downloaded data with stored history and rewrite the collection.
@@ -133,7 +133,7 @@ class HistorySink:
         if existing is None:
             existing = pd.DataFrame()
         data = pd.concat([existing, new_data])
-        return await self.store.async_write(self.contract, data)
+        return await self.store.write(self.contract, data)
 
     async def mark_backfill_exhausted(self) -> Any:
         """Mark this series as unavailable for older backfills."""
@@ -141,7 +141,7 @@ class HistorySink:
         existing = await self.store.read(self.contract)
         if existing is None or existing.empty:
             return None
-        return await self.store.async_write_metadata(
+        return await self.store.write_metadata(
             self.contract, {"backfill_exhausted": True}
         )
 
@@ -151,6 +151,6 @@ class HistorySink:
         existing = await self.store.read(self.contract)
         if existing is None or existing.empty:
             return None
-        return await self.store.async_write_metadata(
+        return await self.store.write_metadata(
             self.contract, {"update_exhausted": True}
         )

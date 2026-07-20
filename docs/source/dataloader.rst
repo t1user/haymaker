@@ -357,10 +357,9 @@ are reported where the write was requested. If cancellation arrives after a
 write starts, the dataloader finishes that write and its corresponding buffer
 or range update before allowing a supervised restart to continue.
 
-The dataloader also retains a dedicated Arctic queue with critical ``DRAIN``
-shutdown semantics for any queued datastore calls. Orderly shutdown reports a
-queued-write failure or drain timeout instead of treating that queued work as
-best effort.
+The dataloader does not submit datastore mutations through a background queue.
+Its persistence guarantee comes from awaiting each Arctic operation and
+reporting failures at that operation's call site.
 
 Read data back with the datastore API:
 
@@ -482,9 +481,8 @@ saved in Arctic.
 
 Pressing ``Ctrl-C`` requests an orderly supervisor stop. Active requests are
 cancelled, an already-started datastore mutation is allowed to settle,
-downloaded chunks are flushed, and any queued datastore writes are drained
-before the process exits. Avoid sending a second forced interrupt while these
-final writes are being logged.
+and downloaded chunks are flushed before the process exits. Avoid sending a
+second forced interrupt while these final writes are being logged.
 
 The run stops rather than continuing when it cannot safely plan or persist data,
 including these cases:

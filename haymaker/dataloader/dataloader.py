@@ -22,10 +22,10 @@ import ib_insync as ibi
 import pandas as pd
 from tqdm import tqdm
 
-from haymaker.async_wrappers import QueueShutdownPolicy, finish_on_cancel
+from haymaker.async_wrappers import finish_on_cancel
 from haymaker.config.settings import StorageSettings
 from haymaker.databases import StoreFactory
-from haymaker.datastore import AsyncAbstractBaseStore
+from haymaker.datastore import AsyncDataStore
 from haymaker.validators import bar_size_validator, wts_validator
 
 from . import helpers
@@ -464,7 +464,7 @@ class Manager:
 
     ib: ibi.IB
     pacing: RequestPacing | None = None
-    store: AsyncAbstractBaseStore | None = None
+    store: AsyncDataStore | None = None
     store_factory: StoreFactory = field(
         default_factory=lambda: StoreFactory(StorageSettings()), repr=False
     )
@@ -516,14 +516,12 @@ class Manager:
             )
 
     @property
-    def datastore(self) -> AsyncAbstractBaseStore:
+    def datastore(self) -> AsyncDataStore:
         """Return the session datastore, creating it lazily when needed."""
 
         if self.store is None:
             lib = f"{self.wts}_{self.bar_size}".replace(" ", "_")
-            self.store = self.store_factory.arctic_store(
-                lib, shutdown_policy=QueueShutdownPolicy.DRAIN
-            )
+            self.store = self.store_factory.arctic_store(lib)
         return self.store
 
     @functools.cached_property
