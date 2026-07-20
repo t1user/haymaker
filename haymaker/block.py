@@ -3,17 +3,14 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from functools import cached_property, singledispatchmethod
+from functools import singledispatchmethod
 from typing import Any
 
 import ib_insync as ibi
 import pandas as pd
 
 from .base import Atom
-from .datastore import (
-    CollectionNamerStrategySymbol,
-    QueuedDataSink,
-)
+from .datastore import QueuedDataSink
 
 log = logging.getLogger(__name__)
 
@@ -95,45 +92,21 @@ class AbstractDfBlock(AbstractBaseBlock):
     """Base dataframe strategy block with optional frame persistence.
 
     Args:
-        datastore: Fully configured store for this block. When omitted, the
-            current runtime block-library default is retained for compatibility.
+        datastore: Fully configured queued sink for this block. When omitted,
+            dataframe persistence is disabled.
     """
 
     strategy: str
     contract: ibi.Contract
     datastore: QueuedDataSink | None = field(default=None, kw_only=True, repr=False)
 
-    @cached_property
-    def _datastore(self) -> QueuedDataSink:
-        if self.datastore is not None:
-            return self.datastore
-
-        library = self.runtime.store_factory.settings.block_library
-        assert library, (
-            f"{self} cannot initialize datastore because block_data_library "
-            "was not given."
-        )
-        return self.runtime.store_factory.arctic_store(
-            library,
-            collection_namer=CollectionNamerStrategySymbol(self.strategy),
-        )
-
-    @cached_property
-    def store(self) -> None | QueuedDataSink:
-        if self.datastore is not None:
-            return self._datastore
-        elif self.runtime.store_factory.settings.block_library:
-            return self._datastore
-        else:
-            return None
-
     def _signal(self, data) -> dict:
         return self.df_row(data).to_dict()
 
     def df_row(self, data) -> pd.Series:
         df = self._create_df(data)
-        if self.store:
-            self.store.enqueue_append(self.contract, df)
+        if self.datastore is not None:
+            self.datastore.enqueue_append(self.contract, df)
         return df.reset_index().iloc[-1]
 
     @singledispatchmethod

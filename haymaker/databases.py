@@ -16,7 +16,12 @@ from .config.settings import StorageSettings
 from .datastore.collection_namer import SymbolNamer
 
 if TYPE_CHECKING:
-    from .datastore import AsyncArcticStore
+    from .datastore import (
+        AsyncArcticStore,
+        AsyncDataStore,
+        FrameStoreProvider,
+        QueuedDataSink,
+    )
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +97,15 @@ class StoreFactory:
             shutdown_policy=shutdown_policy,
         )
 
+    def frame_store_provider(self) -> FrameStoreProvider:
+        """Return the narrow strategy-composition view of this factory.
+
+        Returns:
+            Provider exposing only configured dataframe dependency creation.
+        """
+
+        return _StoreFactoryFrameStoreProvider(self)
+
     @property
     def database(self) -> str:
         """Return the configured application database name."""
@@ -100,3 +114,50 @@ class StoreFactory:
         if not database:
             raise ValueError("storage.mongodb.database is required for Mongo savers")
         return database
+
+
+@dataclass(frozen=True)
+class _StoreFactoryFrameStoreProvider:
+    """Adapt ``StoreFactory`` to the strategy frame-store contract.
+
+    Args:
+        _store_factory: Temporary backing factory retained until DS-005.
+    """
+
+    _store_factory: StoreFactory = field(repr=False)
+
+    def datastore(
+        self, library: str, *, collection_namer: SymbolNamer
+    ) -> AsyncDataStore:
+        """Return an awaited dataframe datastore.
+
+        Args:
+            library: Arctic library name.
+            collection_namer: Immutable contract-to-symbol naming policy.
+
+        Returns:
+            Awaited dataframe datastore backed by Arctic.
+        """
+
+        return self._store_factory.arctic_store(
+            library,
+            collection_namer=collection_namer,
+        )
+
+    def queued_sink(
+        self, library: str, *, collection_namer: SymbolNamer
+    ) -> QueuedDataSink:
+        """Return a best-effort queued dataframe sink.
+
+        Args:
+            library: Arctic library name.
+            collection_namer: Immutable contract-to-symbol naming policy.
+
+        Returns:
+            Queued dataframe sink backed by Arctic.
+        """
+
+        return self._store_factory.arctic_store(
+            library,
+            collection_namer=collection_namer,
+        )

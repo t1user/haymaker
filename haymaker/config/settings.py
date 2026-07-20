@@ -31,7 +31,7 @@ class DataloaderStorageSettings:
 
 @dataclass(frozen=True)
 class StorageSettings:
-    """Filesystem, Mongo, and default market-data storage settings."""
+    """Filesystem, Mongo, and retained dataframe storage settings."""
 
     base_directory: str = "ib_data"
     mongodb: MongoSettings = field(default_factory=MongoSettings)

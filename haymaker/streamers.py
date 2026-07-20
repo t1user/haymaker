@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
-from typing import Awaitable, ClassVar, cast
+from typing import Awaitable, ClassVar
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -15,10 +15,7 @@ import ib_insync as ibi
 from haymaker.misc import format_timestamp
 
 from .base import Atom
-from .datastore import (
-    AsyncDataStore,
-    CollectionNamerBarsizeSetting,
-)
+from .datastore import AsyncDataStore
 from .details_processor import typical_session_length
 from .durationStr_converters import (
     datapoints_to_durationStr,
@@ -138,15 +135,15 @@ class HistoricalDataStreamer(Streamer):
     that has been tested, other values may be incompatible with other
     framework components
 
-    * datastore: bool | AsyncDataStore = False
+    * datastore: AsyncDataStore | None = None
 
-        ** if True, or a datastore is passed, last available datapoint
+        ** if a datastore is passed, last available datapoint
     will be ready from database and only newer data will be requested;
 
         ** a passed datastore must be fully configured with the symbol
     naming policy matching this streamer's bar size;
 
-        ** if False - no data will be read from datastore, only from
+        ** if None - no data will be read from datastore, only from
     broker
 
 
@@ -186,11 +183,16 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
-    datastore: bool | AsyncDataStore = False
+    datastore: AsyncDataStore | None = None
     timeout: bool | float = True
     _last_bar_date: datetime | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.datastore, bool):
+            raise TypeError(
+                "datastore must be an AsyncDataStore or None; "
+                "boolean shortcuts are not supported"
+            )
         Atom.__init__(self)
 
     def streaming_func(self) -> Awaitable:
@@ -206,30 +208,6 @@ class HistoricalDataStreamer(Streamer):
             timeout=0,
         )
 
-    @cached_property
-    def _datastore(self) -> None | AsyncDataStore:
-        if self.datastore is False:
-            return None
-        elif self.datastore is True:
-            library = self.runtime.store_factory.settings.market_data_library
-            assert library, (
-                f"{self} cannot initialize datastore because "
-                f"market_data_library was not given."
-            )
-            return self.runtime.store_factory.arctic_store(
-                library,
-                collection_namer=CollectionNamerBarsizeSetting(self.barSizeSetting),
-            )
-        elif callable(getattr(self.datastore, "read", None)) and callable(
-            getattr(self.datastore, "read_metadata", None)
-        ):
-            return cast(AsyncDataStore, self.datastore)
-        else:
-            raise ValueError(
-                f"datastore must be True, False or instance of async datastore, "
-                f"not{type(self.datastore)}"
-            )
-
     async def last_db_point(self) -> datetime | None:
         """
         Return datetime for the last bar availble in the datastore for
@@ -237,7 +215,7 @@ class HistoricalDataStreamer(Streamer):
 
         start_date: how far back should available data be searched
         """
-        if (store := self._datastore) is None:
+        if (store := self.datastore) is None:
             return None
 
         if up_to := (await store.read_metadata(self.contract)).get("up_to"):

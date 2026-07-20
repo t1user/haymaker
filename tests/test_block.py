@@ -11,9 +11,7 @@ from config import TEST_ROOT  # type: ignore
 from haymaker.base import ActiveNext
 from haymaker.base import Atom as BaseAtom
 from haymaker.block import AbstractBaseBlock, AbstractDfBlock
-from haymaker.config.settings import StorageSettings
-from haymaker.databases import StoreFactory
-from haymaker.datastore import CollectionNamerStrategySymbol, QueuedDataSink
+from haymaker.datastore import QueuedDataSink
 
 
 @pytest.fixture
@@ -241,35 +239,30 @@ async def test_df_block_accepts_df(
     assert {k: v for k, v in output_atom.output.items() if k in last_row} == last_row
 
 
-def test_df_block_runtime_store_is_constructed_with_strategy_namer(
-    atom_runtime, monkeypatch
-):
+def test_df_block_without_datastore_does_not_persist(atom_runtime):
+    """Omitting a queued sink should disable dataframe persistence."""
+
     class Block(AbstractDfBlock):
         def df(self, data):
             return pd.DataFrame(data)
-
-    store = Mock(spec=QueuedDataSink)
-    factory = StoreFactory(StorageSettings(block_library="block_data"))
-    arctic_store = Mock(return_value=store)
-    monkeypatch.setattr(factory, "arctic_store", arctic_store)
-    atom_runtime.store_factory = factory
 
     block = Block("test_strategy", ibi.Future(symbol="NQ", exchange="CME"))
+    data = pd.DataFrame({"close": [1.0]})
 
-    assert block._datastore is store
-    arctic_store.assert_called_once_with(
-        "block_data",
-        collection_namer=CollectionNamerStrategySymbol("test_strategy"),
-    )
+    row = block.df_row(data)
+
+    assert block.datastore is None
+    assert row["close"] == 1.0
+    atom_runtime.frame_store_provider.queued_sink.assert_not_called()
 
 
-def test_df_blocks_keep_explicit_datastores_isolated(atom_runtime, monkeypatch):
+def test_df_blocks_keep_explicit_datastores_isolated(atom_runtime):
+    """Each block should enqueue only through its injected sink."""
+
     class Block(AbstractDfBlock):
         def df(self, data):
             return pd.DataFrame(data)
 
-    factory = Mock()
-    monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", factory)
     first_store = Mock(spec=QueuedDataSink)
     second_store = Mock(spec=QueuedDataSink)
 
@@ -284,9 +277,9 @@ def test_df_blocks_keep_explicit_datastores_isolated(atom_runtime, monkeypatch):
         datastore=second_store,
     )
 
-    assert first.store is first_store
-    assert second.store is second_store
-    factory.assert_not_called()
+    assert first.datastore is first_store
+    assert second.datastore is second_store
+    atom_runtime.frame_store_provider.queued_sink.assert_not_called()
 
     data = pd.DataFrame({"close": [1.0]})
     first.df_row(data)

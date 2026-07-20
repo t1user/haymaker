@@ -16,6 +16,7 @@ from .config.settings import LiveConfig
 from .contract_registry import ContractRegistry
 from .controller import Controller
 from .databases import StoreFactory
+from .datastore import FrameStoreProvider
 from .handlers import IBHandlers
 from .order_defaults import OrderDefaults
 from .saver import MongoLatestSaver, MongoSaver
@@ -153,10 +154,9 @@ class RuntimeContext:
         contract_registry: Qualified contract and contract-details registry.
         sm: Persistent strategy and order state.
         trader: Thin broker order gateway.
-        store_factory: Runtime-owned persistence service factory.
+        frame_store_provider: Narrow dataframe persistence composition service.
         order_defaults: Validated default order fields for execution models.
         timeout_policy: Default timeout interval and action.
-        dataframe_save_frequency: Default aggregation save interval in seconds.
         controller: Live controller installed by ``LiveRuntime``.
         request_restart: Supervisor restart callback, bound before startup.
         future_roll_policies: Per-strategy automatic futures-roll policy.
@@ -166,10 +166,9 @@ class RuntimeContext:
     contract_registry: ContractRegistry = field(repr=False)
     sm: StateMachine = field(repr=False)
     trader: Trader = field(repr=False)
-    store_factory: StoreFactory = field(repr=False)
+    frame_store_provider: FrameStoreProvider = field(repr=False)
     order_defaults: OrderDefaults = field(repr=False)
     timeout_policy: TimeoutPolicy = field(repr=False)
-    dataframe_save_frequency: int = field(repr=False)
     controller: Controller = field(init=False, repr=False)
     request_restart: Callable[[str], bool | None] | None = field(
         default=None, repr=False
@@ -189,6 +188,7 @@ class LiveRuntime:
         config: Merged framework configuration for this live process.
         ib: Optional broker client owned by the runtime.
         store_factory: Optional persistence factory for focused callers and tests.
+        frame_store_provider: Optional strategy-composition persistence provider.
         contract_registry: Optional preconfigured contract registry.
         sm: Optional preconfigured state machine.
     """
@@ -198,6 +198,7 @@ class LiveRuntime:
     store_factory: StoreFactory | None = field(default=None, repr=False)
     contract_registry: ContractRegistry | None = field(default=None, repr=False)
     sm: StateMachine | None = field(default=None, repr=False)
+    frame_store_provider: FrameStoreProvider | None = field(default=None, repr=False)
     context: RuntimeContext = field(init=False, repr=False)
     startup_jobs: StartupJobs = field(init=False, repr=False)
     _broker_logger: IBHandlers | None = field(default=None, init=False, repr=False)
@@ -207,20 +208,21 @@ class LiveRuntime:
 
         if self.store_factory is None:
             self.store_factory = StoreFactory(self.config.storage)
+        if self.frame_store_provider is None:
+            self.frame_store_provider = self.store_factory.frame_store_provider()
         if self.contract_registry is None:
             self.contract_registry = ContractRegistry(**dict(self.config.futures))
         if self.sm is None:
             self.sm = self._create_state_machine(self.config.state_machine)
         trader = Trader(self.ib)
         self.context = RuntimeContext(
-            self.ib,
-            self.contract_registry,
-            self.sm,
-            trader,
-            self.store_factory,
-            OrderDefaults.from_mapping(self.config.orders),
-            TimeoutPolicy.from_mapping(self.config.timeout),
-            self.config.storage.dataframe_save_frequency,
+            ib=self.ib,
+            contract_registry=self.contract_registry,
+            sm=self.sm,
+            trader=trader,
+            frame_store_provider=self.frame_store_provider,
+            order_defaults=OrderDefaults.from_mapping(self.config.orders),
+            timeout_policy=TimeoutPolicy.from_mapping(self.config.timeout),
         )
         Atom.set_runtime_context(self.context)
         self.context.controller = Controller.from_mapping(

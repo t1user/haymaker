@@ -1,6 +1,6 @@
 """Tests for runtime-owned persistence services."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock, call
 
 import ib_insync as ibi
 import pandas as pd
@@ -15,6 +15,8 @@ from haymaker.datastore import (
     ArcticStore,
     AsyncArcticStore,
     AsyncDataStore,
+    CollectionNamerBarsizeSetting,
+    FrameStoreProvider,
     QueuedDataSink,
 )
 
@@ -25,6 +27,10 @@ def accepts_async_datastore(store: AsyncDataStore) -> None:
 
 def accepts_queued_sink(store: QueuedDataSink) -> None:
     """Type-check one structural queued datastore implementation."""
+
+
+def accepts_frame_store_provider(provider: FrameStoreProvider) -> None:
+    """Type-check the StoreFactory strategy-composition adapter."""
 
 
 def storage_settings(**client: object) -> StorageSettings:
@@ -79,6 +85,31 @@ def test_database_name_is_required_only_for_savers() -> None:
 
     with pytest.raises(ValueError, match="database"):
         _ = factory.database
+
+
+def test_frame_store_provider_exposes_only_narrow_store_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The strategy provider should delegate without exposing Mongo services."""
+
+    factory = StoreFactory(StorageSettings())
+    store = Mock()
+    arctic_store = Mock(return_value=store)
+    monkeypatch.setattr(factory, "arctic_store", arctic_store)
+    provider = factory.frame_store_provider()
+    namer = CollectionNamerBarsizeSetting("30 secs")
+
+    accepts_frame_store_provider(provider)
+    assert provider.datastore("market_data", collection_namer=namer) is store
+    assert provider.queued_sink("block_data", collection_namer=namer) is store
+    assert arctic_store.call_args_list == [
+        call("market_data", collection_namer=namer),
+        call("block_data", collection_namer=namer),
+    ]
+    assert not hasattr(provider, "mongo_client")
+    assert not hasattr(provider, "database")
+    assert not hasattr(provider, "settings")
+    assert not hasattr(provider, "store_factory")
 
 
 @pytest.mark.asyncio

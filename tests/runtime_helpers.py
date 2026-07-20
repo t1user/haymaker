@@ -7,7 +7,8 @@ attributes directly.
 
 Use ``atom_runtime`` when the default test runtime is enough. It installs a
 fresh ``ib_insync.IB`` instance, the test ``StateMachine``, a
-``ContractRegistry``, and a restart recorder on ``Atom``.
+``ContractRegistry``, a fake ``FrameStoreProvider``, and a restart recorder on
+``Atom``.
 
 Use ``atom_runtime_factory`` when a test needs custom services:
 
@@ -58,20 +59,22 @@ When writing new tests:
   of assigning ``SomeAtom.contract_registry``;
 - use ``runtime.bind_controller(controller)`` instead of monkeypatching
   ``Atom.runtime`` with a partial object.
+- pass ``frame_store_provider`` to ``atom_runtime_factory`` when strategy
+  composition needs a specific persistence provider.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Self
+from typing import Any, Self, cast
+from unittest.mock import Mock
 
 import ib_insync as ibi
 
 from haymaker.base import Atom
-from haymaker.config.settings import StorageSettings
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
-from haymaker.databases import StoreFactory
+from haymaker.datastore import FrameStoreProvider
 from haymaker.order_defaults import OrderDefaults
 from haymaker.state_machine import StateMachine
 from haymaker.timeout import TimeoutPolicy
@@ -87,10 +90,11 @@ class AtomRuntimeHarness:
     contract_registry: ContractRegistry
     controller: Controller | None = None
     trader: Trader | None = None
-    store_factory: StoreFactory | None = None
+    frame_store_provider: FrameStoreProvider = field(
+        default_factory=lambda: cast(FrameStoreProvider, Mock(spec=FrameStoreProvider))
+    )
     order_defaults: OrderDefaults = field(default_factory=OrderDefaults)
     timeout_policy: TimeoutPolicy = field(default_factory=TimeoutPolicy)
-    dataframe_save_frequency: int = 900
     restart_requests: list[str] = field(default_factory=list)
     future_roll_policies: dict[str, bool] = field(default_factory=dict)
 
@@ -99,8 +103,6 @@ class AtomRuntimeHarness:
 
         if self.trader is None:
             self.trader = Trader(self.ib)
-        if self.store_factory is None:
-            self.store_factory = StoreFactory(StorageSettings())
 
     def install(self, monkeypatch: Any, atom_cls: type[Atom] = Atom) -> Self:
         """Install this harness on an Atom class for the current test."""

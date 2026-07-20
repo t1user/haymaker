@@ -46,14 +46,13 @@ def test_runtime_context_has_compact_repr_and_log_string(atom_runtime) -> None:
     """Runtime context representations must not dump its service graph."""
 
     context = RuntimeContext(
-        atom_runtime.ib,
-        atom_runtime.contract_registry,
-        atom_runtime.sm,
-        Trader(atom_runtime.ib),
-        atom_runtime.store_factory,
-        atom_runtime.order_defaults,
-        atom_runtime.timeout_policy,
-        atom_runtime.dataframe_save_frequency,
+        ib=atom_runtime.ib,
+        contract_registry=atom_runtime.contract_registry,
+        sm=atom_runtime.sm,
+        trader=Trader(atom_runtime.ib),
+        frame_store_provider=atom_runtime.frame_store_provider,
+        order_defaults=atom_runtime.order_defaults,
+        timeout_policy=atom_runtime.timeout_policy,
     )
 
     assert "controller=" not in repr(context)
@@ -73,9 +72,26 @@ def test_live_runtime_builds_and_installs_ready_context(atom_runtime) -> None:
     assert runtime.context.sm is atom_runtime.sm
     assert runtime.context.contract_registry is atom_runtime.contract_registry
     assert runtime.context.controller is not None
+    assert runtime.context.frame_store_provider is runtime.frame_store_provider
     assert runtime.startup_jobs.streamers is Streamer.instances
     assert not hasattr(runtime.context, "config")
     assert not hasattr(runtime.context, "startup_jobs")
+    assert not hasattr(runtime.context, "store_factory")
+    assert not hasattr(runtime.context, "dataframe_save_frequency")
+
+
+def test_live_runtime_installs_injected_frame_store_provider(atom_runtime) -> None:
+    """A supplied strategy provider should reach the ready runtime context."""
+
+    runtime = LiveRuntime(
+        live_config(),
+        ib=atom_runtime.ib,
+        contract_registry=atom_runtime.contract_registry,
+        sm=atom_runtime.sm,
+        frame_store_provider=atom_runtime.frame_store_provider,
+    )
+
+    assert runtime.context.frame_store_provider is atom_runtime.frame_store_provider
 
 
 def test_app_repr_avoids_duplicate_runtime_context(atom_runtime) -> None:

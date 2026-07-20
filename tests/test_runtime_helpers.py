@@ -1,4 +1,5 @@
 from typing import cast
+from unittest.mock import Mock
 
 import ib_insync as ibi
 from runtime_helpers import AtomRuntimeHarness
@@ -6,6 +7,7 @@ from runtime_helpers import AtomRuntimeHarness
 from haymaker.base import Atom
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
+from haymaker.datastore import FrameStoreProvider
 
 
 def test_default_atom_runtime_installs_core_services(atom_runtime) -> None:
@@ -24,12 +26,14 @@ def test_atom_runtime_factory_respects_custom_services(
     ib = ibi.IB()
     registry = ContractRegistry()
     controller = cast(Controller, object())
+    frame_store_provider = Mock(spec=FrameStoreProvider)
 
     runtime = atom_runtime_factory(
         ib=ib,
         sm=state_machine,
         contract_registry=registry,
         controller=controller,
+        frame_store_provider=frame_store_provider,
     )
     atom = Atom()
 
@@ -37,6 +41,7 @@ def test_atom_runtime_factory_respects_custom_services(
     assert runtime.sm is state_machine
     assert runtime.contract_registry is registry
     assert runtime.controller is controller
+    assert runtime.frame_store_provider is frame_store_provider
     assert atom.ib is ib
     assert atom.contract_registry is registry
 

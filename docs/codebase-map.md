@@ -25,19 +25,20 @@ Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
 - startup contract-detail initialization and streamer startup jobs.
 
 `RuntimeContext` is the passive container exposed to `Atom` instances. It
-holds only ready runtime services, the supervisor restart callback, and
-strategy futures-roll policies; it does not construct services or inspect the
-user module.
+holds only ready runtime services, the narrow `FrameStoreProvider` composition
+capability, the supervisor restart callback, and strategy futures-roll
+policies; it does not construct services or inspect the user module.
 
 The `haymaker` console command owns live composition and logging: it configures
 Haymaker, starts threaded logging handlers, creates `LiveRuntime`, and imports
 the user strategy module so module-level pipelines are built against its
 already-installed `RuntimeContext`. Blocks register their futures-roll policy
-as they are constructed. The CLI then hands the composed runtime to the shared
-`App`. The app-lifetime `Controller` starts
-its periodic sync, health-check, and daily UTC futures-roll timers once on the
-active event loop when `Controller.run()` first executes. Live and dataloader
-runtimes use the same application and supervisor lifecycle.
+as they are constructed. Strategy module code may use the provider to build
+fully configured dataframe stores and inject them into consumers. The CLI then
+hands the composed runtime to the shared `App`. The app-lifetime `Controller`
+starts its periodic sync, health-check, and daily UTC futures-roll timers once
+on the active event loop when `Controller.run()` first executes. Live and
+dataloader runtimes use the same application and supervisor lifecycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count. `Manager` owns the run-scoped `now`, while contract selectors share a target-owned `FuturesSelectionPolicy`. The current supported dataloader backend is Arctic, with the library name derived from the data type and bar size.
 
@@ -92,9 +93,9 @@ The research package is intentionally separate from live execution. It works dir
 ### Persistence and Logging
 
 - `haymaker/datastore/`: synchronous and asynchronous store abstractions,
-  the awaited `AsyncDataStore` and queued `QueuedDataSink` protocols,
-  ArcticStore, immutable construction-time symbol naming, futures readers, and
-  deprecated store helpers.
+  the awaited `AsyncDataStore`, queued `QueuedDataSink`, and composition-only
+  `FrameStoreProvider` protocols, ArcticStore, immutable construction-time
+  symbol naming, futures readers, and deprecated store helpers.
 - `haymaker/databases.py`: runtime-owned `StoreFactory`, lazy MongoDB client,
   datastore construction, paths, and health-check registration.
 - `haymaker/blotter.py`, `saver.py`: explicitly configured transaction logging
@@ -120,9 +121,11 @@ return means queue acceptance, while final handling depends on the sink's
 Datastore symbol naming is fixed when each store wrapper is constructed.
 Framework-provided naming policies are frozen, stores expose the configured
 policy read-only, and consumers treat injected stores as fully configured.
-`AbstractDfBlock` holds persistence per instance; omitted stores temporarily
-retain the configured runtime `block_library` fallback pending the broader
-consumer-injection refactor.
+`DfAggregator` requires an awaited datastore. Persisted historical streamers
+accept an awaited datastore, while `None` disables their persistence lookup.
+`AbstractDfBlock` holds an optional queued sink per instance, and `None`
+disables block persistence. None of these consumers constructs a store from
+runtime configuration.
 
 ### Dataloader
 
@@ -267,13 +270,14 @@ The CLI assembles framework configuration once through
 `haymaker/config/loader.py`. Live and dataloader loading return `LiveConfig`
 or `DataloaderConfig`; sections remain mappings until the owning target or
 subsystem composition boundary constructs them. Controller one-run actions are
-nested under `controller.startup`. Live storage temporarily retains the broad
-`StorageSettings` pending the separate datastore refactor. Dataloader storage
-uses the narrower `DataloaderStorageSettings`, containing only a base directory
-and Mongo client arguments; `DataloaderRuntime` adapts it to the existing store
-factory. Runtime components receive their specific section or ready service and
-do not read a process-global configuration object. Strategy-specific parameters
-remain ordinary Python data in the user module.
+nested under `controller.startup`. Live storage temporarily accepts the unused
+`block_library`, `market_data_library`, and `dataframe_save_frequency` fields
+pending their removal in the next datastore configuration slice. Dataloader
+storage uses the narrower `DataloaderStorageSettings`, containing only a base
+directory and Mongo client arguments; `DataloaderRuntime` adapts it to the
+existing store factory. Runtime components receive their specific section or
+ready service and do not read a process-global configuration object.
+Strategy-specific parameters remain ordinary Python data in the user module.
 
 Configuration precedence, from lowest to highest, is:
 

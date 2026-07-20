@@ -80,6 +80,32 @@ Every implementation accepts the same arguments as the respective `ib_insync` me
 .. autoclass:: haymaker.streamers.HistoricalDataStreamer
    :members:
 
+To make historical startup incremental, construct one bar-size-configured
+datastore during strategy composition and inject it into the streamer. The
+same datastore can be shared with a :class:`haymaker.dfaggregator.DfAggregator`
+using the same bar size:
+
+.. code-block:: python
+
+   from haymaker import base, dfaggregator, streamers
+   from haymaker.datastore import CollectionNamerBarsizeSetting
+
+   market_data = base.Atom.runtime.frame_store_provider.datastore(
+       "market_data",
+       collection_namer=CollectionNamerBarsizeSetting("30 secs"),
+   )
+   source = streamers.HistoricalDataStreamer(
+       contract,
+       "10 D",
+       "30 secs",
+       "TRADES",
+       datastore=market_data,
+   )
+   aggregator = dfaggregator.DfAggregator(datastore=market_data)
+
+When ``datastore`` is ``None``, the streamer requests history without reading a
+saved boundary. Boolean datastore shortcuts are not supported.
+
 .. autoclass:: haymaker.streamers.MktDataStreamer
    :members:
 
@@ -131,8 +157,9 @@ Pass a fully configured :class:`haymaker.datastore.QueuedDataSink` through the
 keyword-only ``datastore`` argument when a block needs an explicit persistence
 dependency. Configure its symbol naming when constructing the store, for
 example with :class:`haymaker.datastore.CollectionNamerStrategySymbol`; blocks
-do not mutate injected stores. When ``datastore`` is omitted, the configured
-runtime ``block_library`` fallback remains available.
+do not mutate injected stores. Construct the sink from
+``base.Atom.runtime.frame_store_provider`` while composing the strategy module.
+When ``datastore`` is omitted, block persistence is disabled.
 
 Signal Processor
 ----------------

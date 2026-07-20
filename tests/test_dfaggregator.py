@@ -11,7 +11,7 @@ from sample_barDataList import sample_barDataList
 
 from haymaker.base import ActiveNext, Atom
 from haymaker.contract_registry import ContractRegistry
-from haymaker.datastore import AsyncDataStore, CollectionNamerBarsizeSetting
+from haymaker.datastore import AsyncDataStore
 from haymaker.dfaggregator import DfAggregator, WrongStreamer, custom_bday
 from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
 
@@ -42,6 +42,12 @@ def registry_runtime(atom_runtime_factory, registry_with_data):
     return atom_runtime_factory(contract_registry=registry_with_data)
 
 
+def make_aggregator() -> DfAggregator:
+    """Return an in-memory test aggregator with an explicit datastore."""
+
+    return DfAggregator(datastore=Mock(spec=AsyncDataStore), save_frequency=0)
+
+
 def test_HistoricalDataStreamerAccepted():
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
@@ -51,7 +57,7 @@ def test_HistoricalDataStreamerAccepted():
         whatToShow="TRADES",
     )
 
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     # test if no error raised
     assert aggregator.sync_with_streamer(streamer) is None
 
@@ -59,7 +65,7 @@ def test_HistoricalDataStreamerAccepted():
 def test_wrong_streamer_fails():
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = MktDataStreamer(contract=blueprint, tickList="212")
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     with pytest.raises(WrongStreamer):
         aggregator.sync_with_streamer(streamer)
 
@@ -73,7 +79,7 @@ def test_sync_extracts_which_contract():
         whatToShow="TRADES",
     )
     streamer.which_contract = ActiveNext.NEXT
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.sync_with_streamer(streamer)
     assert aggregator.which_contract is ActiveNext.NEXT
 
@@ -87,7 +93,7 @@ def test_sync_extracts_blueprint():
         whatToShow="TRADES",
     )
     streamer.which_contract = ActiveNext.NEXT
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.sync_with_streamer(streamer)
     assert aggregator._contract_blueprint is blueprint
 
@@ -102,7 +108,7 @@ def test_DfAggregator_has_the_same_contract_as_Streamer(registry_runtime):
     )
     streamer.which_contract = ActiveNext.NEXT
     # even though which_contract is mistakenly set as different on DfAggregator
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.which_contract = ActiveNext.ACTIVE
     aggregator._contract_blueprint = blueprint
     # contracts are different before syncing
@@ -121,7 +127,7 @@ def test_params_extracted_from_streamer():
         barSizeSetting="30 secs",
         whatToShow="TRADES",
     )
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.sync_with_streamer(streamer)
     assert isinstance(aggregator._streamer_params.get("contract"), ibi.Future)
     assert aggregator._streamer_params.get("durationStr") == "1D"
@@ -129,29 +135,30 @@ def test_params_extracted_from_streamer():
     assert aggregator._streamer_params.get("whatToShow") == "TRADES"
 
 
-def test_injected_datastore_is_used_without_reconfiguration(atom_runtime, monkeypatch):
+def test_injected_datastore_is_used_without_runtime_discovery(atom_runtime):
+    """An aggregator should retain its injected datastore unchanged."""
+
     store = Mock(spec=AsyncDataStore)
-    arctic_store = Mock()
-    monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", arctic_store)
 
     aggregator = DfAggregator(datastore=store, save_frequency=0)
 
-    assert aggregator.store is store
-    arctic_store.assert_not_called()
+    assert aggregator.datastore is store
+    atom_runtime.frame_store_provider.datastore.assert_not_called()
 
 
-def test_default_datastore_is_constructed_with_barsize_namer(atom_runtime, monkeypatch):
-    store = Mock(spec=AsyncDataStore)
-    arctic_store = Mock(return_value=store)
-    monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", arctic_store)
-    aggregator = DfAggregator(save_frequency=0)
-    aggregator._streamer_params = {"barSizeSetting": "30 secs"}
+def test_datastore_is_required():
+    """Aggregator construction should require an explicit datastore."""
 
-    assert aggregator.store is store
-    arctic_store.assert_called_once_with(
-        "market_data",
-        collection_namer=CollectionNamerBarsizeSetting("30 secs"),
-    )
+    with pytest.raises(TypeError, match="datastore"):
+        DfAggregator()  # type: ignore[call-arg]
+
+
+def test_save_frequency_defaults_to_900_seconds():
+    """Save cadence should be ordinary constructor policy."""
+
+    aggregator = DfAggregator(datastore=Mock(spec=AsyncDataStore))
+
+    assert aggregator.save_frequency == 900
 
 
 @pytest.mark.asyncio
@@ -209,7 +216,7 @@ def test_back_contracts(registry_runtime):
     current contract and contracts are sorted backwards by expiry
     date.
     """
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = ibi.Future("ES", exchange="CME")
     contracts = [details.contract for details in details[0]]
     previous_contracts = sorted(
@@ -228,7 +235,7 @@ def test_back_contracts(registry_runtime):
 def test_back_contracts_iterable_starting_with_current_contract(
     registry_runtime,
 ):
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = ibi.Future("ES", exchange="CME")
     for contract in aggregator._back_contracts():
         assert contract == aggregator.contract
@@ -236,7 +243,7 @@ def test_back_contracts_iterable_starting_with_current_contract(
 
 
 def test_back_contracts_iterable_going_backward(registry_runtime):
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = ibi.Future("ES", exchange="CME")
     previuos_contract = None
     for contract in aggregator._back_contracts():
@@ -252,7 +259,7 @@ def test_df_combined_correctly_in_append_data_non_overlapping():
     sample_df = pd.DataFrame(sample_barDataList).set_index("date")
     first_batch, last_batch = sample_df[:-5], sample_df[-5:]
 
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator._df = first_batch
 
     with patch.object(aggregator, "save_data", new_callable=Mock):
@@ -265,7 +272,7 @@ def test_df_combined_correctly_in_append_data_overlapping():
     sample_df = pd.DataFrame(sample_barDataList).set_index("date")
     first_batch, last_batch = sample_df[:-5], sample_df[-10:]
 
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator._df = first_batch
 
     with patch.object(aggregator, "save_data", new_callable=Mock):
@@ -291,7 +298,7 @@ async def test_data_queued():
         def onData(self, data, *args):
             print(f"data on output: {len(data) if data else data}")
 
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     source = SourceAtom()
     aggregator.contract = source.contract = ibi.Future(symbol="ES", exchange="CME")
     print(aggregator.contract_selector)
@@ -362,7 +369,7 @@ def test_compute_date_range(registry_runtime, conId, localSymbol, return_value):
     basically, we're requesting data between 10-12/12/2025
 
     """
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = ibi.Future("ES", exchange="CME")
     aggregator._streamer_params = {
         "durationStr": "2 D",
@@ -438,7 +445,7 @@ def test_compute_date_range_longer_period(
     basically, we're requesting data between  3 months back from today
 
     """
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = ibi.Future("ES", exchange="CME")
     aggregator._streamer_params = {
         "durationStr": "3 M",
@@ -461,7 +468,7 @@ def test_compute_date_range_longer_period(
 def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
-        aggregator = DfAggregator(save_frequency=0)
+        aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
             "durationStr": "2 D",
@@ -479,7 +486,7 @@ def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
 ):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 4, 1)
-        aggregator = DfAggregator(save_frequency=0)
+        aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
             "durationStr": "5 D",
@@ -495,7 +502,7 @@ def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
 def test_aggregator_offset_by_durationStr_given_as_int(registry_runtime):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
-        aggregator = DfAggregator(save_frequency=0)
+        aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
             "durationStr": 1000,
@@ -516,7 +523,7 @@ def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
 ):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
-        aggregator = DfAggregator(save_frequency=0)
+        aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
             "durationStr": 3000,
@@ -537,7 +544,7 @@ def test_aggregator_offset_by_durationStr_given_as_int_including_weekend(
 ):
     with patch("haymaker.dfaggregator.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 4, 1)
-        aggregator = DfAggregator(save_frequency=0)
+        aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
             "durationStr": 10000,
@@ -555,13 +562,13 @@ def test_aggregator_offset_by_durationStr_given_as_int_including_weekend(
 
 
 def test_aggregator_session_length(registry_runtime):
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = ibi.Future(symbol="ES", exchange="CME")
     assert aggregator.session_length == timedelta(hours=23)
 
 
 def test_aggregator_datapoints_from_str(registry_runtime):
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = ibi.Future(symbol="ES", exchange="CME")
     aggregator._streamer_params = {
         "durationStr": "5 D",
@@ -573,7 +580,7 @@ def test_aggregator_datapoints_from_str(registry_runtime):
 
 
 def test_aggregator_datapoints_from_int(registry_runtime):
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = ibi.Future(symbol="ES", exchange="CME")
     aggregator._streamer_params = {
         "durationStr": 120,
@@ -600,7 +607,7 @@ async def test_pull_history_from_broker(registry_runtime):
         what_to_show,
         useRTH,
     )
-    aggregator = DfAggregator(save_frequency=0)
+    aggregator = make_aggregator()
     aggregator.contract = input_contract
 
     streamer += aggregator

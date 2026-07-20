@@ -48,16 +48,16 @@ state_machine: # Persistent strategy and order state.
   order_collection_name: orders # Mongo collection for order state.
   max_rejected_orders: 3 # Rejections allowed before blocking new orders.
 
-storage: # Filesystem, MongoDB, and Arctic defaults.
+storage: # Filesystem and framework MongoDB settings.
   base_directory: ib_data # Data directory below the user's home directory.
   mongodb: # MongoDB client and framework database settings.
     client: # Keyword arguments passed to pymongo.MongoClient.
       host: localhost # MongoDB host name or IP address.
       port: 27017 # MongoDB server port.
     database: test_data # Database used by framework state and Mongo savers.
-  block_library: null # Optional Arctic library for saved block data.
-  market_data_library: live_data # Arctic library for live market data.
-  dataframe_save_frequency: 900 # Seconds between dataframe persistence attempts.
+  block_library: null # Retained but unused pending datastore config removal.
+  market_data_library: live_data # Retained but unused pending datastore config removal.
+  dataframe_save_frequency: 900 # Retained but unused pending datastore config removal.
 
 blotter: # Completed-trade transaction logging.
   enabled: true # Create and attach the live trade blotter.

@@ -15,7 +15,8 @@ with ``@pytest.mark.mongo``.
 import datetime
 import logging
 import os
-from typing import Any
+from typing import Any, cast
+from unittest.mock import Mock
 
 # Tests must not inherit local live-trading config. Keep this before importing
 # haymaker modules because config is resolved at import time.
@@ -30,6 +31,7 @@ from runtime_helpers import AtomRuntimeHarness
 from haymaker.base import Atom as BaseAtom
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
+from haymaker.datastore import FrameStoreProvider
 from haymaker.saver import AbstractBaseSaver
 from haymaker.state_machine import StateMachine
 from haymaker.streamers import Streamer as ActualStreamer
@@ -169,12 +171,17 @@ def atom_runtime_factory(monkeypatch, state_machine):
         sm: StateMachine | None = None,
         contract_registry: ContractRegistry | None = None,
         controller: Controller | None = None,
+        frame_store_provider: FrameStoreProvider | None = None,
     ) -> AtomRuntimeHarness:
+        provider = frame_store_provider
+        if provider is None:
+            provider = cast(FrameStoreProvider, Mock(spec=FrameStoreProvider))
         runtime = AtomRuntimeHarness(
             ib=ib or ibi.IB(),
             sm=sm or state_machine,
             contract_registry=contract_registry or ContractRegistry(),
             controller=controller,
+            frame_store_provider=provider,
         )
         return runtime.install(monkeypatch)
 

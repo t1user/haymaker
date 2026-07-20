@@ -9,3 +9,4 @@ from .collection_namer import (
 )
 from .datastore import AbstractBaseStore, ArcticStore
 from .datastore_helpers import DataStoreWrapper
+from .provider import FrameStoreProvider
