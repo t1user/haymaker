@@ -16,7 +16,7 @@ from arctic.store.versioned_item import VersionedItem  # type: ignore
 
 from haymaker.validators import bar_size_validator, wts_validator
 
-from .collection_namer import SymbolNamer, simple_collection_namer
+from .symbol_namer import SymbolNamer, simple_symbol_namer
 
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
@@ -32,10 +32,10 @@ class AbstractBaseStore(ABC):
     Datastore is for saving and reading pandas dataframes and a dict of metadata.
     """
 
-    def __init__(self, collection_namer: SymbolNamer | None = None) -> None:
+    def __init__(self, symbol_namer: SymbolNamer | None = None) -> None:
         """Configure the immutable symbol-naming policy for this store."""
 
-        self._symbol_namer = collection_namer or simple_collection_namer
+        self._symbol_namer = symbol_namer or simple_symbol_namer
 
     @property
     def symbol_namer(self) -> SymbolNamer:
@@ -182,7 +182,7 @@ class ArcticStore(AbstractBaseStore):
         self,
         lib: str,
         host: str | MongoClient = "localhost",
-        collection_namer: SymbolNamer | None = None,
+        symbol_namer: SymbolNamer | None = None,
     ) -> None:
         """
         Library name is whatToShow + barSize, eg.
@@ -190,7 +190,7 @@ class ArcticStore(AbstractBaseStore):
         BID_ASK_1_hour
         MIDPOINT_30_secs
         """
-        super().__init__(collection_namer)
+        super().__init__(symbol_namer)
         lib = lib.replace(" ", "_")
         self.lib = lib
         self.host = host

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from pymongo import MongoClient  # type: ignore
 from pymongo.errors import ConfigurationError  # type: ignore
 
-from .datastore.collection_namer import SymbolNamer
+from .datastore.symbol_namer import SymbolNamer
 
 if TYPE_CHECKING:
     from .datastore import (
@@ -78,14 +78,12 @@ class _ArcticFrameStoreProvider:
 
     _mongo_client: Callable[[], MongoClient] = field(repr=False)
 
-    def datastore(
-        self, library: str, *, collection_namer: SymbolNamer
-    ) -> AsyncDataStore:
+    def datastore(self, library: str, *, symbol_namer: SymbolNamer) -> AsyncDataStore:
         """Return an awaited dataframe datastore.
 
         Args:
             library: Arctic library name.
-            collection_namer: Immutable contract-to-symbol naming policy.
+            symbol_namer: Immutable contract-to-symbol naming policy.
 
         Returns:
             Awaited dataframe datastore backed by Arctic.
@@ -96,17 +94,15 @@ class _ArcticFrameStoreProvider:
         return AsyncArcticStore(
             lib=library,
             host=self._mongo_client(),
-            collection_namer=collection_namer,
+            symbol_namer=symbol_namer,
         )
 
-    def queued_sink(
-        self, library: str, *, collection_namer: SymbolNamer
-    ) -> QueuedDataSink:
+    def queued_sink(self, library: str, *, symbol_namer: SymbolNamer) -> QueuedDataSink:
         """Return a best-effort queued dataframe sink.
 
         Args:
             library: Arctic library name.
-            collection_namer: Immutable contract-to-symbol naming policy.
+            symbol_namer: Immutable contract-to-symbol naming policy.
 
         Returns:
             Queued dataframe sink backed by Arctic.
@@ -117,7 +113,7 @@ class _ArcticFrameStoreProvider:
         return AsyncArcticStore(
             lib=library,
             host=self._mongo_client(),
-            collection_namer=collection_namer,
+            symbol_namer=symbol_namer,
         )
 
 

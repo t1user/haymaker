@@ -1,11 +1,11 @@
 # flake8: noqa
 
 from .async_datastore import AsyncArcticStore, AsyncDataStore, QueuedDataSink
-from .collection_namer import (
-    CollectionNamerBarsizeSetting,
-    CollectionNamerStrategySymbol,
+from .symbol_namer import (
+    BarSizeSymbolNamer,
+    StrategySymbolNamer,
     SymbolNamer,
-    simple_collection_namer,
+    simple_symbol_namer,
 )
 from .datastore import AbstractBaseStore, ArcticStore
 from .datastore_helpers import DataStoreWrapper

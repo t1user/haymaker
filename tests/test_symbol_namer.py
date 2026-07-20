@@ -4,9 +4,9 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.datastore import (
-    CollectionNamerBarsizeSetting,
-    CollectionNamerStrategySymbol,
-    simple_collection_namer,
+    BarSizeSymbolNamer,
+    StrategySymbolNamer,
+    simple_symbol_namer,
 )
 
 FUTURE_CONTRACT = ibi.Future(
@@ -37,9 +37,9 @@ STOCK_CONTRACT = ibi.Stock(
         (STOCK_CONTRACT, "AAPL_STK"),
     ],
 )
-def test_simple_collection_namer(contract, output):
-    collection_name = simple_collection_namer(contract)
-    assert collection_name == output
+def test_simple_symbol_namer(contract, output):
+    symbol_name = simple_symbol_namer(contract)
+    assert symbol_name == output
 
 
 @pytest.mark.parametrize(
@@ -53,16 +53,14 @@ def test_simple_collection_namer(contract, output):
         (STOCK_CONTRACT, "1 hour", "AAPL_STK_1_hour"),
     ],
 )
-def test_collection_name_from_contract_and_barSizeSetting(
-    contract, barSizeSetting, output
-):
-    namer = CollectionNamerBarsizeSetting(barSizeSetting)
-    collection_name = namer(contract)
-    assert collection_name == output
+def test_symbol_name_from_contract_and_barSizeSetting(contract, barSizeSetting, output):
+    namer = BarSizeSymbolNamer(barSizeSetting)
+    symbol_name = namer(contract)
+    assert symbol_name == output
 
 
 def test_namer_raises_if_used_with_non_contract():
-    namer = CollectionNamerBarsizeSetting("30 secs")
+    namer = BarSizeSymbolNamer("30 secs")
     with pytest.raises(AssertionError):
         namer("NQ")
 
@@ -70,8 +68,8 @@ def test_namer_raises_if_used_with_non_contract():
 @pytest.mark.parametrize(
     "namer,field_name,new_value",
     [
-        (CollectionNamerBarsizeSetting("30 secs"), "barSizeSetting", "1 hour"),
-        (CollectionNamerStrategySymbol("alpha"), "strategy", "beta"),
+        (BarSizeSymbolNamer("30 secs"), "barSizeSetting", "1 hour"),
+        (StrategySymbolNamer("alpha"), "strategy", "beta"),
     ],
 )
 def test_symbol_namers_are_immutable(namer, field_name, new_value):

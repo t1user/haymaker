@@ -8,13 +8,13 @@ import ib_insync as ibi
 SymbolNamer: TypeAlias = Callable[[ibi.Contract], str]
 
 
-def simple_collection_namer(contract: ibi.Contract) -> str:
+def simple_symbol_namer(contract: ibi.Contract) -> str:
     assert isinstance(contract, ibi.Contract)
     return f'{"_".join(contract.localSymbol.split())}_{contract.secType}'
 
 
 @dataclass(frozen=True)
-class CollectionNamerBarsizeSetting:
+class BarSizeSymbolNamer:
     barSizeSetting: str
     _barSizeSetting: str = field(init=False, repr=False)
 
@@ -37,7 +37,7 @@ class CollectionNamerBarsizeSetting:
 
 
 @dataclass(frozen=True)
-class CollectionNamerStrategySymbol:
+class StrategySymbolNamer:
     strategy: str
     _timestamp: str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
 

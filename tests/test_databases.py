@@ -14,7 +14,7 @@ from haymaker.datastore import (
     ArcticStore,
     AsyncArcticStore,
     AsyncDataStore,
-    CollectionNamerBarsizeSetting,
+    BarSizeSymbolNamer,
     FrameStoreProvider,
     QueuedDataSink,
 )
@@ -92,14 +92,14 @@ def test_frame_store_provider_exposes_only_narrow_store_construction(
     arctic_store = Mock(side_effect=stores)
     monkeypatch.setattr("haymaker.datastore.AsyncArcticStore", arctic_store)
     provider = create_frame_store_provider(mongo_client)
-    namer = CollectionNamerBarsizeSetting("30 secs")
+    namer = BarSizeSymbolNamer("30 secs")
 
     accepts_frame_store_provider(provider)
-    assert provider.datastore("market_data", collection_namer=namer) is stores[0]
-    assert provider.queued_sink("block_data", collection_namer=namer) is stores[1]
+    assert provider.datastore("market_data", symbol_namer=namer) is stores[0]
+    assert provider.queued_sink("block_data", symbol_namer=namer) is stores[1]
     assert arctic_store.call_args_list == [
-        call(lib="market_data", host=client, collection_namer=namer),
-        call(lib="block_data", host=client, collection_namer=namer),
+        call(lib="market_data", host=client, symbol_namer=namer),
+        call(lib="block_data", host=client, symbol_namer=namer),
     ]
     assert mongo_client.call_count == 2
     assert not hasattr(provider, "mongo_client")
@@ -162,7 +162,7 @@ async def test_awaited_arctic_mutations_return_backend_results(
     calls: list[tuple[str, tuple[object, ...]]] = []
 
     class FakeArcticStore:
-        def __init__(self, lib, host, collection_namer) -> None:
+        def __init__(self, lib, host, symbol_namer) -> None:
             self.lib = lib
             self.host = host
 
@@ -204,7 +204,7 @@ async def test_awaited_metadata_failure_is_reported_at_call_site(
     """Awaited metadata writes should not defer failures until queue shutdown."""
 
     class FailingArcticStore:
-        def __init__(self, lib, host, collection_namer) -> None:
+        def __init__(self, lib, host, symbol_namer) -> None:
             self.lib = lib
             self.host = host
 
@@ -233,7 +233,7 @@ async def test_critical_arctic_store_uses_a_dedicated_draining_queue(
     writes: list[tuple[str, dict[str, bool]]] = []
 
     class FakeArcticStore:
-        def __init__(self, lib, host, collection_namer) -> None:
+        def __init__(self, lib, host, symbol_namer) -> None:
             self.lib = lib
             self.host = host
 
@@ -267,7 +267,7 @@ async def test_critical_arctic_store_propagates_queued_write_failure(
     """A draining store must report queued write failures during shutdown."""
 
     class FailingArcticStore:
-        def __init__(self, lib, host, collection_namer) -> None:
+        def __init__(self, lib, host, symbol_namer) -> None:
             self.lib = lib
             self.host = host
 
@@ -299,8 +299,8 @@ async def test_queued_writes_keep_each_store_symbol_namer_isolated(
     writes: dict[str, list[str]] = {"alpha": [], "beta": []}
 
     class RecordingArcticStore(ArcticStore):
-        def __init__(self, lib, host, collection_namer) -> None:
-            AbstractBaseStore.__init__(self, collection_namer)
+        def __init__(self, lib, host, symbol_namer) -> None:
+            AbstractBaseStore.__init__(self, symbol_namer)
             self.lib = lib
             self.host = host
 
@@ -323,12 +323,12 @@ async def test_queued_writes_keep_each_store_symbol_namer_isolated(
 
     alpha_store = AsyncArcticStore(
         "alpha",
-        collection_namer=alpha_namer,
+        symbol_namer=alpha_namer,
         shutdown_policy=QueueShutdownPolicy.DRAIN,
     )
     beta_store = AsyncArcticStore(
         "beta",
-        collection_namer=beta_namer,
+        symbol_namer=beta_namer,
         shutdown_policy=QueueShutdownPolicy.DRAIN,
     )
     contract = ibi.Future(localSymbol="NQH6")
@@ -342,7 +342,7 @@ async def test_queued_writes_keep_each_store_symbol_namer_isolated(
     assert writes == {"alpha": ["alpha_NQH6"], "beta": ["beta_NQH6"]}
     assert alpha_store.symbol_namer is alpha_namer
     assert beta_store.symbol_namer is beta_namer
-    assert not hasattr(alpha_store, "override_collection_namer")
+    assert not hasattr(alpha_store, "override_symbol_namer")
     with pytest.raises(AttributeError):
         alpha_store.symbol_namer = beta_namer  # type: ignore[misc]
     with pytest.raises(AttributeError):

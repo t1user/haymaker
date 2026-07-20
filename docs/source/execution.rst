@@ -88,11 +88,11 @@ using the same bar size:
 .. code-block:: python
 
    from haymaker import base, dfaggregator, streamers
-   from haymaker.datastore import CollectionNamerBarsizeSetting
+   from haymaker.datastore import BarSizeSymbolNamer
 
    market_data = base.Atom.runtime.frame_store_provider.datastore(
        "market_data",
-       collection_namer=CollectionNamerBarsizeSetting("30 secs"),
+       symbol_namer=BarSizeSymbolNamer("30 secs"),
    )
    source = streamers.HistoricalDataStreamer(
        contract,
@@ -156,7 +156,7 @@ Override :meth:`haymaker.block.AbstractDfBlock.df` when creating a concrete `Abs
 Pass a fully configured :class:`haymaker.datastore.QueuedDataSink` through the
 keyword-only ``datastore`` argument when a block needs an explicit persistence
 dependency. Configure its symbol naming when constructing the store, for
-example with :class:`haymaker.datastore.CollectionNamerStrategySymbol`; blocks
+example with :class:`haymaker.datastore.StrategySymbolNamer`; blocks
 do not mutate injected stores. Construct the sink from
 ``base.Atom.runtime.frame_store_provider`` while composing the strategy module.
 When ``datastore`` is omitted, block persistence is disabled.

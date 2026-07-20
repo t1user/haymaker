@@ -15,8 +15,8 @@ from haymaker.async_wrappers import (
     make_async,
 )
 
-from .collection_namer import SymbolNamer
 from .datastore import ArcticStore
+from .symbol_namer import SymbolNamer
 
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
@@ -127,10 +127,10 @@ class AsyncArcticStore:
         self,
         lib: str,
         host: str | MongoClient = "localhost",
-        collection_namer: SymbolNamer | None = None,
+        symbol_namer: SymbolNamer | None = None,
         shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DISCARD,
     ) -> None:
-        self.store = self._sync_class(lib, host, collection_namer)
+        self.store = self._sync_class(lib, host, symbol_namer)
         if shutdown_policy is not QueueShutdownPolicy.DISCARD:
             self._queue = SyncQueueRunner(
                 f"AsyncArcticStore_queue_{lib}",
