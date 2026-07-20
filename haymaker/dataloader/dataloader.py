@@ -14,6 +14,7 @@ import asyncio
 import functools
 import logging
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import AsyncGenerator, Literal, Optional, TypedDict, cast
@@ -23,8 +24,6 @@ import pandas as pd
 from tqdm import tqdm
 
 from haymaker.async_wrappers import finish_on_cancel
-from haymaker.config.settings import StorageSettings
-from haymaker.databases import StoreFactory
 from haymaker.datastore import AsyncDataStore
 from haymaker.validators import bar_size_validator, wts_validator
 
@@ -446,7 +445,8 @@ class Manager:
         pacing: Optional preconfigured request pacer. A session pacer is created
             when omitted.
         store: Optional async store, primarily for focused callers and tests.
-            Arctic is created lazily when omitted.
+        datastore_factory: Optional library-to-store factory. It is invoked
+            lazily when ``store`` is omitted.
         source: CSV path containing IB contract fields.
         gap_fill_mode: One of ``off``, ``heuristic``, ``schedule``, or ``auto``.
         use_rth: Restrict historical bars and schedules to regular hours.
@@ -465,8 +465,8 @@ class Manager:
     ib: ibi.IB
     pacing: RequestPacing | None = None
     store: AsyncDataStore | None = None
-    store_factory: StoreFactory = field(
-        default_factory=lambda: StoreFactory(StorageSettings()), repr=False
+    datastore_factory: Callable[[str], AsyncDataStore] | None = field(
+        default=None, repr=False
     )
     futures: FuturesSelectionPolicy = field(
         default_factory=FuturesSelectionPolicy, repr=False
@@ -517,11 +517,22 @@ class Manager:
 
     @property
     def datastore(self) -> AsyncDataStore:
-        """Return the session datastore, creating it lazily when needed."""
+        """Return the session datastore, creating it lazily when needed.
+
+        Returns:
+            Injected or factory-built awaited datastore.
+
+        Raises:
+            RuntimeError: If neither a store nor datastore factory was supplied.
+        """
 
         if self.store is None:
+            if self.datastore_factory is None:
+                raise RuntimeError(
+                    "Manager requires store or datastore_factory for persistence"
+                )
             lib = f"{self.wts}_{self.bar_size}".replace(" ", "_")
-            self.store = self.store_factory.arctic_store(lib)
+            self.store = self.datastore_factory(lib)
         return self.store
 
     @functools.cached_property

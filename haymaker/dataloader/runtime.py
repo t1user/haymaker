@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING
 
 from ib_insync import IB
 
-from haymaker.config.settings import DataloaderConfig, MongoSettings, StorageSettings
-from haymaker.databases import StoreFactory
+from haymaker.config.settings import DataloaderConfig
+from haymaker.databases import MongoService
+from haymaker.datastore import AsyncArcticStore, AsyncDataStore
 
 if TYPE_CHECKING:
     from .dataloader import DataloaderSession
@@ -34,23 +35,20 @@ class DataloaderRuntime:
         ib: Optional broker connection owned by this runtime.
         session: Optional preconfigured dataloader session. When omitted, the
             runtime constructs its own session for ``ib``.
+        mongo_service: Optional Mongo client service for focused callers and tests.
     """
 
     config: DataloaderConfig = field(repr=False)
     ib: IB = field(default_factory=_create_ib)
     session: DataloaderSession | None = field(default=None, repr=False)
-    store_factory: StoreFactory = field(init=False, repr=False)
+    mongo_service: MongoService | None = field(default=None, repr=False)
     _work_task: asyncio.Task | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         """Create and wire the configured dataloader session when needed."""
 
-        self.store_factory = StoreFactory(
-            StorageSettings(
-                base_directory=self.config.storage.base_directory,
-                mongodb=MongoSettings(client=self.config.storage.mongodb.client),
-            )
-        )
+        if self.mongo_service is None:
+            self.mongo_service = MongoService(self.config.storage.mongodb.client)
         if self.session is None:
             self.session = self._create_session()
         self.ib.errorEvent += self.session.pacing.onErrEvent
@@ -93,7 +91,7 @@ class DataloaderRuntime:
         manager = Manager(
             self.ib,
             pacing=pacing,
-            store_factory=self.store_factory,
+            datastore_factory=self._create_datastore,
             futures=FuturesSelectionPolicy.from_mapping(self.config.futures),
             **download,
         )
@@ -101,6 +99,22 @@ class DataloaderRuntime:
             self.ib,
             manager=manager,
             number_of_workers=number_of_workers,
+        )
+
+    def _create_datastore(self, library: str) -> AsyncDataStore:
+        """Construct the dataloader's Arctic store for one derived library.
+
+        Args:
+            library: Library name derived by the dataloader manager.
+
+        Returns:
+            Awaited Arctic datastore using the process-owned Mongo client.
+        """
+
+        assert self.mongo_service is not None
+        return AsyncArcticStore(
+            lib=library,
+            host=self.mongo_service.mongo_client(),
         )
 
     def bind_supervisor(

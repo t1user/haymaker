@@ -25,13 +25,15 @@ request, restart, and date-policy behavior with focused tests.
   not retry automatically with another ID.
 - `DataloaderSession` owns producer/worker execution, failure collection,
   cancellation, and final buffered-data flushing.
-- `Manager` owns source expansion, contract discovery, request policy, the
-  run-scoped `now`, datastore construction, active jobs, and broker schedule
-  requests needed for planning. Each session start obtains a fresh discovery
-  generator. A contract becomes planned only after it is conclusively skipped
-  or its constructed job is registered in `active_jobs`, so cancellation during
-  an awaited planning step leaves that contract eligible for discovery after a
-  reconnect.
+- `DataloaderRuntime` owns process Mongo lifecycle and Arctic construction.
+  `Manager` owns source expansion, contract discovery, request policy, the
+  run-scoped `now`, datastore library derivation and lazy invocation of its
+  injected datastore factory, active jobs, and broker schedule requests needed
+  for planning. Focused callers may inject a ready datastore instead. Each
+  session start obtains a fresh discovery generator. A contract becomes planned
+  only after it is conclusively skipped or its constructed job is registered in
+  `active_jobs`, so cancellation during an awaited planning step leaves that
+  contract eligible for discovery after a reconnect.
 - `TaskPlanner` and the range-plan objects in `scheduling.py` are pure planning
   code. Keep IB calls out of them; obtain broker inputs in `Manager` and pass
   ordinary values into the planner.

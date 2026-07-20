@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
 import ib_insync as ibi
+from pymongo import MongoClient  # type: ignore
 
 from . import misc
-from .databases import StoreFactory
 from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver
 
 log = logging.getLogger(__name__)
@@ -133,13 +133,19 @@ class Blotter:
 
 
 def blotter_factory(
-    settings: Mapping[str, Any], store_factory: StoreFactory
+    settings: Mapping[str, Any],
+    *,
+    base_directory: str,
+    mongo_client: Callable[[], MongoClient],
+    database: str | None,
 ) -> Blotter | None:
     """Construct a built-in blotter and saver from plain configuration.
 
     Args:
         settings: Merged ``blotter`` configuration section.
-        store_factory: Runtime persistence services used by built-in savers.
+        base_directory: Application data directory used by the CSV saver.
+        mongo_client: Lazy accessor for the process-owned Mongo client.
+        database: Application database used by the Mongo saver.
 
     Returns:
         Configured blotter, or ``None`` when disabled.
@@ -167,14 +173,14 @@ def blotter_factory(
     options = dict(saver_options)
 
     if saver_type == "csv":
-        saver: AbstractBaseSaver = CsvSaver(
-            **options, base_directory=store_factory.settings.base_directory
-        )
+        saver: AbstractBaseSaver = CsvSaver(**options, base_directory=base_directory)
     elif saver_type == "mongo":
+        if not database:
+            raise ValueError("storage.mongodb.database is required for Mongo savers")
         saver = MongoSaver(
             **options,
-            client=store_factory.mongo_client(),
-            database=store_factory.database,
+            client=mongo_client(),
+            database=database,
         )
     else:
         raise ValueError("blotter.saver.type must be csv or mongo")

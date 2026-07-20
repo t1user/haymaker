@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from logging import LogRecord
 from typing import Any, cast
+from unittest.mock import Mock
 
 import ib_insync as ibi
 import pytest
@@ -133,7 +134,7 @@ def test_runtime_preserves_target_policy_validation(
         runtime.DataloaderRuntime(config, ibi.IB())
 
 
-def test_runtime_adapts_narrow_storage_settings_for_store_factory() -> None:
+def test_runtime_passes_narrow_mongo_settings_to_service() -> None:
     """Runtime should retain only the dataloader's Mongo client configuration."""
 
     config = load_dataloader_config(
@@ -149,12 +150,52 @@ def test_runtime_adapts_narrow_storage_settings_for_store_factory() -> None:
 
     dataloader_runtime = runtime.DataloaderRuntime(config, ibi.IB())
 
-    assert dataloader_runtime.store_factory.settings.base_directory == "history"
-    assert dataloader_runtime.store_factory.settings.mongodb.client == {
+    assert dataloader_runtime.mongo_service is not None
+    assert dataloader_runtime.mongo_service.client_options == {
         "host": "mongo.example",
         "port": 27017,
     }
-    assert dataloader_runtime.store_factory.settings.mongodb.database is None
+    assert not hasattr(dataloader_runtime.mongo_service, "settings")
+    assert dataloader_runtime.session is not None
+    assert dataloader_runtime.session.manager is not None
+    assert (
+        dataloader_runtime.session.manager.datastore_factory
+        == dataloader_runtime._create_datastore
+    )
+
+
+def test_runtime_composes_arctic_store_from_manager_library(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manager should derive its library while the runtime supplies Mongo."""
+
+    config = load_dataloader_config(
+        DataloaderCommand(
+            None,
+            (
+                ("download.what_to_show", "BID"),
+                ("download.bar_size", "1 min"),
+            ),
+        ),
+        environ={},
+    )
+    client = object()
+    store = object()
+    mongo_service = Mock()
+    mongo_service.mongo_client.return_value = client
+    store_constructor = Mock(return_value=store)
+    monkeypatch.setattr(runtime, "AsyncArcticStore", store_constructor)
+
+    dataloader_runtime = runtime.DataloaderRuntime(
+        config,
+        ibi.IB(),
+        mongo_service=cast(Any, mongo_service),
+    )
+
+    assert dataloader_runtime.session is not None
+    assert dataloader_runtime.session.manager is not None
+    assert dataloader_runtime.session.manager.datastore is store
+    store_constructor.assert_called_once_with(lib="BID_1_min", host=client)
 
 
 @pytest.mark.asyncio

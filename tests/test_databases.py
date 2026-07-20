@@ -8,8 +8,7 @@ import pytest
 
 from haymaker import databases
 from haymaker.async_wrappers import QueueProcessingError, QueueShutdownPolicy
-from haymaker.config.settings import MongoSettings, StorageSettings
-from haymaker.databases import StoreFactory
+from haymaker.databases import MongoService, create_frame_store_provider
 from haymaker.datastore import (
     AbstractBaseStore,
     ArcticStore,
@@ -30,23 +29,17 @@ def accepts_queued_sink(store: QueuedDataSink) -> None:
 
 
 def accepts_frame_store_provider(provider: FrameStoreProvider) -> None:
-    """Type-check the StoreFactory strategy-composition adapter."""
-
-
-def storage_settings(**client: object) -> StorageSettings:
-    """Return storage settings with one test Mongo database."""
-
-    return StorageSettings(mongodb=MongoSettings(client=client, database="test_data"))
+    """Type-check the Arctic strategy-composition provider."""
 
 
 def test_real_mongo_client_blocked_by_default() -> None:
-    factory = StoreFactory(storage_settings())
+    service = MongoService()
 
     with pytest.raises(AssertionError, match="real MongoDB"):
-        factory.mongo_client()
+        service.mongo_client()
 
 
-def test_store_factory_creates_and_reuses_one_probed_client(
+def test_mongo_service_creates_and_reuses_one_probed_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = MagicMock()
@@ -57,55 +50,58 @@ def test_store_factory_creates_and_reuses_one_probed_client(
         return client
 
     monkeypatch.setattr(databases, "MongoClient", fake_mongo_client)
-    factory = StoreFactory(storage_settings(host="mongodb://example"))
+    service = MongoService({"host": "mongodb://example"})
 
-    assert factory.mongo_client() is client
-    assert factory.mongo_client() is client
+    assert service.mongo_client() is client
+    assert service.mongo_client() is client
 
     assert created_with == {"host": "mongodb://example"}
     client.admin.command.assert_called_once_with("ping")
-    assert factory.health_checks == [factory.mongodb_health_check]
+    assert service.health_checks == [service.mongodb_health_check]
 
 
-def test_store_factory_reraises_configuration_error(
+def test_mongo_service_reraises_configuration_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_mongo_client(**kwargs: object) -> object:
         raise databases.ConfigurationError("bad mongo configuration")
 
     monkeypatch.setattr(databases, "MongoClient", fake_mongo_client)
-    factory = StoreFactory(storage_settings())
+    service = MongoService()
 
     with pytest.raises(databases.ConfigurationError):
-        factory.mongo_client()
+        service.mongo_client()
 
 
-def test_database_name_is_required_only_for_savers() -> None:
-    factory = StoreFactory(StorageSettings())
+def test_mongo_service_exposes_no_storage_policy() -> None:
+    service = MongoService()
 
-    with pytest.raises(ValueError, match="database"):
-        _ = factory.database
+    assert not hasattr(service, "database")
+    assert not hasattr(service, "path")
+    assert not hasattr(service, "arctic_store")
 
 
 def test_frame_store_provider_exposes_only_narrow_store_construction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The strategy provider should delegate without exposing Mongo services."""
+    """The strategy provider should construct stores without exposing Mongo."""
 
-    factory = StoreFactory(StorageSettings())
-    store = Mock()
-    arctic_store = Mock(return_value=store)
-    monkeypatch.setattr(factory, "arctic_store", arctic_store)
-    provider = factory.frame_store_provider()
+    client = object()
+    mongo_client = Mock(return_value=client)
+    stores = [Mock(), Mock()]
+    arctic_store = Mock(side_effect=stores)
+    monkeypatch.setattr("haymaker.datastore.AsyncArcticStore", arctic_store)
+    provider = create_frame_store_provider(mongo_client)
     namer = CollectionNamerBarsizeSetting("30 secs")
 
     accepts_frame_store_provider(provider)
-    assert provider.datastore("market_data", collection_namer=namer) is store
-    assert provider.queued_sink("block_data", collection_namer=namer) is store
+    assert provider.datastore("market_data", collection_namer=namer) is stores[0]
+    assert provider.queued_sink("block_data", collection_namer=namer) is stores[1]
     assert arctic_store.call_args_list == [
-        call("market_data", collection_namer=namer),
-        call("block_data", collection_namer=namer),
+        call(lib="market_data", host=client, collection_namer=namer),
+        call(lib="block_data", host=client, collection_namer=namer),
     ]
+    assert mongo_client.call_count == 2
     assert not hasattr(provider, "mongo_client")
     assert not hasattr(provider, "database")
     assert not hasattr(provider, "settings")

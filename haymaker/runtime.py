@@ -15,7 +15,7 @@ from .blotter import blotter_factory
 from .config.settings import LiveConfig
 from .contract_registry import ContractRegistry
 from .controller import Controller
-from .databases import StoreFactory
+from .databases import MongoService, create_frame_store_provider
 from .datastore import FrameStoreProvider
 from .handlers import IBHandlers
 from .order_defaults import OrderDefaults
@@ -187,7 +187,7 @@ class LiveRuntime:
     Args:
         config: Merged framework configuration for this live process.
         ib: Optional broker client owned by the runtime.
-        store_factory: Optional persistence factory for focused callers and tests.
+        mongo_service: Optional Mongo client service for focused callers and tests.
         frame_store_provider: Optional strategy-composition persistence provider.
         contract_registry: Optional preconfigured contract registry.
         sm: Optional preconfigured state machine.
@@ -195,7 +195,7 @@ class LiveRuntime:
 
     config: LiveConfig = field(repr=False)
     ib: ibi.IB = field(default_factory=ibi.IB)
-    store_factory: StoreFactory | None = field(default=None, repr=False)
+    mongo_service: MongoService | None = field(default=None, repr=False)
     contract_registry: ContractRegistry | None = field(default=None, repr=False)
     sm: StateMachine | None = field(default=None, repr=False)
     frame_store_provider: FrameStoreProvider | None = field(default=None, repr=False)
@@ -206,10 +206,12 @@ class LiveRuntime:
     def __post_init__(self) -> None:
         """Build services and install a complete Atom context before returning."""
 
-        if self.store_factory is None:
-            self.store_factory = StoreFactory(self.config.storage)
+        if self.mongo_service is None:
+            self.mongo_service = MongoService(self.config.storage.mongodb.client)
         if self.frame_store_provider is None:
-            self.frame_store_provider = self.store_factory.frame_store_provider()
+            self.frame_store_provider = create_frame_store_provider(
+                self.mongo_service.mongo_client
+            )
         if self.contract_registry is None:
             self.contract_registry = ContractRegistry(**dict(self.config.futures))
         if self.sm is None:
@@ -228,8 +230,13 @@ class LiveRuntime:
         self.context.controller = Controller.from_mapping(
             self.config.controller,
             trader=trader,
-            blotter=blotter_factory(self.config.blotter, self.store_factory),
-            health_check_observables=[self.store_factory.health_checks],
+            blotter=blotter_factory(
+                self.config.blotter,
+                base_directory=self.config.storage.base_directory,
+                mongo_client=self.mongo_service.mongo_client,
+                database=self.config.storage.mongodb.database,
+            ),
+            health_check_observables=[self.mongo_service.health_checks],
         )
         self.startup_jobs = StartupJobs(
             InitData(self.ib, self.contract_registry),
@@ -249,7 +256,7 @@ class LiveRuntime:
             State machine using runtime-owned Mongo savers.
         """
 
-        assert self.store_factory is not None
+        assert self.mongo_service is not None
         options = dict(settings)
         order_collection_name = options.pop(
             "order_collection_name", DEFAULT_ORDER_COLLECTION_NAME
@@ -257,21 +264,30 @@ class LiveRuntime:
         strategy_collection_name = options.pop(
             "strategy_collection_name", DEFAULT_STRATEGY_COLLECTION_NAME
         )
-        mongo_client = self.store_factory.mongo_client()
+        mongo_client = self.mongo_service.mongo_client()
+        database = self._framework_database()
         return StateMachine(
             order_saver=MongoSaver(
                 order_collection_name,
                 query_key="orderId",
                 client=mongo_client,
-                database=self.store_factory.database,
+                database=database,
             ),
             strategy_saver=MongoLatestSaver(
                 strategy_collection_name,
                 client=mongo_client,
-                database=self.store_factory.database,
+                database=database,
             ),
             **options,
         )
+
+    def _framework_database(self) -> str:
+        """Return the configured database required by framework Mongo savers."""
+
+        database = self.config.storage.mongodb.database
+        if not database:
+            raise ValueError("storage.mongodb.database is required for Mongo savers")
+        return database
 
     def bind_supervisor(
         self,

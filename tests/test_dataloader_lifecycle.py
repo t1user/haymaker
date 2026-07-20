@@ -1032,13 +1032,12 @@ async def test_manager_policy_flows_to_store_and_download_job(
     monkeypatch.setattr(dataloader.Manager, "headstamp", fake_headstamp)
     monkeypatch.setattr(dataloader, "HistorySink", lambda contract, store: FakeSink())
 
-    class FakeStoreFactory:
-        def arctic_store(self, library):
-            return FakeStore(library, "mongo")
+    def datastore_factory(library):
+        return FakeStore(library, "mongo")
 
     manager = dataloader.Manager(
         object(),
-        store_factory=FakeStoreFactory(),
+        datastore_factory=datastore_factory,
         bar_size="1 day",
         wts="MIDPOINT",
         now=datetime(2025, 1, 10, tzinfo=timezone.utc),

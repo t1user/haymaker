@@ -21,6 +21,7 @@ Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
 - shared `ib_insync.IB` client,
 - contract registry for qualified current/next contracts,
 - persisted strategy/order state machine,
+- private Mongo client lifecycle and health service,
 - controller for broker/state reconciliation and order gateway,
 - startup contract-detail initialization and streamer startup jobs.
 
@@ -40,7 +41,7 @@ starts its periodic sync, health-check, and daily UTC futures-roll timers once
 on the active event loop when `Controller.run()` first executes. Live and
 dataloader runtimes use the same application and supervisor lifecycle.
 
-The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count. `Manager` owns the run-scoped `now`, while contract selectors share a target-owned `FuturesSelectionPolicy`. The current supported dataloader backend is Arctic, with the library name derived from the data type and bar size.
+The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count, owns Mongo/Arctic composition, and injects datastore construction into `Manager`. `Manager` owns the run-scoped `now` and derives the library from data type and bar size, while contract selectors share a target-owned `FuturesSelectionPolicy`. Arctic is the only supported dataloader backend.
 
 The research package is intentionally separate from live execution. It works directly with pandas dataframes and NumPy/Numba kernels to validate signal timing, stops, synthetic data, and performance without depending on live `Atom` pipelines.
 
@@ -96,8 +97,9 @@ The research package is intentionally separate from live execution. It works dir
   the awaited `AsyncDataStore`, queued `QueuedDataSink`, and composition-only
   `FrameStoreProvider` protocols, ArcticStore, immutable construction-time
   symbol naming, futures readers, and deprecated store helpers.
-- `haymaker/databases.py`: runtime-owned `StoreFactory`, lazy MongoDB client,
-  datastore construction, paths, and health-check registration.
+- `haymaker/databases.py`: focused runtime-owned `MongoService` for lazy client
+  construction, initial ping, reuse, and health-check registration, plus the
+  private Arctic implementation of the narrow `FrameStoreProvider` contract.
 - `haymaker/blotter.py`, `saver.py`: explicitly configured transaction logging
   sinks such as CSV and Mongo-backed savers.
 - `haymaker/logging/`: centralized YAML and queue-listener lifecycle setup,
@@ -274,9 +276,10 @@ nested under `controller.startup`. Live storage temporarily accepts the unused
 `block_library`, `market_data_library`, and `dataframe_save_frequency` fields
 pending their removal in the next datastore configuration slice. Dataloader
 storage uses the narrower `DataloaderStorageSettings`, containing only a base
-directory and Mongo client arguments; `DataloaderRuntime` adapts it to the
-existing store factory. Runtime components receive their specific section or
-ready service and do not read a process-global configuration object.
+directory and Mongo client arguments. `DataloaderRuntime` passes the client
+arguments directly to its private `MongoService`; the base directory remains
+shared CLI logging infrastructure. Runtime components receive their specific
+section or ready service and do not read a process-global configuration object.
 Strategy-specific parameters remain ordinary Python data in the user module.
 
 Configuration precedence, from lowest to highest, is:

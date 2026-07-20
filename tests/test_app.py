@@ -12,6 +12,7 @@ from haymaker.app import App
 from haymaker.base import Atom
 from haymaker.config import LiveCommand, load_live_config
 from haymaker.contract_registry import ContractRegistry
+from haymaker.databases import MongoService
 from haymaker.runtime import InitData, LiveRuntime, RuntimeContext, StartupJobs
 from haymaker.streamers import Streamer
 from haymaker.supervisor import ConnectionSettings
@@ -92,6 +93,22 @@ def test_live_runtime_installs_injected_frame_store_provider(atom_runtime) -> No
     )
 
     assert runtime.context.frame_store_provider is atom_runtime.frame_store_provider
+
+
+def test_live_runtime_keeps_mongo_service_out_of_context(atom_runtime) -> None:
+    """Mongo lifecycle should remain private runtime infrastructure."""
+
+    mongo_service = MongoService({"host": "mongo.example"})
+    runtime = LiveRuntime(
+        live_config(),
+        ib=atom_runtime.ib,
+        mongo_service=mongo_service,
+        contract_registry=atom_runtime.contract_registry,
+        sm=atom_runtime.sm,
+    )
+
+    assert runtime.mongo_service is mongo_service
+    assert not hasattr(runtime.context, "mongo_service")
 
 
 def test_app_repr_avoids_duplicate_runtime_context(atom_runtime) -> None:

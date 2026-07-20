@@ -788,33 +788,39 @@ async def test_history_sink_does_not_mark_empty_series(contract):
     assert store.metadata_writes == []
 
 
-def test_manager_datastore_builds_async_arctic_store(monkeypatch, dataloader_module):
+def test_manager_datastore_builds_async_arctic_store(dataloader_module):
     """Manager should lazily build the only supported dataloader backend."""
 
     dataloader = dataloader_module
     created: dict[str, object] = {}
 
-    class FakeStoreFactory:
+    store = FakeAsyncStore()
+
+    def datastore_factory(library: str) -> FakeAsyncStore:
         """Capture store construction without opening Arctic."""
 
-        def arctic_store(self, library: str) -> object:
-            created["lib"] = library
-            created["host"] = "mongo"
-            return self
+        created["lib"] = library
+        return store
 
     manager = dataloader.Manager(
         object(),
-        store_factory=FakeStoreFactory(),
+        datastore_factory=datastore_factory,
         wts="TRADES",
         bar_size="30 secs",
     )
-    store = manager.datastore
+    result = manager.datastore
 
-    assert isinstance(store, FakeStoreFactory)
-    assert created == {
-        "lib": "TRADES_30_secs",
-        "host": "mongo",
-    }
+    assert result is store
+    assert created == {"lib": "TRADES_30_secs"}
+
+
+def test_manager_datastore_requires_explicit_persistence(dataloader_module):
+    """Manager should not construct hidden Mongo infrastructure."""
+
+    manager = dataloader_module.Manager(object())
+
+    with pytest.raises(RuntimeError, match="store or datastore_factory"):
+        _ = manager.datastore
 
 
 def test_heuristic_suppresses_repeated_short_pair_but_keeps_long_gap():

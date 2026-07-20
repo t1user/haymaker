@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import ib_insync as ibi
 import pytest
@@ -19,9 +20,7 @@ from haymaker.config import (
     parse_live_args,
 )
 from haymaker.config.loader import deep_merge, load_yaml
-from haymaker.config.settings import StorageSettings
 from haymaker.contract_registry import ContractRegistry
-from haymaker.databases import StoreFactory
 from haymaker.dataloader.contract_selectors import FuturesSelectionPolicy
 from haymaker.order_defaults import OrderDefaults
 from haymaker.supervisor import ConnectionSettings
@@ -83,8 +82,108 @@ def test_blotter_factory_rejects_unknown_saver_type() -> None:
     with pytest.raises(ValueError, match="csv or mongo"):
         blotter_factory(
             {"enabled": True, "saver": {"type": "unknown", "options": {}}},
-            StoreFactory(StorageSettings()),
+            base_directory="ib_data",
+            mongo_client=Mock(),
+            database="test_data",
         )
+
+
+def test_disabled_blotter_does_not_resolve_mongo_client() -> None:
+    mongo_client = Mock(side_effect=AssertionError("Mongo should remain lazy"))
+
+    assert (
+        blotter_factory(
+            {"enabled": False},
+            base_directory="ib_data",
+            mongo_client=mongo_client,
+            database=None,
+        )
+        is None
+    )
+    mongo_client.assert_not_called()
+
+
+def test_csv_blotter_receives_base_directory_without_resolving_mongo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saver = Mock()
+    blotter = Mock()
+    csv_saver = Mock(return_value=saver)
+    blotter_constructor = Mock(return_value=blotter)
+    mongo_client = Mock(side_effect=AssertionError("CSV should not use Mongo"))
+    monkeypatch.setattr("haymaker.blotter.CsvSaver", csv_saver)
+    monkeypatch.setattr("haymaker.blotter.Blotter", blotter_constructor)
+
+    result = blotter_factory(
+        {
+            "enabled": True,
+            "saver": {
+                "type": "csv",
+                "options": {"name": "trades", "folder": "blotter"},
+            },
+        },
+        base_directory="custom_data",
+        mongo_client=mongo_client,
+        database=None,
+    )
+
+    assert result is blotter
+    csv_saver.assert_called_once_with(
+        name="trades", folder="blotter", base_directory="custom_data"
+    )
+    blotter_constructor.assert_called_once_with(saver=saver)
+    mongo_client.assert_not_called()
+
+
+def test_mongo_blotter_requires_application_database() -> None:
+    mongo_client = Mock(side_effect=AssertionError("Database must fail first"))
+
+    with pytest.raises(ValueError, match="storage.mongodb.database"):
+        blotter_factory(
+            {
+                "enabled": True,
+                "saver": {
+                    "type": "mongo",
+                    "options": {"collection": "blotter"},
+                },
+            },
+            base_directory="ib_data",
+            mongo_client=mongo_client,
+            database=None,
+        )
+    mongo_client.assert_not_called()
+
+
+def test_mongo_blotter_receives_explicit_client_and_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = object()
+    saver = Mock()
+    blotter = Mock()
+    mongo_client = Mock(return_value=client)
+    mongo_saver = Mock(return_value=saver)
+    blotter_constructor = Mock(return_value=blotter)
+    monkeypatch.setattr("haymaker.blotter.MongoSaver", mongo_saver)
+    monkeypatch.setattr("haymaker.blotter.Blotter", blotter_constructor)
+
+    result = blotter_factory(
+        {
+            "enabled": True,
+            "saver": {
+                "type": "mongo",
+                "options": {"collection": "trades"},
+            },
+        },
+        base_directory="ib_data",
+        mongo_client=mongo_client,
+        database="framework",
+    )
+
+    assert result is blotter
+    mongo_saver.assert_called_once_with(
+        collection="trades", client=client, database="framework"
+    )
+    blotter_constructor.assert_called_once_with(saver=saver)
 
 
 def test_dataloader_defaults_are_profile_specific() -> None:
