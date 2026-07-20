@@ -195,7 +195,8 @@ class ArcticStore(AbstractBaseStore):
         self.lib = lib
         self.host = host
         self.db = Arctic(host)
-        self.db.initialize_library(lib)
+        if not self.db.library_exists(lib):
+            self.db.initialize_library(lib)
         self.store = self.db[lib]
 
     def write(

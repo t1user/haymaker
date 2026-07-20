@@ -108,6 +108,51 @@ def test_frame_store_provider_exposes_only_narrow_store_construction(
     assert not hasattr(provider, "store_factory")
 
 
+def test_arctic_store_initializes_a_shared_library_only_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Separate store wrappers should not repeatedly initialize one library."""
+
+    libraries: set[str] = set()
+    existence_checks: list[str] = []
+    initializations: list[str] = []
+    instances: list[object] = []
+    handles: list[object] = []
+
+    class FakeArctic:
+        """Track library lifecycle calls without opening MongoDB."""
+
+        def __init__(self, host: object) -> None:
+            self.host = host
+            instances.append(self)
+
+        def library_exists(self, library: str) -> bool:
+            existence_checks.append(library)
+            return library in libraries
+
+        def initialize_library(self, library: str) -> None:
+            initializations.append(library)
+            libraries.add(library)
+
+        def __getitem__(self, library: str) -> object:
+            assert library in libraries
+            handle = object()
+            handles.append(handle)
+            return handle
+
+    monkeypatch.setattr("haymaker.datastore.datastore.Arctic", FakeArctic)
+
+    first = ArcticStore("shared library", host="mongo.example")
+    second = ArcticStore("shared library", host="mongo.example")
+
+    assert existence_checks == ["shared_library", "shared_library"]
+    assert initializations == ["shared_library"]
+    assert instances == [first.db, second.db]
+    assert first.db is not second.db
+    assert handles == [first.store, second.store]
+    assert first.store is not second.store
+
+
 @pytest.mark.asyncio
 async def test_awaited_arctic_mutations_return_backend_results(
     monkeypatch: pytest.MonkeyPatch,
