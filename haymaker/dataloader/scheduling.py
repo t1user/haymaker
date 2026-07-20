@@ -32,6 +32,7 @@ class PlannedRange(NamedTuple):
     to_date: Union[date, datetime]
     kind: RangeKind
     gap_pattern: Optional["GapPattern"] = None
+    exhausts_update: bool = False
 
 
 class GapPattern(NamedTuple):
@@ -155,6 +156,43 @@ class UpdateRangePlan(BaseRangePlan):
         except TypeError:
             log.exception(f"{self.store.contract=} | {eon=} {self.store.to_date=}")
             raise
+
+    @property
+    def is_terminal(self) -> bool:
+        """Return whether this update ends at an exact past expiry."""
+
+        expiry = self.store.expiry
+        return expiry is not None and expiry < self.store.now
+
+    @property
+    def completes_without_request(self) -> bool:
+        """Return whether one intraday bar remains before past expiry."""
+
+        from_date = self.from_date
+        to_date = self.to_date
+        if (
+            not self.is_terminal
+            or self.store.update_exhausted
+            or not isinstance(from_date, datetime)
+            or not isinstance(to_date, datetime)
+        ):
+            return False
+        bar_interval = timedelta(seconds=duration_in_secs(self.store.bar_size))
+        return to_date - from_date <= bar_interval
+
+    def planned_ranges(self, kind: RangeKind) -> list[PlannedRange]:
+        """Return an update range unless past-expiry completion suppresses it."""
+
+        if kind != "update":
+            return super().planned_ranges(kind)
+        if self.is_terminal and (
+            self.store.update_exhausted or self.completes_without_request
+        ):
+            return []
+        ranges = super().planned_ranges(kind)
+        if ranges and self.is_terminal:
+            return [ranges[0]._replace(exhausts_update=True)]
+        return ranges
 
 
 @dataclass
@@ -291,12 +329,26 @@ class TaskPlanner:
             return self.continuous_future_ranges()
 
         ranges: list[PlannedRange] = []
-        ranges.extend(UpdateRangePlan(self.store, self.start).planned_ranges("update"))
+        ranges.extend(self.update_plan.planned_ranges("update"))
         if not self.store.backfill_exhausted and self.head is not None:
             ranges.extend(
                 BackfillRangePlan(self.store, self.start).planned_ranges("backfill")
             )
         return ranges
+
+    @property
+    def update_plan(self) -> UpdateRangePlan:
+        """Return update policy for the current store and planning boundary."""
+
+        return UpdateRangePlan(self.store, self.start)
+
+    @property
+    def completes_update_without_request(self) -> bool:
+        """Return whether local one-bar policy proves terminal completion."""
+
+        if _sec_type(self.store) == "CONTFUT":
+            return False
+        return self.update_plan.completes_without_request
 
     def continuous_future_ranges(self) -> list[PlannedRange]:
         """Return the one latest-ended range allowed for continuous futures."""

@@ -399,6 +399,14 @@ has stored data, the dataloader writes ``backfill_exhausted: true`` to that
 series metadata. Later runs skip older backfill for that series while still
 allowing updates and optional gap filling.
 
+When an update reaches the exact expiry of a contract that is already expired,
+the dataloader writes ``update_exhausted: true``. Later runs skip only the
+terminal update for that series; older backfill and optional gap filling remain
+eligible. For intraday data, if the stored endpoint is no more than one bar
+before exact past expiry, the dataloader records completion without spending an
+additional IB historical request. The marker is never used to suppress updates
+for live contracts, and missing metadata retains normal download behavior.
+
 Date Policy
 ===========
 
@@ -482,5 +490,7 @@ Operational Notes
 * Re-run the same settings file to update an existing library.
 * If IB returns no older backfill data for an existing series, future runs will
   honor ``backfill_exhausted: true`` metadata.
+* Expired series checked through exact expiry use ``update_exhausted: true`` to
+  avoid repeating the same terminal update request.
 * A full process stop does not write a separate checkpoint. The next process
    derives remaining work from the persisted datastore boundaries.

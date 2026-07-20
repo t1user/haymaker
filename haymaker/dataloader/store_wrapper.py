@@ -88,6 +88,12 @@ class AsyncStoreView:
         return self.metadata.get("backfill_exhausted") is True
 
     @property
+    def update_exhausted(self) -> bool:
+        """Return whether an expired series was checked through expiry."""
+
+        return self.metadata.get("update_exhausted") is True
+
+    @property
     def expiry(self) -> date | datetime | None:
         """Return precise contract expiry when available."""
 
@@ -136,3 +142,11 @@ class HistorySink:
         if existing is None or existing.empty:
             return None
         return self.store.write_metadata(self.contract, {"backfill_exhausted": True})
+
+    async def mark_update_exhausted(self) -> Any:
+        """Mark an expired series as checked through its upper boundary."""
+
+        existing = await self.store.read(self.contract)
+        if existing is None or existing.empty:
+            return None
+        return self.store.write_metadata(self.contract, {"update_exhausted": True})

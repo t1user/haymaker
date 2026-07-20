@@ -109,7 +109,12 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   proves historical data unavailable.
 - Other unavailable-data cases rely on IB responses and datastore metadata.
 - Missing metadata is never an error. `backfill_exhausted: true` suppresses only
-  older backfill; updates and gap filling remain eligible.
+  older backfill. `update_exhausted: true` suppresses only terminal updates for
+  contracts with exact expiry strictly before the run boundary; it never
+  suppresses live updates, backfill, or gap filling.
+- An intraday terminal update no more than one bar interval beyond the stored
+  endpoint is marked `update_exhausted` without an IB request. Longer terminal
+  ranges are marked only after their IB-backed range completes.
 - Continuous futures require an empty `endDateTime`, produce at most one
   latest-ended request range, and do not schedule internal gap fills.
 

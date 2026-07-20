@@ -549,6 +549,106 @@ async def test_download_job_does_not_mark_update_or_gap_exhausted(
         assert job.is_done()
 
 
+@pytest.mark.asyncio
+async def test_download_job_marks_terminal_update_only_after_completion(
+    dataloader_module,
+):
+    """Partial terminal updates must not persist completion metadata."""
+
+    dataloader = dataloader_module
+
+    class FakeSink:
+        def __init__(self):
+            self.writes = []
+            self.update_marks = 0
+
+        async def write(self, data):
+            self.writes.append(data)
+            return "version"
+
+        async def mark_update_exhausted(self):
+            self.update_marks += 1
+
+    def bars(timestamp):
+        return ibi.BarDataList(
+            [
+                ibi.BarData(
+                    date=timestamp,
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                )
+            ]
+        )
+
+    sink = FakeSink()
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=sink,
+        queue=[
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 1, tzinfo=timezone.utc),
+                datetime(2025, 1, 2, tzinfo=timezone.utc),
+                bar_size="30 secs",
+                kind="update",
+                exhausts_update=True,
+            )
+        ],
+        bar_size="30 secs",
+        save_every_chunks=10,
+    )
+
+    await job.save_chunk(bars(datetime(2025, 1, 1, 12, tzinfo=timezone.utc)))
+    assert sink.update_marks == 0
+
+    await job.save_chunk(bars(datetime(2025, 1, 1, tzinfo=timezone.utc)))
+
+    assert len(sink.writes) == 1
+    assert sink.update_marks == 1
+    assert job.is_done()
+
+
+@pytest.mark.asyncio
+async def test_download_job_marks_terminal_update_after_empty_response(
+    dataloader_module,
+):
+    """A terminal empty IB response should complete the expired update."""
+
+    dataloader = dataloader_module
+
+    class FakeSink:
+        def __init__(self):
+            self.update_marks = 0
+
+        async def write(self, data):
+            return "version"
+
+        async def mark_update_exhausted(self):
+            self.update_marks += 1
+
+    sink = FakeSink()
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=sink,
+        queue=[
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 1, tzinfo=timezone.utc),
+                datetime(2025, 1, 2, tzinfo=timezone.utc),
+                bar_size="30 secs",
+                kind="update",
+                exhausts_update=True,
+            )
+        ],
+        bar_size="30 secs",
+    )
+
+    await job.save_chunk([])
+
+    assert sink.update_marks == 1
+    assert job.is_done()
+
+
 def test_request_age_available_uses_run_scoped_now(dataloader_module):
     """Age validation should use the run snapshot supplied by the caller."""
 
@@ -818,6 +918,63 @@ async def test_update_only_job_does_not_request_headstamp(
 
 
 @pytest.mark.asyncio
+async def test_one_bar_past_expiry_marks_complete_without_request(
+    monkeypatch, dataloader_module
+):
+    """Manager should persist local terminal completion without broker work."""
+
+    dataloader = dataloader_module
+    contract = ibi.Future(
+        conId=123,
+        symbol="ES",
+        localSymbol="ESH5",
+        lastTradeDateOrContractMonth="20250102",
+    )
+    expiry = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    index = pd.DatetimeIndex([expiry - timedelta(seconds=30)])
+
+    class FakeStore:
+        def __init__(self):
+            self.metadata_writes = []
+
+        async def read(self, requested_contract):
+            return pd.DataFrame({"close": [1]}, index=index)
+
+        async def read_metadata(self, requested_contract):
+            return {"backfill_exhausted": True}
+
+        def write_metadata(self, requested_contract, metadata):
+            self.metadata_writes.append((requested_contract, metadata))
+            return "metadata-version"
+
+    class FakePacing:
+        def contract_timezone(self, requested_contract):
+            return None
+
+    async def fake_contracts(self):
+        yield contract
+
+    async def unexpected_headstamp(self, requested_contract):
+        raise AssertionError("head timestamp should not be requested")
+
+    monkeypatch.setattr(dataloader.Manager, "contracts", fake_contracts)
+    monkeypatch.setattr(dataloader.Manager, "headstamp", unexpected_headstamp)
+    store = FakeStore()
+    manager = dataloader.Manager(
+        object(),
+        store=store,
+        pacing=FakePacing(),
+        bar_size="30 secs",
+        now=datetime(2025, 1, 3, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(manager.jobs())
+
+    assert store.metadata_writes == [(contract, {"update_exhausted": True})]
+
+
+@pytest.mark.asyncio
 async def test_unavailable_small_bar_contract_skips_headstamp(
     monkeypatch, dataloader_module
 ):
@@ -923,7 +1080,10 @@ async def test_schedule_gap_mode_uses_matching_use_rth(dataloader_module):
         contract, FakeStore(), manager.now, manager.bar_size
     )
 
-    tasks = await manager.tasks(store, datetime(2025, 1, 1, 9, tzinfo=timezone.utc))
+    plan = await manager.download_plan(
+        store, datetime(2025, 1, 1, 9, tzinfo=timezone.utc)
+    )
+    tasks = plan.containers
 
     assert pacing.schedule_calls == [
         (contract, 2, datetime(2025, 1, 1, 10, 2, 30, tzinfo=timezone.utc), True)
@@ -987,7 +1147,7 @@ async def test_schedule_gap_mode_fails_when_schedule_empty(dataloader_module):
     )
 
     with pytest.raises(RuntimeError, match="No historical schedule"):
-        await manager.tasks(store, datetime(2025, 1, 1, 9, tzinfo=timezone.utc))
+        await manager.download_plan(store, datetime(2025, 1, 1, 9, tzinfo=timezone.utc))
 
 
 @pytest.mark.asyncio

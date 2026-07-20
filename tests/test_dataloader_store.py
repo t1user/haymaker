@@ -8,6 +8,7 @@ import pytest
 from haymaker.async_wrappers import QueueShutdownPolicy
 from haymaker.dataloader.scheduling import (
     GapCandidate,
+    GapPattern,
     PlannedRange,
     SessionRange,
     TaskPlanner,
@@ -351,6 +352,178 @@ async def test_task_planner_exhausted_backfill_without_update_has_no_range(
 
 
 @pytest.mark.asyncio
+async def test_task_planner_completes_one_intraday_bar_without_request():
+    """One bar before exact past expiry should be completed locally."""
+
+    contract = ibi.Future(localSymbol="ESH5", lastTradeDateOrContractMonth="20250102")
+    expiry = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    last_bar = expiry - timedelta(seconds=30)
+    data = pd.DataFrame({"close": [1]}, index=pd.DatetimeIndex([last_bar]))
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(data, metadata={"backfill_exhausted": True}),
+        datetime(2025, 1, 3, tzinfo=timezone.utc),
+        "30 secs",
+    )
+    planner = TaskPlanner(wrapper, None, max_lookback_days=None)
+
+    assert planner.completes_update_without_request is True
+    assert planner.planned_ranges() == []
+
+
+@pytest.mark.asyncio
+async def test_task_planner_tags_larger_past_expiry_update():
+    """A larger expired update should be requested and mark on completion."""
+
+    contract = ibi.Future(localSymbol="ESH5", lastTradeDateOrContractMonth="20250102")
+    last_bar = datetime(2025, 1, 1, 12, tzinfo=timezone.utc)
+    expiry = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    data = pd.DataFrame({"close": [1]}, index=pd.DatetimeIndex([last_bar]))
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(data, metadata={"backfill_exhausted": True}),
+        datetime(2025, 1, 3, tzinfo=timezone.utc),
+        "30 secs",
+    )
+
+    assert TaskPlanner(wrapper, None, max_lookback_days=None).planned_ranges() == [
+        PlannedRange(last_bar, expiry, "update", exhausts_update=True)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_uses_update_marker_only_after_expiry():
+    """Update metadata must never suppress a live contract update."""
+
+    contract = ibi.Future(localSymbol="ESM5", lastTradeDateOrContractMonth="20250103")
+    last_bar = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    data = pd.DataFrame({"close": [1]}, index=pd.DatetimeIndex([last_bar]))
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(
+            data,
+            metadata={"backfill_exhausted": True, "update_exhausted": True},
+        ),
+        now,
+        "30 secs",
+    )
+
+    assert wrapper.update_exhausted is True
+    assert TaskPlanner(wrapper, None, max_lookback_days=None).planned_ranges() == [
+        PlannedRange(last_bar, now, "update")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_update_marker_preserves_backfill():
+    """Past-expiry update completion should not suppress older backfill."""
+
+    contract = ibi.Future(localSymbol="ESH5", lastTradeDateOrContractMonth="20250102")
+    head = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    last_bar = datetime(2025, 1, 1, 12, tzinfo=timezone.utc)
+    data = pd.DataFrame({"close": [1]}, index=pd.DatetimeIndex([last_bar]))
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(data, metadata={"update_exhausted": True}),
+        datetime(2025, 1, 3, tzinfo=timezone.utc),
+        "30 secs",
+    )
+
+    assert TaskPlanner(wrapper, head, max_lookback_days=None).planned_ranges() == [
+        PlannedRange(head, last_bar, "backfill")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_update_marker_preserves_gap_filling():
+    """Past-expiry update completion should not suppress internal gaps."""
+
+    contract = ibi.Future(localSymbol="ESH5", lastTradeDateOrContractMonth="20250102")
+    index = pd.DatetimeIndex(
+        [
+            datetime(2025, 1, 1, 10, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 0, 30, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 2, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 10, 2, 30, tzinfo=timezone.utc),
+        ]
+    )
+    data = pd.DataFrame({"close": range(len(index))}, index=index)
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(
+            data,
+            metadata={"backfill_exhausted": True, "update_exhausted": True},
+        ),
+        datetime(2025, 1, 3, tzinfo=timezone.utc),
+        "30 secs",
+    )
+
+    assert TaskPlanner(
+        wrapper,
+        None,
+        max_lookback_days=None,
+        gap_fill_mode="heuristic",
+        timezone_name="UTC",
+    ).planned_ranges() == [
+        PlannedRange(
+            index[1],
+            index[3],
+            "gap",
+            GapPattern(index[1].time(), timedelta(minutes=1, seconds=30), "UTC"),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_does_not_exhaust_update_at_exact_expiry():
+    """Expiry equal to the run boundary is not strictly in the past."""
+
+    contract = ibi.Future(localSymbol="ESH5", lastTradeDateOrContractMonth="20250102")
+    last_bar = datetime(2025, 1, 1, 23, 59, 30, tzinfo=timezone.utc)
+    expiry = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    data = pd.DataFrame({"close": [1]}, index=pd.DatetimeIndex([last_bar]))
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(
+            data,
+            metadata={"backfill_exhausted": True, "update_exhausted": True},
+        ),
+        expiry,
+        "30 secs",
+    )
+    planner = TaskPlanner(wrapper, None, max_lookback_days=None)
+
+    assert planner.completes_update_without_request is False
+    assert planner.planned_ranges() == [PlannedRange(last_bar, expiry, "update")]
+
+
+@pytest.mark.asyncio
+async def test_task_planner_requests_one_daily_period_before_past_expiry():
+    """The local one-bar shortcut should remain intraday-only."""
+
+    contract = ibi.Future(localSymbol="ESH5", lastTradeDateOrContractMonth="20250102")
+    data = pd.DataFrame({"close": [1]}, index=pd.Index([date(2025, 1, 1)]))
+    wrapper = await AsyncStoreView.create(
+        contract,
+        FakeAsyncStore(data, metadata={"backfill_exhausted": True}),
+        date(2025, 1, 3),
+        "1 day",
+    )
+    planner = TaskPlanner(wrapper, None, max_lookback_days=None)
+
+    assert planner.completes_update_without_request is False
+    assert planner.planned_ranges() == [
+        PlannedRange(
+            date(2025, 1, 1),
+            date(2025, 1, 2),
+            "update",
+            exhausts_update=True,
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_gap_planning_preserves_execution_order(contract):
     """Heuristic gap planning should run update, backfill, then gaps."""
 
@@ -588,6 +761,23 @@ async def test_history_sink_marks_backfill_exhausted_for_existing_series(
 
 
 @pytest.mark.asyncio
+async def test_history_sink_marks_update_exhausted_for_existing_series(
+    contract, store_index
+):
+    """HistorySink should preserve metadata when marking terminal updates."""
+
+    data = pd.DataFrame({"close": [1]}, index=store_index[:1])
+    store = FakeAsyncStore(data, metadata={"up_to": store_index[0].isoformat()})
+    sink = HistorySink(contract, store)
+
+    version = await sink.mark_update_exhausted()
+
+    assert version == "metadata-version"
+    assert store.metadata_writes == [(contract, {"update_exhausted": True})]
+    assert store.metadata["up_to"] == store_index[0].isoformat()
+
+
+@pytest.mark.asyncio
 async def test_history_sink_does_not_mark_empty_series(contract):
     """Empty series should not be marked as exhausted without a data anchor."""
 
@@ -595,6 +785,7 @@ async def test_history_sink_does_not_mark_empty_series(contract):
     sink = HistorySink(contract, store)
 
     assert await sink.mark_backfill_exhausted() is None
+    assert await sink.mark_update_exhausted() is None
     assert store.metadata_writes == []
 
 

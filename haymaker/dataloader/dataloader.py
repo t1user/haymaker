@@ -228,6 +228,8 @@ class DownloadJob:
             range_complete = container.next_date is None or self.is_continuous_future
             if len(container.bars) >= self.save_every_chunks or range_complete:
                 await self.write_to_store(container)
+            if range_complete and container.exhausts_update:
+                await self._mark_update_exhausted()
             if self.is_continuous_future:
                 self.queue.pop(0)
         else:
@@ -243,8 +245,20 @@ class DownloadJob:
             await self.write_to_store(container)
             if container.kind == "backfill":
                 await self.sink.mark_backfill_exhausted()
+            elif container.exhausts_update:
+                await self._mark_update_exhausted()
             self.queue.pop(0)
             self._drop_typical_gap_containers(learned_gap_pattern)
+
+    async def _mark_update_exhausted(self) -> None:
+        """Persist completion after a terminal update range finishes."""
+
+        await self.sink.mark_update_exhausted()
+        log.debug(
+            "%s marked update_exhausted after completing its past-expiry "
+            "update range through IB.",
+            self,
+        )
 
     def _learn_empty_gap_pattern(self) -> GapPattern | None:
         """Record an empty gap-fill response and return its learned pattern."""
@@ -338,6 +352,8 @@ class DownloadContainer:
         kind: Download range kind used to distinguish backfill exhaustion from
             update and gap-fill misses.
         gap_pattern: Optional run-local pattern used by heuristic gap filling.
+        exhausts_update: Whether completing this range proves that an expired
+            series has no later data.
         bars: Downloaded chunks waiting for persistence.
     """
 
@@ -346,6 +362,7 @@ class DownloadContainer:
     bar_size: str = "30 secs"
     kind: RangeKind = "backfill"
     gap_pattern: GapPattern | None = None
+    exhausts_update: bool = False
     _next_date: datetime | date | None = field(init=False, repr=False)
     bars: list[ibi.BarDataList] = field(default_factory=list, repr=False)
 
@@ -400,6 +417,14 @@ class DownloadContainer:
     def clear(self) -> None:
         """Discard buffered chunks after successful persistence."""
         self.bars.clear()
+
+
+@dataclass
+class DownloadPlan:
+    """Carry broker request containers and local completion work."""
+
+    containers: list[DownloadContainer]
+    completes_update_without_request: bool = False
 
 
 @dataclass
@@ -517,23 +542,27 @@ class Manager:
                         yield contract
                         contract_pbar.update(1)
 
-    async def tasks(
+    async def download_plan(
         self, store: AsyncStoreView, headstamp: datetime | date | None
-    ) -> list[DownloadContainer]:
-        """Return planned download containers for one contract store view."""
+    ) -> DownloadPlan:
+        """Return broker work and local completion for one contract store view."""
 
         planner = self.task_planner(store, headstamp)
         planned_ranges = await self.planned_ranges(planner)
-        return [
-            DownloadContainer(
-                t.from_date,
-                t.to_date,
-                bar_size=self.bar_size,
-                kind=t.kind,
-                gap_pattern=t.gap_pattern,
-            )
-            for t in planned_ranges
-        ]
+        return DownloadPlan(
+            [
+                DownloadContainer(
+                    t.from_date,
+                    t.to_date,
+                    bar_size=self.bar_size,
+                    kind=t.kind,
+                    gap_pattern=t.gap_pattern,
+                    exhausts_update=t.exhausts_update,
+                )
+                for t in planned_ranges
+            ],
+            completes_update_without_request=(planner.completes_update_without_request),
+        )
 
     def task_planner(
         self, store: AsyncStoreView, headstamp: datetime | date | None
@@ -696,11 +725,19 @@ class Manager:
                 await self.headstamp(contract) if planner.needs_headstamp else None
             )
             sink = HistorySink(contract, self.datastore)
-            tasks = await self.tasks(store, headstamp)
+            plan = await self.download_plan(store, headstamp)
+            if plan.completes_update_without_request:
+                await sink.mark_update_exhausted()
+                log.debug(
+                    "Skipping final update request for %s: local policy determined "
+                    "that exact past expiry is no more than one intraday bar after "
+                    "the stored endpoint; marked update_exhausted.",
+                    contract.localSymbol or contract.symbol,
+                )
             new_job = DownloadJob(
                 contract,
                 sink,
-                tasks,
+                plan.containers,
                 bar_size=self.bar_size,
                 save_every_chunks=self.save_every_chunks,
                 gap_learner=self.gap_learner,
