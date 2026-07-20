@@ -53,7 +53,7 @@ class FakeAsyncStore:
 
         return self.metadata
 
-    def write_metadata(self, contract: ibi.Contract, metadata: dict) -> str:
+    async def async_write_metadata(self, contract: ibi.Contract, metadata: dict) -> str:
         """Record a metadata write and merge it into latest metadata."""
 
         self.metadata_writes.append((contract, metadata))

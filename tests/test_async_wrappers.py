@@ -80,6 +80,57 @@ async def test_make_async_raises_typeerror_on_non_callable():
 
 
 @pytest.mark.asyncio
+async def test_finish_on_cancel_waits_before_propagating_cancellation():
+    """A started side effect must settle before its caller is cancelled."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def operation() -> str:
+        started.set()
+        await release.wait()
+        finished.set()
+        return "done"
+
+    task = asyncio.create_task(async_wrappers.finish_on_cancel(operation()))
+    await started.wait()
+
+    task.cancel()
+    await asyncio.sleep(0)
+
+    assert not task.done()
+    assert not finished.is_set()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_finish_on_cancel_propagates_operation_failure():
+    """A protected operation failure must not be hidden by cancellation."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def operation() -> None:
+        started.set()
+        await release.wait()
+        raise RuntimeError("persistence failed")
+
+    task = asyncio.create_task(async_wrappers.finish_on_cancel(operation()))
+    await started.wait()
+    task.cancel()
+    release.set()
+
+    with pytest.raises(RuntimeError, match="persistence failed"):
+        await task
+
+
+@pytest.mark.asyncio
 async def test_fire_and_forget_schedules_task():
     results = []
 

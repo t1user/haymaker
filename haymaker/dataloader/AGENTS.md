@@ -132,11 +132,15 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   correctness boundaries.
 - Stop workers before the final flush so persistence cannot race an active
   download.
-- Dataloader Arctic stores use a dedicated `DRAIN` queue. All queued datastore
-  writes, including metadata, are critical and processing failures or drain
-  timeouts must propagate from orderly shutdown. The shared/default async
-  Arctic policy remains `DISCARD`; select the dataloader policy at store
-  construction without adding another async-store method.
+- `HistorySink` uses awaited dataframe and metadata mutations. Once an awaited
+  mutation starts, let its database call settle before propagating cancellation;
+  failures must surface at the await site. Apply one downloaded response as a
+  single cancellation-safe transition so successful persistence is followed by
+  buffer clearing, completion metadata, and range progression before restart.
+- Dataloader Arctic stores retain a dedicated `DRAIN` queue as transitional
+  protection for any queued datastore calls. The shared/default async Arctic
+  policy remains `DISCARD`; queued calls are only accepted at their call site
+  and rely on their configured shutdown policy for final handling.
 - Standalone Ctrl-C cancellation must finish the session flush before shared
   application shutdown drains datastore background queues. Do not restore
   `ib_insync.util.patchAsyncio()` in the CLI; nested-loop patching is for

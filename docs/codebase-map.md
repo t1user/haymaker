@@ -206,10 +206,14 @@ aggregation uses `DISCARD`.
 7. Downloaded chunks are buffered by range and passed to `HistorySink` at the
    configured chunk threshold or a correctness boundary such as range completion
    or session cleanup. `HistorySink` concatenates each batch with stored data and
-   writes a complete new version through the async datastore; Arctic owns final
-   cleaning and metadata updates. The returned first bar timestamp is validated
-   before it drives the next request boundary. The dataloader's dedicated
-   `DRAIN` queue makes all queued datastore writes part of critical shutdown.
+   writes a complete new version through the awaited datastore API; completion
+   metadata uses the same awaited mutation contract. An already-started mutation
+   and its buffer/range state transition finish before cancellation propagates,
+   preventing restart cleanup from submitting an overlapping rewrite. Arctic
+   owns final cleaning and metadata updates. The returned first bar timestamp is
+   validated before it drives the next request boundary. The dataloader's
+   dedicated `DRAIN` queue remains critical protection for queued datastore
+   calls.
 8. Supervisor recovery within the same process resumes in-memory active jobs
    before discovering new work. A full process stop writes no separate
    dataloader checkpoint; the next process rediscovers remaining work from

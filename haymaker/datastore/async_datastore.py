@@ -13,6 +13,7 @@ from haymaker.async_wrappers import (
     QueueRunner,
     QueueShutdownPolicy,
     SyncQueueRunner,
+    finish_on_cancel,
     make_async,
 )
 
@@ -75,12 +76,20 @@ class AsyncAbstractBaseStore(ABC):
         data: pd.DataFrame,
         meta: dict | None = None,
         upsert: bool = True,
-    ) -> None: ...
+    ) -> Any: ...
 
     @abstractmethod
     async def async_write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
-    ) -> None: ...
+    ) -> Any: ...
+
+    @abstractmethod
+    async def async_write_metadata(
+        self, symbol: str | ibi.Contract, meta: dict[str, Any]
+    ) -> Any:
+        """Write metadata and wait until the database operation has finished."""
+
+        ...
 
 
 class AsyncArcticStore(AsyncAbstractBaseStore):
@@ -137,8 +146,8 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
 
     async def async_write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
-    ) -> None:
-        await make_async(self.store.write, symbol, data, meta)
+    ) -> Any:
+        return await finish_on_cancel(make_async(self.store.write, symbol, data, meta))
 
     async def async_append(
         self,
@@ -146,8 +155,19 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         data: pd.DataFrame,
         meta: dict | None = None,
         upsert: bool = True,
-    ) -> None:
-        await make_async(self.store.append, symbol, data, meta, upsert)
+    ) -> Any:
+        return await finish_on_cancel(
+            make_async(self.store.append, symbol, data, meta, upsert)
+        )
+
+    async def async_write_metadata(
+        self, symbol: str | ibi.Contract, meta: dict[str, Any]
+    ) -> Any:
+        """Write metadata and wait until the database operation has finished."""
+
+        return await finish_on_cancel(
+            make_async(self.store.write_metadata, symbol, meta)
+        )
 
     async def read(
         self,

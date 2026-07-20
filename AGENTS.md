@@ -151,6 +151,10 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   failures or drain timeouts, while `DISCARD` is best effort and logs failures.
   State-save queues drain. Async Arctic stores default to `DISCARD`, while the
   dataloader selects a dedicated `DRAIN` queue for its queued datastore writes.
+  Awaited datastore mutations finish an already-started database call before
+  propagating cancellation. The dataloader uses awaited dataframe and metadata
+  mutations and completes each response's persistence and in-memory state
+  transition before a supervised restart can resume the job.
 - CLI entrypoints load framework configuration once. Live and dataloader
   configuration stay grouped by owning target where practical until that target
   constructs itself from its mapping. Controller one-run actions belong under

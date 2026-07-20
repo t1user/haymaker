@@ -22,7 +22,7 @@ import ib_insync as ibi
 import pandas as pd
 from tqdm import tqdm
 
-from haymaker.async_wrappers import QueueShutdownPolicy
+from haymaker.async_wrappers import QueueShutdownPolicy, finish_on_cancel
 from haymaker.config.settings import StorageSettings
 from haymaker.databases import StoreFactory
 from haymaker.datastore import AsyncAbstractBaseStore
@@ -213,7 +213,17 @@ class DownloadJob:
         *,
         empty_reason: str = "IB returned no bars",
     ) -> None:
-        """Buffer one response or stop the current range with an explicit reason."""
+        """Apply one response fully before propagating caller cancellation."""
+
+        await finish_on_cancel(self._save_chunk(data, empty_reason=empty_reason))
+
+    async def _save_chunk(
+        self,
+        data: ibi.BarDataList | None,
+        *,
+        empty_reason: str,
+    ) -> None:
+        """Buffer one response or stop its range with an explicit reason."""
 
         container = self._container
         if data:

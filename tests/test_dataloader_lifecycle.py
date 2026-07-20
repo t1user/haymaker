@@ -488,6 +488,182 @@ async def test_download_job_flushes_incomplete_batch_on_cleanup(dataloader_modul
 
 
 @pytest.mark.asyncio
+async def test_session_restart_waits_for_inflight_write_without_resubmitting(
+    dataloader_module,
+):
+    """Restart cleanup should finish one active write and not submit it twice."""
+
+    dataloader = dataloader_module
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class FakeSink:
+        def __init__(self):
+            self.writes = 0
+
+        async def write(self, data):
+            self.writes += 1
+            started.set()
+            await release.wait()
+            return "version"
+
+    class FakePacing:
+        async def historical_data(self, **kwargs):
+            return ibi.BarDataList(
+                [
+                    ibi.BarData(
+                        date=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                        open=1,
+                        high=1,
+                        low=1,
+                        close=1,
+                    )
+                ]
+            )
+
+    async def no_new_jobs():
+        if False:
+            yield
+
+    sink = FakeSink()
+    container = dataloader.DownloadContainer(
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        datetime(2025, 1, 2, tzinfo=timezone.utc),
+        bar_size="1 min",
+    )
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=sink,
+        queue=[container],
+        bar_size="1 min",
+    )
+    manager = SimpleNamespace(
+        active_jobs=[job],
+        jobs=no_new_jobs,
+        pacing=FakePacing(),
+        now=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        wts="TRADES",
+        use_rth=False,
+    )
+    session = dataloader.DataloaderSession(
+        object(), manager=manager, number_of_workers=1
+    )
+    run_task = asyncio.create_task(session.run())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    run_task.cancel()
+    await asyncio.sleep(0)
+
+    assert not run_task.done()
+    assert sink.writes == 1
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(run_task, timeout=1)
+
+    assert container.bars == []
+
+    resumed = dataloader.DataloaderSession(
+        object(), manager=manager, number_of_workers=1
+    )
+    await asyncio.wait_for(resumed.run(), timeout=1)
+
+    assert sink.writes == 1
+    assert job.is_done()
+
+
+@pytest.mark.asyncio
+async def test_download_job_finishes_marker_transition_before_cancellation(
+    dataloader_module,
+):
+    """A completion marker and range removal should settle before restart."""
+
+    dataloader = dataloader_module
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class FakeSink:
+        def __init__(self):
+            self.marked = 0
+
+        async def write(self, data):
+            raise AssertionError("empty response should not write dataframe data")
+
+        async def mark_backfill_exhausted(self):
+            self.marked += 1
+            started.set()
+            await release.wait()
+
+    sink = FakeSink()
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=sink,
+        queue=[
+            dataloader.DownloadContainer(
+                datetime(2025, 1, 1, tzinfo=timezone.utc),
+                datetime(2025, 1, 2, tzinfo=timezone.utc),
+                bar_size="1 min",
+                kind="backfill",
+            )
+        ],
+        bar_size="1 min",
+    )
+    save_task = asyncio.create_task(job.save_chunk([]))
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    save_task.cancel()
+    await asyncio.sleep(0)
+
+    assert not save_task.done()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(save_task, timeout=1)
+
+    assert sink.marked == 1
+    assert job.is_done()
+
+
+@pytest.mark.asyncio
+async def test_download_job_keeps_buffer_when_persistence_fails(dataloader_module):
+    """Failed persistence must leave downloaded bars available for retry."""
+
+    dataloader = dataloader_module
+
+    class FailingSink:
+        async def write(self, data):
+            raise RuntimeError("write failed")
+
+    container = dataloader.DownloadContainer(
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        datetime(2025, 1, 2, tzinfo=timezone.utc),
+        bar_size="1 min",
+    )
+    job = dataloader.DownloadJob(
+        FakeContract(),
+        sink=FailingSink(),
+        queue=[container],
+        bar_size="1 min",
+    )
+    bars = ibi.BarDataList(
+        [
+            ibi.BarData(
+                date=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                open=1,
+                high=1,
+                low=1,
+                close=1,
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        await job.save_chunk(bars)
+
+    assert container.bars == [bars]
+
+
+@pytest.mark.asyncio
 async def test_download_job_marks_backfill_exhausted_on_empty_backfill(
     dataloader_module,
 ):
@@ -1044,7 +1220,7 @@ async def test_one_bar_past_expiry_marks_complete_without_request(
         async def read_metadata(self, requested_contract):
             return {"backfill_exhausted": True}
 
-        def write_metadata(self, requested_contract, metadata):
+        async def async_write_metadata(self, requested_contract, metadata):
             self.metadata_writes.append((requested_contract, metadata))
             return "metadata-version"
 

@@ -353,6 +353,30 @@ async def make_async(fn: Callable[..., R], *args) -> R:
     return await _async_runner(fn, *args)
 
 
+async def finish_on_cancel(operation: Coroutine[Any, Any, R]) -> R:
+    """Finish a started operation before propagating caller cancellation.
+
+    Args:
+        operation: Coroutine whose side effects must settle once scheduled.
+
+    Returns:
+        The operation result when the caller is not cancelled.
+
+    Raises:
+        asyncio.CancelledError: After a successful operation when the caller was
+            cancelled while waiting.
+        Exception: The operation failure, including when cancellation was
+            already pending.
+    """
+
+    task = asyncio.create_task(operation)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
+
+
 def fire_and_forget(fn: Callable[..., Any], *args: Any) -> None:
     """
     Schedule sync callable to run asynchronously in a different thread

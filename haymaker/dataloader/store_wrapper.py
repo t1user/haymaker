@@ -141,7 +141,9 @@ class HistorySink:
         existing = await self.store.read(self.contract)
         if existing is None or existing.empty:
             return None
-        return self.store.write_metadata(self.contract, {"backfill_exhausted": True})
+        return await self.store.async_write_metadata(
+            self.contract, {"backfill_exhausted": True}
+        )
 
     async def mark_update_exhausted(self) -> Any:
         """Mark an expired series as checked through its upper boundary."""
@@ -149,4 +151,6 @@ class HistorySink:
         existing = await self.store.read(self.contract)
         if existing is None or existing.empty:
             return None
-        return self.store.write_metadata(self.contract, {"update_exhausted": True})
+        return await self.store.async_write_metadata(
+            self.contract, {"update_exhausted": True}
+        )

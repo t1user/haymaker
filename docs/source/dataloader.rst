@@ -351,10 +351,16 @@ Collections use Haymaker's default contract naming policy.
 Each save creates a complete new Arctic version of the series. The dataloader
 does not append fragments directly, so a saved version remains independently
 readable. ``save_every_chunks`` controls how frequently a long download creates
-these versions. The dataloader gives its Arctic write queue critical ``DRAIN``
-shutdown semantics: orderly shutdown waits for queued datastore writes,
-including metadata, and reports a queued-write failure or drain timeout instead
-of treating final work as best effort.
+these versions. Dataframe writes and completion-metadata updates are awaited:
+their calls return only after Arctic has completed the operation, and failures
+are reported where the write was requested. If cancellation arrives after a
+write starts, the dataloader finishes that write and its corresponding buffer
+or range update before allowing a supervised restart to continue.
+
+The dataloader also retains a dedicated Arctic queue with critical ``DRAIN``
+shutdown semantics for any queued datastore calls. Orderly shutdown reports a
+queued-write failure or drain timeout instead of treating that queued work as
+best effort.
 
 Read data back with the datastore API:
 
@@ -475,9 +481,10 @@ Re-running the same command plans remaining work again from the data already
 saved in Arctic.
 
 Pressing ``Ctrl-C`` requests an orderly supervisor stop. Active requests are
-cancelled, downloaded chunks are flushed, and queued datastore writes,
-including metadata, are drained before the process exits. Avoid sending a
-second forced interrupt while these final writes are being logged.
+cancelled, an already-started datastore mutation is allowed to settle,
+downloaded chunks are flushed, and any queued datastore writes are drained
+before the process exits. Avoid sending a second forced interrupt while these
+final writes are being logged.
 
 The run stops rather than continuing when it cannot safely plan or persist data,
 including these cases:

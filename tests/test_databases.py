@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 
+import pandas as pd
 import pytest
 
 from haymaker import databases
@@ -63,6 +64,76 @@ def test_database_name_is_required_only_for_savers() -> None:
 
     with pytest.raises(ValueError, match="database"):
         _ = factory.database
+
+
+@pytest.mark.asyncio
+async def test_awaited_arctic_mutations_return_backend_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Awaited mutations should finish inline and return backend results."""
+
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    class FakeArcticStore:
+        def __init__(self, lib, host, collection_namer) -> None:
+            self.lib = lib
+            self.host = host
+
+        def write(self, *args):
+            calls.append(("write", args))
+            return "write-version"
+
+        def append(self, *args):
+            calls.append(("append", args))
+            return "append-version"
+
+        def write_metadata(self, *args):
+            calls.append(("metadata", args))
+            return "metadata-version"
+
+    async def inline_make_async(func, *args):
+        return func(*args)
+
+    monkeypatch.setattr(AsyncArcticStore, "_sync_class", FakeArcticStore)
+    monkeypatch.setattr(
+        "haymaker.datastore.async_datastore.make_async", inline_make_async
+    )
+    store = AsyncArcticStore("awaited")
+    data = pd.DataFrame({"close": [1]})
+
+    assert await store.async_write("ES", data) == "write-version"
+    assert await store.async_append("ES", data) == "append-version"
+    assert (
+        await store.async_write_metadata("ES", {"complete": True}) == "metadata-version"
+    )
+    assert [name for name, _ in calls] == ["write", "append", "metadata"]
+
+
+@pytest.mark.asyncio
+async def test_awaited_metadata_failure_is_reported_at_call_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Awaited metadata writes should not defer failures until queue shutdown."""
+
+    class FailingArcticStore:
+        def __init__(self, lib, host, collection_namer) -> None:
+            self.lib = lib
+            self.host = host
+
+        def write_metadata(self, symbol, metadata) -> None:
+            raise RuntimeError("metadata write failed")
+
+    async def inline_make_async(func, *args):
+        return func(*args)
+
+    monkeypatch.setattr(AsyncArcticStore, "_sync_class", FailingArcticStore)
+    monkeypatch.setattr(
+        "haymaker.datastore.async_datastore.make_async", inline_make_async
+    )
+    store = AsyncArcticStore("awaited-failure")
+
+    with pytest.raises(RuntimeError, match="metadata write failed"):
+        await store.async_write_metadata("ES", {"complete": True})
 
 
 @pytest.mark.asyncio
