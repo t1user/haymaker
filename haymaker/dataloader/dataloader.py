@@ -472,9 +472,8 @@ class Manager:
     pacer_allowance_fraction: float = 1.0
     now: date | datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     active_jobs: list[DownloadJob] = field(default_factory=list, repr=False)
-    _initiated_contracts: set[ibi.Contract] = field(default_factory=set, repr=False)
+    _planned_contracts: set[ibi.Contract] = field(default_factory=set, repr=False)
     gap_learner: RunGapLearner = field(default_factory=RunGapLearner, repr=False)
-    new_job_generator: AsyncGenerator[DownloadJob, None] = field(init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, str):
@@ -505,7 +504,6 @@ class Manager:
                 no_restriction=self.pacer_no_restriction,
                 allowance_fraction=self.pacer_allowance_fraction,
             )
-        self.new_job_generator = self._job_generator()
 
     @property
     def datastore(self) -> AsyncAbstractBaseStore:
@@ -705,10 +703,16 @@ class Manager:
         )
 
     async def jobs(self) -> AsyncGenerator[DownloadJob, None]:
+        """Discover and register jobs not fully planned by an earlier run.
+
+        Cancellation leaves the current contract unregistered so a fresh
+        generator can retry it after a supervised reconnect. Constructed jobs
+        are registered as active before they are yielded to the producer.
+        """
+
         async for contract in self.contracts():
-            if contract in self._initiated_contracts:
+            if contract in self._planned_contracts:
                 continue
-            self._initiated_contracts.add(contract)
             store = await AsyncStoreView.create(
                 contract, self.datastore, self.now, self.bar_size
             )
@@ -720,6 +724,7 @@ class Manager:
                     contract.localSymbol or contract.symbol,
                     reason,
                 )
+                self._planned_contracts.add(contract)
                 continue
             headstamp = (
                 await self.headstamp(contract) if planner.needs_headstamp else None
@@ -744,12 +749,10 @@ class Manager:
             )
             if new_job.is_done():
                 log.debug(f"Skipping {new_job!s} - no need to download data.")
+                self._planned_contracts.add(contract)
                 continue
-            yield new_job
-
-    async def _job_generator(self) -> AsyncGenerator[DownloadJob, None]:
-        async for new_job in self.jobs():
             self.active_jobs.append(new_job)
+            self._planned_contracts.add(contract)
             yield new_job
 
     async def headstamp(self, contract: ibi.Contract) -> date | datetime:
@@ -926,13 +929,8 @@ class DataloaderSession:
 
         self.producer_state = "planning"
         log.debug("Will start queuing new jobs.")
-        while True:
-            try:
-                new_job = await anext(self.manager.new_job_generator)
-                await self._enqueue_job(queue, new_job, active=False)
-            except StopAsyncIteration:
-                log.debug("No more jobs!")
-                break
+        async for new_job in self.manager.jobs():
+            await self._enqueue_job(queue, new_job, active=False)
 
         self.producer_state = "finished"
         log.debug("Producer done!")

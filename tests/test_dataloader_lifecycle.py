@@ -202,7 +202,7 @@ async def test_session_producer_requeues_active_jobs_before_new_discovery(
     manager = SimpleNamespace(
         ib=None,
         active_jobs=[active_job],
-        new_job_generator=new_jobs(),
+        jobs=new_jobs,
         pacing=dataloader.RequestPacing(object()),
     )
     session = dataloader.DataloaderSession(object(), manager=manager)
@@ -215,8 +215,8 @@ async def test_session_producer_requeues_active_jobs_before_new_discovery(
 
 
 @pytest.mark.asyncio
-async def test_producer_reports_job_held_outside_full_queue(dataloader_module):
-    """Producer status should identify backpressure and its pending instrument."""
+async def test_producer_preserves_job_held_outside_full_queue(dataloader_module):
+    """A job blocked on queue backpressure should remain resumable."""
 
     dataloader = dataloader_module
 
@@ -229,15 +229,24 @@ async def test_producer_reports_job_held_outside_full_queue(dataloader_module):
 
     first = FakeJob("first")
     second = FakeJob("second")
+    active_jobs = []
+    discovery_complete = False
 
     async def new_jobs():
-        yield first
-        yield second
+        """Register jobs once before exposing them to the producer."""
+
+        nonlocal discovery_complete
+        if discovery_complete:
+            return
+        discovery_complete = True
+        for job in (first, second):
+            active_jobs.append(job)
+            yield job
 
     manager = SimpleNamespace(
         ib=None,
-        active_jobs=[],
-        new_job_generator=new_jobs(),
+        active_jobs=active_jobs,
+        jobs=new_jobs,
         pacing=dataloader.RequestPacing(object()),
     )
     session = dataloader.DataloaderSession(object(), manager=manager)
@@ -252,10 +261,18 @@ async def test_producer_reports_job_held_outside_full_queue(dataloader_module):
     assert session.producer_state == "blocked_on_full_queue"
     assert session.producer_pending_job == "second"
     assert list(session.queued_jobs.values()) == ["first"]
+    assert manager.active_jobs == [first, second]
 
     producer.cancel()
     with pytest.raises(asyncio.CancelledError):
         await producer
+
+    resumed_queue = asyncio.Queue(maxsize=2)
+    await session.producer(resumed_queue)
+
+    assert resumed_queue.get_nowait() is first
+    assert resumed_queue.get_nowait() is second
+    assert manager.active_jobs == [first, second]
 
 
 def test_dataloader_config_validates_pacer_allowance_fraction(
@@ -854,7 +871,7 @@ async def test_manager_policy_flows_to_store_and_download_job(
         now=datetime(2025, 1, 10, tzinfo=timezone.utc),
         max_lookback_days=120,
     )
-    job = await anext(manager._job_generator())
+    job = await anext(manager.jobs())
 
     assert created_stores == [("MIDPOINT_1_day", "mongo")]
     assert manager.bar_size == "1 day"
@@ -868,6 +885,90 @@ async def test_manager_policy_flows_to_store_and_download_job(
         == dataloader.helpers.DEFAULT_TARGET_BARS_PER_REQUEST
     )
     assert job.params["endDateTime"] == date(2025, 1, 10)
+    assert job in manager.active_jobs
+    assert contract in manager._planned_contracts
+
+
+@pytest.mark.asyncio
+async def test_cancelled_discovery_replays_incomplete_contracts(
+    monkeypatch, dataloader_module
+):
+    """A fresh discovery pass should resume at the interrupted contract."""
+
+    dataloader = dataloader_module
+    contracts = [FakeContract(), FakeContract(), FakeContract()]
+    for index, contract in enumerate(contracts, start=1):
+        contract.symbol = f"ES{index}"
+        contract.localSymbol = f"ES{index}Z5"
+
+    planning_second = asyncio.Event()
+    second_headstamp_calls = 0
+
+    class FakeStore:
+        """Provide empty persisted state for discovery planning."""
+
+        async def read(self, requested_contract):
+            """Return no stored dataframe for a known contract."""
+
+            assert requested_contract in contracts
+            return None
+
+        async def read_metadata(self, requested_contract):
+            """Return no stored metadata for a known contract."""
+
+            assert requested_contract in contracts
+            return {}
+
+    async def fake_contracts(self):
+        """Yield the same source contracts on every discovery pass."""
+
+        for contract in contracts:
+            yield contract
+
+    async def fake_headstamp(self, requested_contract):
+        """Block the first attempt to plan the second contract."""
+
+        nonlocal second_headstamp_calls
+        if requested_contract is contracts[1]:
+            second_headstamp_calls += 1
+            if second_headstamp_calls == 1:
+                planning_second.set()
+                await asyncio.Event().wait()
+        return datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(dataloader.Manager, "contracts", fake_contracts)
+    monkeypatch.setattr(dataloader.Manager, "headstamp", fake_headstamp)
+
+    manager = dataloader.Manager(
+        object(),
+        store=FakeStore(),
+        bar_size="1 day",
+        now=datetime(2025, 1, 10, tzinfo=timezone.utc),
+    )
+    interrupted_discovery = manager.jobs()
+    first_job = await anext(interrupted_discovery)
+    pending_job = asyncio.create_task(anext(interrupted_discovery))
+    await asyncio.wait_for(planning_second.wait(), timeout=1)
+
+    pending_job.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending_job
+
+    assert manager.active_jobs == [first_job]
+    assert contracts[0] in manager._planned_contracts
+    assert contracts[1] not in manager._planned_contracts
+    assert contracts[2] not in manager._planned_contracts
+
+    resumed_discovery = manager.jobs()
+    second_job = await anext(resumed_discovery)
+    third_job = await anext(resumed_discovery)
+    with pytest.raises(StopAsyncIteration):
+        await anext(resumed_discovery)
+
+    assert [job.contract for job in manager.active_jobs] == contracts
+    assert second_job.contract is contracts[1]
+    assert third_job.contract is contracts[2]
+    assert manager._planned_contracts == set(contracts)
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,11 @@ request, restart, and date-policy behavior with focused tests.
   cancellation, and final buffered-data flushing.
 - `Manager` owns source expansion, contract discovery, request policy, the
   run-scoped `now`, datastore construction, active jobs, and broker schedule
-  requests needed for planning.
+  requests needed for planning. Each session start obtains a fresh discovery
+  generator. A contract becomes planned only after it is conclusively skipped
+  or its constructed job is registered in `active_jobs`, so cancellation during
+  an awaited planning step leaves that contract eligible for discovery after a
+  reconnect.
 - `TaskPlanner` and the range-plan objects in `scheduling.py` are pure planning
   code. Keep IB calls out of them; obtain broker inputs in `Manager` and pass
   ordinary values into the planner.
@@ -137,9 +141,11 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   application shutdown drains datastore background queues. Do not restore
   `ib_insync.util.patchAsyncio()` in the CLI; nested-loop patching is for
   notebooks, not this standalone command.
-- A supervisor restart preserves active jobs in memory. A new process derives
-  remaining work from persisted datastore boundaries; there is no separate
-  checkpoint file.
+- A supervisor restart preserves active jobs in memory and queues those jobs
+  before starting a fresh discovery pass. The pass skips contracts already
+  planned in this process and retries the contract whose planning was
+  interrupted. A new process derives remaining work from persisted datastore
+  boundaries; there is no separate checkpoint file.
 - Arctic remains responsible for final sorting, duplicate removal, metadata,
   and collection naming. Do not normalize raw downloaded frames in
   `HistorySink`.

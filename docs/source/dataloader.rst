@@ -424,6 +424,19 @@ Connection And Pacing
 runs under the Haymaker connection supervisor. The supervisor reconnects the
 IB API socket but does not start, stop, or restart TWS/IB Gateway.
 
+When a socket outage causes a supervised workload restart, the existing
+dataloader session first queues its unfinished active jobs and then starts a
+fresh contract-discovery pass. Contracts whose planning completed earlier in
+the process are skipped. A contract interrupted while loading datastore state
+or awaiting broker inputs is not marked as planned, so it is discovered again
+after reconnection. Jobs are registered as active before they can block on the
+bounded producer queue.
+
+The dataloader does not request a whole-process restart merely because one
+historical request takes a long time. IB can legitimately throttle historical
+requests for extended periods; socket health and reconnection remain the
+supervisor's responsibility.
+
 There is no dataloader connection-mode setting. Configure the gateway address,
 port, and ``connection.client_id`` used by this standalone connection. The default client ID
 is ``1``; choose another value when that ID is already in use.
@@ -476,8 +489,9 @@ including these cases:
 
 IB connection failures are handled by the connection supervisor. During an
 orderly restart or shutdown, buffered chunks are saved before the session
-finishes. A forced process kill can lose only the chunks accumulated since the
-last threshold or range-completion save.
+finishes. After reconnection, active jobs resume before incomplete contract
+discovery is replayed. A forced process kill can lose only the chunks
+accumulated since the last threshold or range-completion save.
 
 Operational Notes
 =================
