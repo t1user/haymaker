@@ -200,19 +200,9 @@ def _optional_str(value: Any, path: str) -> str | None:
 
 
 def _parse_storage(data: Mapping[str, Any]) -> StorageSettings:
-    """Build validated persistence and filesystem settings."""
+    """Build validated live filesystem and Mongo settings."""
 
-    _reject_unknown(
-        data,
-        {
-            "base_directory",
-            "mongodb",
-            "block_library",
-            "market_data_library",
-            "dataframe_save_frequency",
-        },
-        "storage",
-    )
+    _reject_unknown(data, {"base_directory", "mongodb"}, "storage")
     mongo = _mapping(data.get("mongodb", {}), "storage.mongodb")
     _reject_unknown(mongo, {"client", "database"}, "storage.mongodb")
     client = _mapping(mongo.get("client", {}), "storage.mongodb.client")
@@ -223,17 +213,6 @@ def _parse_storage(data: Mapping[str, Any]) -> StorageSettings:
         mongodb=MongoSettings(
             client=client,
             database=_optional_str(mongo.get("database"), "storage.mongodb.database"),
-        ),
-        block_library=_optional_str(data.get("block_library"), "storage.block_library"),
-        market_data_library=_typed(
-            data.get("market_data_library", "market_data"),
-            str,
-            "storage.market_data_library",
-        ),
-        dataframe_save_frequency=_typed(
-            data.get("dataframe_save_frequency", 900),
-            int,
-            "storage.dataframe_save_frequency",
         ),
     )
 

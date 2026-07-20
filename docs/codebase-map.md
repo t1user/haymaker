@@ -272,14 +272,15 @@ The CLI assembles framework configuration once through
 `haymaker/config/loader.py`. Live and dataloader loading return `LiveConfig`
 or `DataloaderConfig`; sections remain mappings until the owning target or
 subsystem composition boundary constructs them. Controller one-run actions are
-nested under `controller.startup`. Live storage temporarily accepts the unused
-`block_library`, `market_data_library`, and `dataframe_save_frequency` fields
-pending their removal in the next datastore configuration slice. Dataloader
+nested under `controller.startup`. Live storage contains only the shared base
+directory, Mongo client arguments, and framework database name. Dataloader
 storage uses the narrower `DataloaderStorageSettings`, containing only a base
-directory and Mongo client arguments. `DataloaderRuntime` passes the client
-arguments directly to its private `MongoService`; the base directory remains
-shared CLI logging infrastructure. Runtime components receive their specific
-section or ready service and do not read a process-global configuration object.
+directory and Mongo client arguments. Dataframe library names are selected
+during strategy composition, and save frequency belongs to the consuming
+object. `DataloaderRuntime` passes its client arguments directly to its private
+`MongoService`; the base directory remains shared CLI logging infrastructure.
+Runtime components receive their specific section or ready service and do not
+read a process-global configuration object.
 Strategy-specific parameters remain ordinary Python data in the user module.
 
 Configuration precedence, from lowest to highest, is:

@@ -1,4 +1,4 @@
-"""Configuration aggregates and retained storage settings."""
+"""Configuration aggregates and storage settings."""
 
 from __future__ import annotations
 
@@ -31,13 +31,10 @@ class DataloaderStorageSettings:
 
 @dataclass(frozen=True)
 class StorageSettings:
-    """Filesystem, Mongo, and retained dataframe storage settings."""
+    """Filesystem and framework Mongo settings used by live execution."""
 
     base_directory: str = "ib_data"
     mongodb: MongoSettings = field(default_factory=MongoSettings)
-    block_library: str | None = None
-    market_data_library: str = "market_data"
-    dataframe_save_frequency: int = 900
 
 
 @dataclass(frozen=True)
@@ -49,7 +46,7 @@ class LiveConfig:
         logging: Logging setup and broker-log options.
         controller: Controller startup, reconciliation, and scheduling options.
         state_machine: State persistence and rejection options.
-        storage: Retained typed storage settings pending datastore refactoring.
+        storage: Filesystem and framework Mongo infrastructure settings.
         blotter: Blotter enablement and saver specification.
         orders: Default IB order fields.
         timeout: Default streamer timeout policy.

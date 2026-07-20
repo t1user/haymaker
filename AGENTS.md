@@ -172,10 +172,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   configuration stay grouped by owning target where practical until that target
   constructs itself from its mapping. Controller one-run actions belong under
   `controller.startup`. Logging and dataloader `download` remain user-facing
-  subsystem groups composed across closely related objects. Live storage
-  temporarily retains three unused dataframe-policy fields pending their
-  removal in the datastore configuration slice; dataloader storage contains
-  only `base_directory` and `mongodb.client`.
+  subsystem groups composed across closely related objects. Live storage contains
+  only `base_directory`, `mongodb.client`, and `mongodb.database`; dataloader
+  storage contains only `base_directory` and `mongodb.client`. Dataframe library
+  names and save frequency belong to strategy composition and consumer
+  constructors, not framework storage configuration.
   Bundled base profiles must enumerate supported settings, pin effective
   command defaults, and keep a concise inline comment after every setting.
   Environment variables may select a profile YAML file but must not directly

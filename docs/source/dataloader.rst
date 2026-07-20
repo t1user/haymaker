@@ -264,9 +264,10 @@ Common settings:
 
 ``storage.mongodb.client``
    Keyword arguments passed to ``pymongo.MongoClient``, such as ``host`` and
-   ``port``. These are the only Mongo settings used by the dataloader. Database,
-   library-name, and dataframe-save-frequency settings belong to other runtime
-   services and are rejected in the dataloader profile.
+   ``port``. These are the only Mongo settings used by the dataloader. The
+   framework database is live-only; library names and dataframe save frequency
+   belong to explicit consumer composition. Those paths are rejected in the
+   dataloader profile.
 
 Unknown keys in ``download``, ``pacing``, ``futures``, or ``storage`` are
 rejected. Worker and save counts must be positive integers,

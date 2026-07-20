@@ -152,8 +152,9 @@ closely related runtime objects.
    Save delay, Mongo collection names, and rejected-order limit.
 
 ``storage``
-   Base directory, Mongo client arguments and database, Arctic libraries, and
-   dataframe save frequency.
+   Base directory plus Mongo client arguments and the framework database name.
+   Dataframe library names and save frequency belong to strategy composition
+   and consumer constructors.
 
 ``blotter``
    Enablement and a safe built-in ``csv`` or ``mongo`` saver specification.
@@ -174,8 +175,9 @@ Dataloader Configuration
 
 Dataloader configuration shares the ``connection`` and ``logging`` section
 shapes with live execution. Its narrower ``storage`` section contains only
-``base_directory`` and ``mongodb.client``; live-only database, library, and
-dataframe-save settings are rejected.
+``base_directory`` and ``mongodb.client``. ``mongodb.database`` is live-only;
+dataframe library and save-frequency settings are not framework configuration.
+All of those unsupported paths are rejected.
 
 ``storage``
    Base directory and keyword arguments passed to ``pymongo.MongoClient``. The
@@ -235,6 +237,14 @@ removed. Common migrations include:
      - ``logging.directory``
    * - ``data_folder``
      - ``storage.base_directory``
+   * - ``storage.block_library``
+     - Select the library explicitly in the strategy's
+       ``FrameStoreProvider.queued_sink()`` call
+   * - ``storage.market_data_library``
+     - Select the library explicitly in the strategy's
+       ``FrameStoreProvider.datastore()`` call
+   * - ``storage.dataframe_save_frequency``
+     - Pass ``save_frequency`` to ``DfAggregator``
    * - ``barSize``
      - ``download.bar_size``
    * - ``wts``

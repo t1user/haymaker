@@ -15,6 +15,7 @@ from haymaker.config import (
     DataloaderCommand,
     DataloaderStorageSettings,
     LiveCommand,
+    StorageSettings,
     load_dataloader_config,
     load_live_config,
     parse_live_args,
@@ -66,6 +67,35 @@ def test_live_defaults_are_composed_by_target_objects() -> None:
     assert timeout.seconds == 300
     assert timeout.action == "restart"
     assert orders.open["algoParams"] == [ibi.TagValue("adaptivePriority", "Normal")]
+    assert isinstance(config.storage, StorageSettings)
+    assert config.storage.base_directory == "ib_data"
+    assert config.storage.mongodb.client == {"host": "localhost", "port": 27017}
+    assert config.storage.mongodb.database == "test_data"
+    assert not hasattr(config.storage, "block_library")
+    assert not hasattr(config.storage, "market_data_library")
+    assert not hasattr(config.storage, "dataframe_save_frequency")
+
+
+def test_live_accepts_filesystem_and_framework_mongo_settings() -> None:
+    """Retained live storage infrastructure should remain configurable."""
+
+    config = load_live_config(
+        live_command(
+            None,
+            ("storage.base_directory", "custom_data"),
+            ("storage.mongodb.client.host", "mongo.example"),
+            ("storage.mongodb.client.port", 27018),
+            ("storage.mongodb.database", "framework"),
+        ),
+        environ={},
+    )
+
+    assert config.storage.base_directory == "custom_data"
+    assert config.storage.mongodb.client == {
+        "host": "mongo.example",
+        "port": 27018,
+    }
+    assert config.storage.mongodb.database == "framework"
 
 
 def test_order_defaults_reject_invalid_order_fields_during_construction() -> None:
@@ -218,13 +248,28 @@ def test_dataloader_defaults_are_profile_specific() -> None:
         "storage.dataframe_save_frequency",
     ],
 )
-def test_dataloader_rejects_irrelevant_storage_settings(path: str) -> None:
-    """Dataloader configuration should reject live-only storage settings."""
+def test_dataloader_rejects_unsupported_storage_settings(path: str) -> None:
+    """Dataloader configuration should reject live-only or removed settings."""
 
     command = DataloaderCommand(None, ((path, "unused"),))
 
     with pytest.raises(ConfigError, match=path.rsplit(".", maxsplit=1)[-1]):
         load_dataloader_config(command, environ={})
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "storage.block_library",
+        "storage.market_data_library",
+        "storage.dataframe_save_frequency",
+    ],
+)
+def test_live_rejects_removed_dataframe_storage_settings(path: str) -> None:
+    """Removed consumer policy must not remain accepted as inert config."""
+
+    with pytest.raises(ConfigError, match=path.rsplit(".", maxsplit=1)[-1]):
+        load_live_config(live_command(None, (path, "unused")), environ={})
 
 
 def test_dataloader_accepts_its_filesystem_and_mongo_client_settings() -> None:
