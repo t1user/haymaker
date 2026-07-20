@@ -1,5 +1,7 @@
 """Tests for runtime-owned persistence services."""
 
+import asyncio
+
 from unittest.mock import MagicMock, Mock, call
 
 import ib_insync as ibi
@@ -7,7 +9,11 @@ import pandas as pd
 import pytest
 
 from haymaker import databases
-from haymaker.async_wrappers import QueueProcessingError, QueueShutdownPolicy
+from haymaker.async_wrappers import (
+    QueueProcessingError,
+    QueueShutdownPolicy,
+    SyncQueueRunner,
+)
 from haymaker.databases import MongoService, create_frame_store_provider
 from haymaker.datastore import (
     AbstractBaseStore,
@@ -347,3 +353,62 @@ async def test_queued_writes_keep_each_store_symbol_namer_isolated(
         alpha_store.symbol_namer = beta_namer  # type: ignore[misc]
     with pytest.raises(AttributeError):
         alpha_store.store.symbol_namer = beta_namer  # type: ignore[misc]
+
+
+@pytest.mark.asyncio
+async def test_shared_default_queue_keeps_store_symbol_namers_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default queued sinks must retain their own symbol-naming policies."""
+
+    writes: list[str] = []
+    writes_complete = asyncio.Event()
+
+    class RecordingArcticStore(ArcticStore):
+        """Record symbols produced by each immutable store configuration."""
+
+        def __init__(self, lib, host, symbol_namer) -> None:
+            AbstractBaseStore.__init__(self, symbol_namer)
+            self.lib = lib
+            self.host = host
+
+        def write(self, symbol, data, meta=None) -> str:
+            persisted_symbol = self._symbol(symbol)
+            writes.append(persisted_symbol)
+            if len(writes) == 3:
+                writes_complete.set()
+            return persisted_symbol
+
+    async def inline_to_thread(func, *args):
+        return func(*args)
+
+    def alpha_namer(contract: ibi.Contract) -> str:
+        return f"alpha_{contract.localSymbol}"
+
+    def beta_namer(contract: ibi.Contract) -> str:
+        return f"beta_{contract.localSymbol}"
+
+    shared_queue = SyncQueueRunner(
+        "shared-default-store-queue",
+        shutdown_policy=QueueShutdownPolicy.DISCARD,
+    )
+    monkeypatch.setattr(AsyncArcticStore, "_sync_class", RecordingArcticStore)
+    monkeypatch.setattr(AsyncArcticStore, "_queue", shared_queue)
+    monkeypatch.setattr("haymaker.async_wrappers.asyncio.to_thread", inline_to_thread)
+
+    alpha_store = AsyncArcticStore("block_data", symbol_namer=alpha_namer)
+    beta_store = AsyncArcticStore("block_data", symbol_namer=beta_namer)
+    contract = ibi.Future(localSymbol="NQH6")
+    data = pd.DataFrame({"close": [1]})
+
+    assert alpha_store._queue is beta_store._queue is shared_queue
+    assert alpha_store.shutdown_policy is QueueShutdownPolicy.DISCARD
+    assert beta_store.shutdown_policy is QueueShutdownPolicy.DISCARD
+
+    alpha_store.enqueue_write(contract, data)
+    beta_store.enqueue_write(contract, data)
+    alpha_store.enqueue_write(contract, data)
+    await asyncio.wait_for(writes_complete.wait(), timeout=1)
+    await shared_queue.close()
+
+    assert writes == ["alpha_NQH6", "beta_NQH6", "alpha_NQH6"]
