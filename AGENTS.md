@@ -155,6 +155,10 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   propagating cancellation. The dataloader uses awaited dataframe and metadata
   mutations and completes each response's persistence and in-memory state
   transition before a supervised restart can resume the job.
+- Datastore symbol naming is supplied when a store is constructed and is not
+  replaced afterward. Framework-provided naming policies are frozen, consumers
+  treat injected stores as fully configured, and dataframe blocks hold their
+  optional datastore dependency per instance rather than through class state.
 - CLI entrypoints load framework configuration once. Live and dataloader
   configuration stay grouped by owning target where practical until that target
   constructs itself from its mapping. Controller one-run actions belong under

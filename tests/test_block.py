@@ -11,7 +11,9 @@ from config import TEST_ROOT  # type: ignore
 from haymaker.base import ActiveNext
 from haymaker.base import Atom as BaseAtom
 from haymaker.block import AbstractBaseBlock, AbstractDfBlock
-from haymaker.datastore import CollectionNamerStrategySymbol
+from haymaker.config.settings import StorageSettings
+from haymaker.databases import StoreFactory
+from haymaker.datastore import AsyncAbstractBaseStore, CollectionNamerStrategySymbol
 
 
 @pytest.fixture
@@ -239,22 +241,52 @@ async def test_df_block_accepts_df(
     assert {k: v for k, v in output_atom.output.items() if k in last_row} == last_row
 
 
-def test_DfBlock_has_correct_collection_namer(atom_runtime):
+def test_df_block_runtime_store_is_constructed_with_strategy_namer(
+    atom_runtime, monkeypatch
+):
     class Block(AbstractDfBlock):
-
         def df(self, data):
             return pd.DataFrame(data)
 
-    Block.set_datastore(Mock())
+    store = Mock(spec=AsyncAbstractBaseStore)
+    factory = StoreFactory(StorageSettings(block_library="block_data"))
+    arctic_store = Mock(return_value=store)
+    monkeypatch.setattr(factory, "arctic_store", arctic_store)
+    atom_runtime.store_factory = factory
 
     block = Block("test_strategy", ibi.Future(symbol="NQ", exchange="CME"))
 
-    store = block._datastore
-
-    store.override_collection_namer.assert_called_once()
-    store.override_collection_namer.assert_called_once_with(
-        CollectionNamerStrategySymbol("test_strategy")
+    assert block._datastore is store
+    arctic_store.assert_called_once_with(
+        "block_data",
+        collection_namer=CollectionNamerStrategySymbol("test_strategy"),
     )
+
+
+def test_df_blocks_keep_explicit_datastores_isolated(atom_runtime, monkeypatch):
+    class Block(AbstractDfBlock):
+        def df(self, data):
+            return pd.DataFrame(data)
+
+    factory = Mock()
+    monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", factory)
+    first_store = Mock(spec=AsyncAbstractBaseStore)
+    second_store = Mock(spec=AsyncAbstractBaseStore)
+
+    first = Block(
+        "first",
+        ibi.Future(symbol="NQ", exchange="CME"),
+        datastore=first_store,
+    )
+    second = Block(
+        "second",
+        ibi.Future(symbol="ES", exchange="CME"),
+        datastore=second_store,
+    )
+
+    assert first.store is first_store
+    assert second.store is second_store
+    factory.assert_not_called()
 
 
 def test_next_correct(atom_runtime_factory) -> None:

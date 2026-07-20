@@ -127,6 +127,13 @@ Implementations
 
 Override :meth:`haymaker.block.AbstractDfBlock.df` when creating a concrete `AbstractDfBlock`.
 
+Pass a fully configured datastore through the keyword-only ``datastore``
+argument when a block needs an explicit persistence dependency. Configure its
+symbol naming when constructing the store, for example with
+:class:`haymaker.datastore.CollectionNamerStrategySymbol`; blocks do not mutate
+injected stores. When ``datastore`` is omitted, the configured runtime
+``block_library`` fallback remains available.
+
 Signal Processor
 ----------------
 

@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import cached_property, singledispatchmethod
-from typing import Any, ClassVar
+from typing import Any
 
 import ib_insync as ibi
 import pandas as pd
@@ -93,36 +93,39 @@ class AbstractBaseBlock(Atom, ABC):
 
 @dataclass
 class AbstractDfBlock(AbstractBaseBlock):
+    """Base dataframe strategy block with optional frame persistence.
+
+    Args:
+        datastore: Fully configured store for this block. When omitted, the
+            current runtime block-library default is retained for compatibility.
+    """
+
     strategy: str
     contract: ibi.Contract
-
-    datastore: ClassVar[AsyncAbstractBaseStore | None] = None
-
-    @classmethod
-    def set_datastore(cls, datastore: AsyncAbstractBaseStore) -> type[AbstractDfBlock]:
-        AbstractDfBlock.datastore = datastore
-        return cls
+    datastore: AsyncAbstractBaseStore | None = field(
+        default=None, kw_only=True, repr=False
+    )
 
     @cached_property
     def _datastore(self) -> AsyncAbstractBaseStore:
-        datastore: AsyncAbstractBaseStore
-        if self.datastore is None:
-            library = self.runtime.store_factory.settings.block_library
-            assert library, (
-                f"{self} cannot initialize datastore because block_data_library "
-                "was not given."
-            )
-            datastore = self.runtime.store_factory.arctic_store(library)
-        else:
-            datastore = self.datastore
-        datastore.override_collection_namer(
-            CollectionNamerStrategySymbol(self.strategy)
+        if self.datastore is not None:
+            return self.datastore
+
+        library = self.runtime.store_factory.settings.block_library
+        assert library, (
+            f"{self} cannot initialize datastore because block_data_library "
+            "was not given."
         )
-        return datastore
+        return self.runtime.store_factory.arctic_store(
+            library,
+            collection_namer=CollectionNamerStrategySymbol(self.strategy),
+        )
 
     @cached_property
     def store(self) -> None | AsyncAbstractBaseStore:
-        if self.runtime.store_factory.settings.block_library:
+        if self.datastore is not None:
+            return self._datastore
+        elif self.runtime.store_factory.settings.block_library:
             return self._datastore
         else:
             return None

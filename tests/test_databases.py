@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 
+import ib_insync as ibi
 import pandas as pd
 import pytest
 
@@ -9,7 +10,7 @@ from haymaker import databases
 from haymaker.async_wrappers import QueueProcessingError, QueueShutdownPolicy
 from haymaker.config.settings import MongoSettings, StorageSettings
 from haymaker.databases import StoreFactory
-from haymaker.datastore import AsyncArcticStore
+from haymaker.datastore import AbstractBaseStore, ArcticStore, AsyncArcticStore
 
 
 def storage_settings(**client: object) -> StorageSettings:
@@ -200,3 +201,62 @@ async def test_critical_arctic_store_propagates_queued_write_failure(
 
     with pytest.raises(QueueProcessingError, match="failed to process queued work"):
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_queued_writes_keep_each_store_symbol_namer_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Queued contract writes must use each store's construction-time namer."""
+
+    writes: dict[str, list[str]] = {"alpha": [], "beta": []}
+
+    class RecordingArcticStore(ArcticStore):
+        def __init__(self, lib, host, collection_namer) -> None:
+            AbstractBaseStore.__init__(self, collection_namer)
+            self.lib = lib
+            self.host = host
+
+        def write(self, symbol, data, meta=None) -> str:
+            persisted_symbol = self._symbol(symbol)
+            writes[self.lib].append(persisted_symbol)
+            return persisted_symbol
+
+    async def inline_to_thread(func, *args):
+        return func(*args)
+
+    def alpha_namer(contract: ibi.Contract) -> str:
+        return f"alpha_{contract.localSymbol}"
+
+    def beta_namer(contract: ibi.Contract) -> str:
+        return f"beta_{contract.localSymbol}"
+
+    monkeypatch.setattr(AsyncArcticStore, "_sync_class", RecordingArcticStore)
+    monkeypatch.setattr("haymaker.async_wrappers.asyncio.to_thread", inline_to_thread)
+
+    alpha_store = AsyncArcticStore(
+        "alpha",
+        collection_namer=alpha_namer,
+        shutdown_policy=QueueShutdownPolicy.DRAIN,
+    )
+    beta_store = AsyncArcticStore(
+        "beta",
+        collection_namer=beta_namer,
+        shutdown_policy=QueueShutdownPolicy.DRAIN,
+    )
+    contract = ibi.Future(localSymbol="NQH6")
+    data = pd.DataFrame({"close": [1]})
+
+    alpha_store.write(contract, data)
+    beta_store.write(contract, data)
+    await alpha_store.close()
+    await beta_store.close()
+
+    assert writes == {"alpha": ["alpha_NQH6"], "beta": ["beta_NQH6"]}
+    assert alpha_store.symbol_namer is alpha_namer
+    assert beta_store.symbol_namer is beta_namer
+    assert not hasattr(alpha_store, "override_collection_namer")
+    with pytest.raises(AttributeError):
+        alpha_store.symbol_namer = beta_namer  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        alpha_store.store.symbol_namer = beta_namer  # type: ignore[misc]

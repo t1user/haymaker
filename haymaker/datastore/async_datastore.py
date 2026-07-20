@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import ib_insync as ibi
 import pandas as pd
@@ -17,21 +17,14 @@ from haymaker.async_wrappers import (
     make_async,
 )
 
-from .datastore import AbstractBaseStore, ArcticStore
+from .collection_namer import SymbolNamer
+from .datastore import ArcticStore
 
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
 
 
 class AsyncAbstractBaseStore(ABC):
-
-    collection_namer: Callable[[ibi.Contract], str] = AbstractBaseStore.collection_namer
-
-    @abstractmethod
-    def override_collection_namer(
-        self, namer: Callable[[ibi.Contract], str]
-    ) -> Self: ...
-
     @abstractmethod
     def write(
         self, symbol: str | ibi.Contract, data: pd.DataFrame, meta: dict | None = None
@@ -103,7 +96,7 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
         self,
         lib: str,
         host: str | MongoClient = "localhost",
-        collection_namer: Callable[[ibi.Contract], str] | None = None,
+        collection_namer: SymbolNamer | None = None,
         shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DISCARD,
     ) -> None:
         self.store = self._sync_class(lib, host, collection_namer)
@@ -113,9 +106,11 @@ class AsyncArcticStore(AsyncAbstractBaseStore):
                 shutdown_policy=shutdown_policy,
             )
 
-    def override_collection_namer(self, collection_namer: Callable[..., str]) -> Self:
-        self.store.collection_namer = collection_namer
-        return self
+    @property
+    def symbol_namer(self) -> SymbolNamer:
+        """Return the wrapped store's construction-time naming policy."""
+
+        return self.store.symbol_namer
 
     def enqueue(self, fn: Callable[..., Any], *args) -> None:
         self._queue.enqueue(fn, *args)

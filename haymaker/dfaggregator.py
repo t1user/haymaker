@@ -60,9 +60,9 @@ class DfAggregator(Atom):
     -----
 
     * datastore: custom datastore can be passed, it needs to handle
-    naming contract collections in a manner that can be interpreted by
-    streamer; if nothing is passed, default :class:`AsyncArcticStore`
-    will be used
+    naming contract symbols in a manner that can be interpreted by
+    streamer. Injected stores must be fully configured; if nothing is
+    passed, a default :class:`AsyncArcticStore` will be used
 
     * save_frequency: how often data will be saved to datastore, zero
     means data will not be saved (which maybe useful for testing but
@@ -99,6 +99,9 @@ class DfAggregator(Atom):
 
     @property
     def store(self) -> AsyncAbstractBaseStore:
+        if self.datastore is not None:
+            return self.datastore
+
         assert (barSizeSetting := self._streamer_params.get("barSizeSetting")), (
             f"{self} cannot initialize "
             f" datastore because barSizeSetting is not defined"
@@ -113,9 +116,6 @@ class DfAggregator(Atom):
                 library,
                 collection_namer=CollectionNamerBarsizeSetting(barSizeSetting),
             )
-        self.datastore.override_collection_namer(
-            CollectionNamerBarsizeSetting(barSizeSetting)
-        )
         return self.datastore
 
     async def set_timer(self) -> None:

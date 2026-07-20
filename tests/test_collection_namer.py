@@ -1,8 +1,11 @@
+from dataclasses import FrozenInstanceError
+
 import ib_insync as ibi
 import pytest
 
 from haymaker.datastore import (
     CollectionNamerBarsizeSetting,
+    CollectionNamerStrategySymbol,
     simple_collection_namer,
 )
 
@@ -62,3 +65,15 @@ def test_namer_raises_if_used_with_non_contract():
     namer = CollectionNamerBarsizeSetting("30 secs")
     with pytest.raises(AssertionError):
         namer("NQ")
+
+
+@pytest.mark.parametrize(
+    "namer,field_name,new_value",
+    [
+        (CollectionNamerBarsizeSetting("30 secs"), "barSizeSetting", "1 hour"),
+        (CollectionNamerStrategySymbol("alpha"), "strategy", "beta"),
+    ],
+)
+def test_symbol_namers_are_immutable(namer, field_name, new_value):
+    with pytest.raises(FrozenInstanceError):
+        setattr(namer, field_name, new_value)

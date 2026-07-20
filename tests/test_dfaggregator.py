@@ -11,6 +11,7 @@ from sample_barDataList import sample_barDataList
 
 from haymaker.base import ActiveNext, Atom
 from haymaker.contract_registry import ContractRegistry
+from haymaker.datastore import AsyncAbstractBaseStore, CollectionNamerBarsizeSetting
 from haymaker.dfaggregator import DfAggregator, WrongStreamer, custom_bday
 from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
 
@@ -126,6 +127,31 @@ def test_params_extracted_from_streamer():
     assert aggregator._streamer_params.get("durationStr") == "1D"
     assert aggregator._streamer_params.get("barSizeSetting") == "30 secs"
     assert aggregator._streamer_params.get("whatToShow") == "TRADES"
+
+
+def test_injected_datastore_is_used_without_reconfiguration(atom_runtime, monkeypatch):
+    store = Mock(spec=AsyncAbstractBaseStore)
+    arctic_store = Mock()
+    monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", arctic_store)
+
+    aggregator = DfAggregator(datastore=store, save_frequency=0)
+
+    assert aggregator.store is store
+    arctic_store.assert_not_called()
+
+
+def test_default_datastore_is_constructed_with_barsize_namer(atom_runtime, monkeypatch):
+    store = Mock(spec=AsyncAbstractBaseStore)
+    arctic_store = Mock(return_value=store)
+    monkeypatch.setattr(atom_runtime.store_factory, "arctic_store", arctic_store)
+    aggregator = DfAggregator(save_frequency=0)
+    aggregator._streamer_params = {"barSizeSetting": "30 secs"}
+
+    assert aggregator.store is store
+    arctic_store.assert_called_once_with(
+        "market_data",
+        collection_namer=CollectionNamerBarsizeSetting("30 secs"),
+    )
 
 
 def test_expiry_from_contract():

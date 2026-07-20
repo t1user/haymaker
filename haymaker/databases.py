@@ -13,6 +13,7 @@ from pymongo.errors import ConfigurationError  # type: ignore
 
 from .async_wrappers import QueueShutdownPolicy
 from .config.settings import StorageSettings
+from .datastore.collection_namer import SymbolNamer
 
 if TYPE_CHECKING:
     from .datastore import AsyncArcticStore
@@ -77,7 +78,7 @@ class StoreFactory:
     def arctic_store(
         self,
         library: str,
-        collection_namer: Callable[..., str] | None = None,
+        collection_namer: SymbolNamer | None = None,
         shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DISCARD,
     ) -> AsyncArcticStore:
         """Construct an asynchronous Arctic store using the runtime client."""

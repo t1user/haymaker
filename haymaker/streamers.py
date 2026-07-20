@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
-from typing import Awaitable, ClassVar
+from typing import Awaitable, ClassVar, cast
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -144,6 +144,9 @@ class HistoricalDataStreamer(Streamer):
         ** if True, or a datastore is passed, last available datapoint
     will be ready from database and only newer data will be requested;
 
+        ** a passed datastore must be fully configured with the symbol
+    naming policy matching this streamer's bar size;
+
         ** if False - no data will be read from datastore, only from
     broker
 
@@ -218,15 +221,10 @@ class HistoricalDataStreamer(Streamer):
                 library,
                 collection_namer=CollectionNamerBarsizeSetting(self.barSizeSetting),
             )
-        elif (
-            getattr(self.datastore, "read") is not None
-            and getattr(self.datastore, "read_metadata") is not None
-            and getattr(self.datastore, "override_collection_namer") is not None
+        elif callable(getattr(self.datastore, "read", None)) and callable(
+            getattr(self.datastore, "read_metadata", None)
         ):
-            self.datastore.override_collection_namer(
-                CollectionNamerBarsizeSetting(self.barSizeSetting)
-            )
-            return self.datastore
+            return cast(AsyncAbstractBaseStore, self.datastore)
         else:
             raise ValueError(
                 f"datastore must be True, False or instance of async datastore, "

@@ -4,9 +4,8 @@ import logging
 
 # import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
 
 import ib_insync as ibi
 import pandas as pd
@@ -17,7 +16,7 @@ from arctic.store.versioned_item import VersionedItem  # type: ignore
 
 from haymaker.validators import bar_size_validator, wts_validator
 
-from .collection_namer import simple_collection_namer
+from .collection_namer import SymbolNamer, simple_collection_namer
 
 if TYPE_CHECKING:
     from pymongo import MongoClient  # type: ignore
@@ -33,13 +32,16 @@ class AbstractBaseStore(ABC):
     Datastore is for saving and reading pandas dataframes and a dict of metadata.
     """
 
-    collection_namer: Callable[[ibi.Contract], str] = staticmethod(
-        simple_collection_namer
-    )
+    def __init__(self, collection_namer: SymbolNamer | None = None) -> None:
+        """Configure the immutable symbol-naming policy for this store."""
 
-    def override_collection_namer(self, namer: Callable[[ibi.Contract], str]) -> Self:
-        self.collection_namer = namer
-        return self
+        self._symbol_namer = collection_namer or simple_collection_namer
+
+    @property
+    def symbol_namer(self) -> SymbolNamer:
+        """Return the symbol-naming policy fixed during construction."""
+
+        return self._symbol_namer
 
     @abstractmethod
     def write(
@@ -130,7 +132,7 @@ class AbstractBaseStore(ABC):
         Otherwise return the string passed.
         """
         if isinstance(sym, ibi.Contract):
-            return self.collection_namer(sym)
+            return self.symbol_namer(sym)
         else:
             return sym
 
@@ -180,7 +182,7 @@ class ArcticStore(AbstractBaseStore):
         self,
         lib: str,
         host: str | MongoClient = "localhost",
-        collection_namer: Callable[[ibi.Contract], str] | None = None,
+        collection_namer: SymbolNamer | None = None,
     ) -> None:
         """
         Library name is whatToShow + barSize, eg.
@@ -188,14 +190,13 @@ class ArcticStore(AbstractBaseStore):
         BID_ASK_1_hour
         MIDPOINT_30_secs
         """
+        super().__init__(collection_namer)
         lib = lib.replace(" ", "_")
         self.lib = lib
         self.host = host
         self.db = Arctic(host)
         self.db.initialize_library(lib)
         self.store = self.db[lib]
-        if collection_namer is not None:
-            self.collection_namer = collection_namer  # type: ignore
 
     def write(
         self,

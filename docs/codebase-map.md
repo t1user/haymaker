@@ -91,7 +91,9 @@ The research package is intentionally separate from live execution. It works dir
 
 ### Persistence and Logging
 
-- `haymaker/datastore/`: synchronous and asynchronous store abstractions, ArcticStore, collection naming, futures readers, and deprecated store helpers.
+- `haymaker/datastore/`: synchronous and asynchronous store abstractions,
+  ArcticStore, immutable construction-time symbol naming, futures readers, and
+  deprecated store helpers.
 - `haymaker/databases.py`: runtime-owned `StoreFactory`, lazy MongoDB client,
   datastore construction, paths, and health-check registration.
 - `haymaker/blotter.py`, `saver.py`: explicitly configured transaction logging
@@ -108,6 +110,13 @@ best-effort: failures are logged and pending final work is dropped. State saves
 use `DRAIN`; async Arctic stores default to `DISCARD`, but the dataloader gives
 its store a dedicated `DRAIN` queue for queued datastore writes. Transient
 aggregation uses `DISCARD`.
+
+Datastore symbol naming is fixed when each store wrapper is constructed.
+Framework-provided naming policies are frozen, stores expose the configured
+policy read-only, and consumers treat injected stores as fully configured.
+`AbstractDfBlock` holds persistence per instance; omitted stores temporarily
+retain the configured runtime `block_library` fallback pending the broader
+consumer-injection refactor.
 
 ### Dataloader
 

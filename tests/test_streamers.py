@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from sample_barDataList import sample_barDataList
 
+from haymaker.datastore import CollectionNamerBarsizeSetting
 from haymaker.streamers import (
     HistoricalDataStreamer,
     bar_filter,
@@ -85,9 +86,6 @@ class FakeStore:
 
     async def read_metadata(self, x, *y):
         return {}
-
-    def override_collection_namer(self, *args):
-        pass
 
 
 @pytest.fixture()
@@ -209,6 +207,10 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_True(mock_arctic_
         contract, 10000, "1 min", "TRADES", datastore=True
     )
     assert streamer._datastore == mock_arctic_store.return_value
+    mock_arctic_store.assert_called_once_with(
+        "market_data",
+        collection_namer=CollectionNamerBarsizeSetting("1 min"),
+    )
     assert await streamer.last_db_point() == df.index[-1]
 
     await streamer.sync_last_bar_date()
@@ -256,9 +258,6 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_datastore_given()
 
         async def read_metadata(self, symbol: ibi.Contract) -> dict:
             return {}
-
-        def override_collection_namer(self, *args):
-            pass
 
     fake_store = FakeStore()
 
