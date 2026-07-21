@@ -103,6 +103,17 @@ def test_order_defaults_reject_invalid_order_fields_during_construction() -> Non
         OrderDefaults.from_mapping({"open": {"notAnOrderField": True}})
 
 
+@pytest.mark.parametrize("oca_type", [1, 2, 3])
+def test_order_defaults_accept_ib_oca_types(oca_type: int) -> None:
+    assert OrderDefaults.from_mapping({"oca_type": oca_type}).oca_type == oca_type
+
+
+@pytest.mark.parametrize("oca_type", [0, 4, True, "2"])
+def test_order_defaults_reject_invalid_ib_oca_types(oca_type: object) -> None:
+    with pytest.raises(ValueError, match="must be one of: 1, 2, or 3"):
+        OrderDefaults.from_mapping({"oca_type": oca_type})
+
+
 def test_timeout_policy_rejects_unknown_action() -> None:
     with pytest.raises(ValueError, match="restart or log"):
         TimeoutPolicy.from_mapping({"action": "ignore"})

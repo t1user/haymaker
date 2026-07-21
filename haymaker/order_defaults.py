@@ -40,7 +40,14 @@ def _order_mapping(value: object, name: str) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class OrderDefaults:
-    """IB order defaults shared by execution models."""
+    """IB order defaults shared by execution models.
+
+    Attributes:
+        oca_type: IB OCA behavior. Permissible values are ``1`` to cancel all
+            remaining orders with overfill protection, ``2`` to reduce their
+            sizes proportionately with overfill protection, and ``3`` to
+            reduce their sizes proportionately without overfill protection.
+    """
 
     open: Mapping[str, Any] = field(default_factory=dict)
     close: Mapping[str, Any] = field(default_factory=dict)
@@ -64,6 +71,6 @@ class OrderDefaults:
             if name in options:
                 options[name] = _order_mapping(options[name], name)
         result = cls(**options)
-        if result.oca_type <= 0:
-            raise ValueError("orders.oca_type must be positive")
+        if type(result.oca_type) is not int or result.oca_type not in {1, 2, 3}:
+            raise ValueError("orders.oca_type must be one of: 1, 2, or 3")
         return result
