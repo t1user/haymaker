@@ -110,6 +110,20 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - Futures roll scheduling is app-lifetime behavior. Schedule the daily roll once
   for the app process, not per supervisor connection/workload cycle; reconnects
   and workload restarts must not create additional roll timers.
+- Futures contract roles are intentionally distinct. A selector's `ACTIVE` is
+  the current market-data and roll-reference contract, while `NEXT` is an
+  early entry candidate used by atoms such as strategy blocks to avoid opening
+  positions close to a roll. `Atom.which_contract` selects the role exposed by
+  that atom; it does not redefine which contract is ACTIVE. OPEN uses the
+  block-selected contract, CLOSE uses the strategy's persisted held contract
+  (`Strategy.active_contract`), and `FutureRoller` permits held contracts that
+  are either ACTIVE or NEXT and rolls holdings outside that set. A NEXT-only
+  change does not require market-data back-adjustment. Selectors are rebuilt on
+  each supervised workload start using one timezone-naive UTC timestamp, and
+  live operation relies on the IB-driven daily workload restarts to refresh
+  these roles. Strategy block collections use the root `contract.symbol`, not
+  expiry-specific `localSymbol`, so an early NEXT change does not split the
+  persisted strategy series.
 - IB/TWS connection outages, especially around a broker's daily restart period,
   are expected and should normally be recoverable. Do not treat a connection
   outage alone as an unsafe broker/local state; emergency trading disablement

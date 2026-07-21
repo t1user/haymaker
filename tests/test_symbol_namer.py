@@ -75,3 +75,9 @@ def test_namer_raises_if_used_with_non_contract():
 def test_symbol_namers_are_immutable(namer, field_name, new_value):
     with pytest.raises(FrozenInstanceError):
         setattr(namer, field_name, new_value)
+
+
+def test_strategy_symbol_namer_uses_root_symbol_not_local_symbol():
+    namer = StrategySymbolNamer("alpha", "20260721_1200")
+
+    assert namer(FUTURE_CONTRACT) == "alpha_NQ_20260721_1200"

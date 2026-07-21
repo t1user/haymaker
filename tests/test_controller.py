@@ -1499,6 +1499,33 @@ def test_future_roller_filters_declared_policy_and_warns_for_undeclared(
     ]
 
 
+def test_future_roller_holds_active_or_next_and_rolls_everything_else() -> None:
+    active = ibi.Future(conId=1, symbol="NG", exchange="NYMEX", localSymbol="NGQ26")
+    next_contract = ibi.Future(
+        conId=2, symbol="NG", exchange="NYMEX", localSymbol="NGU26"
+    )
+
+    class StrategyRegistry(dict):
+        def strategies_by_contract(self):
+            return {active: ["dt_NG"]}
+
+    strategies = StrategyRegistry(dt_NG=SimpleNamespace(position=-1))
+    contract_registry = SimpleNamespace(current_contracts={active, next_contract})
+    controller = cast(
+        Controller,
+        SimpleNamespace(
+            sm=SimpleNamespace(strategy=strategies),
+            contract_registry=contract_registry,
+        ),
+    )
+
+    assert FutureRoller(controller, {"dt_NG": True}).contracts_to_roll == set()
+
+    contract_registry.current_contracts = {next_contract}
+
+    assert FutureRoller(controller, {"dt_NG": True}).contracts_to_roll == {active}
+
+
 # def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):
 #     """TODO: This doesnt test anythin yet."""
 #     IB.orderStatusEvent.emit(456)

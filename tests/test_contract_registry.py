@@ -5,6 +5,7 @@ import ib_insync as ibi
 import pytest
 from contract_details_for_registry import blueprints, details
 
+import haymaker.contract_registry as contract_registry_module
 from haymaker.base import ActiveNext
 from haymaker.contract_registry import ContractRegistry
 from haymaker.contract_selector import FutureSelector
@@ -56,6 +57,26 @@ def test_reset_data(registry):
 
     registry.reset_data(details)
     assert len(registry.selectors) == len(blueprints)
+
+
+def test_reset_data_refreshes_selector_date_from_utc_clock(monkeypatch):
+    dates = iter((datetime(2026, 7, 20), datetime(2026, 7, 21)))
+    monkeypatch.setattr(
+        contract_registry_module,
+        "utc_now_naive",
+        lambda: next(dates),
+    )
+    registry = ContractRegistry()
+    for blueprint in blueprints:
+        registry.register_blueprint(blueprint)
+
+    registry.reset_data(details)
+    first_dates = {selector.today for selector in registry.selectors}
+    registry.reset_data(details)
+    second_dates = {selector.today for selector in registry.selectors}
+
+    assert first_dates == {datetime(2026, 7, 20)}
+    assert second_dates == {datetime(2026, 7, 21)}
 
 
 @pytest.mark.parametrize("contract_index", [0, 1, 2])

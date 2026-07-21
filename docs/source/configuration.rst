@@ -167,8 +167,12 @@ closely related runtime objects.
    Default streamer timeout in seconds and the ``restart`` or ``log`` action.
 
 ``futures``
-   ``futures_roll_bdays`` and ``futures_roll_margin_bdays`` offsets used to
-   select and roll live futures contracts.
+   ``futures_roll_bdays`` controls when the selector advances ``ACTIVE`` and
+   positions outside the allowed ``ACTIVE``/``NEXT`` set become eligible for
+   rolling. ``futures_roll_margin_bdays`` advances ``NEXT`` earlier so strategy
+   atoms may route new entries away from the expiring contract while market
+   data and existing positions remain on ``ACTIVE``. Selector dates are
+   evaluated as timezone-naive UTC and refreshed on supervised workload start.
 
 Dataloader Configuration
 ========================

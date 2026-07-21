@@ -329,8 +329,8 @@ class Atom:
         rolling.  Actual position rolling is taken care of by
         `Controller` object.
         """
-        log.warning(
-            f"{self!s} contract changed: {old_contract.localSymbol} "
+        log.info(
+            f"{self!s} {self.which_contract!s} contract changed: {old_contract.localSymbol} "
             f"--> {new_contract.localSymbol}"
         )
         self._roll_contract_data = ContractRollData(old_contract, new_contract)

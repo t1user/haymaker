@@ -255,6 +255,7 @@ class BarAggregator(Atom):
         )
         self._future_adjust_flag = True
         super().onContractChanged(old_contract, new_contract)
+        log.warning(f"{self!s} will back-adjust data for {old_contract}")
 
     @cached_property
     def _id(self) -> int:

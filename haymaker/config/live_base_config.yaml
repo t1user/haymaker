@@ -86,5 +86,5 @@ timeout: # Default stale-stream timeout policy.
   action: restart # Timeout response: restart or log.
 
 futures: # Live futures contract selection offsets.
-  futures_roll_bdays: 3 # Business days before expiry to select the next contract.
-  futures_roll_margin_bdays: 3 # Business-day margin around the roll boundary.
+  futures_roll_bdays: 3 # Business days before expiry when ACTIVE advances.
+  futures_roll_margin_bdays: 3 # Days before ACTIVE roll when NEXT advances for entries.

@@ -38,8 +38,10 @@ class BarSizeSymbolNamer:
 
 @dataclass(frozen=True)
 class StrategySymbolNamer:
+    """Build one run-scoped collection name per strategy and root symbol."""
+
     strategy: str
     _timestamp: str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
 
     def __call__(self, contract: ibi.Contract) -> str:
-        return f"{self.strategy}_{contract.localSymbol}_{self._timestamp}"
+        return f"{self.strategy}_{contract.symbol}_{self._timestamp}"

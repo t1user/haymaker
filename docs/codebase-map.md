@@ -198,9 +198,18 @@ runtime configuration.
    Non-retryable unsafe states raise `SyncBrokenStateError`, which disables
    trading immediately. A failed controller run still permits startup jobs to
    provide monitoring while outbound trading remains disabled.
-5. `StartupJobs` downloads contract details, updates the contract registry, logs restart state, resets timeouts, and runs all registered streamers.
+5. `StartupJobs` downloads contract details, rebuilds contract selectors from
+   one timezone-naive UTC timestamp, logs restart state, resets timeouts, and
+   runs all registered streamers. Selector `ACTIVE` identifies the current
+   market-data and roll-reference contract; `NEXT` is an early new-entry
+   candidate. Existing positions retain their persisted held contract, and the
+   futures roller acts only after that contract leaves the allowed
+   `ACTIVE`/`NEXT` set.
 6. Streamers emit market data into strategy blocks.
-7. Blocks add strategy fields and emit dictionaries.
+7. Blocks add strategy fields and emit dictionaries. A block may select `NEXT`
+   for new entries while consuming `ACTIVE` prices; persisted strategy-frame
+   collections use the root contract symbol so this routing change does not
+   split the series by expiry-specific local symbol.
 8. Signal processors create `action`, `target_position`, and existing-position context.
 9. Portfolio sizing adds `amount`.
 10. Execution models create IB orders and call `Controller.trade()`.

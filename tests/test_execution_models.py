@@ -246,16 +246,19 @@ def test_BaseExecModel_open_signal_generates_order(objects):
     controller, source, output_data = objects
     em = BaseExecModel()
     source += em
+    contract = ibi.ContFuture("NQ", "CME")
     data = {
         "signal": 1,
         "action": "OPEN",
         "amount": 1,
         "target_position": 1,
-        "contract": ibi.ContFuture("NQ", "CME"),
+        "contract": contract,
     }
     source.startEvent.emit({"strategy": "xxx"})
     source.dataEvent.emit(data)
     assert output_data.order.action == "BUY"
+    assert output_data.contract == contract
+    assert em.data.active_contract == contract
 
 
 def test_BaseExecModel_no_close_order_without_position(objects):
@@ -319,6 +322,51 @@ def test_BaseExecModel_close_signal_generates_order(objects):
     }
     source.dataEvent.emit(data_close)
     assert data.order.action == "SELL"
+
+
+def test_BaseExecModel_close_uses_held_contract_when_entry_contract_changed(objects):
+    controller, source, data = objects
+    held_contract = ibi.Future(
+        conId=1,
+        symbol="NG",
+        lastTradeDateOrContractMonth="20260729",
+        exchange="NYMEX",
+        localSymbol="NGQ26",
+    )
+    next_contract = ibi.Future(
+        conId=2,
+        symbol="NG",
+        lastTradeDateOrContractMonth="20260827",
+        exchange="NYMEX",
+        localSymbol="NGU26",
+    )
+    em = BaseExecModel()
+    em.onStart({"strategy": "dt_NG"})
+    source += em
+
+    with patch.object(controller, "verify_market_open", return_value=True):
+        source.dataEvent.emit(
+            {
+                "signal": -1,
+                "action": "OPEN",
+                "amount": 1,
+                "target_position": -1,
+                "contract": held_contract,
+            }
+        )
+        em.data.position = -1
+        source.dataEvent.emit(
+            {
+                "signal": 1,
+                "action": "CLOSE",
+                "amount": 1,
+                "target_position": 0,
+                "contract": next_contract,
+            }
+        )
+
+    assert em.data.active_contract == held_contract
+    assert data.contract == held_contract
 
 
 def test_passed_order_kwargs_update_defaults(Atom, objects):

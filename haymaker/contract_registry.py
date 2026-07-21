@@ -6,7 +6,11 @@ from typing import TypeAlias
 
 import ib_insync as ibi
 
-from .contract_selector import AbstractBaseContractSelector, selector_factory
+from .contract_selector import (
+    AbstractBaseContractSelector,
+    selector_factory,
+    utc_now_naive,
+)
 from .details_processor import Details
 from .enums import ActiveNext
 from .misc import general_to_specific_contract_class
@@ -45,7 +49,7 @@ class ContractRegistry:
 
     @property
     def _today(self) -> datetime:
-        return self.today or datetime.now()
+        return self.today or utc_now_naive()
 
     def register_blueprint(self, blueprint: Blueprint) -> None:
         self.__blueprints[self.hash_contract(blueprint)] = blueprint
@@ -74,13 +78,14 @@ class ContractRegistry:
                 return None
 
     def reset_data(self, input_details: list[list[ibi.ContractDetails]]) -> None:
+        today = self._today
 
         for blueprint, details_list in zip(self.__blueprints, input_details):
             self.__selectors[blueprint] = selector_factory(
                 details_list,
                 self.futures_roll_bdays,
                 self.futures_roll_margin_bdays,
-                today=self._today,
+                today=today,
             )
 
             for details in details_list:

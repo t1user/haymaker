@@ -1193,16 +1193,16 @@ class TestLifecycle:
         registry = RollingRegistry()
         atom_runtime_factory(contract_registry=registry)
         atom = AtomWithContract(ibi.Future(symbol="ES", exchange="CME"))
-        caplog.set_level(logging.WARNING)
+        atom.which_contract = ActiveNext.NEXT
+        caplog.set_level(logging.INFO)
 
         atom.onStart({})
         registry.current_contract = new_contract
         atom.onStart({})
 
-        assert atom._roll_contract_data == ContractRollData(
-            old_contract, new_contract
-        )
-        assert "contract changed: ESH4 --> ESM4" in caplog.text
+        assert atom._roll_contract_data == ContractRollData(old_contract, new_contract)
+        assert caplog.records[-1].levelno == logging.INFO
+        assert caplog.messages[-1].endswith("NEXT contract changed: ESH4 --> ESM4")
 
 
 class Test_data_property:
