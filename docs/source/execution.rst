@@ -1,295 +1,311 @@
-***************
-Execution Module
-***************
+*****************
+Live Components
+*****************
 
-.. toctree::
-    :maxdepth: 3
+Haymaker strategies are ordinary Python modules that compose
+:class:`~haymaker.base.Atom` objects after the live runtime has installed a
+ready ``RuntimeContext``. ``Atom`` is intentionally
+general: custom Atoms may pass any object. The built-in trading toolbox is
+available from ``haymaker.components`` and uses structured immutable
+messages.
 
-Haymaker trading algorithms consist of a series of Atom components, each implementing a step in a trading algorithm. These components are piped together in an event-driven fashion.
+Atom composition
+================
 
-Common trading steps include:
+Every concrete Atom implements ``onData`` and explicitly emits through
+``dataEvent``. Base ``onData`` raises ``NotImplementedError``. Startup remains
+synchronous and receives arbitrary mutable data through
+``onStart(data, source)``; Haymaker does not add strategy names, timestamps, or
+reserved fields.
 
-* Receiving price data.
-* Processing, aggregating, or filtering data.
-* Generating trading signals.
-* Managing the portfolio.
-* Controlling risk.
-* Managing execution.
+``source.connect(*targets)`` validates every target before changing any event
+connections. A component overrides ``validate_source`` only when an upstream
+class is structurally incompatible. Value-dependent checks happen in
+``onData``.
 
-Each processing component (called an "Atom") inherits from :class:`haymaker.base.Atom`.
-
-Atom Object
-===========
+Fan-out sends the same object reference to every branch. Immutable standard
+messages are safe to share. A custom branch that mutates its input must copy it
+first.
 
 .. autoclass:: haymaker.base.Atom
-    :members:
-
-Auxiliary Objects
------------------
+   :members: connect, pipe, union, validate_source, onStart, onData, onFeedback
 
 .. autoclass:: haymaker.base.Pipe
-    :members:
-
-.. autoclass:: haymaker.base.Details
-    :members:
-
-Strategy Building Components
-============================
-
-Building on :class:`haymaker.base.Atom`, Haymaker offers skeletons of several components addressing typical requirements in building trading strategies:
-
-* **Streamer**: Connects to the broker and pipes market data.
-* **Aggregator**: Custom aggregation or processing of market data before signal generation.
-* **Block**: Generates trading signals; this is the core building block of strategies (like blocks in a house).
-
-  .. note:: If you have an idea for a better name, email me! :)
-
-* **Signal Processor**: Filters or processes signals based on strategy state or auxiliary data, determining whether signals should trigger orders.
-* **Portfolio**: A global object that receives processed signals and translates them into allocations (e.g., amounts of instruments to trade). It uses data like account value, holdings, volatility, risk targets, and concentration limits.
-* **Execution Model**: Issues actual broker orders based on target instrument amounts.
-
-Below is a review of how to use pre-built component modules:
-
-Dataframe Persistence
----------------------
-
-Configure dataframe persistence while building the strategy module. Use
-``base.Atom.runtime.frame_store_provider`` and supply the Arctic library name
-and symbol-naming policy for each datastore.
-
-Choose the provider method according to how the datastore will be used:
-
-``datastore()``
-   Use the returned :class:`haymaker.datastore.AsyncDataStore` with
-   :class:`haymaker.streamers.HistoricalDataStreamer` and
-   :class:`haymaker.dfaggregator.DfAggregator`. Its methods are asynchronous;
-   after a mutation returns from ``await``, the datastore operation has
-   completed and any failure has been reported at that call.
-
-``queued_sink()``
-   Use the returned :class:`haymaker.datastore.QueuedDataSink` for optional
-   dataframe-block output. Its ``enqueue_*`` methods return after accepting the
-   write rather than after saving it. These writes are best-effort and pending
-   writes may be discarded during shutdown.
-
-Choose the symbol namer when constructing each store. Use
-:class:`haymaker.datastore.BarSizeSymbolNamer` for market data shared by a
-streamer and aggregator, and :class:`haymaker.datastore.StrategySymbolNamer`
-for strategy block output. Naming cannot be changed after construction, so
-create a separate store for every distinct naming policy, even when the stores
-use the same Arctic library.
-
-Streamer
---------
-
-Haymaker provides streamers corresponding to all `ib_insync` market data subscriptions:
-
-   +---------------------------+--------------------------+
-   | ib_insync Method          | Streamer                 |
-   +===========================+==========================+
-   | reqHistoricalDataAsync    | HistoricalDataStreamer   |
-   +---------------------------+--------------------------+
-   | reqMktData                | MktDataStreamer          |
-   +---------------------------+--------------------------+
-   | reqRealTimeBars           | RealTimeBarsStreamer     |
-   +---------------------------+--------------------------+
-   | reqTickByTickData         | TickByTickStreamer       |
-   +---------------------------+--------------------------+
-
-All streamers extend :class:`haymaker.streamers.Streamer`.
-
-.. autoclass:: haymaker.streamers.Streamer
    :members:
 
-Implementations
-^^^^^^^^^^^^^^^
+Trading messages
+================
 
-Every implementation accepts the same arguments as the respective `ib_insync` method it wraps, plus standard :class:`haymaker.streamers.Streamer` parameters.
+The standard message sequence is:
 
-.. autoclass:: haymaker.streamers.HistoricalDataStreamer
-   :members:
+.. code-block:: text
 
-To make historical startup incremental, construct one bar-size-configured
-datastore during strategy composition and inject it into the streamer. The
-same datastore can be shared with a :class:`haymaker.dfaggregator.DfAggregator`
-using the same bar size:
+   Signal -> PositionProposal -> PositionTarget
 
-.. code-block:: python
+:class:`~haymaker.components.Signal` identifies one logical source, a Contract,
+a finite value, and mandatory :class:`~haymaker.components.SignalType`.
+``STATE`` replaces the source's previous desired state. Each ``EVENT`` is a new
+event; an EVENT zero means that no event occurred. ``as_of`` is the optional
+effective market-observation time, while ``created_at`` records local creation.
 
-   from haymaker import base, dfaggregator, streamers
-   from haymaker.datastore import BarSizeSymbolNamer
+:class:`~haymaker.components.PositionProposal` is used only by one-to-one
+processors. It preserves the original Signal, chooses short/flat/long
+direction, and includes mandatory OPEN/CLOSE/REVERSE intent.
 
-   market_data = base.Atom.runtime.frame_store_provider.datastore(
-       "market_data",
-       symbol_namer=BarSizeSymbolNamer("30 secs"),
-   )
-   source = streamers.HistoricalDataStreamer(
-       contract,
-       "10 D",
-       "30 secs",
-       "TRADES",
-       datastore=market_data,
-   )
-   aggregator = dfaggregator.DfAggregator(datastore=market_data)
+:class:`~haymaker.components.PositionTarget` is an absolute signed setpoint for
+a concrete Contract. It never contains a captured current quantity or a
+proposed order delta. The numeric target is authoritative. Intent is optional
+for general direct execution and mandatory only for the one-to-one bracket
+path.
 
-When ``datastore`` is ``None``, the streamer requests history without reading a
-saved boundary. Boolean datastore shortcuts are not supported.
+.. autoclass:: haymaker.components.Signal
 
-.. autoclass:: haymaker.streamers.MktDataStreamer
-   :members:
+.. autoclass:: haymaker.components.SignalType
 
-.. autoclass:: haymaker.streamers.RealTimeBarsStreamer
-   :members:
+.. autoclass:: haymaker.components.PositionProposal
 
-.. autoclass:: haymaker.streamers.TickByTickStreamer
-   :members:
+.. autoclass:: haymaker.components.PositionTarget
 
-Aggregator
-----------
+.. autoclass:: haymaker.components.PositionIntent
 
-.. autoclass:: haymaker.aggregators.BarAggregator
-   :members:
+.. autoclass:: haymaker.components.StandardOrderRole
 
-Available Filters
-^^^^^^^^^^^^^^^^^
+Market-data components
+======================
 
-.. autoclass:: haymaker.aggregators.CountBars
-   :members:
+Streamers own Interactive Brokers subscriptions and emit broker objects while
+the runtime is connected. Historical bars normally feed either
+:class:`~haymaker.components.BarAggregator` for eventkit bar filters or
+:class:`~haymaker.components.DfAggregator` for dataframe history. Streamers are
+registered process-wide during strategy import and started by the runtime.
 
-.. autoclass:: haymaker.aggregators.VolumeBars
-   :members:
+.. autoclass:: haymaker.components.Streamer
 
-.. autoclass:: haymaker.aggregators.TickBars
-   :members:
+.. autoclass:: haymaker.components.HistoricalDataStreamer
 
-.. autoclass:: haymaker.aggregators.TimeBars
-   :members:
+.. autoclass:: haymaker.components.MktDataStreamer
 
-.. autoclass:: haymaker.aggregators.NoFilter
-   :members:
+.. autoclass:: haymaker.components.RealTimeBarsStreamer
 
-Block
------
+.. autoclass:: haymaker.components.TickByTickStreamer
 
-.. autoclass:: haymaker.block.AbstractBaseBlock
-   :members:
+.. autoclass:: haymaker.components.BarAggregator
 
-Implementations
-^^^^^^^^^^^^^^^
+.. autoclass:: haymaker.components.DfAggregator
 
-.. autoclass:: haymaker.block.AbstractDfBlock
-   :members:
+.. autoexception:: haymaker.components.aggregators.WrongStreamer
 
-Override :meth:`haymaker.block.AbstractDfBlock.df` when creating a concrete `AbstractDfBlock`.
+.. autoexception:: haymaker.components.aggregators.MissingStreamerParam
 
-Pass a fully configured :class:`haymaker.datastore.QueuedDataSink` through the
-keyword-only ``datastore`` argument when a block needs an explicit persistence
-dependency. Configure its symbol naming when constructing the store, for
-example with :class:`haymaker.datastore.StrategySymbolNamer`; blocks
-do not mutate injected stores. Construct the sink from
-``base.Atom.runtime.frame_store_provider`` while composing the strategy module.
-When ``datastore`` is omitted, block persistence is disabled.
+Bar filters
+-----------
 
-For example, a strategy module can define a small helper and use one configured
-sink per block:
+The filter objects below group source bars and retain their output
+``BarDataList``. ``NoFilter`` preserves one output bar per input bar.
 
-.. code-block:: python
+.. autoclass:: haymaker.components.CountBars
 
-   from haymaker import base
-   from haymaker.datastore import QueuedDataSink, StrategySymbolNamer
+.. autoclass:: haymaker.components.VolumeBars
 
-   def block_store(strategy: str) -> QueuedDataSink:
-       return base.Atom.runtime.frame_store_provider.queued_sink(
-           "block_data",
-           symbol_namer=StrategySymbolNamer(strategy),
-       )
+.. autoclass:: haymaker.components.TickBars
 
-   block = MyDataframeBlock(
-       strategy="momentum_ES",
-       contract=contract,
-       datastore=block_store("momentum_ES"),
-   )
+.. autoclass:: haymaker.components.TimeBars
 
-Here ``MyDataframeBlock`` represents the strategy's concrete
-:class:`haymaker.block.AbstractDfBlock` subclass.
+.. autoclass:: haymaker.components.NoFilter
 
-Signal Processor
-----------------
+.. autoclass:: haymaker.components.VolumeGrouper
 
-To better separate concerns, filter signals received from :class:`haymaker.block.AbstractBaseBlock` based on strategy state (e.g., avoid repeated signals or re-entering after a stop-out). While this could be done in :class:`haymaker.block.AbstractBaseBlock`, using a :class:`haymaker.signals.BinarySignalProcessor` is more modular.
+Signal models
+=============
 
-Available processors are designed for binary signals (on/off switches). For discrete signals (e.g., 0–10 strength), these implementations aren’t suitable, but you can develop custom ones.
+:class:`~haymaker.components.SignalModel` is the general structured Signal
+producer. :class:`~haymaker.components.PandasSignalModel` retains the existing
+dataframe conveniences: implement ``df(data)`` and return the complete
+calculated dataframe. By default the latest ``signal`` value becomes
+``Signal.value``, its index becomes ``as_of`` when datetime-like, and the other
+row fields become metadata.
 
-It’s easiest to create a binary signal processor by implementing :class:`haymaker.signals.AbstractBaseBinarySignalProcessor`.
+An optional custom row hook may build the Signal directly. An optional audit
+sink must use ``DRAIN`` and records calculation history under
+``{source_key}_{ACTIVE.localSymbol}_{run_started_at}``. The first successful
+write stores the complete frame; later writes append only new rows. A NEXT-only
+futures change does not rotate audit history.
 
-.. autoclass:: haymaker.signals.AbstractBaseBinarySignalProcessor
-   :members:
+.. autoclass:: haymaker.components.SignalModel
+   :members: create_signal
 
-Implementations
-^^^^^^^^^^^^^^^
+.. autoclass:: haymaker.components.PandasSignalModel
+   :members: df, create_signal
 
-.. autoclass:: haymaker.signals.BinarySignalProcessor
-   :members:
+.. autofunction:: haymaker.components.read_signal_audit
 
-.. autoclass:: haymaker.signals.BlipBinarySignalProcessor
-   :members:
-      
-.. autoclass:: haymaker.signals.LockableBinarySignalProcessor
-   :members:
+.. autoclass:: haymaker.datastore.AsyncDataStore
 
-.. autoclass:: haymaker.signals.LockableBlipBinarySignalProcessor
-   :members:
+.. autoclass:: haymaker.datastore.QueuedDataSink
 
-.. autoclass:: haymaker.signals.AlwaysOnLockableBinarySignalProcessor
-   :members:
+One-to-one processing
+=====================
 
-.. autoclass:: haymaker.signals.AlwaysOnBinarySignalProcessor
-   :members:
+Binary processors consume Signal and query Book's effective quantity,
+including relevant working orders. STATE zero requests flat. EVENT zero is
+ignored. Matching direction is suppressed. Ordinary opposing input closes
+first; always-on input reverses. Lock-aware variants suppress a new opening
+only in the persisted stopped direction.
 
-Factory Function
-^^^^^^^^^^^^^^^^
+.. autoclass:: haymaker.components.BinarySignalProcessor
+   :members: process
 
-.. autofunction:: haymaker.signals.binary_signal_processor_factory
+.. autoclass:: haymaker.components.LockableBinarySignalProcessor
 
-Portfolio
----------
+.. autoclass:: haymaker.components.AlwaysOnBinarySignalProcessor
 
-.. autoclass:: haymaker.portfolio.AbstractBasePortfolio
-   :members:
+.. autoclass:: haymaker.components.AlwaysOnLockableBinarySignalProcessor
 
-Implementations
-^^^^^^^^^^^^^^^
+.. autofunction:: haymaker.components.binary_signal_processor_factory
 
-.. autoclass:: haymaker.portfolio.FixedPortfolio
-   :members:
+Portfolio boundaries
+====================
 
-Wrapper
-^^^^^^^
+The dedicated one-to-one flow uses a processor, allocator wrapper, and bracket
+model:
 
-.. autoclass:: haymaker.portfolio.PortfolioWrapper
-   :members:
+.. code-block:: text
 
-An instance of :class:`haymaker.portfolio.AbstractBasePortfolio` should never be directly included in a processing pipeline, as there should be only one portfolio for all strategies. Instead, include an instance of :class:`haymaker.portfolio.PortfolioWrapper` in a pipeline. As long as an instance of :class:`haymaker.portfolio.AbstractBasePortfolio` exists in your package, :class:`haymaker.portfolio.PortfolioWrapper` ensures it’s connected.
+   SignalModel
+       -> BinarySignalProcessor
+       -> PortfolioWrapper(FixedSizeAllocator)
+       -> BracketExecutionModel
 
-Execution Model
----------------
+``PortfolioWrapper`` accepts only PositionProposal, calls the narrow
+``PositionAllocator.target_for()`` protocol, and emits at most one target while
+preserving source, Contract, metadata, and intent.
 
-It’s easiest to create an execution model by extending :class:`haymaker.execution_models.AbstractExecModel`.
+.. autoclass:: haymaker.components.PositionAllocator
 
-.. autoclass:: haymaker.execution_models.AbstractExecModel
-   :members:
+.. autoclass:: haymaker.components.FixedSizeAllocator
+   :members: target_for
 
-Implementations
-^^^^^^^^^^^^^^^
+.. autoclass:: haymaker.components.PortfolioWrapper
+   :members: onData
 
-.. autoclass:: haymaker.execution_models.BaseExecModel
-   :members:
-   :show-inheritance:
+Account-wide allocation uses a direct Portfolio:
 
-.. autoclass:: haymaker.execution_models.EventDrivenExecModel
-   :members:
-   :show-inheritance:
+.. code-block:: text
 
-This model automatically places stop-loss orders (and potentially take-profit orders) when the original order is filled.
+   multiple Signal paths
+       -> Portfolio
+       -> ExecutionRouter
+       -> SerialTargetExecutionModel
 
-.. include:: example.rst
+Implement ``process(signal)`` to update Portfolio state and return zero or more
+absolute targets. The optional ``sources`` collection rejects unknown source
+keys. The base class deliberately does not batch, debounce, time out, or
+interpret ``as_of``; concrete policies own those decisions.
+
+.. autoclass:: haymaker.components.Portfolio
+   :members: process
+
+Execution and routing
+=====================
+
+Execution models have stable configured names used for recovery. They persist
+the newest target, inspect Book quantity and working orders, and derive the
+next order rather than replaying stale intent.
+
+:class:`~haymaker.components.SerialTargetExecutionModel` manages each concrete
+Contract independently, supports arbitrary same-side resizing, and permits at
+most one active TARGET_ADJUSTMENT order per Contract.
+
+:class:`~haymaker.components.BracketExecutionModel` manages one configured
+``source_key``. Initial targets require consistent intent, same-side non-zero
+resizing is rejected, and each opening episode gets a fresh ``position_id``.
+Protective brackets are attached only after the entry is completely filled.
+
+.. autoclass:: haymaker.components.ExecutionModel
+
+.. autoclass:: haymaker.components.SerialTargetExecutionModel
+
+.. autoclass:: haymaker.components.BracketExecutionModel
+
+Router rules are fixed and evaluated in declaration order; first match wins.
+Without a default, unmatched targets fail closed. Persisted model affinity
+overrides current rules until the source or Contract is flat with no working
+orders.
+
+.. autoclass:: haymaker.components.ExecutionRule
+
+.. autoclass:: haymaker.components.ExecutionRouter
+
+.. autofunction:: haymaker.components.contract_is
+
+.. autofunction:: haymaker.components.symbol_is
+
+.. autofunction:: haymaker.components.security_type_is
+
+.. autofunction:: haymaker.components.exchange_is
+
+.. autofunction:: haymaker.components.where
+
+Bracket legs
+============
+
+Bracket legs convert a completely filled entry Trade and validated Signal
+metadata into IB stop or take-profit order fields. Their ``vol_field`` defaults
+to ``atr`` and must be present in PositionTarget metadata.
+
+.. autoclass:: haymaker.components.AbstractBracketLeg
+
+.. autoclass:: haymaker.components.FixedStop
+
+.. autoclass:: haymaker.components.TrailingStop
+
+.. autoclass:: haymaker.components.AdjustableTrailingFixedStop
+
+.. autoclass:: haymaker.components.AdjustableFixedTrailingStop
+
+.. autoclass:: haymaker.components.AdjustableTrailingStop
+
+.. autoclass:: haymaker.components.TakeProfitAsStopMultiple
+
+.. autoclass:: haymaker.components.FlexibleTakeProfitAsStopMultiple
+
+Book and Controller ownership
+=============================
+
+:class:`~haymaker.book.Book` owns typed order, Fill, PositionState, TargetState,
+Portfolio recovery state, stopped-direction state, and blotter access. It uses
+one ordered critical ``DRAIN`` queue and performs no broker calls or Portfolio
+calculation.
+
+:class:`~haymaker.controller.Controller` owns broker submission/cancellation,
+immediate OrderInfo registration, status and rejection handling, Fill and
+commission processing, Trade rebinding, blotter attribution, aggregate broker
+reconciliation, target verification, and futures rolling.
+
+.. autoclass:: haymaker.book.Book
+
+.. autoclass:: haymaker.book.OrderInfo
+
+.. autoclass:: haymaker.book.FillRecord
+
+.. autoclass:: haymaker.book.PositionState
+
+.. autoclass:: haymaker.book.TargetState
+
+.. autoclass:: haymaker.controller.Controller
+   :members: trade, cancel
+
+State conversion
+================
+
+The standalone converter is dry-run by default and never modifies its source:
+
+.. code-block:: bash
+
+   python scripts/migrate_components_state.py \
+       --source-db legacy_haymaker \
+       --target-db fresh_components
+
+Inspect the count, P&L, identifier, active-state, and episode report. Add
+``--apply`` only after selecting an empty target database. Compatible reruns
+are idempotent; mixed or foreign target data is refused.

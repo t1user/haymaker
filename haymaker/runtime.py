@@ -6,12 +6,18 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Self
 
 import ib_insync as ibi
 
 from .base import Atom
 from .blotter import blotter_factory
+from .book import (
+    DEFAULT_ORDER_COLLECTION_NAME,
+    DEFAULT_STATE_COLLECTION_NAME,
+    Book,
+)
 from .config.settings import LiveConfig
 from .contract_registry import ContractRegistry
 from .controller import Controller
@@ -19,13 +25,8 @@ from .databases import MongoService, create_frame_store_provider
 from .datastore import FrameStoreProvider
 from .handlers import IBHandlers
 from .order_defaults import OrderDefaults
-from .saver import MongoLatestSaver, MongoSaver
-from .state_machine import (
-    DEFAULT_ORDER_COLLECTION_NAME,
-    DEFAULT_STRATEGY_COLLECTION_NAME,
-    StateMachine,
-)
-from .streamers import Streamer
+from .saver import MongoSaver
+from .components.streamers import Streamer
 from .timeout import Timeout, TimeoutPolicy
 from .trader import Trader
 
@@ -152,19 +153,21 @@ class RuntimeContext:
     Attributes:
         ib: Broker client owned by the live process.
         contract_registry: Qualified contract and contract-details registry.
-        sm: Persistent strategy and order state.
+        book: Persistent typed accounting and order state.
         trader: Thin broker order gateway.
         frame_store_provider: Narrow dataframe persistence composition service.
         order_defaults: Validated default order fields for execution models.
         timeout_policy: Default timeout interval and action.
         controller: Live controller installed by ``LiveRuntime``.
         request_restart: Supervisor restart callback, bound before startup.
-        future_roll_policies: Per-strategy automatic futures-roll policy.
+        future_roll_policies: Per-source automatic futures-roll policy.
+        run_started_at: Fixed process/component-graph creation timestamp.
+        workload_generation: Supervised workload-start generation counter.
     """
 
     ib: ibi.IB
     contract_registry: ContractRegistry = field(repr=False)
-    sm: StateMachine = field(repr=False)
+    book: Book = field(repr=False)
     trader: Trader = field(repr=False)
     frame_store_provider: FrameStoreProvider = field(repr=False)
     order_defaults: OrderDefaults = field(repr=False)
@@ -174,6 +177,10 @@ class RuntimeContext:
         default=None, repr=False
     )
     future_roll_policies: dict[str, bool] = field(default_factory=dict, repr=False)
+    run_started_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    workload_generation: int = 0
 
     def __str__(self) -> str:
         """Return a compact runtime summary suitable for logs."""
@@ -190,14 +197,14 @@ class LiveRuntime:
         mongo_service: Optional Mongo client service for focused callers and tests.
         frame_store_provider: Optional strategy-composition persistence provider.
         contract_registry: Optional preconfigured contract registry.
-        sm: Optional preconfigured state machine.
+        book: Optional preconfigured accounting book.
     """
 
     config: LiveConfig = field(repr=False)
     ib: ibi.IB = field(default_factory=ibi.IB)
     mongo_service: MongoService | None = field(default=None, repr=False)
     contract_registry: ContractRegistry | None = field(default=None, repr=False)
-    sm: StateMachine | None = field(default=None, repr=False)
+    book: Book | None = field(default=None, repr=False)
     frame_store_provider: FrameStoreProvider | None = field(default=None, repr=False)
     context: RuntimeContext = field(init=False, repr=False)
     startup_jobs: StartupJobs = field(init=False, repr=False)
@@ -214,13 +221,19 @@ class LiveRuntime:
             )
         if self.contract_registry is None:
             self.contract_registry = ContractRegistry(**dict(self.config.futures))
-        if self.sm is None:
-            self.sm = self._create_state_machine(self.config.state_machine)
+        blotter = blotter_factory(
+            self.config.blotter,
+            base_directory=self.config.storage.base_directory,
+            mongo_client=self.mongo_service.mongo_client,
+            database=self.config.storage.mongodb.database,
+        )
+        if self.book is None:
+            self.book = self._create_book(self.config.book, blotter=blotter)
         trader = Trader(self.ib)
         self.context = RuntimeContext(
             ib=self.ib,
             contract_registry=self.contract_registry,
-            sm=self.sm,
+            book=self.book,
             trader=trader,
             frame_store_provider=self.frame_store_provider,
             order_defaults=OrderDefaults.from_mapping(self.config.orders),
@@ -230,12 +243,6 @@ class LiveRuntime:
         self.context.controller = Controller.from_mapping(
             self.config.controller,
             trader=trader,
-            blotter=blotter_factory(
-                self.config.blotter,
-                base_directory=self.config.storage.base_directory,
-                mongo_client=self.mongo_service.mongo_client,
-                database=self.config.storage.mongodb.database,
-            ),
             health_check_observables=[self.mongo_service.health_checks],
         )
         self.startup_jobs = StartupJobs(
@@ -246,14 +253,17 @@ class LiveRuntime:
         if self.config.logging.get("log_broker", False):
             self._broker_logger = IBHandlers(self.ib)
 
-    def _create_state_machine(self, settings: Mapping[str, Any]) -> StateMachine:
-        """Construct state services from configuration and injected storage.
+    def _create_book(
+        self, settings: Mapping[str, Any], *, blotter
+    ) -> Book:
+        """Construct Book persistence from configuration and runtime storage.
 
         Args:
-            settings: Merged ``state_machine`` configuration section.
+            settings: Merged ``book`` configuration section.
+            blotter: Runtime blotter owned by the constructed Book.
 
         Returns:
-            State machine using runtime-owned Mongo savers.
+            Book using runtime-owned Mongo savers.
         """
 
         assert self.mongo_service is not None
@@ -261,23 +271,25 @@ class LiveRuntime:
         order_collection_name = options.pop(
             "order_collection_name", DEFAULT_ORDER_COLLECTION_NAME
         )
-        strategy_collection_name = options.pop(
-            "strategy_collection_name", DEFAULT_STRATEGY_COLLECTION_NAME
+        state_collection_name = options.pop(
+            "state_collection_name", DEFAULT_STATE_COLLECTION_NAME
         )
         mongo_client = self.mongo_service.mongo_client()
         database = self._framework_database()
-        return StateMachine(
+        return Book(
             order_saver=MongoSaver(
                 order_collection_name,
                 query_key="orderId",
                 client=mongo_client,
                 database=database,
             ),
-            strategy_saver=MongoLatestSaver(
-                strategy_collection_name,
+            state_saver=MongoSaver(
+                state_collection_name,
+                query_key="state_key",
                 client=mongo_client,
                 database=database,
             ),
+            blotter=blotter,
             **options,
         )
 
@@ -302,6 +314,7 @@ class LiveRuntime:
     async def start(self) -> None:
         """Start controller and strategy jobs after connectivity is verified."""
 
+        self.context.workload_generation += 1
         log.debug("Will run controller...")
         self.context.controller.set_future_roll_policies(
             self.context.future_roll_policies
@@ -318,7 +331,7 @@ class LiveRuntime:
     async def close(self) -> None:
         """Flush final live-runtime state before process shutdown."""
 
-        self.context.sm.flush_pending_save()
+        await self.context.book.close()
 
     def __str__(self) -> str:
         """Return a compact live-runtime description suitable for logs."""

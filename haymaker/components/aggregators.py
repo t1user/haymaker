@@ -14,10 +14,17 @@ from typing import Literal
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
-from .async_wrappers import QueueRunner, QueueShutdownPolicy
-from .base import Atom
-from .dfaggregator import WrongStreamer
+from ..async_wrappers import QueueRunner, QueueShutdownPolicy
+from ..base import Atom
+from ._dataframe_aggregators import (
+    DfAggregator,
+    MissingStreamerParam,
+    VolumeGrouper,
+    WrongStreamer,
+    custom_bday,
+)
 from .streamers import Streamer
+from .streamers import HistoricalDataStreamer
 
 log = logging.getLogger(__name__)
 
@@ -25,32 +32,26 @@ _counter = itertools.count().__next__
 
 
 class BarAggregator(Atom):
-    """
-    Aggregate recieved data bars into new bars based on the criteria
-    specified in :attr:`filter'.  Store processed data.
+    """Backfill and group HistoricalDataStreamer bars.
 
-    When future contract changes, data already in the filter will be
-    adjusted.  However, when system is started afresh right after
-    contract changed, all back data will be for the new contract,
-    which in some cases might be incorrect.
-
-    :class:`BarAggregator` works best for strategies that don't
-    require large amounts of back data.
+    The aggregator queues incoming ``BarDataList`` snapshots, backfills unseen
+    completed bars in order, and emits only current filter output. It is
+    structurally compatible with HistoricalDataStreamer.
 
     Args:
-    -----
+        filter: Count-, volume-, time-, or pass-through bar operation.
+        future_adjust_type: ``"add"`` or ``"mul"`` back-adjusts retained
+            prices after ACTIVE changes; ``None`` disables adjustment.
 
-    filter: one of :class:`CountBars`, :class:`VolumeBars`,
-    :class:`TimeBars`, :class:`NoFilter`, determines how input bars
-    are grouped into output bars
+    Raises:
+        WrongStreamer: If connected to an incompatible built-in Streamer.
 
-    future_adjust_type: one of: "add" or "mul" on future contract
-    change, how price bars currently in the filter are to be adjusted;
-    resulting adjusted series will created by splicing two price
-    series using either addition or multiplication.
+    Note:
+        Retained futures history may be back-adjusted without an additional
+        downstream notification.
     """
 
-    _compatible_with = ("HistoricalDataStreamer",)
+    _compatible_with = (HistoricalDataStreamer,)
 
     def __init__(
         self,
@@ -76,6 +77,16 @@ class BarAggregator(Atom):
         # start with cleared state (will not block)
         self._backfill_event.set()
 
+    def validate_source(self, source: Atom) -> None:
+        """Reject structurally incompatible upstream streamer classes."""
+
+        if isinstance(source, Streamer) and not isinstance(
+            source, self._compatible_with
+        ):
+            raise WrongStreamer(
+                f"Streamer {type(source).__name__} is not compatible with {self!s}"
+            )
+
     def onStart(self, data: dict, *args) -> None:
         """Syncing contract with streamer."""
         assert args, f"No streamer passed to {self!s}"
@@ -93,10 +104,9 @@ class BarAggregator(Atom):
         self._contract_blueprint = streamer._contract_blueprint
 
     def verify_streamer_compatibility(self, streamer: Streamer) -> None:
-        streamer_class = streamer.__class__.__name__
-        if streamer_class not in self._compatible_with:
+        if not isinstance(streamer, self._compatible_with):
             raise WrongStreamer(
-                f"Streamer {streamer_class} is not compatible with {self!s}"
+                f"Streamer {type(streamer).__name__} is not compatible with {self!s}"
             )
 
     def onDataBar(self, bars, *args) -> None:
@@ -269,14 +279,12 @@ class BarAggregator(Atom):
 
 
 class CountBars(ev.Op):
-    """
-    Group input bars into new bars corresponding to a fixed number
-    of source bars.
+    """Group a fixed number of source bars into each output BarDataList.
 
     Args:
-    -----
-
-    count: number of source bars that constitue one output bar
+        count: Positive source-bar count per completed output bar.
+        source: Optional eventkit source.
+        label: Diagnostic name shown in logs and representations.
     """
 
     __slots__ = ("_count", "bars", "label")
@@ -319,14 +327,14 @@ class CountBars(ev.Op):
 
 
 class VolumeBars(ev.Op):
-    """
-    Group input bars into new bars so that each output corresponds to
-    the same volume.
+    """Group source bars until each output reaches a volume threshold.
 
     Args:
-    -----
+        volume: Positive minimum volume per completed output bar.
+        source: Optional eventkit source.
+        label: Diagnostic name shown in logs and representations.
 
-    volume: desired volume of each output bar
+    Negative-volume or negative-bar-count source bars are ignored.
     """
 
     __slots__ = ("_volume", "bars", "label")
@@ -380,14 +388,12 @@ class VolumeBars(ev.Op):
 
 
 class TickBars(ev.Op):
-    """
-    Group input bars into new bars so that each output bar corresponds
-    to the same number of ticks.
+    """Group source bars until each output reaches a tick-count threshold.
 
     Args:
-    ----
-
-    count: desired number of ticks for every output bar
+        count: Positive ``barCount`` threshold per output bar.
+        source: Optional eventkit source.
+        label: Diagnostic name shown in logs and representations.
     """
 
     __slots__ = ("_count", "bars", "label")
@@ -431,15 +437,15 @@ class TickBars(ev.Op):
 
 
 class TimeBars(ev.Op):
-    """
-    Group input bars into new bars so that every output bar
-    corresponds to the same time period.
+    """Aggregate source bars into periods delimited by an eventkit Timer.
 
     Args:
-    -----
+        timer: Timer whose ticks close the current output period.
+        source: Optional eventkit source.
+        label: Diagnostic name shown in logs and representations.
 
-    timer: :class:`eventkit.create.Timer` corresponding to desired
-    duration of output bars
+    Emits:
+        One completed IB ``BarData`` at each timer tick.
     """
 
     __slots__ = ("_timer", "bars", "_running_price_volume", "label")
@@ -496,9 +502,11 @@ class TimeBars(ev.Op):
 
 
 class NoFilter(ev.Op):
-    """
-    Accumulate input bars to ensure no bars are lost during restarts.
-    Every input bar and output bar is the same.
+    """Retain every source bar and emit the updated BarDataList unchanged.
+
+    Args:
+        source: Optional eventkit source.
+        label: Diagnostic name shown in logs and representations.
     """
 
     __slots__ = ("bars", "label")

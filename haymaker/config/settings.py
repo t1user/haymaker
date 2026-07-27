@@ -45,7 +45,7 @@ class LiveConfig:
         connection: Broker connection and recovery options.
         logging: Logging setup and broker-log options.
         controller: Controller startup, reconciliation, and scheduling options.
-        state_machine: State persistence and rejection options.
+        book: Typed state, order persistence, and rejection options.
         storage: Filesystem and framework Mongo infrastructure settings.
         blotter: Blotter enablement and saver specification.
         orders: Default IB order fields.
@@ -56,7 +56,7 @@ class LiveConfig:
     connection: Mapping[str, Any]
     logging: Mapping[str, Any]
     controller: Mapping[str, Any]
-    state_machine: Mapping[str, Any]
+    book: Mapping[str, Any]
     storage: StorageSettings
     blotter: Mapping[str, Any]
     orders: Mapping[str, Any]

@@ -1,187 +1,187 @@
-Example Usage
-=============
+********************
+Composition Examples
+********************
 
-.. literalinclude:: includes/example.py
-   :language: python
+Strategy modules are imported after ``LiveRuntime`` has installed a ready
+runtime context. Construct components at module scope and keep the resulting
+pipeline referenced by the module.
 
-.. warning::
-   **NOT INVESTMENT ADVICE**
+One-to-one bracketed strategy
+=============================
 
-   This example is only meant to illustrate how to use the Haymaker framework. It is unlikely to produce favorable investment outcomes.
+This flow turns a dataframe STATE signal into one independently attributed
+position episode:
 
-Example Walk-Through
---------------------
-
-This is a simple example implementing a `moving average crossover <https://en.wikipedia.org/wiki/Moving_average_crossover>`_ strategy with a stop-loss.
-
-The strategy:
-
-* Buys 1 `e-mini S&P futures contract ('ES') <https://www.cmegroup.com/markets/equities/sp/e-mini-sandp500.html>`_ whenever the faster exponential moving average (EMA) crosses above the slower one.
-* Sells 1 contract when the faster EMA crosses below the slower EMA.
-* The moment a position-opening order is filled, places a `trailing stop-loss order <https://www.investopedia.com/terms/t/trailingstop.asp>`_ with a distance based on the current instrument's `Average True Range <https://www.investopedia.com/terms/a/atr.asp>`_.
-* Whenever the stop-loss is hit, prevents reopening a position in the same direction until an opposite position is opened and closed. This protects against repeated transactions in a volatile, non-trending market.
-* Reverses the position when a signal indicates a direction opposite to the position currently held.
-
-  
 .. code-block:: python
-   :caption: Defining the EMA crossover strategy
 
-   from dataclasses import dataclass
+   import ib_insync as ibi
    import pandas as pd
-   import numpy as np
-   from haymaker import block, indicators
+
+   from haymaker.base import Pipe
+   from haymaker.components import (
+       BracketExecutionModel,
+       DfAggregator,
+       FixedSizeAllocator,
+       FixedStop,
+       HistoricalDataStreamer,
+       LockableBinarySignalProcessor,
+       PandasSignalModel,
+       PortfolioWrapper,
+       SignalType,
+   )
+   from haymaker.base import Atom
+   from haymaker.datastore import BarSizeSymbolNamer
+
+
+   CONTRACT = ibi.ContFuture("ES", exchange="CME")
+   SOURCE = "trend.es.daily"
+
+
+   class TrendModel(PandasSignalModel):
+       """Emit long/flat STATE from a calculated dataframe."""
+
+       def df(self, data: pd.DataFrame) -> pd.DataFrame:
+           result = data.copy()
+           result["fast"] = result["close"].rolling(20).mean()
+           result["slow"] = result["close"].rolling(50).mean()
+           result["atr"] = (
+               result["high"] - result["low"]
+           ).rolling(20).mean()
+           result["signal"] = (result["fast"] > result["slow"]).astype(float)
+           return result
+
+
+   history_store = Atom.runtime.frame_store_provider.datastore(
+       "daily_history",
+       symbol_namer=BarSizeSymbolNamer("1 day"),
+   )
+
+   streamer = HistoricalDataStreamer(
+       contract=CONTRACT,
+       durationStr=100,
+       barSizeSetting="1 day",
+       whatToShow="TRADES",
+       datastore=history_store,
+   )
+   frames = DfAggregator(history_store)
+   signals = TrendModel(SOURCE, CONTRACT, SignalType.STATE)
+   processor = LockableBinarySignalProcessor()
+   allocation = PortfolioWrapper(FixedSizeAllocator(1))
+   execution = BracketExecutionModel(
+       SOURCE,
+       name="trend_es_brackets",
+       stop=FixedStop(3),
+   )
+
+   strategy: Pipe = streamer.pipe(
+       frames,
+       signals,
+       processor,
+       allocation,
+       execution,
+   )
+
+``TrendModel`` places ``atr`` in Signal metadata. ``FixedSizeAllocator``
+preserves it in the PositionTarget, and ``FixedStop`` consumes it after the
+entry is completely filled. Book assigns a fresh ``position_id`` to the
+episode, while Controller carries source and episode attribution to every
+order and blotter row.
+
+An EVENT model uses ``SignalType.EVENT``. Its zero values are ignored by the
+processor instead of requesting a flat position. Repeating a non-zero EVENT
+represents another event, although one-to-one processing still suppresses
+actions that are already satisfied by effective quantity.
+
+Account-wide direct Portfolio
+=============================
+
+A direct Portfolio receives raw Signals from several sources and may change
+several execution targets after any one input:
+
+.. code-block:: python
+
+   from collections.abc import Iterable
+
    import ib_insync as ibi
 
-   @dataclass
-   class EMACrossStrategy(block.AbstractDfBlock):
-       strategy: str
-       contract: ibi.Contract
-       fast_lookback: int
-       slow_lookback: int
-       atr_lookback: int
+   from haymaker.components import (
+       ExecutionRouter,
+       ExecutionRule,
+       Portfolio,
+       PositionTarget,
+       SerialTargetExecutionModel,
+       Signal,
+       symbol_is,
+   )
 
-       def df(self, df: pd.DataFrame) -> pd.DataFrame:
-           df["fast_ema"] = df["close"].ewm(self.fast_lookback).mean()
-           df["slow_ema"] = df["close"].ewm(self.slow_lookback).mean()
-           df["signal"] = np.sign(df["fast_ema"] - df["slow_ema"])
-           df["atr"] = indicators.atr(df, self.atr_lookback)
-           return df
 
-This defines the trading signals using :class:`haymaker.block.AbstractDfBlock`. It requires a :py:class:`dataclasses.dataclass` with the strategy name, contract, and parameters. The :meth:`haymaker.block.AbstractDfBlock.df` method must be overridden to process a :class:`pandas.DataFrame` containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.
+   class EqualWeightPortfolio(Portfolio):
+       """Keep the latest STATE direction and emit all registered targets."""
 
-The data received via `onData` is wrapped into a :class:`pandas.DataFrame` with column names matching the keys in the `data` dictionary. Users must ensure upstream components provide all required data for signal generation.
+       def __init__(
+           self,
+           contracts: dict[str, ibi.Contract],
+           size: float,
+       ) -> None:
+           super().__init__(sources=contracts)
+           self.contracts = contracts
+           self.size = size
+           self.latest: dict[str, float] = {}
 
-The :meth:`haymaker.block.AbstractDfBlock.df` method must return a :class:`pandas.DataFrame` with a ``signal`` column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., ``atr``) can be included for downstream components.
+       def process(self, signal: Signal) -> Iterable[PositionTarget]:
+           self.latest[signal.source_key] = signal.value
+           return (
+               PositionTarget(
+                   contract=self.contracts[source_key],
+                   target_quantity=(
+                       0
+                       if value == 0
+                       else self.size if value > 0 else -self.size
+                   ),
+                   source_key=source_key,
+               )
+               for source_key, value in self.latest.items()
+           )
 
-.. code-block:: python
-   :caption: Defining the ES futures contract
 
-   es_contract = ibi.ContFuture("ES", "CME")
-
-The :class:`ib_insync.contracts.ContFuture` contract is not directly tradable. Haymaker replaces it with the current on-the-run futures contract and rolls it to the next contract near expiration. Refer to other documentation sections for customization details.
-
-.. code-block:: python
-   :caption: Setting a fixed portfolio size
-
-   from haymaker import portfolio
-   portfolio.FixedPortfolio(1)
-
-Typically, a :class:`haymaker.portfolio.FixedPortfolio` would include more logic. Here, it trades one contract regardless of circumstances—a simplistic approach not recommended for real use.
-
-.. code-block:: python
-   :caption: Assembling the pipeline
-
-   from haymaker import base, streamers, aggregators, signals, execution_models, portfolio, bracket_legs
-
-   pipe = base.Pipe(
-       streamers.HistoricalDataStreamer(es_contract, "10 D", "1 hour", "TRADES"),
-       aggregators.BarAggregator(aggregators.NoFilter()),
-       EMACrossStrategy("ema_cross_ES", es_contract, 12, 48, 24),
-       signals.BinarySignalProcessor(),
-       portfolio.PortfolioWrapper(),
-       execution_models.EventDrivenExecModel(
-           stop=bracket_legs.TrailingStop(3, vol_field="atr")
+   contracts = {
+       "trend.es": ibi.Future(
+           conId=123,
+           symbol="ES",
+           exchange="CME",
        ),
+       "trend.nq": ibi.Future(
+           conId=456,
+           symbol="NQ",
+           exchange="CME",
+       ),
+   }
+   portfolio = EqualWeightPortfolio(contracts, size=2)
+   index_model = SerialTargetExecutionModel(name="index_targets")
+   router = ExecutionRouter(
+       rules=[
+           ExecutionRule(
+               predicate=symbol_is("ES"),
+               model=index_model,
+           ),
+           ExecutionRule(
+               predicate=symbol_is("NQ"),
+               model=index_model,
+           ),
+       ]
    )
+   portfolio.connect(router)
 
-The :class:`haymaker.base.Pipe` connects components into an event-driven pipeline. Market data from the streamer triggers processing, potentially resulting in broker orders.
+   es_signal_model.connect(portfolio)
+   nq_signal_model.connect(portfolio)
 
-Components used:
+The example Portfolio implements its own immediate STATE recomputation policy.
+A synchronized implementation could instead require ``as_of``, wait for all
+registered sources, define duplicate/late input handling, and persist its
+normalized mapping under a stable ``portfolio_key`` through Book.
 
-- .. code-block:: python
-     :caption: Historical data streamer
-
-     streamers.HistoricalDataStreamer(es_contract, "10 D", "1 hour", "TRADES")
-
-  Pulls 10 days of 1-hour "TRADES" data for ``es_contract`` from the broker, updating with new data points. The framework automatically fills gaps if disruptions occur.
-
-- .. code-block:: python
-     :caption: No-op aggregator
-
-     aggregators.BarAggregator(aggregators.NoFilter())
-
-  No aggregation or processing is applied (using :class:`haymaker.aggregators.NoFilter`). An aggregator is currently required with historical data streamers to track history.
-
-- .. code-block:: python
-     :caption: EMA crossover strategy instance
-
-     EMACrossStrategy("ema_cross_ES", es_contract, 12, 48, 24)
-
-  Instantiates the strategy with arbitrary parameters: 12-hour and 48-hour EMAs, 24-hour ATR.
-
-  .. note::
-     These parameters are illustrative and not optimized.
-
-- .. code-block:: python
-     :caption: Binary signal processor
-
-     signals.BinarySignalProcessor()
-
-  The :class:`haymaker.signals.BinarySignalProcessor` ensures:
-  * Repeated signals in the same direction are ignored if a position exists.
-  * Post-stop-loss, prevents reopening in the same direction until an opposite position is cycled.
-  * Reverses positions on opposing signals.
-
-- .. code-block:: python
-     :caption: Portfolio wrapper
-
-     portfolio.PortfolioWrapper()
-
-  Connects to a single global :class:`haymaker.portfolio.FixedPortfolio` instance, ensuring strategy-specific data flows correctly to downstream components.
-
-- .. code-block:: python
-     :caption: Event-driven execution model
-
-     execution_models.EventDrivenExecModel(
-         stop=bracket_legs.TrailingStop(3, vol_field="atr")
-     )
-
-  Sends a :class:`ib_insync.order.MarketOrder` to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an ``atr`` column from the :class:`haymaker.block.AbstractDfBlock`).
-
-Save the pipeline in a Python strategy file, for example ``strategy.py``. This
-file is the trading setup passed to Haymaker: it contains the contracts,
-strategy components, and pipeline wiring for one or more strategies.
-
-To exclude a strategy from the daily futures roll, set
-``auto_roll_futures=False`` on its block:
-
-.. code-block:: python
-   :caption: Optional strategy policy
-
-   strategy = EMACrossStrategy(
-       "ema_cross_ES",
-       es_contract,
-       12,
-       48,
-       24,
-       auto_roll_futures=False,
-   )
-
-Run the strategy file with the ``haymaker`` command:
-
-.. code-block:: bash
-   :caption: Starting the strategy
-
-   haymaker strategy.py
-
-Configuration can be supplied with ``--file``/``-f`` or environment variables
-as described in :doc:`configuration`:
-
-.. code-block:: bash
-   :caption: Starting with a YAML override
-
-   haymaker strategy.py --file live_config.yaml
-
-.. code-block:: bash
-   :caption: Starting with an environment-selected YAML override
-
-   export HAYMAKER_HAYMAKER_CONFIG_OVERRIDES=/path/to/live_config.yaml
-   haymaker strategy.py
-
-Ensure ``haymaker`` comes from the intended environment. Long-running process
-management, including systemd units, will be documented separately.
-
-Conclusion
-----------
-
-In real-world strategies, you’d trade multiple instruments and parameter sets. Using the patterns above with Python data structures, you can create pipelines for as many combinations as needed.
+The serial model treats each target as an absolute setpoint. If a newer target
+arrives while an adjustment order works, it retains only the newer target and
+re-evaluates after completion. Router rules are evaluated in declaration order;
+persisted model affinity remains authoritative until the Contract is flat with
+no working orders.

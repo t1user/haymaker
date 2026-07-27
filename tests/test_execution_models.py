@@ -1,484 +1,626 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
+import asyncio
 from datetime import datetime, timezone
-from itertools import count
-import logging
-from unittest.mock import patch
 
 import ib_insync as ibi
 import pytest
 
-from haymaker.bracket_legs import FixedStop, TakeProfitAsStopMultiple, TrailingStop
-from haymaker.controller import Controller
-from haymaker.execution_models import (
-    AbstractExecModel,
-    BaseExecModel,
-    EventDrivenExecModel,
-    OrderKey,
+from haymaker.book import PositionState, TargetState
+from haymaker.components import (
+    BracketExecutionModel,
+    ExecutionModel,
+    ExecutionRouter,
+    ExecutionRule,
+    FixedStop,
+    PositionIntent,
+    PositionTarget,
+    SerialTargetExecutionModel,
+    StandardOrderRole,
+    symbol_is,
 )
-
-COUNTER = count().__next__
-
-
-def test_AbstraExecModel_is_abstract(controller: Controller):
-    with pytest.raises(TypeError):
-        AbstractExecModel()  # type: ignore
+from haymaker.controller import Controller
 
 
-def test_BaseExecModel_instantiates(controller: Controller):
-    bem = BaseExecModel()
-    assert isinstance(bem, BaseExecModel)
+class FakeTrader:
+    def __init__(self):
+        self.trades = []
+        self.cancelled = []
 
+    def trade(self, contract, order):
+        order.orderId = len(self.trades) + 1
+        order.permId = 100 + order.orderId
+        trade = ibi.Trade(
+            contract=contract,
+            order=order,
+            orderStatus=ibi.OrderStatus(
+                orderId=order.orderId,
+                status=ibi.OrderStatus.Submitted,
+                remaining=order.totalQuantity,
+            ),
+        )
+        self.trades.append(trade)
+        return trade
 
-def test_BaseExecModel_uses_runtime_controller(controller: Controller):
-    bem = BaseExecModel()
-    assert bem.controller is controller
+    def cancel(self, trade):
+        self.cancelled.append(trade)
+        trade.orderStatus.status = ibi.OrderStatus.Cancelled
+        trade.cancelledEvent.emit(trade)
+        return trade
 
+    def position_for_contract(self, contract):
+        return 0
 
-def test_EventDrivenExecModel_instantiates(controller: Controller):
-    edem = EventDrivenExecModel(stop=FixedStop(1))
-    assert isinstance(edem, EventDrivenExecModel)
-
-
-def test_EventDrivenExecModel_requires_stop(controller: Controller):
-    with pytest.raises(TypeError):
-        EventDrivenExecModel()
-
-
-def test_BaseExecModel_order_validator_works_with_correct_keys(controller: Controller):
-    open_order = {"orderType": "LMT", "lmtPrice": 5}
-    bem = BaseExecModel(open_order=open_order)
-    assert isinstance(bem.open_order, dict)
-    assert bem.open_order["lmtPrice"] == 5
-
-
-def test_BaseExecModel_order_validator_raises_with_incorrect_keys(
-    controller: Controller,
-):
-    open_order = {"orderType": "LMT", "price123": 5}
-    with pytest.raises(ValueError) as excinfo:
-        BaseExecModel(open_order=open_order)
-    assert "price123" in str(excinfo.value)
-
-
-def test_position_id(controller: Controller):
-    em = EventDrivenExecModel(stop=FixedStop(10))
-    em.onStart({"strategy": "xxx"})
-    id1 = em.get_position_id()
-    id2 = em.get_position_id()
-    assert id1 == id2
-
-
-def test_position_id_reset(controller: Controller):
-    em = EventDrivenExecModel(stop=FixedStop(10))
-    em.onStart({"strategy": "xxx"})
-    id1 = em.get_position_id()
-    id2 = em.get_position_id(True)
-    assert id1 != id2
-
-
-def test_oca_group_EventDrivenExecModel(controller: Controller):
-    e = EventDrivenExecModel(
-        stop=FixedStop(1),
-        take_profit=TakeProfitAsStopMultiple(1, 2),
-    )
-    e.onStart({"strategy": "xxx"})
-    oca_group = e.oca_group_generator()
-    assert isinstance(oca_group, str)
-    assert len(oca_group) > 10
-
-
-def test_oca_group_unique_EventDrivenExecModel(controller: Controller):
-    e = EventDrivenExecModel(
-        stop=FixedStop(1),
-        take_profit=TakeProfitAsStopMultiple(1, 2),
-    )
-    e.onStart({"strategy": "xxx"})
-    oca_group1 = e.oca_group_generator()
-    oca_group2 = e.oca_group_generator()
-    assert oca_group1 != oca_group2
-
-
-def test_oca_group_is_not_position_id(controller: Controller):
-    e = EventDrivenExecModel(
-        stop=FixedStop(1),
-        take_profit=TakeProfitAsStopMultiple(1, 2),
-    )
-    e.onStart({"strategy": "xxx"})
-    oca_group = e.oca_group_generator()
-    position_id = e.get_position_id()
-    assert oca_group != position_id
+    def positions(self):
+        return {}
 
 
 @pytest.fixture
-def objects(Atom, atom_runtime) -> tuple:
+def execution_runtime(atom_runtime):
+    trader = FakeTrader()
+    controller = Controller(trader=trader)
+    atom_runtime.bind_controller(controller)
+    return atom_runtime, controller, trader
 
-    @dataclass
-    class Data:
-        contract: ibi.Contract | None = None
-        order: ibi.Order | None = None
-        action: str | None = None
-        trade_object: ibi.Trade | None = None
-        fill: ibi.Fill | None = None
-        position: float | None = None
 
-        def trade_done(self):
-            assert self.trade_object is not None
-            self.trade_object.fillEvent.emit(self.trade_object, self.fill)
-            self.trade_object.filledEvent.emit(self.trade_object)
+def contract(symbol="ES", con_id=1):
+    return ibi.Future(
+        conId=con_id,
+        symbol=symbol,
+        exchange="CME",
+        localSymbol=f"{symbol}M6",
+    )
 
-    output_data = Data()
 
-    class FakeTrader:
-        """
-        All it cares about is accepting correct data and returning
-        Trade object with desired properties.
-        """
+def target(
+    quantity,
+    *,
+    source_key=None,
+    intent=None,
+    symbol="ES",
+    con_id=1,
+    metadata=None,
+    created_at=None,
+):
+    return PositionTarget(
+        contract=contract(symbol, con_id),
+        target_quantity=quantity,
+        source_key=source_key,
+        intent=intent,
+        metadata=metadata or {},
+        created_at=created_at or datetime.now(timezone.utc),
+    )
 
-        def trade(self, contract, order) -> ibi.Trade:
-            order.orderId = COUNTER()
-            trade_object = ibi.Trade(order=order, contract=contract)
-            fill = ibi.Fill(
-                contract,
-                ibi.Execution(
-                    execId="0000e1a7.656447c6.01.01",
-                    time=datetime.now(timezone.utc),
-                    side="SLD" if order.action == "SELL" else "BOT",
-                    shares=order.totalQuantity,
-                ),
-                ibi.CommissionReport(),
-                datetime.now(timezone.utc),
+
+def execution_fill(trade, quantity, exec_id):
+    return ibi.Fill(
+        contract=trade.contract,
+        execution=ibi.Execution(
+            execId=exec_id,
+            orderId=trade.order.orderId,
+            permId=trade.order.permId,
+            side="BOT" if trade.order.action == "BUY" else "SLD",
+            shares=quantity,
+            price=100,
+            time=datetime.now(timezone.utc),
+        ),
+        commissionReport=ibi.CommissionReport(execId=exec_id),
+        time=datetime.now(timezone.utc),
+    )
+
+
+def apply_fill(controller, trade, quantity, exec_id="exec-1", complete=True):
+    fill = execution_fill(trade, quantity, exec_id)
+    trade.fills.append(fill)
+    trade.orderStatus.filled += quantity
+    trade.orderStatus.remaining -= quantity
+    if complete:
+        trade.orderStatus.status = ibi.OrderStatus.Filled
+    info = controller.book.order_by_id(trade.order.orderId)
+    controller.register_position(info, fill)
+    return fill
+
+
+def test_execution_model_string_includes_name_and_class(execution_runtime):
+    model = SerialTargetExecutionModel(name="eurex")
+
+    assert str(model) == "eurex[SerialTargetExecutionModel]"
+
+
+def test_serial_model_submits_absolute_adjustment(execution_runtime):
+    _, _, trader = execution_runtime
+    model = SerialTargetExecutionModel(name="serial")
+
+    model.onData(target(3))
+
+    assert trader.trades[0].order.action == "BUY"
+    assert trader.trades[0].order.totalQuantity == 3
+    assert model.book.order_by_id(1).role == StandardOrderRole.TARGET_ADJUSTMENT
+
+
+def test_serial_model_supports_same_side_resizing(execution_runtime):
+    _, controller, trader = execution_runtime
+    model = SerialTargetExecutionModel(name="serial")
+    model.onData(target(1))
+    first = trader.trades[0]
+    apply_fill(controller, first, 1)
+    first.filledEvent.emit(first)
+
+    assert len(trader.trades) == 1
+
+    model.onData(target(3))
+
+    assert trader.trades[1].order.action == "BUY"
+    assert trader.trades[1].order.totalQuantity == 2
+
+
+@pytest.mark.asyncio
+async def test_serial_target_supersedes_while_order_active(execution_runtime):
+    _, controller, trader = execution_runtime
+    model = SerialTargetExecutionModel(name="serial")
+    model.onData(target(1))
+    model.onData(target(3))
+
+    assert len(trader.trades) == 1
+
+    first = trader.trades[0]
+    apply_fill(controller, first, 1)
+    first.filledEvent.emit(first)
+    await asyncio.sleep(0)
+
+    assert len(trader.trades) == 2
+    assert trader.trades[1].order.totalQuantity == 2
+
+
+def test_serial_recovery_resumes_persisted_target(execution_runtime):
+    runtime, _, trader = execution_runtime
+    model = SerialTargetExecutionModel(name="serial")
+    model.book.update_target(
+        TargetState(
+            execution_model_name="serial",
+            contract=contract(),
+            target_quantity=2,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    runtime.workload_generation = 1
+
+    model.onStart({})
+
+    assert trader.trades[0].order.totalQuantity == 2
+
+
+def test_bracket_model_rejects_missing_or_stale_intent(execution_runtime):
+    model = BracketExecutionModel(
+        "alpha", name="brackets", stop=FixedStop(2)
+    )
+
+    with pytest.raises(ValueError, match="requires PositionIntent"):
+        model.onData(target(1, source_key="alpha", metadata={"atr": 5}))
+    with pytest.raises(ValueError, match="inconsistent"):
+        model.onData(
+            target(
+                1,
+                source_key="alpha",
+                intent=PositionIntent.CLOSE,
+                metadata={"atr": 5},
             )
-            trade_object.fills.append(fill)
-            output_data.trade_object = trade_object
-            output_data.fill = fill
-            return trade_object
-
-    class FakeController(Controller):
-        """
-        It's a regular `Controller object, the only modification being
-        that it records data passed to :meth:`Trade`
-        """
-
-        def trade(
-            self,
-            strategy_str: str,
-            contract: ibi.Contract,
-            order: ibi.Order,
-            action: str,
-            params: dict,
-        ) -> ibi.Trade | None:
-            output_data.contract = contract
-            output_data.order = order
-            output_data.action = action
-            return super().trade(strategy_str, contract, order, action, params)
-
-    class Source(Atom):
-        pass
-
-    controller = FakeController(FakeTrader())  # type: ignore
-    atom_runtime.bind_controller(controller)
-    source = Source()
-
-    return controller, source, output_data
-
-
-def test_EventDrivenExecModel_brackets_have_same_oca(objects):
-    controller, source, data = objects
-    em = EventDrivenExecModel(
-        stop=TrailingStop(3),
-        take_profit=TakeProfitAsStopMultiple(3, 3),
-    )
-    em.onStart({"strategy": "xxx"})
-    source += em
-    with patch.object(controller, "verify_market_open", return_value=True):
-        source.dataEvent.emit(
-            {
-                "signal": 1,
-                "action": "OPEN",
-                "amount": 1,
-                "target_position": 1,
-                "atr": 5,
-                "contract": ibi.Future("NQ", "CME", conId=1),
-            }
-        )
-        data.trade_done()
-        brackets = list(em.data.brackets.values())
-        assert brackets[0].trade.order.ocaGroup == brackets[1].trade.order.ocaGroup
-
-
-def test_EventDrivenExecModel_close_has_same_oca_as_brackets(objects):
-    controller, source, data = objects
-    em = EventDrivenExecModel(
-        stop=TrailingStop(3),
-        take_profit=TakeProfitAsStopMultiple(3, 3),
-    )
-    em.onStart({"strategy": "xxx"})
-    source += em
-    with patch.object(controller, "verify_market_open", return_value=True):
-        source.dataEvent.emit(
-            {
-                "signal": 1,
-                "action": "OPEN",
-                "amount": 1,
-                "target_position": 1,
-                "atr": 5,
-                "contract": ibi.ContFuture("NQ", "CME", conId=1),
-            }
-        )
-        data.trade_done()
-        brackets = list(em.data.brackets.values())
-        # em.position = 1
-        source.dataEvent.emit(
-            {
-                "signal": -1,
-                "action": "CLOSE",
-                "amount": 1,
-                "target_position": 0,
-            }
-        )
-        data.trade_done()
-        assert data.order.ocaGroup == brackets[0].trade.order.ocaGroup
-
-
-def test_BaseExecModel_open_signal_generates_order(objects):
-    controller, source, output_data = objects
-    em = BaseExecModel()
-    source += em
-    contract = ibi.ContFuture("NQ", "CME")
-    data = {
-        "signal": 1,
-        "action": "OPEN",
-        "amount": 1,
-        "target_position": 1,
-        "contract": contract,
-    }
-    source.startEvent.emit({"strategy": "xxx"})
-    source.dataEvent.emit(data)
-    assert output_data.order.action == "BUY"
-    assert output_data.contract == contract
-    assert em.data.active_contract == contract
-
-
-def test_BaseExecModel_no_close_order_without_position(objects):
-    controller, source, output_data = objects
-    em = BaseExecModel()
-    em.onStart({"strategy": "xxx"})
-    source += em
-
-    data = {
-        "signal": -1,
-        "action": "CLOSE",
-        "amount": 1,
-        "target_position": 0,
-        "contract": ibi.ContFuture("NQ", "CME"),
-    }
-    source.dataEvent.emit(data)
-    assert output_data.order is None
-
-
-def test_BaseExecModel_faulty_close_order_logs(objects, caplog):
-    """
-    Execution model logs an attempt to close a non-existing position.
-    """
-    controller, source, data = objects
-    em = BaseExecModel()
-    source += em
-    em.onStart({"strategy": "xxx"})
-
-    data = {
-        "signal": -1,
-        "action": "CLOSE",
-        "amount": 1,
-        "target_position": 0,
-        "contract": ibi.ContFuture("NQ", "CME"),
-    }
-    source.dataEvent.emit(data)
-    assert caplog.record_tuples[-1][1] == logging.ERROR
-
-
-def test_BaseExecModel_close_signal_generates_order(objects):
-    controller, source, data = objects
-    em = BaseExecModel()
-    em.onStart({"strategy": "xxx"})
-    source += em
-
-    data_open = {
-        "signal": 1,
-        "action": "OPEN",
-        "amount": 1,
-        "target_position": 1,
-        "contract": ibi.Future("NQ", "CME"),
-    }
-    source.dataEvent.emit(data_open)
-    em.data.position = 1
-    data_close = {
-        "signal": -1,
-        "action": "CLOSE",
-        "amount": 1,
-        "target_position": 0,
-        "contract": ibi.Future("NQ", "CME"),
-    }
-    source.dataEvent.emit(data_close)
-    assert data.order.action == "SELL"
-
-
-def test_BaseExecModel_close_uses_held_contract_when_entry_contract_changed(objects):
-    controller, source, data = objects
-    held_contract = ibi.Future(
-        conId=1,
-        symbol="NG",
-        lastTradeDateOrContractMonth="20260729",
-        exchange="NYMEX",
-        localSymbol="NGQ26",
-    )
-    next_contract = ibi.Future(
-        conId=2,
-        symbol="NG",
-        lastTradeDateOrContractMonth="20260827",
-        exchange="NYMEX",
-        localSymbol="NGU26",
-    )
-    em = BaseExecModel()
-    em.onStart({"strategy": "dt_NG"})
-    source += em
-
-    with patch.object(controller, "verify_market_open", return_value=True):
-        source.dataEvent.emit(
-            {
-                "signal": -1,
-                "action": "OPEN",
-                "amount": 1,
-                "target_position": -1,
-                "contract": held_contract,
-            }
-        )
-        em.data.position = -1
-        source.dataEvent.emit(
-            {
-                "signal": 1,
-                "action": "CLOSE",
-                "amount": 1,
-                "target_position": 0,
-                "contract": next_contract,
-            }
         )
 
-    assert em.data.active_contract == held_contract
-    assert data.contract == held_contract
+    assert model.book.position_state("alpha") is None
 
 
-def test_passed_order_kwargs_update_defaults(Atom, objects):
-    controller, source, data = objects
-    # these are non defaults, so assert will check whether defaults
-    # have been successfully overridden
-    em = BaseExecModel(open_order={"algoParams": ""})
-
-    class Source(Atom):
-        pass
-
-    source = Source()
-    source += em
-    source.startEvent.emit({"strategy": "xxx"})
-    source.dataEvent.emit(
-        {
-            "signal": 1,
-            "action": "OPEN",
-            "amount": 1,
-            "target_position": 1,
-            "contract": ibi.ContFuture("NQ", "CME"),
-        }
-    )
-    assert data.order.algoParams == ""
-
-
-def test_EventDrivenExecModel_bracket_params_override_detaults(atom_runtime, trade):
-    """
-    Create a setup where `FakeTrader` will record received order that
-    we can compare with expectations.
-
-    `stop` parameter passed to `EventDrivenExecModel` is `TrailingStop` so
-    resulting bracket order must be `TRAIL` even though default is `STP`.
-    """
-
-    class FakeTrader:
-        order = None
-
-        def trade(self, contract, order):
-            self.order = order
-            return ibi.Trade(order=ibi.Order(orderId=1))
-
-    fake_trader = FakeTrader()
-    controller = Controller(fake_trader)
-    atom_runtime.bind_controller(controller)
-    em = EventDrivenExecModel(stop=TrailingStop(2, vol_field="my_vol_field"))
-    with patch.object(controller, "verify_market_open", return_value=True):
-        em.strategy = "fake strategy"
-        em._attach_bracket(trade, {"my_vol_field": 10})
-
-        assert fake_trader.order.orderType == "TRAIL"
-        # basis for stop distance calculation is defined as `my_vol_field`
-        # its value is given as 10 and stop multiple is 2
-        assert fake_trader.order.auxPrice == 20
-
-
-def test_OrderKey_picks_correct_order_low_level(controller):
-    em = BaseExecModel(open_order={"orderType": "STP"})
-    my_order = em._order(OrderKey.open_order, {})
-    assert my_order.orderType == "STP"
-
-
-def test_OrderKey_picks_correct_order_higher_level(atom_runtime):
-
-    class FakeTrader:
-        order = None
-
-        def trade(self, contract, order):
-            self.order = order
-            return ibi.Trade(order=ibi.Order(orderId=1))
-
-    fake_trader = FakeTrader()
-    controller = Controller(fake_trader)
-    atom_runtime.bind_controller(controller)
-    em = BaseExecModel(
-        open_order={"orderType": "STPLMT"},
-        close_order={"orderType": "TRAIL"},
-    )
-    with patch.object(controller, "verify_market_open", return_value=True):
-        em.open(
-            {
-                "contract": ibi.Future("NQ", "CME"),
-                "signal": 1,
-                "amount": 1,
-                "strategy": "fake strategy",
-            }
+def test_bracket_model_rejects_same_side_resize(execution_runtime):
+    runtime, _, _ = execution_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+            target_quantity=1,
+            position_id="episode",
+            bracket_inputs={"atr": 5},
         )
-        assert fake_trader.order.orderType == "STPLMT"
-
-
-def test_OrderKey_picks_correct_order_higher_level_2(atom_runtime):
-
-    class FakeTrader:
-        order = None
-
-        def trade(self, contract, order):
-            self.order = order
-            return ibi.Trade(order=ibi.Order(orderId=1))
-
-    fake_trader = FakeTrader()
-
-    controller = Controller(fake_trader)
-    atom_runtime.bind_controller(controller)
-    em = BaseExecModel(
-        open_order={"orderType": "STPLMT"},
-        close_order={"orderType": "TRAIL"},
     )
-    em.strategy = "xxx"
-    with patch.object(controller, "verify_market_open", return_value=True):
-        em.open({"contract": ibi.Future("NQ", "CME"), "signal": 1, "amount": 1})
-        # brute forcing position here because we're not properly updating StateMachine
-        # and execution models abandon close positions for non-existing positions
-        em.data.position = 1
-        em.close({"contract": ibi.Future("NQ", "CME"), "signal": -1, "amount": 1})
-        assert fake_trader.order.orderType == "TRAIL"
+    model = BracketExecutionModel(
+        "alpha", name="brackets", stop=FixedStop(2)
+    )
+
+    with pytest.raises(ValueError, match="same-side"):
+        model.onData(
+            target(
+                2,
+                source_key="alpha",
+                intent=PositionIntent.OPEN,
+                metadata={"atr": 5},
+            )
+        )
+
+
+def test_bracket_model_rejects_invalid_oca_type(execution_runtime):
+    with pytest.raises(ValueError, match="oca_type"):
+        BracketExecutionModel(
+            "alpha",
+            name="brackets",
+            stop=FixedStop(2),
+            oca_type=0,
+        )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), "five"])
+def test_bracket_model_validates_recovery_inputs(execution_runtime, value):
+    model = BracketExecutionModel(
+        "alpha", name="brackets", stop=FixedStop(2)
+    )
+
+    with pytest.raises((TypeError, ValueError), match="Bracket input"):
+        model.onData(
+            target(
+                1,
+                source_key="alpha",
+                intent=PositionIntent.OPEN,
+                metadata={"atr": value},
+            )
+        )
+
+    assert model.book.position_state("alpha") is None
+
+
+def test_brackets_attach_only_after_complete_entry_fill(execution_runtime):
+    _, controller, trader = execution_runtime
+    model = BracketExecutionModel(
+        "alpha",
+        name="brackets",
+        stop=FixedStop(2),
+    )
+    model.onData(
+        target(
+            2,
+            source_key="alpha",
+            intent=PositionIntent.OPEN,
+            metadata={"atr": 5},
+        )
+    )
+    entry = trader.trades[0]
+    apply_fill(controller, entry, 1, complete=False)
+    entry.filledEvent.emit(entry)
+
+    assert len(trader.trades) == 1
+
+    apply_fill(controller, entry, 1, exec_id="exec-2")
+    entry.orderStatus.avgFillPrice = 100
+    entry.filledEvent.emit(entry)
+
+    assert len(trader.trades) == 2
+    assert controller.book.order_by_id(2).role == StandardOrderRole.STOP_LOSS
+    assert controller.book.order_by_id(2).position_id == (
+        controller.book.position_state("alpha").position_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_entry_fill_continues_to_newer_close_target(execution_runtime):
+    _, controller, trader = execution_runtime
+    model = BracketExecutionModel(
+        "alpha",
+        name="brackets",
+        stop=FixedStop(2),
+    )
+    model.onData(
+        target(
+            1,
+            source_key="alpha",
+            intent=PositionIntent.OPEN,
+            metadata={"atr": 5},
+        )
+    )
+    entry = trader.trades[0]
+    model.onData(
+        target(
+            0,
+            source_key="alpha",
+            intent=PositionIntent.CLOSE,
+        )
+    )
+
+    apply_fill(controller, entry, 1)
+    entry.orderStatus.avgFillPrice = 100
+    entry.filledEvent.emit(entry)
+    await asyncio.sleep(0)
+
+    assert [
+        controller.book.order_by_id(trade.order.orderId).role
+        for trade in trader.trades
+    ] == [
+        StandardOrderRole.OPEN,
+        StandardOrderRole.STOP_LOSS,
+        StandardOrderRole.CLOSE,
+    ]
+    assert trader.trades[-1].order.action == "SELL"
+
+
+@pytest.mark.asyncio
+async def test_reversal_closes_then_opens_new_episode(execution_runtime):
+    runtime, controller, trader = execution_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+            target_quantity=1,
+            position_id="old-episode",
+            bracket_inputs={"atr": 5},
+        )
+    )
+    model = BracketExecutionModel(
+        "alpha", name="brackets", stop=FixedStop(2)
+    )
+
+    model.onData(
+        target(
+            -1,
+            source_key="alpha",
+            intent=PositionIntent.REVERSE,
+            metadata={"atr": 5},
+        )
+    )
+
+    close = trader.trades[0]
+    assert close.order.action == "SELL"
+    apply_fill(controller, close, 1)
+    close.filledEvent.emit(close)
+    await asyncio.sleep(0)
+
+    assert trader.trades[1].order.action == "SELL"
+    assert runtime.book.position_state("alpha").position_id != "old-episode"
+    assert runtime.book.position_state("alpha").bracket_inputs == {"atr": 5}
+
+
+def test_stop_fill_closes_episode_and_prevents_restart_reentry(
+    execution_runtime,
+):
+    runtime, controller, trader = execution_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+            target_quantity=1,
+            position_id="episode",
+            bracket_inputs={"atr": 5},
+        )
+    )
+    model = BracketExecutionModel(
+        "alpha", name="brackets", stop=FixedStop(2)
+    )
+    stop = controller.trade(
+        contract(),
+        ibi.Order(action="SELL", totalQuantity=1, orderType="STP"),
+        role=StandardOrderRole.STOP_LOSS,
+        execution_model_name=model.name,
+        source_key="alpha",
+        position_id="episode",
+    )
+
+    assert stop is not None
+    apply_fill(controller, stop, 1)
+
+    state = runtime.book.position_state("alpha")
+    assert state.quantity == 0
+    assert state.target_quantity == 0
+    assert state.position_id is None
+    assert state.blocked_direction == 1
+    model.recover()
+    assert trader.trades == [stop]
+
+
+class RecordingModel(ExecutionModel):
+    def __init__(self, **kwargs):
+        self.accepted = []
+        self.recoveries = 0
+        super().__init__(**kwargs)
+
+    def accept(self, incoming):
+        self.accepted.append(incoming)
+        return True
+
+    def recover(self):
+        self.recoveries += 1
+
+
+def test_router_first_match_and_default(execution_runtime):
+    first = RecordingModel(name="first")
+    second = RecordingModel(name="second")
+    fallback = RecordingModel(name="fallback")
+    router = ExecutionRouter(
+        [
+            ExecutionRule(predicate=symbol_is("ES"), model=first),
+            ExecutionRule(predicate=symbol_is("NQ"), model=second),
+        ],
+        default_model=fallback,
+    )
+
+    router.onData(target(1, symbol="ES"))
+    router.onData(target(1, symbol="NQ", con_id=2))
+    router.onData(target(1, symbol="YM", con_id=3))
+
+    assert len(first.accepted) == 1
+    assert len(second.accepted) == 1
+    assert len(fallback.accepted) == 1
+
+
+def test_router_fails_closed_without_default(execution_runtime):
+    model = RecordingModel(name="model")
+    router = ExecutionRouter(
+        [ExecutionRule(predicate=symbol_is("NQ"), model=model)]
+    )
+
+    with pytest.raises(LookupError, match="No ExecutionModel"):
+        router.onData(target(1))
+
+
+def test_router_rejects_duplicate_model_names(execution_runtime):
+    with pytest.raises(ValueError, match="Duplicate"):
+        ExecutionRouter(
+            [
+                ExecutionRule(
+                    predicate=lambda target: True,
+                    model=RecordingModel(name="same"),
+                ),
+                ExecutionRule(
+                    predicate=lambda target: False,
+                    model=RecordingModel(name="same"),
+                ),
+            ]
+        )
+
+
+def test_router_starts_every_model_once_per_generation(execution_runtime):
+    runtime, _, _ = execution_runtime
+    first = RecordingModel(name="first")
+    second = RecordingModel(name="second")
+    router = ExecutionRouter(
+        [
+            ExecutionRule(predicate=lambda target: True, model=first),
+            ExecutionRule(predicate=lambda target: False, model=second),
+        ]
+    )
+    runtime.workload_generation = 1
+
+    router.onStart({})
+    router.onStart({})
+    runtime.workload_generation = 2
+    router.onStart({})
+
+    assert first.recoveries == 2
+    assert second.recoveries == 2
+
+
+def test_router_preserves_source_affinity_until_flat(execution_runtime):
+    runtime, _, _ = execution_runtime
+    owner = RecordingModel(name="owner")
+    current_rule = RecordingModel(name="current")
+    router = ExecutionRouter(
+        [
+            ExecutionRule(
+                predicate=lambda target: True,
+                model=current_rule,
+            )
+        ],
+        default_model=owner,
+    )
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="owner",
+            contract=contract(),
+            quantity=1,
+            target_quantity=1,
+        )
+    )
+    incoming = target(0, source_key="alpha")
+
+    router.onData(incoming)
+
+    assert owner.accepted == [incoming]
+    assert current_rule.accepted == []
+
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="owner",
+            contract=contract(),
+        )
+    )
+    router.onData(incoming)
+
+    assert current_rule.accepted == [incoming]
+
+
+def test_router_fails_closed_for_missing_recovery_model(execution_runtime):
+    runtime, _, _ = execution_runtime
+    runtime.book.update_target(
+        TargetState(
+            execution_model_name="missing",
+            contract=contract(),
+            target_quantity=1,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    router = ExecutionRouter(
+        [
+            ExecutionRule(
+                predicate=lambda target: True,
+                model=RecordingModel(name="configured"),
+            )
+        ]
+    )
+    runtime.workload_generation = 1
+
+    with pytest.raises(RuntimeError, match="affinity"):
+        router.onStart({})
+
+
+def test_stale_serial_target_is_not_emitted_as_accepted(execution_runtime):
+    model = SerialTargetExecutionModel(name="serial")
+    newer = target(
+        2,
+        created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    older = target(
+        1,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    accepted = []
+    model.dataEvent += lambda incoming, _name: accepted.append(incoming)
+
+    model.onData(newer)
+    model.onData(older)
+
+    assert accepted == [newer]
+
+
+def test_serial_recovery_rebinds_active_order_completion(execution_runtime):
+    runtime, _, trader = execution_runtime
+    model = SerialTargetExecutionModel(name="serial")
+    model.onData(target(1))
+    active = trader.trades[0]
+    rebound = ibi.Trade(
+        contract=active.contract,
+        order=active.order,
+        orderStatus=active.orderStatus,
+    )
+    runtime.book.rebind_trade(rebound)
+    runtime.workload_generation = 1
+
+    model.onStart({})
+
+    assert len(rebound.filledEvent) == 1
+
+
+def test_bracket_recovery_rebinds_active_entry_fill(execution_runtime):
+    runtime, _, trader = execution_runtime
+    model = BracketExecutionModel(
+        "alpha", name="brackets", stop=FixedStop(2)
+    )
+    model.onData(
+        target(
+            1,
+            source_key="alpha",
+            intent=PositionIntent.OPEN,
+            metadata={"atr": 5},
+        )
+    )
+    entry = trader.trades[0]
+    rebound = ibi.Trade(
+        contract=entry.contract,
+        order=entry.order,
+        orderStatus=entry.orderStatus,
+    )
+    runtime.book.rebind_trade(rebound)
+    runtime.workload_generation = 1
+
+    model.onStart({})
+
+    assert len(rebound.filledEvent) == 1

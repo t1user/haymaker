@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from haymaker.async_wrappers import QueueShutdownPolicy
+
 from .async_datastore import AsyncDataStore, QueuedDataSink
 from .symbol_namer import SymbolNamer
 
@@ -24,7 +26,13 @@ class FrameStoreProvider(Protocol):
 
         ...
 
-    def queued_sink(self, library: str, *, symbol_namer: SymbolNamer) -> QueuedDataSink:
+    def queued_sink(
+        self,
+        library: str,
+        *,
+        symbol_namer: SymbolNamer,
+        shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DISCARD,
+    ) -> QueuedDataSink:
         """Return a best-effort queued sink for strategy composition.
 
         Args:
@@ -32,7 +40,7 @@ class FrameStoreProvider(Protocol):
             symbol_namer: Immutable contract-to-symbol naming policy.
 
         Returns:
-            Sink whose explicit enqueue methods use best-effort shutdown.
+            Sink whose explicit enqueue methods use ``shutdown_policy``.
         """
 
         ...

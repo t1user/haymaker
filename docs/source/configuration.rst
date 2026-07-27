@@ -148,8 +148,10 @@ closely related runtime objects.
    execution verification, error filtering, unknown-trade policy, bracket
    policy, and futures-roll time.
 
-``state_machine``
-   Save delay, Mongo collection names, and rejected-order limit.
+``book``
+   Critical-save policy, ``orders`` and ``state`` Mongo collection names, and
+   the rejected-order limit. Book mutations use one ordered ``DRAIN`` queue;
+   whole-system strategy snapshots and snapshot debounce are not configured.
 
 ``storage``
    Base directory plus Mongo client arguments and the framework database name.
@@ -214,55 +216,8 @@ Safe Object Conversion
 
 YAML contains plain data only. ``ConnectionSettings.from_mapping()`` converts
 the ``connection.probe_contract`` mapping to an
-:class:`ib_insync.contract.Contract`, while ``OrderDefaults.from_mapping()``
+IB ``Contract``, while ``OrderDefaults.from_mapping()``
 converts order ``algoParams`` entries to
-:class:`ib_insync.objects.TagValue` instances and verifies that each mapping can
+IB ``TagValue`` instances and verifies that each mapping can
 construct an IB order. Arbitrary Python object constructors and executable YAML
 tags are rejected.
-
-Migration from the Legacy Schema
-================================
-
-The former flat configuration API and import-time ``CONFIG`` object have been
-removed. Common migrations include:
-
-.. list-table::
-   :header-rows: 1
-
-   * - Legacy key or command
-     - Replacement
-   * - ``app.host`` / top-level ``host``
-     - ``connection.host``
-   * - ``clientId``
-     - ``connection.client_id``
-   * - ``logging_config``
-     - ``logging.config_file``
-   * - ``logging_path``
-     - ``logging.directory``
-   * - ``data_folder``
-     - ``storage.base_directory``
-   * - ``storage.block_library``
-     - Select the library explicitly in the strategy's
-       ``FrameStoreProvider.queued_sink()`` call
-   * - ``storage.market_data_library``
-     - Select the library explicitly in the strategy's
-       ``FrameStoreProvider.datastore()`` call
-   * - ``storage.dataframe_save_frequency``
-     - Pass ``save_frequency`` to ``DfAggregator``
-   * - ``barSize``
-     - ``download.bar_size``
-   * - ``wts``
-     - ``download.what_to_show``
-   * - ``useRTH``
-     - ``download.use_rth``
-   * - ``pacer_allowance_fraction``
-     - ``pacing.allowance_fraction``
-   * - top-level ``startup.reset`` and related startup paths
-     - ``controller.startup.reset`` and related startup paths
-   * - ``-s key value`` with a flat key
-     - ``-s section.key value``
-
-Code that imported ``haymaker.config.CONFIG`` should instead receive a ready
-runtime service. Framework composition uses ``load_live_config()`` and passes
-each section to its owning target or subsystem composition boundary; user
-strategy code normally does not need direct access to framework configuration.

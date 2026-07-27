@@ -14,7 +14,7 @@ from haymaker.config import LiveCommand, load_live_config
 from haymaker.contract_registry import ContractRegistry
 from haymaker.databases import MongoService
 from haymaker.runtime import InitData, LiveRuntime, RuntimeContext, StartupJobs
-from haymaker.streamers import Streamer
+from haymaker.components.streamers import Streamer
 from haymaker.supervisor import ConnectionSettings
 from haymaker.trader import Trader
 
@@ -39,7 +39,7 @@ def make_live_runtime(atom_runtime) -> LiveRuntime:
         live_config(),
         ib=atom_runtime.ib,
         contract_registry=atom_runtime.contract_registry,
-        sm=atom_runtime.sm,
+        book=atom_runtime.book,
     )
 
 
@@ -49,7 +49,7 @@ def test_runtime_context_has_compact_repr_and_log_string(atom_runtime) -> None:
     context = RuntimeContext(
         ib=atom_runtime.ib,
         contract_registry=atom_runtime.contract_registry,
-        sm=atom_runtime.sm,
+        book=atom_runtime.book,
         trader=Trader(atom_runtime.ib),
         frame_store_provider=atom_runtime.frame_store_provider,
         order_defaults=atom_runtime.order_defaults,
@@ -70,7 +70,7 @@ def test_live_runtime_builds_and_installs_ready_context(atom_runtime) -> None:
 
     assert Atom.runtime is runtime.context
     assert runtime.context.ib is atom_runtime.ib
-    assert runtime.context.sm is atom_runtime.sm
+    assert runtime.context.book is atom_runtime.book
     assert runtime.context.contract_registry is atom_runtime.contract_registry
     assert runtime.context.controller is not None
     assert runtime.context.frame_store_provider is runtime.frame_store_provider
@@ -88,7 +88,7 @@ def test_live_runtime_installs_injected_frame_store_provider(atom_runtime) -> No
         live_config(),
         ib=atom_runtime.ib,
         contract_registry=atom_runtime.contract_registry,
-        sm=atom_runtime.sm,
+        book=atom_runtime.book,
         frame_store_provider=atom_runtime.frame_store_provider,
     )
 
@@ -104,7 +104,7 @@ def test_live_runtime_keeps_mongo_service_out_of_context(atom_runtime) -> None:
         ib=atom_runtime.ib,
         mongo_service=mongo_service,
         contract_registry=atom_runtime.contract_registry,
-        sm=atom_runtime.sm,
+        book=atom_runtime.book,
     )
 
     assert runtime.mongo_service is mongo_service
@@ -223,9 +223,10 @@ async def test_live_runtime_propagates_startup_failure() -> None:
     runtime = object.__new__(LiveRuntime)
     runtime.context = cast(
         RuntimeContext,
-        SimpleNamespace(
-            controller=FailingController(),
-            future_roll_policies={},
+            SimpleNamespace(
+                controller=FailingController(),
+                future_roll_policies={},
+                workload_generation=0,
         ),
     )
 
@@ -254,9 +255,10 @@ async def test_live_runtime_runs_startup_jobs_after_controller() -> None:
     runtime = object.__new__(LiveRuntime)
     runtime.context = cast(
         RuntimeContext,
-        SimpleNamespace(
-            controller=FakeController(),
-            future_roll_policies={"manual": False},
+            SimpleNamespace(
+                controller=FakeController(),
+                future_roll_policies={"manual": False},
+                workload_generation=0,
         ),
     )
     runtime.startup_jobs = cast(StartupJobs, FakeStartupJobs())

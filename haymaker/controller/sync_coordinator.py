@@ -8,12 +8,12 @@ restarting once, retrying, and deciding whether repeated failures should
 disable trading.
 
 After broker validation, each step reads current state directly from
-``controller.ib`` or ``controller.sm`` instead of using stored broker/local
+``controller.ib`` or ``controller.book`` instead of using stored broker/local
 snapshots.  The ordered flow is:
 
 1. Relink broker ``ibi.Trade`` objects to local order records and back-report
    fills for orders that completed while the process was disconnected.
-2. Compare local aggregate strategy positions with broker positions and
+2. Compare local aggregate logical Book positions with broker positions and
    correct local position records when the existing recovery rules allow it.
 3. Skip correction trades when unresolved unknown broker orders remain active.
 4. Delegate bracket-record and broker stop-loss protection handling to
@@ -36,7 +36,10 @@ from typing import TYPE_CHECKING
 import ib_insync as ibi
 
 from haymaker import misc
-from haymaker.state_machine import OrderInfo
+from dataclasses import replace
+from datetime import datetime, timezone
+
+from haymaker.book import OrderInfo
 
 from .sync_brackets import BracketSyncAction, BracketSyncError
 from .sync_routines import OrderSync, PositionSync
@@ -78,7 +81,7 @@ class SyncCoordinator:
             restart_before_correction: When ``True``, unresolved order or
                 position mismatches set ``request_restart`` and end the pass
                 before cancelling unknown orders, pruning local order records,
-                or changing strategy positions.  Trade-object refreshes and
+                or changing logical positions.  Trade-object refreshes and
                 known completed-fill back-reporting still run first.
         """
         self.controller = controller
@@ -108,14 +111,14 @@ class SyncCoordinator:
             self.request_restart = True
             return False
 
-        order_sync = OrderSync(self.controller.ib, self.controller.sm)
+        order_sync = OrderSync(self.controller.ib, self.controller.book)
 
         self.controller.release_hold()
         if order_sync.done:
             self.handle_done_trades(order_sync.done)
             await asyncio.sleep(0)
 
-        position_sync = PositionSync(self.controller.ib, self.controller.sm)
+        position_sync = PositionSync(self.controller.ib, self.controller.book)
 
         if (
             order_sync.is_error or position_sync.is_error
@@ -201,50 +204,78 @@ class SyncCoordinator:
                 f"Will delete record for trade that IB doesn't know about: "
                 f"{trade.order.orderId}"
             )
-            self._faulty_trades.append(self.controller.sm._orders[trade.order.orderId])
-            self.controller.sm.prune_order(trade.order.orderId)
+            info = self.controller.book.order_by_id(trade.order.orderId)
+            if info is not None:
+                self._faulty_trades.append(info)
+            self.controller.book.prune_order(trade.order.orderId)
 
     def handle_error_positions(self, errors: dict[ibi.Contract, float]) -> None:
         log.error("Will attempt to fix position records")
         for contract, diff in errors.items():
-            strategies = self.controller.sm.for_contract.get(contract)
-            log.debug(f"Strategies for contract {contract.localSymbol}: {strategies}")
-            if strategies and len(strategies) == 1:
-                self.controller.sm.strategy[strategies[0]].position -= diff
-                log.error(
-                    f"Corrected position records for strategy "
-                    f"{strategies[0]} by {-diff}"
+            states = self.controller.book.positions_for_contract(contract)
+            log.debug(
+                "Sources for contract %s: %s",
+                contract.localSymbol,
+                [state.source_key for state in states],
+            )
+            if len(states) == 1:
+                state = states[0]
+                self.controller.book.update_position(
+                    replace(
+                        state,
+                        quantity=state.quantity - diff,
+                        updated_at=datetime.now(timezone.utc),
+                    )
                 )
-                self.controller.sm.save_strategies()
+                log.error(
+                    "Corrected position records for source %s by %s",
+                    state.source_key,
+                    -diff,
+                )
 
             elif (
-                strategies
+                states
                 and self.controller.trader.position_for_contract(contract) == 0
             ):
-                for strategy in strategies:
-                    self.controller.sm.strategy[strategy].position = 0
-                self.controller.sm.save_strategies()
+                for state in states:
+                    self.controller.book.update_position(
+                        replace(
+                            state,
+                            quantity=0.0,
+                            position_id=None,
+                            updated_at=datetime.now(timezone.utc),
+                        )
+                    )
                 log.error(
-                    f"Position records zeroed for {strategies} "
-                    f"to reflect zero position for {contract.symbol}."
+                    "Position records zeroed for %s to reflect broker flat.",
+                    [state.source_key for state in states],
                 )
-            elif strategies:
-                strategy_faults = [
-                    order_info.strategy for order_info in self._faulty_trades
+            elif states:
+                source_faults = [
+                    order_info.source_key
+                    for order_info in self._faulty_trades
+                    if order_info.source_key is not None
                 ]
-                for strategy in strategies:
-                    if strategy in strategy_faults:
-                        self.controller.sm.strategy[strategy].position = 0
+                for state in states:
+                    if state.source_key in source_faults:
+                        self.controller.book.update_position(
+                            replace(
+                                state,
+                                quantity=0.0,
+                                position_id=None,
+                                updated_at=datetime.now(timezone.utc),
+                            )
+                        )
                         log.error(
-                            f"Position records zeroed for {strategy} "
-                            f"to reflect faulty trade previously removed."
+                            "Position records zeroed for %s after faulty trade.",
+                            state.source_key,
                         )
 
             else:
                 # too risky to make assumptions about strategy (what about sl?)
                 log.critical(
                     f"Cannot fix position records for {contract.localSymbol}, "
-                    f"{strategies=}."
+                    f"{states=}."
                 )
                 raise PositionsOutOfSync
             self._faulty_trades.clear()

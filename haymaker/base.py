@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,8 +19,8 @@ from .enums import ActiveNext
 
 if TYPE_CHECKING:
     from .contract_selector import AbstractBaseContractSelector
+    from .book import Book
     from .runtime import RuntimeContext
-    from .state_machine import StateMachine, Strategy
 
 log = logging.getLogger(__name__)
 
@@ -157,10 +156,10 @@ class Atom:
         return self.runtime.ib
 
     @property
-    def sm(self) -> StateMachine:
-        """Return the runtime state machine."""
+    def book(self) -> Book:
+        """Return the runtime accounting book."""
 
-        return self.runtime.sm
+        return self.runtime.book
 
     @property
     def contract_registry(self) -> ContractRegistry:
@@ -180,9 +179,6 @@ class Atom:
     def __init__(self) -> None:
         self._createEvents()
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
-        if not getattr(self, "strategy", None):
-            self.strategy = ""
-        self.startup = False
         self._contract_memo: ibi.Contract | None = None
         self._roll_contract_data: ContractRollData | None = None
 
@@ -227,51 +223,20 @@ class Atom:
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
 
-    def onStart(self, data: Any, *args: Any) -> Awaitable[None] | None:
+    def onStart(
+        self, data: Any, source: Atom | None = None
+    ) -> Awaitable[None] | None:
+        """Run synchronous startup work and forward arbitrary mutable data.
+
+        Args:
+            data: Shared user-controlled startup payload. Atom reserves no keys.
+            source: Immediate upstream Atom, when available.
+
+        Subclasses normally perform their initialization first and call
+        ``super().onStart(data, source)`` last so downstream startup continues.
         """
-        Perform any initilization required on system (re)start.  It
-        will be run automatically and it will be linked to
-        :attr:`startEvent` of the preceding object in the chain.
-
-        First `Atom` in a pipeline (typically a data streamer) will be
-        called by system, which is an indication that (re)start is in
-        progress and we have successfully connected to the broker.
-
-        `data` by default is a dict.  Any information that needs to be
-        passed to atoms down the chain, should be appended to `data`
-        without removing any existing keys.
-
-        If overriding the class, call superclass; call to
-        :meth:`super().onStart(data)` should usually be the last line
-        in overriden method as it will emit :attr:`startEvent` -
-        basically do any processing required in sub-class and then
-        call super-class, which will do standard processing and then
-        emit the event to initialize processing in the next Atom down
-        the chain; if you don't call superclass, make sure to emit
-        :attr:`startEvent`, otherwise subsequent Atoms in the chain
-        won't do startup initialization.
-
-        This method can be synchronous as well as asynchronous (in the
-        subclass it's ok to override it with `async def onData(self,
-        data, *args)`).  If it's async, it will be put in the asyncio
-        loop.
-        """
-        self._set_startup_attrs(data)
         self._process_contract_change()
         self.startEvent.emit(data, self)
-
-    def _set_startup_attrs(self, data):
-        # set strategy if not already set and present in `data` dict
-        if (
-            (self.strategy == "")
-            and isinstance(data, dict)
-            and (strategy := data.get("strategy"))
-        ):
-            self.strategy = strategy
-
-        # set startup to whatever in dict
-        if isinstance(data, dict) and (startup := data.get("startup")):
-            self.startup = startup
 
     def _process_contract_change(self) -> None:
         if (self._contract_memo is not None) and (self._contract_memo != self.contract):
@@ -279,41 +244,22 @@ class Atom:
         self._contract_memo = self.contract
 
     def onData(self, data: Any, *args: Any) -> Awaitable[None] | None:
+        """Process one input.
+
+        Subclasses must implement processing and explicitly emit output.
+
+        Raises:
+            NotImplementedError: Always, unless overridden.
         """
-        Connected to :attr:`dataEvent` of the preceding object in the chain.
-        This is the entry point to any processing perfmormed by this
-        object.  Result of this processing should be added to the
-        `data` dict and passed to the subsequent object in the chain
-        using :attr:`dataEvent` (by calling `self.dataEvent.emit(data)`).
 
-        It's up to the user to emit `dataEvent` with appropriate data,
-        this event will NOT be emitted by the system, so if it's not
-        properly implemented, event chain will be broken.  This method
-        must be obligatorily overriden in a subclass.
-
-        Calling superclass on exit will add a timestamp with object's
-        name to `data`, which may be useful for logging.
-
-        This method can be synchronous as well as asynchronous (in the
-        subclass it's ok to override it with `async def onData(self,
-        data, *args)`).  If it's async, it will be put in the asyncio
-        loop.
-        """
-        data[f"{self.__class__.__name__}_ts"] = datetime.now(tz=timezone.utc)
+        raise NotImplementedError(f"{type(self).__name__}.onData must be implemented")
 
     def onFeedback(self, data: Any, *args: Any) -> Awaitable[None] | None:
-        """
-        Connected to :attr:`feedbackEvent` of the subsequent object in the
-        chain.  Allows for passing of information about trading
-        results.  It's optional to use it, if used, overriden method
-        must emit `feedbackEvent` with appropriate data.  If not
-        overriden, it will just pass received data to the previous
-        object in the chain.
+        """Forward optional feedback toward the preceding Atom.
 
-        This method can be synchronous as well as asynchronous (in the
-        subclass it's ok to override it with `async def onData(self,
-        data, *args)`).  If it's async, it will be put in the asyncio
-        loop.
+        Args:
+            data: Arbitrary feedback payload.
+            *args: Additional event values supplied by the downstream source.
         """
         self.feedbackEvent.emit(data)
 
@@ -335,33 +281,37 @@ class Atom:
         )
         self._roll_contract_data = ContractRollData(old_contract, new_contract)
 
-    def strategy_data(self, strategy_str: str | None = None) -> Strategy:
-        if strategy_str is None:
-            strategy_str = getattr(self, "strategy", "")
-        if not strategy_str:
-            log.warning(f"{self} accessing data for empty strategy.")
-        return self.sm.strategy[strategy_str]
+    def validate_source(self, source: Atom) -> None:
+        """Validate one prospective upstream connection.
 
-    @property
-    def data(self) -> Strategy:
-        """Return strategy data if :attr:`strategy` has been set"""
-        # deprecated; to be removed in next version
-        return self.strategy_data()
-
-    def connect(self, *targets: Atom) -> Self:
-        """
-        Connect appropriate events and methods to subsequent :class:`Atom`
-        object(s) in the chain. Shorthand for this method is `+=`
+        The default accepts every source. Built-in components override this
+        only for structural incompatibilities that can be known before data
+        arrives.
 
         Args:
-            targets (Atom): One or more :class:`Atom` objects to connect to.
-                If more than one object passed, they will be connected directly
-                in a `one-to-many` fashion. If the intention is to create
-                a chain of objects, use :meth:`pipe` instead.
+            source: Atom that would emit into this Atom.
+        """
+
+    def connect(self, *targets: Atom) -> Self:
+        """Connect this Atom directly to one or more targets.
+
+        Every target validates this source before any connection changes.
+        ``+=`` is an alias. Use ``pipe`` for a linear multi-stage chain.
+
+        Args:
+            targets: One or more Atoms connected in one-to-many fan-out.
 
         Returns:
-            Atom: The updated `Atom` object.
+            This source Atom.
+
+        Raises:
+            TypeError: If any target is not an Atom or rejects the source.
         """
+        for target in targets:
+            if not isinstance(target, Atom):
+                raise TypeError("targets must be Atom instances")
+            target.validate_source(self)
+
         for t in targets:
             self.disconnect(t)
             self.startEvent.connect(
@@ -438,15 +388,25 @@ class Atom:
 
 
 class Pipe(Atom):
-    """
-    Auxiliary object for conneting several :class:`Atom` objects. Atoms to be connected
-    need to passed in the right order at initialization.  :class:`Pipe` itself is
-    a subclass of :class:`Atom`, so it can be connected
-    to other :class:`Atom` (or :class:`Pipe`) and all :class:`Atom` attributes
-    and methods are available.
+    """Connect several Atoms into one composable linear pipeline.
+
+    Pass members in data-flow order. ``Pipe`` forwards input and startup to the
+    first member, exposes the last member's output, and routes feedback from the
+    last member to the first.
+
+    Args:
+        targets: One or more initialized Atoms in connection order.
+
+    Note:
+        Connection validation is performed between adjacent members while the
+        pipe is assembled. Fan-out semantics remain those of :class:`Atom`.
     """
 
     def __init__(self, *targets: Atom):
+        if not targets:
+            raise ValueError("Pipe requires at least one Atom")
+        if not all(isinstance(target, Atom) for target in targets):
+            raise TypeError("Pipe members must be Atom instances")
         self._members = targets
         self.first = self._members[0]
         self.last = self._members[-1]
@@ -463,6 +423,11 @@ class Pipe(Atom):
         for target in targets:
             self.last.connect(target)
         return self
+
+    def validate_source(self, source: Atom) -> None:
+        """Validate an upstream connection against the first pipe member."""
+
+        self.first.validate_source(source)
 
     def disconnect(self, *targets: Atom) -> Self:
         for target in targets:

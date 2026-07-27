@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -36,6 +36,7 @@ class Blotter:
     ) -> None:
         self.save_immediately = save_immediately  # False for backtester, True otherwise
         self.blotter: list[dict] = []
+        self._current_records: list[dict[str, Any]] = []
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
         self.done_trades: list[int] = []
@@ -107,14 +108,54 @@ class Blotter:
             self.log_trade(trade, comms, **kwargs)
 
     def save_report(self, report: dict[str, Any]) -> None:
+        """Record one completed trade and apply the configured save policy.
+
+        The in-memory copy makes a newly completed trade queryable while an
+        asynchronous immediate save is still queued. Backtests retain the same
+        rows until :meth:`save_many` is called.
         """
-        Choose whether row of data (report) should be written to permanent
-        store immediately or just kept in self.blotter for later.
-        """
+        self._current_records.append(report)
         if self.save_immediately:
             self.save(report)
         else:
             self.blotter.append(report)
+
+    def records(self) -> tuple[Mapping[str, Any], ...]:
+        """Return persisted and current-process blotter rows without duplicates.
+
+        Returns:
+            Completed trade reports. Rows with the same broker permanent or
+            local order identity are returned once, preferring the in-memory
+            copy produced by the current process.
+        """
+
+        persisted: Sequence[Any] = ()
+        try:
+            if isinstance(self.saver, CsvSaver):
+                persisted = self.saver.read(self.saver.name)
+            else:
+                result = self.saver.read()
+                if isinstance(result, Sequence):
+                    persisted = result
+        except FileNotFoundError:
+            pass
+
+        rows: list[Mapping[str, Any]] = []
+        positions: dict[tuple[Any, Any], int] = {}
+        for candidate in (*persisted, *self._current_records):
+            if not isinstance(candidate, Mapping):
+                continue
+            row = dict(candidate)
+            identity = (row.get("perm_id"), row.get("order_id"))
+            if identity == (None, None):
+                rows.append(row)
+                continue
+            if identity in positions:
+                rows[positions[identity]] = row
+            else:
+                positions[identity] = len(rows)
+                rows.append(row)
+        return tuple(rows)
 
     def save_many(self) -> None:
         """

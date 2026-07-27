@@ -6,8 +6,8 @@ from typing import Any, Optional
 
 import ib_insync as ibi
 
-from .contract_registry import DetailsContainer
-from .misc import round_tick
+from ..contract_registry import DetailsContainer
+from ..misc import round_tick
 
 log = logging.getLogger(__name__)
 
@@ -17,12 +17,19 @@ log = logging.getLogger(__name__)
 
 
 class AbstractBracketLeg(ABC):
-    """
-    For use by EventDrivenExecModel to create stop-loss and
-    take-profit orders.
+    """Build one protective-order leg after a complete entry fill.
 
-    Extract information from Trade object and create dictionary with
-    parameters for appropriate bracket order.
+    BracketExecutionModel calls the leg with validated PositionTarget metadata,
+    the completely filled entry Trade, and Contract details. Subclasses return
+    IB Order keyword arguments for a stop or take-profit order.
+
+    Args:
+        stop_multiple: Multiple applied to the configured volatility field.
+        vol_field: Metadata field containing the distance basis. Defaults to
+            ``"atr"``.
+
+    Raises:
+        KeyError: If the configured volatility field is absent.
     """
 
     vol_field: str = "atr"
@@ -92,8 +99,11 @@ class AbstractBracketLeg(ABC):
 
 
 class FixedStop(AbstractBracketLeg):
-    """
-    Stop-loss with fixed distance from the execution price of entry order.
+    """Create a fixed-price stop from entry price and volatility distance.
+
+    ``stop_multiple * metadata[vol_field]`` determines the distance, rounded
+    to Contract minimum tick. The generated GTC stop closes the completely
+    filled entry quantity and is permitted outside regular trading hours.
     """
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -113,8 +123,11 @@ class FixedStop(AbstractBracketLeg):
 
 
 class TrailingStop(AbstractBracketLeg):
-    """
-    Stop loss trailing price by given distance.
+    """Create a fixed-distance trailing stop for the filled entry quantity.
+
+    The trailing distance is ``stop_multiple * metadata[vol_field]`` rounded to
+    Contract minimum tick. The generated trailing order is GTC and active
+    outside regular trading hours.
     """
 
     def _order(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -131,26 +144,15 @@ class TrailingStop(AbstractBracketLeg):
 
 
 class AdjustableTrailingFixedStop(TrailingStop):
-    """
-    Trailing stop loss that will adjust itself to fixed stop-loss
-    after reaching specified trigger expressed as multiple of trailing
-    points.
+    """Create a trailing stop that later becomes a fixed stop.
 
     Args:
-    =====
-
-    stop_multiple: Multiple of ``vol_field`` at which the TRAIL will
-    be trailing
-
-    trigger_multiple: Multiple of ``stop_multiple`` at which order
-    will be adjusted to STP
-
-    fixed_stop_multiple: Multiple of ``stop_multiple`` to calculate stop
-    price as.  Stop price distance from entry price is
-    ``fixed_stop_multiple`` * ``stop_multiple`` * ``vol_field``
-
-    vol_field: (default: ``atr``) Volatility measure used to calculate
-    stop loss distance from entry price
+        stop_multiple: Initial trailing-distance multiple of ``vol_field``.
+        trigger_multiple: Trailing-distance multiple from entry at which IB
+            changes order type.
+        fixed_stop_multiple: Trailing-distance multiple used to place the
+            adjusted fixed stop relative to its trigger.
+        **kwargs: Optional ``vol_field`` accepted by AbstractBracketLeg.
     """
 
     def __init__(
@@ -190,25 +192,15 @@ class AdjustableTrailingFixedStop(TrailingStop):
 
 
 class AdjustableFixedTrailingStop(FixedStop):
-    """
-    Fixed stop loss that will adjust itself to trailing stop-loss
-    after reaching specified trigger expressed as multiple of trailing
-    points.
+    """Create a fixed stop that later becomes a trailing stop.
 
     Args:
-    =====
-
-    stop_multiple: Multiple of ``vol_filed`` will be the distance of
-    initial STP
-
-    trigger_multiple: Multiple of ``stop_multiple`` at which
-    adjustment will be triggered
-
-    trail_multiple: Multiple of ``stop_multiple`` at which TRAIL will be
-    trialing post adjustment
-
-    vol_field: (default: ``atr``) Volatility measure used to calculate
-    stop loss distance from entry price
+        stop_multiple: Initial stop-distance multiple of ``vol_field``.
+        trigger_multiple: Stop-distance multiple from entry at which IB
+            changes order type.
+        trail_multiple: Stop-distance multiple used as the adjusted trailing
+            amount.
+        **kwargs: Optional ``vol_field`` accepted by AbstractBracketLeg.
     """
 
     def __init__(
@@ -256,25 +248,15 @@ class AdjustableFixedTrailingStop(FixedStop):
 
 
 class AdjustableTrailingStop(TrailingStop):
-    """
-    Trailing stop-loss that will widen trailing distance after
-    reaching pre-specified trigger.
+    """Create a trailing stop whose distance widens after a trigger.
 
     Args:
-    =====
-
-    stop_multiple: Multiple of ``vol_field`` at which the TRAIL will
-    initially be trailing
-
-    trigger_multiple: Multiple of ``stop_multiple`` at which order
-    trailing distance will be adjusted
-
-    adjusted_multiple: Multiple of ``stop_multiple`` at which TRAIL
-    will be trailing after adjustment; i.e. the trailing amount will be:
-    ``vol_field`` * ``stop_multiple`` * ``adjusted_multiple``
-
-    vol_field: (default: ``atr``) Volatility measure used to calculate
-    stop loss distance from entry price
+        stop_multiple: Initial trailing-distance multiple of ``vol_field``.
+        trigger_multiple: Initial-distance multiple from entry at which IB
+            adjusts the order.
+        adjusted_multiple: Initial-distance multiple used as the new trailing
+            amount.
+        **kwargs: Optional ``vol_field`` accepted by AbstractBracketLeg.
     """
 
     def __init__(
@@ -313,10 +295,15 @@ class AdjustableTrailingStop(TrailingStop):
 
 
 class TakeProfitAsStopMultiple(AbstractBracketLeg):
-    """
-    Take-profit order with distance from entry price specified as multiple
-    of stop-loss distance. The multiple is fixed, given on object
-    initialization.
+    """Create a take-profit limit as a multiple of stop distance.
+
+    Args:
+        stop_multiple: Multiple converting ``vol_field`` to stop distance.
+        tp_multiple: Multiple converting stop distance to take-profit distance.
+        **kwargs: Optional ``vol_field`` accepted by AbstractBracketLeg.
+
+    The generated GTC limit closes the filled entry quantity and is permitted
+    outside regular trading hours.
     """
 
     def __init__(self, stop_multiple: float, tp_multiple: float, **kwargs) -> None:
@@ -341,11 +328,15 @@ class TakeProfitAsStopMultiple(AbstractBracketLeg):
 
 
 class FlexibleTakeProfitAsStopMultiple(AbstractBracketLeg):
-    """
-    Take-profit order with distance from entry price specified as multiple
-    of stop-loss distance. The multiple is flexible, passed every time object
-    is called.
+    """Create a GTC take-profit limit without forcing ``outsideRth``.
 
+    Args:
+        stop_multiple: Multiple converting ``vol_field`` to stop distance.
+        tp_multiple: Multiple converting stop distance to take-profit distance.
+        **kwargs: Optional ``vol_field`` accepted by AbstractBracketLeg.
+
+    Use this variant when order defaults or model options should decide
+    outside-regular-hours behavior.
     """
 
     def __init__(self, stop_multiple: float, tp_multiple: float, **kwargs) -> None:

@@ -14,14 +14,14 @@ def test_default_atom_runtime_installs_core_services(atom_runtime) -> None:
     atom = Atom()
 
     assert atom.ib is atom_runtime.ib
-    assert atom.sm is atom_runtime.sm
+    assert atom.book is atom_runtime.book
     assert atom.contract_registry is atom_runtime.contract_registry
     assert atom_runtime.trader is not None
     assert atom_runtime.controller is None
 
 
 def test_atom_runtime_factory_respects_custom_services(
-    atom_runtime_factory, state_machine
+    atom_runtime_factory, book
 ) -> None:
     ib = ibi.IB()
     registry = ContractRegistry()
@@ -30,7 +30,7 @@ def test_atom_runtime_factory_respects_custom_services(
 
     runtime = atom_runtime_factory(
         ib=ib,
-        sm=state_machine,
+        book_=book,
         contract_registry=registry,
         controller=controller,
         frame_store_provider=frame_store_provider,
@@ -38,7 +38,7 @@ def test_atom_runtime_factory_respects_custom_services(
     atom = Atom()
 
     assert runtime.ib is ib
-    assert runtime.sm is state_machine
+    assert runtime.book is book
     assert runtime.contract_registry is registry
     assert runtime.controller is controller
     assert runtime.frame_store_provider is frame_store_provider
@@ -65,22 +65,22 @@ def test_atom_runtime_bind_controller_updates_installed_runtime(atom_runtime) ->
 
 
 def test_atom_runtime_factory_replaces_previous_runtime(
-    atom_runtime_factory, state_machine
+    atom_runtime_factory, book
 ) -> None:
-    first = atom_runtime_factory(ib=ibi.IB(), sm=state_machine)
-    second = atom_runtime_factory(ib=ibi.IB(), sm=state_machine)
+    first = atom_runtime_factory(ib=ibi.IB(), book_=book)
+    second = atom_runtime_factory(ib=ibi.IB(), book_=book)
 
     assert first is not second
     assert Atom().ib is second.ib
 
 
-def test_harness_can_install_on_custom_atom_class(monkeypatch, state_machine) -> None:
+def test_harness_can_install_on_custom_atom_class(monkeypatch, book) -> None:
     class LocalAtom(Atom):
         pass
 
     runtime = AtomRuntimeHarness(
         ib=ibi.IB(),
-        sm=state_machine,
+        book=book,
         contract_registry=ContractRegistry(),
     )
 

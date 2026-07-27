@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from sample_barDataList import sample_barDataList
 
-from haymaker.streamers import (
+from haymaker.components.streamers import (
     HistoricalDataStreamer,
     bar_filter,
 )
@@ -50,7 +50,7 @@ def test_Streamer_keeps_instances(Streamer):
 
 def test_StreamerId(Streamer):
     # make sure module level variable is not carried over from previous runs
-    importlib.reload(importlib.import_module("haymaker.streamers"))
+    importlib.reload(importlib.import_module("haymaker.components.streamers"))
 
     class ConcreteStreamer(Streamer):
 
@@ -73,7 +73,7 @@ def test_StreamerId(Streamer):
 
 def test_StreamerId_dataclass():
     # make sure module level variable is not carried over from previous runs
-    importlib.reload(importlib.import_module("haymaker.streamers"))
+    importlib.reload(importlib.import_module("haymaker.components.streamers"))
 
     s0 = HistoricalDataStreamer(ibi.Contract(symbol="XXX"), "x", "x", "x")
     assert str(s0) == "HistoricalDataStreamer<0><XXX>"
@@ -88,7 +88,7 @@ class FakeStore:
 
 
 def test_timer_true():
-    with patch("haymaker.streamers.Timeout.from_atom") as MockTimeout:
+    with patch("haymaker.components.streamers.Timeout.from_atom") as MockTimeout:
         streamer = HistoricalDataStreamer(
             ibi.Future(symbol="NQ", exchange="CME"),
             10000,
@@ -103,7 +103,7 @@ def test_timer_true():
 
 
 def test_timer_float():
-    with patch("haymaker.streamers.Timeout.from_atom") as MockTimeout:
+    with patch("haymaker.components.streamers.Timeout.from_atom") as MockTimeout:
         streamer = HistoricalDataStreamer(
             ibi.Future(symbol="NQ", exchange="CME"),
             10000,
@@ -154,7 +154,7 @@ def test_HistoricalDataStreamer_durationStr_given_as_int():
         ibi.Future(symbol="NQ", exchange="CME"), 10000, "1 min", "TRADES"
     )
     with patch(
-        "haymaker.streamers.typical_session_length", return_value=timedelta(hours=23)
+        "haymaker.components.streamers.typical_session_length", return_value=timedelta(hours=23)
     ):
         assert streamer._durationStr == "8 D"
 
@@ -164,7 +164,7 @@ def test_HistoricalDataStreamer_durationStr_given_as_str():
         ibi.Future(symbol="NQ", exchange="CME"), "5 D", "1 min", "TRADES"
     )
     with patch(
-        "haymaker.streamers.typical_session_length", return_value=timedelta(hours=23)
+        "haymaker.components.streamers.typical_session_length", return_value=timedelta(hours=23)
     ):
         assert streamer._durationStr == "5 D"
 
@@ -178,7 +178,7 @@ def test_HistoricalDataStreamer_durationStr_with_last_bar_date():
         _last_bar_date=datetime(2026, 1, 26, 10, 0),
     )
     with patch(
-        "haymaker.streamers.typical_session_length", return_value=timedelta(hours=23)
+        "haymaker.components.streamers.typical_session_length", return_value=timedelta(hours=23)
     ):
         with patch("haymaker.durationStr_converters.datetime") as mock_datetime:
             mock_datetime.now.return_value = datetime(2026, 1, 26, 10, 10)

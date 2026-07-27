@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-07-20.
+Last updated: 2026-07-24.
 
 ## High-Level Purpose
 
@@ -14,26 +14,33 @@ The package is still alpha-stage. Some public docs describe the live backtester 
 
 ## Architecture Overview
 
-The live execution side is built around `Atom` pipelines. `Atom` provides event wiring, contract lookup, and shared access to process-owned runtime services. Strategy code composes streamers, signal processors, portfolio sizing, and execution models into event chains.
+The live execution side is built around `Atom` pipelines. `Atom` is an
+arbitrary-message composition primitive providing validated event wiring,
+contract lookup, and shared access to process-owned runtime services. The
+pre-built trading toolbox lives under `haymaker.components` and communicates
+through immutable `Signal`, `PositionProposal`, and absolute `PositionTarget`
+messages.
 
 Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
 
 - shared `ib_insync.IB` client,
 - contract registry for qualified current/next contracts,
-- persisted strategy/order state machine,
+- typed persisted Book for orders, fills, positions, targets, and Portfolio
+  recovery state,
 - private Mongo client lifecycle and health service,
 - controller for broker/state reconciliation and order gateway,
 - startup contract-detail initialization and streamer startup jobs.
 
 `RuntimeContext` is the passive container exposed to `Atom` instances. It
-holds only ready runtime services, the narrow `FrameStoreProvider` composition
-capability, the supervisor restart callback, and strategy futures-roll
-policies; it does not construct services or inspect the user module.
+holds only ready runtime services, process `run_started_at`, supervised
+`workload_generation`, the narrow `FrameStoreProvider` composition capability,
+the supervisor restart callback, and source futures-roll policies; it does not
+construct services or inspect the user module.
 
 The `haymaker` console command owns live composition and logging: it configures
 Haymaker, starts threaded logging handlers, creates `LiveRuntime`, and imports
 the user strategy module so module-level pipelines are built against its
-already-installed `RuntimeContext`. Blocks register their futures-roll policy
+already-installed `RuntimeContext`. SignalModels register their futures-roll policy
 as they are constructed. Strategy module code may use the provider to build
 fully configured dataframe stores and inject them into consumers. The CLI then
 hands the composed runtime to the shared `App`. The app-lifetime `Controller`
@@ -62,7 +69,7 @@ The research package is intentionally separate from live execution. It works dir
   runtime protocol, supervisor composition, graceful `SIGTERM`, and propagation
   of unexpected workload failures after cleanup.
 - `haymaker/runtime.py`: `LiveRuntime`, the live composition root that builds
-  IB/state/controller services, installs a passive `RuntimeContext`, and owns
+  IB/Book/controller services, installs a passive `RuntimeContext`, and owns
   contract-detail initialization, workload startup, reconnect cleanup, and
   final state flushing. Startup jobs retain the live streamer registry
   populated during strategy import.
@@ -75,21 +82,39 @@ The research package is intentionally separate from live execution. It works dir
   connection-unavailable event to the application runtime so live controller
   sync can abort during broker recovery, restart, or shutdown. It does not
   manage the gateway process.
-- `haymaker/controller/`: order/position reconciliation, execution verification, futures rolling, emergency modes, and error handling. Controller sync retries broker connection and broker-position freshness failures, back-reports known fills before position comparison, can request one reconnect before corrective mutations on the first sync after hold/startup, then queries broker/local state directly for order and position checks while `sync_brackets.py` owns bracket/protection testing and remedies and `Controller.sync()` owns retry and trading-disable decisions.
+- `haymaker/controller/`: broker submission, order/position reconciliation,
+  execution verification, fill and commission event processing, Trade
+  rebinding, futures rolling, emergency modes, and broker message handling.
+  Sync retries broker-position freshness failures, back-reports known fills
+  before comparison, and requests supervisor-owned recovery before correction
+  where required.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
-- `haymaker/state_machine.py`: persisted strategy and order state, rejection tracking, active positions, and locks.
+- `haymaker/book.py`: typed order/fill evidence, one-to-one PositionState,
+  direct TargetState, Portfolio recovery mappings, rejection tracking,
+  execution affinity, blotter access, and one ordered critical persistence
+  queue. Book performs no broker calls or allocation.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.
 
 ### Strategy Pipeline Components
 
-- `haymaker/streamers.py`: historical, market-data, real-time-bar, and tick streamers that emit `Atom` events.
-- `haymaker/block.py`: dataframe-to-signal strategy block base classes; can
-  persist generated bar data and register per-strategy futures-roll policy.
-- `haymaker/signals.py`: binary signal processors converting strategy output into `OPEN`, `CLOSE`, or `REVERSE` actions.
-- `haymaker/portfolio.py`: position sizing layer.
-- `haymaker/execution_models.py`: converts portfolio/action data into IB orders, including bracket/stop/take-profit handling.
-- `haymaker/bracket_legs.py`: bracket-order leg abstractions.
-- `haymaker/dfaggregator.py`, `aggregators.py`: bar aggregation and market-data persistence helpers.
+- `haymaker/components/messages.py`: frozen `Signal`, `PositionProposal`, and
+  absolute `PositionTarget` messages plus signal, intent, and open-ended order
+  role enums.
+- `haymaker/components/streamers.py`, `aggregators.py`: broker market-data
+  sources, bar grouping, dataframe aggregation, and history persistence.
+- `haymaker/components/signal_models.py`: general SignalModel and
+  dataframe-based PandasSignalModel, including optional ordered calculation
+  audit persistence and lookup.
+- `haymaker/components/signals.py`: one-to-one binary processors implementing
+  STATE/EVENT, close-first, reversal, and stopped-direction lock semantics.
+- `haymaker/components/portfolio.py`: direct account-wide Portfolio,
+  one-to-one PortfolioWrapper, and PositionAllocator boundary.
+- `haymaker/components/execution_router.py`: fixed first-match target routing
+  with persisted execution-model affinity.
+- `haymaker/components/execution_models.py`: stateful serial Contract target
+  convergence and one-to-one bracket episode execution.
+- `haymaker/components/bracket_legs.py`: user-configurable bracket-order legs.
+- `haymaker/components/__init__.py`: explicit supported public toolbox.
 
 ### Persistence and Logging
 
@@ -110,10 +135,11 @@ The research package is intentionally separate from live execution. It works dir
 
 Background queues use one shutdown policy. `DRAIN` queues are critical: item
 failures and drain timeouts escape final cleanup. `DISCARD` queues are
-best-effort: failures are logged and pending final work is dropped. State saves
-use `DRAIN`; async Arctic queued sinks default to `DISCARD`, and transient
-aggregation uses `DISCARD`. The dataloader uses only awaited datastore
-mutations and therefore owns no datastore queue policy.
+best-effort: failures are logged and pending final work is dropped. All Book
+mutations share one ordered `DRAIN` queue; SignalModel audit sinks also require
+`DRAIN`. Other async Arctic queued sinks and transient aggregation default to
+`DISCARD`. The dataloader uses only awaited datastore mutations and therefore
+owns no datastore queue policy.
 
 `AsyncDataStore` methods are all awaited: successful mutation return means the
 backend operation finished. `QueuedDataSink` uses explicit `enqueue_*` methods:
@@ -125,9 +151,9 @@ Framework-provided naming policies are frozen, stores expose the configured
 policy read-only, and consumers treat injected stores as fully configured.
 `DfAggregator` requires an awaited datastore. Persisted historical streamers
 accept an awaited datastore, while `None` disables their persistence lookup.
-`AbstractDfBlock` holds an optional queued sink per instance, and `None`
-disables block persistence. None of these consumers constructs a store from
-runtime configuration.
+`PandasSignalModel` accepts an optional dedicated queued audit sink, and
+`None` disables audit persistence. None of these consumers constructs a store
+from runtime configuration.
 
 ### Dataloader
 
@@ -179,7 +205,7 @@ runtime configuration.
    `StartupJobs` around the live streamer registry, and installs the passive
    `RuntimeContext` on `Atom` before importing the user strategy module.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
-   Each block also registers its `auto_roll_futures` policy in the context.
+   Each SignalModel also registers its `auto_roll_futures` policy in the context.
 3. `App` starts the IB watchdog and waits for a successful historical-data probe.
 4. `Controller.run()` starts its app-lifetime timers once on the active event
    loop, reads or initializes state, then `Controller.sync()` races the
@@ -189,7 +215,7 @@ runtime configuration.
    retry loop around a sync coordinator. Each coordinator pass first checks
    broker connection and validates broker position freshness, relinks current
    `ibi.Trade` objects to local records, back-reports known completed fills,
-   runs order/position reconciliation against direct broker and state-machine
+   runs order/position reconciliation against direct broker and Book
    reads, and returns `False` after broker verification failures or recovery
    actions so sync can retry the checks before disabling trading. If unresolved
    order or position mismatches remain on the first pass, the coordinator can
@@ -205,15 +231,23 @@ runtime configuration.
    candidate. Existing positions retain their persisted held contract, and the
    futures roller acts only after that contract leaves the allowed
    `ACTIVE`/`NEXT` set.
-6. Streamers emit market data into strategy blocks.
-7. Blocks add strategy fields and emit dictionaries. A block may select `NEXT`
-   for new entries while consuming `ACTIVE` prices; persisted strategy-frame
-   collections use the root contract symbol so this routing change does not
-   split the series by expiry-specific local symbol.
-8. Signal processors create `action`, `target_position`, and existing-position context.
-9. Portfolio sizing adds `amount`.
-10. Execution models create IB orders and call `Controller.trade()`.
-11. Controller registers orders, reconciles broker events, updates the state machine, and sends blotter records when enabled; sync failures disable further outbound trading. The global `controller.missing_brackets` option controls bracket/protection handling: `ignore` skips bracket checks, `warn` logs local bracket-record mismatches and broker positions without stop-loss protection, and `remove` also cancels obsolete bracket/closing orders and closes local strategy positions whose expected local bracket records are missing.
+6. Streamers and aggregators emit market data into SignalModels.
+7. SignalModels emit immutable raw Signals. PandasSignalModel may persist a
+   calculation generation named from source, ACTIVE contract, and process
+   start; NEXT-only changes do not rotate it.
+8. In the one-to-one flow, a binary processor emits PositionProposal and
+   PortfolioWrapper allocates one absolute PositionTarget. In direct mode,
+   Portfolio owns input state and may emit targets for several Contracts.
+9. ExecutionRouter optionally selects one stable named model. Active persisted
+   source/Contract affinity overrides current rules until flat.
+10. Execution models persist the newest target, derive required work from Book
+    quantity and working orders, and call `Controller.trade()` with explicit
+    role/model/source/episode attribution.
+11. Controller registers complete OrderInfo immediately, applies normalized
+    Fill evidence idempotently, attaches late CommissionReports, updates Book
+    projections, rebinds Trades, and sends source/position-attributed blotter
+    records. The global `controller.missing_brackets` option controls
+    bracket/protection reconciliation.
 
 ### Dataloader Flow
 
@@ -383,14 +417,22 @@ dataloader contracts.csv -f settings.yaml
 - `upsample()` must preserve the rule that lower-frequency values become available when the grouped bar completes. `position` must not be upsampled.
 - `stop_loss()` treats `blip` as generated events and shifts internally, while `position` is already executable state. `distance` and `scheduled_close` Series must match the dataframe index exactly.
 - Python and Numba implementations in the stop engine and backtester engine must stay behaviorally identical.
-- Controller sync and reconciliation touches live broker state, state-machine records, blotter output, and order cancellation/close logic. Sync correction actions should only run after broker position sources agree and after known completed fills have been replayed into local position records; if broker connection or broker position validation fails, the coordinator returns a retryable failed pass and sync retries before disabling trading for non-convergence. If the supervisor marks the connection unavailable during broker recovery, restart, or shutdown, the public sync wrapper cancels the in-flight pass without treating it as unsafe state. On unresolved order or position mismatches, the first pass can request a broker reconnect before corrective mutations are attempted. Later sync checks query broker/local state directly; broker stop-loss exposure is reported by bracket sync, while missing-local-bracket emergency closes are based on the affected local strategy position.
-- Futures rolling changes active contracts, next-contract selection, and strategy state; changes can cause live trading differences.
+- Controller sync and reconciliation touches live broker state, typed Book
+  records, blotter output, and order cancellation/close logic. Sync correction
+  actions should only run after broker position sources agree and known
+  completed fills have been applied. If the supervisor marks the connection
+  unavailable, the public sync wrapper cancels the pass without treating it as
+  unsafe state. Recovered execution models must rebind current Trade callbacks
+  before resuming outstanding targets.
+- Futures rolling changes active contracts, next-contract selection, and Book
+  PositionState; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.
 
 ## AGENTS.md Notes
 
 The repo-root `AGENTS.md` contains the project-wide development rules. Scoped
-guidance lives in `haymaker/dataloader/AGENTS.md` for historical request,
+guidance lives in `haymaker/components/AGENTS.md` for public trading contracts,
+in `haymaker/dataloader/AGENTS.md` for historical request,
 persistence, schema, and validation invariants and in
 `haymaker/research/AGENTS.md` for timing-sensitive research code.
 The root guidance records the standard focused checks, warns against importing

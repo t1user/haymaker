@@ -1,29 +1,28 @@
-from dataclasses import dataclass
-
 import ib_insync as ibi
 import numpy as np
 import pandas as pd
 
-from haymaker import (
-    aggregators,
-    base,
-    bracket_legs,
-    block,
-    execution_models,
-    indicators,
-    portfolio,
-    signals,
-    streamers,
+from haymaker import indicators
+from haymaker.components import (
+    BarAggregator,
+    BinarySignalProcessor,
+    BracketExecutionModel,
+    FixedSizeAllocator,
+    HistoricalDataStreamer,
+    NoFilter,
+    PandasSignalModel,
+    PortfolioWrapper,
+    SignalType,
+    TrailingStop,
 )
 
 
-@dataclass
-class EMACrossStrategy(block.AbstractDfBlock):
-    strategy: str
-    contract: ibi.Contract
-    fast_lookback: int
-    slow_lookback: int
-    atr_lookback: int
+class EMACrossSignalModel(PandasSignalModel):
+    def __init__(self, source_key, contract):
+        self.fast_lookback = 12
+        self.slow_lookback = 48
+        self.atr_lookback = 24
+        super().__init__(source_key, contract, SignalType.STATE)
 
     def df(self, df: pd.DataFrame) -> pd.DataFrame:
         df["fast_ema"] = df["close"].ewm(self.fast_lookback).mean()
@@ -35,17 +34,19 @@ class EMACrossStrategy(block.AbstractDfBlock):
 
 es_contract = ibi.ContFuture("ES", "CME")
 
-portfolio.FixedPortfolio(1)
-
-pipe = base.Pipe(
-    streamers.HistoricalDataStreamer(es_contract, "10 D", "1 hours", "TRADES"),
-    aggregators.BarAggregator(aggregators.NoFilter()),
-    EMACrossStrategy(
-        "ema_cross_ES", es_contract, 12, 48, 24, auto_roll_futures=False
+pipe = HistoricalDataStreamer(
+    es_contract, "10 D", "1 hour", "TRADES"
+).pipe(
+    BarAggregator(NoFilter()),
+    EMACrossSignalModel(
+        "ema_cross_ES",
+        es_contract,
     ),
-    signals.BinarySignalProcessor(),
-    portfolio.PortfolioWrapper(),
-    execution_models.EventDrivenExecModel(
-        stop=bracket_legs.TrailingStop(3, vol_field="atr")
+    BinarySignalProcessor(),
+    PortfolioWrapper(FixedSizeAllocator(1)),
+    BracketExecutionModel(
+        "ema_cross_ES",
+        name="ema_cross_brackets",
+        stop=TrailingStop(3, vol_field="atr"),
     ),
 )

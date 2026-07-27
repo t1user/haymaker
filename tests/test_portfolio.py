@@ -1,126 +1,258 @@
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from typing import Literal
+
+import ib_insync as ibi
 import pytest
 
-from haymaker.base import Atom
-from haymaker.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
-
-# it's important to destroy portfolio after every test, because instance is saved
-# on the class
-
-
-@pytest.fixture
-def portfolio_1():
-    class Portfolio(AbstractBasePortfolio):
-        def allocate(self, data):
-            return 1
-
-    yield Portfolio
-    AbstractBasePortfolio.instance = None
+from haymaker.components import (
+    FixedSizeAllocator,
+    Portfolio,
+    PortfolioWrapper,
+    PositionIntent,
+    PositionProposal,
+    PositionTarget,
+    Signal,
+    SignalType,
+)
 
 
-def test_abstract_portoflio_is_abstract():
-    with pytest.raises(TypeError):
-        AbstractBasePortfolio()
+def signal(source_key: str = "alpha", value: float = 1) -> Signal:
+    return Signal(
+        source_key=source_key,
+        contract=ibi.Future(conId=1, symbol="ES", exchange="CME"),
+        value=value,
+        signal_type=SignalType.STATE,
+        metadata={"atr": 10},
+    )
 
 
-def test_portfolio_is_a_singleton(portfolio_1):
-    p1 = portfolio_1()
-    p2 = portfolio_1()
-
-    assert p1 is p2
-
-
-@pytest.fixture
-def atom_portfolio():
-    class Portfolio(AbstractBasePortfolio, Atom):
-        def allocate(self, data):
-            return 1
-
-    portfolio = Portfolio
-    yield portfolio
-    AbstractBasePortfolio._instance = None
-    del portfolio
+def proposal(
+    direction: Literal[-1, 0, 1] = 1,
+    intent: PositionIntent = PositionIntent.OPEN,
+) -> PositionProposal:
+    return PositionProposal(
+        signal=signal(),
+        target_direction=direction,
+        intent=intent,
+    )
 
 
-def test_portfolio_is_not_Atom(atom_portfolio):
-    with pytest.raises(TypeError):
-        atom_portfolio()
+def test_fixed_size_allocator_preserves_proposal_attribution():
+    target = FixedSizeAllocator(3).target_for(proposal(-1))
+
+    assert target.target_quantity == -3
+    assert target.source_key == "alpha"
+    assert target.contract == signal().contract
+    assert target.intent is PositionIntent.OPEN
+    assert target.metadata == {"atr": 10}
 
 
-@pytest.mark.parametrize("attribute", ["onStart", "onData", "startEven", "dataEvent"])
-def test_portfolio_will_not_implement_Atom_attributes(attribute, portfolio_1):
-    p = portfolio_1()
-    with pytest.raises(AttributeError):
-        setattr(p._instance, attribute, "x")
+def test_fixed_size_allocator_uses_source_mapping():
+    allocator = FixedSizeAllocator({"alpha": 2, "beta": 4})
+
+    assert allocator.target_for(proposal()).target_quantity == 2
 
 
-@pytest.fixture
-def portfolio():
-    class Portfolio(AbstractBasePortfolio):
-        def __init__(self, x, y):
-            self.x = x
-            self.y = y
-
-        def allocate(self, data):
-            return self.other_method()
-
-        def other_method(self):
-            return id(self)
-
-    portfolio_class = Portfolio
-    yield portfolio_class
-
-    # ensure any existing singleton is destroyed
-    del portfolio_class
-    AbstractBasePortfolio.instance = None
+def test_fixed_size_allocator_missing_source_mapping_raises():
+    with pytest.raises(KeyError):
+        FixedSizeAllocator({"beta": 2}).target_for(proposal())
 
 
-def test_wrapper_will_not_instantiate_without_portoflio_created_first():
-    with pytest.raises(TypeError):
-        PortfolioWrapper()
+def test_fixed_size_allocator_callable_receives_proposal():
+    allocator = FixedSizeAllocator(
+        lambda incoming: incoming.signal.metadata["atr"] / 2
+    )
+
+    assert allocator.target_for(proposal()).target_quantity == 5
 
 
-def test_wrapper_will_instantiate_with_portfolio_created_first(portfolio):
-    portfolio(1, 2)
-    assert isinstance(PortfolioWrapper(), PortfolioWrapper)
+@pytest.mark.parametrize("size", [float("nan"), float("inf")])
+def test_fixed_size_allocator_rejects_non_finite_size(size):
+    with pytest.raises(ValueError, match="finite"):
+        FixedSizeAllocator(size).target_for(proposal())
 
 
-def test_init_called_while_portfolio_created(portfolio):
-    p = portfolio(1, 2)
-    assert p.x == 1
-    assert p.y == 2
+def test_portfolio_wrapper_emits_zero_or_one_target(atom_runtime):
+    wrapper = PortfolioWrapper(FixedSizeAllocator(2))
+    output = []
+    wrapper.dataEvent += output.append
+
+    wrapper.onData(proposal(direction=-1, intent=PositionIntent.REVERSE))
+
+    assert len(output) == 1
+    assert output[0].target_quantity == -2
+    assert output[0].intent is PositionIntent.REVERSE
 
 
-def test_every_PortfolioWrapper_instance_unique(portfolio):
-    portfolio(1, 2)
-    p1 = PortfolioWrapper()
-    p2 = PortfolioWrapper()
+def test_portfolio_wrapper_rejects_allocator_returning_multiple_targets(
+    atom_runtime,
+):
+    class InvalidAllocator:
+        def target_for(self, proposal):
+            return [PositionTarget(contract=proposal.signal.contract, target_quantity=1)]
 
-    assert p1 is not p2
-
-
-def test_every_PortfolioWrapper_instance_refers_to_the_same_portfolio(portfolio):
-    portfolio(1, 2)
-    p1 = PortfolioWrapper()
-    p2 = PortfolioWrapper()
-
-    assert p1._portfolio is p2._portfolio
+    with pytest.raises(TypeError, match="multiple"):
+        PortfolioWrapper(InvalidAllocator()).onData(proposal())
 
 
-def test_allocate_shared_among_wrapper_instances(portfolio):
-    portfolio(1, 2)
-    portfolio_1_id = PortfolioWrapper().allocate("test_data")
-    portfolio_2_id = PortfolioWrapper().allocate("test_data")
-    portfolio_3_id = PortfolioWrapper().allocate("test_data")
+def test_portfolio_wrapper_rejects_changed_identity(atom_runtime):
+    class InvalidAllocator:
+        def target_for(self, proposal):
+            return PositionTarget(
+                contract=proposal.signal.contract,
+                target_quantity=1,
+                source_key="other",
+            )
 
-    assert portfolio_1_id == portfolio_2_id
-    assert portfolio_2_id == portfolio_3_id
-
-
-def test_fixed_portfolio():
-    portfolio = FixedPortfolio(1)
-    assert portfolio.allocate({"signal": "OPEN"}) == 1
+    with pytest.raises(ValueError, match="source_key"):
+        PortfolioWrapper(InvalidAllocator()).onData(proposal())
 
 
-def test_wrapper_with_fixed_portfolio():
-    FixedPortfolio(1)
-    assert PortfolioWrapper().allocate({"signal": "OPEN"}) == 1
+class EchoPortfolio(Portfolio):
+    def process(self, incoming: Signal) -> Iterable[PositionTarget]:
+        return (
+            PositionTarget(
+                contract=incoming.contract,
+                target_quantity=incoming.value,
+                source_key=incoming.source_key,
+            ),
+        )
+
+
+def test_direct_portfolio_emits_targets_and_omits_intent(atom_runtime):
+    portfolio = EchoPortfolio()
+    output = []
+    portfolio.dataEvent += output.append
+
+    portfolio.onData(signal(value=2))
+
+    assert output[0].target_quantity == 2
+    assert output[0].intent is None
+
+
+def test_registered_portfolio_rejects_unknown_source(atom_runtime):
+    portfolio = EchoPortfolio(sources={"alpha", "beta"})
+
+    with pytest.raises(KeyError, match="Unknown"):
+        portfolio.onData(signal(source_key="gamma"))
+
+    assert portfolio.expected_sources == frozenset({"alpha", "beta"})
+
+
+def test_dynamic_portfolio_has_no_completeness_policy(atom_runtime):
+    portfolio = EchoPortfolio(sources=None)
+
+    portfolio.onData(signal(source_key="new"))
+
+    assert portfolio.expected_sources is None
+
+
+def test_portfolio_rejects_unsupported_signal_type(atom_runtime):
+    portfolio = EchoPortfolio(supported_signal_types={SignalType.STATE})
+    event = Signal(
+        source_key="alpha",
+        contract=signal().contract,
+        value=1,
+        signal_type=SignalType.EVENT,
+    )
+
+    with pytest.raises(ValueError, match="does not support"):
+        portfolio.onData(event)
+
+
+class AnalogAggregatePortfolio(Portfolio):
+    def __init__(self):
+        super().__init__(sources={"alpha", "beta"})
+        self.values = {}
+        self.observation_times = []
+
+    def process(self, incoming: Signal) -> Iterable[PositionTarget]:
+        self.observation_times.append(incoming.as_of)
+        if incoming.signal_type is SignalType.STATE:
+            self.values[incoming.source_key] = incoming.value
+        else:
+            self.values[incoming.source_key] = (
+                self.values.get(incoming.source_key, 0) + incoming.value
+            )
+        total = sum(self.values.values())
+        return (
+            PositionTarget(
+                contract=incoming.contract,
+                target_quantity=total,
+            ),
+            PositionTarget(
+                contract=ibi.Future(
+                    conId=2,
+                    symbol="NQ",
+                    exchange="CME",
+                ),
+                target_quantity=-total,
+            ),
+        )
+
+
+def test_direct_analog_portfolio_replaces_state_and_accumulates_events(
+    atom_runtime,
+):
+    portfolio = AnalogAggregatePortfolio()
+    output = []
+    portfolio.dataEvent += output.append
+    observed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    portfolio.onData(
+        Signal(
+            source_key="alpha",
+            contract=signal().contract,
+            value=2,
+            signal_type=SignalType.STATE,
+            as_of=observed_at,
+        )
+    )
+    portfolio.onData(
+        Signal(
+            source_key="beta",
+            contract=signal().contract,
+            value=-0.5,
+            signal_type=SignalType.EVENT,
+        )
+    )
+    portfolio.onData(
+        Signal(
+            source_key="beta",
+            contract=signal().contract,
+            value=-0.5,
+            signal_type=SignalType.EVENT,
+        )
+    )
+
+    assert [target.target_quantity for target in output[-2:]] == [1, -1]
+    assert portfolio.observation_times[0] is observed_at
+
+
+class BinaryAggregatePortfolio(Portfolio):
+    def __init__(self):
+        super().__init__(supported_signal_types={SignalType.STATE})
+        self.directions = {}
+
+    def process(self, incoming: Signal) -> Iterable[PositionTarget]:
+        self.directions[incoming.source_key] = (
+            1 if incoming.value > 0 else -1 if incoming.value < 0 else 0
+        )
+        return (
+            PositionTarget(
+                contract=incoming.contract,
+                target_quantity=sum(self.directions.values()),
+            ),
+        )
+
+
+def test_direct_binary_portfolio_aggregates_source_directions(atom_runtime):
+    portfolio = BinaryAggregatePortfolio()
+    output = []
+    portfolio.dataEvent += output.append
+
+    portfolio.onData(signal(source_key="alpha", value=10))
+    portfolio.onData(signal(source_key="beta", value=-0.1))
+
+    assert output[-1].target_quantity == 0

@@ -112,18 +112,17 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   and workload restarts must not create additional roll timers.
 - Futures contract roles are intentionally distinct. A selector's `ACTIVE` is
   the current market-data and roll-reference contract, while `NEXT` is an
-  early entry candidate used by atoms such as strategy blocks to avoid opening
+  early entry candidate used by SignalModels to avoid opening
   positions close to a roll. `Atom.which_contract` selects the role exposed by
   that atom; it does not redefine which contract is ACTIVE. OPEN uses the
-  block-selected contract, CLOSE uses the strategy's persisted held contract
-  (`Strategy.active_contract`), and `FutureRoller` permits held contracts that
+  signal-selected contract, CLOSE uses Book's persisted held contract, and
+  `FutureRoller` permits held contracts that
   are either ACTIVE or NEXT and rolls holdings outside that set. A NEXT-only
   change does not require market-data back-adjustment. Selectors are rebuilt on
   each supervised workload start using one timezone-naive UTC timestamp, and
   live operation relies on the IB-driven daily workload restarts to refresh
-  these roles. Strategy block collections use the root `contract.symbol`, not
-  expiry-specific `localSymbol`, so an early NEXT change does not split the
-  persisted strategy series.
+  these roles. Signal audit generations use ACTIVE `localSymbol` plus the
+  process `run_started_at`; a NEXT-only change does not rotate audit history.
 - IB/TWS connection outages, especially around a broker's daily restart period,
   are expected and should normally be recoverable. Do not treat a connection
   outage alone as an unsafe broker/local state; emergency trading disablement
@@ -152,7 +151,7 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   `RuntimeContext` per process. Process-global registries such as
   `Streamer.instances` are not reset for same-process application reuse.
 - `LiveRuntime` assembles live services and installs a ready, passive
-  `RuntimeContext` before the CLI imports the strategy module. Blocks register
+  `RuntimeContext` before the CLI imports the strategy module. SignalModels register
   their own `auto_roll_futures` policy while they are constructed. Strategy
   composition may use the context's narrow `FrameStoreProvider` to build fully
   configured persistence dependencies; the runtime does not inspect imported
@@ -165,7 +164,8 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   Telegram are optional YAML configuration, not runtime dependencies.
 - Queue shutdown uses one policy: `DRAIN` is critical and propagates processing
   failures or drain timeouts, while `DISCARD` is best effort and logs failures.
-  State-save queues drain. Async Arctic queued sinks default to `DISCARD`.
+  Book mutations and SignalModel audit sinks drain. Async Arctic queued sinks
+  otherwise default to `DISCARD`.
   Awaited `AsyncDataStore` mutations finish an already-started database call
   before propagating cancellation. The dataloader uses only this awaited
   contract and completes each response's persistence and in-memory state
@@ -175,13 +175,13 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   contract and explicit `enqueue_*` methods, whose return means queue acceptance.
 - Datastore symbol naming is supplied when a store is constructed and is not
   replaced afterward. Framework-provided naming policies are frozen, consumers
-  treat injected stores as fully configured, and dataframe blocks hold their
-  optional datastore dependency per instance rather than through class state.
+  treat injected stores as fully configured, and SignalModels hold their
+  optional audit sink per instance rather than through class state.
 - Live dataframe consumers never construct or discover persistence through
   runtime state. Strategy module composition builds stores through
   `RuntimeContext.frame_store_provider` and injects them: `DfAggregator`
   requires `AsyncDataStore`, persisted streamers accept `AsyncDataStore | None`,
-  and dataframe blocks accept `QueuedDataSink | None`.
+  and PandasSignalModels accept a dedicated `DRAIN` `QueuedDataSink | None`.
 - CLI entrypoints load framework configuration once. Live and dataloader
   configuration stay grouped by owning target where practical until that target
   constructs itself from its mapping. Controller one-run actions belong under
@@ -196,9 +196,25 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   Environment variables may select a profile YAML file but must not directly
   override individual settings. Strategy parameters remain user-module Python
   data. Do not change real local `.env` files or credential files.
+- `Atom` remains an arbitrary-message composition primitive. It never mutates
+  startup/data payloads automatically, base `onData` raises, connection
+  validation occurs before wiring, and fan-out shares one object reference.
+  Built-in trading components live only under `haymaker.components`.
+- Built-in messages are immutable `Signal -> PositionProposal ->
+  PositionTarget` boundaries. PositionTarget quantity is always an absolute
+  setpoint. `PositionIntent` is mandatory only on the one-to-one
+  PortfolioWrapper/BracketExecutionModel path and is only an initial assertion.
+- `Book` owns typed position/target/order recovery, fill idempotence, the
+  critical ordered persistence queue, and blotter access. Controller owns
+  broker calls, reconciliation, submission, rebinding, and fill/commission
+  event handling. Do not move Portfolio calculations or broker calls into Book.
+- Direct Portfolio consumes Signals and emits zero or more targets. The
+  one-to-one path uses a signal processor, `PortfolioWrapper`, and
+  `PositionAllocator`. Execution models have stable unique configured names;
+  persisted affinity fails closed when the named model is absent.
 - Use `tests/runtime_helpers.py` and the `atom_runtime` /
   `atom_runtime_factory` fixtures for tests that need `Atom` runtime services.
-  Install custom `ib`, state machine, contract registry, controller, restart
+  Install custom `ib`, Book, contract registry, controller, restart
   callbacks, frame-store provider, and contract details through those fixtures
   instead of scattering ad hoc runtime monkeypatches.
 - See `docs/codebase-map.md` for the current repository map.

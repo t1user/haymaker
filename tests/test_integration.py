@@ -1,272 +1,158 @@
-import asyncio
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 import ib_insync as ibi
-import pytest
-from test_block import data_for_df  # noqa
 
 from haymaker.base import Atom, Pipe
-from haymaker.block import AbstractDfBlock
-from haymaker.bracket_legs import FixedStop
+from haymaker.components import (
+    BracketExecutionModel,
+    ExecutionRouter,
+    ExecutionRule,
+    FixedSizeAllocator,
+    FixedStop,
+    LockableBinarySignalProcessor,
+    Portfolio,
+    PortfolioWrapper,
+    PositionTarget,
+    SerialTargetExecutionModel,
+    Signal,
+    SignalModel,
+    SignalType,
+)
 from haymaker.controller import Controller
-from haymaker.execution_models import BaseExecModel, EventDrivenExecModel
-from haymaker.portfolio import AbstractBasePortfolio, FixedPortfolio, PortfolioWrapper
-from haymaker.signals import BinarySignalProcessor
-from haymaker.state_machine import StrategyContainer
-from haymaker.trader import Trader
 
 
-@pytest.fixture
-def portfolio():
-    portfolio = FixedPortfolio()
+class FakeTrader:
+    def __init__(self):
+        self.trades = []
 
-    yield portfolio
-    AbstractBasePortfolio.instance = None
-
-
-@pytest.fixture
-def pipe(data_for_df, portfolio, strategy_saver, atom_runtime_factory):  # noqa
-
-    class FakeStateMachine:
-        strategy = StrategyContainer(strategy_saver)
-
-        def locked(self, key):
-            return 0
-
-        def position_and_order_for_strategy(self, strategy_str: str):
-            return 0
-
-    sm = FakeStateMachine()
-    atom_runtime = atom_runtime_factory(sm=sm)
-
-    class Block(AbstractDfBlock):
-        def df(self, data):
-            data["price_plus"] = data["price"] + 1
-            return data
-
-    class FakeController(Atom):
-        out = None
-
-        def trade(self, strategy, contract, order, action, data):
-            self.out = strategy, contract, order, action, data
-
-    controller = FakeController()
-    atom_runtime.bind_controller(controller)
-    # signal is 1, contract is NQ
-    block = Block("eska_NQ", ibi.Future("NQ", "CME"))
-    # so this should result in action "OPEN"
-    signal = BinarySignalProcessor()
-
-    # on which exec_model should act by issuing Buy order
-    exec_model = EventDrivenExecModel(stop=FixedStop(5))
-
-    class SourceAtom(Atom):
-        def run(self):
-            # this should ensure setting "strategy" attr on exec_model
-            # block has this attr so it will emit it on start
-            # and every subsequent Atom down the chain should set it on start
-            self.startEvent.emit({})
-            self.dataEvent.emit(data_for_df)
-
-    source = SourceAtom()
-    Pipe(source, block, signal, PortfolioWrapper(), exec_model)
-    source.run()
-
-    return controller.out
-
-
-def test_strategy_is_strategy(pipe):
-    strategy, contract, order, action, data = pipe
-    # this is the strategy that was set on Block object
-    assert strategy == "eska_NQ"
-
-
-def test_data_is_dict(pipe):
-    strategy, contract, order, action, data = pipe
-
-    assert isinstance(data, dict)
-
-
-def test_contract_is_contract(pipe):
-    strategy, contract, order, action, data = pipe
-    assert isinstance(contract, ibi.Contract)
-
-
-def test_required_fields_in_data_present(pipe):
-    _, _, _, _, data = pipe
-    assert set(["strategy", "contract", "amount", "signal", "action"]).issubset(
-        set(data.keys())
-    )
-
-
-def test_order_is_order(pipe):
-    _, _, order, _, _ = pipe
-    assert isinstance(order, ibi.Order)
-
-
-def test_order_is_a_buy_order(pipe):
-    _, _, order, _, _ = pipe
-    assert order.action == "BUY"
-
-
-def test_order_is_for_one_contract(pipe):
-    _, _, order, _, __ = pipe
-    assert order.totalQuantity == 1
-
-
-# #####################################
-# Test position recorded
-# #####################################
-
-
-@pytest.fixture
-def new_setup(Atom, atom_runtime):
-    class FakeTrader:
-        def trade(self, contract: ibi.Contract, order: ibi.Order):
-            return ibi.Trade(contract, order)
-
-    class FakeController(Controller):
-        trade_object = None
-
-        def trade(self, *args, **kwargs):
-            self.trade_object = super().trade(*args, **kwargs)
-            return self.trade_object
-
-        def verify_market_open(self, contract) -> bool:
-            return True
-
-    controller = FakeController(trader=FakeTrader())
-    atom_runtime.bind_controller(controller)
-
-    class Source(Atom):
-        pass
-
-    source = Source()
-    em = BaseExecModel()
-
-    source += em
-
-    source.startEvent.emit({"strategy": "xxx"})
-    return controller, source, em
-
-
-@pytest.mark.asyncio
-async def test_buy_position_registered(new_setup):
-    controller, source, em = new_setup
-
-    data = {
-        "signal": 1,
-        "action": "OPEN",
-        "amount": 1,
-        "target_position": 1,
-        "contract": ibi.Future(
-            conId=551601561,
-            symbol="ES",
-            lastTradeDateOrContractMonth="20240621",
-            multiplier="50",
-            exchange="CME",
-            currency="USD",
-            localSymbol="ESM4",
-            tradingClass="ES",
-        ),
-    }
-    source.dataEvent.emit(data)
-    trade_object = controller.trade_object
-    trade_object.fills.append(
-        ibi.Fill(
-            contract=trade_object.contract,
-            execution=ibi.Execution(
-                execId="0000e1a7.656447c6.01.01",
-                shares=trade_object.order.totalQuantity,
-                side="SLD" if trade_object.order.action == "SELL" else "BOT",
+    def trade(self, contract, order):
+        order.orderId = len(self.trades) + 1
+        order.permId = 100 + order.orderId
+        trade = ibi.Trade(
+            contract=contract,
+            order=order,
+            orderStatus=ibi.OrderStatus(
+                orderId=order.orderId,
+                status=ibi.OrderStatus.Submitted,
+                remaining=order.totalQuantity,
             ),
-            commissionReport=ibi.CommissionReport(commission=1.0, realizedPNL=0.0),
-            time=datetime.now(timezone.utc),
         )
-    )
-    controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
-    await asyncio.sleep(0)
-    assert em.data.position == 1
+        self.trades.append(trade)
+        return trade
+
+    def cancel(self, trade):
+        return trade
+
+    def position_for_contract(self, contract):
+        return 0
+
+    def positions(self):
+        return {}
 
 
-@pytest.mark.asyncio
-async def test_sell_position_registered(new_setup):
-    controller, source, em = new_setup
+class Source(Atom):
+    output_type = object
 
-    data = {
-        "signal": -1,
-        "action": "OPEN",
-        "amount": 1,
-        "target_position": -1,
-        "contract": ibi.Future(
-            conId=551601561,
-            symbol="ES",
-            lastTradeDateOrContractMonth="20240621",
-            multiplier="50",
-            exchange="CME",
-            currency="USD",
-            localSymbol="ESM4",
-            tradingClass="ES",
-        ),
-    }
+    def run(self, data):
+        self.startEvent.emit({})
+        self.dataEvent.emit(data)
 
-    source.dataEvent.emit(data)
-    trade_object = controller.trade_object
-    trade_object.fills.append(
-        ibi.Fill(
-            contract=trade_object.contract,
-            execution=ibi.Execution(
-                execId="0000e1a7.656447c6.01.01",
-                shares=trade_object.order.totalQuantity,
-                side="SLD" if trade_object.order.action == "SELL" else "BOT",
-            ),
-            commissionReport=ibi.CommissionReport(commission=1.0, realizedPNL=0.0),
-            time=datetime.now(timezone.utc),
+
+class IntegrationSignalModel(SignalModel):
+    def create_signal(self, data):
+        return Signal(
+            source_key=self.source_key,
+            contract=self.contract,
+            value=data,
+            signal_type=self.signal_type,
+            metadata={"atr": 5},
         )
-    )
-    trade_object.order.permId = 12345
-    controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
-    await asyncio.sleep(0)
-    assert em.data.position == -1
 
 
-@pytest.mark.asyncio
-async def test_manual_order_created(Atom, atom_runtime):
-
-    class A(Atom):
-        pass
-
-    a = A()
-    contract = ibi.Future(
-        conId=551601561,
-        symbol="ES",
-        lastTradeDateOrContractMonth="20240621",
-        multiplier="50",
+def contract(symbol="ES", con_id=1):
+    return ibi.Future(
+        conId=con_id,
+        symbol=symbol,
         exchange="CME",
-        currency="USD",
-        localSymbol="ESM4",
-        tradingClass="ES",
+        localSymbol=f"{symbol}M6",
     )
-    trade_object = ibi.Trade(
-        contract=contract,
-        order=ibi.Order(action="BUY", totalQuantity=1, orderId=-1, permId=12345),
+
+
+def test_one_to_one_pipeline_submits_attributed_open(atom_runtime):
+    trader = FakeTrader()
+    controller = Controller(trader=trader)
+    atom_runtime.bind_controller(controller)
+    source = Source()
+    signal_model = IntegrationSignalModel(
+        "alpha", contract(), SignalType.STATE
     )
-    trade_object.fills.append(
-        ibi.Fill(
-            contract=trade_object.contract,
-            execution=ibi.Execution(
-                execId="0000e1a7.656447c6.01.01",
-                shares=trade_object.order.totalQuantity,
-                side="SLD" if trade_object.order.action == "SELL" else "BOT",
+    processor = LockableBinarySignalProcessor()
+    wrapper = PortfolioWrapper(FixedSizeAllocator(2))
+    execution = BracketExecutionModel(
+        "alpha",
+        name="alpha_brackets",
+        stop=FixedStop(2),
+    )
+    Pipe(source, signal_model, processor, wrapper, execution)
+
+    source.run(1)
+
+    assert len(trader.trades) == 1
+    trade = trader.trades[0]
+    assert trade.order.action == "BUY"
+    assert trade.order.totalQuantity == 2
+    info = atom_runtime.book.order_by_id(trade.order.orderId)
+    assert info.source_key == "alpha"
+    assert info.execution_model_name == "alpha_brackets"
+    assert info.position_id == atom_runtime.book.position_state("alpha").position_id
+
+
+class AggregatePortfolio(Portfolio):
+    def __init__(self):
+        super().__init__(sources={"alpha", "beta"})
+        self.values = {}
+
+    def process(self, signal: Signal) -> Iterable[PositionTarget]:
+        self.values[signal.source_key] = signal.value
+        total = sum(self.values.values())
+        return (
+            PositionTarget(
+                contract=contract(),
+                target_quantity=total,
+                metadata={"sources": dict(self.values)},
             ),
-            commissionReport=ibi.CommissionReport(commission=1.0, realizedPNL=0.0),
-            time=datetime.now(timezone.utc),
+        )
+
+
+def test_direct_pipeline_routes_aggregate_target(atom_runtime):
+    trader = FakeTrader()
+    controller = Controller(trader=trader)
+    atom_runtime.bind_controller(controller)
+    portfolio = AggregatePortfolio()
+    model = SerialTargetExecutionModel(name="serial")
+    router = ExecutionRouter(
+        [ExecutionRule(predicate=lambda target: True, model=model)]
+    )
+    portfolio.connect(router)
+
+    portfolio.onData(
+        Signal(
+            source_key="alpha",
+            contract=contract(),
+            value=2,
+            signal_type=SignalType.STATE,
         )
     )
-    controller = Controller(trader=Trader(atom_runtime.ib))
-    controller.release_hold()
-    controller.ib.orderStatusEvent.emit(trade_object)
-    controller.ib.execDetailsEvent.emit(trade_object, trade_object.fills[-1])
-    await asyncio.sleep(0)
-    assert a.sm._strategies.total_positions()[trade_object.contract] == 1
-    assert "manual_ES" in a.sm._strategies
+    portfolio.onData(
+        Signal(
+            source_key="beta",
+            contract=contract(),
+            value=-1,
+            signal_type=SignalType.STATE,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+    assert len(trader.trades) == 1
+    assert atom_runtime.book.target_state("serial", contract()).target_quantity == 1

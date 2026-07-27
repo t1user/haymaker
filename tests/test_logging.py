@@ -156,7 +156,7 @@ def test_telegram_handler_sends_plain_text_without_parse_mode():
     )
     handler.setFormatter(logging.Formatter("%(levelname)s\n\n%(message)s"))
     record = logging.LogRecord(
-        "haymaker.aggregators",
+        "haymaker.components.aggregators",
         logging.WARNING,
         "/tmp/aggregators.py",
         227,
@@ -187,7 +187,7 @@ def test_telegram_handler_reports_rejected_delivery(capsys, monkeypatch):
     connection = _TelegramConnection(response)
     monkeypatch.setattr(handler, "getConnection", lambda host, secure: connection)
     record = logging.LogRecord(
-        "haymaker.aggregators",
+        "haymaker.components.aggregators",
         logging.WARNING,
         "/tmp/aggregators.py",
         227,

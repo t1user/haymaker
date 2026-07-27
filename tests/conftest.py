@@ -29,12 +29,12 @@ from ib_insync import Contract, ContractDetails
 from runtime_helpers import AtomRuntimeHarness
 
 from haymaker.base import Atom as BaseAtom
+from haymaker.book import Book
+from haymaker.components import Streamer as ActualStreamer
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
 from haymaker.datastore import FrameStoreProvider
 from haymaker.saver import AbstractBaseSaver
-from haymaker.state_machine import StateMachine
-from haymaker.streamers import Streamer as ActualStreamer
 from haymaker.trader import Trader
 
 log = logging.getLogger(__name__)
@@ -123,13 +123,14 @@ class FakeMongoSaver(AbstractBaseSaver):
 
     def read(self, key: dict | None = None, /, *args) -> Any:
         s = self.store[self.collection]
+        values = list(s.values()) if isinstance(s, dict) else list(s)
         if key:
-            try:
-                return [s.get(key)]  # type: ignore
-            except AttributeError:
-                return s  # type: ignore
-        else:
-            return s  # type: ignore
+            return [
+                item
+                for item in values
+                if all(item.get(name) == value for name, value in key.items())
+            ]
+        return values
 
 
 class FakeMongoLatestSaver(FakeMongoSaver):
@@ -147,28 +148,27 @@ def order_saver():
 
 
 @pytest.fixture
-def strategy_saver():
-    return FakeMongoLatestSaver("models")
+def state_saver():
+    return FakeMongoSaver("state", query_key="state_key")
 
 
 @pytest.fixture
-def state_machine(order_saver, strategy_saver):
-    sm = StateMachine(
-        order_saver=order_saver, strategy_saver=strategy_saver, save_async=False
+def book(order_saver, state_saver):
+    return Book(
+        order_saver=order_saver,
+        state_saver=state_saver,
+        save_async=False,
     )
-    yield sm
-    # ensure any existing singleton is destroyed
-    StateMachine._instance = None
 
 
 @pytest.fixture
-def atom_runtime_factory(monkeypatch, state_machine):
+def atom_runtime_factory(monkeypatch, book):
     """Create and install test runtimes for Atom-dependent tests."""
 
     def make(
         *,
         ib: ibi.IB | None = None,
-        sm: StateMachine | None = None,
+        book_: Book | None = None,
         contract_registry: ContractRegistry | None = None,
         controller: Controller | None = None,
         frame_store_provider: FrameStoreProvider | None = None,
@@ -178,7 +178,7 @@ def atom_runtime_factory(monkeypatch, state_machine):
             provider = cast(FrameStoreProvider, Mock(spec=FrameStoreProvider))
         runtime = AtomRuntimeHarness(
             ib=ib or ibi.IB(),
-            sm=sm or state_machine,
+            book=book_ or book,
             contract_registry=contract_registry or ContractRegistry(),
             controller=controller,
             frame_store_provider=provider,

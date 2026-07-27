@@ -1,0 +1,333 @@
+from datetime import datetime, timezone
+from pathlib import Path
+from runpy import run_path
+
+import ib_insync as ibi
+import pytest
+
+from haymaker.misc import tree
+
+_MIGRATION = run_path(
+    str(Path(__file__).parents[1] / "scripts" / "migrate_components_state.py")
+)
+MIGRATION_VERSION = _MIGRATION["MIGRATION_VERSION"]
+convert_blotter = _MIGRATION["convert_blotter"]
+convert_latest_strategy_snapshot = _MIGRATION["convert_latest_strategy_snapshot"]
+convert_order = _MIGRATION["convert_order"]
+migrate = _MIGRATION["migrate"]
+order_role = _MIGRATION["order_role"]
+validation_report = _MIGRATION["validation_report"]
+
+
+def legacy_trade():
+    timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    contract = ibi.Future(conId=1, symbol="ES", exchange="CME")
+    order = ibi.Order(
+        orderId=7,
+        clientId=2,
+        permId=99,
+        action="BUY",
+        totalQuantity=1,
+    )
+    trade = ibi.Trade(
+        contract=contract,
+        order=order,
+        orderStatus=ibi.OrderStatus(
+            orderId=7,
+            status=ibi.OrderStatus.Filled,
+            filled=1,
+            remaining=0,
+        ),
+        fills=[
+            ibi.Fill(
+                contract=contract,
+                execution=ibi.Execution(
+                    execId="exec-1",
+                    orderId=7,
+                    permId=99,
+                    side="BOT",
+                    shares=1,
+                    price=100,
+                    time=timestamp,
+                ),
+                commissionReport=ibi.CommissionReport(
+                    execId="exec-1",
+                    commission=1,
+                    realizedPNL=2,
+                ),
+                time=timestamp,
+            )
+        ],
+        log=[
+            ibi.TradeLogEntry(
+                time=timestamp,
+                status=ibi.OrderStatus.Submitted,
+                message="submitted",
+            )
+        ],
+    )
+    return trade
+
+
+@pytest.mark.parametrize(
+    ("legacy", "expected"),
+    [
+        ("STOP-LOSS", "STOP_LOSS"),
+        ("TAKE-PROFIT", "TAKE_PROFIT"),
+        ("FUTURE-ROLL", "ROLL"),
+        ("CUSTOM_ALGO", "CUSTOM_ALGO"),
+    ],
+)
+def test_role_mapping_preserves_custom_values(legacy, expected):
+    assert order_role(legacy) == expected
+
+
+def test_order_conversion_preserves_trade_fill_and_identifiers():
+    trade = legacy_trade()
+    converted = convert_order(
+        {
+            "_id": "legacy-order",
+            "strategy": "alpha",
+            "action": "OPEN",
+            "trade": tree(trade),
+            "params": {"position_id": "episode"},
+            "active": False,
+        },
+        source_database="legacy",
+    )
+
+    assert converted["orderId"] == 7
+    assert converted["clientId"] == 2
+    assert converted["permId"] == 99
+    assert converted["source_key"] == "alpha"
+    assert converted["position_id"] == "episode"
+    assert converted["params"]["legacy_action"] == "OPEN"
+    assert converted["fills"][0]["deduplication_key"] == "exec-1"
+    assert converted["migration_version"] == MIGRATION_VERSION
+
+
+def test_order_conversion_refuses_invented_submission_timestamp():
+    trade = legacy_trade()
+    trade.log = []
+
+    with pytest.raises(ValueError, match="honest submission"):
+        convert_order(
+            {"strategy": "alpha", "action": "OPEN", "trade": tree(trade)},
+            source_database="legacy",
+        )
+
+
+def test_latest_strategy_conversion_preserves_episode_and_lock():
+    timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    states = convert_latest_strategy_snapshot(
+        {
+            "_id": "snapshot",
+            "timestamp": timestamp,
+            "alpha": tree(
+                {
+                    "active_contract": ibi.Future(conId=1, symbol="ES", exchange="CME"),
+                    "position": 0,
+                    "lock": -1,
+                    "position_id": "episode",
+                    "params": {"atr": 5, "unrelated": "ignored"},
+                    "timestamp": timestamp,
+                }
+            ),
+        },
+        source_database="legacy",
+    )
+
+    assert states[0]["state_type"] == "position"
+    assert states[0]["source_key"] == "alpha"
+    assert states[0]["position_id"] == "episode"
+    assert states[0]["blocked_direction"] == -1
+    assert states[0]["bracket_inputs"] == {"atr": 5}
+
+
+def test_blotter_conversion_and_validation_totals():
+    converted = convert_blotter(
+        {
+            "_id": "row",
+            "strategy": "alpha",
+            "action": "CLOSE",
+            "position_id": "episode",
+            "order_id": 7,
+            "commission": 1.5,
+            "realizedPNL": 10,
+        },
+        source_database="legacy",
+    )
+    report = validation_report(
+        [{"orderId": 7, "active": False}],
+        [{"quantity": 0}],
+        [converted],
+    )
+
+    assert converted["source_key"] == "alpha"
+    assert converted["role"] == "CLOSE"
+    assert report["totals"] == {"commission": 1.5, "realized_pnl": 10}
+    assert report["unmatched_blotter_order_ids"] == []
+
+
+class FakeCollection:
+    def __init__(self, documents=None):
+        self.documents = [dict(document) for document in documents or ()]
+
+    def find(self, query):
+        return [
+            document
+            for document in self.documents
+            if all(document.get(key) == value for key, value in query.items())
+        ]
+
+    def find_one(self, query, sort=None):
+        matches = self.find(query)
+        if sort:
+            name, direction = sort[0]
+            matches.sort(
+                key=lambda document: document.get(name),
+                reverse=direction < 0,
+            )
+        return matches[0] if matches else None
+
+    def estimated_document_count(self):
+        return len(self.documents)
+
+    def count_documents(self, query):
+        return len(self.find(query))
+
+    def create_index(self, *args, **kwargs):
+        return None
+
+    def replace_one(self, query, document, upsert=False):
+        for index, existing in enumerate(self.documents):
+            if all(existing.get(key) == value for key, value in query.items()):
+                self.documents[index] = dict(document)
+                return
+        if upsert:
+            self.documents.append(dict(document))
+
+
+class FakeDatabase:
+    def __init__(self):
+        self.collections = {}
+
+    def __getitem__(self, name):
+        return self.collections.setdefault(name, FakeCollection())
+
+    def __setitem__(self, name, collection):
+        self.collections[name] = collection
+
+
+class FakeClient:
+    def __init__(self):
+        self.databases = {}
+
+    def __getitem__(self, name):
+        return self.databases.setdefault(name, FakeDatabase())
+
+
+def migration_client():
+    client = FakeClient()
+    timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    client["legacy"]["orders"] = FakeCollection(
+        [
+            {
+                "_id": "legacy-order",
+                "strategy": "alpha",
+                "action": "OPEN",
+                "trade": tree(legacy_trade()),
+                "params": {"position_id": "episode"},
+            }
+        ]
+    )
+    client["legacy"]["strategies"] = FakeCollection(
+        [
+            {
+                "_id": "snapshot",
+                "timestamp": timestamp,
+                "alpha": tree(
+                    {
+                        "active_contract": ibi.Future(
+                            conId=1, symbol="ES", exchange="CME"
+                        ),
+                        "position": 1,
+                        "position_id": "episode",
+                        "timestamp": timestamp,
+                    }
+                ),
+            }
+        ]
+    )
+    client["legacy"]["blotter"] = FakeCollection(
+        [
+            {
+                "_id": "row",
+                "strategy": "alpha",
+                "action": "OPEN",
+                "position_id": "episode",
+                "order_id": 7,
+                "commission": 1,
+                "realizedPNL": 2,
+            }
+        ]
+    )
+    return client
+
+
+def test_migration_defaults_to_non_mutating_dry_run():
+    client = migration_client()
+
+    report = migrate(
+        client,
+        source_database="legacy",
+        target_database="fresh",
+    )
+
+    assert report["mode"] == "dry-run"
+    assert report["source_counts"] == {
+        "orders": 1,
+        "strategy_snapshots": 1,
+        "blotter": 1,
+    }
+    assert report["target_counts"] == {
+        "orders": 0,
+        "state": 0,
+        "blotter": 0,
+    }
+
+
+def test_migration_apply_is_idempotent_and_reports_target_counts():
+    client = migration_client()
+
+    first = migrate(
+        client,
+        source_database="legacy",
+        target_database="fresh",
+        apply=True,
+    )
+    second = migrate(
+        client,
+        source_database="legacy",
+        target_database="fresh",
+        apply=True,
+    )
+
+    assert first["target_counts"] == {
+        "orders": 1,
+        "state": 1,
+        "blotter": 1,
+    }
+    assert second["target_counts"] == first["target_counts"]
+
+
+def test_migration_refuses_mixed_or_foreign_target_database():
+    client = migration_client()
+    client["fresh"]["orders"] = FakeCollection([{"unrelated": True}])
+
+    with pytest.raises(RuntimeError, match="incompatible"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+        )

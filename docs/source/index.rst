@@ -15,6 +15,7 @@ Haymaker Documentation
    supervisor
    ib_message_codes
    execution
+   example
    dataloader
    research/index
    code

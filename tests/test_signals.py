@@ -1,802 +1,232 @@
-from __future__ import annotations
+from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
 
+import ib_insync as ibi
 import pytest
 
-from haymaker.base import Atom, Pipe
-from haymaker.signals import (
+from haymaker.base import Atom
+from haymaker.book import PositionState
+from haymaker.components import (
     AlwaysOnBinarySignalProcessor,
-    AlwaysOnLockableBinarySignalProcessor,
     BinarySignalProcessor,
-    BlipBinarySignalProcessor,
     LockableBinarySignalProcessor,
-    LockableBlipBinarySignalProcessor,
-    binary_signal_processor_factory,
+    PositionIntent,
+    PositionProposal,
+    PositionTarget,
+    Signal,
+    SignalType,
+    StandardOrderRole,
 )
-from haymaker.state_machine import StrategyContainer
 
 
-def test_BinarySignalProcessor_instantiates():
-    proc = BinarySignalProcessor()
-    assert isinstance(proc, BinarySignalProcessor)
-
-
-def test_repr():
-    bp = BinarySignalProcessor()
-    assert "BinarySignalProcessor" in bp.__repr__()
-
-
-def test_repr_Lockable():
-    bp = LockableBinarySignalProcessor()
-    assert "LockableBinarySignalProcessor" in bp.__repr__()
-
-
-def test_repr_AlwaysOnLockable():
-    bp = AlwaysOnLockableBinarySignalProcessor()
-    assert "AlwaysOnLockableBinarySignalProcessor" in bp.__repr__()
-
-
-def test_repr_AlwaysOn():
-    bp = AlwaysOnBinarySignalProcessor()
-    assert "AlwaysOnBinarySignalProcessor" in bp.__repr__()
-
-
-@pytest.fixture
-def StateMachine(strategy_saver):
-    class FakeStateMachine:
-        """
-        Simulate state machine always returning desired values for
-        position and lock.
-        """
-
-        def __init__(self, position=0.0, lock=0):
-            self.position = position
-            self.lock = lock
-
-        strategy = StrategyContainer(strategy_saver)
-
-        def position_and_order_for_strategy(self, strategy_str: str) -> float:
-            return self.position
-
-        def locked(self, key: str) -> int:
-            return self.lock
-
-    return FakeStateMachine
-
-
-@pytest.fixture
-def pipe(StateMachine, atom_runtime_factory):
-    class SourceAtom(Atom):
-        def run(self):
-            self.dataEvent.emit({"strategy": "eska_NQ", "signal": 1})
-
-    source = SourceAtom()
-
-    sm = StateMachine()
-    atom_runtime_factory(sm=sm)
-
-    processor = binary_signal_processor_factory(lockable=False, always_on=False)
-    processor_instance = processor()
-
-    class OutputAtom(Atom):
-        def onData(self, data, *args):
-            self.out = data
-
-    out = OutputAtom()
-    Pipe(source, processor_instance, out)
-    source.run()
-    return out.out
-
-
-def test_signal_emits_dict(pipe):
-    assert isinstance(pipe, dict)
-
-
-def test_correct_action(pipe):
-    assert pipe["action"] == "OPEN"
-
-
-def test_signal_included_in_output(pipe):
-    assert "signal" in pipe.keys()
-
-
-def test_target_position_included_in_output(pipe):
-    assert "target_position" in pipe.keys()
-
-
-# =================================================
-# Testing actions
-# =================================================
-
-# Some comments are nonsense
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [
-        # pos, lock, signal, lockable, always_on
-        ((0, 0, 0, False, False), None),  # No signal must generate no signal
-        ((0, 1, 0, True, False), None),  # No signal must generate no signal
-        ((1, 0, 0, False, False), "CLOSE"),  # Zero signal, zero position (lockable)
-        ((-1, 0, 0, False, False), "CLOSE"),  # Zero signal, zero position (lockable)
-        ((1, 0, 0, True, False), "CLOSE"),  # Zero signal, zero position (lockable)
-        ((-1, 0, 0, True, False), "CLOSE"),  # Zero signal, zero position (lockable)
-        # ---
-        ((1, 0, 1, False, False), None),  # Same signal with existing position
-        ((-1, 0, -1, False, False), None),  # Same, opposite direction
-        ((1, 0, -1, False, True), "REVERSE"),  # reverse signal, position, always-on
-        ((-1, 0, 1, False, True), "REVERSE"),  # Same, opposite direction
-        ((0, 1, 1, True, False), None),  # No position, signal, lockable, with lock
-        ((0, -1, -1, True, False), None),  # Same, opposite direction
-        ((0, 1, 1, False, False), "OPEN"),  # No position, signal, not lockable, lock
-        ((0, -1, -1, False, False), "OPEN"),  # Same, oppposite direction
-        ((0, 0, 1, True, False), "OPEN"),  # No position, signal, lockable, no lock
-        ((0, 0, -1, True, False), "OPEN"),  # Same, opposite direction
-        ((0, 1, 1, True, False), None),  # No position, lock, signal
-        ((0, 0, 1, True, False), "OPEN"),  # No position, signal, lockable, no lock
-        ((0, -1, 1, True, True), "OPEN"),  # Lockable, signal, irrelevant lock
-        ((-1, -1, 1, True, True), "REVERSE"),  # Same but with position
-        ((-1, 0, 1, True, True), "REVERSE"),  # Always_on position with opposite signal
-        ((1, 0, -1, True, True), "REVERSE"),  # Same, opposite direction
-        ((1, 0, -1, False, False), "CLOSE"),  # Position, opposite, closing signal
-        ((-1, 0, 1, False, False), "CLOSE"),  # Same, reverse direction
-        ((-2, 0, 1, True, True), "REVERSE"),  # Always_on position with opposite signal
-        ((3, 0, -1, True, True), "REVERSE"),  # Same, opposite direction
-        ((2, 0, -1, False, False), "CLOSE"),  # Position, opposite, closing signal
-        ((-4, 0, 1, False, False), "CLOSE"),  # Same, reverse direction
-    ],
-)
-def test_signal_paths_actions(test_input, expected, StateMachine, atom_runtime_factory):
-    position, lock, signal, lockable, always_on = test_input
-
-    sm = StateMachine(position, lock)
-    atom_runtime_factory(sm=sm)
-
-    processor = binary_signal_processor_factory(lockable, always_on)
-    processor_instance = processor()
-    action = processor_instance.process_signal("x", signal, signal)
-
-    assert action == expected
-
-
-# =================================================
-# Testing positions
-# =================================================
-
-# Some comments are nonsense
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [
-        # pos, lock, signal, lockable, always_on
-        ((0, 0, 0, False, False), None),  # No signal must generate no signal
-        ((0, 1, 0, True, False), None),  # No signal must generate no signal
-        ((1, 0, 0, False, False), 0),  # Zero signal means no position
-        ((-1, 0, 0, False, False), 0),  # Zero signal means no position
-        ((1, 0, 0, True, False), 0),  # Zero signal, (lockable)
-        ((-1, 0, 0, True, False), 0),  # Zero signal (lockable)
-        # ---
-        ((1, 0, 1, False, False), None),  # Same signal with existing position
-        ((-1, 0, -1, False, False), None),  # Same, opposite direction
-        ((1, 0, -1, False, True), -1),  # Reverse signal, existing position, always-on
-        ((-1, 0, 1, False, True), 1),  # Same, opposite direction
-        ((0, 1, 1, True, False), None),  # No position, signal, lockable, with lock
-        ((0, -1, -1, True, False), None),  # Same, opposite direction
-        ((0, 1, 1, False, False), 1),  # No position, signal, not lockable, with lock
-        ((0, -1, -1, False, False), -1),  # Same, oppposite direction
-        ((0, 0, 1, True, False), 1),  # No position, signal, lockable, no lock
-        ((0, 1, 1, True, False), None),  # Same, opposite direction
-        ((0, 0, 1, True, False), 1),  # No position, signal, lockable, no lock
-        ((0, -1, 1, True, True), 1),  # Lockable, signal, opposite (irrelevant) lock
-        ((-1, 0, 1, True, True), 1),  # Always_on position with opposite signal
-        ((1, 0, -1, True, True), -1),  # Same, opposite direction
-        ((1, 0, -1, False, False), 0),  # Position, opposite, closing signal
-        ((-1, 0, 1, False, False), 0),  # Same, reverse direction
-        # same but with non-zero positions (which should be interpreted as np.sign)
-        ((2, 0, -1, True, True), -1),  # Same, opposite direction
-        ((2, 0, -1, False, False), 0),  # Position, opposite, closing signal
-        ((-2, 0, 1, False, False), 0),  # Same, reverse direction
-    ],
-)
-def test_signal_paths_positions(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, lock, signal, lockable, always_on = test_input
-
-    sm = StateMachine(position, lock)
-    atom_runtime_factory(sm=sm)
-
-    class OutputAtom(Atom):
-        out = {}
-
-        def onData(self, data, *args):
-            self.out = data
-
-    output = OutputAtom()
-
-    processor = binary_signal_processor_factory(lockable, always_on)
-    print(processor)
-    processor_instance = processor()
-    processor_instance += output
-    processor_instance.onData({"strategy": "x", "signal": signal})
-
-    target_position = output.out.get("target_position")
-
-    assert target_position == expected
-
-
-# =================================================
-# Testing actions - object by object
-# =================================================
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [  # pos, sig
-        ((0, 0), None),
-        ((0, 1), "OPEN"),
-        ((0, -1), "OPEN"),
-        ((1, 0), "CLOSE"),
-        ((-1, 0), "CLOSE"),
-        ((1, 1), None),
-        ((1, -1), "CLOSE"),
-        ((-1, 1), "CLOSE"),
-        ((-1, -1), None),
-    ],
-)
-def test_signal_paths_BinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal = test_input
-
-    sm = StateMachine(position=position)
-    atom_runtime_factory(sm=sm)
-
-    processor_instance = BinarySignalProcessor()
-    action = processor_instance.process_signal("x", signal, signal)
-
-    assert action == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [  # pos, sig
-        ((0, 0), None),
-        ((0, 1), "OPEN"),
-        ((0, -1), "OPEN"),
-        ((1, 0), None),
-        ((-1, 0), None),
-        ((1, 1), None),
-        ((1, -1), "CLOSE"),
-        ((-1, 1), "CLOSE"),
-        ((-1, -1), None),
-    ],
-)
-def test_signal_paths_BlipBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal = test_input
-
-    sm = StateMachine(position=position)
-    atom_runtime_factory(sm=sm)
-
-    processor_instance = BlipBinarySignalProcessor()
-    action = processor_instance.process_signal("x", signal, signal)
-
-    assert action == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [
-        # pos, signal, lock
-        ((0, 0, 0), None),
-        ((0, 1, 0), "OPEN"),
-        ((0, -1, 0), "OPEN"),
-        ((1, 0, 0), "CLOSE"),
-        ((-1, 0, 0), "CLOSE"),
-        ((1, 1, 0), None),
-        ((1, -1, 0), "CLOSE"),
-        ((-1, 1, 0), "CLOSE"),
-        ((-1, -1, 0), None),
-        ((0, 0, 1), None),
-        ((0, 1, 1), None),
-        ((0, -1, 1), "OPEN"),
-        ((1, 0, 1), "CLOSE"),
-        ((-1, 0, 1), "CLOSE"),
-        ((1, 1, 1), None),
-        ((1, -1, 1), "CLOSE"),
-        # ((-1, 1, 1), "CLOSE"), IMPOSSIBLE
-        ((-1, -1, 1), None),
-        ((0, 0, -1), None),
-        ((0, 1, -1), "OPEN"),
-        ((0, -1, -1), None),
-        ((1, 0, -1), "CLOSE"),
-        ((-1, 0, -1), "CLOSE"),
-        ((1, 1, -1), None),
-        # ((1, -1, -1), "CLOSE"), IMPOSSIBLE
-        ((-1, 1, -1), "CLOSE"),
-        ((-1, -1, -1), None),
-    ],
-)
-def test_signal_paths_LockableBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal, lock = test_input
-
-    sm = StateMachine(position, lock)
-    atom_runtime_factory(sm=sm)
-
-    processor_instance = LockableBinarySignalProcessor()
-    action = processor_instance.process_signal("x", signal, signal)
-
-    assert action == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [
-        # pos, signal, lock
-        ((0, 0, 0), None),
-        ((0, 1, 0), "OPEN"),
-        ((0, -1, 0), "OPEN"),
-        ((1, 0, 0), None),
-        ((-1, 0, 0), None),
-        ((1, 1, 0), None),
-        ((1, -1, 0), "CLOSE"),
-        ((-1, 1, 0), "CLOSE"),
-        ((-1, -1, 0), None),
-        ((0, 0, 1), None),
-        ((0, 1, 1), None),
-        ((0, -1, 1), "OPEN"),
-        ((1, 0, 1), None),
-        ((-1, 0, 1), None),
-        ((1, 1, 1), None),
-        ((1, -1, 1), "CLOSE"),
-        # ((-1, 1, 1), "CLOSE"), IMPOSSIBLE
-        ((-1, -1, 1), None),
-        ((0, 0, -1), None),
-        ((0, 1, -1), "OPEN"),
-        ((0, -1, -1), None),
-        ((1, 0, -1), None),
-        ((-1, 0, -1), None),
-        ((1, 1, -1), None),
-        # ((1, -1, -1), "CLOSE"), IMPOSSIBLE
-        ((-1, 1, -1), "CLOSE"),
-        ((-1, -1, -1), None),
-    ],
-)
-def test_signal_paths_LockableBlipBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal, lock = test_input
-
-    sm = StateMachine(position, lock)
-    atom_runtime_factory(sm=sm)
-
-    processor_instance = LockableBlipBinarySignalProcessor()
-    action = processor_instance.process_signal("x", signal, signal)
-
-    assert action == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [
-        # pos, signal, lock
-        ((0, 0, 0), None),
-        ((0, 1, 0), "OPEN"),
-        ((0, -1, 0), "OPEN"),
-        ((1, 0, 0), "CLOSE"),
-        ((-1, 0, 0), "CLOSE"),
-        ((1, 1, 0), None),
-        ((1, -1, 0), "REVERSE"),
-        ((-1, 1, 0), "REVERSE"),
-        ((-1, -1, 0), None),
-        ((0, 0, 1), None),
-        ((0, 1, 1), None),
-        ((0, -1, 1), "OPEN"),
-        ((1, 0, 1), "CLOSE"),
-        ((-1, 0, 1), "CLOSE"),
-        ((1, 1, 1), None),
-        ((1, -1, 1), "REVERSE"),
-        # ((-1, 1, 1), "CLOSE"), IMPOSSIBLE
-        ((-1, -1, 1), None),
-        ((0, 0, -1), None),
-        ((0, 1, -1), "OPEN"),
-        ((0, -1, -1), None),
-        ((1, 0, -1), "CLOSE"),
-        ((-1, 0, -1), "CLOSE"),
-        ((1, 1, -1), None),
-        # ((1, -1, -1), "CLOSE"), IMPOSSIBLE
-        ((-1, 1, -1), "REVERSE"),
-        ((-1, -1, -1), None),
-    ],
-)
-def test_signal_paths_AlwaysOnLockableBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal, lock = test_input
-
-    sm = StateMachine(position, lock)
-    atom_runtime_factory(sm=sm)
-    strategy = sm.strategy["x"]
-    strategy.position = position
-
-    processor_instance = AlwaysOnLockableBinarySignalProcessor()
-    action = processor_instance.process_signal("x", signal, signal)
-
-    assert action == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [  # pos, sig
-        ((0, 0), None),
-        ((0, 1), "OPEN"),
-        ((0, -1), "OPEN"),
-        ((1, 0), "CLOSE"),
-        ((-1, 0), "CLOSE"),
-        ((1, 1), None),
-        ((1, -1), "REVERSE"),
-        ((-1, 1), "REVERSE"),
-        ((-1, -1), None),
-    ],
-)
-def test_signal_paths_AlwaysOnBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal = test_input
-
-    sm = StateMachine(position=position)
-    atom_runtime_factory(sm=sm)
-
-    processor_instance = AlwaysOnBinarySignalProcessor()
-    action = processor_instance.process_signal("x", signal, signal)
-
-    assert action == expected
-
-
-# =================================================
-# Testing target positions - object by object
-# =================================================
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [  # pos, sig
-        ((0, 0), None),
-        ((0, 1), 1),
-        ((0, -1), -1),
-        ((1, 0), 0),
-        ((-1, 0), 0),
-        ((1, 1), None),
-        ((1, -1), 0),
-        ((-1, 1), 0),
-        ((-1, -1), None),
-    ],
-)
-def test_signal_paths_positions_BinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal = test_input
-
-    class FakeStateMachine(StateMachine):
-
-        def locked(self, key):
-            raise TypeError("Shouldn't be here")
-
-    sm = FakeStateMachine(position)
-    atom_runtime_factory(sm=sm)
-    strategy = sm.strategy["x"]
-    strategy.position = position
-
-    class OutputAtom(Atom):
-        out = {}
-
-        def onData(self, data, *args):
-            self.out = data
-
-    output = OutputAtom()
-    processor_instance = BinarySignalProcessor()
-    processor_instance += output
-    processor_instance.onData({"strategy": "x", "signal": signal})
-
-    target_position = output.out.get("target_position")
-
-    assert target_position == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [  # pos, sig
-        ((0, 0), None),
-        ((0, 1), 1),
-        ((0, -1), -1),
-        ((1, 0), None),
-        ((-1, 0), None),
-        ((1, 1), None),
-        ((1, -1), 0),
-        ((-1, 1), 0),
-        ((-1, -1), None),
-    ],
-)
-def test_signal_paths_positions_BlipBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal = test_input
-
-    class FakeStateMachine(StateMachine):
-
-        def locked(self, key):
-            raise TypeError("Shouldn't be here")
-
-    sm = FakeStateMachine(position)
-    atom_runtime_factory(sm=sm)
-    strategy = sm.strategy["x"]
-    strategy.position = position
-
-    class OutputAtom(Atom):
-        out = {}
-
-        def onData(self, data, *args):
-            self.out = data
-
-    output = OutputAtom()
-    processor_instance = BlipBinarySignalProcessor()
-    processor_instance += output
-    processor_instance.onData({"strategy": "x", "signal": signal})
-
-    target_position = output.out.get("target_position")
-
-    assert target_position == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [
-        # pos, signal, lock
-        ((0, 0, 0), None),
-        ((0, 1, 0), 1),
-        ((0, -1, 0), -1),
-        ((1, 0, 0), 0),
-        ((-1, 0, 0), 0),
-        ((1, 1, 0), None),
-        ((1, -1, 0), 0),
-        ((-1, 1, 0), 0),
-        ((-1, -1, 0), None),
-        ((0, 0, 1), None),
-        ((0, 1, 1), None),
-        ((0, -1, 1), -1),
-        ((1, 0, 1), 0),
-        ((-1, 0, 1), 0),
-        ((1, 1, 1), None),
-        ((1, -1, 1), 0),
-        # ((-1, 1, 1), "CLOSE"), IMPOSSIBLE
-        ((-1, -1, 1), None),
-        ((0, 0, -1), None),
-        ((0, 1, -1), 1),
-        ((0, -1, -1), None),
-        ((1, 0, -1), 0),
-        ((-1, 0, -1), 0),
-        ((1, 1, -1), None),
-        # ((1, -1, -1), "CLOSE"), IMPOSSIBLE
-        ((-1, 1, -1), 0),
-        ((-1, -1, -1), None),
-    ],
-)
-def test_signal_paths_positions_LockableBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal, lock = test_input
-
-    sm = StateMachine(position, lock)
-    atom_runtime_factory(sm=sm)
-
-    class OutputAtom(Atom):
-        out = {}
-
-        def onData(self, data, *args):
-            self.out = data
-
-    output = OutputAtom()
-
-    processor_instance = LockableBinarySignalProcessor()
-
-    processor_instance += output
-    processor_instance.onData({"strategy": "x", "signal": signal})
-
-    target_position = output.out.get("target_position")
-
-    assert target_position == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [
-        # pos, signal, lock
-        ((0, 0, 0), None),
-        ((0, 1, 0), 1),
-        ((0, -1, 0), -1),
-        ((1, 0, 0), 0),
-        ((-1, 0, 0), 0),
-        ((1, 1, 0), None),
-        ((1, -1, 0), -1),
-        ((-1, 1, 0), 1),
-        ((-1, -1, 0), None),
-        ((0, 0, 1), None),
-        ((0, 1, 1), None),
-        ((0, -1, 1), -1),
-        ((1, 0, 1), 0),
-        ((-1, 0, 1), 0),
-        ((1, 1, 1), None),
-        ((1, -1, 1), -1),
-        # ((-1, 1, 1), "CLOSE"), IMPOSSIBLE
-        ((-1, -1, 1), None),
-        ((0, 0, -1), None),
-        ((0, 1, -1), 1),
-        ((0, -1, -1), None),
-        ((1, 0, -1), 0),
-        ((-1, 0, -1), 0),
-        ((1, 1, -1), None),
-        # ((1, -1, -1), "CLOSE"), IMPOSSIBLE
-        ((-1, 1, -1), 1),
-        ((-1, -1, -1), None),
-    ],
-)
-def test_signal_paths_positions_AlwaysOnLockableBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal, lock = test_input
-
-    sm = StateMachine(position, lock)
-    atom_runtime_factory(sm=sm)
-
-    class OutputAtom(Atom):
-        out = {}
-
-        def onData(self, data, *args):
-            self.out = data
-
-    output = OutputAtom()
-
-    processor_instance = AlwaysOnLockableBinarySignalProcessor()
-    processor_instance += output
-    processor_instance.onData({"strategy": "x", "signal": signal})
-
-    target_position = output.out.get("target_position")
-
-    assert target_position == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [  # pos, sig
-        ((0, 0), None),
-        ((0, 1), 1),
-        ((0, -1), -1),
-        ((1, 0), 0),
-        ((-1, 0), 0),
-        ((1, 1), None),
-        ((1, -1), -1),
-        ((-1, 1), 1),
-        ((-1, -1), None),
-    ],
-)
-def test_signal_paths_positions_AlwaysOnBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal = test_input
-
-    sm = StateMachine(position)
-    atom_runtime_factory(sm=sm)
-
-    class OutputAtom(Atom):
-        out = {}
-
-        def onData(self, data, *args):
-            self.out = data
-
-    output = OutputAtom()
-
-    processor_instance = AlwaysOnBinarySignalProcessor()
-    processor_instance += output
-    processor_instance.onData({"strategy": "x", "signal": signal})
-
-    target_position = output.out.get("target_position")
-
-    assert target_position == expected
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [  # pos, sig_in, sig_out
-        ((0, 0, 1), None),
-        ((0, 1, 0), 1),
-        ((0, -1, 0), -1),
-        ((0, 1, -1), 1),
-        ((0, -1, 1), -1),
-        ((1, 0, 1), None),  # out signals should be ignored if in the same direction
-        ((-1, 0, -1), None),  # out signals should be ignored if in the same direction
-        ((1, -1, 0), 0),  # in signals should be ignored if position exists
-        ((-1, 1, 0), 0),  # in signals should be ignored if position exists
-        ((1, -1, -1), 0),  # out signals should be acted on
-        ((-1, 1, 1), 0),  # out signals should be acted on
-        ((1, 0, -1), 0),  # out signals should be acted on
-        ((-1, 0, 1), 0),  # out signals should be acted on
-    ],
-)
-def test_double_signals_BinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal_in, signal_out = test_input
-
-    sm = StateMachine(position)
-    atom_runtime_factory(sm=sm)
-
-    class OutputAtom(Atom):
-        out = {}
-
-        def onData(self, data, *args):
-            self.out = data
-
-    output = OutputAtom()
-
-    processor_instance = BinarySignalProcessor(
-        signal_fields=("signal_in", "signal_out")
-    )
-    processor_instance += output
-    processor_instance.onData(
-        {"strategy": "x", "signal_in": signal_in, "signal_out": signal_out}
+def contract() -> ibi.Future:
+    return ibi.Future(conId=1, symbol="ES", exchange="CME")
+
+
+def signal(
+    value: float,
+    signal_type: SignalType = SignalType.STATE,
+    metadata=None,
+) -> Signal:
+    return Signal(
+        source_key="alpha",
+        contract=contract(),
+        value=value,
+        signal_type=signal_type,
+        metadata=metadata or {},
     )
 
-    target_position = output.out.get("target_position")
 
-    assert target_position == expected
+class SignalSource(Atom):
+    output_type = Signal
+
+    def onData(self, data, *args):
+        self.dataEvent.emit(data)
 
 
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [  # pos, sig_in, sig_out
-        ((0, 0, 1), None),
-        ((0, 1, 0), 1),
-        ((0, -1, 0), -1),
-        ((0, 1, -1), 1),
-        ((0, -1, 1), -1),
-        ((1, 0, 1), None),  # out signals should be ignored if in the same direction
-        ((-1, 0, -1), None),  # out signals should be ignored if in the same direction
-        ((1, -1, 0), None),  # in signals should be ignored if position exists
-        ((-1, 1, 0), None),  # in signals should be ignored if position exists
-        ((1, -1, -1), 0),  # out signals should be acted on
-        ((-1, 1, 1), 0),  # out signals should be acted on
-        ((1, 0, -1), 0),  # out signals should be acted on
-        ((-1, 0, 1), 0),  # out signals should be acted on
-    ],
-)
-def test_double_signals_BlipBinarySignalProcessor(
-    test_input, expected, StateMachine, atom_runtime_factory
-):
-    position, signal_in, signal_out = test_input
+def capture(processor):
+    result = []
+    processor.dataEvent += result.append
+    return result
 
-    sm = StateMachine(position)
-    atom_runtime_factory(sm=sm)
 
-    class OutputAtom(Atom):
-        out = {}
+def test_signal_is_frozen_keyword_only_and_copies_metadata():
+    metadata = {"atr": 10}
+    message = signal(1, metadata=metadata)
+    metadata["atr"] = 20
 
-        def onData(self, data, *args):
-            self.out = data
+    assert message.metadata["atr"] == 10
+    with pytest.raises(TypeError):
+        message.metadata["new"] = 1
+    with pytest.raises(FrozenInstanceError):
+        message.value = 2
+    with pytest.raises(TypeError):
+        Signal("alpha", contract(), 1, SignalType.STATE)
 
-    output = OutputAtom()
 
-    processor_instance = BlipBinarySignalProcessor(
-        signal_fields=("signal_in", "signal_out")
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_signal_rejects_non_finite_value(value):
+    with pytest.raises(ValueError, match="finite"):
+        signal(value)
+
+
+def test_messages_reject_naive_timestamps():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        Signal(
+            source_key="alpha",
+            contract=contract(),
+            value=1,
+            signal_type=SignalType.STATE,
+            created_at=datetime(2026, 1, 1),
+        )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        PositionTarget(
+            contract=contract(),
+            target_quantity=1,
+            created_at=datetime(2026, 1, 1),
+        )
+
+
+def test_position_proposal_requires_binary_direction():
+    with pytest.raises(ValueError, match="-1, 0, or 1"):
+        PositionProposal(
+            signal=signal(1),
+            target_direction=2,
+            intent=PositionIntent.OPEN,
+        )
+
+
+def test_position_target_has_optional_intent_and_absolute_quantity():
+    target = PositionTarget(
+        contract=contract(),
+        target_quantity=-3,
+        created_at=datetime.now(timezone.utc),
     )
-    processor_instance += output
-    processor_instance.onData(
-        {"strategy": "x", "signal_in": signal_in, "signal_out": signal_out}
+
+    assert target.target_quantity == -3
+    assert target.intent is None
+
+
+def test_custom_order_roles_remain_valid():
+    assert StandardOrderRole("ICEBERG_CHILD").value == "ICEBERG_CHILD"
+
+
+def test_state_zero_closes_existing_position(atom_runtime):
+    atom_runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+        )
     )
+    processor = BinarySignalProcessor()
+    output = capture(processor)
 
-    target_position = output.out.get("target_position")
+    processor.onData(signal(0))
 
-    assert target_position == expected
+    assert output[0].target_direction == 0
+    assert output[0].intent is PositionIntent.CLOSE
+
+
+def test_event_zero_is_ignored_even_with_position(atom_runtime):
+    atom_runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+        )
+    )
+    processor = BinarySignalProcessor()
+    output = capture(processor)
+
+    processor.onData(signal(0, SignalType.EVENT))
+
+    assert output == []
+
+
+def test_repeated_event_represents_another_open_after_flat(atom_runtime):
+    processor = BinarySignalProcessor()
+    output = capture(processor)
+
+    processor.onData(signal(1, SignalType.EVENT))
+    processor.onData(signal(1, SignalType.EVENT))
+
+    assert [proposal.intent for proposal in output] == [
+        PositionIntent.OPEN,
+        PositionIntent.OPEN,
+    ]
+
+
+def test_ordinary_opposing_binary_signal_closes_first(atom_runtime):
+    atom_runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+        )
+    )
+    processor = BinarySignalProcessor()
+    output = capture(processor)
+
+    processor.onData(signal(-1))
+
+    assert output[0].target_direction == 0
+    assert output[0].intent is PositionIntent.CLOSE
+
+
+def test_always_on_opposing_signal_reverses(atom_runtime):
+    atom_runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+        )
+    )
+    processor = AlwaysOnBinarySignalProcessor()
+    output = capture(processor)
+
+    processor.onData(signal(-1))
+
+    assert output[0].target_direction == -1
+    assert output[0].intent is PositionIntent.REVERSE
+
+
+def test_lockable_processor_suppresses_blocked_open(atom_runtime):
+    atom_runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            blocked_direction=1,
+        )
+    )
+    processor = LockableBinarySignalProcessor()
+    output = capture(processor)
+
+    processor.onData(signal(1))
+
+    assert output == []
+
+
+def test_connection_validation_happens_before_any_wiring(atom_runtime):
+    source = SignalSource()
+    valid = BinarySignalProcessor()
+    invalid = BinarySignalProcessor()
+
+    class WrongSource(Atom):
+        output_type = dict
+
+    with pytest.raises(TypeError):
+        WrongSource().connect(valid, invalid)
+
+    assert len(valid.startEvent) == 0
+    assert len(invalid.startEvent) == 0
+
+
+def test_processor_rejects_actual_wrong_message(atom_runtime):
+    with pytest.raises(TypeError, match="only Signal"):
+        BinarySignalProcessor().onData({"value": 1})

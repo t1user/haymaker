@@ -7,7 +7,7 @@ import pytest
 from helpers import wait_for_condition
 from sample_barDataList import sample_barDataList
 
-from haymaker.aggregators import (
+from haymaker.components.aggregators import (
     BarAggregator,
     CountBars,
     NoFilter,
@@ -16,7 +16,7 @@ from haymaker.aggregators import (
 )
 from haymaker.base import Atom as BaseAtom
 from haymaker.base import Pipe
-from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
+from haymaker.components.streamers import HistoricalDataStreamer, MktDataStreamer
 
 
 @pytest.mark.parametrize("bar_filter", [CountBars(2), VolumeBars(20)])

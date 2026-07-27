@@ -105,7 +105,12 @@ def test_frame_store_provider_exposes_only_narrow_store_construction(
     assert provider.queued_sink("block_data", symbol_namer=namer) is stores[1]
     assert arctic_store.call_args_list == [
         call(lib="market_data", host=client, symbol_namer=namer),
-        call(lib="block_data", host=client, symbol_namer=namer),
+        call(
+            lib="block_data",
+            host=client,
+            symbol_namer=namer,
+            shutdown_policy=QueueShutdownPolicy.DISCARD,
+        ),
     ]
     assert mongo_client.call_count == 2
     assert not hasattr(provider, "mongo_client")

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from pymongo import MongoClient  # type: ignore
 from pymongo.errors import ConfigurationError  # type: ignore
 
+from .async_wrappers import QueueShutdownPolicy
 from .datastore.symbol_namer import SymbolNamer
 
 if TYPE_CHECKING:
@@ -97,8 +98,14 @@ class _ArcticFrameStoreProvider:
             symbol_namer=symbol_namer,
         )
 
-    def queued_sink(self, library: str, *, symbol_namer: SymbolNamer) -> QueuedDataSink:
-        """Return a best-effort queued dataframe sink.
+    def queued_sink(
+        self,
+        library: str,
+        *,
+        symbol_namer: SymbolNamer,
+        shutdown_policy: QueueShutdownPolicy = QueueShutdownPolicy.DISCARD,
+    ) -> QueuedDataSink:
+        """Return a queued dataframe sink with explicit shutdown policy.
 
         Args:
             library: Arctic library name.
@@ -114,6 +121,7 @@ class _ArcticFrameStoreProvider:
             lib=library,
             host=self._mongo_client(),
             symbol_namer=symbol_namer,
+            shutdown_policy=shutdown_policy,
         )
 
 

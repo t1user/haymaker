@@ -23,9 +23,9 @@ from haymaker.durationStr_converters import (
     offset_durationStr,
 )
 from haymaker.research.numba_tools import volume_grouper
-from haymaker.streamers import Streamer
+from haymaker.components.streamers import HistoricalDataStreamer, Streamer
 
-from .stitcher import FuturesStitcher
+from ..stitcher import FuturesStitcher
 
 log = logging.getLogger(__name__)
 
@@ -40,27 +40,22 @@ class WrongStreamer(Exception):
 
 @dataclass
 class DfAggregator(Atom):
-    """
-    Convert recieved data bars into a pandas DataFrame and store
-    processed data.  Ensure required minimum amount of data is
-    available, calling on database and/or broker if necessary.
+    """Build and persist sufficient dataframe history from historical bars.
 
-    For futures contracts ensure that a conitinuous series is created
-    using appropriate back contracts.
-
-    A fully configured datastore is supplied directly. The save frequency is
-    ordinary strategy policy and defaults to 900 seconds.
+    The component converts HistoricalDataStreamer snapshots to a monotonic
+    dataframe, reads older stored/broker bars when the requested history is
+    insufficient, and stitches futures history where required. It emits the
+    complete current dataframe.
 
     Args:
-    -----
+        datastore: Fully configured awaited store. Its symbol naming must match
+            the connected streamer's bar size.
+        save_frequency: Seconds between background saves; zero disables saves.
 
-    * datastore: datastore passed by strategy composition; it needs to handle
-    naming contract symbols in a manner that can be interpreted by
-    streamer. Injected stores must be fully configured.
-
-    * save_frequency: how often data will be saved to datastore, zero
-    means data will not be saved (which maybe useful for testing but
-    in a way defies the purpose of the whole object)
+    Raises:
+        WrongStreamer: If connected to an incompatible built-in Streamer.
+        MissingStreamerParam: If required historical request parameters are
+            unavailable at startup.
     """
 
     datastore: AsyncDataStore
@@ -68,7 +63,9 @@ class DfAggregator(Atom):
 
     # ================================================================================
 
-    _compatible_with: ClassVar[tuple[str]] = ("HistoricalDataStreamer",)
+    _compatible_with: ClassVar[tuple[type[Streamer], ...]] = (
+        HistoricalDataStreamer,
+    )
 
     _streamer_params: dict[str, Any] = field(
         init=False, repr=False, default_factory=dict
@@ -88,6 +85,16 @@ class DfAggregator(Atom):
             shutdown_policy=QueueShutdownPolicy.DISCARD,
         )
         super().__init__()
+
+    def validate_source(self, source: Atom) -> None:
+        """Reject structurally incompatible upstream streamer classes."""
+
+        if isinstance(source, Streamer) and not isinstance(
+            source, self._compatible_with
+        ):
+            raise WrongStreamer(
+                f"Streamer {type(source).__name__} is not compatible with {self!s}"
+            )
 
     async def set_timer(self) -> None:
         # if many objects created, they shouldn't all save at the same time
@@ -122,10 +129,9 @@ class DfAggregator(Atom):
         self._contract_blueprint = streamer._contract_blueprint
 
     def verify_streamer_compatibility(self, streamer: Streamer) -> None:
-        streamer_class = streamer.__class__.__name__
-        if streamer_class not in self._compatible_with:
+        if not isinstance(streamer, self._compatible_with):
             raise WrongStreamer(
-                f"Streamer {streamer_class} is not compatible with {self!s}"
+                f"Streamer {type(streamer).__name__} is not compatible with {self!s}"
             )
 
     async def onData(self, data: ibi.BarDataList, *args: Any) -> None:
@@ -448,6 +454,20 @@ class DfAggregator(Atom):
 
 @dataclass
 class VolumeGrouper(Atom):
+    """Regroup a dataframe into completed equal-volume bars.
+
+    Args:
+        volume: Positive target volume for each grouped row.
+        group_on: Input column accumulated toward ``volume``.
+        label: Whether grouped timestamps use the left or right boundary.
+
+    Emits:
+        A dataframe containing completed groups only when a new group closes.
+
+    Raises:
+        AssertionError: If input is not a dataframe or ``group_on`` is absent.
+    """
+
     volume: int
     group_on: str = "volume"
     label: Literal["left", "right"] = "left"

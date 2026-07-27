@@ -79,7 +79,7 @@ class QueuedDataSink(Protocol):
     """Queue dataframe mutations without waiting for backend completion.
 
     Enqueue methods return after work has been accepted. Final durability and
-    failure handling depend on :attr:`shutdown_policy`; ``DRAIN`` reports
+    failure handling depend on ``shutdown_policy``; ``DRAIN`` reports
     processing failures or drain timeouts during queue shutdown, while
     ``DISCARD`` is best effort.
     """

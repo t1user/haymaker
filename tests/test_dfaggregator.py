@@ -12,8 +12,8 @@ from sample_barDataList import sample_barDataList
 from haymaker.base import ActiveNext, Atom
 from haymaker.contract_registry import ContractRegistry
 from haymaker.datastore import AsyncDataStore
-from haymaker.dfaggregator import DfAggregator, WrongStreamer, custom_bday
-from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
+from haymaker.components._dataframe_aggregators import DfAggregator, WrongStreamer, custom_bday
+from haymaker.components.streamers import HistoricalDataStreamer, MktDataStreamer
 
 
 @pytest.fixture(scope="module")
@@ -378,7 +378,7 @@ def test_compute_date_range(registry_runtime, conId, localSymbol, return_value):
         "useRTH": False,
     }
     # required timedelta will return 2D
-    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
         # this is "now" used by the method:
         mock_dt.now.return_value = datetime(2025, 12, 12)
         mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
@@ -454,7 +454,7 @@ def test_compute_date_range_longer_period(
         "useRTH": False,
     }
     # required timedelta will return 2D
-    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
         # this is "now" used by the method:
         mock_dt.now.return_value = datetime(2025, 12, 12)
         mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
@@ -466,7 +466,7 @@ def test_compute_date_range_longer_period(
 
 
 def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
-    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
@@ -484,7 +484,7 @@ def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
 def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
     registry_runtime,
 ):
-    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 4, 1)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
@@ -500,7 +500,7 @@ def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
 
 
 def test_aggregator_offset_by_durationStr_given_as_int(registry_runtime):
-    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
@@ -521,7 +521,7 @@ def test_aggregator_offset_by_durationStr_given_as_int(registry_runtime):
 def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
     registry_runtime,
 ):
-    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
@@ -542,7 +542,7 @@ def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
 def test_aggregator_offset_by_durationStr_given_as_int_including_weekend(
     registry_runtime,
 ):
-    with patch("haymaker.dfaggregator.datetime") as mock_dt:
+    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 4, 1)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")

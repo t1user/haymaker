@@ -6,7 +6,7 @@ patching ``Atom.ib``, ``Atom.runtime``, or concrete ``contract_registry`` class
 attributes directly.
 
 Use ``atom_runtime`` when the default test runtime is enough. It installs a
-fresh ``ib_insync.IB`` instance, the test ``StateMachine``, a
+fresh ``ib_insync.IB`` instance, the test ``Book``, a
 ``ContractRegistry``, a fake ``FrameStoreProvider``, and a restart recorder on
 ``Atom``.
 
@@ -28,11 +28,10 @@ Examples:
 
         assert contract in atom_runtime.contract_registry.blueprints
 
-    def test_signal_processor_uses_fake_state_machine(
-        atom_runtime_factory, FakeStateMachine
+    def test_signal_processor_uses_fake_book(
+        atom_runtime_factory, fake_book
     ):
-        sm = FakeStateMachine(position=1)
-        atom_runtime_factory(sm=sm)
+        atom_runtime_factory(book_=fake_book)
 
         processor = BinarySignalProcessor()
 
@@ -42,12 +41,12 @@ Examples:
         controller = FakeController(FakeTrader())
         atom_runtime.bind_controller(controller)
 
-        model = BaseExecModel()
+        model = SerialTargetExecutionModel(name="test_serial")
 
         assert model.controller is controller
 
 The controller is intentionally opt-in. Many tests only need contract
-registration, state-machine access, or restart recording; constructing a
+registration, Book access, or restart recording; constructing a
 controller wires IB events and should remain explicit in tests that need it.
 
 When writing new tests:
@@ -66,17 +65,18 @@ When writing new tests:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Self, cast
 from unittest.mock import Mock
 
 import ib_insync as ibi
 
 from haymaker.base import Atom
+from haymaker.book import Book
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
 from haymaker.datastore import FrameStoreProvider
 from haymaker.order_defaults import OrderDefaults
-from haymaker.state_machine import StateMachine
 from haymaker.timeout import TimeoutPolicy
 from haymaker.trader import Trader
 
@@ -86,7 +86,7 @@ class AtomRuntimeHarness:
     """Test runtime context installed on ``Atom``."""
 
     ib: ibi.IB
-    sm: StateMachine
+    book: Book
     contract_registry: ContractRegistry
     controller: Controller | None = None
     trader: Trader | None = None
@@ -97,6 +97,10 @@ class AtomRuntimeHarness:
     timeout_policy: TimeoutPolicy = field(default_factory=TimeoutPolicy)
     restart_requests: list[str] = field(default_factory=list)
     future_roll_policies: dict[str, bool] = field(default_factory=dict)
+    run_started_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    workload_generation: int = 0
 
     def __post_init__(self) -> None:
         """Create the default trader around the harness IB client."""

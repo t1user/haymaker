@@ -18,7 +18,7 @@ Why Haymaker?
 
 * **Modular**: Easily customize components or build your own to suit your trading needs.
 * **Minimal**: Provide only essential components, allowing you to code your strategy in preferred style.
-* **Tried and Tested**: Built on top of `ib_insync`, leveraging over a decade of development community feedback. `Interactive Brokers <https://www.interactivebrokers.com/>`_ is a pioneer in algoritmic trading and still remains the leading platform both for individual and institutional investors.
+* **Tried and Tested**: Built on top of `ib_insync`, leveraging over a decade of development community feedback. `Interactive Brokers <https://www.interactivebrokers.com/>`__ is a pioneer in algoritmic trading and still remains the leading platform both for individual and institutional investors.
 * **Event Driven**: Processes market data as soon as it becomes available.
 
 Documentation

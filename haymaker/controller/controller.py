@@ -1,3 +1,5 @@
+"""Broker submission, execution accounting, and reconciliation boundary."""
+
 from __future__ import annotations
 
 import asyncio
@@ -8,14 +10,15 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import Any, Literal, Self
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from haymaker import misc
 from haymaker.base import Atom
-from haymaker.state_machine import OrderInfo, Strategy
+from haymaker.book import OrderInfo, PositionState
+from haymaker.components.messages import PositionTarget, StandardOrderRole
 from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
 
@@ -24,49 +27,42 @@ from .sync_brackets import MissingBracketsPolicy
 from .sync_coordinator import SyncBrokenStateError, SyncCoordinator
 from .terminator import Terminator
 
-if TYPE_CHECKING:
-    from haymaker.blotter import Blotter
-
 log = logging.getLogger(__name__)
 
 
 class ControllerError(ValueError):
-    """Raised when direct controller construction receives invalid policy."""
+    """Raised when Controller policy configuration is invalid."""
 
 
 class SyncOutcome(Enum):
-    """Result of a controller sync attempt."""
+    """Result of one Controller synchronization cycle."""
 
     OK = auto()
     FAILED = auto()
     ABORTED = auto()
 
     def __bool__(self) -> bool:
-        """Return True only when sync completed cleanly."""
-
         return self is SyncOutcome.OK
 
 
 def _broker_messages_to_ignore(
     codes: tuple[int, ...] | list[int],
 ) -> tuple[int, ...]:
-    """Return broker message codes ignored by controller logging."""
-
     return tuple(sorted(set(codes) | SUPERVISOR_OWNED_BROKER_CODES))
 
 
 @dataclass
 class Controller(Atom):
-    """
-    Intermediary between execution models (which are off ramps for
-    strategies), :class:`Trader` and :class:`StateMachine`.  Use information
-    provided by :class:`StateMachine` to make sure that positions held in
-    the market reflect what is requested by strategies.
+    """Own broker order submission, fill accounting, and reconciliation.
 
+    ExecutionModels call :meth:`trade` with explicit role, stable model name,
+    and optional one-to-one attribution. Controller registers complete Trade
+    evidence in Book immediately after broker submission, applies Fill and
+    commission callbacks, writes the Book-owned blotter, and verifies accepted
+    absolute targets after a delay.
     """
 
     trader: Trader
-    blotter: Blotter | None = None
     cold_start: bool = True
     reset: bool = False
     zero: bool = False
@@ -88,9 +84,9 @@ class Controller(Atom):
         default_factory=list
     )
     _hold: bool = field(default=True, repr=False)
-    _sync_timer: ev.Timer | None = None
-    _health_check_timer: ev.Timer | None = None
-    _order_loggers: OrderLoggers | None = None
+    _sync_timer: ev.Timer | None = field(default=None, repr=False)
+    _health_check_timer: ev.Timer | None = field(default=None, repr=False)
+    _order_loggers: OrderLoggers | None = field(default=None, repr=False)
     _health_check_functions: list[Callable[[], bool]] = field(
         default_factory=list, repr=False
     )
@@ -107,21 +103,9 @@ class Controller(Atom):
         values: Mapping[str, Any],
         *,
         trader: Trader,
-        blotter: Blotter | None = None,
         health_check_observables: list[list[Callable[[], bool]]] | None = None,
     ) -> Self:
-        """Construct a controller from configuration and runtime dependencies.
-
-        Args:
-            values: Merged ``controller`` configuration section, including
-                the nested one-run ``startup`` options.
-            trader: Runtime broker order gateway.
-            blotter: Optional transaction logger.
-            health_check_observables: Runtime-owned health-check collections.
-
-        Returns:
-            Controller ready to install in a runtime context.
-        """
+        """Construct a Controller from merged runtime configuration."""
 
         options = dict(values)
         startup = options.pop("startup", {})
@@ -133,53 +117,35 @@ class Controller(Atom):
             options["future_roll_time"] = tuple(roll_time)
         return cls(
             trader=trader,
-            blotter=blotter,
             health_check_observables=health_check_observables or [],
             **options,
         )
 
     def __post_init__(self) -> None:
-        super().__init__()
+        Atom.__init__(self)
         self.ignore_errors = _broker_messages_to_ignore(self.ignore_errors)
         if self.missing_brackets not in ("ignore", "warn", "remove"):
             raise ControllerError(
-                "Wrong value for controller.missing_brackets: "
-                f"{self.missing_brackets!r}."
+                "controller.missing_brackets must be ignore, warn, or remove"
             )
-        # these are essential (non-optional) events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent, self._log_event_error)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent, self._log_event_error)
         self.ib.orderStatusEvent.connect(self.onOrderStatusEvent, self._log_event_error)
-
-        # this is for logging
         self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
-        # IB calls this errorEvent, but most payloads are broker messages, not
-        # actionable application errors. Keep "error" out of callback logs.
         self.ib.errorEvent.connect(self.onErrEvent, self._log_event_error)
-
-        self.set_hold()
-
-        if self.blotter:
+        if self.book.blotter is not None:
             self.ib.commissionReportEvent.connect(
                 self.onCommissionReport, self._log_event_error
             )
-
         if self.log_order_events:
             self._order_loggers = OrderLoggers(self.ib)
-
-        if missing_contracts := self.verify_have_contracts_for_positions():
-            log.critical(
-                f"No qualified contracts for open position: {missing_contracts}"
-            )
-
-        log.debug("Controller initialized: %s", self)
+        self.set_hold()
+        if missing := self.verify_have_contracts_for_positions():
+            log.critical("No qualified contracts for open position: %s", missing)
 
     def __str__(self) -> str:
-        """Return a compact controller description suitable for logs."""
-
-        if self.future_roll_time is None:
-            future_roll = "off"
-        else:
+        future_roll = "off"
+        if self.future_roll_time is not None:
             hour, minute = self.future_roll_time
             future_roll = f"{hour:02}:{minute:02} UTC"
         return (
@@ -189,42 +155,47 @@ class Controller(Atom):
             f"missing_brackets={self.missing_brackets}>"
         )
 
+    def onStart(self, data: Any, source: Atom | None = None) -> None:
+        """Ignore graph startup because Controller lifecycle is runtime-owned."""
+
+    async def onData(
+        self,
+        target: PositionTarget,
+        execution_model_name: str | None = None,
+    ) -> None:
+        """Verify one accepted target after its model has submitted work."""
+
+        if not isinstance(target, PositionTarget):
+            raise TypeError("Controller accepts only PositionTarget")
+        if not execution_model_name:
+            raise ValueError("execution_model_name is required")
+        await asyncio.sleep(self.execution_verification_delay)
+        await self.verify_target_integrity(target, execution_model_name)
+        self.verify_position_with_broker(target.contract)
+
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
 
     def set_sync_abort_event(self, event: asyncio.Event) -> None:
-        """Set the supervisor lifecycle event that aborts controller sync."""
-
         self._sync_abort_event = event
 
-    def run_health_check(self, *args) -> None:
+    def run_health_check(self, *args: object) -> None:
         for func in itertools.chain(
             itertools.chain(*self.health_check_observables),
             self._health_check_functions,
         ):
             if not func() and func.__name__ not in self._health_check_triggers:
-                log.critical(f"Health check failure for checker: {func.__name__}")
-                # prevent repeating same error multiple times
+                log.critical("Health check failure for checker: %s", func.__name__)
                 self._health_check_triggers.append(func.__name__)
 
     def verify_have_contracts_for_positions(self) -> list[ibi.Contract]:
         return [
-            p.contract
-            for p in self.ib.positions()
-            if p.contract not in self.contract_registry.all_contracts
+            position.contract
+            for position in self.ib.positions()
+            if position.contract not in self.contract_registry.all_contracts
         ]
 
     def set_hold(self) -> None:
-        """Hold event-driven record updates and arm first-sync reconfirmation.
-
-        The first sync after startup, reconnect, or an explicit hold may see
-        incomplete broker order/position registers.  If that first sync finds a
-        concrete order or position mismatch, the controller requests one fresh
-        broker connection before mutating local records.  A clean sync clears
-        this flag so later live mismatches are treated as reconciliation issues,
-        not connection freshness issues.
-        """
-
         self._hold = True
         log.debug("hold set")
 
@@ -234,775 +205,611 @@ class Controller(Atom):
             log.debug("hold released")
 
     def set_future_roll_policies(self, policies: Mapping[str, bool]) -> None:
-        """Replace strategy futures-roll policies with a defensive copy."""
-
         self.future_roll_policies = dict(policies)
 
     async def run(self) -> bool:
-        """
-        Main entry point into the programme.  Ensure records up to
-        date and any remaining initialization complete.
-        """
-        log.debug("Running controller...")
+        """Restore Book, reconcile broker state, and arm runtime timers."""
+
         self._ensure_runtime_timers_started()
         self.set_hold()
         if self.nuke:
             await self.run_nuke()
-
         if self.cold_start:
-            log.debug("Starting cold... (state NOT read from db)")
+            log.debug("Starting cold; Book state will not be loaded.")
         else:
             try:
-                log.debug("Reading from store...")
-                await self.sm.read_from_store()
+                await self.book.read_from_store()
                 self.cold_start = True
-            except Exception as e:
-                log.exception(e)
+            except Exception:
+                log.exception("Book state restoration failed.")
                 self.disable_trading("state store read failed")
                 return False
-
-        sync_outcome = await self.sync()
-        if not sync_outcome:
-            if sync_outcome is SyncOutcome.ABORTED:
-                log.debug("Controller startup sync aborted: connection unavailable.")
-            else:
-                log.critical(
-                    "Controller startup sync failed. Trading remains disabled."
-                )
+        outcome = await self.sync()
+        if not outcome:
+            if outcome is not SyncOutcome.ABORTED:
+                log.critical("Controller startup sync failed. Trading disabled.")
             return False
-
         if self.zero:
-            log.debug("Zeroing all records...")
             self.clear_records()
             self.zero = False
-
         if self.reset:
             await self.execute_stops_and_close_positions()
+            self.book.clear_state()
             self.reset = False
-            # zero-out all records
-            self.sm.clear_strategies()
-
-        log.debug("Controller run sequence completed successfully.")
         self._restart_before_correction = True
-        # now Streamers will run
         return True
 
     def _ensure_runtime_timers_started(self) -> None:
-        """Start app-lifetime controller timers on the active event loop."""
-
         if self.sync_frequency and self._sync_timer is None:
             self._sync_timer = ev.Timer(self.sync_frequency)
             self._sync_timer.connect(self.sync, error=self._log_event_error)
-
         if self.health_check_frequency and self._health_check_timer is None:
             self._health_check_timer = ev.Timer(self.health_check_frequency)
             self._health_check_timer.connect(
                 self.run_health_check, error=self._log_event_error
             )
-
         if self._future_roll_timer is None:
             self.schedule_future_roll()
 
-    def roll_futures(self, *args) -> None:
-        """
-        This method is scheduled to run once a day.
-        """
-        log.info(f"Running roll on controller object: {id(self)}")
-        roller = FutureRoller(self, self.future_roll_policies)
-        roller.roll()
+    def roll_futures(self, *args: object) -> None:
+        FutureRoller(self, self.future_roll_policies).roll()
 
     def schedule_future_roll(self) -> None:
-        """Schedule the daily futures roll for this controller lifetime."""
-
         if self.future_roll_time is None:
             return
         if self._future_roll_timer is not None:
             log.warning("Future roll already scheduled; ignoring duplicate request.")
             return
-
-        roll_hour, roll_minute = self.future_roll_time
-        roll_time = datetime.time(
-            hour=roll_hour, minute=roll_minute, tzinfo=datetime.UTC
-        )
+        hour, minute = self.future_roll_time
+        roll_time = datetime.time(hour=hour, minute=minute, tzinfo=datetime.UTC)
         self._future_roll_timer = ev.Event.timerange(
             start=roll_time, step=datetime.timedelta(days=1)  # type: ignore
         )
         self._future_roll_timer += self.roll_futures
-        log.debug(f"Future roll scheduled for {roll_time} UTC.")
 
-    async def sync(self, *args) -> SyncOutcome:
-        """Run sync unless the supervisor marks the connection unavailable."""
+    async def sync(self, *args: object) -> SyncOutcome:
+        """Run reconciliation unless supervisor marks the connection unavailable."""
 
         abort_event = self._sync_abort_event
         if abort_event is None:
-            return await self._sync(*args)
-
+            return await self._sync()
         if abort_event.is_set():
-            log.debug("Connection unavailable. Skipping sync.")
             return SyncOutcome.ABORTED
-
-        sync_task = asyncio.create_task(self._sync(*args), name="controller-sync")
+        sync_task = asyncio.create_task(self._sync(), name="controller-sync")
         abort_task = asyncio.create_task(
             abort_event.wait(), name="controller-sync-abort"
         )
-
         try:
             done, _ = await asyncio.wait(
                 (sync_task, abort_task),
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if abort_task in done and abort_event.is_set():
-                log.debug("Controller sync aborted: connection unavailable.")
                 sync_task.cancel()
                 await asyncio.gather(sync_task, return_exceptions=True)
                 return SyncOutcome.ABORTED
-
             abort_task.cancel()
             await asyncio.gather(abort_task, return_exceptions=True)
             return await sync_task
-        except asyncio.CancelledError:
-            sync_task.cancel()
-            abort_task.cancel()
-            await asyncio.gather(sync_task, abort_task, return_exceptions=True)
-            raise
         finally:
             for task in (sync_task, abort_task):
                 if not task.done():
                     task.cancel()
             await asyncio.gather(sync_task, abort_task, return_exceptions=True)
 
-    async def _sync(self, *args) -> SyncOutcome:
-        """Run sync passes until state is clean, broken, or non-convergent.
-
-        ``SyncCoordinator`` performs one pass and never disables trading.
-        Retryable broker-state verification failures or recovery actions
-        return ``False`` from the coordinator, so the controller waits and
-        retries from fresh broker/local reads. The first sync after hold may
-        request one reconnect before corrective mutations; a clean sync clears
-        that startup/reconnect reconfirmation flag so later mismatches are
-        corrected or rejected without another restart. ``SyncBrokenStateError``
-        means broker/local state is unsafe and trading must be disabled
-        immediately.
-        """
-
+    async def _sync(self) -> SyncOutcome:
         if not self.ib.isConnected():
-            log.debug("No connection. Skipping sync.")
             return SyncOutcome.FAILED
-
-        log.debug("--- Sync ---")
-
         for attempt in range(1, self.sync_max_attempts + 1):
-            if attempt > 1:
-                log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
             coordinator = SyncCoordinator(self, self._restart_before_correction)
             try:
                 if await coordinator.run():
                     self._restart_before_correction = False
-                    if self._trading_disabled:
-                        log.debug(f"TRADING DISABLED")
-                    log.debug("--- Sync completed ---")
                     return SyncOutcome.OK
             except SyncBrokenStateError as exc:
                 self.disable_trading(str(exc))
                 return SyncOutcome.FAILED
-
             if attempt < self.sync_max_attempts:
-                log.debug("Sync did not complete; will retry checks.")
                 await asyncio.sleep(self.sync_resync_delay)
                 if coordinator.request_restart:
                     self._restart_before_correction = False
                     self.ib.disconnect()
-
         if self._sync_abort_event is not None and self._sync_abort_event.is_set():
-            log.debug("Controller sync aborted before disabling trading.")
             return SyncOutcome.ABORTED
-
         self.disable_trading("sync did not converge")
         return SyncOutcome.FAILED
 
-    def onStart(self, data, *args) -> None:
-        # prevent superclass from setting attributes here
-        pass
-
-    async def onData(self, data, *args) -> None:
-        """
-        After obtaining transaction details from execution model,
-        verify if the intended effect is the same as achieved effect.
-        """
-        try:
-            strategy = data["strategy"]
-            amount = data["amount"]
-            target_position = data["target_position"]
-            await asyncio.sleep(self.execution_verification_delay)
-            await self.verify_transaction_integrity(strategy, amount, target_position)
-        except KeyError:
-            log.exception(
-                "Unable to verify transaction integrity", extra={"data": data}
-            )
-        contract = data.get("contract")
-        self.verify_position_with_broker(contract)
-
     def trade(
         self,
-        strategy_str: str,
         contract: ibi.Contract,
         order: ibi.Order,
-        action: str,
-        params: dict,
+        *,
+        role: str,
+        execution_model_name: str,
+        source_key: str | None = None,
+        position_id: str | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> ibi.Trade | None:
+        """Submit and immediately register one fully attributed broker order."""
+
         if self._trading_disabled:
             log.debug(
-                f"Trade suppressed because trading is disabled: "
-                f"{strategy_str} {action} {order.orderType} {order.action} "
-                f"{order.totalQuantity} {contract.localSymbol or contract.symbol}"
+                "Trade suppressed while trading is disabled: %s %s %s",
+                execution_model_name,
+                role,
+                contract.localSymbol or contract.symbol,
             )
             return None
+        if role == StandardOrderRole.OPEN and self._new_position_lock:
+            log.debug("New-position lock suppressed trade for %s", source_key)
+            return None
+        if not self.book.verify_for_rejections(execution_model_name):
+            return None
+        if not self.verify_market_open(contract):
+            return None
+        return self._submit_registered_trade(
+            contract,
+            order,
+            role=role,
+            execution_model_name=execution_model_name,
+            source_key=source_key,
+            position_id=position_id,
+            params=params,
+        )
 
-        # this will return False if order for the strategy has been repeatedly rejected
-        if action == "OPEN" and self._new_position_lock:
-            log.debug(
-                f"New position lock - supressing trade for {strategy_str}: "
-                f"{order.orderType} {order.action} {order.totalQuantity} "
-                f"{contract.localSymbol}"
-            )
-            return None
-        if self.sm.verify_for_rejections(strategy_str) and self.verify_market_open(
-            contract
-        ):
-            trade = self.trader.trade(contract, order)
-            self.register_order(strategy_str, action, trade, params)
-            trade.filledEvent += partial(
-                self.log_trade, reason=action, strategy=strategy_str
-            )
-            return trade
-        else:
-            return None
+    def _submit_registered_trade(
+        self,
+        contract: ibi.Contract,
+        order: ibi.Order,
+        *,
+        role: str,
+        execution_model_name: str,
+        source_key: str | None = None,
+        position_id: str | None = None,
+        params: Mapping[str, Any] | None = None,
+    ) -> ibi.Trade:
+        """Submit and register an order after caller-specific policy checks."""
+
+        trade = self.trader.trade(contract, order)
+        self.register_order(
+            trade,
+            role=str(role),
+            execution_model_name=execution_model_name,
+            source_key=source_key,
+            position_id=position_id,
+            params=params,
+        )
+        trade.filledEvent += partial(
+            self.log_trade,
+            reason=str(role),
+            source_key=source_key or execution_model_name,
+        )
+        return trade
+
+    def register_order(
+        self,
+        trade: ibi.Trade,
+        *,
+        role: str,
+        execution_model_name: str,
+        source_key: str | None = None,
+        position_id: str | None = None,
+        params: Mapping[str, Any] | None = None,
+    ) -> OrderInfo:
+        """Persist complete submission evidence before later broker callbacks."""
+
+        info = OrderInfo(
+            trade=trade,
+            role=role,
+            submitted_at=datetime.datetime.now(datetime.timezone.utc),
+            execution_model_name=execution_model_name,
+            source_key=source_key,
+            position_id=position_id,
+            params=params or {},
+        )
+        self.book.save_order(info)
+        log.debug(
+            "%s orderId=%s permId=%s registered for %s",
+            trade.order.orderType,
+            trade.order.orderId,
+            trade.order.permId,
+            trade.contract.localSymbol or trade.contract.symbol,
+        )
+        return info
 
     def verify_market_open(self, contract: ibi.Contract) -> bool:
         details = self.contract_registry.get_details(contract)
         if details is None:
             log.warning(
-                f"Missing details for "
-                f"{contract.localSymbol or contract.symbol or contract}, "
-                f"won't verify if market open"
+                "Missing details for %s; market hours cannot be verified.",
+                contract.localSymbol or contract.symbol or contract,
             )
             return True
-        if details and details.is_open():
+        if details.is_open():
             return True
-        else:
-            log.error(
-                f"Attempt to place an order for "
-                f"{contract.localSymbol} while market is closed."
-            )
-            return False
-
-    def register_order(
-        self, strategy_str: str, action: str, trade: ibi.Trade, params: dict
-    ) -> OrderInfo:
-        """
-        Register order, register lock, verify that position has been registered.
-
-        Register order that has just been posted to the broker.  If
-        it's an order openning a new position register a lock on this
-        strategy (the lock may or may not be used by strategy itself,
-        it doesn't matter here, locks are registered for all
-        positions).  Verify that position has been registered.
-
-        This method is called by :class:`Controller`.
-        """
-
-        order_info = OrderInfo(strategy_str, action, trade, params)
-        oi = self.sm.save_order(order_info)
-
-        if action.upper() == "OPEN":
-            trade.filledEvent += partial(self.register_lock, strategy_str)
-        elif action.upper() == "CLOSE":
-            trade.filledEvent += partial(self.remove_lock, strategy_str)
-
-        log.debug(
-            f"{trade.order.orderType} orderId: {trade.order.orderId} "
-            f"permId: {trade.order.permId} registered for: "
-            f"{trade.contract.localSymbol or trade.contract.symbol} "
-        )
-
-        return oi
-
-    def register_lock(self, strategy_str: str, trade: ibi.Trade) -> None:
-        strategy = self.sm.strategy[strategy_str]
-        strategy.lock = 1 if trade.order.action == "BUY" else -1
-
-    def remove_lock(self, strategy_str: str, trade: ibi.Trade) -> None:
-        strategy = self.sm.strategy[strategy_str]
-        strategy.lock = 0
+        log.error("Attempt to place an order while market is closed: %s", contract)
+        return False
 
     def cancel(self, trade: ibi.Trade) -> ibi.Trade | None:
+        """Cancel one live Trade through the broker gateway."""
+
         return self.trader.cancel(trade)
 
     async def onNewOrderEvent(self, trade: ibi.Trade) -> None:
-        # keep this method async; it ensures correct sequence of actions
-        """
-        Check if the system knows about the order that was just posted
-        to the broker.
+        """Report a broker order that lacks immediate Book registration."""
 
-        This is an event handler (callback).  Connected (subscribed)
-        to :meth:`ibi.IB.newOrderEvent` in :meth:`__init__`
-        """
-
-        log.debug(f"New order event: {trade.order.orderId, trade.order.permId} ")
-        if not (trade.order.orderId < 0 or self.sm.order.get(trade.order.orderId)):
+        await asyncio.sleep(0)
+        if trade.order.orderId < 0:
+            return
+        if self.book.order_by_id(trade.order.orderId) is None:
             log.critical(
-                f"Unknown trade in the system {trade.order} {trade.contract.symbol}"
+                "Unknown broker trade: %s %s",
+                trade.order,
+                trade.contract.symbol,
             )
 
     def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
+        """Persist status changes and rebind current live Trade objects."""
 
         if self._hold:
             return
-
-        # this will create new order record if it doesn't already exist
-        self.sm.save_order_status(trade)
+        info = self.book.order_by_id(
+            trade.order.orderId
+        ) or self.book.order_by_perm_id(trade.order.permId)
+        if info is None:
+            if not trade.order.orderId:
+                log.warning(
+                    "Skipping unknown order status with orderId 0, permId=%s",
+                    trade.order.permId,
+                )
+                return
+            info = self._unknown_order_info(trade)
+        else:
+            info.trade = trade
+        self.book.save_order(info)
 
     def register_position(self, order_info: OrderInfo, fill: ibi.Fill) -> None:
-        strategy = self.sm.strategy[order_info.strategy]
-        trade = order_info.trade
-        strategy_str = strategy.strategy
-        if isinstance(trade.contract, ibi.Bag):
-            log.debug(
-                f"Combo trade registered for: {trade.contract.symbol}, "
-                f"position kept unchanged at: {strategy.position}"
+        """Apply one execution idempotently to Book projections."""
+
+        if isinstance(order_info.trade.contract, ibi.Bag):
+            log.debug("Combo fill retained as order evidence without projection.")
+            self.book.apply_fill(order_info.trade, fill)
+            return
+        try:
+            changed = self.book.apply_fill(order_info.trade, fill)
+        except (KeyError, ValueError):
+            log.exception(
+                "Cannot apply fill for orderId=%s", order_info.trade.order.orderId
             )
             return
-        elif fill.execution.side not in {"BOT", "SLD"}:
-            log.critical(
-                f"Abiguous fill: {fill} for order: {trade.order} for "
-                f"{trade.contract.localSymbol} strategy: {strategy}"
+        if not changed:
+            log.warning(
+                "Abandoned duplicate fill execId=%s orderId=%s",
+                fill.execution.execId,
+                order_info.trade.order.orderId,
             )
-            return
 
-        log_string = (
-            f"orderId: {trade.order.orderId} permId: "
-            f"{trade.order.permId} {fill.execution.side} "
-            f"{trade.order.orderType} "
-            f"for {strategy_str} --> position: {strategy.position} "
-        )
-        if order_info.execution_accounted(fill):
-            log.warning(f"Abandoned duplicated fill event - {log_string}")
-            return
+    async def onExecDetailsEvent(
+        self, trade: ibi.Trade, fill: ibi.Fill
+    ) -> None:
+        """Match, persist, and account one broker execution callback."""
 
-        strategy.register_fill(fill)
-        order_info.mark_execution(fill)
-        self.sm.save_order(order_info)
-        log.debug(f"Registered position - {log_string}")
-
-    async def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
-        """
-        Get or create OrderInfo for ``trade`` and use it to register
-        position.
-        """
-        order_info = (
+        info = (
             self.assign_manual_trade(trade)
-            or self.sm.order.get(trade.order.orderId)
+            or self.book.order_by_id(trade.order.orderId)
             or self.match_by_permId(trade, fill)
             or self.assign_unknown_trade(trade)
         )
-        self.register_position(order_info, fill)
+        if info is not None:
+            info.trade = trade
+            self.register_position(info, fill)
 
     async def onCommissionReport(
-        self, trade: ibi.Trade, fill: ibi.Fill, report: ibi.CommissionReport
+        self,
+        trade: ibi.Trade,
+        fill: ibi.Fill,
+        report: ibi.CommissionReport,
     ) -> None:
-        """
-        Writing commission on :class:`ibi.Trade` is the final stage of
-        order execution.  At this point that trade object is ready for
-        storing in blotter.
-        """
+        """Update order evidence and submit a fully attributed blotter row."""
 
-        # silence emission of all orders from session on startup
-        if self._hold:
+        if self._hold or not trade.order.orderId:
             return
-        if trade.order.orderId == 0:
-            log.debug(
-                f"Skipping blotter entry for orderId==0, permId: {trade.order.permId}"
+        await asyncio.sleep(0)
+        info = self.book.order_by_id(
+            trade.order.orderId
+        ) or self.book.order_by_perm_id(trade.order.permId)
+        if info is None:
+            log.error(
+                "Commission report for unknown orderId=%s", trade.order.orderId
             )
             return
-
-        await asyncio.sleep(1)
-        order_info = self.sm.save_order_status(trade)
-        if not order_info:
-            if trade.order.totalQuantity == 0:
-                log.warning(
-                    f"empty CommissionReportEvent emit for trade: {trade.order.orderId=} {trade.order.permId=}"
-                )
-            else:
-                log.error(
-                    f"Commission report for unknown trade: {trade.order.orderId} "
-                    f"{trade.contract.localSymbol}; no blotter entry created."
-                )
+        if not self.book.update_commission(trade, fill, report):
+            log.warning(
+                "Commission report has no normalized fill evidence: "
+                "execId=%s orderId=%s",
+                fill.execution.execId,
+                trade.order.orderId,
+            )
+            info.trade = trade
+            self.book.save_order(info)
+        blotter = self.book.blotter
+        if blotter is None:
             return
-
-        log.debug(
-            f"Saving order {trade.order.orderId} to blotter: {order_info.strategy}"
-        )
-
+        kwargs = {
+            "source_key": info.source_key,
+            "position_id": info.position_id,
+            "role": info.role,
+            "execution_model_name": info.execution_model_name,
+            "params": ibi.util.tree(dict(info.params)),
+        }
         try:
-            strategy, action, _, params, _ = order_info
-            position_id = params.get("position_id", "unknown")
+            blotter.log_commission(trade, fill, report, **kwargs)
+        except Exception:
+            log.exception("Blotter write failed for orderId=%s", info.orderId)
 
-            kwargs = {
-                "strategy": strategy,
-                "action": action,
-                "position_id": position_id,
-                "params": ibi.util.tree(params),
-            }
-            # optionally set by execution model
-            if arrival_price := params.get("arrival_price"):
-                kwargs.update(
-                    {
-                        "price_time": arrival_price["time"],
-                        "bid": arrival_price["bid"],
-                        "ask": arrival_price["ask"],
-                    }
-                )
-        except Exception as e:
-            log.error(f"Error while trying to create blotter entry: {e}")
-            kwargs = {}
-
-        assert self.blotter is not None
-        try:
-            self.blotter.log_commission(trade, fill, report, **kwargs)
-        except Exception as e:
-            log.error(f"Error while writing to blotter: {e}")
-
-    async def verify_transaction_integrity(
-        self,
-        strategy: str,
-        amount: float,  # amount in transaction being verified
-        target_position: float,  # target direction
+    async def verify_target_integrity(
+        self, target: PositionTarget, execution_model_name: str
     ) -> None:
-        """
-        Called by :meth:`onData`, which is passing data that was the
-        basis for transaction.  The purpose of this method is to
-        confirm that the resulting transaction achieved required
-        objectives.  Things vefied are: 1.  actual resulting position
-        in broker records 2.  records in state_machine
+        """Check Book convergence after an accepted absolute target."""
 
-        Any errors are logged but not corrected (may change in
-        future).
-        """
         retries = 0
-
-        data = self.sm.strategy.get(strategy)
-        target = target_position * amount
-
-        order_infos = [
-            info
-            for info in self.sm.orders_for_strategy(strategy)
-            if info.action not in ("STOP-LOSS", "TAKE-PROFIT")
-        ]
-        if order_infos:  # exists an order which is not a sl or tp
-            # if order(s) still in execution don't check if position achieved yet
-            while any([info.active for info in order_infos]):
-                log.debug(
-                    f"{strategy} taking long to achive target position of {target}"
-                )
-                await asyncio.sleep(self.execution_verification_delay)
-                retries += 1
-                if retries >= self.execution_verification_max_retries:
-                    break
-
-        log_str = f"target: {target}, position: {data.position}"
-        if data:
-            records_ok = data.position == (target)
-            if records_ok:
-                log.debug(f"{strategy} position OK? -> {records_ok} <- " f"{log_str}")
-            else:
-
-                log.error(
-                    f"Failed to achieve target position for {strategy} - " f"{log_str}"
-                )
-        else:
-            log.critical(f"Attempt to trade for unknown strategy: {strategy}")
+        while self.book.active_orders(
+            source_key=target.source_key,
+            contract=target.contract,
+            execution_model_name=execution_model_name,
+        ):
+            if retries >= self.execution_verification_max_retries:
+                break
+            retries += 1
+            await asyncio.sleep(self.execution_verification_delay)
+        position = (
+            self.book.position_state(target.source_key)
+            if target.source_key is not None
+            else None
+        )
+        actual = (
+            position.quantity
+            if position is not None
+            else self.book.aggregate_quantity(target.contract)
+        )
+        if actual != target.target_quantity:
+            log.error(
+                "Target not achieved for %s: target=%s actual=%s",
+                target.source_key or target.contract.localSymbol,
+                target.target_quantity,
+                actual,
+            )
 
     def verify_position_with_broker(self, contract: ibi.Contract) -> None:
-        # called by onData after every transaction
-        sm_position = self.sm.position.get(contract, 0.0)
-        ib_position = self.trader.position_for_contract(contract)
-        position_ok = sm_position == ib_position
-        log_str_position = f"{sm_position=}, {ib_position=}"
-        if position_ok:
-            log.debug(
-                f"{contract.symbol} records vs broker OK? -> {position_ok} <- "
-                f"{log_str_position}"
+        """Compare aggregate logical Book quantity with the broker position."""
+
+        logical = self.book.aggregate_quantity(contract)
+        broker = self.trader.position_for_contract(contract)
+        if logical != broker:
+            log.error(
+                "Wrong aggregate position for %s: logical=%s broker=%s",
+                contract,
+                logical,
+                broker,
             )
-        else:
-            log.error(f"Wrong position for {contract} - {log_str_position}")
 
-    def match_by_permId(self, trade: ibi.Trade, fill: ibi.Fill) -> OrderInfo | None:
-        """Find an order record using the trade permanent id."""
-        order_info = self.sm.order_by_permId(trade.order.permId)
-        if order_info:
+    def match_by_permId(
+        self, trade: ibi.Trade, fill: ibi.Fill
+    ) -> OrderInfo | None:
+        """Find and rebind an order using broker permanent id."""
+
+        info = self.book.order_by_perm_id(trade.order.permId)
+        if info is not None:
+            if not trade.order.orderId:
+                trade.order.orderId = info.orderId
+            info.trade = trade
+            self.book.save_order(info)
             log.debug(
-                "Matched trade to existing order record: "
-                f"execId={fill.execution.execId} "
-                f"trade_orderId={trade.order.orderId} "
-                f"trade_permId={trade.order.permId} "
-                f"record_orderId={order_info.trade.order.orderId} "
-                f"record_permId={order_info.trade.order.permId}"
+                "Matched execId=%s by permId=%s to orderId=%s",
+                fill.execution.execId,
+                trade.order.permId,
+                info.orderId,
             )
-        return order_info
+        return info
 
-    def _assign_trade(self, trade: ibi.Trade) -> Strategy | None:
+    def _source_for_unknown_trade(self, trade: ibi.Trade) -> str | None:
+        """Attribute an unknown trade only when one logical position is clear."""
 
-        # these are BAG contracts
-        if not trade.contract.isHashable():
+        if not trade.contract.conId:
             return None
-
-        # assumed unknown trade is to close a position
-        active_strategies_list = [
-            self.sm.strategy[s]
-            for s in self.sm.for_contract[trade.contract]
-            if self.sm.strategy[s].active
-        ]
-        log.debug(
-            f"Attemp to assign unknown trade to a strategy: "
-            f"{[s.strategy for s in active_strategies_list]}"
-        )
-
-        if len(active_strategies_list) == 1:
-            strategy = active_strategies_list[0]
-
-        # if more than 1 active, unknown trade is for the one without
-        # resting orders (resting orders are most likely stop-losses or take-profit)
-        elif candidate_strategies := [
-            s
-            for s in active_strategies_list
-            if not self.sm.orders_for_strategy(s.strategy)
-        ]:
-            log.debug(
-                f"Active strategies without resting orders: "
-                f"{[s.strategy for s in candidate_strategies]}"
-            )
-            self._assign_to_strategies(trade, candidate_strategies)
-            # if more than one pick the one with matching size
-            # (or None if not available)
-            strategy = self._assign_to_strategies(trade, candidate_strategies)
-        elif active_strategies_list:
-            # failing everything else, pick one on which there was most recent operation
-            # (probably we're trying to correct a recent error)
-            strategy = sorted(
-                active_strategies_list,
-                key=lambda s: s.get("timestamp"),
-            )[-1]
-        else:
-            # strategy doesn't correspond to open position
-            # no way to know what's the intention behind it
-            strategy = None
-
-        if strategy:
-            self.cancel_orders_for_strategy(strategy.strategy)
-
-        return strategy
-
-    def _assign_to_strategies(
-        self, trade: ibi.Trade, candidate_strategies: list[Strategy]
-    ) -> Strategy | None:
-        """Find strategy with holdings equal to trade size."""
-        for strategy in candidate_strategies:
-            if abs(strategy.position) == trade.order.totalQuantity:
-                return strategy
+        states = self.book.positions_for_contract(trade.contract)
+        if len(states) == 1:
+            return states[0].source_key
         return None
 
-    def cancel_orders_for_strategy(self, strategy: str) -> None:
-        order_infos = self.sm.orders_for_strategy(strategy)
-        for oi in order_infos:
-            cancelled_trade = self.cancel(oi.trade)
-            if cancelled_trade:
-                log.debug(
-                    f"Cancelled trade: {cancelled_trade.order.orderId} for "
-                    f"{cancelled_trade.contract.localSymbol}"
-                )
-
-    def close_positions_for_strategy(self, strategy: str, action: str) -> None:
-        strategy_obj = self.sm.strategy[strategy]
-        if strategy_obj.position == 0:
-            log.error(f"Attempt to close zero position for {strategy}")
-            return
-        direction = "BUY" if strategy_obj.position < 0 else "SELL"
-        amount = abs(strategy_obj.position)
-        order = ibi.MarketOrder(direction, amount)
-        trade_object = self.trade(
-            strategy, strategy_obj.active_contract, order, action, strategy_obj
+    def _unknown_order_info(
+        self,
+        trade: ibi.Trade,
+        *,
+        role: StandardOrderRole = StandardOrderRole.UNKNOWN,
+    ) -> OrderInfo:
+        if not trade.order.orderId:
+            raise ValueError("Cannot register unknown Trade with orderId 0")
+        source_key = self._source_for_unknown_trade(trade)
+        state = (
+            self.book.position_state(source_key) if source_key is not None else None
         )
-        if trade_object:
-            close_message = (
-                f"Position for: {strategy} closed; reason: {action} "
-                f"{direction} {amount} {strategy_obj.active_contract.localSymbol}"
-            )
-            trade_object.filledEvent += lambda trade: log.debug(close_message)
-
-    def disable_trading(self, reason: str) -> None:
-        """Disable future outbound orders from normal controller flow."""
-        if not self._trading_disabled:
-            self._trading_disabled = True
-            log.critical(f"Trading disabled: {reason}")
-
-    def lock_new_positions(self):
-        """
-        No new positions will be opened from now on.  Emergency
-        measure after a significant error.
-        """
-        log.error("Emergency lock for new positions.")
-        self._new_position_lock = True
-
-    def _make_strategy(self, trade: ibi.Trade, description: str) -> Strategy:
-        """
-        Last resort when strategy cannot be matched.  Creating new
-        made up strategy to make sure that position change resulting
-        from trade will be somehow accounted for.  It should only be
-        used if there are no position for the contract, otherwise
-        unknown transactions should close existing strategies, rather
-        than invent new ones.
-        """
-        strategy_str = f"{description}_{trade.contract.symbol}"
-        strategy = self.sm.strategy[strategy_str]  # this creates new Strategy
-        strategy["active_contract"] = trade.contract
-        return strategy
+        return OrderInfo(
+            trade=trade,
+            role=str(role),
+            submitted_at=datetime.datetime.now(datetime.timezone.utc),
+            execution_model_name=(
+                state.execution_model_name
+                if state is not None
+                else str(role).lower()
+            ),
+            source_key=source_key,
+            position_id=state.position_id if state is not None else None,
+        )
 
     def assign_manual_trade(self, trade: ibi.Trade) -> OrderInfo | None:
+        """Register a negative-orderId manual broker trade."""
 
         if trade.order.orderId >= 0:
             return None
-
-        return self.assign_trade(trade, "manual")
-
-    def assign_unknown_trade(self, trade: ibi.Trade) -> OrderInfo:
-        return self.assign_trade(trade, "unknown")
-
-    def assign_trade(
-        self, trade: ibi.Trade, trade_type: Literal["manual", "unknown"]
-    ) -> OrderInfo:
-
-        strategy = self._assign_trade(trade) or self._make_strategy(trade, trade_type)
-
-        if trade_type == "manual":
-            log.debug(f"Manual trade assigned to strategy: {strategy.strategy}.")
-        else:
-            log.critical(f"Unknown trade: {trade}")
-
-        action = "MANUAL" if trade_type == "manual" else "UNKNOWN"
-        order_key = trade.order.orderId or trade.order.permId
-        if trade.order.orderId == 0:
-            log.error(
-                "Assigning zero-orderId trade to strategy using permId as "
-                f"local order key: orderId={trade.order.orderId} "
-                f"permId={trade.order.permId} strategy={strategy.strategy}"
+        existing = self.book.order_by_id(trade.order.orderId)
+        if existing is not None:
+            return existing
+        return self.book.save_order(
+            self._unknown_order_info(
+                trade, role=StandardOrderRole.MANUAL
             )
-        order_info = self.sm.order.get(order_key) or OrderInfo(
-            strategy.strategy,
-            action,
-            trade,
-            {},
         )
-        order_info.strategy = strategy.strategy
-        return self.sm.save_order(order_info)
+
+    def assign_unknown_trade(self, trade: ibi.Trade) -> OrderInfo | None:
+        """Register an unattributed non-manual broker trade."""
+
+        if not trade.order.orderId:
+            log.error(
+                "Cannot persist unknown orderId=0 trade with permId=%s",
+                trade.order.permId,
+            )
+            return None
+        log.critical("Unknown broker trade: %s", trade)
+        return self.book.save_order(self._unknown_order_info(trade))
+
+    def cancel_orders_for_source(self, source_key: str) -> None:
+        """Cancel every working order attributed to one source."""
+
+        for info in self.book.active_orders(source_key=source_key):
+            self.cancel(info.trade)
+
+    def close_position_for_source(
+        self, source_key: str, role: str = StandardOrderRole.LIQUIDATION
+    ) -> None:
+        """Submit one attributed market order to flatten a logical source."""
+
+        state = self.book.position_state(source_key)
+        if state is None or not state.quantity or state.contract is None:
+            log.error("Attempt to close zero or unknown source %s", source_key)
+            return
+        self.trade(
+            state.contract,
+            ibi.MarketOrder(
+                "BUY" if state.quantity < 0 else "SELL",
+                abs(state.quantity),
+            ),
+            role=role,
+            execution_model_name=state.execution_model_name,
+            source_key=source_key,
+            position_id=state.position_id,
+        )
+
+    def disable_trading(self, reason: str) -> None:
+        if not self._trading_disabled:
+            self._trading_disabled = True
+            log.critical("Trading disabled: %s", reason)
+
+    def lock_new_positions(self) -> None:
+        log.error("Emergency lock for new positions.")
+        self._new_position_lock = True
 
     def log_order_status(self, trade: ibi.Trade) -> None:
-        # Connected to ib.OrderStatusEvent
-
         if self._hold:
             return
-
         if trade.order.orderId < 0:
-            log.warning(
-                f"Manual trade: {trade.order} status update: {trade.orderStatus}"
-            )
-
+            log.warning("Manual trade status update: %s", trade.orderStatus)
         elif trade.isDone():
             log.debug(
-                f"{trade.contract.symbol}: order {trade.order.orderId} "
-                f"{trade.order.orderType} done {trade.orderStatus.status}. "
+                "%s order %s done %s",
+                trade.contract.symbol,
+                trade.order.orderId,
+                trade.orderStatus.status,
             )
         else:
             log.info(
-                f"{trade.contract.symbol}: OrderStatus ->{trade.orderStatus.status}<-"
-                f" for order: {trade.order.orderId} {trade.order.permId}, "
+                "%s order %s status %s",
+                trade.contract.symbol,
+                trade.order.orderId,
+                trade.orderStatus.status,
             )
 
     @staticmethod
-    def log_trade(trade: ibi.Trade, reason: str = "", strategy: str = "") -> None:
+    def log_trade(
+        trade: ibi.Trade, reason: str = "", source_key: str = ""
+    ) -> None:
         log.info(
-            f"{reason} trade filled: {trade.contract.localSymbol} "
-            f"{trade.order.action} {trade.filled()}"
-            f"@{misc.trade_fill_price(trade)} --> {strategy} "
-            f"orderId: {trade.order.orderId}, permId: {trade.order.permId} "
+            "%s trade filled: %s %s %s@%s --> %s orderId=%s permId=%s",
+            reason,
+            trade.contract.localSymbol,
+            trade.order.action,
+            trade.filled(),
+            misc.trade_fill_price(trade),
+            source_key,
+            trade.order.orderId,
+            trade.order.permId,
         )
 
     def onErrEvent(
-        self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
+        self,
+        reqId: int,
+        errorCode: int,
+        errorString: str,
+        contract: ibi.Contract,
     ) -> None:
-        """Log broker messages with order context when it is available."""
+        """Log broker messages and count genuine order rejections."""
 
-        order_info = self.sm.order.get(reqId)
-        if order_info:
-            strategy, action, trade, *_ = order_info
-            strategy_str = strategy
-            order = trade.order
-        else:
-            strategy, action, order = "", "", ""
-            strategy_str = ""
-
-        context = f"{contract=}, {strategy} | {action} | {order}"
+        info = self.book.order_by_id(reqId)
+        model_name = info.execution_model_name if info is not None else ""
+        role = info.role if info is not None else ""
+        order = info.trade.order if info is not None else ""
+        context = f"{contract=}, {model_name} | {role} | {order}"
         if errorCode == 201:
-            log.critical(f"ORDER REJECTED: {errorString} {errorCode=}, {context}")
-            self.sm.register_rejected_order(strategy_str)
+            log.critical("ORDER REJECTED: %s errorCode=%s, %s", errorString, errorCode, context)
+            self.book.register_rejected_order(model_name)
         elif errorCode == 202 and "YOUR ORDER IS NOT ACCEPTED" in errorString:
-            log.error(f"ORDER NOT ACCEPTED: {errorString} {errorCode=}, {context}")
+            log.error("ORDER NOT ACCEPTED: %s, %s", errorString, context)
         elif errorCode in self.ignore_errors:
             return
         elif errorCode in (165, 321, 322, 323):
-            log.debug(f"Broker message {errorCode}: {errorString} {context}")
+            log.debug("Broker message %s: %s %s", errorCode, errorString, context)
         elif errorCode < 400:
-            log.error(f"Broker message {errorCode}: {errorString} {context}")
+            log.error("Broker message %s: %s %s", errorCode, errorString, context)
         else:
-            log.debug(f"Broker message {errorCode}: {errorString} {context}")
+            log.debug("Broker message %s: %s %s", errorCode, errorString, context)
 
     async def execute_stops_and_close_positions(self) -> None:
         await Terminator(self).run()
 
-    def clear_records(self):
-        self.sm.clear_strategies()
+    def clear_records(self) -> None:
+        self.book.clear_state()
 
     async def close_positions(self) -> None:
-        positions: list[ibi.Position] = self.ib.positions()
-        log.debug(f"closing positions: {positions}")
-        for position in positions:
+        for position in self.ib.positions():
             await self.ib.qualifyContractsAsync(position.contract)
-            self.ib.placeOrder(
+            states = self.book.positions_for_contract(position.contract)
+            state = states[0] if len(states) == 1 else None
+            self._submit_registered_trade(
                 position.contract,
                 ibi.MarketOrder(
-                    "BUY" if position.position < 0 else "SELL", abs(position.position)
+                    "BUY" if position.position < 0 else "SELL",
+                    abs(position.position),
                 ),
+                role=StandardOrderRole.LIQUIDATION,
+                execution_model_name=(
+                    state.execution_model_name
+                    if state is not None
+                    else self.book.affinity_for_contract(position.contract)
+                    or "nuke_liquidation"
+                ),
+                source_key=state.source_key if state is not None else None,
+                position_id=state.position_id if state is not None else None,
             )
 
     async def run_nuke(self) -> None:
-        """
-        Cancel all open orders, close existing positions and prevent
-        any further trading.  Response to a critical error or request
-        sent by administrator.
-
-        ---> Currently not in use. <---
-        """
         self.ib.reqGlobalCancel()
         await self.close_positions()
         self.disable_trading("self nuke requested")
-
-        log.critical("Self nuked!!!!! No more trades will be executed until restart.")
+        log.critical("Emergency account liquidation requested.")
 
 
 class OrderLoggers:
-    """
-    These are optional, non-essential loggers that can be switched on
-    by :class:`Controller`
-    """
+    """Optional detailed broker order-event loggers."""
 
     def __init__(self, ib: ibi.IB) -> None:
         self.ib = ib
@@ -1012,15 +819,15 @@ class OrderLoggers:
     @staticmethod
     def log_cancel(trade: ibi.Trade) -> None:
         log.info(
-            f"{trade.order.orderType} order {trade.order.action} "
-            f"{trade.remaining()} (of "
-            f"{trade.order.totalQuantity}) for "
-            f"{trade.contract.localSymbol} cancelled"
+            "%s order %s %s cancelled",
+            trade.order.orderType,
+            trade.order.action,
+            trade.remaining(),
         )
 
     @staticmethod
     def log_modification(trade: ibi.Trade) -> None:
-        log.debug(f"Order modified: {trade.order}")
+        log.debug("Order modified: %s", trade.order)
 
     def __repr__(self) -> str:
         return f"OrderLoggers({self.ib})"
