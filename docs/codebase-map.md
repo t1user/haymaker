@@ -113,7 +113,9 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/components/execution_router.py`: fixed first-match target routing
   with persisted execution-model affinity.
 - `haymaker/components/execution_models.py`: stateful serial Contract target
-  convergence and one-to-one bracket episode execution.
+  convergence and one-to-one bracket episode execution. Regular bracket closes
+  join the episode's OCA group, keeping stop protection active until an exit
+  fills.
 - `haymaker/components/bracket_legs.py`: user-configurable bracket-order legs.
 - `haymaker/components/__init__.py`: explicit supported public toolbox.
 
@@ -245,10 +247,11 @@ from runtime configuration.
     quantity and working orders, and call `Controller.trade()` with explicit
     role/model/source/episode attribution.
 11. Controller registers complete OrderInfo immediately, applies normalized
-    Fill evidence idempotently, attaches late CommissionReports, updates Book
-    projections, rebinds Trades, and sends source/position-attributed blotter
-    records. The global `controller.missing_brackets` option controls
-    bracket/protection reconciliation.
+    Fill evidence idempotently, attaches late CommissionReports regardless of
+    optional blotter configuration, updates Book projections, rebinds Trades,
+    and sends source/position-attributed blotter records when enabled. The
+    global `controller.missing_brackets` option controls critical stop-loss
+    reconciliation; take-profit orders are optional.
 
 ### Dataloader Flow
 
@@ -425,6 +428,10 @@ dataloader contracts.csv -f settings.yaml
   unavailable, the public sync wrapper cancels the pass without treating it as
   unsafe state. Recovered execution models must rebind current Trade callbacks
   before resuming outstanding targets.
+- Explicit account reset waits for every pre-existing order cancellation to
+  become terminal before submitting liquidation orders; overlapping live exits
+  can reverse a position. Failed cancellation or liquidation leaves Book state
+  intact and prevents startup from enabling trading.
 - Futures rolling changes active contracts, next-contract selection, and Book
   PositionState; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.

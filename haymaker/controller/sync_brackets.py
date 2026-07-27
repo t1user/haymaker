@@ -1,4 +1,4 @@
-"""Bracket-record and broker stop-protection checks for Controller sync."""
+"""Critical stop-loss and optional take-profit checks for Controller sync."""
 
 from __future__ import annotations
 
@@ -42,7 +42,12 @@ class ProtectionIssue:
 
 @dataclass
 class BracketSync:
-    """Collect local bracket attribution and broker-protection issues."""
+    """Collect critical stop-loss attribution and broker-protection issues.
+
+    A configured stop-loss is required for an established bracket-managed
+    position. Take-profit orders are optional execution conveniences: their
+    absence is not a synchronization issue.
+    """
 
     controller: Controller
     missing_brackets: list[BracketIssue] = field(default_factory=list)
@@ -58,7 +63,7 @@ class BracketSync:
         return bool(self.missing_brackets or self.obsolete_brackets)
 
     def compare_bracket_records(self) -> None:
-        """Compare one-to-one Book positions with attributed bracket orders."""
+        """Require attributed stops without requiring optional take-profits."""
 
         for source_key, state in self.controller.book.position_states().items():
             orders = self.controller.book.active_orders(source_key=source_key)

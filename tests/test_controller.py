@@ -9,7 +9,9 @@ from haymaker.book import PositionState
 from haymaker.components import PositionTarget, StandardOrderRole
 from haymaker.controller import Controller
 from haymaker.controller.controller import SyncOutcome
+from haymaker.controller.sync_brackets import BracketSync
 from haymaker.controller.sync_coordinator import verify_broker_position_source
+from haymaker.controller.terminator import Terminator
 
 
 class FakeTrader:
@@ -253,6 +255,262 @@ async def test_commission_report_uses_book_owned_blotter(controller_runtime):
     assert blotter.calls[0][1]["source_key"] == "alpha"
     assert blotter.calls[0][1]["position_id"] == "episode"
     assert blotter.calls[0][1]["role"] == StandardOrderRole.OPEN
+
+
+@pytest.mark.asyncio
+async def test_commission_report_persists_without_blotter(controller_runtime):
+    """Commission evidence remains durable when reporting is disabled."""
+
+    runtime, controller, _ = controller_runtime
+    assert runtime.book.blotter is None
+    assert len(controller.ib.commissionReportEvent) == 1
+    controller.release_hold()
+    trade = controller.trade(
+        contract(),
+        ibi.MarketOrder("BUY", 1),
+        role=StandardOrderRole.OPEN,
+        execution_model_name="brackets",
+        source_key="alpha",
+        position_id="episode",
+    )
+    execution = fill(trade)
+    await controller.onExecDetailsEvent(trade, execution)
+    report = ibi.CommissionReport(execId="exec-1", commission=1.25)
+
+    await controller.onCommissionReport(trade, execution, report)
+
+    info = runtime.book.order_by_id(trade.order.orderId)
+    assert info.fills[0].commission_report == report
+
+
+@pytest.mark.parametrize(
+    ("role", "missing"),
+    [
+        (StandardOrderRole.STOP_LOSS, False),
+        (StandardOrderRole.TAKE_PROFIT, True),
+    ],
+)
+def test_bracket_sync_requires_stop_but_not_take_profit(
+    controller_runtime, role, missing
+):
+    """Only an absent stop is a critical local bracket-record issue."""
+
+    runtime, controller, _ = controller_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+            target_quantity=1,
+            position_id="episode",
+            bracket_inputs={"atr": 5},
+        )
+    )
+    controller.trade(
+        contract(),
+        ibi.Order(
+            action="SELL",
+            totalQuantity=1,
+            orderType=(
+                "STP" if role == StandardOrderRole.STOP_LOSS else "LMT"
+            ),
+        ),
+        role=role,
+        execution_model_name="brackets",
+        source_key="alpha",
+        position_id="episode",
+    )
+
+    sync = BracketSync(controller)
+
+    assert bool(sync.missing_brackets) is missing
+
+
+@pytest.mark.asyncio
+async def test_terminator_waits_for_cancellation_before_logical_close(
+    controller_runtime,
+):
+    """Reset never overlaps an attributed close with a working exit order."""
+
+    runtime, controller, _ = controller_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+            position_id="episode",
+        )
+    )
+    protective = ibi.Trade(
+        contract=contract(),
+        order=ibi.Order(
+            orderId=77,
+            action="SELL",
+            totalQuantity=1,
+            orderType="STP",
+        ),
+        orderStatus=ibi.OrderStatus(
+            orderId=77,
+            status=ibi.OrderStatus.Submitted,
+            remaining=1,
+        ),
+    )
+    controller.ib.openTrades = Mock(return_value=[protective])
+    controller.ib.positions = Mock(return_value=[])
+    loop = asyncio.get_running_loop()
+
+    def cancel(_trade):
+        """Complete cancellation after more than one event-loop turn."""
+
+        loop.call_soon(
+            lambda: loop.call_soon(
+                setattr,
+                protective.orderStatus,
+                "status",
+                ibi.OrderStatus.Cancelled,
+            )
+        )
+        return protective
+
+    def close(*args, **kwargs):
+        """Record that the close was submitted only after cancellation."""
+
+        assert protective.isDone()
+        return ibi.Trade(
+            contract=args[0],
+            order=ibi.Order(
+                orderId=78,
+                action="SELL",
+                totalQuantity=1,
+                orderType="MKT",
+            ),
+            orderStatus=ibi.OrderStatus(
+                orderId=78,
+                status=ibi.OrderStatus.Filled,
+                filled=1,
+                remaining=0,
+            ),
+        )
+
+    controller.cancel = Mock(side_effect=cancel)
+    controller.trade = Mock(side_effect=close)
+
+    completed = await Terminator(controller).run()
+
+    assert completed is True
+    controller.trade.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_terminator_stops_when_cancellation_does_not_complete(
+    controller_runtime,
+):
+    """Reset fails closed instead of overlapping a close with a live order."""
+
+    runtime, controller, trader = controller_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+            position_id="episode",
+        )
+    )
+    protective = ibi.Trade(
+        contract=contract(),
+        order=ibi.Order(
+            orderId=77,
+            action="SELL",
+            totalQuantity=1,
+            orderType="STP",
+        ),
+        orderStatus=ibi.OrderStatus(
+            orderId=77,
+            status=ibi.OrderStatus.Submitted,
+            remaining=1,
+        ),
+    )
+    controller.ib.openTrades = Mock(return_value=[protective])
+    terminator = Terminator(controller)
+    terminator.cancellation_timeout = 0
+
+    completed = await terminator.run()
+
+    assert completed is False
+    assert trader.trades == []
+
+
+@pytest.mark.asyncio
+async def test_terminator_does_not_hide_residual_behind_flat_state(
+    controller_runtime,
+):
+    """A stale flat PositionState does not suppress broker liquidation."""
+
+    runtime, controller, _ = controller_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=0,
+        )
+    )
+    controller.ib.openTrades = Mock(return_value=[])
+    controller.ib.positions = Mock(
+        return_value=[
+            ibi.Position(
+                account="DU123",
+                contract=contract(),
+                position=2,
+                avgCost=100,
+            )
+        ]
+    )
+    done_trade = ibi.Trade(
+        contract=contract(),
+        order=ibi.Order(
+            orderId=79,
+            action="SELL",
+            totalQuantity=2,
+            orderType="MKT",
+        ),
+        orderStatus=ibi.OrderStatus(
+            orderId=79,
+            status=ibi.OrderStatus.Filled,
+            filled=2,
+            remaining=0,
+        ),
+    )
+    controller.trade = Mock(return_value=done_trade)
+
+    completed = await Terminator(controller).run()
+
+    assert completed is True
+    assert controller.trade.call_args.kwargs["role"] == (StandardOrderRole.LIQUIDATION)
+
+
+@pytest.mark.asyncio
+async def test_run_keeps_book_when_explicit_reset_fails(controller_runtime):
+    """Failed reset disables trading without discarding recovery state."""
+
+    runtime, controller, _ = controller_runtime
+    controller.cold_start = True
+    controller.reset = True
+    controller.sync = AsyncMock(return_value=SyncOutcome.OK)
+    controller.execute_stops_and_close_positions = AsyncMock(
+        return_value=False
+    )
+    runtime.book.clear_state = Mock()
+
+    completed = await controller.run()
+
+    assert completed is False
+    assert controller._trading_disabled is True
+    assert controller.reset is True
+    runtime.book.clear_state.assert_not_called()
 
 
 @pytest.mark.asyncio

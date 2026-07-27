@@ -144,7 +144,8 @@ FillRecord preserves the complete Execution, fill time and Contract, optional
 CommissionReport, and a deduplication key normally equal to `execId`. Explicit
 FillRecords are authoritative execution evidence; serialized Trade remains
 diagnostic evidence. Fill application is conditional and idempotent, and late
-commission callbacks update the normalized record.
+commission callbacks update the normalized record whether or not optional
+blotter output is configured.
 
 Physical Mongo collections are only `orders`, `state`, and `blotter`. State
 documents use:
@@ -186,7 +187,9 @@ non-zero same-side resizing, creates a new `position_id` for each opening
 episode, and preserves it on close, brackets, and roll orders. Protection is
 attached only after a complete entry fill. A protective exit closes the
 episode, zeroes the recovered target, and persists the exited direction as
-blocked.
+blocked. Stop-loss protection is critical while take-profit is optional. A
+regular close joins the active brackets' OCA group, so the first filled exit
+causes IB to cancel the remaining exits.
 
 Order keyword precedence is:
 

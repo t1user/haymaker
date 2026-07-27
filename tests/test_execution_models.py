@@ -15,6 +15,7 @@ from haymaker.components import (
     PositionTarget,
     SerialTargetExecutionModel,
     StandardOrderRole,
+    TakeProfitAsStopMultiple,
     symbol_is,
 )
 from haymaker.controller import Controller
@@ -295,6 +296,47 @@ def test_brackets_attach_only_after_complete_entry_fill(execution_runtime):
     assert controller.book.order_by_id(2).position_id == (
         controller.book.position_state("alpha").position_id
     )
+
+
+def test_regular_close_joins_active_bracket_oca_group(execution_runtime):
+    """A regular close lets IB cancel stop and take-profit through OCA."""
+
+    _, controller, trader = execution_runtime
+    model = BracketExecutionModel(
+        "alpha",
+        name="brackets",
+        stop=FixedStop(2),
+        take_profit=TakeProfitAsStopMultiple(2, 3),
+    )
+    model.onData(
+        target(
+            1,
+            source_key="alpha",
+            intent=PositionIntent.OPEN,
+            metadata={"atr": 5},
+        )
+    )
+    entry = trader.trades[0]
+    apply_fill(controller, entry, 1)
+    entry.orderStatus.avgFillPrice = 100
+    entry.filledEvent.emit(entry)
+    brackets = trader.trades[1:3]
+    oca_group = brackets[0].order.ocaGroup
+
+    model.onData(
+        target(
+            0,
+            source_key="alpha",
+            intent=PositionIntent.CLOSE,
+        )
+    )
+
+    close = trader.trades[3]
+    assert oca_group
+    assert {trade.order.ocaGroup for trade in brackets} == {oca_group}
+    assert close.order.ocaGroup == oca_group
+    assert close.order.ocaType == model.oca_type
+    assert trader.cancelled == []
 
 
 @pytest.mark.asyncio

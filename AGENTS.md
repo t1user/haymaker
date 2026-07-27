@@ -218,6 +218,13 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   flat and exit while positioned. Protective STOP_LOSS and TAKE_PROFIT fills
   set a direction block only when they flatten the episode; the first actual
   fill of a permitted opposite OPEN clears it. CLOSE and ROLL preserve it.
+- Bracket-managed positions require critical stop-loss protection; take-profit
+  orders are optional and their absence is not a sync failure. Regular closes
+  join the active protective orders' OCA group so IB cancels the remaining
+  exits only after one exit fills.
+- Explicit account reset must confirm cancellation of all pre-existing orders
+  before submitting liquidation orders. A failed reset leaves Book recovery
+  state intact and prevents startup from enabling trading.
 - Use `tests/runtime_helpers.py` and the `atom_runtime` /
   `atom_runtime_factory` fixtures for tests that need `Atom` runtime services.
   Install custom `ib`, Book, contract registry, controller, restart

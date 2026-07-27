@@ -129,7 +129,10 @@ def test_latest_strategy_conversion_preserves_episode_and_lock():
                     "position": 0,
                     "lock": -1,
                     "position_id": "episode",
-                    "params": {"atr": 5, "unrelated": "ignored"},
+                    "params": {
+                        "open": {"atr": 5},
+                        "unrelated": "ignored",
+                    },
                     "timestamp": timestamp,
                 }
             ),
@@ -142,6 +145,36 @@ def test_latest_strategy_conversion_preserves_episode_and_lock():
     assert states[0]["position_id"] == "episode"
     assert states[0]["blocked_direction"] == -1
     assert states[0]["bracket_inputs"] == {"atr": 5}
+
+
+def test_latest_strategy_conversion_recovers_custom_bracket_field():
+    """Legacy bracket memos retain the configured volatility field."""
+
+    timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    states = convert_latest_strategy_snapshot(
+        {
+            "_id": "snapshot",
+            "timestamp": timestamp,
+            "alpha": tree(
+                {
+                    "active_contract": ibi.Future(conId=1, symbol="ES", exchange="CME"),
+                    "position": 1,
+                    "params": {
+                        "open": {"custom_volatility": 7},
+                        "stop-loss": {
+                            "vol_field_name": "custom_volatility",
+                            "vol_field_value": 7,
+                            "sl_points": 14,
+                        },
+                    },
+                    "timestamp": timestamp,
+                }
+            ),
+        },
+        source_database="legacy",
+    )
+
+    assert states[0]["bracket_inputs"] == {"custom_volatility": 7}
 
 
 def test_blotter_conversion_and_validation_totals():

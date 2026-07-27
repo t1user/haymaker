@@ -133,10 +133,9 @@ class Controller(Atom):
         self.ib.orderStatusEvent.connect(self.onOrderStatusEvent, self._log_event_error)
         self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
         self.ib.errorEvent.connect(self.onErrEvent, self._log_event_error)
-        if self.book.blotter is not None:
-            self.ib.commissionReportEvent.connect(
-                self.onCommissionReport, self._log_event_error
-            )
+        self.ib.commissionReportEvent.connect(
+            self.onCommissionReport, self._log_event_error
+        )
         if self.log_order_events:
             self._order_loggers = OrderLoggers(self.ib)
         self.set_hold()
@@ -233,7 +232,9 @@ class Controller(Atom):
             self.clear_records()
             self.zero = False
         if self.reset:
-            await self.execute_stops_and_close_positions()
+            if not await self.execute_stops_and_close_positions():
+                self.disable_trading("account reset did not complete")
+                return False
             self.book.clear_state()
             self.reset = False
         self._restart_before_correction = True
@@ -510,7 +511,7 @@ class Controller(Atom):
         fill: ibi.Fill,
         report: ibi.CommissionReport,
     ) -> None:
-        """Update order evidence and submit a fully attributed blotter row."""
+        """Persist final commission evidence and optionally write a blotter row."""
 
         if self._hold or not trade.order.orderId:
             return
@@ -773,8 +774,10 @@ class Controller(Atom):
         else:
             log.debug("Broker message %s: %s %s", errorCode, errorString, context)
 
-    async def execute_stops_and_close_positions(self) -> None:
-        await Terminator(self).run()
+    async def execute_stops_and_close_positions(self) -> bool:
+        """Run an explicit account reset and report whether it completed."""
+
+        return await Terminator(self).run()
 
     def clear_records(self) -> None:
         self.book.clear_state()

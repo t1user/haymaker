@@ -235,6 +235,10 @@ most one active TARGET_ADJUSTMENT order per Contract.
 ``source_key``. Initial targets require consistent intent, same-side non-zero
 resizing is rejected, and each opening episode gets a fresh ``position_id``.
 Protective brackets are attached only after the entry is completely filled.
+The stop-loss is critical protection for every established episode; a
+take-profit is optional and its absence is not a synchronization failure.
+Regular CLOSE orders join the active brackets' OCA group, allowing IB to cancel
+the unfilled protective orders when any exit fills.
 
 .. autoclass:: haymaker.components.ExecutionModel
 

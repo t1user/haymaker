@@ -1,3 +1,5 @@
+"""Tests for the built-in one-to-one signal processors."""
+
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from itertools import product

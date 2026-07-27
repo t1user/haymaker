@@ -244,7 +244,8 @@ class BracketExecutionModel(ExecutionModel):
     Args:
         source_key: Required stable source identity.
         stop: Required protective stop leg.
-        take_profit: Optional protective take-profit leg.
+        take_profit: Optional take-profit leg. Stop-loss protection remains
+            critical even when no take-profit is configured.
         name: Stable configured model name.
         open_order: Model-specific entry Order fields.
         close_order: Model-specific close Order fields.
@@ -254,8 +255,10 @@ class BracketExecutionModel(ExecutionModel):
 
     Newly received targets require an initially consistent PositionIntent.
     After acceptance, numeric target is authoritative and recovery derives work
-    from Book instead of replaying intent. Non-zero same-side resizing is not
-    supported; use :class:`SerialTargetExecutionModel` for that policy.
+    from Book instead of replaying intent. Regular closes join the protective
+    orders' OCA group so the filled close cancels remaining brackets. Non-zero
+    same-side resizing is not supported; use
+    :class:`SerialTargetExecutionModel` for that policy.
     """
 
     def __init__(
@@ -447,7 +450,6 @@ class BracketExecutionModel(ExecutionModel):
                 "Recovered bracket target requests unsupported same-side resizing"
             )
         if current:
-            self._cancel_brackets()
             self._submit_close(state)
         else:
             self._submit_open(state)
@@ -485,8 +487,12 @@ class BracketExecutionModel(ExecutionModel):
 
     def _submit_close(self, state: PositionState) -> None:
         assert state.contract is not None
-        order = ibi.Order(
+        options = {
             **self.close_options,
+            **self._active_bracket_oca_options(),
+        }
+        order = ibi.Order(
+            **options,
             action=action(-sign(state.quantity)),
             totalQuantity=abs(state.quantity),
         )
@@ -520,13 +526,25 @@ class BracketExecutionModel(ExecutionModel):
             cancelled=lambda _trade: self._defer(self._converge),
         )
 
-    def _cancel_brackets(self) -> None:
-        for info in self.book.active_orders(source_key=self.source_key):
+    def _active_bracket_oca_options(self) -> dict[str, Any]:
+        """Return the shared OCA identity of this episode's active brackets."""
+
+        groups = {
+            info.trade.order.ocaGroup
+            for info in self.book.active_orders(source_key=self.source_key)
             if info.role in {
                 StandardOrderRole.STOP_LOSS,
                 StandardOrderRole.TAKE_PROFIT,
-            }:
-                self.controller.cancel(info.trade)
+            }
+            and info.trade.order.ocaGroup
+        }
+        if not groups:
+            return {}
+        if len(groups) != 1:
+            raise RuntimeError(
+                f"Active brackets for {self.source_key!r} have different OCA groups"
+            )
+        return {"ocaGroup": groups.pop(), "ocaType": self.oca_type}
 
     def _on_entry_filled(self, trade: ibi.Trade) -> None:
         """Attach protection only after a complete entry fill."""

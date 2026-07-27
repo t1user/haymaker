@@ -97,6 +97,30 @@ def _legacy_timestamp(*values: Any, name: str) -> datetime:
     raise ValueError(f"legacy {name} timestamp is required")
 
 
+def _legacy_bracket_inputs(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Recover volatility inputs recorded by legacy bracket creation."""
+
+    inputs: dict[str, Any] = {}
+    for label in ("stop-loss", "take-profit"):
+        memo = params.get(label)
+        if not isinstance(memo, Mapping):
+            continue
+        name = memo.get("vol_field_name")
+        if isinstance(name, str) and name and "vol_field_value" in memo:
+            inputs[name] = memo["vol_field_value"]
+
+    opening = params.get("open")
+    if isinstance(opening, Mapping):
+        for name in ("atr", "sl_points", "min_tick"):
+            if name in opening:
+                inputs.setdefault(name, opening[name])
+
+    for name in ("atr", "sl_points", "min_tick"):
+        if name in params:
+            inputs.setdefault(name, params[name])
+    return inputs
+
+
 def convert_order(
     document: Mapping[str, Any], *, source_database: str
 ) -> dict[str, Any]:
@@ -161,11 +185,7 @@ def convert_latest_strategy_snapshot(
             int(lock) if not quantity and lock in (-1, 1) else None
         )
         params = dict(state.get("params") or {})
-        bracket_inputs = {
-            name: value
-            for name, value in params.items()
-            if name in {"atr", "sl_points", "min_tick"}
-        }
+        bracket_inputs = _legacy_bracket_inputs(params)
         migration = provenance(
             source_database=source_database,
             source_collection="strategies",

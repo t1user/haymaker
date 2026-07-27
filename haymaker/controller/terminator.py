@@ -19,18 +19,24 @@ log = logging.getLogger(__name__)
 class Terminator:
     """Cancel working orders and close broker positions during explicit reset."""
 
+    cancellation_timeout = 10.0
+    cancellation_poll_interval = 0.1
+
     def __init__(self, controller: Controller) -> None:
         self.controller = controller
         self.in_progress_trades: list[ibi.Trade] = []
 
-    async def run(self) -> None:
-        """Cancel attributed orders, close logical sources, then broker residue."""
+    async def run(self) -> bool:
+        """Cancel and close the account, returning whether reset completed."""
 
         log.warning("Explicit account reset initiated.")
-        for trade in tuple(self.controller.ib.openTrades()):
+        open_trades = tuple(self.controller.ib.openTrades())
+        for trade in open_trades:
             self.controller.cancel(trade)
-        await asyncio.sleep(0)
+        if not await self._wait_for_cancellations(open_trades):
+            return False
 
+        logical_contracts: set[int] = set()
         for source_key, state in self.controller.book.position_states().items():
             if state.quantity and state.contract is not None:
                 logical_trade = self.controller.trade(
@@ -46,13 +52,10 @@ class Terminator:
                 )
                 if logical_trade is not None:
                     self.in_progress_trades.append(logical_trade)
+                    logical_contracts.add(state.contract.conId)
 
-        await self._wait_for_logical_closes()
-        logical_contracts = {
-            state.contract.conId
-            for state in self.controller.book.position_states().values()
-            if state.contract is not None
-        }
+        if not await self._wait_for_logical_closes():
+            return False
         for position in self.controller.ib.positions():
             if position.position and position.contract.conId not in logical_contracts:
                 residual_trade = self.controller.trade(
@@ -65,22 +68,39 @@ class Terminator:
                     ),
                     role=StandardOrderRole.LIQUIDATION,
                     execution_model_name=(
-                        self.controller.book.affinity_for_contract(
-                            position.contract
-                        )
+                        self.controller.book.affinity_for_contract(position.contract)
                         or "reset_liquidation"
                     ),
                 )
                 if residual_trade is not None:
                     self.in_progress_trades.append(residual_trade)
-        await self._wait_for_logical_closes()
+        return await self._wait_for_logical_closes()
 
-    async def _wait_for_logical_closes(self) -> None:
+    async def _wait_for_cancellations(self, trades: tuple[ibi.Trade, ...]) -> bool:
+        """Wait until every pre-reset order is terminal before closing positions."""
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.cancellation_timeout
+        while any(not trade.isDone() for trade in trades):
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                pending = [
+                    trade.order.orderId for trade in trades if not trade.isDone()
+                ]
+                log.critical(
+                    "Reset stopped because order cancellations did not complete: %s",
+                    pending,
+                )
+                return False
+            await asyncio.sleep(min(self.cancellation_poll_interval, remaining))
+        return True
+
+    async def _wait_for_logical_closes(self) -> bool:
         """Wait briefly for reset orders without creating a shutdown framework."""
 
         for _ in range(10):
             if all(trade.isDone() for trade in self.in_progress_trades):
-                return
+                return True
             await asyncio.sleep(1)
         if pending := [
             trade.order.orderId
@@ -88,3 +108,5 @@ class Terminator:
             if not trade.isDone()
         ]:
             log.critical("Reset trades did not complete: %s", pending)
+            return False
+        return True
