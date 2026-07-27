@@ -62,17 +62,27 @@ valid.
 ## Signal production and one-to-one flow
 
 `SignalModel` owns source identity, Contract, SignalType, futures auto-roll
-policy, and standard Signal emission. `PandasSignalModel` retains dataframe,
-BarDataList, mapping, and compatible input conversion; subclasses implement
-`df(data)`. The latest row supplies the value, observation index supplies
-`as_of` when possible, and other row values become metadata. A custom
-row-to-Signal hook may replace this conversion.
+policy, and standard Signal emission. A Signal carries either one finite
+scalar value or a finite `SignalPair(entry, exit)`. `PandasSignalModel` retains
+dataframe, BarDataList, mapping, and compatible input conversion; subclasses
+implement `df(data)`. `signal_fields` accepts either one field name for a
+scalar or an `(entry, exit)` field-name tuple for a SignalPair. The observation
+index supplies `as_of` when possible, selected signal fields are excluded from
+metadata, and other row values become metadata. A custom row-to-Signal hook
+may replace this conversion.
 
 Built-in binary processors consume Signal and query
 `Book.effective_quantity(source_key)`. STATE zero requests flat; EVENT zero is
-ignored. Matching non-zero direction is suppressed. An ordinary opposing
-signal closes first, while an always-on processor reverses. Lock-aware variants
-suppress only a new opening in Book's persisted `blocked_direction`.
+ignored. Matching non-zero direction is suppressed. `BinarySignalProcessor`
+accepts scalar `-1/0/1` values and uses explicit `OpposingSignalPolicy.CLOSE`
+or `REVERSE`. `BinaryEntryExitSignalProcessor` accepts SignalPair, consults
+entry only while flat and exit only while positioned, and never reverses
+directly. Either processor may respect Book's `blocked_direction`.
+
+A completely filled STOP_LOSS or TAKE_PROFIT that flattens an episode sets the
+block to the exited direction. A permitted opposite OPEN clears the old block
+on its first actual fill. CLOSE and ROLL are indifferent, and partial
+protective fills do not set the block.
 
 The dedicated one-to-one composition is:
 
@@ -175,8 +185,8 @@ authoritative afterward. It supports no-op, OPEN, CLOSE, and REVERSE, rejects
 non-zero same-side resizing, creates a new `position_id` for each opening
 episode, and preserves it on close, brackets, and roll orders. Protection is
 attached only after a complete entry fill. A protective exit closes the
-episode and zeroes the recovered target; a stop additionally persists the
-stopped direction.
+episode, zeroes the recovered target, and persists the exited direction as
+blocked.
 
 Order keyword precedence is:
 

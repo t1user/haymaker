@@ -43,10 +43,13 @@ The standard message sequence is:
    Signal -> PositionProposal -> PositionTarget
 
 :class:`~haymaker.components.Signal` identifies one logical source, a Contract,
-a finite value, and mandatory :class:`~haymaker.components.SignalType`.
+a finite scalar value or :class:`~haymaker.components.SignalPair`, and
+mandatory :class:`~haymaker.components.SignalType`.
 ``STATE`` replaces the source's previous desired state. Each ``EVENT`` is a new
 event; an EVENT zero means that no event occurred. ``as_of`` is the optional
 effective market-observation time, while ``created_at`` records local creation.
+``SignalPair`` carries separate entry and exit values without duplicating the
+Signal's identity, Contract, timestamps, or metadata.
 
 :class:`~haymaker.components.PositionProposal` is used only by one-to-one
 processors. It preserves the original Signal, chooses short/flat/long
@@ -59,6 +62,8 @@ for general direct execution and mandatory only for the one-to-one bracket
 path.
 
 .. autoclass:: haymaker.components.Signal
+
+.. autoclass:: haymaker.components.SignalPair
 
 .. autoclass:: haymaker.components.SignalType
 
@@ -121,9 +126,11 @@ Signal models
 :class:`~haymaker.components.SignalModel` is the general structured Signal
 producer. :class:`~haymaker.components.PandasSignalModel` retains the existing
 dataframe conveniences: implement ``df(data)`` and return the complete
-calculated dataframe. By default the latest ``signal`` value becomes
-``Signal.value``, its index becomes ``as_of`` when datetime-like, and the other
-row fields become metadata.
+calculated dataframe. By default, ``signal_fields="signal"`` selects a scalar
+from the latest row. A two-field tuple such as
+``signal_fields=("in", "out")`` creates ``SignalPair(entry=..., exit=...)``.
+The selected field or fields are excluded from metadata; the index becomes
+``as_of`` when datetime-like, and all other row fields become metadata.
 
 An optional custom row hook may build the Signal directly. An optional audit
 sink must use ``DRAIN`` and records calculation history under
@@ -147,21 +154,29 @@ One-to-one processing
 =====================
 
 Binary processors consume Signal and query Book's effective quantity,
-including relevant working orders. STATE zero requests flat. EVENT zero is
-ignored. Matching direction is suppressed. Ordinary opposing input closes
-first; always-on input reverses. Lock-aware variants suppress a new opening
-only in the persisted stopped direction.
+including relevant working orders. Values must be exactly ``-1``, ``0``, or
+``1``. For scalar input, STATE zero requests flat and EVENT zero is ignored.
+Matching direction is suppressed. ``OpposingSignalPolicy.CLOSE`` closes first;
+``REVERSE`` reverses immediately.
+
+``BinaryEntryExitSignalProcessor`` consumes a SignalPair. It consults only the
+entry value while flat and only the exit value while positioned. An opposing
+exit closes and never reverses directly. STATE exit zero closes; EVENT exit
+zero is ignored.
+
+Either processor can set ``respect_blocked_direction=True``. A protective
+STOP_LOSS or TAKE_PROFIT that completely flattens a position establishes the
+block. Opening in the blocked direction is suppressed, opening in the opposite
+direction is allowed, and its first actual fill clears the old block. Ordinary
+CLOSE and ROLL fills do not alter it.
 
 .. autoclass:: haymaker.components.BinarySignalProcessor
    :members: process
 
-.. autoclass:: haymaker.components.LockableBinarySignalProcessor
+.. autoclass:: haymaker.components.BinaryEntryExitSignalProcessor
+   :members: process
 
-.. autoclass:: haymaker.components.AlwaysOnBinarySignalProcessor
-
-.. autoclass:: haymaker.components.AlwaysOnLockableBinarySignalProcessor
-
-.. autofunction:: haymaker.components.binary_signal_processor_factory
+.. autoclass:: haymaker.components.OpposingSignalPolicy
 
 Portfolio boundaries
 ====================

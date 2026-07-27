@@ -22,9 +22,7 @@ def utc_now() -> datetime:
 def _validate_timestamp(value: datetime | None, field_name: str) -> None:
     """Validate that an optional timestamp contains timezone information."""
 
-    if value is not None and (
-        value.tzinfo is None or value.utcoffset() is None
-    ):
+    if value is not None and (value.tzinfo is None or value.utcoffset() is None):
         raise ValueError(f"{field_name} must be timezone-aware")
 
 
@@ -110,13 +108,41 @@ class StandardOrderRole(StrEnum):
 
 
 @dataclass(frozen=True, kw_only=True)
+class SignalPair:
+    """Carry distinct entry and exit values in one Signal.
+
+    Use this value with :class:`BinaryEntryExitSignalProcessor` when a
+    one-to-one strategy calculates separate entry and exit conditions for the
+    same observation. Both values must be finite numbers; the receiving
+    processor may impose narrower constraints such as ``-1``, ``0``, and
+    ``1``.
+
+    Args:
+        entry: Value consulted while the source is effectively flat.
+        exit: Value consulted while the source has an effective position.
+
+    Raises:
+        TypeError: If either value is not a real number.
+        ValueError: If either value is not finite.
+    """
+
+    entry: float
+    exit: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "entry", _finite_number(self.entry, "entry"))
+        object.__setattr__(self, "exit", _finite_number(self.exit, "exit"))
+
+
+@dataclass(frozen=True, kw_only=True)
 class Signal:
     """Represent one structured trading input.
 
     Args:
         source_key: Stable opaque identity of the logical input path.
         contract: Contract to which the signal applies.
-        value: Finite signal value.
+        value: Finite scalar value or an entry/exit pair. Consumers decide
+            which value shapes they support.
         signal_type: Whether the value replaces state or records an event.
         as_of: Optional effective time of the market observation.
         created_at: Local signal-generation time.
@@ -130,7 +156,7 @@ class Signal:
 
     source_key: str
     contract: ibi.Contract
-    value: float
+    value: float | SignalPair
     signal_type: SignalType
     as_of: datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
@@ -140,7 +166,8 @@ class Signal:
         if not isinstance(self.source_key, str) or not self.source_key:
             raise ValueError("source_key must be a non-empty string")
         object.__setattr__(self, "contract", _contract(self.contract))
-        object.__setattr__(self, "value", _finite_number(self.value, "value"))
+        if not isinstance(self.value, SignalPair):
+            object.__setattr__(self, "value", _finite_number(self.value, "value"))
         if not isinstance(self.signal_type, SignalType):
             raise TypeError("signal_type must be a SignalType")
         _validate_timestamp(self.as_of, "as_of")
@@ -230,6 +257,7 @@ __all__ = [
     "PositionProposal",
     "PositionTarget",
     "Signal",
+    "SignalPair",
     "SignalType",
     "StandardOrderRole",
 ]

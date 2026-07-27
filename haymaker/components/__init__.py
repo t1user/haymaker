@@ -39,6 +39,7 @@ from .messages import (
     PositionProposal,
     PositionTarget,
     Signal,
+    SignalPair,
     SignalType,
     StandardOrderRole,
 )
@@ -49,12 +50,10 @@ from .portfolio import (
     PositionAllocator,
 )
 from .signal_models import PandasSignalModel, SignalModel, read_signal_audit
-from .signals import (
-    AlwaysOnBinarySignalProcessor,
-    AlwaysOnLockableBinarySignalProcessor,
+from .signal_processors import (
+    BinaryEntryExitSignalProcessor,
     BinarySignalProcessor,
-    LockableBinarySignalProcessor,
-    binary_signal_processor_factory,
+    OpposingSignalPolicy,
 )
 from .streamers import (
     HistoricalDataStreamer,
@@ -70,9 +69,8 @@ __all__ = [
     "AdjustableFixedTrailingStop",
     "AdjustableTrailingFixedStop",
     "AdjustableTrailingStop",
-    "AlwaysOnBinarySignalProcessor",
-    "AlwaysOnLockableBinarySignalProcessor",
     "BarAggregator",
+    "BinaryEntryExitSignalProcessor",
     "BinarySignalProcessor",
     "BracketExecutionModel",
     "CountBars",
@@ -84,9 +82,9 @@ __all__ = [
     "FixedStop",
     "FlexibleTakeProfitAsStopMultiple",
     "HistoricalDataStreamer",
-    "LockableBinarySignalProcessor",
     "MktDataStreamer",
     "NoFilter",
+    "OpposingSignalPolicy",
     "PandasSignalModel",
     "PositionIntent",
     "PositionAllocator",
@@ -97,6 +95,7 @@ __all__ = [
     "RealTimeBarsStreamer",
     "SerialTargetExecutionModel",
     "Signal",
+    "SignalPair",
     "SignalModel",
     "SignalType",
     "StandardOrderRole",
@@ -109,7 +108,6 @@ __all__ = [
     "VolumeBars",
     "VolumeGrouper",
     "bar_filter",
-    "binary_signal_processor_factory",
     "contract_is",
     "exchange_is",
     "read_signal_audit",

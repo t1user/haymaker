@@ -24,7 +24,7 @@ position episode:
        FixedSizeAllocator,
        FixedStop,
        HistoricalDataStreamer,
-       LockableBinarySignalProcessor,
+       BinarySignalProcessor,
        PandasSignalModel,
        PortfolioWrapper,
        SignalType,
@@ -65,7 +65,7 @@ position episode:
    )
    frames = DfAggregator(history_store)
    signals = TrendModel(SOURCE, CONTRACT, SignalType.STATE)
-   processor = LockableBinarySignalProcessor()
+   processor = BinarySignalProcessor(respect_blocked_direction=True)
    allocation = PortfolioWrapper(FixedSizeAllocator(1))
    execution = BracketExecutionModel(
        SOURCE,

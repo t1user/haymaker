@@ -97,16 +97,17 @@ The research package is intentionally separate from live execution. It works dir
 
 ### Strategy Pipeline Components
 
-- `haymaker/components/messages.py`: frozen `Signal`, `PositionProposal`, and
-  absolute `PositionTarget` messages plus signal, intent, and open-ended order
-  role enums.
+- `haymaker/components/messages.py`: frozen scalar-or-paired `Signal`,
+  `SignalPair`, `PositionProposal`, and absolute `PositionTarget` messages plus
+  signal, intent, and open-ended order role enums.
 - `haymaker/components/streamers.py`, `aggregators.py`: broker market-data
   sources, bar grouping, dataframe aggregation, and history persistence.
 - `haymaker/components/signal_models.py`: general SignalModel and
   dataframe-based PandasSignalModel, including optional ordered calculation
   audit persistence and lookup.
-- `haymaker/components/signals.py`: one-to-one binary processors implementing
-  STATE/EVENT, close-first, reversal, and stopped-direction lock semantics.
+- `haymaker/components/signal_processors.py`: scalar and paired one-to-one
+  binary processors implementing STATE/EVENT, configurable opposing-signal,
+  entry/exit, and stopped-direction lock semantics.
 - `haymaker/components/portfolio.py`: direct account-wide Portfolio,
   one-to-one PortfolioWrapper, and PositionAllocator boundary.
 - `haymaker/components/execution_router.py`: fixed first-match target routing

@@ -10,7 +10,7 @@ from haymaker.components import (
     ExecutionRule,
     FixedSizeAllocator,
     FixedStop,
-    LockableBinarySignalProcessor,
+    BinarySignalProcessor,
     Portfolio,
     PortfolioWrapper,
     PositionTarget,
@@ -84,10 +84,8 @@ def test_one_to_one_pipeline_submits_attributed_open(atom_runtime):
     controller = Controller(trader=trader)
     atom_runtime.bind_controller(controller)
     source = Source()
-    signal_model = IntegrationSignalModel(
-        "alpha", contract(), SignalType.STATE
-    )
-    processor = LockableBinarySignalProcessor()
+    signal_model = IntegrationSignalModel("alpha", contract(), SignalType.STATE)
+    processor = BinarySignalProcessor(respect_blocked_direction=True)
     wrapper = PortfolioWrapper(FixedSizeAllocator(2))
     execution = BracketExecutionModel(
         "alpha",
@@ -111,9 +109,11 @@ def test_one_to_one_pipeline_submits_attributed_open(atom_runtime):
 class AggregatePortfolio(Portfolio):
     def __init__(self):
         super().__init__(sources={"alpha", "beta"})
-        self.values = {}
+        self.values: dict[str, float] = {}
 
     def process(self, signal: Signal) -> Iterable[PositionTarget]:
+        if not isinstance(signal.value, float):
+            raise TypeError("AggregatePortfolio requires scalar Signals")
         self.values[signal.source_key] = signal.value
         total = sum(self.values.values())
         return (

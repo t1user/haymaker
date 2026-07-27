@@ -35,7 +35,7 @@ Examples:
 
         processor = BinarySignalProcessor()
 
-        assert processor.position("strategy") == 1
+        assert processor.book is fake_book
 
     def test_execution_model_uses_fake_controller(atom_runtime):
         controller = FakeController(FakeTrader())
@@ -97,9 +97,7 @@ class AtomRuntimeHarness:
     timeout_policy: TimeoutPolicy = field(default_factory=TimeoutPolicy)
     restart_requests: list[str] = field(default_factory=list)
     future_roll_policies: dict[str, bool] = field(default_factory=dict)
-    run_started_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    run_started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     workload_generation: int = 0
 
     def __post_init__(self) -> None:

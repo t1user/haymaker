@@ -16,7 +16,7 @@ import pandas as pd
 from ..async_wrappers import QueueShutdownPolicy
 from ..base import Atom
 from ..datastore import AsyncDataStore, QueuedDataSink
-from .messages import Signal, SignalType
+from .messages import Signal, SignalPair, SignalType
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +91,27 @@ class SignalModel(Atom, ABC):
 
 
 RowToSignal = Callable[[pd.Series, ibi.Contract], Signal]
+SignalFields = str | tuple[str, str]
+
+
+def _validate_signal_fields(value: SignalFields) -> SignalFields:
+    """Validate a scalar field name or an entry/exit field pair."""
+
+    if isinstance(value, str):
+        if not value:
+            raise ValueError("signal_fields must not be empty")
+        return value
+    if not isinstance(value, tuple):
+        raise TypeError("signal_fields must be a field name or a two-field tuple")
+    if len(value) != 2:
+        raise ValueError("signal_fields tuple must contain exactly two fields")
+    if not all(isinstance(field, str) for field in value):
+        raise TypeError("signal_fields tuple members must be strings")
+    if not all(value):
+        raise ValueError("signal_fields tuple members must not be empty")
+    if value[0] == value[1]:
+        raise ValueError("signal_fields tuple members must be distinct")
+    return value
 
 
 class PandasSignalModel(SignalModel, ABC):
@@ -100,7 +121,8 @@ class PandasSignalModel(SignalModel, ABC):
         source_key: Stable logical input identity.
         contract: Signal Contract blueprint.
         signal_type: State or event semantics.
-        signal_field: Calculated row field containing the numeric signal.
+        signal_fields: Calculated row field containing a scalar Signal value,
+            or an ``(entry, exit)`` field-name tuple that creates a SignalPair.
         row_to_signal: Optional hook replacing standard row conversion.
         audit_sink: Optional ordered ``DRAIN`` sink for complete calculation
             audit history. Other queued shutdown policies are rejected.
@@ -117,7 +139,7 @@ class PandasSignalModel(SignalModel, ABC):
         contract: ibi.Contract,
         signal_type: SignalType,
         *,
-        signal_field: str = "signal",
+        signal_fields: SignalFields = "signal",
         row_to_signal: RowToSignal | None = None,
         audit_sink: QueuedDataSink | None = None,
         auto_roll_futures: bool = True,
@@ -126,7 +148,7 @@ class PandasSignalModel(SignalModel, ABC):
             audit_sink.shutdown_policy is not QueueShutdownPolicy.DRAIN
         ):
             raise ValueError("SignalModel audit_sink must use DRAIN shutdown")
-        self.signal_field = signal_field
+        self.signal_fields = _validate_signal_fields(signal_fields)
         self.row_to_signal = row_to_signal
         self.audit_sink = audit_sink
         self._audit_symbol: str | None = None
@@ -160,19 +182,33 @@ class PandasSignalModel(SignalModel, ABC):
             if signal.signal_type is not self.signal_type:
                 raise ValueError("row_to_signal changed SignalType")
         else:
-            if self.signal_field not in row:
+            fields = (
+                (self.signal_fields,)
+                if isinstance(self.signal_fields, str)
+                else self.signal_fields
+            )
+            missing = [field for field in fields if field not in row]
+            if missing:
                 raise KeyError(
-                    f"Calculated row is missing signal field {self.signal_field!r}"
+                    "Calculated row is missing signal field(s): "
+                    + ", ".join(repr(field) for field in missing)
                 )
             metadata = {
-                str(key): value
-                for key, value in row.items()
-                if key != self.signal_field
+                str(key): value for key, value in row.items() if key not in fields
             }
+            value: float | SignalPair
+            if isinstance(self.signal_fields, str):
+                value = row[self.signal_fields]
+            else:
+                entry_field, exit_field = self.signal_fields
+                value = SignalPair(
+                    entry=row[entry_field],
+                    exit=row[exit_field],
+                )
             signal = Signal(
                 source_key=self.source_key,
                 contract=contract,
-                value=row[self.signal_field],
+                value=value,
                 signal_type=self.signal_type,
                 as_of=_aware_timestamp(row.name),
                 metadata=metadata,
@@ -247,8 +283,7 @@ class PandasSignalModel(SignalModel, ABC):
             f"{run_started_at.isoformat()}"
         )
         is_new_generation = (
-            self._audit_active_con_id != active.conId
-            or self._audit_symbol != symbol
+            self._audit_active_con_id != active.conId or self._audit_symbol != symbol
         )
         metadata = {
             "source_key": self.source_key,
@@ -296,9 +331,7 @@ async def read_signal_audit(
 
     if created_at.tzinfo is None or created_at.utcoffset() is None:
         raise ValueError("created_at must be timezone-aware")
-    if as_of is not None and (
-        as_of.tzinfo is None or as_of.utcoffset() is None
-    ):
+    if as_of is not None and (as_of.tzinfo is None or as_of.utcoffset() is None):
         raise ValueError("as_of must be timezone-aware")
     prefix = f"{source_key}_"
     candidates: list[tuple[datetime, str]] = []
@@ -312,14 +345,10 @@ async def read_signal_audit(
         if isinstance(run_started_at, str):
             run_started_at = datetime.fromisoformat(run_started_at)
         if isinstance(run_started_at, datetime) and (
-            run_started_at.tzinfo is None
-            or run_started_at.utcoffset() is None
+            run_started_at.tzinfo is None or run_started_at.utcoffset() is None
         ):
             run_started_at = run_started_at.replace(tzinfo=timezone.utc)
-        if (
-            isinstance(run_started_at, datetime)
-            and run_started_at <= created_at
-        ):
+        if isinstance(run_started_at, datetime) and run_started_at <= created_at:
             candidates.append((run_started_at, symbol))
     if not candidates:
         return None

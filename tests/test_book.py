@@ -149,9 +149,7 @@ def test_late_commission_updates_normalized_fill_evidence(book):
         )
     )
     info = book.save_order(order_info(trade_))
-    execution = fill(trade_)._replace(
-        commissionReport=ibi.CommissionReport()
-    )
+    execution = fill(trade_)._replace(commissionReport=ibi.CommissionReport())
     book.apply_fill(trade_, execution)
     report = ibi.CommissionReport(
         execId="exec-1",
@@ -161,9 +159,10 @@ def test_late_commission_updates_normalized_fill_evidence(book):
 
     assert book.update_commission(trade_, execution, report)
     assert info.fills[0].commission_report is report
-    assert info.encode()["fills"][0]["commission_report"][
-        "CommissionReport"
-    ]["commission"] == 1.25
+    assert (
+        info.encode()["fills"][0]["commission_report"]["CommissionReport"]["commission"]
+        == 1.25
+    )
 
 
 def test_opposing_logical_positions_reconcile_to_broker_net(book):
@@ -225,7 +224,7 @@ def test_stop_fill_persists_blocked_direction(book):
     assert state.blocked_direction == 1
 
 
-def test_close_fill_closes_episode_and_clears_bracket_inputs(book):
+def test_close_fill_closes_episode_without_changing_block(book):
     trade_ = trade(side="SELL", quantity=1)
     book.update_position(
         PositionState(
@@ -235,6 +234,7 @@ def test_close_fill_closes_episode_and_clears_bracket_inputs(book):
             quantity=1,
             target_quantity=0,
             position_id="episode-1",
+            blocked_direction=1,
             bracket_inputs={"atr": 10},
         )
     )
@@ -244,6 +244,7 @@ def test_close_fill_closes_episode_and_clears_bracket_inputs(book):
 
     state = book.position_state("alpha")
     assert state.position_id is None
+    assert state.blocked_direction == 1
     assert state.bracket_inputs == {}
 
 
@@ -268,7 +269,76 @@ def test_protective_fill_closes_episode_and_latest_target(book):
     assert state.quantity == 0
     assert state.target_quantity == 0
     assert state.position_id is None
+    assert state.blocked_direction == 1
     assert state.bracket_inputs == {}
+
+
+@pytest.mark.parametrize("role", ["STOP_LOSS", "TAKE_PROFIT"])
+def test_partial_protective_fill_sets_block_only_when_position_is_flat(book, role):
+    trade_ = trade(side="SELL", quantity=2)
+    book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=trade_.contract,
+            quantity=2,
+            position_id="episode-1",
+        )
+    )
+    book.save_order(order_info(trade_, role=role))
+
+    book.apply_fill(trade_, fill(trade_, exec_id="partial", quantity=1))
+
+    state = book.position_state("alpha")
+    assert state.quantity == 1
+    assert state.blocked_direction is None
+    assert state.position_id == "episode-1"
+
+    book.apply_fill(trade_, fill(trade_, exec_id="complete", quantity=1))
+
+    state = book.position_state("alpha")
+    assert state.quantity == 0
+    assert state.blocked_direction == 1
+    assert state.position_id is None
+
+
+def test_first_open_fill_clears_prior_block(book):
+    trade_ = trade(side="BUY", quantity=2)
+    book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=trade_.contract,
+            blocked_direction=1,
+            position_id="episode-2",
+        )
+    )
+    book.save_order(order_info(trade_, role="OPEN", position_id="episode-2"))
+
+    book.apply_fill(trade_, fill(trade_, quantity=0.5))
+
+    state = book.position_state("alpha")
+    assert state.quantity == 0.5
+    assert state.blocked_direction is None
+
+
+def test_roll_fill_preserves_block(book):
+    trade_ = trade(side="SELL", quantity=1)
+    book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=trade_.contract,
+            quantity=1,
+            blocked_direction=1,
+            position_id="episode-1",
+        )
+    )
+    book.save_order(order_info(trade_, role="ROLL"))
+
+    book.apply_fill(trade_, fill(trade_))
+
+    assert book.position_state("alpha").blocked_direction == 1
 
 
 @pytest.mark.asyncio

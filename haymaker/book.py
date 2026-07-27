@@ -268,9 +268,7 @@ class OrderInfo:
             source_key=data.get("source_key"),
             position_id=data.get("position_id"),
             params=decode_tree(data.get("params", {})),
-            fills=tuple(
-                FillRecord.decode(fill) for fill in data.get("fills", ())
-            ),
+            fills=tuple(FillRecord.decode(fill) for fill in data.get("fills", ())),
             _applied_fill_keys=set(data.get("applied_fill_keys", ())),
         )
 
@@ -301,9 +299,7 @@ class PositionState:
             self.blocked_direction not in (None, -1, 1)
         ):
             raise ValueError("blocked_direction must be None, -1, or 1")
-        object.__setattr__(
-            self, "quantity", _finite_number(self.quantity, "quantity")
-        )
+        object.__setattr__(self, "quantity", _finite_number(self.quantity, "quantity"))
         if self.target_quantity is not None:
             object.__setattr__(
                 self,
@@ -449,9 +445,7 @@ class Book:
     async def read_from_store(self) -> None:
         """Restore complete order evidence and typed state from persistence."""
 
-        order_documents, state_documents = await make_async(
-            self._read_documents
-        )
+        order_documents, state_documents = await make_async(self._read_documents)
         self._orders = {}
         for document in order_documents:
             document = dict(document)
@@ -480,9 +474,7 @@ class Book:
                 ] = target_state
             elif state_type == "portfolio":
                 self._portfolio_states[str(document["portfolio_key"])] = (
-                    MappingProxyType(
-                        decode_tree(document.get("state", {}))
-                    )
+                    MappingProxyType(decode_tree(document.get("state", {})))
                 )
             else:
                 raise ValueError(f"Unknown Book state_type: {state_type!r}")
@@ -539,10 +531,7 @@ class Book:
             for info in self._orders.values()
             if info.active
             and (source_key is None or info.source_key == source_key)
-            and (
-                con_id is None
-                or info.trade.contract.conId == con_id
-            )
+            and (con_id is None or info.trade.contract.conId == con_id)
             and (role is None or info.role == role)
             and (
                 execution_model_name is None
@@ -660,8 +649,7 @@ class Book:
             if info.source_key is not None or info.trade.contract.conId != con_id:
                 continue
             direct += sum(
-                record.execution.shares
-                * (1 if record.execution.side == "BOT" else -1)
+                record.execution.shares * (1 if record.execution.side == "BOT" else -1)
                 for record in info.fills
             )
         return one_to_one + direct
@@ -807,9 +795,13 @@ class Book:
             else:
                 raise ValueError(f"Ambiguous fill side: {fill.execution.side}")
             blocked = state.blocked_direction
-            if info.role == "STOP_LOSS" and old_quantity:
+            if (
+                info.role in {"STOP_LOSS", "TAKE_PROFIT"}
+                and old_quantity
+                and quantity == 0
+            ):
                 blocked = 1 if old_quantity > 0 else -1
-            elif info.role == "CLOSE" and quantity == 0:
+            elif info.role == "OPEN" and quantity != 0:
                 blocked = None
             episode_closed = quantity == 0 and info.role in {
                 "CLOSE",
@@ -820,9 +812,7 @@ class Book:
                 "STOP_LOSS",
                 "TAKE_PROFIT",
             }
-            target_quantity = (
-                0.0 if protective_exit else state.target_quantity
-            )
+            target_quantity = 0.0 if protective_exit else state.target_quantity
             state = replace(
                 state,
                 contract=trade.contract,
@@ -894,9 +884,7 @@ class Book:
             },
         )
 
-    def load_portfolio_state(
-        self, portfolio_key: str
-    ) -> Mapping[str, Any] | None:
+    def load_portfolio_state(self, portfolio_key: str) -> Mapping[str, Any] | None:
         """Load one Portfolio recovery mapping."""
 
         return self._portfolio_states.get(portfolio_key)
@@ -912,9 +900,7 @@ class Book:
             row
             for row in self.blotter.records()
             if row.get("source_key") == source_key
-            and (
-                position_id is None or row.get("position_id") == position_id
-            )
+            and (position_id is None or row.get("position_id") == position_id)
         )
 
     def register_rejected_order(self, execution_model_name: str) -> None:

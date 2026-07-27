@@ -201,7 +201,8 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   validation occurs before wiring, and fan-out shares one object reference.
   Built-in trading components live only under `haymaker.components`.
 - Built-in messages are immutable `Signal -> PositionProposal ->
-  PositionTarget` boundaries. PositionTarget quantity is always an absolute
+  PositionTarget` boundaries. Signal values are finite scalars or
+  `SignalPair(entry, exit)`. PositionTarget quantity is always an absolute
   setpoint. `PositionIntent` is mandatory only on the one-to-one
   PortfolioWrapper/BracketExecutionModel path and is only an initial assertion.
 - `Book` owns typed position/target/order recovery, fill idempotence, the
@@ -212,6 +213,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   one-to-one path uses a signal processor, `PortfolioWrapper`, and
   `PositionAllocator`. Execution models have stable unique configured names;
   persisted affinity fails closed when the named model is absent.
+- One-to-one scalar processors accept only `-1/0/1` and make opposing CLOSE
+  versus REVERSE policy explicit. Paired processors use SignalPair entry while
+  flat and exit while positioned. Protective STOP_LOSS and TAKE_PROFIT fills
+  set a direction block only when they flatten the episode; the first actual
+  fill of a permitted opposite OPEN clears it. CLOSE and ROLL preserve it.
 - Use `tests/runtime_helpers.py` and the `atom_runtime` /
   `atom_runtime_factory` fixtures for tests that need `Atom` runtime services.
   Install custom `ib`, Book, contract registry, controller, restart

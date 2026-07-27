@@ -10,10 +10,10 @@ unexported.
 ## Message boundaries
 
 - `Signal` is a frozen, keyword-only input with a stable `source_key`, Contract,
-  finite value, mandatory `SignalType`, aware timestamps, and copied read-only
-  top-level metadata. `STATE` replaces a source's prior desired state; each
-  `EVENT` is a new event and an EVENT zero is normally ignored by one-to-one
-  processors.
+  finite scalar or `SignalPair(entry, exit)` value, mandatory `SignalType`,
+  aware timestamps, and copied read-only top-level metadata. `STATE` replaces a
+  source's prior desired state; each `EVENT` is a new event and an EVENT zero
+  is normally ignored by one-to-one processors.
 - `PositionProposal` is the frozen one-to-one boundary. It preserves the
   original Signal, adds direction `-1`, `0`, or `1`, and always has
   `PositionIntent.OPEN`, `CLOSE`, or `REVERSE`.
@@ -48,6 +48,14 @@ multiple SignalModels -> Portfolio -> PositionTarget(s)
 target. Direct `Portfolio` implementations own source state, synchronization,
 `as_of`, duplicate/late input, timeout, and recomputation policies. Do not put
 those policies in the abstract base.
+
+`BinarySignalProcessor` accepts only scalar `-1/0/1` values and exposes
+`OpposingSignalPolicy.CLOSE` or `REVERSE`. `BinaryEntryExitSignalProcessor`
+accepts only SignalPair, uses entry while flat and exit while positioned, and
+never reverses directly. Both may opt into blocked-direction checks. A complete
+STOP_LOSS or TAKE_PROFIT fill that flattens the episode sets the block; the
+first actual fill of a permitted opposite OPEN clears it. CLOSE and ROLL do not
+change it.
 
 ## Atom and validation
 
