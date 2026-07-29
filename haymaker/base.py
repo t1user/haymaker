@@ -18,8 +18,8 @@ from .details_processor import Details
 from .enums import ActiveNext
 
 if TYPE_CHECKING:
-    from .contract_selector import AbstractBaseContractSelector
     from .book import Book
+    from .contract_selector import AbstractBaseContractSelector
     from .runtime import RuntimeContext
 
 log = logging.getLogger(__name__)
@@ -71,65 +71,110 @@ class ContractRollData(NamedTuple):
 
 
 class Atom:
-    """
-    Abstract base object from which all other objects inherit. It's a basic building
-    block for creating strategies in Haymaker. Every ``Atom`` represents a processing
-    step typically for one traded instrument, thus allowing for separation of concerns.
-    Connecting ``Atoms`` creates a processing pipeline.
+    """Compose an event-driven processing step around arbitrary Python messages.
 
-    ``Atoms`` in a pipeline communicate with each other in an event-driven manner
-    through three methods: :meth:`onStart`, :meth:`onData`, :meth:`onFeedback`.
-    Those methods are called when appropriate :class:`eventkit.event.Event` objects are
-    emitted (respectively :attr:`startEvent`, :attr:`dataEvent`, :attr:`feedbackEvent`),
-    and emit their own events when they are done processing thus sending a signal to
-    the next ``Atom`` in the pipeline that it can start processing.
+    ``Atom`` is Haymaker's general composition primitive. Subclasses implement
+    one focused operation and are connected to form a graph: startup and data
+    travel downstream, while feedback travels toward the preceding Atom.
+    ``Atom`` does not impose a trading-message schema, create strategy state, or
+    emit output automatically.
 
-    Users are free to put in those methods any processing logic they want, using any
-    libraries and tools required. ``Atoms`` can be connected in any order; unions can be
-    created by connecting more than one ``Atom``; pipelines can be created using
-    auxiliary class :class:`Pipeline`.
+    Override :meth:`onData` to process one input and explicitly emit any output
+    with ``self.dataEvent.emit(...)``. Override :meth:`onStart` for per-workload
+    initialization and normally call ``super().onStart(data, source)`` last to
+    continue startup. Override :meth:`onFeedback` only when the default reverse
+    forwarding is insufficient.
+
+    Connections use event references rather than copying messages. Every branch
+    of a fan-out therefore receives the same object; a branch that mutates its
+    input must copy it first. Use :meth:`connect` for fan-out and :meth:`pipe` or
+    :class:`Pipe` for a linear chain.
+
+    Haymaker installs runtime services before importing the live strategy
+    module, so strategy code can use the runtime-backed properties directly.
+    Runtime-context installation itself is framework plumbing rather than a
+    user extension point.
 
     Attributes:
-        contract (ib_insync.contract.Contract): The contract object associated with
-            this Atom. This can be any :class:`ib_insync.contract.Contract`. On startup
-            this contract will be qualified and available
-            :class:`ib_insync.contract.ContractDetails` will be downloaded from broker
-            and made available through :attr:`details` attribute. If contract
-            is a :class:`ib_insync.contract.ContFuture` or
-            :class:`ib_insync.contract.Future`, it will be replaced with on-the-run
-            :class:`ib_insync.contract.Future`. `ContFuture` will pick contract that
-            IB considers to be be current, `Future` allows for customization by tweaking
-            :class:`FutureSelector`. Whichever method is chose, when contract
-            to be rolled, :meth:`onContractChanged` method will be called.
+        events (Sequence[str]): Names of the standard lifecycle events:
+            ``startEvent``, ``dataEvent``, and ``feedbackEvent``.
+        startEvent (eventkit.Event): Downstream startup event. The base
+            :meth:`onStart` emits the unchanged startup payload and this Atom as
+            its source.
+        dataEvent (eventkit.Event): Downstream data event. Subclasses emit it
+            explicitly after producing output.
+        feedbackEvent (eventkit.Event): Reverse-direction feedback event. The
+            base :meth:`onFeedback` emits the supplied payload unchanged.
+        contract (ib_insync.Contract | None): Optional contract associated with
+            this component. Assignment registers the unqualified blueprint;
+            access asks :attr:`contract_registry` for its current resolution.
+            Before startup this may still be the blueprint; after qualification
+            it is the selected concrete Contract. Components unrelated to a
+            single instrument should leave it unset.
+        which_contract (ActiveNext): Futures role returned by :attr:`contract`.
+            The default is :attr:`~haymaker.enums.ActiveNext.ACTIVE`; use
+            :attr:`~haymaker.enums.ActiveNext.NEXT` only when the component
+            intentionally operates on the early-entry contract.
+        ib (ib_insync.IB): Runtime broker client.
+        book (Book): Runtime accounting and recovery service.
+        contract_registry (ContractRegistry): Runtime contract qualification
+            and selection registry.
+        request_restart (Callable | None): Current supervisor restart callback,
+            or ``None`` before one has been installed.
+        contract_details (Details): Details for the resolved :attr:`contract`.
+            These normally become available during startup. Missing details
+            produce an empty ``Details`` value and an error log.
+        contract_selector (AbstractBaseContractSelector | None): Selector
+            registered for the contract blueprint. Access without a configured
+            contract raises ``KeyError``.
 
-            This attribute doesn't need to be set. If this Atom
-            object is not related to any one particular contract, just don't assign any
-            value to this attribute.
+    Note:
+        The public methods and operations are:
 
-        which_contract (ActiveNext): default: ACTIVE; if NEXT chosen :attr:`contract`
-            will return next contract in chain (relevant only for expiring contracts
-            like futures or options) allowing for early usage of upcoming
-            contracts for new positions a short period before they become active
-            (number of days prior to expiry during which NEXT will be used can be
-            configured in config.)
+        * ``Atom()`` initializes the standard events. Subclass constructors must
+          call ``super().__init__()``.
+        * ``onStart(data, source=None)`` performs startup and forwards its
+          arbitrary mutable payload downstream.
+        * ``onData(data, *args)`` processes one input. The base implementation
+          always raises ``NotImplementedError``.
+        * ``onFeedback(data, *args)`` forwards feedback toward the preceding
+          Atom.
+        * ``onContractChanged(old_contract, new_contract)`` reacts when the
+          resolved contract changes; Controller remains responsible for rolling
+          held positions.
+        * ``validate_source(source)`` rejects a structurally incompatible
+          prospective upstream Atom. The default accepts every Atom.
+        * ``connect(*targets)`` connects this Atom directly to one or more
+          downstream targets after all targets validate the source and returns
+          this Atom.
+        * ``disconnect(*targets)`` removes direct startup, data, and
+          reverse-feedback connections and returns this Atom.
+        * ``clear()`` removes this Atom's current downstream connections.
+        * ``pipe(*targets)`` builds a linear :class:`Pipe` beginning with this
+          Atom.
+        * ``union(*targets)`` connects targets as fan-out and returns this Atom.
+        * ``repr(atom)`` returns a concise representation of its non-default
+          instance state and resolved contract.
 
-        ib (ibi.IB): The instance of the :class:`ib_insync.ib.IB` client used
-           for interacting with the broker. It can be used to communicate with
-           the broker if neccessary.
+        ``source += target`` is shorthand for ``source.connect(target)`` and
+        ``source -= target`` is shorthand for ``source.disconnect(target)``.
 
-        sm (StateMachine): Access to :class:`StateMachine` which is
-            Haymaker's central collection of information about current positions,
-            orders and state of strategies.
+    Example:
+        A custom Atom can process any Python value::
 
-        contracts (ClassVar[list[ibi.Contract]]): A collection of all contracts
-            currently in use.
+            class Scale(Atom):
+                def __init__(self, factor: float) -> None:
+                    self.factor = factor
+                    super().__init__()
 
-        events (ClassVar[Sequence[str]]): Collection of :class:`eventkit.Event` objects
-            used by ``Haymaker``, i.e. :attr:`startEvent`, :attr:`dataEvent`,
-            :attr:`feedbackEvent`, appropriate methods should use these events to
-            communicate with other objects in the chain, e.g. :meth:`onStart` after
-            processing incoming data should pass the result to the next object
-            by calling `self.dataEvent.emit(data)`.
+                def onData(self, value: float, *args: object) -> None:
+                    self.dataEvent.emit(value * self.factor)
+
+            calculation = Scale(2).pipe(Scale(3))
+            results = []
+            calculation.dataEvent += results.append
+            calculation.onData(4)
+            assert results == [24]
     """
 
     runtime: ClassVar[RuntimeContext]
@@ -148,6 +193,12 @@ class Atom:
         """Install process runtime services on all Atoms."""
 
         cls.runtime = runtime
+
+    def __init__(self) -> None:
+        self._createEvents()
+        self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
+        self._contract_memo: ibi.Contract | None = None
+        self._roll_contract_data: ContractRollData | None = None
 
     @property
     def ib(self) -> ibi.IB:
@@ -175,17 +226,6 @@ class Atom:
         if runtime is None:
             return None
         return runtime.request_restart
-
-    def __init__(self) -> None:
-        self._createEvents()
-        self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
-        self._contract_memo: ibi.Contract | None = None
-        self._roll_contract_data: ContractRollData | None = None
-
-    @property
-    def details(self) -> Details:
-        """This is a deprecated property name, which will be removed"""
-        return self.contract_details
 
     @property
     def contract_details(self) -> Details:
@@ -223,9 +263,7 @@ class Atom:
     def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
         self._log.error(f"Event error {event.name()}: {exception}", exc_info=True)
 
-    def onStart(
-        self, data: Any, source: Atom | None = None
-    ) -> Awaitable[None] | None:
+    def onStart(self, data: Any, source: Atom | None = None) -> Awaitable[None] | None:
         """Run synchronous startup work and forward arbitrary mutable data.
 
         Args:
