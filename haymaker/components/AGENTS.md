@@ -76,8 +76,9 @@ Execution models consume absolute targets, retain only the newest target for
 their natural identity, and use Book state plus working orders to derive the
 next broker action. Every model has a stable unique configured `name`; persist
 and recover that name. Router rules are fixed, ordered, and first-match wins.
-Active persisted affinity overrides current rules and missing model names fail
-closed.
+Only working orders retain persisted affinity and missing owners fail closed.
+Without working orders, current rules own held quantity and recovered direct
+targets; startup reassigns an idle target before model recovery.
 
 `SerialTargetExecutionModel` owns one active Contract adjustment at a time and
 supports arbitrary same-side resizing. `BracketExecutionModel` owns one

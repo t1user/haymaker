@@ -212,7 +212,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - Direct Portfolio consumes Signals and emits zero or more targets. The
   one-to-one path uses a signal processor, `PortfolioWrapper`, and
   `PositionAllocator`. Execution models have stable unique configured names;
-  persisted affinity fails closed when the named model is absent.
+  working-order affinity fails closed when the named model is absent. Held
+  quantity or an idle latest target does not pin an old model: current Router
+  rules take ownership, and idle direct targets are reassigned on recovery.
 - One-to-one scalar processors accept only `-1/0/1` and make opposing CLOSE
   versus REVERSE policy explicit. Paired processors use SignalPair entry while
   flat and exit while positioned. Protective STOP_LOSS and TAKE_PROFIT fills
@@ -222,9 +224,10 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   orders are optional and their absence is not a sync failure. Regular closes
   join the active protective orders' OCA group so IB cancels the remaining
   exits only after one exit fills.
-- Explicit account reset must confirm cancellation of all pre-existing orders
-  before submitting liquidation orders. A failed reset leaves Book recovery
-  state intact and prevents startup from enabling trading.
+- Explicit account reset gives pre-existing order cancellations a bounded grace
+  period, then submits liquidation orders even when some cancellations remain
+  unconfirmed because flattening is the priority. An incomplete liquidation
+  leaves Book recovery state intact and prevents startup from enabling trading.
 - Use `tests/runtime_helpers.py` and the `atom_runtime` /
   `atom_runtime_factory` fixtures for tests that need `Atom` runtime services.
   Install custom `ib`, Book, contract registry, controller, restart

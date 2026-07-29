@@ -169,7 +169,7 @@ class SerialTargetExecutionModel(ExecutionModel):
     def accept(self, target: PositionTarget) -> bool:
         """Persist a newer target and submit only when no adjustment is active."""
 
-        current = self.book.target_state(self.name, target.contract)
+        current = self.book.latest_target_for_contract(target.contract)
         if current is not None and target.created_at < current.target_created_at:
             return False
         self.book.update_target(
@@ -216,8 +216,8 @@ class SerialTargetExecutionModel(ExecutionModel):
         )
         if active:
             return
-        state = self.book.target_state(self.name, contract)
-        if state is None:
+        state = self.book.latest_target_for_contract(contract)
+        if state is None or state.execution_model_name != self.name:
             return
         current = self.book.aggregate_quantity(contract)
         delta = state.target_quantity - current

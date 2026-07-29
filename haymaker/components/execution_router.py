@@ -9,6 +9,7 @@ from typing import ClassVar
 import ib_insync as ibi
 
 from ..base import Atom
+from ..book import TargetState
 from .execution_models import ExecutionModel
 from .messages import PositionTarget
 
@@ -43,8 +44,9 @@ class ExecutionRouter(Atom):
         default_model: Optional fallback. Without it unmatched targets fail
             closed.
 
-    Model names must be unique. Active persisted affinity wins over current
-    rules until the source or Contract is flat with no working orders.
+    Model names must be unique. Working-order affinity wins until those orders
+    become terminal; otherwise current rules own both held quantity and target
+    recovery.
     """
 
     input_type: ClassVar[type] = PositionTarget
@@ -97,6 +99,7 @@ class ExecutionRouter(Atom):
         generation = self.runtime.workload_generation
         if generation != self._started_generation:
             self._started_generation = generation
+            self._handoff_recoverable_targets()
             for model in self.models_by_name.values():
                 model.onStart(data, self)
         super().onStart(data, source)
@@ -119,17 +122,40 @@ class ExecutionRouter(Atom):
                     f"Persisted ExecutionModel {affinity!r} is unavailable"
                 )
         else:
-            model = next(
-                (
-                    rule.model
-                    for rule in self.rules
-                    if rule.predicate(target)
-                ),
-                self.default_model,
-            )
-            if model is None:
-                raise LookupError(f"No ExecutionModel matched target {target!r}")
+            model = self._model_for_rules(target)
         model.onData(target)
+
+    def _model_for_rules(self, target: PositionTarget) -> ExecutionModel:
+        model = next(
+            (rule.model for rule in self.rules if rule.predicate(target)),
+            self.default_model,
+        )
+        if model is None:
+            raise LookupError(f"No ExecutionModel matched target {target!r}")
+        return model
+
+    def _handoff_recoverable_targets(self) -> None:
+        """Assign idle direct targets to the models selected by current rules."""
+
+        for state in self.book.latest_targets():
+            if self.book.affinity_for_contract(state.contract) is not None:
+                continue
+            target = PositionTarget(
+                contract=state.contract,
+                target_quantity=state.target_quantity,
+                created_at=state.target_created_at,
+            )
+            model = self._model_for_rules(target)
+            if model.name == state.execution_model_name:
+                continue
+            self.book.update_target(
+                TargetState(
+                    execution_model_name=model.name,
+                    contract=state.contract,
+                    target_quantity=state.target_quantity,
+                    target_created_at=state.target_created_at,
+                )
+            )
 
 
 def contract_is(contract: ibi.Contract) -> TargetPredicate:

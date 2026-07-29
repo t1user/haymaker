@@ -613,14 +613,47 @@ class Book:
         execution_model_name: str,
         contract: ibi.Contract | None = None,
     ) -> TargetState | tuple[TargetState, ...] | None:
-        """Recover one target by Contract or all targets owned by a model."""
+        """Recover globally current targets owned by one execution model."""
 
         if contract is not None:
-            return self.target_state(execution_model_name, contract)
+            state = self.latest_target_for_contract(contract)
+            if state is not None and state.execution_model_name == execution_model_name:
+                return state
+            return None
         return tuple(
             state
-            for state in self._targets.values()
+            for state in self.latest_targets()
             if state.execution_model_name == execution_model_name
+        )
+
+    def latest_targets(self) -> tuple[TargetState, ...]:
+        """Return one globally current direct target per concrete Contract."""
+
+        latest: dict[int, TargetState] = {}
+        for state in self._targets.values():
+            con_id = _contract_key(state.contract)
+            current = latest.get(con_id)
+            if current is None or (
+                state.target_created_at,
+                state.updated_at,
+            ) > (
+                current.target_created_at,
+                current.updated_at,
+            ):
+                latest[con_id] = state
+        return tuple(latest.values())
+
+    def latest_target_for_contract(self, contract: ibi.Contract) -> TargetState | None:
+        """Return the globally current direct target for one Contract."""
+
+        con_id = _contract_key(contract)
+        return next(
+            (
+                state
+                for state in self.latest_targets()
+                if state.contract.conId == con_id
+            ),
+            None,
         )
 
     def effective_quantity(self, source_key: str) -> float:
@@ -926,59 +959,35 @@ class Book:
         }
 
     def routing_affinity_names(self) -> set[str]:
-        """Return model names that still own active recoverable execution."""
+        """Return model names owning working orders that must be recovered."""
 
-        names = {
-            state.execution_model_name
-            for state in self._positions.values()
-            if state.quantity
-            or state.target_quantity
-            or self.active_orders(source_key=state.source_key)
-        }
-        names.update(
-            state.execution_model_name
-            for state in self._targets.values()
-            if state.target_quantity
-            or self.aggregate_quantity(state.contract)
-            or self.active_orders(
-                contract=state.contract,
-                execution_model_name=state.execution_model_name,
-            )
-        )
-        return names
+        return {info.execution_model_name for info in self.active_orders()}
 
     def affinity_for_source(self, source_key: str) -> str | None:
-        """Return active model ownership for one source, if any."""
+        """Return working-order ownership for one source, if any."""
 
-        state = self._positions.get(source_key)
-        if state is not None and (
-            state.quantity
-            or state.target_quantity
-            or self.active_orders(source_key=source_key)
-        ):
-            return state.execution_model_name
-        return None
+        candidates = {
+            info.execution_model_name
+            for info in self.active_orders(source_key=source_key)
+        }
+        return self._one_affinity(candidates, f"source_key={source_key!r}")
 
     def affinity_for_contract(self, contract: ibi.Contract) -> str | None:
-        """Return active model ownership for one direct execution Contract."""
+        """Return working-order ownership for one direct execution Contract."""
 
         con_id = _contract_key(contract)
         candidates = {
-            state.execution_model_name
-            for state in self._targets.values()
-            if state.contract.conId == con_id
-            and (
-                state.target_quantity
-                or self.active_orders(
-                    contract=contract,
-                    execution_model_name=state.execution_model_name,
-                )
-                or self.aggregate_quantity(contract)
-            )
+            info.execution_model_name for info in self.active_orders(contract=contract)
         }
+        return self._one_affinity(candidates, f"conId={con_id}")
+
+    @staticmethod
+    def _one_affinity(candidates: set[str], identity: str) -> str | None:
+        """Require unambiguous ownership among relevant working orders."""
+
         if len(candidates) > 1:
             raise RuntimeError(
-                f"Ambiguous execution-model affinity for conId={con_id}: "
+                f"Ambiguous execution-model affinity for {identity}: "
                 f"{sorted(candidates)}"
             )
         return next(iter(candidates), None)

@@ -247,9 +247,11 @@ the unfilled protective orders when any exit fills.
 .. autoclass:: haymaker.components.BracketExecutionModel
 
 Router rules are fixed and evaluated in declaration order; first match wins.
-Without a default, unmatched targets fail closed. Persisted model affinity
-overrides current rules until the source or Contract is flat with no working
-orders.
+Without a default, unmatched targets fail closed. Working orders retain their
+persisted model affinity until terminal and require that named model during
+recovery. Held quantity and idle targets do not pin an old model: current rules
+take ownership, and startup reassigns each idle direct target before model
+recovery.
 
 .. autoclass:: haymaker.components.ExecutionRule
 
@@ -299,7 +301,10 @@ calculation.
 :class:`~haymaker.controller.Controller` owns broker submission/cancellation,
 immediate OrderInfo registration, status and rejection handling, Fill and
 commission processing, Trade rebinding, blotter attribution, aggregate broker
-reconciliation, target verification, and futures rolling.
+reconciliation, target verification, and futures rolling. Target verification
+waits only for OPEN, CLOSE, and TARGET_ADJUSTMENT work; protective stops and
+take-profits remain active without delaying the check. A superseded target is
+not checked or compared with the broker.
 
 .. autoclass:: haymaker.book.Book
 

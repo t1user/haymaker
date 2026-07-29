@@ -169,8 +169,8 @@ class Controller(Atom):
         if not execution_model_name:
             raise ValueError("execution_model_name is required")
         await asyncio.sleep(self.execution_verification_delay)
-        await self.verify_target_integrity(target, execution_model_name)
-        self.verify_position_with_broker(target.contract)
+        if await self.verify_target_integrity(target, execution_model_name):
+            self.verify_position_with_broker(target.contract)
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
@@ -550,19 +550,26 @@ class Controller(Atom):
 
     async def verify_target_integrity(
         self, target: PositionTarget, execution_model_name: str
-    ) -> None:
-        """Check Book convergence after an accepted absolute target."""
+    ) -> bool:
+        """Check Book convergence when this is still the latest target.
+
+        Returns:
+            ``True`` when the target remained current and was checked, or
+            ``False`` when a newer target superseded it.
+        """
 
         retries = 0
-        while self.book.active_orders(
-            source_key=target.source_key,
-            contract=target.contract,
-            execution_model_name=execution_model_name,
-        ):
+        if not self._target_is_latest(target, execution_model_name):
+            return False
+        while self._active_target_orders(target, execution_model_name):
             if retries >= self.execution_verification_max_retries:
                 break
             retries += 1
             await asyncio.sleep(self.execution_verification_delay)
+            if not self._target_is_latest(target, execution_model_name):
+                return False
+        if not self._target_is_latest(target, execution_model_name):
+            return False
         position = (
             self.book.position_state(target.source_key)
             if target.source_key is not None
@@ -580,6 +587,50 @@ class Controller(Atom):
                 target.target_quantity,
                 actual,
             )
+        return True
+
+    def _active_target_orders(
+        self, target: PositionTarget, execution_model_name: str
+    ) -> tuple[OrderInfo, ...]:
+        """Return only orders whose completion can converge this target."""
+
+        roles = {
+            StandardOrderRole.OPEN,
+            StandardOrderRole.CLOSE,
+            StandardOrderRole.TARGET_ADJUSTMENT,
+        }
+        return tuple(
+            info
+            for info in self.book.active_orders(
+                source_key=target.source_key,
+                contract=target.contract,
+                execution_model_name=execution_model_name,
+            )
+            if info.role in roles
+        )
+
+    def _target_is_latest(
+        self, target: PositionTarget, execution_model_name: str
+    ) -> bool:
+        """Return whether Book still identifies this exact accepted setpoint."""
+
+        if target.source_key is not None:
+            position_state = self.book.position_state(target.source_key)
+            return (
+                position_state is not None
+                and position_state.execution_model_name == execution_model_name
+                and position_state.contract is not None
+                and position_state.contract.conId == target.contract.conId
+                and position_state.target_quantity == target.target_quantity
+                and position_state.target_created_at == target.created_at
+            )
+        target_state = self.book.latest_target_for_contract(target.contract)
+        return (
+            target_state is not None
+            and target_state.execution_model_name == execution_model_name
+            and target_state.target_quantity == target.target_quantity
+            and target_state.target_created_at == target.created_at
+        )
 
     def verify_position_with_broker(self, contract: ibi.Contract) -> None:
         """Compare aggregate logical Book quantity with the broker position."""
@@ -767,6 +818,8 @@ class Controller(Atom):
             log.error("ORDER NOT ACCEPTED: %s, %s", errorString, context)
         elif errorCode in self.ignore_errors:
             return
+        elif errorCode == 202:
+            log.debug("Broker message %s: %s %s", errorCode, errorString, context)
         elif errorCode in (165, 321, 322, 323):
             log.debug("Broker message %s: %s %s", errorCode, errorString, context)
         elif errorCode < 400:

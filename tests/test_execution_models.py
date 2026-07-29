@@ -539,8 +539,10 @@ def test_router_starts_every_model_once_per_generation(execution_runtime):
     assert second.recoveries == 2
 
 
-def test_router_preserves_source_affinity_until_flat(execution_runtime):
-    runtime, _, _ = execution_runtime
+def test_router_preserves_source_affinity_only_while_order_is_working(
+    execution_runtime,
+):
+    runtime, controller, _ = execution_runtime
     owner = RecordingModel(name="owner")
     current_rule = RecordingModel(name="current")
     router = ExecutionRouter(
@@ -561,6 +563,13 @@ def test_router_preserves_source_affinity_until_flat(execution_runtime):
             target_quantity=1,
         )
     )
+    working = controller.trade(
+        contract(),
+        ibi.MarketOrder("SELL", 1),
+        role=StandardOrderRole.CLOSE,
+        execution_model_name="owner",
+        source_key="alpha",
+    )
     incoming = target(0, source_key="alpha")
 
     router.onData(incoming)
@@ -568,20 +577,43 @@ def test_router_preserves_source_affinity_until_flat(execution_runtime):
     assert owner.accepted == [incoming]
     assert current_rule.accepted == []
 
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
-            execution_model_name="owner",
-            contract=contract(),
-        )
-    )
+    working.orderStatus.status = ibi.OrderStatus.Filled
     router.onData(incoming)
 
     assert current_rule.accepted == [incoming]
 
 
-def test_router_fails_closed_for_missing_recovery_model(execution_runtime):
+def test_router_current_rules_own_held_position_without_working_order(
+    execution_runtime,
+):
     runtime, _, _ = execution_runtime
+    old = RecordingModel(name="old")
+    current = RecordingModel(name="current")
+    router = ExecutionRouter(
+        [ExecutionRule(predicate=lambda target: True, model=current)],
+        default_model=old,
+    )
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="old",
+            contract=contract(),
+            quantity=1,
+            target_quantity=1,
+        )
+    )
+    incoming = target(0, source_key="alpha")
+
+    router.onData(incoming)
+
+    assert current.accepted == [incoming]
+    assert old.accepted == []
+
+
+def test_router_fails_closed_for_missing_working_order_model(
+    execution_runtime,
+):
+    runtime, controller, _ = execution_runtime
     runtime.book.update_target(
         TargetState(
             execution_model_name="missing",
@@ -589,6 +621,12 @@ def test_router_fails_closed_for_missing_recovery_model(execution_runtime):
             target_quantity=1,
             target_created_at=datetime.now(timezone.utc),
         )
+    )
+    controller.trade(
+        contract(),
+        ibi.MarketOrder("BUY", 1),
+        role=StandardOrderRole.TARGET_ADJUSTMENT,
+        execution_model_name="missing",
     )
     router = ExecutionRouter(
         [
@@ -602,6 +640,68 @@ def test_router_fails_closed_for_missing_recovery_model(execution_runtime):
 
     with pytest.raises(RuntimeError, match="affinity"):
         router.onStart({})
+
+
+def test_router_hands_idle_recovered_target_to_current_model(execution_runtime):
+    runtime, _, _ = execution_runtime
+    created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    runtime.book.update_target(
+        TargetState(
+            execution_model_name="old",
+            contract=contract(),
+            target_quantity=2,
+            target_created_at=created_at,
+        )
+    )
+    current = RecordingModel(name="current")
+    router = ExecutionRouter(
+        [ExecutionRule(predicate=lambda target: True, model=current)]
+    )
+    runtime.workload_generation = 1
+
+    router.onStart({})
+
+    state = runtime.book.latest_target_for_contract(contract())
+    assert state.execution_model_name == "current"
+    assert state.target_quantity == 2
+    assert state.target_created_at == created_at
+
+
+def test_serial_recovery_handoff_converges_from_existing_quantity(
+    execution_runtime,
+):
+    runtime, controller, trader = execution_runtime
+    filled = controller.trade(
+        contract(),
+        ibi.MarketOrder("BUY", 1),
+        role=StandardOrderRole.TARGET_ADJUSTMENT,
+        execution_model_name="old",
+    )
+    apply_fill(controller, filled, 1)
+    runtime.book.update_target(
+        TargetState(
+            execution_model_name="old",
+            contract=contract(),
+            target_quantity=2,
+            target_created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+    current = SerialTargetExecutionModel(name="current")
+    router = ExecutionRouter(
+        [ExecutionRule(predicate=lambda target: True, model=current)]
+    )
+    runtime.workload_generation = 1
+
+    router.onStart({})
+
+    adjustment = trader.trades[-1]
+    assert adjustment is not filled
+    assert adjustment.order.action == "BUY"
+    assert adjustment.order.totalQuantity == 1
+    assert (
+        runtime.book.latest_target_for_contract(contract()).execution_model_name
+        == "current"
+    )
 
 
 def test_stale_serial_target_is_not_emitted_as_accepted(execution_runtime):

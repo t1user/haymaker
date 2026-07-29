@@ -241,8 +241,10 @@ from runtime configuration.
 8. In the one-to-one flow, a binary processor emits PositionProposal and
    PortfolioWrapper allocates one absolute PositionTarget. In direct mode,
    Portfolio owns input state and may emit targets for several Contracts.
-9. ExecutionRouter optionally selects one stable named model. Active persisted
-   source/Contract affinity overrides current rules until flat.
+9. ExecutionRouter optionally selects one stable named model. Working-order
+   source/Contract affinity overrides current rules until those orders become
+   terminal; otherwise current rules own held quantity and idle recovered
+   targets.
 10. Execution models persist the newest target, derive required work from Book
     quantity and working orders, and call `Controller.trade()` with explicit
     role/model/source/episode attribution.
@@ -428,10 +430,10 @@ dataloader contracts.csv -f settings.yaml
   unavailable, the public sync wrapper cancels the pass without treating it as
   unsafe state. Recovered execution models must rebind current Trade callbacks
   before resuming outstanding targets.
-- Explicit account reset waits for every pre-existing order cancellation to
-  become terminal before submitting liquidation orders; overlapping live exits
-  can reverse a position. Failed cancellation or liquidation leaves Book state
-  intact and prevents startup from enabling trading.
+- Explicit account reset gives every pre-existing order cancellation a bounded
+  grace period, then submits liquidation orders even if some cancellations
+  remain unconfirmed. Incomplete liquidation leaves Book state intact and
+  prevents startup from enabling trading.
 - Futures rolling changes active contracts, next-contract selection, and Book
   PositionState; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.

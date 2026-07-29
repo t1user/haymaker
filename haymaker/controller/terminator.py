@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 
 
 class Terminator:
-    """Cancel working orders and close broker positions during explicit reset."""
+    """Cancel working orders briefly, then flatten during explicit reset."""
 
     cancellation_timeout = 10.0
     cancellation_poll_interval = 0.1
@@ -33,8 +33,7 @@ class Terminator:
         open_trades = tuple(self.controller.ib.openTrades())
         for trade in open_trades:
             self.controller.cancel(trade)
-        if not await self._wait_for_cancellations(open_trades):
-            return False
+        await self._wait_for_cancellations(open_trades)
 
         logical_contracts: set[int] = set()
         for source_key, state in self.controller.book.position_states().items():
@@ -77,7 +76,7 @@ class Terminator:
         return await self._wait_for_logical_closes()
 
     async def _wait_for_cancellations(self, trades: tuple[ibi.Trade, ...]) -> bool:
-        """Wait until every pre-reset order is terminal before closing positions."""
+        """Give pre-reset orders bounded time to become terminal."""
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.cancellation_timeout
@@ -88,7 +87,8 @@ class Terminator:
                     trade.order.orderId for trade in trades if not trade.isDone()
                 ]
                 log.critical(
-                    "Reset stopped because order cancellations did not complete: %s",
+                    "Order cancellations did not complete before reset "
+                    "liquidation continued: %s",
                     pending,
                 )
                 return False

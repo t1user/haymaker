@@ -173,7 +173,10 @@ Execution models consume absolute PositionTargets and have stable configured
 names. They validate a target before persistence or submission, retain only the
 newest target for their natural identity, derive work from Book state and
 working orders, and report accepted targets to Controller. Recovery rebinds
-completion callbacks to the current live Trade objects.
+completion callbacks to the current live Trade objects. Delayed verification
+waits only for target-converging OPEN, CLOSE, and TARGET_ADJUSTMENT orders and
+silently abandons a check when a newer target supersedes it; protective orders
+do not delay verification.
 
 `SerialTargetExecutionModel` groups by concrete Contract, supports arbitrary
 quantities and same-side resizing, ignores optional intent, and permits one
@@ -204,10 +207,12 @@ optional default model. First match wins; no match without a default fails
 closed. Model instances are constructed before the Router and names must be
 unique. Every configured model starts once per workload generation.
 
-Persisted source or Contract affinity wins while quantity, a non-flat latest
-target, or working orders remain. Once flat with no working orders, rules are
-evaluated again. Recovery fails closed if active affinity references an absent
-model. There is no route key in messages or persistence.
+Persisted source or Contract affinity wins only while working orders remain.
+Once they are terminal, rules are evaluated again even if quantity is held.
+During recovery, idle direct targets are reassigned to the model selected by
+current rules before models resume convergence. Recovery fails closed if a
+working order references an absent model. There is no route key in messages or
+persistence.
 
 ## Futures and calculation audit
 

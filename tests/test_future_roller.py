@@ -114,6 +114,24 @@ def test_roll_order_preserves_source_episode_model_and_role(book):
     assert attribution["position_id"] == "alpha-episode"
 
 
+def test_undeclared_persisted_source_rolls_with_warning(book, caplog):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    book.update_position(position("automatic", old))
+    book.update_position(position("manual", old))
+    book.update_position(position("persisted", old))
+    controller = roller_controller(book, active, next_)
+
+    roller = FutureRoller(
+        controller,
+        {"automatic": True, "manual": False},
+    )
+
+    assert roller.sources == {old: ["automatic", "persisted"]}
+    assert "policy undeclared for ['persisted']; enabled" in caplog.text
+
+
 def test_source_adjustment_preserves_logical_episode_state(book):
     old = future(1, "NGQ26")
     active = future(2, "NGU26")
@@ -189,3 +207,4 @@ def test_replacement_protective_order_keeps_attribution_and_role(book):
     assert attribution["execution_model_name"] == "alpha_brackets"
     assert attribution["source_key"] == "alpha"
     assert attribution["position_id"] == "alpha-episode"
+    assert attribution["params"] == {"atr": 0.25}
