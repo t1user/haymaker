@@ -1,5 +1,5 @@
 import importlib
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
 import ib_insync as ibi
@@ -9,6 +9,7 @@ from sample_barDataList import sample_barDataList
 
 from haymaker.components.streamers import (
     HistoricalDataStreamer,
+    RealTimeBarsStreamer,
     bar_filter,
 )
 
@@ -31,6 +32,20 @@ def test_bar_filter():
         barCount=4,
     )
     assert bar_filter(bar)
+
+
+def make_bar(bar_date: date | datetime, price: float = 20) -> ibi.BarData:
+    """Return a valid historical bar for streamer tests."""
+    return ibi.BarData(
+        date=bar_date,
+        open=price,
+        high=price + 1,
+        low=price - 1,
+        close=price,
+        volume=100,
+        average=price,
+        barCount=4,
+    )
 
 
 def test_Streamer_is_abstract(Streamer):
@@ -154,7 +169,8 @@ def test_HistoricalDataStreamer_durationStr_given_as_int():
         ibi.Future(symbol="NQ", exchange="CME"), 10000, "1 min", "TRADES"
     )
     with patch(
-        "haymaker.components.streamers.typical_session_length", return_value=timedelta(hours=23)
+        "haymaker.components.streamers.typical_session_length",
+        return_value=timedelta(hours=23),
     ):
         assert streamer._durationStr == "8 D"
 
@@ -164,7 +180,8 @@ def test_HistoricalDataStreamer_durationStr_given_as_str():
         ibi.Future(symbol="NQ", exchange="CME"), "5 D", "1 min", "TRADES"
     )
     with patch(
-        "haymaker.components.streamers.typical_session_length", return_value=timedelta(hours=23)
+        "haymaker.components.streamers.typical_session_length",
+        return_value=timedelta(hours=23),
     ):
         assert streamer._durationStr == "5 D"
 
@@ -178,7 +195,8 @@ def test_HistoricalDataStreamer_durationStr_with_last_bar_date():
         _last_bar_date=datetime(2026, 1, 26, 10, 0),
     )
     with patch(
-        "haymaker.components.streamers.typical_session_length", return_value=timedelta(hours=23)
+        "haymaker.components.streamers.typical_session_length",
+        return_value=timedelta(hours=23),
     ):
         with patch("haymaker.durationStr_converters.datetime") as mock_datetime:
             mock_datetime.now.return_value = datetime(2026, 1, 26, 10, 10)
@@ -219,6 +237,42 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_uses_injected_store():
     assert streamer._last_bar_date == df.index[-1]
 
     store.read.assert_awaited_with(contract)
+
+
+@pytest.mark.asyncio
+async def test_HistoricalDataStreamer_normalizes_persisted_daily_bar_date():
+    """Daily metadata should be comparable with dates received from IB."""
+    contract = ibi.Future(symbol="NQ", exchange="CME")
+    store = Mock()
+    store.read_metadata = AsyncMock(return_value={"up_to": "2026-01-26"})
+
+    streamer = HistoricalDataStreamer(
+        contract, 10000, "1 day", "TRADES", datastore=store
+    )
+
+    assert await streamer.last_db_point() == datetime(2026, 1, 26, tzinfo=timezone.utc)
+    assert streamer._normalize_bar_date(date(2026, 1, 27)) > (
+        await streamer.last_db_point()
+    )
+
+
+def test_HistoricalDataStreamer_removes_invalid_bars_from_emitted_history():
+    """A rejected historical bar should not reappear in a later snapshot."""
+    streamer = HistoricalDataStreamer(
+        ibi.Future(symbol="NQ", exchange="CME"),
+        10000,
+        "1 min",
+        "TRADES",
+    )
+    first = make_bar(datetime(2026, 1, 26, 10, 0))
+    invalid = make_bar(datetime(2026, 1, 26, 10, 1), price=0)
+    latest = make_bar(datetime(2026, 1, 26, 10, 2))
+    emitted: list[list[ibi.BarData]] = []
+    streamer.dataEvent += emitted.append
+
+    streamer.on_new_bar([first, invalid, latest])
+
+    assert emitted == [[first, latest]]
 
 
 @pytest.mark.asyncio
@@ -272,3 +326,26 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_datastore_given()
 
     assert fake_store.saved_contract == contract
     assert fake_store.call_counter == 2
+
+
+def test_RealTimeBarsStreamer_forwards_request_options():
+    """Real-time bar request options should reach IB unchanged."""
+    contract = ibi.Future(symbol="NQ", exchange="CME")
+    options = [ibi.TagValue("test", "value")]
+    streamer = RealTimeBarsStreamer(
+        contract,
+        whatToShow="TRADES",
+        useRTH=False,
+        realTimeBarsOptions=options,
+    )
+    streamer.ib.reqRealTimeBars = Mock(return_value=ibi.RealTimeBarList())
+
+    streamer.streaming_func()
+
+    streamer.ib.reqRealTimeBars.assert_called_once_with(
+        contract,
+        5,
+        "TRADES",
+        False,
+        realTimeBarsOptions=options,
+    )

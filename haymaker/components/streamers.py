@@ -5,7 +5,7 @@ import itertools
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from functools import cached_property
 from typing import Awaitable, ClassVar
 
@@ -189,24 +189,38 @@ class HistoricalDataStreamer(Streamer):
         )
 
     async def last_db_point(self) -> datetime | None:
-        """
-        Return datetime for the last bar availble in the datastore for
-        given contract.
+        """Return the normalized date of the last persisted bar.
 
-        start_date: how far back should available data be searched
+        Returns:
+            Last persisted bar date as a datetime, or ``None`` when no
+            persisted data is available.
         """
         if (store := self.datastore) is None:
             return None
 
         if up_to := (await store.read_metadata(self.contract)).get("up_to"):
             log.debug(f"{self!s} retrieved last date from datastore: {up_to}")
-            return format_timestamp(up_to)
+            return self._normalize_bar_date(up_to)
 
         df = await store.read(self.contract)
         try:
-            return df.index[-1]  # type: ignore
+            return self._normalize_bar_date(df.index[-1])  # type: ignore
         except (AttributeError, IndexError):
             return None
+
+    @staticmethod
+    def _normalize_bar_date(value: date | datetime | str) -> datetime:
+        """Normalize an IB or persisted bar date to an aware datetime.
+
+        Args:
+            value: Intraday datetime, calendar date, or persisted date string.
+
+        Returns:
+            UTC-aware datetime suitable for duration calculation and comparison.
+        """
+        if isinstance(value, date) and not isinstance(value, datetime):
+            value = value.isoformat()
+        return format_timestamp(value)
 
     def _ensure_durationStr(self) -> str:
         """
@@ -254,19 +268,22 @@ class HistoricalDataStreamer(Streamer):
 
         try:
             async for bars_, hasNewBar in bars.updateEvent:
-                if hasNewBar and (
-                    (not self._last_bar_date) or (bars_[-2].date > self._last_bar_date)
+                if not hasNewBar:
+                    continue
+                completed_bar_date = self._normalize_bar_date(bars_[-2].date)
+                if (not self._last_bar_date) or (
+                    completed_bar_date > self._last_bar_date
                 ):
-                    self._last_bar_date = bars_[-2].date
+                    self._last_bar_date = completed_bar_date
                     self.on_new_bar(bars_[:-1])
         except ValueError as e:
             log.debug(f"Empty emit for {self!s}: {e}")
 
-    def on_new_bar(self, bars: ibi.BarDataList) -> None:
-        if bar_filter(bars[-1]):
+    def on_new_bar(self, bars: list[ibi.BarData]) -> None:
+        """Emit a completed historical snapshot without invalid bars."""
+        if not bars or bar_filter(bars[-1]):
             return
-        else:
-            self.dataEvent.emit(bars)
+        self.dataEvent.emit([bar for bar in bars if not bar_filter(bar)])
 
     def onContractChanged(
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
@@ -324,12 +341,13 @@ class RealTimeBarsStreamer(Streamer):
     def __post_init__(self):
         Atom.__init__(self)
 
-    def streaming_func(self):
+    def streaming_func(self) -> ibi.RealTimeBarList:
         return self.ib.reqRealTimeBars(
             self.contract,
             5,
             self.whatToShow,
             self.useRTH,
+            realTimeBarsOptions=self.realTimeBarsOptions,
         )
 
     async def run(self):
