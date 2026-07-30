@@ -255,6 +255,10 @@ def test_contract_descriptor_registers_blueprint(atom_runtime):
     assert atom.contract == future
 
 
+def test_contract_descriptor_class_access_returns_descriptor():
+    assert Atom.contract is Atom.__dict__["contract"]
+
+
 def test_contract_descriptor_rejects_wrong_type(atom_runtime):
     with pytest.raises(TypeError):
         Atom().contract = "ES"

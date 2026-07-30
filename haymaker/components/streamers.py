@@ -157,7 +157,7 @@ class HistoricalDataStreamer(Streamer):
         every five seconds. Use a tick streamer when that latency is unsuitable.
     """
 
-    contract: ibi.Contract
+    contract: ibi.Contract = field()
     durationStr: str | int  # can be given as number of required datapoints
     barSizeSetting: str
     whatToShow: str
@@ -288,7 +288,7 @@ class MktDataStreamer(Streamer):
         Updated IB ``Ticker`` objects from ``reqMktData``.
     """
 
-    contract: ibi.Contract
+    contract: ibi.Contract = field()
     tickList: str
     timeout: bool | float = True
 
@@ -315,7 +315,7 @@ class RealTimeBarsStreamer(Streamer):
         validation. IB supports only a five-second interval for this request.
     """
 
-    contract: ibi.Contract
+    contract: ibi.Contract = field()
     whatToShow: str
     useRTH: bool
     realTimeBarsOptions: list[ibi.TagValue] = field(default_factory=list)
@@ -370,7 +370,7 @@ class TickByTickStreamer(Streamer):
         ``reqTickByTickData``.
     """
 
-    contract: ibi.Contract
+    contract: ibi.Contract = field()
     tickType: str
     numberOfTicks: int = 0
     ignoreSize: bool = False

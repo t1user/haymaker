@@ -9,6 +9,7 @@ from typing import (
     NamedTuple,
     Self,
     Sequence,
+    overload,
 )
 
 import ib_insync as ibi
@@ -48,7 +49,19 @@ class ContractManagingDescriptor:
         obj.__dict__[self.name] = value
         obj.contract_registry.register_blueprint(value)
 
-    def __get__(self, obj: Atom, type=None) -> ibi.Contract | None:
+    @overload
+    def __get__(self, obj: None, owner: type[Atom] | None = None) -> Self: ...
+
+    @overload
+    def __get__(
+        self, obj: Atom, owner: type[Atom] | None = None
+    ) -> ibi.Contract | None: ...
+
+    def __get__(
+        self, obj: Atom | None, owner: type[Atom] | None = None
+    ) -> Self | ibi.Contract | None:
+        if obj is None:
+            return self
         contract_blueprint = obj.__dict__.get(self.name)
         if contract_blueprint is None:
             return None
