@@ -166,7 +166,13 @@ closely related runtime objects.
    default OCA type.
 
 ``timeout``
-   Default streamer timeout in seconds and the ``restart`` or ``log`` action.
+   Default :class:`~haymaker.components.MarketDataTimeout` interval in seconds
+   and its ``restart`` or ``log`` action. Streamers and
+   ``MarketDataTimeout.from_atom()`` use this runtime policy unless given an
+   explicit interval. Haymaker validates the section as
+   :class:`~haymaker.config.TimeoutPolicy`. General
+   :class:`~haymaker.components.EventTimeout` instances always receive their
+   interval and callback directly and do not consult this section.
 
 ``futures``
    ``futures_roll_bdays`` controls when the selector advances ``ACTIVE`` and
@@ -175,6 +181,11 @@ closely related runtime objects.
    atoms may route new entries away from the expiring contract while market
    data and existing positions remain on ``ACTIVE``. Selector dates are
    evaluated as timezone-naive UTC and refreshed on supervised workload start.
+
+Timeout policy API
+------------------
+
+.. autoclass:: haymaker.config.TimeoutPolicy
 
 Dataloader Configuration
 ========================

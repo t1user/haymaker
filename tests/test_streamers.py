@@ -92,7 +92,9 @@ class FakeStore:
 
 
 def test_timer_true():
-    with patch("haymaker.components.streamers.Timeout.from_atom") as MockTimeout:
+    with patch(
+        "haymaker.components.streamers.MarketDataTimeout.from_atom"
+    ) as MockTimeout:
         streamer = HistoricalDataStreamer(
             ibi.Future(symbol="NQ", exchange="CME"),
             10000,
@@ -107,7 +109,9 @@ def test_timer_true():
 
 
 def test_timer_float():
-    with patch("haymaker.components.streamers.Timeout.from_atom") as MockTimeout:
+    with patch(
+        "haymaker.components.streamers.MarketDataTimeout.from_atom"
+    ) as MockTimeout:
         streamer = HistoricalDataStreamer(
             ibi.Future(symbol="NQ", exchange="CME"),
             10000,

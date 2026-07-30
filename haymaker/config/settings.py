@@ -1,10 +1,10 @@
-"""Configuration aggregates and storage settings."""
+"""Configuration aggregates and typed settings."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, Self
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,46 @@ class StorageSettings:
 
     base_directory: str = "ib_data"
     mongodb: MongoSettings = field(default_factory=MongoSettings)
+
+
+@dataclass(frozen=True)
+class TimeoutPolicy:
+    """Runtime defaults for market-data inactivity monitoring.
+
+    Live users normally configure these values through the YAML ``timeout``
+    section rather than constructing this class. ``LiveRuntime`` installs the
+    resulting policy in ``RuntimeContext`` for
+    :meth:`haymaker.components.MarketDataTimeout.from_atom`. General
+    :class:`haymaker.components.EventTimeout` instances are user-configured and
+    do not consult this policy.
+    """
+
+    seconds: float = 0
+    action: Literal["restart", "log"] = "restart"
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> Self:
+        """Construct and validate a timeout policy from plain configuration.
+
+        Args:
+            values: Merged ``timeout`` configuration section.
+
+        Returns:
+            Timeout policy ready to install in a runtime context.
+        """
+
+        policy = cls(**dict(values))
+        if policy.seconds < 0:
+            raise ValueError("timeout.seconds cannot be negative")
+        if policy.action not in ("restart", "log"):
+            raise ValueError("timeout.action must be restart or log")
+        return policy
+
+    @property
+    def log_only(self) -> bool:
+        """Return whether a timeout should only be logged."""
+
+        return self.action == "log"
 
 
 @dataclass(frozen=True)

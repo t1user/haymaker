@@ -179,8 +179,11 @@ broker-message policy.
 - A `10182` soon after a rebuild indicates the farm disturbance was still in
   progress or a new subscription failed. Expect another delayed rebuild; use
   several nightly samples before changing the constant.
-- Streamer timeouts remain an independent fallback and call
-  `request_restart()`.
+- Streamer `MarketDataTimeout` instances remain an independent fallback and
+  call `request_restart()` once per stale episode. They stay disarmed after
+  that request, including when it is rejected because cleanup is already in
+  progress. `LiveRuntime.stop()` cancels every workload-owned market timeout;
+  general user-owned `EventTimeout` instances are outside supervisor cleanup.
 - `OPEN NOT LIQUID` does not mean no trades should occur. European hours for US
   futures can be marked non-liquid while stream freshness still matters.
 - Fully `CLOSED` sessions may suppress timeout action where the streamer

@@ -156,9 +156,15 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   composition may use the context's narrow `FrameStoreProvider` to build fully
   configured persistence dependencies; the runtime does not inspect imported
   module data.
-- Create restart-enabled `Timeout.from_atom()` instances from `onStart()` or
-  later, after the supervisor restart callback has been bound. Zero-time and
-  debug timeouts remain safe during pipeline construction.
+- `EventTimeout` is a general user-owned event inactivity monitor; supervised
+  workload restarts never cancel it. Positive intervals must be constructed
+  on the running event loop, and owners must call `cancel()` when their own
+  lifetime ends. `MarketDataTimeout.from_atom()` adds Contract-session and
+  supervisor behavior and must be created from `onStart()` or later, after
+  details and the restart callback are available. `LiveRuntime` cancels all
+  market-data timeouts when each supervised workload stops. Runtime defaults
+  live in `haymaker.config.TimeoutPolicy`, not in the public components
+  package.
 - `HistoricalDataStreamer` initial `reqHistoricalDataAsync()` requests
   intentionally use `timeout=0`. Legitimate large backfills may take many
   minutes, so elapsed time alone must not cancel the request or trigger a

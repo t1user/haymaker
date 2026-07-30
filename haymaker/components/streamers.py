@@ -21,8 +21,8 @@ from ..durationStr_converters import (
     datapoints_to_durationStr,
     date_to_delta_wrapper,
 )
-from ..timeout import Timeout
 from ..validators import wts_validator
+from .timeouts import MarketDataTimeout
 
 log = logging.getLogger(__name__)
 
@@ -96,14 +96,16 @@ class Streamer(Atom, ABC):
             await self.ib.disconnectedEvent
 
     def _set_timeout(self, event: ev.Event, name: str) -> None:
-        """
-        Automatically monitor event for stale data.  Can be switched
-        off by overriding class variable `set_timeout`
+        """Install stale-market-data monitoring for one subscription event.
+
+        Args:
+            event: Broker update event to monitor.
+            name: Diagnostic label appended to the streamer name.
         """
         if self.timeout and isinstance(self.timeout, bool):
-            Timeout.from_atom(self, event, name)
+            MarketDataTimeout.from_atom(self, event, name)
         elif self.timeout:
-            Timeout.from_atom(self, event, name, self.timeout)
+            MarketDataTimeout.from_atom(self, event, name, self.timeout)
 
     @cached_property
     def _id(self) -> int:

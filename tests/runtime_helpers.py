@@ -73,11 +73,11 @@ import ib_insync as ibi
 
 from haymaker.base import Atom
 from haymaker.book import Book
+from haymaker.config import TimeoutPolicy
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
 from haymaker.datastore import FrameStoreProvider
 from haymaker.order_defaults import OrderDefaults
-from haymaker.timeout import TimeoutPolicy
 from haymaker.trader import Trader
 
 

@@ -18,7 +18,7 @@ from .book import (
     DEFAULT_STATE_COLLECTION_NAME,
     Book,
 )
-from .config.settings import LiveConfig
+from .config.settings import LiveConfig, TimeoutPolicy
 from .contract_registry import ContractRegistry
 from .controller import Controller
 from .databases import MongoService, create_frame_store_provider
@@ -27,7 +27,7 @@ from .handlers import IBHandlers
 from .order_defaults import OrderDefaults
 from .saver import MongoSaver
 from .components.streamers import Streamer
-from .timeout import Timeout, TimeoutPolicy
+from .components.timeouts import MarketDataTimeout
 from .trader import Trader
 
 log = logging.getLogger(__name__)
@@ -120,7 +120,6 @@ class StartupJobs:
                 )
             )
         log.info(f"Orders on restart: {dict(order_dict)}")
-        Timeout.reset()
         log.debug("Run streamers --->")
         await asyncio.gather(
             *[
@@ -177,9 +176,7 @@ class RuntimeContext:
         default=None, repr=False
     )
     future_roll_policies: dict[str, bool] = field(default_factory=dict, repr=False)
-    run_started_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    run_started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     workload_generation: int = 0
 
     def __str__(self) -> str:
@@ -253,9 +250,7 @@ class LiveRuntime:
         if self.config.logging.get("log_broker", False):
             self._broker_logger = IBHandlers(self.ib)
 
-    def _create_book(
-        self, settings: Mapping[str, Any], *, blotter
-    ) -> Book:
+    def _create_book(self, settings: Mapping[str, Any], *, blotter) -> Book:
         """Construct Book persistence from configuration and runtime storage.
 
         Args:
@@ -315,16 +310,20 @@ class LiveRuntime:
         """Start controller and strategy jobs after connectivity is verified."""
 
         self.context.workload_generation += 1
-        log.debug("Will run controller...")
-        self.context.controller.set_future_roll_policies(
-            self.context.future_roll_policies
-        )
-        await self.context.controller.run()
-        await self.startup_jobs.run()
+        try:
+            log.debug("Will run controller...")
+            self.context.controller.set_future_roll_policies(
+                self.context.future_roll_policies
+            )
+            await self.context.controller.run()
+            await self.startup_jobs.run()
+        finally:
+            MarketDataTimeout._cancel_all()
 
     async def stop(self, reason: str) -> None:
         """Put the controller on hold while supervised work stops."""
 
+        MarketDataTimeout._cancel_all()
         self.context.controller.set_hold()
         log.debug("Stopping live runtime: %s", reason)
 

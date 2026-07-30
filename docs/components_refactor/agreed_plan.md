@@ -22,11 +22,12 @@ validation.
 The user-facing trading toolbox is exported explicitly from
 `haymaker.components`. It contains messages, streamers, aggregators,
 SignalModels, one-to-one processors, Portfolio boundaries, routing, execution
-models, and bracket legs. Runtime, Book, Controller, persistence, Trader, and
-contract selection stay outside. There are no forwarding modules or aliases
-for former top-level component paths. Each public component module owns its
-`__all__`; the package initializer declares which modules participate and
-aggregates their non-overlapping exports.
+models, bracket legs, and event timeout helpers. Runtime, Book, Controller,
+persistence, Trader, contract selection, and
+`haymaker.config.TimeoutPolicy` stay outside. There are no forwarding modules
+or aliases for former top-level component paths. Each public component module
+owns its `__all__`; the package initializer declares which modules participate
+and aggregates their non-overlapping exports.
 
 ## Runtime metadata
 
@@ -35,6 +36,23 @@ typed accounting service. `run_started_at` is fixed for the process/component
 graph. `workload_generation` increments immediately before each supervised
 workload start and lets stateful models recover once per generation. Neither
 value modifies generic startup data.
+
+## Timeout ownership
+
+`EventTimeout` monitors any `eventkit.Event` and invokes a synchronous or
+asynchronous user callback once per inactivity episode. Emissions restart the
+deadline; after firing, the monitor waits for a fresh emission before rearming.
+The user owns cancellation, and supervised restarts never reach general event
+timeouts.
+
+`MarketDataTimeout` extends this mechanism with Contract trading sessions and
+the runtime's `TimeoutPolicy`. Streamers create it through `from_atom()` after
+contract qualification and supervisor binding. Closed sessions pause
+monitoring until the next open, when a complete interval begins. An open-market
+deadline either logs once or requests one supervised workload restart; a
+rejected request remains disarmed because it indicates that another lifecycle
+transition is already active. Market-data timeouts are workload-owned and are
+all cancelled by `LiveRuntime` when the workload stops or exits.
 
 ## Trading messages
 

@@ -1,281 +1,395 @@
+"""Tests for generic and market-data event inactivity monitoring."""
+
+from __future__ import annotations
+
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Type
+import importlib.util
+import logging
+from datetime import datetime, timedelta, timezone
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.base import Atom as _Atom
+import haymaker.components as components_package
+from haymaker.base import Atom
+from haymaker.components import EventTimeout, MarketDataTimeout
+from haymaker.config import TimeoutPolicy
 from haymaker.details_processor import Details
-from haymaker.timeout import Timeout as _Timeout
 
 
-@pytest.fixture
-def Timeout():
-    yield _Timeout
-    _Timeout.instances = []
+def test_timeout_policy_belongs_to_config_without_compatibility_module() -> None:
+    """TimeoutPolicy is configuration, not a public trading component."""
+
+    assert TimeoutPolicy.__module__ == "haymaker.config.settings"
+    assert "TimeoutPolicy" not in components_package.__all__
+    assert importlib.util.find_spec("haymaker.timeout") is None
 
 
-def test_all_timouts_stored(Timeout):
-    t1 = Timeout(ev.Event(), 0.1, "mytimeout1")
-    t2 = Timeout(ev.Event(), 0.2, "mytimout2")
-    assert Timeout.instances == [t1, t2]
+@pytest.fixture(autouse=True)
+def cancel_market_data_timeouts():
+    """Keep workload-scoped timeout ownership isolated between tests."""
+
+    yield
+    MarketDataTimeout._cancel_all()
 
 
-def test_all_timouts_cleared_on_reset(Timeout):
-    Timeout(ev.Event(), 0.1, "mytimeout1")
-    Timeout(ev.Event(), 0.2, "mytimout2")
-    assert len(Timeout.instances) == 2
-    Timeout.reset()
-    assert Timeout.instances == []
+def test_event_timeout_validates_inputs() -> None:
+    """Invalid generic timeout inputs should fail with actionable errors."""
+
+    callback = lambda: None
+
+    with pytest.raises(TypeError, match="eventkit.Event"):
+        EventTimeout(object(), 0, callback=callback)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="real number"):
+        EventTimeout(ev.Event(), True, callback=callback)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        EventTimeout(ev.Event(), -1, callback=callback)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        EventTimeout(ev.Event(), float("nan"), callback=callback)
+    with pytest.raises(TypeError, match="callback"):
+        EventTimeout(ev.Event(), 0, callback=None)  # type: ignore[arg-type]
 
 
-def test_timeout_created_from_atom(Atom, Timeout):
+def test_positive_event_timeout_requires_running_loop() -> None:
+    """A scheduled generic timeout must bind to the loop that will run it."""
 
-    class FakeDetails(Details):
-        def __post_init__(self):
-            pass
-
-        def __str__(self):
-            return ""
-
-    class MyAtom(Atom):
-        def __str__(self):
-            return "MyAtom"
-
-        @property
-        def contract_details(self):
-            # overriding property so that it becomes irrelevant
-            return FakeDetails(ibi.ContractDetails(contract=ibi.Future("NQ", "CME")))
-
-    a = MyAtom()
-
-    t = Timeout.from_atom(a, ev.Event(), "my_key")
-    assert t
-    assert "my_key" in str(t)
-    assert "MyAtom" in str(t)
+    with pytest.raises(RuntimeError, match="event loop"):
+        EventTimeout(ev.Event(), 1, callback=lambda: None)
 
 
-def test_restart_timeout_from_atom_requires_bound_supervisor(
-    Atom, Timeout, atom_runtime
-) -> None:
-    """Restart-enabled Atom timeouts must be created during startup or later."""
+def test_zero_event_timeout_can_be_created_without_running_loop() -> None:
+    """A disabled timeout may be composed before application startup."""
 
-    class FakeDetails(Details):
-        def __post_init__(self):
-            pass
+    timeout = EventTimeout(ev.Event(), 0, callback=lambda: None)
 
-    class MyAtom(Atom):
-        @property
-        def contract_details(self):
-            return FakeDetails(ibi.ContractDetails(contract=ibi.Future("NQ", "CME")))
+    assert not timeout.armed
+    assert not timeout.cancelled
+    assert str(timeout).startswith("EventTimeout<0s:<")
 
-    setattr(atom_runtime, "request_restart", None)
-
-    with pytest.raises(RuntimeError, match="onStart"):
-        Timeout.from_atom(MyAtom(), ev.Event(), time=1)
+    timeout.cancel()
 
 
-def test_timeout_from_atom_raises_when_no_details(Timeout, Atom):
-    class MyAtom(Atom):
-        def __str__(self):
-            return "MyAtom"
+@pytest.mark.asyncio
+async def test_event_emissions_restart_inactivity_interval() -> None:
+    """Fresh data should move the deadline rather than create another timer."""
 
-    a = MyAtom()
+    source = ev.Event()
+    fired = asyncio.Event()
+    timeout = EventTimeout(source, 0.04, callback=fired.set, name="updates")
 
-    with pytest.raises(AssertionError):
-        Timeout.from_atom(a, ev.Event(), "my_key")
+    await asyncio.sleep(0.025)
+    source.emit("fresh")
+    await asyncio.sleep(0.025)
 
-
-def test_timeout_raises_when_no_event(Timeout):
-    with pytest.raises(AssertionError):
-        Timeout("some random object")
-
-
-def test_timeout_with_no_name_gets_a_number(Timeout):
-    t0 = Timeout(ev.Event(), 0.1)
-    t1 = Timeout(ev.Event(), 0.2)
-    assert str(t0).startswith("Timeout <0.1s> for <0>  event id:")
-    assert str(t1).startswith("Timeout <0.2s> for <1>  event id:")
+    assert not fired.is_set()
+    assert await wait_for_condition(fired.is_set)
+    timeout.cancel()
 
 
-def test_stale_streamer_requests_restart(Timeout):
-    reasons = []
-    timeout = Timeout(
-        ev.Event(),
-        time=0,
-        name="stale",
-        debug=False,
-        request_restart=reasons.append,
+@pytest.mark.asyncio
+async def test_event_timeout_fires_once_until_source_recovers() -> None:
+    """One stale episode should produce one callback and no repeated spam."""
+
+    source = ev.Event()
+    calls: list[str] = []
+    timeout = EventTimeout(
+        source,
+        0.01,
+        callback=lambda: calls.append("stale"),
+        name="updates",
     )
 
-    timeout.triggered_action()
+    assert await wait_for_condition(lambda: calls == ["stale"])
+    await asyncio.sleep(0.03)
+    assert calls == ["stale"]
+    assert timeout.triggered
+    assert not timeout.armed
 
-    assert reasons == [f"stale streamer: {timeout!s}"]
+    source.emit("recovered")
+
+    assert not timeout.triggered
+    assert timeout.armed
+    assert await wait_for_condition(lambda: calls == ["stale", "stale"])
+    timeout.cancel()
 
 
-def test_stale_streamer_rearms_timeout_when_restart_is_blocked(Timeout):
-    reasons = []
+@pytest.mark.asyncio
+async def test_event_timeout_awaits_async_callback() -> None:
+    """Asynchronous callbacks should execute on the active event loop."""
 
-    def blocked_restart(reason: str) -> bool:
+    callback_finished = asyncio.Event()
+
+    async def callback() -> None:
+        await asyncio.sleep(0)
+        callback_finished.set()
+
+    timeout = EventTimeout(ev.Event(), 0.01, callback=callback)
+
+    assert await wait_for_condition(callback_finished.is_set)
+    timeout.cancel()
+
+
+@pytest.mark.asyncio
+async def test_event_timeout_cancel_stops_running_async_callback() -> None:
+    """Owner cancellation should also stop callback work still in progress."""
+
+    callback_started = asyncio.Event()
+    callback_cancelled = asyncio.Event()
+
+    async def callback() -> None:
+        callback_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            callback_cancelled.set()
+
+    timeout = EventTimeout(ev.Event(), 0.01, callback=callback)
+    assert await wait_for_condition(callback_started.is_set)
+
+    timeout.cancel()
+
+    assert await wait_for_condition(callback_cancelled.is_set)
+
+
+@pytest.mark.asyncio
+async def test_event_timeout_cancel_stops_deadline_and_disconnects() -> None:
+    """Owner cancellation should prevent future callbacks and event rearming."""
+
+    source = ev.Event()
+    calls: list[str] = []
+    timeout = EventTimeout(source, 0.02, callback=lambda: calls.append("stale"))
+
+    timeout.cancel()
+    source.emit("ignored")
+    await asyncio.sleep(0.04)
+
+    assert calls == []
+    assert timeout.cancelled
+    assert not timeout.armed
+
+
+@pytest.mark.asyncio
+async def test_source_completion_cancels_event_timeout() -> None:
+    """An ended source should release its timeout automatically."""
+
+    source = ev.Event()
+    calls: list[str] = []
+    timeout = EventTimeout(source, 0.02, callback=lambda: calls.append("stale"))
+
+    source.set_done()
+    await asyncio.sleep(0.04)
+
+    assert timeout.cancelled
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_market_timeout_cleanup_does_not_cancel_general_timeout() -> None:
+    """Workload cleanup must leave user-owned general monitors alone."""
+
+    fired = asyncio.Event()
+    timeout = EventTimeout(ev.Event(), 0.01, callback=fired.set)
+
+    MarketDataTimeout._cancel_all()
+
+    assert await wait_for_condition(fired.is_set)
+    assert not timeout.cancelled
+    timeout.cancel()
+
+
+def _atom_with_details(details: ibi.ContractDetails) -> Atom:
+    atom = Atom()
+    assert details.contract is not None
+    atom.contract = details.contract
+    return atom
+
+
+def test_market_data_timeout_created_from_atom(
+    atom_runtime, details: ibi.ContractDetails
+) -> None:
+    """Atom construction should supply policy, details, restart, and naming."""
+
+    atom_runtime.timeout_policy = TimeoutPolicy(seconds=0, action="restart")
+    atom = _atom_with_details(details)
+
+    timeout = MarketDataTimeout.from_atom(atom, ev.Event(), "ticks")
+
+    assert timeout.seconds == 0
+    assert timeout.details is atom_runtime.contract_registry.get_details(
+        details.contract
+    )
+    assert timeout.request_restart == atom_runtime.request_restart
+    assert "ticks" in timeout.name
+    assert str(atom) in timeout.name
+
+
+def test_market_data_timeout_from_atom_requires_details(atom_runtime) -> None:
+    """A contractless Atom cannot supply market-session behavior."""
+
+    with pytest.raises(ValueError, match="Contract details"):
+        MarketDataTimeout.from_atom(Atom(), ev.Event(), "ticks")
+
+
+def test_restart_market_timeout_requires_bound_supervisor(
+    atom_runtime, details: ibi.ContractDetails
+) -> None:
+    """Positive restart mode cannot be created before supervisor binding."""
+
+    atom_runtime.timeout_policy = TimeoutPolicy(seconds=1, action="restart")
+    atom_runtime.request_restart = None
+    atom = _atom_with_details(details)
+
+    with pytest.raises(RuntimeError, match="supervisor"):
+        MarketDataTimeout.from_atom(atom, ev.Event(), "ticks")
+
+
+@pytest.mark.asyncio
+async def test_open_market_timeout_requests_one_restart_even_when_rejected(
+    details: ibi.ContractDetails,
+) -> None:
+    """A rejected request already means lifecycle work is in progress."""
+
+    source = ev.Event()
+    reasons: list[str] = []
+
+    def reject_restart(reason: str) -> bool:
         reasons.append(reason)
         return False
 
-    timeout = Timeout(
+    timeout = MarketDataTimeout(
+        source,
+        0.01,
+        details=Details(details),
+        request_restart=reject_restart,
+        name="quotes",
+    )
+    timeout._now = datetime(2024, 3, 4, 14, 0, tzinfo=timezone.utc)
+
+    assert await wait_for_condition(lambda: len(reasons) == 1)
+    source.emit("late data")
+    await asyncio.sleep(0.03)
+
+    assert len(reasons) == 1
+    assert timeout.triggered
+    assert not timeout.armed
+
+
+@pytest.mark.asyncio
+async def test_log_only_market_timeout_rearms_after_fresh_data(
+    caplog, details: ibi.ContractDetails
+) -> None:
+    """Log mode should report once per stale-data episode."""
+
+    source = ev.Event()
+    with caplog.at_level(logging.ERROR, logger="haymaker.components.timeouts"):
+        timeout = MarketDataTimeout(
+            source,
+            0.01,
+            details=Details(details),
+            log_only=True,
+            name="quotes",
+        )
+        timeout._now = datetime(2024, 3, 4, 14, 0, tzinfo=timezone.utc)
+
+        assert await wait_for_condition(
+            lambda: sum("market data may be stale" in r.message for r in caplog.records)
+            == 1
+        )
+        await asyncio.sleep(0.02)
+        assert sum("market data may be stale" in r.message for r in caplog.records) == 1
+
+        source.emit("recovered")
+
+        assert await wait_for_condition(
+            lambda: sum("market data may be stale" in r.message for r in caplog.records)
+            == 2
+        )
+        timeout.cancel()
+
+
+@pytest.mark.asyncio
+async def test_closed_market_timeout_pauses_until_session_open(
+    details: ibi.ContractDetails,
+) -> None:
+    """Closed sessions should not log stale data or request a restart."""
+
+    reasons: list[str] = []
+    timeout = MarketDataTimeout(
         ev.Event(),
-        time=0.1,
-        name="stale",
-        debug=False,
-        request_restart=blocked_restart,
-    )
-    original_timeout = timeout._timeout
-    expected_reason = f"stale streamer: {timeout!s}"
-
-    timeout.triggered_action()
-
-    assert reasons == [expected_reason]
-    assert timeout._timeout is not original_timeout
-
-
-# ###########################################
-# Below created by claude
-# ###########################################
-
-
-@pytest.fixture
-def timeout(Timeout) -> Type[_Timeout]:
-    @dataclass
-    class TimerForTesting(Timeout):
-        triggered: bool = False
-
-        def triggered_action(self) -> None:
-            self.triggered = True
-
-    return TimerForTesting
-
-
-@pytest.mark.asyncio
-async def test_timer_not_triggered(
-    timeout: type[_Timeout], Atom: type[_Atom], details: ibi.ContractDetails
-):
-    t = timeout(
-        event=ev.Event(),
-        time=0.15,
-        name="xxx",
+        0.01,
         details=Details(details),
-        debug=True,
-        _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
+        request_restart=lambda reason: reasons.append(reason),
+        name="closed",
     )
+    timeout._now = datetime(2024, 3, 4, 22, 0, tzinfo=timezone.utc)
 
-    await asyncio.sleep(0.1)
-    assert not t.triggered  # type: ignore
+    assert await wait_for_condition(lambda: timeout.triggered)
+
+    assert reasons == []
+    assert not timeout.armed
+    assert not timeout.cancelled
+
+    timeout.cancel()
 
 
 @pytest.mark.asyncio
-async def test_timer_triggered(
-    timeout: type[_Timeout], Atom: _Atom, details: ibi.ContractDetails
-):
-    t = timeout(
-        event=ev.Event(),
-        time=0.1,
-        name="xxx",
+async def test_closed_market_timeout_arms_full_interval_after_reopen() -> None:
+    """Reopening should begin a fresh interval rather than fire immediately."""
+
+    class ReopeningDetails(Details):
+        def __init__(self) -> None:
+            pass
+
+        def is_open(self, _now: datetime | None = None) -> bool:
+            return False
+
+        def next_open(self, _now: datetime | None = None) -> datetime | None:
+            assert _now is not None
+            return _now + timedelta(seconds=0.02)
+
+    timeout = MarketDataTimeout(
+        ev.Event(),
+        0.04,
+        details=ReopeningDetails(),
+        log_only=True,
+        name="reopening",
+    )
+    timeout._now = datetime(2024, 3, 4, 22, 0, tzinfo=timezone.utc)
+
+    assert await wait_for_condition(lambda: timeout.triggered)
+    assert await wait_for_condition(lambda: timeout.armed and not timeout.triggered)
+    timeout.cancel()
+
+
+@pytest.mark.asyncio
+async def test_workload_cleanup_stops_armed_and_market_reopen_timeouts(
+    details: ibi.ContractDetails,
+) -> None:
+    """Workload cleanup must cancel every timer and pending reopen wait."""
+
+    open_timeout = MarketDataTimeout(
+        ev.Event(),
+        0.05,
         details=Details(details),
-        debug=True,
-        _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
+        log_only=True,
     )
-    assert await wait_for_condition(lambda: t.triggered)  # type: ignore
-
-
-@pytest.mark.asyncio
-async def test_timer_works_with_no_details(
-    timeout: type[_Timeout], Atom: _Atom, details: ibi.ContractDetails
-):
-    t = timeout(
-        event=ev.Event(),
-        time=0.1,
-        debug=True,
-        _now=datetime(2024, 3, 4, 14, 00, tzinfo=timezone.utc),
-    )
-    assert await wait_for_condition(lambda: t.triggered)  # type: ignore
-
-
-@pytest.mark.asyncio
-async def test_timer_not_triggered_when_market_closed(
-    timeout: type[_Timeout], details: ibi.ContractDetails
-):
-    """Timeout fires but does not trigger action when market is closed."""
-    t = timeout(
-        event=ev.Event(),
-        time=0.1,
-        name="closed_market",
+    open_timeout._now = datetime(2024, 3, 4, 14, 0, tzinfo=timezone.utc)
+    closed_timeout = MarketDataTimeout(
+        ev.Event(),
+        0.01,
         details=Details(details),
-        debug=True,
-        _now=datetime(2024, 3, 4, 22, 00, tzinfo=timezone.utc),  # outside hours
+        log_only=True,
     )
-    await asyncio.sleep(0.3)
-    assert not t.triggered  # type: ignore
+    closed_timeout._now = datetime(2024, 3, 4, 22, 0, tzinfo=timezone.utc)
+    assert await wait_for_condition(lambda: closed_timeout.triggered)
 
+    MarketDataTimeout._cancel_all()
+    await asyncio.sleep(0.06)
 
-@pytest.mark.asyncio
-async def test_sleep_task_stored_when_market_closed(
-    timeout: type[_Timeout], details: ibi.ContractDetails
-):
-    """When market is closed, _sleep_taks is set after timeout fires."""
-    t = timeout(
-        event=ev.Event(),
-        time=0.1,
-        name="sleep_task_stored",
-        details=Details(details),
-        debug=True,
-        _now=datetime(2024, 3, 4, 22, 00, tzinfo=timezone.utc),
-    )
-    assert await wait_for_condition(lambda: t._sleep_taks is not None)
-    assert not t._sleep_taks.done()  # type: ignore
-
-
-@pytest.mark.asyncio
-async def test_sleep_task_cancelled_on_reset(
-    timeout: type[_Timeout], Timeout: type[_Timeout], details: ibi.ContractDetails
-):
-    """reset() cancels sleeping _timeout_callback tasks."""
-    t = timeout(
-        event=ev.Event(),
-        time=0.1,
-        name="cancel_on_reset",
-        details=Details(details),
-        debug=True,
-        _now=datetime(2024, 3, 4, 22, 00, tzinfo=timezone.utc),
-    )
-    await wait_for_condition(lambda: t._sleep_taks is not None)
-
-    Timeout.reset()
-    await asyncio.sleep(0.1)
-
-    assert t._sleep_taks.done()  # type: ignore
-    assert not t.triggered  # type: ignore
-    assert len(Timeout.instances) == 0
-
-
-@pytest.mark.asyncio
-async def test_set_timeout_not_called_after_cancellation(
-    timeout: type[_Timeout], Timeout: type[_Timeout], details: ibi.ContractDetails
-):
-    """After CancelledError, _set_timeout should not replace existing timeout."""
-    t = timeout(
-        event=ev.Event(),
-        time=0.1,
-        name="no_reset_after_cancel",
-        details=Details(details),
-        debug=True,
-        _now=datetime(2024, 3, 4, 22, 00, tzinfo=timezone.utc),
-    )
-    await wait_for_condition(lambda: t._sleep_taks is not None)
-    initial_timeout_id = id(t._timeout)
-
-    Timeout.reset()
-    await asyncio.sleep(0.1)
-
-    assert id(t._timeout) == initial_timeout_id
+    assert open_timeout.cancelled
+    assert closed_timeout.cancelled
+    assert not open_timeout.armed
+    assert not closed_timeout.armed
+    assert MarketDataTimeout._instances == []

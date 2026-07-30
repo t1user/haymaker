@@ -37,10 +37,14 @@ Usage
 
 The live-trading command and managed dataloader create and run the supervisor
 automatically. Strategy modules do not need to instantiate or control it.
-Custom restart-enabled :class:`haymaker.timeout.Timeout` instances created with
-``Timeout.from_atom()`` must be created from ``onStart()`` or later, after the
-runtime has bound the supervisor restart callback. Zero-time timeouts may still
-be constructed while the pipeline is being defined.
+Custom restart-enabled
+:class:`~haymaker.components.MarketDataTimeout` instances created with
+``MarketDataTimeout.from_atom()`` must be created from ``onStart()`` or later,
+after the runtime has qualified Contract details and bound the supervisor
+restart callback. The runtime cancels these monitors when the workload stops
+and creates new streamer monitors in the next generation. General
+:class:`~haymaker.components.EventTimeout` instances are user-owned and are not
+cancelled by a supervised restart.
 
 Configure both live trading and managed dataloader runs under the
 ``connection`` section of their profile-specific YAML file.

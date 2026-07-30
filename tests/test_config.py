@@ -16,6 +16,7 @@ from haymaker.config import (
     DataloaderStorageSettings,
     LiveCommand,
     StorageSettings,
+    TimeoutPolicy,
     load_dataloader_config,
     load_live_config,
     parse_live_args,
@@ -25,7 +26,6 @@ from haymaker.contract_registry import ContractRegistry
 from haymaker.dataloader.contract_selectors import FuturesSelectionPolicy
 from haymaker.order_defaults import OrderDefaults
 from haymaker.supervisor import ConnectionSettings
-from haymaker.timeout import TimeoutPolicy
 
 
 def live_command(

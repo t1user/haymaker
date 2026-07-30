@@ -96,6 +96,153 @@ registered process-wide during strategy import and started by the runtime.
 
 .. autoclass:: haymaker.components.TickByTickStreamer
 
+Event inactivity monitoring
+---------------------------
+
+:class:`~haymaker.components.EventTimeout` monitors any ``eventkit.Event`` and
+calls a user callback once when one inactivity interval expires. Every source
+emission moves the deadline. After a timeout, fresh source data rearms the next
+episode. General event timeouts are user-owned: create positive intervals on
+the running asyncio loop and call ``cancel()`` when the owning object ends.
+Haymaker does not cancel them during a supervised workload restart.
+
+:class:`~haymaker.components.MarketDataTimeout` adds a Contract's trading
+session and supervisor restart policy. Streamers install it automatically.
+Custom market-data Atoms should call ``MarketDataTimeout.from_atom()`` from
+``onStart()`` or later, once Contract details and the supervisor callback are
+available. A closed session pauses monitoring until the next open and then
+starts a complete interval. Log-only mode waits for fresh data before rearming;
+restart mode requests one workload rebuild and stays disarmed while that
+lifecycle transition is handled.
+
+Generic timeout in a custom Atom
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This pass-through Atom monitors its own output event. The positive timeout is
+created from ``onStart()``, when the asyncio loop is running. It is created
+only once because a general ``EventTimeout`` belongs to the component owner
+and is not reset by supervised workload restarts:
+
+.. code-block:: python
+
+   import logging
+   from typing import Any
+
+   from haymaker.base import Atom
+   from haymaker.components import EventTimeout
+
+
+   log = logging.getLogger(__name__)
+
+
+   class HeartbeatGuard(Atom):
+       """Pass data through and report when output becomes inactive."""
+
+       def __init__(self, seconds: float) -> None:
+           super().__init__()
+           self.seconds = seconds
+           self._timeout: EventTimeout | None = None
+
+       def onStart(
+           self,
+           data: Any,
+           source: Atom | None = None,
+       ) -> None:
+           if self._timeout is None:
+               self._timeout = EventTimeout(
+                   self.dataEvent,
+                   self.seconds,
+                   callback=self.on_stale,
+                   name=f"{type(self).__name__} output",
+               )
+           super().onStart(data, source)
+
+       def onData(self, data: Any, *args: Any) -> None:
+           self.dataEvent.emit(data)
+
+       def on_stale(self) -> None:
+           log.warning("No output for %s seconds", self.seconds)
+
+       def close(self) -> None:
+           if self._timeout is not None:
+               self._timeout.cancel()
+               self._timeout = None
+
+
+   guard = HeartbeatGuard(seconds=30)
+
+Call ``guard.close()`` when the application-specific owner releases the
+component. A callback may also be an ``async def`` function. After one timeout,
+the callback is not repeated until ``dataEvent`` emits again and begins a new
+inactivity episode.
+
+Market-aware timeout in a custom Atom
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``MarketDataTimeout.from_atom()`` when stale data should be interpreted
+using the Atom's Contract session and Haymaker's supervisor policy. Construct
+it on every ``onStart()``: Haymaker cancels the previous workload's
+market-data timeouts before the next workload generation starts.
+
+.. code-block:: python
+
+   from typing import Any
+
+   import eventkit as ev
+   import ib_insync as ibi
+
+   from haymaker.base import Atom
+   from haymaker.components import MarketDataTimeout
+
+
+   class CustomMarketFeed(Atom):
+       """Forward one external market-data event into an Atom pipeline."""
+
+       def __init__(
+           self,
+           contract: ibi.Contract,
+           update_event: ev.Event,
+       ) -> None:
+           super().__init__()
+           self.contract = contract
+           self.update_event = update_event
+           self.update_event += self.onUpdateEvent
+           self._timeout: MarketDataTimeout | None = None
+
+       def onStart(
+           self,
+           data: Any,
+           source: Atom | None = None,
+       ) -> None:
+           self._timeout = MarketDataTimeout.from_atom(
+               self,
+               self.update_event,
+               key="quotes",
+           )
+           super().onStart(data, source)
+
+       def onUpdateEvent(self, update: Any) -> None:
+           self.dataEvent.emit(update)
+
+
+   updates = ev.Event("vendor quotes")
+   feed = CustomMarketFeed(
+       ibi.Future("ES", exchange="CME"),
+       updates,
+   )
+
+Omitting ``seconds`` uses the runtime ``timeout:`` configuration. Passing
+``seconds=15`` overrides only the interval; the configured ``restart`` or
+``log`` action still applies. ``from_atom()`` requires qualified Contract
+details and the bound supervisor callback, so call it from ``onStart()`` or
+later rather than during module-level pipeline construction.
+
+.. autoclass:: haymaker.components.EventTimeout
+   :members: arm, cancel
+
+.. autoclass:: haymaker.components.MarketDataTimeout
+   :members: from_atom, cancel
+
 .. autoclass:: haymaker.components.BarAggregator
 
 .. autoclass:: haymaker.components.DfAggregator

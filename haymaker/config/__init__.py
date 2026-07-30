@@ -14,6 +14,7 @@ from .settings import (
     MongoClientSettings,
     MongoSettings,
     StorageSettings,
+    TimeoutPolicy,
 )
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "MongoClientSettings",
     "MongoSettings",
     "StorageSettings",
+    "TimeoutPolicy",
     "load_dataloader_config",
     "load_live_config",
     "parse_dataloader_args",

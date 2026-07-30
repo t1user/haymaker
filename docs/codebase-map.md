@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-07-24.
+Last updated: 2026-07-30.
 
 ## High-Level Purpose
 
@@ -73,6 +73,9 @@ The research package is intentionally separate from live execution. It works dir
   contract-detail initialization, workload startup, reconnect cleanup, and
   final state flushing. Startup jobs retain the live streamer registry
   populated during strategy import.
+- `haymaker/config/settings.py`: typed storage aggregates and the validated
+  runtime `TimeoutPolicy`; public timeout components live in the component
+  toolbox.
 - `haymaker/supervisor/`: IB socket supervisor package for connections it owns.
   It owns workload task lifecycle, broker auto-recovery waits,
   probes, restart coalescing, and reconnect retry pacing. Its run loop evaluates
@@ -102,6 +105,8 @@ The research package is intentionally separate from live execution. It works dir
   signal, intent, and open-ended order role enums.
 - `haymaker/components/streamers.py`, `aggregators.py`: broker market-data
   sources, bar grouping, dataframe aggregation, and history persistence.
+- `haymaker/components/timeouts.py`: user-owned generic event inactivity
+  callbacks and workload-owned, market-session-aware stale-data monitoring.
 - `haymaker/components/signal_models.py`: general SignalModel and
   dataframe-based PandasSignalModel, including optional ordered calculation
   audit persistence and lookup.
@@ -230,12 +235,15 @@ from runtime configuration.
    trading immediately. A failed controller run still permits startup jobs to
    provide monitoring while outbound trading remains disabled.
 5. `StartupJobs` downloads contract details, rebuilds contract selectors from
-   one timezone-naive UTC timestamp, logs restart state, resets timeouts, and
-   runs all registered streamers. Selector `ACTIVE` identifies the current
-   market-data and roll-reference contract; `NEXT` is an early new-entry
-   candidate. Existing positions retain their persisted held contract, and the
-   futures roller acts only after that contract leaves the allowed
-   `ACTIVE`/`NEXT` set.
+   one timezone-naive UTC timestamp, logs restart state, and runs all
+   registered streamers. Each streamer creates a market-session-aware timeout
+   for its subscription. `LiveRuntime` cancels those workload-owned monitors
+   before supervised cleanup and again when the workload exits; unrelated
+   user-owned `EventTimeout` instances are untouched. Selector `ACTIVE`
+   identifies the current market-data and roll-reference contract; `NEXT` is
+   an early new-entry candidate. Existing positions retain their persisted held
+   contract, and the futures roller acts only after that contract leaves the
+   allowed `ACTIVE`/`NEXT` set.
 6. Streamers and aggregators emit market data into SignalModels.
 7. SignalModels emit immutable raw Signals. PandasSignalModel may persist a
    calculation generation named from source, ACTIVE contract, and process

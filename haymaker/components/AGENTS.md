@@ -60,6 +60,25 @@ STOP_LOSS or TAKE_PROFIT fill that flattens the episode sets the block; the
 first actual fill of a permitted opposite OPEN clears it. CLOSE and ROLL do not
 change it.
 
+## Event timeouts
+
+`EventTimeout` is the general callback-based inactivity monitor for any
+`eventkit.Event`. It is user-owned, independent of Atom and supervisor
+lifecycle, fires once per stale episode, and rearms only after the source emits
+again. A positive interval must be armed on a running asyncio loop. The owner
+calls `cancel()`; ending the source event also cancels it.
+
+`MarketDataTimeout` inherits the generic mechanism and adds Contract trading
+hours plus `haymaker.config.TimeoutPolicy`. The policy remains configuration,
+not a component export. Create `MarketDataTimeout` with `from_atom()` during
+`onStart()` or later, after contract qualification and supervisor binding.
+Closed markets pause until the next open and then start a full interval.
+Log-only timeouts rearm after fresh data. Restart-enabled timeouts request one
+workload rebuild and remain disarmed even when the request is rejected because
+another lifecycle transition is active. `LiveRuntime` alone cancels all
+market-data timeout instances when a workload stops; never include general
+`EventTimeout` instances in that registry.
+
 ## Atom and validation
 
 `Atom` accepts arbitrary messages. Base `onData` raises `NotImplementedError`;

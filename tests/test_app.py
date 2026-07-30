@@ -223,10 +223,10 @@ async def test_live_runtime_propagates_startup_failure() -> None:
     runtime = object.__new__(LiveRuntime)
     runtime.context = cast(
         RuntimeContext,
-            SimpleNamespace(
-                controller=FailingController(),
-                future_roll_policies={},
-                workload_generation=0,
+        SimpleNamespace(
+            controller=FailingController(),
+            future_roll_policies={},
+            workload_generation=0,
         ),
     )
 
@@ -235,7 +235,7 @@ async def test_live_runtime_propagates_startup_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_runtime_runs_startup_jobs_after_controller() -> None:
+async def test_live_runtime_runs_startup_jobs_after_controller(monkeypatch) -> None:
     """Live startup should apply policies and run monitoring after controller."""
 
     events: list[object] = []
@@ -255,13 +255,17 @@ async def test_live_runtime_runs_startup_jobs_after_controller() -> None:
     runtime = object.__new__(LiveRuntime)
     runtime.context = cast(
         RuntimeContext,
-            SimpleNamespace(
-                controller=FakeController(),
-                future_roll_policies={"manual": False},
-                workload_generation=0,
+        SimpleNamespace(
+            controller=FakeController(),
+            future_roll_policies={"manual": False},
+            workload_generation=0,
         ),
     )
     runtime.startup_jobs = cast(StartupJobs, FakeStartupJobs())
+    monkeypatch.setattr(
+        "haymaker.runtime.MarketDataTimeout._cancel_all",
+        lambda: events.append("timeouts"),
+    )
 
     await runtime.start()
 
@@ -269,7 +273,35 @@ async def test_live_runtime_runs_startup_jobs_after_controller() -> None:
         ("policies", {"manual": False}),
         "controller",
         "startup-jobs",
+        "timeouts",
     ]
+
+
+@pytest.mark.asyncio
+async def test_live_runtime_stop_cancels_timeouts_before_controller_hold(
+    monkeypatch,
+) -> None:
+    """Workload stop should disable stale-data callbacks before other cleanup."""
+
+    events: list[str] = []
+
+    class FakeController:
+        def set_hold(self) -> None:
+            events.append("hold")
+
+    runtime = object.__new__(LiveRuntime)
+    runtime.context = cast(
+        RuntimeContext,
+        SimpleNamespace(controller=FakeController()),
+    )
+    monkeypatch.setattr(
+        "haymaker.runtime.MarketDataTimeout._cancel_all",
+        lambda: events.append("timeouts"),
+    )
+
+    await runtime.stop("restart requested")
+
+    assert events == ["timeouts", "hold"]
 
 
 def test_live_runtime_binds_supervisor_controls(atom_runtime) -> None:
