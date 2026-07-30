@@ -26,19 +26,17 @@ log = logging.getLogger(__name__)
 
 
 class MissingContractError(Exception):
-    pass
+    """Indicate that a registered contract has no current resolution."""
 
 
 class ContractManagingDescriptor:
     # DON'T CHANGE THIS TO PROPERTY or it will screw up dataclasses
     # that inherit from Atom
-    """
-    Manage accessing `contract` property on :class:`Atom`.
+    """Resolve an Atom's assigned contract through the runtime registry.
 
-    Contract needs to be qualified and their details obtaned before.
-    This is being managed by :module:`Manager`, which puts correct
-    contracts and details into :class:`ContractRegistry`.  The role of
-    this descriptor is to pull the correct values from it.
+    Assignment registers an unqualified contract blueprint. Instance access
+    returns the registry's currently selected concrete contract, including the
+    configured ACTIVE or NEXT futures role.
     """
 
     def __set_name__(self, obj: type[Atom], name: str) -> None:
@@ -142,17 +140,18 @@ class Atom:
         * ``onContractChanged(old_contract, new_contract)`` reacts when the
           resolved contract changes; Controller remains responsible for rolling
           held positions.
-        * ``validate_source(source)`` rejects a structurally incompatible
-          prospective upstream Atom. The default accepts every Atom.
+        * ``validate_source(source)`` returns normally for a compatible
+          prospective upstream Atom and raises for structural incompatibility.
+          The default accepts every Atom.
         * ``connect(*targets)`` connects this Atom directly to one or more
           downstream targets after all targets validate the source and returns
           this Atom.
         * ``disconnect(*targets)`` removes direct startup, data, and
           reverse-feedback connections and returns this Atom.
-        * ``clear()`` removes this Atom's current downstream connections.
+        * ``clear()`` removes all outgoing startup and data connections,
+          including the reverse-feedback links created by :meth:`connect`.
         * ``pipe(*targets)`` builds a linear :class:`Pipe` beginning with this
           Atom.
-        * ``union(*targets)`` connects targets as fan-out and returns this Atom.
         * ``repr(atom)`` returns a concise representation of its non-default
           instance state and resolved contract.
 
@@ -195,6 +194,7 @@ class Atom:
         cls.runtime = runtime
 
     def __init__(self) -> None:
+        self._downstream_targets: list[Atom] = []
         self._createEvents()
         self._log = logging.getLogger(f"strategy.{self.__class__.__name__}")
         self._contract_memo: ibi.Contract | None = None
@@ -229,11 +229,12 @@ class Atom:
 
     @property
     def contract_details(self) -> Details:
-        """
-        Contract details received from the broker.
+        """Return broker details for the resolved contract.
 
-        if :attr:`contract` is not set empty :class:`Details` object
-        will be returned.
+        Returns:
+            Contract details registered for :attr:`contract`. If details are
+            unavailable, returns an empty :class:`Details` object and logs the
+            missing contract.
         """
         details = self.contract_registry.get_details(self.contract)
         if details is None:
@@ -244,9 +245,12 @@ class Atom:
 
     @property
     def contract_selector(self) -> AbstractBaseContractSelector | None:
-        try:
-            assert self._contract_blueprint
-        except AssertionError:
+        """Return the selector registered for this Atom's contract blueprint.
+
+        Raises:
+            KeyError: If no contract has been assigned to this Atom.
+        """
+        if self._contract_blueprint is None:
             raise KeyError(
                 f"contract_selector not available because contract not set on {self}"
             )
@@ -304,14 +308,16 @@ class Atom:
     def onContractChanged(
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> Awaitable[None] | None:
-        """
-        Will be called if contract object on `self.contract` changes.
-        In particular, this happens when future contract is about to
-        expire, and new on-the-run contract replaces old, expiring
-        contract.  This method should be used to initialize any
-        adjustment required on the object in relation to contract
-        rolling.  Actual position rolling is taken care of by
-        `Controller` object.
+        """Record a change in the concrete contract resolved for this Atom.
+
+        Override this hook when component-local data must be adjusted after a
+        futures contract change. Call ``super().onContractChanged(...)`` to
+        preserve the recorded roll information. Controller owns rolling any
+        held broker position.
+
+        Args:
+            old_contract: Previously resolved concrete contract.
+            new_contract: Newly resolved concrete contract.
         """
         log.info(
             f"{self!s} {self.which_contract!s} contract changed: {old_contract.localSymbol} "
@@ -324,10 +330,16 @@ class Atom:
 
         The default accepts every source. Built-in components override this
         only for structural incompatibilities that can be known before data
-        arrives.
+        arrives. An override must return normally when ``source`` is compatible
+        and raise ``TypeError`` or a more specific domain exception otherwise;
+        returning a boolean has no effect.
 
         Args:
             source: Atom that would emit into this Atom.
+
+        Raises:
+            TypeError: If an override determines that ``source`` is
+                structurally incompatible.
         """
 
     def connect(self, *targets: Atom) -> Self:
@@ -343,7 +355,10 @@ class Atom:
             This source Atom.
 
         Raises:
-            TypeError: If any target is not an Atom or rejects the source.
+            TypeError: If a target is not an Atom.
+            Exception: Propagates any incompatibility raised by a target's
+                :meth:`validate_source`. No connection is changed unless every
+                target accepts this source.
         """
         for target in targets:
             if not isinstance(target, Atom):
@@ -359,70 +374,78 @@ class Atom:
             t.feedbackEvent.connect(
                 self.onFeedback, error=t._log_event_error, keep_ref=True
             )
+            self._downstream_targets.append(t)
 
         return self
 
     def disconnect(self, *targets: Atom) -> Self:
-        """
-        Disconnect passed :class:`Atom` objects, which are directly
-        connected to this atom. Shorthand for this method is `-=`
+        """Disconnect one or more directly connected downstream Atoms.
 
+        ``-=`` is an alias. Connections and callbacks not created through
+        :meth:`connect` are unaffected.
 
         Args:
-            targets (Atom): One or more :class:`Atom` objects to disconnect from.
+            targets: Direct downstream Atoms to disconnect.
+
+        Returns:
+            This source Atom.
         """
         for t in targets:
             # the same target cannot be connected more than once
             self.startEvent.disconnect_obj(t)
             self.dataEvent.disconnect_obj(t)
             t.feedbackEvent.disconnect_obj(self)
+            self._downstream_targets = [
+                target for target in self._downstream_targets if target is not t
+            ]
         return self
 
     def clear(self) -> None:
-        connected_to = [i[0] for i in self.startEvent._slots]
+        """Remove all outgoing startup, data, and reverse-feedback connections.
+
+        Reverse-feedback callbacks belonging to other upstream Atoms are
+        preserved.
+        """
+        for target in tuple(self._downstream_targets):
+            target.feedbackEvent.disconnect_obj(self)
+        self._downstream_targets.clear()
         self.startEvent.clear()
         self.dataEvent.clear()
-        for obj in connected_to:
-            obj.feedbackEvent.clear()
 
     def pipe(self, *targets: Atom) -> Pipe:
-        """
-        Create a :class:`Pipe` or a chain of connected :class:`Atom` objects.
-        Only first `target` will be directly connected to this object, second
-        target will be connected to the first target and so on. It's different
-        from :meth:`connect` method, which connects all targets directly to
-        this object.
+        """Create a linear Pipe beginning with this Atom.
+
+        Unlike :meth:`connect`, which creates fan-out, this method connects
+        each target to the preceding Atom.
+
+        Args:
+            targets: Atoms to append in data-flow order.
 
         Returns:
-            Pipe: :class:`Pipe` object with all targets connected in a chain,
-            where this object is the first and the last target is the last
-            target in the list of passed targets.
+            Pipe whose first member is this Atom.
+
+        Raises:
+            TypeError: If a target is not an Atom or adjacent members are
+                structurally incompatible.
         """
         return Pipe(self, *targets)
-
-    def union(self, *targets: "Atom") -> Self:
-        for t in targets:
-            self.connect(t)
-        return self
 
     __iadd__ = connect
     __isub__ = disconnect
 
     def __repr__(self) -> str:
-        attrs = ", ".join(
-            (
-                f"{i}={j}"
-                for i, j in self.__dict__.items()
-                if ("Event" not in str(i))
-                and (i != "_log")
-                and (i != "_contract_blueprint")
-                and j
-                and j != ActiveNext.ACTIVE
-            )
-        )
-        if self.contract is not None:
-            attrs += f", contract={self.contract}"
-        return f"{self.__class__.__name__}({attrs})"
+        attrs = [
+            f"{name}={value}"
+            for name, value in self.__dict__.items()
+            if not name.startswith("_")
+            and name not in self.events
+            and value
+            and value != ActiveNext.ACTIVE
+        ]
+        contract = self.contract
+        if contract is not None:
+            attrs.append(f"contract={contract}")
+        return f"{self.__class__.__name__}({', '.join(attrs)})"
 
 
 class Pipe(Atom):
@@ -437,10 +460,12 @@ class Pipe(Atom):
 
     Note:
         Connection validation is performed between adjacent members while the
-        pipe is assembled. Fan-out semantics remain those of :class:`Atom`.
+        pipe is assembled. When another Atom connects to the Pipe itself, the
+        first member validates that prospective source. Fan-out semantics
+        remain those of :class:`Atom`.
     """
 
-    def __init__(self, *targets: Atom):
+    def __init__(self, *targets: Atom) -> None:
         if not targets:
             raise ValueError("Pipe requires at least one Atom")
         if not all(isinstance(target, Atom) for target in targets):
@@ -458,30 +483,64 @@ class Pipe(Atom):
         self.feedbackEvent = self.first.feedbackEvent
 
     def connect(self, *targets: Atom) -> Self:
-        for target in targets:
-            self.last.connect(target)
+        """Connect downstream targets to the Pipe's last member.
+
+        Args:
+            targets: Atoms connected as fan-out from the final member.
+
+        Returns:
+            This Pipe.
+        """
+        self.last.connect(*targets)
         return self
 
     def validate_source(self, source: Atom) -> None:
-        """Validate an upstream connection against the first pipe member."""
+        """Ask the first member to validate a prospective upstream Atom.
+
+        This preserves the first member's input constraint when callers compose
+        an existing Pipe with ``source.connect(pipe)``.
+
+        Args:
+            source: Atom that would emit into the Pipe's first member.
+
+        Raises:
+            Exception: Propagates any incompatibility raised by the first
+                member.
+        """
 
         self.first.validate_source(source)
 
     def disconnect(self, *targets: Atom) -> Self:
-        for target in targets:
-            self.last.startEvent.disconnect_obj(target)
-            self.last.dataEvent.disconnect_obj(target)
-            target.feedbackEvent.disconnect_obj(self.last)
+        """Disconnect targets from the Pipe's last member.
+
+        Args:
+            targets: Direct downstream Atoms to disconnect.
+
+        Returns:
+            This Pipe.
+        """
+        self.last.disconnect(*targets)
         return self
 
-    def onStart(self, data: Any, *args: Any) -> None:
-        self.first.onStart(data, *args)
+    def clear(self) -> None:
+        """Clear outgoing connections from the Pipe's last member."""
 
-    def onData(self, data: Any, *args: Any) -> None:
-        self.first.onData(data, *args)
+        self.last.clear()
 
-    def onFeedback(self, data: Any, *args: Any) -> None:
-        self.last.onFeedback(data, *args)
+    def onStart(self, data: Any, source: Atom | None = None) -> Awaitable[None] | None:
+        """Forward workload startup to the Pipe's first member."""
+
+        return self.first.onStart(data, source)
+
+    def onData(self, data: Any, *args: Any) -> Awaitable[None] | None:
+        """Forward one input to the Pipe's first member."""
+
+        return self.first.onData(data, *args)
+
+    def onFeedback(self, data: Any, *args: Any) -> Awaitable[None] | None:
+        """Forward feedback from the Pipe's last member through the chain."""
+
+        return self.last.onFeedback(data, *args)
 
     def _pipe(self) -> None:
         source = None
@@ -492,9 +551,13 @@ class Pipe(Atom):
             source = member
 
     def __getitem__(self, i: int) -> Atom:
+        """Return the member at ``i`` in data-flow order."""
+
         return self._members[i]
 
     def __len__(self) -> int:
+        """Return the number of members in the Pipe."""
+
         return len(self._members)
 
     def __repr__(self) -> str:

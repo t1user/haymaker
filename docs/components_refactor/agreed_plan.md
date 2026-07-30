@@ -14,8 +14,10 @@ copy first.
 
 `source.connect(*targets)` asks every target to validate the source before any
 connection changes. Built-ins use `validate_source()` only for structural
-incompatibility visible at composition time. Message values and conditional
-requirements remain runtime validation.
+incompatibility visible at composition time. An override returns normally for
+a compatible source and raises for an incompatible source; a boolean return
+value is ignored. Message values and conditional requirements remain runtime
+validation.
 
 The user-facing trading toolbox is exported explicitly from
 `haymaker.components`. It contains messages, streamers, aggregators,

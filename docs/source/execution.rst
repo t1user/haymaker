@@ -20,15 +20,17 @@ reserved fields.
 
 ``source.connect(*targets)`` validates every target before changing any event
 connections. A component overrides ``validate_source`` only when an upstream
-class is structurally incompatible. Value-dependent checks happen in
-``onData``.
+class is structurally incompatible. The override returns normally for a valid
+source and raises ``TypeError`` or a more specific domain exception for an
+invalid source; returning a boolean does not reject a connection.
+Value-dependent checks happen in ``onData``.
 
 Fan-out sends the same object reference to every branch. Immutable standard
 messages are safe to share. A custom branch that mutates its input must copy it
 first.
 
 .. autoclass:: haymaker.base.Atom
-   :members: connect, pipe, union, validate_source, onStart, onData, onFeedback
+   :members: connect, disconnect, clear, pipe, validate_source, onStart, onData, onFeedback
 
 .. autoclass:: haymaker.base.Pipe
    :members:

@@ -144,6 +144,37 @@ def test_disconnect_removes_reverse_feedback():
     assert len(target.feedbackEvent) == 0
 
 
+def test_clear_preserves_other_sources_reverse_feedback():
+    cleared_source = Atom()
+    remaining_source = Atom()
+    target = Transform("target")
+    cleared_feedback = []
+    remaining_feedback = []
+    cleared_source.feedbackEvent += cleared_feedback.append
+    remaining_source.feedbackEvent += remaining_feedback.append
+    cleared_source.connect(target)
+    remaining_source.connect(target)
+
+    cleared_source.clear()
+    target.onFeedback("feedback")
+
+    assert cleared_feedback == []
+    assert remaining_feedback == ["feedback"]
+    assert len(cleared_source.startEvent) == 0
+    assert len(cleared_source.dataEvent) == 0
+
+
+def test_clear_removes_direct_outgoing_event_callbacks():
+    source = Atom()
+    received = []
+    source.dataEvent += received.append
+
+    source.clear()
+    source.dataEvent.emit("data")
+
+    assert received == []
+
+
 def test_pipe_connects_members_in_order():
     first = Transform("first")
     second = Transform("second")
@@ -182,6 +213,26 @@ def test_pipe_delegates_source_validation_to_first_member():
     assert len(source.dataEvent) == 0
 
 
+def test_pipe_on_start_forwards_source_to_first_member():
+    class StartupRecorder(Transform):
+        def __init__(self, name):
+            super().__init__(name)
+            self.startup = None
+
+        def onStart(self, data, source=None):
+            self.startup = (data, source)
+            return super().onStart(data, source)
+
+    first = StartupRecorder("first")
+    pipe = Pipe(first, Transform("last"))
+    source = Transform("source")
+    payload = object()
+
+    pipe.onStart(payload, source)
+
+    assert first.startup == (payload, source)
+
+
 def test_pipe_connects_downstream_from_last_member():
     pipe = Pipe(Transform("first"), Transform("second"))
     sink = Transform("sink")
@@ -209,9 +260,12 @@ def test_contract_descriptor_rejects_wrong_type(atom_runtime):
         Atom().contract = "ES"
 
 
-def test_missing_qualified_contract_raises_domain_error(
-    atom_runtime, monkeypatch
-):
+def test_contract_selector_requires_assigned_contract(atom_runtime):
+    with pytest.raises(KeyError, match="contract not set"):
+        _ = Atom().contract_selector
+
+
+def test_missing_qualified_contract_raises_domain_error(atom_runtime, monkeypatch):
     atom = Atom()
     future = ibi.Future("ES", exchange="CME")
     atom.contract = future
@@ -255,6 +309,18 @@ def test_repr_excludes_default_active_role():
     assert repr(atom) == "Transform(name=alpha)"
     atom.which_contract = ActiveNext.NEXT
     assert "which_contract=NEXT" in repr(atom)
+
+
+def test_repr_formats_contract_without_leading_comma(atom_runtime):
+    atom = Atom()
+    contract = ibi.Stock("AAPL", "SMART", "USD")
+    atom.contract = contract
+
+    assert repr(atom) == f"Atom(contract={contract})"
+
+
+def test_atom_has_no_redundant_union_method():
+    assert not hasattr(Atom, "union")
 
 
 def test_event_callback_failures_are_logged(caplog):
