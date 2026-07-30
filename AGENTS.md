@@ -159,6 +159,13 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - Create restart-enabled `Timeout.from_atom()` instances from `onStart()` or
   later, after the supervisor restart callback has been bound. Zero-time and
   debug timeouts remain safe during pipeline construction.
+- `HistoricalDataStreamer` initial `reqHistoricalDataAsync()` requests
+  intentionally use `timeout=0`. Legitimate large backfills may take many
+  minutes, so elapsed time alone must not cancel the request or trigger a
+  restart. Keep post-initialization stale-update monitoring separate. Prefer
+  non-cancelling elapsed-time logging for diagnostics, and add a configurable
+  hard limit only if there is evidence of requests hanging while the broker
+  connection remains healthy.
 - CLI entrypoints own logging setup and shutdown. Every configured destination
   handler runs behind its own queue/listener thread; messenger handlers such as
   Telegram are optional YAML configuration, not runtime dependencies.

@@ -1,5 +1,7 @@
+import asyncio
 import importlib
-from datetime import date, datetime, timedelta, timezone
+import math
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
 import ib_insync as ibi
@@ -9,8 +11,8 @@ from sample_barDataList import sample_barDataList
 
 from haymaker.components.streamers import (
     HistoricalDataStreamer,
+    MktDataStreamer,
     RealTimeBarsStreamer,
-    bar_filter,
 )
 
 
@@ -19,19 +21,6 @@ def install_atom_runtime(atom_runtime):
     """Install default Atom runtime for streamer tests."""
 
     return atom_runtime
-
-
-def test_bar_filter():
-    bar = ibi.BarData(
-        datetime(2025, 9, 25, 9, 6, 0, 0),
-        high=21,
-        low=20,
-        close=-1,
-        volume=100,
-        average=0,
-        barCount=4,
-    )
-    assert bar_filter(bar)
 
 
 def make_bar(bar_date: date | datetime, price: float = 20) -> ibi.BarData:
@@ -90,7 +79,7 @@ def test_StreamerId_dataclass():
     # make sure module level variable is not carried over from previous runs
     importlib.reload(importlib.import_module("haymaker.components.streamers"))
 
-    s0 = HistoricalDataStreamer(ibi.Contract(symbol="XXX"), "x", "x", "x")
+    s0 = HistoricalDataStreamer(ibi.Contract(symbol="XXX"), "1 D", "1 min", "TRADES")
     assert str(s0) == "HistoricalDataStreamer<0><XXX>"
 
 
@@ -240,8 +229,8 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_uses_injected_store():
 
 
 @pytest.mark.asyncio
-async def test_HistoricalDataStreamer_normalizes_persisted_daily_bar_date():
-    """Daily metadata should be comparable with dates received from IB."""
+async def test_HistoricalDataStreamer_restores_persisted_daily_bar_date():
+    """Daily metadata should retain the date category received from IB."""
     contract = ibi.Future(symbol="NQ", exchange="CME")
     store = Mock()
     store.read_metadata = AsyncMock(return_value={"up_to": "2026-01-26"})
@@ -250,10 +239,24 @@ async def test_HistoricalDataStreamer_normalizes_persisted_daily_bar_date():
         contract, 10000, "1 day", "TRADES", datastore=store
     )
 
-    assert await streamer.last_db_point() == datetime(2026, 1, 26, tzinfo=timezone.utc)
-    assert streamer._normalize_bar_date(date(2026, 1, 27)) > (
-        await streamer.last_db_point()
+    assert await streamer.last_db_point() == date(2026, 1, 26)
+
+
+def test_HistoricalDataStreamer_durationStr_with_daily_last_bar_date():
+    """A date watermark should be converted only for duration calculation."""
+    streamer = HistoricalDataStreamer(
+        ibi.Future(symbol="NQ", exchange="CME"),
+        10000,
+        "1 day",
+        "TRADES",
+        _last_bar_date=date(2026, 1, 26),
     )
+    with patch("haymaker.durationStr_converters.datetime") as mock_datetime:
+        mock_datetime.now.return_value = datetime(2026, 1, 27)
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        assert streamer._durationStr == "3 D"
+        assert streamer._last_bar_date == date(2026, 1, 26)
 
 
 def test_HistoricalDataStreamer_removes_invalid_bars_from_emitted_history():
@@ -265,7 +268,7 @@ def test_HistoricalDataStreamer_removes_invalid_bars_from_emitted_history():
         "TRADES",
     )
     first = make_bar(datetime(2026, 1, 26, 10, 0))
-    invalid = make_bar(datetime(2026, 1, 26, 10, 1), price=0)
+    invalid = make_bar(datetime(2026, 1, 26, 10, 1), price=math.nan)
     latest = make_bar(datetime(2026, 1, 26, 10, 2))
     emitted: list[list[ibi.BarData]] = []
     streamer.dataEvent += emitted.append
@@ -273,6 +276,33 @@ def test_HistoricalDataStreamer_removes_invalid_bars_from_emitted_history():
     streamer.on_new_bar([first, invalid, latest])
 
     assert emitted == [[first, latest]]
+
+
+def test_HistoricalDataStreamer_accepts_finite_nonpositive_prices():
+    """Finite zero or negative historical prices are not inherently invalid."""
+    streamer = HistoricalDataStreamer(
+        ibi.Future(symbol="NQ", exchange="CME"),
+        10000,
+        "1 min",
+        "TRADES",
+    )
+
+    assert streamer._is_valid_bar(make_bar(datetime(2026, 1, 26), price=0))
+    assert streamer._is_valid_bar(make_bar(datetime(2026, 1, 27), price=-20))
+
+
+def test_HistoricalDataStreamer_ignores_unavailable_average_for_midpoint():
+    """Non-trade data should not require a finite trade-average field."""
+    streamer = HistoricalDataStreamer(
+        ibi.Future(symbol="NQ", exchange="CME"),
+        10000,
+        "1 min",
+        "MIDPOINT",
+    )
+    bar = make_bar(datetime(2026, 1, 26))
+    bar.average = math.nan
+
+    assert streamer._is_valid_bar(bar)
 
 
 @pytest.mark.asyncio
@@ -349,3 +379,65 @@ def test_RealTimeBarsStreamer_forwards_request_options():
         False,
         realTimeBarsOptions=options,
     )
+
+
+def test_RealTimeBarsStreamer_validates_its_own_bar_schema():
+    """Real-time validation should use RealTimeBar field names."""
+    streamer = RealTimeBarsStreamer(
+        ibi.Future(symbol="NQ", exchange="CME"),
+        whatToShow="TRADES",
+        useRTH=False,
+    )
+    bar = ibi.RealTimeBar(
+        open_=20,
+        high=21,
+        low=19,
+        close=20,
+        wap=20,
+    )
+    bars = ibi.RealTimeBarList([bar])
+    emitted: list[ibi.RealTimeBarList] = []
+    streamer.dataEvent += emitted.append
+
+    streamer.onUpdateEvent(bars, True)
+
+    assert emitted == [bars]
+
+
+def test_RealTimeBarsStreamer_rejects_historical_only_data_type():
+    """Real-time bar requests should reject historical-only data types."""
+    with pytest.raises(ValueError, match="Real-time bar whatToShow"):
+        RealTimeBarsStreamer(
+            ibi.Future(symbol="NQ", exchange="CME"),
+            whatToShow="BID_ASK",
+            useRTH=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_MktDataStreamer_preserves_shared_ticker_listeners():
+    """Starting a streamer should not clear another ticker listener."""
+    contract = ibi.Future(symbol="NQ", exchange="CME")
+    streamer = MktDataStreamer(contract, tickList="221")
+    ticker = ibi.Ticker(contract=contract)
+    existing_updates: list[ibi.Ticker] = []
+    streamer_updates: list[ibi.Ticker] = []
+    ticker.updateEvent += existing_updates.append
+    streamer.dataEvent += streamer_updates.append
+    streamer.streaming_func = Mock(return_value=ticker)  # type: ignore[method-assign]
+    streamer._set_timeout = Mock()  # type: ignore[method-assign]
+    streamer.ib.isConnected = Mock(return_value=True)
+
+    task = asyncio.create_task(streamer.run())
+    await asyncio.sleep(0)
+    ticker.updateEvent.emit(ticker)
+
+    assert existing_updates == [ticker]
+    assert streamer_updates == [ticker]
+
+    streamer.ib.disconnectedEvent.emit()
+    await task
+    ticker.updateEvent.emit(ticker)
+
+    assert existing_updates == [ticker, ticker]
+    assert streamer_updates == [ticker]

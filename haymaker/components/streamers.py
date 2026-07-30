@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import itertools
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -22,6 +22,7 @@ from ..durationStr_converters import (
     date_to_delta_wrapper,
 )
 from ..timeout import Timeout
+from ..validators import wts_validator
 
 log = logging.getLogger(__name__)
 
@@ -29,27 +30,7 @@ log = logging.getLogger(__name__)
 _counter = itertools.count().__next__
 
 
-def bar_filter(bar: ibi.BarData) -> bool:
-    """Return whether an IB bar contains a non-positive price.
-
-    Use this predicate with bar aggregators when malformed market-data bars
-    should be excluded before downstream calculations.
-
-    Args:
-        bar: Broker bar to validate.
-
-    Returns:
-        ``True`` when any OHLC or average price is non-positive.
-    """
-    return any(
-        (
-            bar.close <= 0,
-            bar.open <= 0,
-            bar.high <= 0,
-            bar.low <= 0,
-            bar.average <= 0,
-        )
-    )
+_REALTIME_BAR_DATA_TYPES = frozenset({"TRADES", "MIDPOINT", "BID", "ASK"})
 
 
 class Streamer(Atom, ABC):
@@ -101,11 +82,18 @@ class Streamer(Atom, ABC):
         # `onContractChanged` if necessary
         self.onStart({})
         ticker = self.streaming_func()
-        ticker.updateEvent.clear()
+        ticker.updateEvent.disconnect(self.dataEvent)
         ticker.updateEvent += self.dataEvent
-        self._set_timeout(ticker.updateEvent, "ticks")
-        while self.ib.isConnected():
-            await asyncio.sleep(0)
+        try:
+            self._set_timeout(ticker.updateEvent, "ticks")
+            await self._wait_until_disconnected()
+        finally:
+            ticker.updateEvent.disconnect(self.dataEvent)
+
+    async def _wait_until_disconnected(self) -> None:
+        """Wait without polling until IB emits its next disconnection."""
+        if self.ib.isConnected():
+            await self.ib.disconnectedEvent
 
     def _set_timeout(self, event: ev.Event, name: str) -> None:
         """
@@ -136,8 +124,8 @@ class HistoricalDataStreamer(Streamer):
 
     Use this source when a strategy needs an initial bar history followed by
     updates from ``reqHistoricalDataAsync(keepUpToDate=True)``. It emits a
-    ``BarDataList`` only when a new completed bar is available; the final
-    work-in-progress bar is excluded.
+    list of completed ``BarData`` objects only when a new valid completed bar
+    is available; the final work-in-progress bar is excluded.
 
     Args:
         contract: Contract blueprint registered with the runtime.
@@ -157,6 +145,8 @@ class HistoricalDataStreamer(Streamer):
         every five seconds. Use a tick streamer when that latency is unsuitable.
     """
 
+    # field() supplies no default: it keeps this dataclass argument required
+    # while allowing Atom.contract's inherited descriptor to remain active.
     contract: ibi.Contract = field()
     durationStr: str | int  # can be given as number of required datapoints
     barSizeSetting: str
@@ -165,9 +155,10 @@ class HistoricalDataStreamer(Streamer):
     formatDate: int = 2  # should be 2 for utc timestamp
     datastore: AsyncDataStore | None = None
     timeout: bool | float = True
-    _last_bar_date: datetime | None = None
+    _last_bar_date: date | datetime | None = None
 
     def __post_init__(self) -> None:
+        self.whatToShow = wts_validator(self.whatToShow)
         if isinstance(self.datastore, bool):
             raise TypeError(
                 "datastore must be an AsyncDataStore or None; "
@@ -188,38 +179,45 @@ class HistoricalDataStreamer(Streamer):
             timeout=0,
         )
 
-    async def last_db_point(self) -> datetime | None:
-        """Return the normalized date of the last persisted bar.
+    async def last_db_point(self) -> date | datetime | None:
+        """Return the date of the last persisted bar.
 
         Returns:
-            Last persisted bar date as a datetime, or ``None`` when no
-            persisted data is available.
+            Last persisted bar date in its original date or datetime category,
+            or ``None`` when no persisted data is available.
         """
         if (store := self.datastore) is None:
             return None
 
         if up_to := (await store.read_metadata(self.contract)).get("up_to"):
             log.debug(f"{self!s} retrieved last date from datastore: {up_to}")
-            return self._normalize_bar_date(up_to)
+            return self._restore_bar_date(up_to)
 
         df = await store.read(self.contract)
         try:
-            return self._normalize_bar_date(df.index[-1])  # type: ignore
+            return df.index[-1]  # type: ignore
         except (AttributeError, IndexError):
             return None
 
     @staticmethod
-    def _normalize_bar_date(value: date | datetime | str) -> datetime:
-        """Normalize an IB or persisted bar date to an aware datetime.
+    def _restore_bar_date(value: date | datetime | str) -> date | datetime:
+        """Restore a persisted bar timestamp to its temporal category.
 
         Args:
             value: Intraday datetime, calendar date, or persisted date string.
 
         Returns:
-            UTC-aware datetime suitable for duration calculation and comparison.
+            Calendar date for date-only values, otherwise a datetime.
         """
-        if isinstance(value, date) and not isinstance(value, datetime):
-            value = value.isoformat()
+        if not isinstance(value, str):
+            return value
+        if len(value) == 10:
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                pass
+        if len(value) == 8 and value.isdigit():
+            return datetime.strptime(value, "%Y%m%d").date()
         return format_timestamp(value)
 
     def _ensure_durationStr(self) -> str:
@@ -240,11 +238,14 @@ class HistoricalDataStreamer(Streamer):
 
     @property
     def _durationStr(self) -> str:
-        return (
-            date_to_delta_wrapper(self._last_bar_date, self.barSizeSetting, margin=2)
-            if self._last_bar_date
-            else self._ensure_durationStr()
+        if self._last_bar_date is None:
+            return self._ensure_durationStr()
+        start_date = (
+            self._last_bar_date
+            if isinstance(self._last_bar_date, datetime)
+            else datetime.combine(self._last_bar_date, datetime.min.time())
         )
+        return date_to_delta_wrapper(start_date, self.barSizeSetting, margin=2)
 
     async def sync_last_bar_date(self) -> None:
         if self._last_bar_date is None:
@@ -257,8 +258,8 @@ class HistoricalDataStreamer(Streamer):
         stream = self.ib.reqMktData(self.contract, "221")
         self._set_timeout(stream.updateEvent, "ticks")
 
-        log.debug(f"{self!s} requesting bars {self._durationStr=}")
         await self.sync_last_bar_date()
+        log.debug(f"{self!s} requesting bars {self._durationStr=}")
         bars = await self.streaming_func()
         log.debug(
             f"{self!s} received historical bars, last bar date: "
@@ -270,7 +271,7 @@ class HistoricalDataStreamer(Streamer):
             async for bars_, hasNewBar in bars.updateEvent:
                 if not hasNewBar:
                     continue
-                completed_bar_date = self._normalize_bar_date(bars_[-2].date)
+                completed_bar_date = bars_[-2].date
                 if (not self._last_bar_date) or (
                     completed_bar_date > self._last_bar_date
                 ):
@@ -281,9 +282,16 @@ class HistoricalDataStreamer(Streamer):
 
     def on_new_bar(self, bars: list[ibi.BarData]) -> None:
         """Emit a completed historical snapshot without invalid bars."""
-        if not bars or bar_filter(bars[-1]):
+        if not bars or not self._is_valid_bar(bars[-1]):
             return
-        self.dataEvent.emit([bar for bar in bars if not bar_filter(bar)])
+        self.dataEvent.emit([bar for bar in bars if self._is_valid_bar(bar)])
+
+    def _is_valid_bar(self, bar: ibi.BarData) -> bool:
+        """Return whether a historical bar has finite applicable prices."""
+        prices = [bar.open, bar.high, bar.low, bar.close]
+        if self.whatToShow == "TRADES":
+            prices.append(bar.average)
+        return all(math.isfinite(price) for price in prices)
 
     def onContractChanged(
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
@@ -305,11 +313,13 @@ class MktDataStreamer(Streamer):
         Updated IB ``Ticker`` objects from ``reqMktData``.
     """
 
+    # field() supplies no default: it keeps this dataclass argument required
+    # while allowing Atom.contract's inherited descriptor to remain active.
     contract: ibi.Contract = field()
     tickList: str
     timeout: bool | float = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         Atom.__init__(self)
 
     def streaming_func(self) -> ibi.Ticker:
@@ -332,13 +342,20 @@ class RealTimeBarsStreamer(Streamer):
         validation. IB supports only a five-second interval for this request.
     """
 
+    # field() supplies no default: it keeps this dataclass argument required
+    # while allowing Atom.contract's inherited descriptor to remain active.
     contract: ibi.Contract = field()
     whatToShow: str
     useRTH: bool
     realTimeBarsOptions: list[ibi.TagValue] = field(default_factory=list)
     timeout: bool | float = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        if self.whatToShow not in _REALTIME_BAR_DATA_TYPES:
+            raise ValueError(
+                "Real-time bar whatToShow must be one of "
+                f"{sorted(_REALTIME_BAR_DATA_TYPES)}, not {self.whatToShow!r}"
+            )
         Atom.__init__(self)
 
     def streaming_func(self) -> ibi.RealTimeBarList:
@@ -350,26 +367,33 @@ class RealTimeBarsStreamer(Streamer):
             realTimeBarsOptions=self.realTimeBarsOptions,
         )
 
-    async def run(self):
+    async def run(self) -> None:
         """
         The difference to superclass is that here we connect the
-        `updateEvent` to intermediary function `onUpdate`, which needs
+        `updateEvent` to intermediary function `onUpdateEvent`, which needs
         to perform some additional checks before emitting `dataEvent`.
         """
         self.onStart({})
         bars = self.streaming_func()
-        bars.updateEvent.clear()
-        bars.updateEvent += self.onUpdate
-        self._set_timeout(bars.updateEvent, "bars")
-        while self.ib.isConnected():
-            await asyncio.sleep(0)
+        bars.updateEvent.disconnect(self.onUpdateEvent)
+        bars.updateEvent += self.onUpdateEvent
+        try:
+            self._set_timeout(bars.updateEvent, "bars")
+            await self._wait_until_disconnected()
+        finally:
+            bars.updateEvent.disconnect(self.onUpdateEvent)
 
-    def onUpdate(self, bars, hasNewBar):
-        # No need to filter out the last bar
-        # emits are every 5 secs, hasNewBar always True
-        # last bar is ready and not modified after emit
-        if hasNewBar and not bar_filter(bars[-1]):
+    def onUpdateEvent(self, bars: ibi.RealTimeBarList, hasNewBar: bool) -> None:
+        """Emit a completed real-time bar list after price validation."""
+        if hasNewBar and self._is_valid_bar(bars[-1]):
             self.dataEvent.emit(bars)
+
+    def _is_valid_bar(self, bar: ibi.RealTimeBar) -> bool:
+        """Return whether a real-time bar has finite applicable prices."""
+        prices = [bar.open_, bar.high, bar.low, bar.close]
+        if self.whatToShow == "TRADES":
+            prices.append(bar.wap)
+        return all(math.isfinite(price) for price in prices)
 
 
 @dataclass
@@ -388,13 +412,15 @@ class TickByTickStreamer(Streamer):
         ``reqTickByTickData``.
     """
 
+    # field() supplies no default: it keeps this dataclass argument required
+    # while allowing Atom.contract's inherited descriptor to remain active.
     contract: ibi.Contract = field()
     tickType: str
     numberOfTicks: int = 0
     ignoreSize: bool = False
     timeout: bool | float = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         Atom.__init__(self)
 
     def streaming_func(self) -> ibi.Ticker:
@@ -412,5 +438,4 @@ __all__ = [
     "RealTimeBarsStreamer",
     "Streamer",
     "TickByTickStreamer",
-    "bar_filter",
 ]
