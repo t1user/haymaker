@@ -24,7 +24,9 @@ The user-facing trading toolbox is exported explicitly from
 SignalModels, one-to-one processors, Portfolio boundaries, routing, execution
 models, and bracket legs. Runtime, Book, Controller, persistence, Trader, and
 contract selection stay outside. There are no forwarding modules or aliases
-for former top-level component paths.
+for former top-level component paths. Each public component module owns its
+`__all__`; the package initializer declares which modules participate and
+aggregates their non-overlapping exports.
 
 ## Runtime metadata
 

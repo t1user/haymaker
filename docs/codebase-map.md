@@ -117,7 +117,9 @@ The research package is intentionally separate from live execution. It works dir
   join the episode's OCA group, keeping stop protection active until an exit
   fills.
 - `haymaker/components/bracket_legs.py`: user-configurable bracket-order legs.
-- `haymaker/components/__init__.py`: explicit supported public toolbox.
+- `haymaker/components/__init__.py`: registers public component modules and
+  aggregates their module-owned, non-overlapping `__all__` exports into the
+  supported package toolbox.
 
 ### Persistence and Logging
 

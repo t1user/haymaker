@@ -3,9 +3,12 @@
 `haymaker.components` is the discoverable public toolbox for user-composed
 trading pipelines. Keep `Atom`, `Pipe`, `Controller`, `Book`, runtime services,
 persistence infrastructure, contract selection, and broker infrastructure
-outside this package. Add every supported public component to the explicit
-`haymaker.components.__all__`; private implementation helpers may remain
-unexported.
+outside this package. Every public component module owns an explicit
+module-level `__all__`. `haymaker.components.__init__` imports those declared
+names and builds the package `__all__` from the ordered set of registered
+public modules. A module's `__all__` therefore means both public within that
+module and promoted to the package toolbox; keep submodule-only and private
+helpers out. Export names must be unique across modules.
 
 ## Message boundaries
 
