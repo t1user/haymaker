@@ -120,7 +120,7 @@ class Streamer(Atom, ABC):
         return f"{self.__class__.__name__}<{'><'.join(identifier)}>"
 
 
-@dataclass
+@dataclass(eq=False)
 class HistoricalDataStreamer(Streamer):
     """Stream IB historical bars and continue with completed live bars.
 
@@ -302,7 +302,7 @@ class HistoricalDataStreamer(Streamer):
         super().onContractChanged(old_contract, new_contract)
 
 
-@dataclass
+@dataclass(eq=False)
 class MktDataStreamer(Streamer):
     """Stream IB level-one market-data ticker updates.
 
@@ -328,7 +328,7 @@ class MktDataStreamer(Streamer):
         return self.ib.reqMktData(self.contract, self.tickList)
 
 
-@dataclass
+@dataclass(eq=False)
 class RealTimeBarsStreamer(Streamer):
     """Stream completed IB real-time five-second bars.
 
@@ -398,7 +398,7 @@ class RealTimeBarsStreamer(Streamer):
         return all(math.isfinite(price) for price in prices)
 
 
-@dataclass
+@dataclass(eq=False)
 class TickByTickStreamer(Streamer):
     """Stream IB tick-by-tick ticker updates.
 

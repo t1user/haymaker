@@ -167,6 +167,10 @@ class Atom:
           Atom.
         * ``repr(atom)`` returns a concise representation of its non-default
           instance state and resolved contract.
+        * Dataclass-based Atom subclasses must use ``@dataclass(eq=False)`` at
+          every dataclass-decorated inheritance level. Atoms are stateful graph
+          nodes, so identically configured instances retain distinct identity
+          equality and remain hashable.
 
         ``source += target`` is shorthand for ``source.connect(target)`` and
         ``source -= target`` is shorthand for ``source.disconnect(target)``.

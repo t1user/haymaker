@@ -38,7 +38,7 @@ class WrongStreamer(Exception):
     pass
 
 
-@dataclass
+@dataclass(eq=False)
 class DfAggregator(Atom):
     """Build and persist sufficient dataframe history from historical bars.
 
@@ -452,7 +452,7 @@ class DfAggregator(Atom):
             return f"{self!r}"
 
 
-@dataclass
+@dataclass(eq=False)
 class VolumeGrouper(Atom):
     """Regroup a dataframe into completed equal-volume bars.
 

@@ -10,7 +10,9 @@ invariants. It is the contract for future changes.
 raises `NotImplementedError`; every concrete Atom explicitly emits output.
 `onStart(data, source)` receives arbitrary mutable startup data and reserves no
 keys. Fan-out passes one shared object reference, so a mutating branch must
-copy first.
+copy first. Dataclass-based Atom subclasses use `@dataclass(eq=False)` at every
+decorated inheritance level so stateful graph nodes retain identity equality
+and object hashing.
 
 `source.connect(*targets)` asks every target to validate the source before any
 connection changes. Built-ins use `validate_source()` only for structural

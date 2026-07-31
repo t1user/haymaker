@@ -29,6 +29,11 @@ Fan-out sends the same object reference to every branch. Immutable standard
 messages are safe to share. A custom branch that mutates its input must copy it
 first.
 
+Atoms are stateful graph nodes rather than value records. A dataclass-based
+Atom must therefore use ``@dataclass(eq=False)``. Repeat ``eq=False`` on every
+subclass decorated with ``@dataclass`` because a new dataclass decoration would
+otherwise generate value equality again.
+
 .. autoclass:: haymaker.base.Atom
    :members: connect, disconnect, clear, pipe, validate_source, onStart, onData, onFeedback
 

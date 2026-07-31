@@ -212,7 +212,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - `Atom` remains an arbitrary-message composition primitive. It never mutates
   startup/data payloads automatically, base `onData` raises, connection
   validation occurs before wiring, and fan-out shares one object reference.
-  Built-in trading components live only under `haymaker.components`.
+  Dataclass-based Atoms use `@dataclass(eq=False)` at every decorated
+  inheritance level so graph nodes retain identity equality. Built-in trading
+  components live only under `haymaker.components`.
 - Built-in messages are immutable `Signal -> PositionProposal ->
   PositionTarget` boundaries. Signal values are finite scalars or
   `SignalPair(entry, exit)`. PositionTarget quantity is always an absolute

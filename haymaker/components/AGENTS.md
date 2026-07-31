@@ -94,6 +94,8 @@ reject only structural incompatibility known before values arrive. It must
 return normally for a compatible source and raise for an incompatible source;
 returning a boolean has no effect. `connect()` validates every target before
 changing any connection. Fan-out passes one shared object reference.
+Dataclass-based Atoms use `@dataclass(eq=False)` at every decorated inheritance
+level so stateful graph nodes retain identity equality and object hashing.
 
 Prefer a real class, ABC, or minimal runtime protocol for structural checks.
 Validate conditional message values in `onData`; do not introduce graph-wide

@@ -51,7 +51,7 @@ def _broker_messages_to_ignore(
     return tuple(sorted(set(codes) | SUPERVISOR_OWNED_BROKER_CODES))
 
 
-@dataclass
+@dataclass(eq=False)
 class Controller(Atom):
     """Own broker order submission, fill accounting, and reconciliation.
 
