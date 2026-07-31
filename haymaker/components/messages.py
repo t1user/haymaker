@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
+from numbers import Real
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -26,10 +27,10 @@ def _validate_timestamp(value: datetime | None, field_name: str) -> None:
         raise ValueError(f"{field_name} must be timezone-aware")
 
 
-def _finite_number(value: float, field_name: str) -> float:
+def _finite_number(value: object, field_name: str) -> float:
     """Return a finite float or raise a field-specific validation error."""
 
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, Real):
         raise TypeError(f"{field_name} must be a real number")
     result = float(value)
     if not math.isfinite(result):

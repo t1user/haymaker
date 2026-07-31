@@ -40,13 +40,14 @@ construct services or inspect the user module.
 The `haymaker` console command owns live composition and logging: it configures
 Haymaker, starts threaded logging handlers, creates `LiveRuntime`, and imports
 the user strategy module so module-level pipelines are built against its
-already-installed `RuntimeContext`. SignalModels register their futures-roll policy
-as they are constructed. Strategy module code may use the provider to build
-fully configured dataframe stores and inject them into consumers. The CLI then
-hands the composed runtime to the shared `App`. The app-lifetime `Controller`
-starts its periodic sync, health-check, and daily UTC futures-roll timers once
-on the active event loop when `Controller.run()` first executes. Live and
-dataloader runtimes use the same application and supervisor lifecycle.
+already-installed `RuntimeContext`. SignalModels register Contract blueprints
+as they are constructed but do not own futures-roll policy. Strategy module
+code may use the provider to build fully configured dataframe stores and inject
+them into consumers. The CLI then hands the composed runtime to the shared
+`App`. The app-lifetime `Controller` starts its periodic sync, health-check, and
+daily UTC futures-roll timers once on the active event loop when
+`Controller.run()` first executes. Live and dataloader runtimes use the same
+application and supervisor lifecycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count, owns Mongo/Arctic composition, and injects datastore construction into `Manager`. `Manager` owns the run-scoped `now` and derives the library from data type and bar size, while contract selectors share a target-owned `FuturesSelectionPolicy`. Arctic is the only supported dataloader backend.
 
@@ -109,7 +110,7 @@ The research package is intentionally separate from live execution. It works dir
   callbacks and workload-owned, market-session-aware stale-data monitoring.
 - `haymaker/components/signal_models.py`: general SignalModel and
   dataframe-based PandasSignalModel, including optional ordered calculation
-  audit persistence and lookup.
+  dataframe persistence.
 - `haymaker/components/signal_processors.py`: scalar and paired one-to-one
   binary processors implementing STATE/EVENT, configurable opposing-signal,
   entry/exit, and stopped-direction lock semantics.
@@ -215,7 +216,6 @@ from runtime configuration.
    `StartupJobs` around the live streamer registry, and installs the passive
    `RuntimeContext` on `Atom` before importing the user strategy module.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
-   Each SignalModel also registers its `auto_roll_futures` policy in the context.
 3. `App` starts the IB watchdog and waits for a successful historical-data probe.
 4. `Controller.run()` starts its app-lifetime timers once on the active event
    loop, reads or initializes state, then `Controller.sync()` races the

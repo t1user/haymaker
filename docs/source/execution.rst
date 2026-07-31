@@ -276,24 +276,26 @@ Signal models
 producer. :class:`~haymaker.components.PandasSignalModel` retains the existing
 dataframe conveniences: implement ``df(data)`` and return the complete
 calculated dataframe. By default, ``signal_fields="signal"`` selects a scalar
-from the latest row. A two-field tuple such as
+from the last row. A two-field tuple such as
 ``signal_fields=("in", "out")`` creates ``SignalPair(entry=..., exit=...)``.
 The selected field or fields are excluded from metadata; the index becomes
 ``as_of`` when datetime-like, and all other row fields become metadata.
+The last returned row is authoritative: the user calculation owns ordering,
+duplicate handling, and correctness.
 
-An optional custom row hook may build the Signal directly. An optional audit
-sink must use ``DRAIN`` and records calculation history under
+An optional custom row hook may build the Signal directly, but it must preserve
+the model's source, resolved Contract, and SignalType. An optional audit sink
+must use ``DRAIN`` and records calculation history under
 ``{source_key}_{ACTIVE.localSymbol}_{run_started_at}``. The first successful
 write stores the complete frame; later writes append only new rows. A NEXT-only
-futures change does not rotate audit history.
+futures change does not rotate audit history. When saving is enabled, the
+calculated dataframe must not be mutated after ``df()`` returns.
 
 .. autoclass:: haymaker.components.SignalModel
    :members: create_signal
 
 .. autoclass:: haymaker.components.PandasSignalModel
-   :members: df, create_signal
-
-.. autofunction:: haymaker.components.read_signal_audit
+   :members: df, create_signal, save_df
 
 .. autoclass:: haymaker.datastore.AsyncDataStore
 

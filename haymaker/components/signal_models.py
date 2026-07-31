@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import singledispatchmethod
-import logging
 from typing import Any, ClassVar
 
 import ib_insync as ibi
@@ -15,7 +15,8 @@ import pandas as pd
 
 from ..async_wrappers import QueueShutdownPolicy
 from ..base import Atom
-from ..datastore import AsyncDataStore, QueuedDataSink
+from ..datastore import QueuedDataSink
+from ..misc import tree
 from .messages import Signal, SignalPair, SignalType
 
 log = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ def _aware_timestamp(value: Any) -> datetime | None:
     return timestamp
 
 
+@dataclass(eq=False)
 class SignalModel(Atom, ABC):
     """Produce standard Signals for one logical source and Contract.
 
@@ -39,55 +41,72 @@ class SignalModel(Atom, ABC):
         source_key: Stable identity used by Portfolio, Book, and execution.
         contract: Contract to which generated Signals apply.
         signal_type: State-replacement or event semantics.
-        auto_roll_futures: Whether this source participates in Controller-owned
-            automatic futures rolling.
 
-    Subclasses implement ``create_signal``; ``onData`` emits its
-    returned immutable Signal.
+    Subclasses implement :meth:`create_signal`. The base :meth:`onData`
+    validates that the returned Signal preserves this model's source, resolved
+    Contract, and SignalType before emitting it.
+
+    Raises:
+        TypeError: If ``source_key`` or ``signal_type`` has the wrong type.
+        ValueError: If ``source_key`` is empty.
     """
+
+    source_key: str
+    contract: ibi.Contract = field()
+    signal_type: SignalType
 
     output_type: ClassVar[type] = Signal
 
-    def __init__(
-        self,
-        source_key: str,
-        contract: ibi.Contract,
-        signal_type: SignalType,
-        *,
-        auto_roll_futures: bool = True,
-    ) -> None:
-        super().__init__()
-        if not source_key:
-            raise ValueError("source_key must not be empty")
-        if not isinstance(signal_type, SignalType):
-            raise TypeError("signal_type must be a SignalType")
-        self.source_key = source_key
-        self.contract = contract
-        self.signal_type = signal_type
-        self.auto_roll_futures = auto_roll_futures
-        self._register_future_roll_policy()
+    def __post_init__(self) -> None:
+        """Initialize Atom services and validate Signal identity configuration."""
 
-    def _register_future_roll_policy(self) -> None:
-        policies = self.runtime.future_roll_policies
-        previous = policies.get(self.source_key)
-        if previous is not None and previous != self.auto_roll_futures:
-            raise ValueError(
-                "Conflicting auto_roll_futures values for source "
-                f"{self.source_key!r}"
-            )
-        policies[self.source_key] = self.auto_roll_futures
+        Atom.__init__(self)
+        if not isinstance(self.source_key, str):
+            raise TypeError("source_key must be a string")
+        if not self.source_key:
+            raise ValueError("source_key must not be empty")
+        if not isinstance(self.signal_type, SignalType):
+            raise TypeError("signal_type must be a SignalType")
 
     def onData(self, data: Any, *args: Any) -> None:
         """Create and emit one Signal from arbitrary upstream data."""
 
-        signal = self.create_signal(data)
-        if not isinstance(signal, Signal):
-            raise TypeError("create_signal() must return Signal")
+        signal = self._validate_signal(self.create_signal(data))
         self.dataEvent.emit(signal)
+
+    def _validate_signal(
+        self,
+        signal: object,
+        *,
+        contract: ibi.Contract | None = None,
+        producer: str = "create_signal()",
+    ) -> Signal:
+        """Validate the Signal identity owned by this model."""
+
+        if not isinstance(signal, Signal):
+            raise TypeError(f"{producer} must return Signal")
+        expected_contract = contract if contract is not None else self.contract
+        if expected_contract is None:
+            raise RuntimeError("SignalModel Contract is unavailable")
+        if signal.source_key != self.source_key:
+            raise ValueError(f"{producer} changed source_key")
+        if signal.contract != expected_contract:
+            raise ValueError(f"{producer} changed Contract")
+        if signal.signal_type is not self.signal_type:
+            raise ValueError(f"{producer} changed SignalType")
+        return signal
 
     @abstractmethod
     def create_signal(self, data: Any) -> Signal:
-        """Return one Signal calculated from upstream data."""
+        """Return one Signal calculated from upstream data.
+
+        Args:
+            data: Arbitrary upstream message accepted by the implementation.
+
+        Returns:
+            Signal preserving this model's configured source, resolved Contract,
+            and SignalType.
+        """
 
 
 RowToSignal = Callable[[pd.Series, ibi.Contract], Signal]
@@ -114,8 +133,9 @@ def _validate_signal_fields(value: SignalFields) -> SignalFields:
     return value
 
 
+@dataclass(eq=False)
 class PandasSignalModel(SignalModel, ABC):
-    """Calculate a Signal from the latest row of a pandas dataframe.
+    """Calculate a Signal from the last row of a pandas dataframe.
 
     Args:
         source_key: Stable logical input identity.
@@ -126,43 +146,33 @@ class PandasSignalModel(SignalModel, ABC):
         row_to_signal: Optional hook replacing standard row conversion.
         audit_sink: Optional ordered ``DRAIN`` sink for complete calculation
             audit history. Other queued shutdown policies are rejected.
-        auto_roll_futures: Controller-owned futures-roll policy.
 
     ``df(data)`` receives a dataframe converted from DataFrame, BarDataList,
     mapping, or dataframe-compatible data. The default row conversion derives
-    ``as_of`` from the latest index and places other row fields in metadata.
+    ``as_of`` from the last row's index and places other row fields in
+    metadata. Row order is authoritative: subclasses own sorting, duplicate
+    handling, and calculation correctness.
     """
 
-    def __init__(
-        self,
-        source_key: str,
-        contract: ibi.Contract,
-        signal_type: SignalType,
-        *,
-        signal_fields: SignalFields = "signal",
-        row_to_signal: RowToSignal | None = None,
-        audit_sink: QueuedDataSink | None = None,
-        auto_roll_futures: bool = True,
-    ) -> None:
-        if audit_sink is not None and (
-            audit_sink.shutdown_policy is not QueueShutdownPolicy.DRAIN
+    signal_fields: SignalFields = field(default="signal", kw_only=True)
+    row_to_signal: RowToSignal | None = field(default=None, kw_only=True, repr=False)
+    audit_sink: QueuedDataSink | None = field(default=None, kw_only=True, repr=False)
+    _audit_symbol: str | None = field(default=None, init=False, repr=False)
+    _audit_active_con_id: int | None = field(default=None, init=False, repr=False)
+    _audit_last_index: Any = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Validate dataframe configuration and initialize Atom services."""
+
+        if self.audit_sink is not None and (
+            self.audit_sink.shutdown_policy is not QueueShutdownPolicy.DRAIN
         ):
             raise ValueError("SignalModel audit_sink must use DRAIN shutdown")
-        self.signal_fields = _validate_signal_fields(signal_fields)
-        self.row_to_signal = row_to_signal
-        self.audit_sink = audit_sink
-        self._audit_symbol: str | None = None
-        self._audit_active_con_id: int | None = None
-        self._audit_last_index: Any = None
-        super().__init__(
-            source_key,
-            contract,
-            signal_type,
-            auto_roll_futures=auto_roll_futures,
-        )
+        self.signal_fields = _validate_signal_fields(self.signal_fields)
+        super().__post_init__()
 
     def create_signal(self, data: Any) -> Signal:
-        """Calculate, audit, and convert the latest dataframe row."""
+        """Calculate, optionally save, and convert the last dataframe row."""
 
         calculated = self.df(self._as_dataframe(data))
         if not isinstance(calculated, pd.DataFrame):
@@ -170,51 +180,25 @@ class PandasSignalModel(SignalModel, ABC):
         if calculated.empty:
             raise ValueError("df() returned an empty dataframe")
         row = calculated.iloc[-1]
-        contract = self._signal_contract()
+        contract = self.contract
+        if contract is None:
+            raise RuntimeError("SignalModel Contract is unavailable")
         if self.row_to_signal is not None:
-            signal = self.row_to_signal(row, contract)
-            if not isinstance(signal, Signal):
-                raise TypeError("row_to_signal must return Signal")
-            if signal.source_key != self.source_key:
-                raise ValueError("row_to_signal changed source_key")
-            if signal.contract != contract:
-                raise ValueError("row_to_signal changed Contract")
-            if signal.signal_type is not self.signal_type:
-                raise ValueError("row_to_signal changed SignalType")
-        else:
-            fields = (
-                (self.signal_fields,)
-                if isinstance(self.signal_fields, str)
-                else self.signal_fields
+            signal = self._validate_row_to_signal(
+                self.row_to_signal(row, contract),
+                contract,
             )
-            missing = [field for field in fields if field not in row]
-            if missing:
-                raise KeyError(
-                    "Calculated row is missing signal field(s): "
-                    + ", ".join(repr(field) for field in missing)
-                )
-            metadata = {
-                str(key): value for key, value in row.items() if key not in fields
-            }
-            value: float | SignalPair
-            if isinstance(self.signal_fields, str):
-                value = row[self.signal_fields]
-            else:
-                entry_field, exit_field = self.signal_fields
-                value = SignalPair(
-                    entry=row[entry_field],
-                    exit=row[exit_field],
-                )
-            signal = Signal(
+        else:
+            signal = self._default_row_to_signal(
+                row,
                 source_key=self.source_key,
                 contract=contract,
-                value=value,
                 signal_type=self.signal_type,
-                as_of=_aware_timestamp(row.name),
-                metadata=metadata,
+                signal_fields=self.signal_fields,
             )
+            self._validate_signal(signal, contract=contract)
 
-        audit_reference = self._persist_audit(calculated)
+        audit_reference = self.save_df(calculated)
         if audit_reference is not None:
             signal = replace(
                 signal,
@@ -224,6 +208,58 @@ class PandasSignalModel(SignalModel, ABC):
                 },
             )
         return signal
+
+    def _validate_row_to_signal(
+        self,
+        signal: object,
+        contract: ibi.Contract,
+    ) -> Signal:
+        """Validate a Signal returned by the custom row conversion hook."""
+
+        if not isinstance(signal, Signal):
+            raise TypeError("row_to_signal must return Signal")
+        return self._validate_signal(
+            signal,
+            contract=contract,
+            producer="row_to_signal",
+        )
+
+    @staticmethod
+    def _default_row_to_signal(
+        row: pd.Series,
+        *,
+        source_key: str,
+        contract: ibi.Contract,
+        signal_type: SignalType,
+        signal_fields: SignalFields,
+    ) -> Signal:
+        """Convert one calculated row using the standard field mapping."""
+
+        fields = (signal_fields,) if isinstance(signal_fields, str) else signal_fields
+        missing = [field for field in fields if field not in row]
+        if missing:
+            raise KeyError(
+                "Calculated row is missing signal field(s): "
+                + ", ".join(repr(field) for field in missing)
+            )
+        metadata = {str(key): value for key, value in row.items() if key not in fields}
+        value: float | SignalPair
+        if isinstance(signal_fields, str):
+            value = row[signal_fields]
+        else:
+            entry_field, exit_field = signal_fields
+            value = SignalPair(
+                entry=row[entry_field],
+                exit=row[exit_field],
+            )
+        return Signal(
+            source_key=source_key,
+            contract=contract,
+            value=value,
+            signal_type=signal_type,
+            as_of=_aware_timestamp(row.name),
+            metadata=metadata,
+        )
 
     @singledispatchmethod
     def _as_dataframe(self, data: Any) -> pd.DataFrame:
@@ -249,33 +285,39 @@ class PandasSignalModel(SignalModel, ABC):
 
     @abstractmethod
     def df(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Return the complete calculated dataframe used for the Signal."""
+        """Return the complete calculated dataframe used for the Signal.
 
-    def _active_contract(self) -> ibi.Contract:
-        """Return ACTIVE for audit identity, independent of transaction role."""
+        Args:
+            data: Dataframe converted from the upstream message.
 
-        try:
-            selector = self.contract_selector
-        except KeyError:
-            selector = None
-        if selector is not None:
-            return selector.active_contract
-        return self._signal_contract()
+        Returns:
+            Calculated dataframe whose last row will produce the Signal.
+        """
 
-    def _signal_contract(self) -> ibi.Contract:
-        """Return the configured Contract after runtime registry resolution."""
+    def save_df(self, frame: pd.DataFrame) -> str | None:
+        """Queue calculated dataframe rows when a save sink is configured.
 
-        contract = self.contract
-        if contract is None:
-            raise RuntimeError("SignalModel Contract is unavailable")
-        return contract
+        Args:
+            frame: Complete calculated dataframe returned by :meth:`df`. The
+                caller must not mutate it after this method queues it.
 
-    def _persist_audit(self, frame: pd.DataFrame) -> str | None:
-        """Queue ordered audit writes after a successful calculation."""
+        Returns:
+            Physical dataframe symbol, or ``None`` when saving is disabled.
+
+        Raises:
+            RuntimeError: If saving is enabled before contract selection has
+                been initialized.
+        """
 
         if self.audit_sink is None:
             return None
-        active = self._active_contract()
+        selector = self.contract_selector
+        if selector is None:
+            raise RuntimeError(
+                "PandasSignalModel cannot save data before its Contract selector "
+                "is initialized"
+            )
+        active = selector.active_contract
         run_started_at = self.runtime.run_started_at
         symbol = (
             f"{self.source_key}_"
@@ -288,72 +330,22 @@ class PandasSignalModel(SignalModel, ABC):
         metadata = {
             "source_key": self.source_key,
             "run_started_at": run_started_at,
-            "active_contract": ibi.util.tree(active),
-            "observation_start": frame.index[0],
-            "observation_end": frame.index[-1],
-            "status": "complete",
+            "active_contract": tree(active),
         }
         if is_new_generation:
             self.audit_sink.enqueue_write(symbol, frame, metadata)
             self._audit_symbol = symbol
             self._audit_active_con_id = active.conId
-            log.info("Started Signal audit generation %s", symbol)
+            log.info("Started Signal dataframe generation %s", symbol)
         else:
             new_rows = frame
             if self._audit_last_index is not None:
                 new_rows = frame.loc[frame.index > self._audit_last_index]
             if not new_rows.empty:
                 self.audit_sink.enqueue_append(symbol, new_rows, metadata)
-                log.debug("Appended Signal audit generation %s", symbol)
+                log.debug("Appended Signal dataframe generation %s", symbol)
         self._audit_last_index = frame.index[-1]
         return symbol
 
 
-async def read_signal_audit(
-    store: AsyncDataStore,
-    *,
-    source_key: str,
-    created_at: datetime,
-    as_of: datetime | None = None,
-) -> pd.DataFrame | None:
-    """Read the latest audit run created no later than a Signal.
-
-    Args:
-        store: Awaited dataframe store used for the audit library.
-        source_key: Signal source identity.
-        created_at: Signal creation time used to bound candidate runs.
-        as_of: Optional final observation timestamp.
-
-    Returns:
-        Audit dataframe through ``as_of``, or ``None`` when no matching run
-        exists.
-    """
-
-    if created_at.tzinfo is None or created_at.utcoffset() is None:
-        raise ValueError("created_at must be timezone-aware")
-    if as_of is not None and (as_of.tzinfo is None or as_of.utcoffset() is None):
-        raise ValueError("as_of must be timezone-aware")
-    prefix = f"{source_key}_"
-    candidates: list[tuple[datetime, str]] = []
-    for symbol in await store.keys():
-        if not symbol.startswith(prefix):
-            continue
-        metadata: Mapping[str, Any] = await store.read_metadata(symbol)
-        if metadata.get("source_key") != source_key:
-            continue
-        run_started_at = metadata.get("run_started_at")
-        if isinstance(run_started_at, str):
-            run_started_at = datetime.fromisoformat(run_started_at)
-        if isinstance(run_started_at, datetime) and (
-            run_started_at.tzinfo is None or run_started_at.utcoffset() is None
-        ):
-            run_started_at = run_started_at.replace(tzinfo=timezone.utc)
-        if isinstance(run_started_at, datetime) and run_started_at <= created_at:
-            candidates.append((run_started_at, symbol))
-    if not candidates:
-        return None
-    _, symbol = max(candidates)
-    return await store.read(symbol, end_date=as_of)
-
-
-__all__ = ["PandasSignalModel", "SignalModel", "read_signal_audit"]
+__all__ = ["PandasSignalModel", "SignalModel"]

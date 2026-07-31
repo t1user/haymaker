@@ -1,17 +1,22 @@
+from dataclasses import is_dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import ib_insync as ibi
+import numpy as np
 import pandas as pd
 import pytest
 
+from haymaker import misc
 from haymaker.async_wrappers import QueueShutdownPolicy
 from haymaker.components import (
     PandasSignalModel,
     Signal,
     SignalPair,
+    SignalModel,
     SignalType,
-    read_signal_audit,
 )
+from haymaker.enums import ActiveNext
 
 
 class Model(PandasSignalModel):
@@ -68,6 +73,46 @@ def frame(last=11):
     )
 
 
+def install_selector(
+    monkeypatch: pytest.MonkeyPatch,
+    atom_runtime,
+    *,
+    active: ibi.Contract,
+    next_contract: ibi.Contract | None = None,
+) -> None:
+    """Install a resolved ACTIVE/NEXT selector on the test runtime."""
+
+    selector = SimpleNamespace(
+        active_contract=active,
+        next_contract=next_contract or active,
+    )
+    monkeypatch.setattr(
+        atom_runtime.contract_registry,
+        "get_selector",
+        lambda blueprint: selector,
+    )
+
+
+def test_signal_models_are_identity_based_dataclasses_without_roll_policy(
+    atom_runtime,
+):
+    first = model()
+    second = model()
+
+    assert is_dataclass(first)
+    assert first != second
+    assert atom_runtime.future_roll_policies == {}
+
+
+def test_signal_model_rejects_non_string_source_key(atom_runtime):
+    with pytest.raises(TypeError, match="source_key must be a string"):
+        Model(
+            1,
+            ibi.Future(conId=1, symbol="ES", exchange="CME"),
+            SignalType.STATE,
+        )
+
+
 def test_pandas_model_emits_structured_signal(atom_runtime):
     output = []
     subject = model()
@@ -86,6 +131,43 @@ def test_pandas_model_emits_structured_signal(atom_runtime):
             metadata={"close": 11, "atr": 2.5},
         )
     ]
+
+
+def test_pandas_model_accepts_numpy_integer_signal(atom_runtime):
+    class IntegerModel(PandasSignalModel):
+        def df(self, data):
+            return pd.DataFrame(
+                {"signal": np.array([0, 1], dtype=np.int64)},
+                index=data.index,
+            )
+
+    result = IntegerModel(
+        "alpha",
+        ibi.Future(conId=1, symbol="ES", exchange="CME"),
+        SignalType.STATE,
+    ).create_signal(frame())
+
+    assert result.value == 1.0
+
+
+def test_signal_model_rejects_changed_signal_identity(atom_runtime):
+    class WrongSourceModel(SignalModel):
+        def create_signal(self, data):
+            return Signal(
+                source_key="other",
+                contract=self.contract,
+                value=data,
+                signal_type=self.signal_type,
+            )
+
+    subject = WrongSourceModel(
+        "alpha",
+        ibi.Future(conId=1, symbol="ES", exchange="CME"),
+        SignalType.STATE,
+    )
+
+    with pytest.raises(ValueError, match=r"create_signal\(\) changed source_key"):
+        subject.onData(1)
 
 
 def test_pandas_model_treats_naive_observation_index_as_utc(atom_runtime):
@@ -201,7 +283,17 @@ def test_custom_row_hook_cannot_change_owned_signal_identity(atom_runtime):
     assert sink.calls == []
 
 
-def test_successful_audit_writes_full_frame_then_only_new_rows(atom_runtime):
+def test_successful_audit_writes_full_frame_then_only_new_rows(
+    atom_runtime,
+    monkeypatch,
+):
+    active = ibi.Future(
+        conId=1,
+        symbol="ES",
+        exchange="CME",
+        localSymbol="ESM6",
+    )
+    install_selector(monkeypatch, atom_runtime, active=active)
     sink = FakeAuditSink()
     subject = model(audit_sink=sink)
     subject.create_signal(frame())
@@ -222,6 +314,55 @@ def test_successful_audit_writes_full_frame_then_only_new_rows(atom_runtime):
     assert list(sink.calls[1][2].index) == [datetime(2026, 1, 3, tzinfo=timezone.utc)]
     assert result.metadata["audit_symbol"] == sink.calls[0][1]
     assert sink.calls[0][3]["source_key"] == "alpha"
+    assert sink.calls[0][3]["active_contract"] == misc.tree(active)
+
+
+def test_signal_uses_selected_contract_but_saved_data_uses_active(
+    atom_runtime,
+    monkeypatch,
+):
+    active = ibi.Future(
+        conId=1,
+        symbol="ES",
+        exchange="CME",
+        localSymbol="ESM6",
+    )
+    next_contract = ibi.Future(
+        conId=2,
+        symbol="ES",
+        exchange="CME",
+        localSymbol="ESU6",
+    )
+    install_selector(
+        monkeypatch,
+        atom_runtime,
+        active=active,
+        next_contract=next_contract,
+    )
+
+    class NextModel(Model):
+        which_contract = ActiveNext.NEXT
+
+    sink = FakeAuditSink()
+    subject = NextModel(
+        "alpha",
+        ibi.Future(symbol="ES", exchange="CME"),
+        SignalType.STATE,
+        audit_sink=sink,
+    )
+
+    result = subject.create_signal(frame())
+
+    assert result.contract == next_contract
+    assert "ESM6" in sink.calls[0][1]
+    assert sink.calls[0][3]["active_contract"] == misc.tree(active)
+
+
+def test_saving_requires_initialized_contract_selector(atom_runtime):
+    subject = model(audit_sink=FakeAuditSink())
+
+    with pytest.raises(RuntimeError, match="Contract selector"):
+        subject.create_signal(frame())
 
 
 def test_failed_calculation_creates_no_audit_generation(atom_runtime):
@@ -268,55 +409,3 @@ def test_audit_sink_requires_drain_policy(atom_runtime):
 
     with pytest.raises(ValueError, match="DRAIN"):
         model(audit_sink=sink)
-
-
-def test_signal_model_registers_source_roll_policy(atom_runtime):
-    model(auto_roll_futures=False)
-
-    assert atom_runtime.future_roll_policies["alpha"] is False
-
-
-def test_conflicting_source_roll_policy_raises(atom_runtime):
-    model(auto_roll_futures=True)
-
-    with pytest.raises(ValueError, match="Conflicting"):
-        model(auto_roll_futures=False)
-
-
-@pytest.mark.asyncio
-async def test_audit_lookup_uses_metadata_identity_and_normalizes_legacy_utc():
-    data = frame()
-
-    class Store:
-        async def keys(self):
-            return ["alpha_ES_older", "alpha_ES_wrong", "beta_ES_newer"]
-
-        async def read_metadata(self, symbol):
-            return {
-                "alpha_ES_older": {
-                    "source_key": "alpha",
-                    "run_started_at": "2026-01-01T00:00:00",
-                },
-                "alpha_ES_wrong": {
-                    "source_key": "other",
-                    "run_started_at": "2026-01-02T00:00:00+00:00",
-                },
-                "beta_ES_newer": {
-                    "source_key": "beta",
-                    "run_started_at": "2026-01-03T00:00:00+00:00",
-                },
-            }[symbol]
-
-        async def read(self, symbol, start_date=None, end_date=None):
-            assert symbol == "alpha_ES_older"
-            assert end_date == datetime(2026, 1, 2, tzinfo=timezone.utc)
-            return data
-
-    result = await read_signal_audit(
-        Store(),
-        source_key="alpha",
-        created_at=datetime(2026, 1, 4, tzinfo=timezone.utc),
-        as_of=datetime(2026, 1, 2, tzinfo=timezone.utc),
-    )
-
-    assert result is data

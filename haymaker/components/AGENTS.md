@@ -52,6 +52,12 @@ target. Direct `Portfolio` implementations own source state, synchronization,
 `as_of`, duplicate/late input, timeout, and recomputation policies. Do not put
 those policies in the abstract base.
 
+SignalModels are identity-based dataclasses used by both flows. They own
+`source_key`, the Signal Contract, SignalType, and standard emission, but do not
+own futures-roll policy. PandasSignalModel treats the last row returned by
+`df()` as authoritative; user calculations own ordering, duplicates, and
+correctness.
+
 `BinarySignalProcessor` accepts only scalar `-1/0/1` values and exposes
 `OpposingSignalPolicy.CLOSE` or `REVERSE`. `BinaryEntryExitSignalProcessor`
 accepts only SignalPair, uses entry while flat and exit while positioned, and
@@ -134,7 +140,8 @@ PandasSignalModel audit symbols are
 selector regardless of a transaction's Contract role; NEXT-only changes do not
 rotate history. A successful ACTIVE change writes a new complete generation,
 then only new rows append. Audit sinks must use ordered `DRAIN`; no failed
-calculation may create a generation.
+calculation may create a generation. Saving uses the selector's ACTIVE Contract
+even when the emitted Signal uses `Atom.which_contract=NEXT`.
 
 Every public export needs a usage-focused Google-style, Sphinx-compatible
 docstring and focused pytest coverage. Tests must cover structural connection

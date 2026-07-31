@@ -83,15 +83,16 @@ valid.
 
 ## Signal production and one-to-one flow
 
-`SignalModel` owns source identity, Contract, SignalType, futures auto-roll
-policy, and standard Signal emission. A Signal carries either one finite
-scalar value or a finite `SignalPair(entry, exit)`. `PandasSignalModel` retains
-dataframe, BarDataList, mapping, and compatible input conversion; subclasses
-implement `df(data)`. `signal_fields` accepts either one field name for a
-scalar or an `(entry, exit)` field-name tuple for a SignalPair. The observation
-index supplies `as_of` when possible, selected signal fields are excluded from
-metadata, and other row values become metadata. A custom row-to-Signal hook
-may replace this conversion.
+`SignalModel` is an identity-based dataclass that owns source identity,
+Contract, SignalType, and standard Signal emission. It does not own
+futures-roll policy. A Signal carries either one finite scalar value or a
+finite `SignalPair(entry, exit)`. `PandasSignalModel` retains dataframe,
+BarDataList, mapping, and compatible input conversion; subclasses implement
+`df(data)`. `signal_fields` accepts either one field name for a scalar or an
+`(entry, exit)` field-name tuple for a SignalPair. The last returned row is
+authoritative, its index supplies `as_of` when possible, selected signal fields
+are excluded from metadata, and other row values become metadata. A custom
+row-to-Signal hook may replace this conversion.
 
 Built-in binary processors consume Signal and query
 `Book.effective_quantity(source_key)`. STATE zero requests flat; EVENT zero is
@@ -254,8 +255,8 @@ dataframe; later saves append only new rows. ACTIVE rotation starts a new
 generation only after a successful calculation. A supervised restart continues
 the process run, while a new process creates a new run. Audit sinks are
 dedicated ordered `DRAIN` sinks. Metadata records source, run start, ACTIVE
-Contract, observation range, and status. Futures history may be back-adjusted
-without a downstream notification.
+Contract. Futures history may be back-adjusted without a downstream
+notification.
 
 ## Conversion and validation
 
