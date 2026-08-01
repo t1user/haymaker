@@ -54,7 +54,10 @@ a finite scalar value or :class:`~haymaker.components.SignalPair`, and
 mandatory :class:`~haymaker.components.SignalType`.
 ``STATE`` replaces the source's previous desired state. Each ``EVENT`` is a new
 event; an EVENT zero means that no event occurred. ``as_of`` is the optional
-effective market-observation time, while ``created_at`` records local creation.
+effective market-observation time, while ``created_at`` records local Signal
+creation. They deliberately remain distinct: IB bars are left-labelled, so a
+bar's ``as_of`` identifies the start of its interval rather than the time at
+which the completed bar was processed.
 ``SignalPair`` carries separate entry and exit values without duplicating the
 Signal's identity, Contract, timestamps, or metadata.
 
@@ -278,29 +281,51 @@ Signal models
 =============
 
 :class:`~haymaker.components.SignalModel` is the general structured Signal
-producer. :class:`~haymaker.components.PandasSignalModel` retains the existing
-dataframe conveniences: implement ``df(data)`` and return the complete
-calculated dataframe. By default, ``signal_fields="signal"`` selects a scalar
-from the last row. A two-field tuple such as
-``signal_fields=("in", "out")`` creates ``SignalPair(entry=..., exit=...)``.
-The selected field or fields are excluded from metadata; the index becomes
-``as_of`` when datetime-like, and all other row fields become metadata.
-The last returned row is authoritative: the user calculation owns ordering,
-duplicate handling, and correctness.
+producer. A custom model implements ``calculate_signal(data)`` and returns a
+:class:`~haymaker.components.SignalCalculation` containing only its calculated
+value, optional metadata, and optional observation time. The framework supplies
+the configured source, resolved Contract, SignalType, and ``created_at`` when it
+constructs the immutable Signal. Override ``validate_signal_value()`` to impose
+model-specific restrictions beyond the standard finite-value checks.
 
-An optional custom row hook may build the Signal directly, but it must preserve
-the model's source, resolved Contract, and SignalType. An optional audit sink
-must use ``DRAIN`` and records calculation history under
+.. code-block:: python
+
+   class ThresholdModel(SignalModel):
+       threshold = 100.0
+
+       def calculate_signal(self, observation):
+           return SignalCalculation(
+               value=1 if observation.price > self.threshold else 0,
+               metadata={"threshold": self.threshold},
+               as_of=observation.time,
+           )
+
+:class:`~haymaker.components.PandasSignalModel` provides dataframe
+conveniences: implement ``df(data)`` and return the complete calculated
+dataframe. By default, ``signal_fields="signal"`` selects a scalar from the
+last row. A two-field tuple such as ``signal_fields=("in", "out")`` creates
+``SignalPair(entry=..., exit=...)``. The index becomes ``as_of`` when
+datetime-like. ``metadata_fields=None`` copies all non-signal fields into
+metadata, an empty collection copies none, and an explicit collection selects
+only those fields. The last returned row is authoritative: the user calculation
+owns ordering, duplicate handling, and correctness.
+
+An optional ``row_to_calculation`` hook can replace the standard last-row
+conversion, but it still returns only ``SignalCalculation``; it cannot replace
+framework-owned Signal identity. An optional audit sink must use ``DRAIN`` and
+records calculation history under
 ``{source_key}_{ACTIVE.localSymbol}_{run_started_at}``. The first successful
 write stores the complete frame; later writes append only new rows. A NEXT-only
 futures change does not rotate audit history. When saving is enabled, the
 calculated dataframe must not be mutated after ``df()`` returns.
 
+.. autoclass:: haymaker.components.SignalCalculation
+
 .. autoclass:: haymaker.components.SignalModel
-   :members: create_signal
+   :members: calculate_signal, create_signal, validate_signal_value
 
 .. autoclass:: haymaker.components.PandasSignalModel
-   :members: df, create_signal, save_df
+   :members: df, calculate_signal, create_signal, save_df
 
 .. autoclass:: haymaker.datastore.AsyncDataStore
 

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import singledispatchmethod
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 
 import ib_insync as ibi
 import pandas as pd
@@ -33,6 +33,39 @@ def _aware_timestamp(value: Any) -> datetime | None:
     return timestamp
 
 
+@dataclass(frozen=True, kw_only=True)
+class SignalCalculation:
+    """Carry user-calculated fields from which SignalModel builds a Signal.
+
+    Use this as the single return type of :meth:`SignalModel.calculate_signal`.
+    SignalModel supplies source identity, the resolved Contract, SignalType, and
+    ``created_at`` when it constructs the emitted :class:`Signal`.
+
+    Args:
+        value: Finite scalar value or one-to-one entry/exit pair.
+        metadata: Optional calculated fields consumed downstream. Omit it when
+            the calculation has no metadata.
+        as_of: Effective observation time. For left-labelled IB bars this is
+            the time at which the bar interval started, not when calculation
+            completed.
+
+    Note:
+        Intrinsic value, metadata, and timestamp validation occur when the
+        framework constructs the immutable Signal.
+    """
+
+    value: float | SignalPair
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    as_of: datetime | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class _PandasSignalCalculation(SignalCalculation):
+    """Keep the calculated frame alive until its validated Signal is saved."""
+
+    frame: pd.DataFrame = field(repr=False, compare=False)
+
+
 @dataclass(eq=False)
 class SignalModel(Atom, ABC):
     """Produce standard Signals for one logical source and Contract.
@@ -42,9 +75,9 @@ class SignalModel(Atom, ABC):
         contract: Contract to which generated Signals apply.
         signal_type: State-replacement or event semantics.
 
-    Subclasses implement :meth:`create_signal`. The base :meth:`onData`
-    validates that the returned Signal preserves this model's source, resolved
-    Contract, and SignalType before emitting it.
+    Subclasses implement :meth:`calculate_signal` and return only calculated
+    value, metadata, and observation time. SignalModel owns construction of the
+    immutable Signal envelope and emits it from :meth:`onData`.
 
     Raises:
         TypeError: If ``source_key`` or ``signal_type`` has the wrong type.
@@ -69,68 +102,104 @@ class SignalModel(Atom, ABC):
             raise TypeError("signal_type must be a SignalType")
 
     def onData(self, data: Any, *args: Any) -> None:
-        """Create and emit one Signal from arbitrary upstream data."""
+        """Create and emit one Signal from arbitrary upstream data.
 
-        signal = self._validate_signal(self.create_signal(data))
+        Args:
+            data: Message supplied by the connected upstream Atom.
+            *args: Additional event arguments, accepted for eventkit callbacks
+                and otherwise ignored.
+
+        Emits:
+            Signal: The validated Signal returned by :meth:`create_signal`.
+        """
+
+        signal = self.create_signal(data)
         self.dataEvent.emit(signal)
 
-    def _validate_signal(
-        self,
-        signal: object,
-        *,
-        contract: ibi.Contract | None = None,
-        producer: str = "create_signal()",
-    ) -> Signal:
-        """Validate the Signal identity owned by this model."""
-
-        if not isinstance(signal, Signal):
-            raise TypeError(f"{producer} must return Signal")
-        expected_contract = contract if contract is not None else self.contract
-        if expected_contract is None:
-            raise RuntimeError("SignalModel Contract is unavailable")
-        if signal.source_key != self.source_key:
-            raise ValueError(f"{producer} changed source_key")
-        if signal.contract != expected_contract:
-            raise ValueError(f"{producer} changed Contract")
-        if signal.signal_type is not self.signal_type:
-            raise ValueError(f"{producer} changed SignalType")
-        return signal
-
-    @abstractmethod
+    @final
     def create_signal(self, data: Any) -> Signal:
-        """Return one Signal calculated from upstream data.
+        """Calculate and return one framework-owned Signal.
+
+        This method is the template boundary used by :meth:`onData`. Call it
+        directly when a calculated Signal is needed without emitting it;
+        subclasses customize :meth:`calculate_signal` and
+        :meth:`validate_signal_value` instead.
 
         Args:
             data: Arbitrary upstream message accepted by the implementation.
 
         Returns:
-            Signal preserving this model's configured source, resolved Contract,
-            and SignalType.
+            Immutable Signal with framework-owned identity and creation time.
+
+        Raises:
+            TypeError: If the calculation has the wrong result type or the
+                resulting Signal is structurally invalid.
+            ValueError: If intrinsic or model-specific Signal validation fails.
+        """
+
+        calculation = self.calculate_signal(data)
+        signal = self._signal_from_calculation(calculation)
+        additional_metadata = self._additional_signal_metadata(calculation)
+        if additional_metadata:
+            signal = replace(
+                signal,
+                metadata={**signal.metadata, **additional_metadata},
+            )
+        return signal
+
+    def _signal_from_calculation(self, calculation: object) -> Signal:
+        """Construct and validate the Signal envelope owned by this model."""
+
+        if not isinstance(calculation, SignalCalculation):
+            raise TypeError("calculate_signal() must return SignalCalculation")
+        contract = self.contract
+        signal = Signal(
+            source_key=self.source_key,
+            contract=contract,
+            value=calculation.value,
+            signal_type=self.signal_type,
+            as_of=calculation.as_of,
+            metadata=calculation.metadata,
+        )
+        self.validate_signal_value(signal.value)
+        return signal
+
+    def _additional_signal_metadata(
+        self,
+        calculation: SignalCalculation,
+    ) -> Mapping[str, Any]:
+        """Return framework metadata to add after Signal validation."""
+
+        return {}
+
+    def validate_signal_value(self, value: float | SignalPair) -> None:
+        """Validate model-specific value constraints before Signal emission.
+
+        Override this hook to reject values that are structurally valid Signals
+        but invalid for a particular model, such as non-binary scalar values.
+        The base implementation accepts every value supported by Signal.
+
+        Args:
+            value: Signal-normalized finite float or SignalPair.
+
+        Raises:
+            ValueError: When an override rejects the calculated value.
+        """
+
+    @abstractmethod
+    def calculate_signal(self, data: Any) -> SignalCalculation:
+        """Calculate the user-owned contents of one Signal.
+
+        Args:
+            data: Arbitrary upstream message accepted by the implementation.
+
+        Returns:
+            Value, optional metadata, and optional effective observation time.
         """
 
 
-RowToSignal = Callable[[pd.Series, ibi.Contract], Signal]
+RowToCalculation = Callable[[pd.Series], SignalCalculation]
 SignalFields = str | tuple[str, str]
-
-
-def _validate_signal_fields(value: SignalFields) -> SignalFields:
-    """Validate a scalar field name or an entry/exit field pair."""
-
-    if isinstance(value, str):
-        if not value:
-            raise ValueError("signal_fields must not be empty")
-        return value
-    if not isinstance(value, tuple):
-        raise TypeError("signal_fields must be a field name or a two-field tuple")
-    if len(value) != 2:
-        raise ValueError("signal_fields tuple must contain exactly two fields")
-    if not all(isinstance(field, str) for field in value):
-        raise TypeError("signal_fields tuple members must be strings")
-    if not all(value):
-        raise ValueError("signal_fields tuple members must not be empty")
-    if value[0] == value[1]:
-        raise ValueError("signal_fields tuple members must be distinct")
-    return value
 
 
 @dataclass(eq=False)
@@ -143,7 +212,11 @@ class PandasSignalModel(SignalModel, ABC):
         signal_type: State or event semantics.
         signal_fields: Calculated row field containing a scalar Signal value,
             or an ``(entry, exit)`` field-name tuple that creates a SignalPair.
-        row_to_signal: Optional hook replacing standard row conversion.
+        metadata_fields: Row fields copied into Signal metadata. ``None`` copies
+            every non-signal field, an empty collection copies none, and an
+            explicit collection copies only those fields.
+        row_to_calculation: Optional hook replacing standard row conversion. It
+            returns SignalCalculation and never supplies Signal identity.
         audit_sink: Optional ordered ``DRAIN`` sink for complete calculation
             audit history. Other queued shutdown policies are rejected.
 
@@ -155,11 +228,44 @@ class PandasSignalModel(SignalModel, ABC):
     """
 
     signal_fields: SignalFields = field(default="signal", kw_only=True)
-    row_to_signal: RowToSignal | None = field(default=None, kw_only=True, repr=False)
+    metadata_fields: Collection[str] | None = field(default=None, kw_only=True)
+    row_to_calculation: RowToCalculation | None = field(
+        default=None, kw_only=True, repr=False
+    )
     audit_sink: QueuedDataSink | None = field(default=None, kw_only=True, repr=False)
     _audit_symbol: str | None = field(default=None, init=False, repr=False)
     _audit_active_con_id: int | None = field(default=None, init=False, repr=False)
     _audit_last_index: Any = field(default=None, init=False, repr=False)
+
+    @staticmethod
+    def _validate_signal_fields(value: SignalFields) -> SignalFields:
+        """Validate the shape of a scalar field name or entry/exit field pair."""
+
+        if isinstance(value, str):
+            return value
+        if not isinstance(value, tuple):
+            raise TypeError("signal_fields must be a field name or a two-field tuple")
+        if len(value) != 2:
+            raise ValueError("signal_fields tuple must contain exactly two fields")
+        if not all(isinstance(field, str) for field in value):
+            raise TypeError("signal_fields tuple members must be strings")
+        return value
+
+    @staticmethod
+    def _normalize_metadata_fields(
+        value: Collection[str] | None,
+    ) -> tuple[str, ...] | None:
+        """Normalize an optional collection of dataframe metadata columns."""
+
+        if value is None:
+            return None
+        if isinstance(value, str) or not isinstance(value, Collection):
+            raise TypeError(
+                "metadata_fields must be a collection of field names or None"
+            )
+        if not all(isinstance(field, str) for field in value):
+            raise TypeError("metadata_fields members must be strings")
+        return tuple(value)
 
     def __post_init__(self) -> None:
         """Validate dataframe configuration and initialize Atom services."""
@@ -168,11 +274,28 @@ class PandasSignalModel(SignalModel, ABC):
             self.audit_sink.shutdown_policy is not QueueShutdownPolicy.DRAIN
         ):
             raise ValueError("SignalModel audit_sink must use DRAIN shutdown")
-        self.signal_fields = _validate_signal_fields(self.signal_fields)
+        self.signal_fields = self._validate_signal_fields(self.signal_fields)
+        self.metadata_fields = self._normalize_metadata_fields(self.metadata_fields)
         super().__post_init__()
 
-    def create_signal(self, data: Any) -> Signal:
-        """Calculate, optionally save, and convert the last dataframe row."""
+    @final
+    def calculate_signal(self, data: Any) -> SignalCalculation:
+        """Calculate Signal contents from the last dataframe row.
+
+        Args:
+            data: DataFrame, BarDataList, mapping, or dataframe-compatible
+                upstream message.
+
+        Returns:
+            Calculation result converted from the final row returned by
+            :meth:`df`.
+
+        Raises:
+            TypeError: If :meth:`df` or ``row_to_calculation`` returns the wrong
+                type.
+            ValueError: If :meth:`df` returns an empty dataframe.
+            KeyError: If a configured signal or metadata field is absent.
+        """
 
         calculated = self.df(self._as_dataframe(data))
         if not isinstance(calculated, pd.DataFrame):
@@ -180,60 +303,44 @@ class PandasSignalModel(SignalModel, ABC):
         if calculated.empty:
             raise ValueError("df() returned an empty dataframe")
         row = calculated.iloc[-1]
-        contract = self.contract
-        if contract is None:
-            raise RuntimeError("SignalModel Contract is unavailable")
-        if self.row_to_signal is not None:
-            signal = self._validate_row_to_signal(
-                self.row_to_signal(row, contract),
-                contract,
-            )
+        if self.row_to_calculation is not None:
+            calculation = self.row_to_calculation(row)
+            if not isinstance(calculation, SignalCalculation):
+                raise TypeError("row_to_calculation must return SignalCalculation")
         else:
-            signal = self._default_row_to_signal(
+            calculation = self._default_row_to_calculation(
                 row,
-                source_key=self.source_key,
-                contract=contract,
-                signal_type=self.signal_type,
                 signal_fields=self.signal_fields,
+                metadata_fields=self.metadata_fields,
             )
-            self._validate_signal(signal, contract=contract)
-
-        audit_reference = self.save_df(calculated)
-        if audit_reference is not None:
-            signal = replace(
-                signal,
-                metadata={
-                    **signal.metadata,
-                    "audit_symbol": audit_reference,
-                },
-            )
-        return signal
-
-    def _validate_row_to_signal(
-        self,
-        signal: object,
-        contract: ibi.Contract,
-    ) -> Signal:
-        """Validate a Signal returned by the custom row conversion hook."""
-
-        if not isinstance(signal, Signal):
-            raise TypeError("row_to_signal must return Signal")
-        return self._validate_signal(
-            signal,
-            contract=contract,
-            producer="row_to_signal",
+        return _PandasSignalCalculation(
+            value=calculation.value,
+            metadata=calculation.metadata,
+            as_of=calculation.as_of,
+            frame=calculated,
         )
 
+    def _additional_signal_metadata(
+        self,
+        calculation: SignalCalculation,
+    ) -> Mapping[str, Any]:
+        """Save a validated dataframe and return its optional audit reference."""
+
+        if not isinstance(calculation, _PandasSignalCalculation):
+            raise TypeError("PandasSignalModel calculation is missing its dataframe")
+        audit_reference = self.save_df(calculation.frame)
+        if audit_reference is not None:
+            return {"audit_symbol": audit_reference}
+        return {}
+
     @staticmethod
-    def _default_row_to_signal(
+    def _default_row_to_calculation(
         row: pd.Series,
         *,
-        source_key: str,
-        contract: ibi.Contract,
-        signal_type: SignalType,
         signal_fields: SignalFields,
-    ) -> Signal:
-        """Convert one calculated row using the standard field mapping."""
+        metadata_fields: Collection[str] | None,
+    ) -> SignalCalculation:
+        """Convert one calculated row using standard value and metadata fields."""
 
         fields = (signal_fields,) if isinstance(signal_fields, str) else signal_fields
         missing = [field for field in fields if field not in row]
@@ -242,7 +349,18 @@ class PandasSignalModel(SignalModel, ABC):
                 "Calculated row is missing signal field(s): "
                 + ", ".join(repr(field) for field in missing)
             )
-        metadata = {str(key): value for key, value in row.items() if key not in fields}
+        if metadata_fields is None:
+            metadata = {
+                str(key): value for key, value in row.items() if key not in fields
+            }
+        else:
+            missing_metadata = [field for field in metadata_fields if field not in row]
+            if missing_metadata:
+                raise KeyError(
+                    "Calculated row is missing metadata field(s): "
+                    + ", ".join(repr(field) for field in missing_metadata)
+                )
+            metadata = {field: row[field] for field in metadata_fields}
         value: float | SignalPair
         if isinstance(signal_fields, str):
             value = row[signal_fields]
@@ -252,11 +370,8 @@ class PandasSignalModel(SignalModel, ABC):
                 entry=row[entry_field],
                 exit=row[exit_field],
             )
-        return Signal(
-            source_key=source_key,
-            contract=contract,
+        return SignalCalculation(
             value=value,
-            signal_type=signal_type,
             as_of=_aware_timestamp(row.name),
             metadata=metadata,
         )
@@ -348,4 +463,4 @@ class PandasSignalModel(SignalModel, ABC):
         return symbol
 
 
-__all__ = ["PandasSignalModel", "SignalModel"]
+__all__ = ["PandasSignalModel", "SignalCalculation", "SignalModel"]

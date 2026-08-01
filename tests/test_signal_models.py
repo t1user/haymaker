@@ -1,4 +1,4 @@
-from dataclasses import is_dataclass
+from dataclasses import FrozenInstanceError, is_dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -12,6 +12,7 @@ from haymaker.async_wrappers import QueueShutdownPolicy
 from haymaker.components import (
     PandasSignalModel,
     Signal,
+    SignalCalculation,
     SignalPair,
     SignalModel,
     SignalType,
@@ -150,24 +151,76 @@ def test_pandas_model_accepts_numpy_integer_signal(atom_runtime):
     assert result.value == 1.0
 
 
-def test_signal_model_rejects_changed_signal_identity(atom_runtime):
-    class WrongSourceModel(SignalModel):
-        def create_signal(self, data):
-            return Signal(
-                source_key="other",
-                contract=self.contract,
+def test_signal_calculation_is_frozen_and_metadata_is_optional():
+    calculation = SignalCalculation(value=1)
+
+    assert calculation.metadata == {}
+    assert calculation.as_of is None
+    with pytest.raises(FrozenInstanceError):
+        calculation.value = 2
+
+
+def test_signal_model_owns_signal_envelope_and_both_timestamps(atom_runtime):
+    observed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    class CalculationModel(SignalModel):
+        def calculate_signal(self, data):
+            return SignalCalculation(
                 value=data,
-                signal_type=self.signal_type,
+                metadata={"atr": 2},
+                as_of=observed_at,
             )
 
-    subject = WrongSourceModel(
+    subject = CalculationModel(
+        "alpha",
+        ibi.Future(conId=1, symbol="ES", exchange="CME"),
+        SignalType.STATE,
+    )
+    created_after = datetime.now(timezone.utc)
+
+    result = subject.create_signal(1)
+
+    assert result.source_key == "alpha"
+    assert result.contract == subject.contract
+    assert result.value == 1.0
+    assert result.signal_type is SignalType.STATE
+    assert result.as_of is observed_at
+    assert result.created_at >= created_after
+    assert result.metadata == {"atr": 2}
+
+
+def test_signal_model_requires_signal_calculation(atom_runtime):
+    class WrongCalculationModel(SignalModel):
+        def calculate_signal(self, data):
+            return data
+
+    subject = WrongCalculationModel(
         "alpha",
         ibi.Future(conId=1, symbol="ES", exchange="CME"),
         SignalType.STATE,
     )
 
-    with pytest.raises(ValueError, match=r"create_signal\(\) changed source_key"):
+    with pytest.raises(TypeError, match="must return SignalCalculation"):
         subject.onData(1)
+
+
+def test_signal_model_allows_model_specific_value_validation(atom_runtime):
+    class BinaryModel(SignalModel):
+        def calculate_signal(self, data):
+            return SignalCalculation(value=data)
+
+        def validate_signal_value(self, value):
+            if value not in (-1.0, 0.0, 1.0):
+                raise ValueError("value must be binary")
+
+    subject = BinaryModel(
+        "alpha",
+        ibi.Future(conId=1, symbol="ES", exchange="CME"),
+        SignalType.STATE,
+    )
+
+    with pytest.raises(ValueError, match="must be binary"):
+        subject.onData(2)
 
 
 def test_pandas_model_treats_naive_observation_index_as_utc(atom_runtime):
@@ -220,11 +273,8 @@ def test_pandas_model_builds_pair_and_excludes_both_fields_from_metadata(
 @pytest.mark.parametrize(
     ("signal_fields", "exception", "message"),
     [
-        ("", ValueError, "must not be empty"),
         (("entry",), ValueError, "exactly two"),
         (("entry", "exit", "other"), ValueError, "exactly two"),
-        (("entry", "entry"), ValueError, "distinct"),
-        (("entry", ""), ValueError, "must not be empty"),
         (("entry", 1), TypeError, "must be strings"),
         (["entry", "exit"], TypeError, "field name or a two-field tuple"),
     ],
@@ -234,6 +284,50 @@ def test_pandas_model_rejects_invalid_signal_fields(
 ):
     with pytest.raises(exception, match=message):
         model(signal_fields=signal_fields)
+
+
+@pytest.mark.parametrize(
+    "signal_fields",
+    ("", ("entry", "entry"), ("entry", "")),
+)
+def test_pandas_model_accepts_string_field_names(
+    atom_runtime,
+    signal_fields: str | tuple[str, str],
+) -> None:
+    """Accept any pandas column names once the field shape is valid."""
+
+    subject = model(signal_fields=signal_fields)
+
+    assert subject.signal_fields == signal_fields
+
+
+@pytest.mark.parametrize(
+    ("metadata_fields", "expected"),
+    [
+        (None, {"close": 11, "atr": 2.5}),
+        ((), {}),
+        (("atr",), {"atr": 2.5}),
+    ],
+)
+def test_pandas_model_selects_metadata_fields(
+    atom_runtime,
+    metadata_fields,
+    expected,
+) -> None:
+    subject = model(metadata_fields=metadata_fields)
+
+    result = subject.create_signal(frame())
+
+    assert result.metadata == expected
+
+
+@pytest.mark.parametrize("metadata_fields", ["atr", ("atr", 1)])
+def test_pandas_model_rejects_invalid_metadata_fields(
+    atom_runtime,
+    metadata_fields,
+) -> None:
+    with pytest.raises(TypeError, match="metadata_fields"):
+        model(metadata_fields=metadata_fields)
 
 
 def test_pandas_model_reports_all_missing_pair_fields_before_audit(
@@ -258,26 +352,70 @@ def test_pandas_model_reports_all_missing_pair_fields_before_audit(
     assert sink.calls == []
 
 
-def test_custom_row_hook_must_return_signal(atom_runtime):
-    subject = model(row_to_signal=lambda row, contract: {"value": row["signal"]})
+def test_custom_row_hook_must_return_signal_calculation(atom_runtime):
+    subject = model(row_to_calculation=lambda row: {"value": row["signal"]})
 
-    with pytest.raises(TypeError, match="must return Signal"):
+    with pytest.raises(TypeError, match="must return SignalCalculation"):
         subject.create_signal(frame())
 
 
-def test_custom_row_hook_cannot_change_owned_signal_identity(atom_runtime):
-    sink = FakeAuditSink()
+def test_custom_row_hook_supplies_only_calculated_fields(atom_runtime):
+    observed_at = datetime(2025, 12, 31, tzinfo=timezone.utc)
     subject = model(
-        audit_sink=sink,
-        row_to_signal=lambda row, contract: Signal(
-            source_key="other",
-            contract=contract,
+        row_to_calculation=lambda row: SignalCalculation(
             value=row["signal"],
-            signal_type=SignalType.STATE,
+            metadata={"custom": row["atr"]},
+            as_of=observed_at,
         ),
     )
 
-    with pytest.raises(ValueError, match="source_key"):
+    result = subject.create_signal(frame())
+
+    assert result.source_key == "alpha"
+    assert result.contract == subject.contract
+    assert result.signal_type is SignalType.STATE
+    assert result.value == 1.0
+    assert result.metadata == {"custom": 2.5}
+    assert result.as_of is observed_at
+
+
+def test_invalid_custom_calculation_creates_no_audit_generation(atom_runtime):
+    sink = FakeAuditSink()
+    subject = model(
+        audit_sink=sink,
+        row_to_calculation=lambda row: SignalCalculation(value=float("nan")),
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        subject.create_signal(frame())
+
+    assert sink.calls == []
+
+
+def test_model_specific_validation_precedes_audit_persistence(atom_runtime):
+    class RejectingModel(Model):
+        def validate_signal_value(self, value):
+            raise ValueError("rejected calculated value")
+
+    sink = FakeAuditSink()
+    subject = RejectingModel(
+        "alpha",
+        ibi.Future(conId=1, symbol="ES", exchange="CME"),
+        SignalType.STATE,
+        audit_sink=sink,
+    )
+
+    with pytest.raises(ValueError, match="rejected calculated value"):
+        subject.create_signal(frame())
+
+    assert sink.calls == []
+
+
+def test_missing_explicit_metadata_creates_no_audit_generation(atom_runtime):
+    sink = FakeAuditSink()
+    subject = model(metadata_fields=("missing",), audit_sink=sink)
+
+    with pytest.raises(KeyError, match="metadata.*'missing'"):
         subject.create_signal(frame())
 
     assert sink.calls == []

@@ -16,6 +16,7 @@ from haymaker.components import (
     PositionTarget,
     SerialTargetExecutionModel,
     Signal,
+    SignalCalculation,
     SignalModel,
     SignalType,
 )
@@ -60,12 +61,9 @@ class Source(Atom):
 
 
 class IntegrationSignalModel(SignalModel):
-    def create_signal(self, data):
-        return Signal(
-            source_key=self.source_key,
-            contract=self.contract,
+    def calculate_signal(self, data):
+        return SignalCalculation(
             value=data,
-            signal_type=self.signal_type,
             metadata={"atr": 5},
         )
 

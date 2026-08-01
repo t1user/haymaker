@@ -108,9 +108,10 @@ The research package is intentionally separate from live execution. It works dir
   sources, bar grouping, dataframe aggregation, and history persistence.
 - `haymaker/components/timeouts.py`: user-owned generic event inactivity
   callbacks and workload-owned, market-session-aware stale-data monitoring.
-- `haymaker/components/signal_models.py`: general SignalModel and
-  dataframe-based PandasSignalModel, including optional ordered calculation
-  dataframe persistence.
+- `haymaker/components/signal_models.py`: general SignalModel with a
+  framework-owned Signal envelope and public SignalCalculation result boundary,
+  plus dataframe-based PandasSignalModel with configurable row metadata and
+  optional ordered calculation-data persistence.
 - `haymaker/components/signal_processors.py`: scalar and paired one-to-one
   binary processors implementing STATE/EVENT, configurable opposing-signal,
   entry/exit, and stopped-direction lock semantics.
@@ -244,10 +245,13 @@ from runtime configuration.
    an early new-entry candidate. Existing positions retain their persisted held
    contract, and the futures roller acts only after that contract leaves the
    allowed `ACTIVE`/`NEXT` set.
-6. Streamers and aggregators emit market data into SignalModels.
-7. SignalModels emit immutable raw Signals. PandasSignalModel may persist a
-   calculation generation named from source, ACTIVE contract, and process
-   start; NEXT-only changes do not rotate it.
+6. Streamers and aggregators emit market data into SignalModels. Custom models
+   calculate only a SignalCalculation; the base supplies source, resolved
+   Contract, SignalType, and local creation time.
+7. SignalModels emit immutable raw Signals. Observation `as_of` remains distinct
+   from `created_at`, including for IB's left-labelled bars. PandasSignalModel
+   may persist a calculation generation named from source, ACTIVE contract, and
+   process start; NEXT-only changes do not rotate it.
 8. In the one-to-one flow, a binary processor emits PositionProposal and
    PortfolioWrapper allocates one absolute PositionTarget. In direct mode,
    Portfolio owns input state and may emit targets for several Contracts.

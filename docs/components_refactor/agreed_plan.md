@@ -86,15 +86,23 @@ valid.
 ## Signal production and one-to-one flow
 
 `SignalModel` is an identity-based dataclass that owns source identity,
-Contract, SignalType, and standard Signal emission. It does not own
-futures-roll policy. A Signal carries either one finite scalar value or a
-finite `SignalPair(entry, exit)`. `PandasSignalModel` retains dataframe,
-BarDataList, mapping, and compatible input conversion; subclasses implement
-`df(data)`. `signal_fields` accepts either one field name for a scalar or an
-`(entry, exit)` field-name tuple for a SignalPair. The last returned row is
-authoritative, its index supplies `as_of` when possible, selected signal fields
-are excluded from metadata, and other row values become metadata. A custom
-row-to-Signal hook may replace this conversion.
+Contract, SignalType, local creation time, and standard Signal emission. It
+does not own futures-roll policy. Subclasses implement `calculate_signal(data)`
+and return `SignalCalculation(value, metadata, as_of)`; they never reconstruct
+framework-owned Signal identity. A model may override `validate_signal_value()`
+for restrictions beyond the standard immutable Signal validation. A Signal
+carries either one finite scalar value or a finite `SignalPair(entry, exit)`.
+`as_of` remains the effective observation label while `created_at` records
+local construction; these differ intentionally for IB's left-labelled bars.
+
+`PandasSignalModel` retains dataframe, BarDataList, mapping, and compatible
+input conversion; subclasses implement `df(data)`. `signal_fields` accepts
+either one field name for a scalar or an `(entry, exit)` field-name tuple for a
+SignalPair. The last returned row is authoritative and its index supplies
+`as_of` when possible. `metadata_fields=None` copies every non-signal row field,
+an empty collection copies none, and an explicit collection selects fields. A
+custom `row_to_calculation` hook may replace this conversion while returning the
+same `SignalCalculation` boundary.
 
 Built-in binary processors consume Signal and query
 `Book.effective_quantity(source_key)`. STATE zero requests flat; EVENT zero is

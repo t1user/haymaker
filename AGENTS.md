@@ -153,9 +153,12 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - `LiveRuntime` assembles live services and installs a ready, passive
   `RuntimeContext` before the CLI imports the strategy module. SignalModels
   register their Contract blueprints while they are constructed but do not own
-  futures-roll policy. Strategy composition may use the context's narrow
-  `FrameStoreProvider` to build fully configured persistence dependencies; the
-  runtime does not inspect imported module data.
+  futures-roll policy. User SignalModels return
+  `SignalCalculation(value, metadata, as_of)` while the base supplies source,
+  resolved Contract, SignalType, and `created_at`. Observation `as_of` remains
+  distinct because IB bars are left-labelled. Strategy composition may use the
+  context's narrow `FrameStoreProvider` to build fully configured persistence
+  dependencies; the runtime does not inspect imported module data.
 - `EventTimeout` is a general user-owned event inactivity monitor; supervised
   workload restarts never cancel it. Positive intervals must be constructed
   on the running event loop, and owners must call `cancel()` when their own
