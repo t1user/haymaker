@@ -135,9 +135,9 @@ class Atom:
         contract_details (Details): Details for the resolved :attr:`contract`.
             These normally become available during startup. Missing details
             produce an empty ``Details`` value and an error log.
-        contract_selector (AbstractBaseContractSelector | None): Selector
-            registered for the contract blueprint. Access without a configured
-            contract raises ``KeyError``.
+        contract_selector (AbstractBaseContractSelector): Selector registered
+            for the contract blueprint. Access raises until a contract has been
+            assigned and its selector initialized by the runtime.
 
     Note:
         The public methods and operations are:
@@ -261,17 +261,25 @@ class Atom:
         return details
 
     @property
-    def contract_selector(self) -> AbstractBaseContractSelector | None:
+    def contract_selector(self) -> AbstractBaseContractSelector:
         """Return the selector registered for this Atom's contract blueprint.
 
         Raises:
             KeyError: If no contract has been assigned to this Atom.
+            RuntimeError: If the runtime has not initialized the assigned
+                contract's selector.
         """
         if self._contract_blueprint is None:
             raise KeyError(
                 f"contract_selector not available because contract not set on {self}"
             )
-        return self.contract_registry.get_selector(self._contract_blueprint)
+        selector = self.contract_registry.get_selector(self._contract_blueprint)
+        if selector is None:
+            raise RuntimeError(
+                "Contract selector not initialized for "
+                f"{self._contract_blueprint} on {type(self).__name__}"
+            )
+        return selector
 
     def _createEvents(self) -> None:
         self.startEvent = ibi.Event("startEvent")

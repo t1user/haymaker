@@ -259,10 +259,11 @@ class DfAggregator(Atom):
         `contract_selector` and it shouldn't go back further than
         :meth:`.required_timedelta`
         """
+        selector = self.contract_selector
         assert isinstance(
-            self.contract_selector, FutureSelector
+            selector, FutureSelector
         ), f"contract on {self!s} is not a Future: {self.contract}"
-        start, stop = self.contract_selector.date_ranges[contract]
+        start, stop = selector.date_ranges[contract]
         now = datetime.now()
         start_date = max(start, self.offset_by_durationStr())
         stop_date = min(stop, now)
@@ -316,7 +317,7 @@ class DfAggregator(Atom):
     def _back_contracts(self) -> Generator[ibi.Future, None, None]:
         assert isinstance(
             selector := self.contract_selector, FutureSelector
-        ), f"Missing contract selector for {self._contract_blueprint}"
+        ), f"contract on {self!s} is not a Future: {self.contract}"
         assert isinstance(
             self.contract, ibi.Future
         ), f"{self!s} attempting stiching on a non-Future"

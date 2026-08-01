@@ -269,6 +269,27 @@ def test_contract_selector_requires_assigned_contract(atom_runtime):
         _ = Atom().contract_selector
 
 
+def test_contract_selector_requires_runtime_initialization(atom_runtime):
+    atom = Atom()
+    atom.contract = ibi.Future("ES", exchange="CME")
+
+    with pytest.raises(RuntimeError, match="Contract selector not initialized"):
+        _ = atom.contract_selector
+
+
+def test_contract_selector_returns_initialized_selector(atom_runtime, monkeypatch):
+    atom = Atom()
+    atom.contract = ibi.Future("ES", exchange="CME")
+    selector = object()
+    monkeypatch.setattr(
+        atom_runtime.contract_registry,
+        "get_selector",
+        lambda blueprint: selector,
+    )
+
+    assert atom.contract_selector is selector
+
+
 def test_missing_qualified_contract_raises_domain_error(atom_runtime, monkeypatch):
     atom = Atom()
     future = ibi.Future("ES", exchange="CME")

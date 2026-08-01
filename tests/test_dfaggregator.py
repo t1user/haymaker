@@ -301,7 +301,6 @@ async def test_data_queued():
     aggregator = make_aggregator()
     source = SourceAtom()
     aggregator.contract = source.contract = ibi.Future(symbol="ES", exchange="CME")
-    print(aggregator.contract_selector)
     source += aggregator
     aggregator += OutputAtom()
 

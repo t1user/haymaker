@@ -429,13 +429,7 @@ class PandasSignalModel(SignalModel, ABC):
 
         if self.audit_sink is None:
             return None
-        selector = self.contract_selector
-        if selector is None:
-            raise RuntimeError(
-                "PandasSignalModel cannot save data before its Contract selector "
-                "is initialized"
-            )
-        active = selector.active_contract
+        active = self.contract_selector.active_contract
         run_started_at = self.runtime.run_started_at
         symbol = (
             f"{self.source_key}_"
