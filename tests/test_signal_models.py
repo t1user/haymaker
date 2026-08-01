@@ -352,21 +352,36 @@ def test_pandas_model_reports_all_missing_pair_fields_before_audit(
     assert sink.calls == []
 
 
-def test_custom_row_hook_must_return_signal_calculation(atom_runtime):
-    subject = model(row_to_calculation=lambda row: {"value": row["signal"]})
+def test_custom_row_conversion_must_return_signal_calculation(atom_runtime):
+    class InvalidRowModel(Model):
+        def row_to_calculation(self, row):
+            return {"value": row["signal"]}
+
+    subject = InvalidRowModel(
+        "alpha",
+        ibi.Future(conId=1, symbol="ES", exchange="CME", localSymbol="ESM6"),
+        SignalType.STATE,
+    )
 
     with pytest.raises(TypeError, match="must return SignalCalculation"):
         subject.create_signal(frame())
 
 
-def test_custom_row_hook_supplies_only_calculated_fields(atom_runtime):
+def test_custom_row_conversion_supplies_only_calculated_fields(atom_runtime):
     observed_at = datetime(2025, 12, 31, tzinfo=timezone.utc)
-    subject = model(
-        row_to_calculation=lambda row: SignalCalculation(
-            value=row["signal"],
-            metadata={"custom": row["atr"]},
-            as_of=observed_at,
-        ),
+
+    class CustomRowModel(Model):
+        def row_to_calculation(self, row):
+            return SignalCalculation(
+                value=row["signal"],
+                metadata={"custom": row["atr"]},
+                as_of=observed_at,
+            )
+
+    subject = CustomRowModel(
+        "alpha",
+        ibi.Future(conId=1, symbol="ES", exchange="CME", localSymbol="ESM6"),
+        SignalType.STATE,
     )
 
     result = subject.create_signal(frame())
@@ -380,10 +395,16 @@ def test_custom_row_hook_supplies_only_calculated_fields(atom_runtime):
 
 
 def test_invalid_custom_calculation_creates_no_audit_generation(atom_runtime):
+    class InvalidCalculationModel(Model):
+        def row_to_calculation(self, row):
+            return SignalCalculation(value=float("nan"))
+
     sink = FakeAuditSink()
-    subject = model(
+    subject = InvalidCalculationModel(
+        "alpha",
+        ibi.Future(conId=1, symbol="ES", exchange="CME", localSymbol="ESM6"),
+        SignalType.STATE,
         audit_sink=sink,
-        row_to_calculation=lambda row: SignalCalculation(value=float("nan")),
     )
 
     with pytest.raises(ValueError, match="finite"):

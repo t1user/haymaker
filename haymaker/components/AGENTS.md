@@ -62,7 +62,7 @@ bars. PandasSignalModel treats the last row returned by `df()` as authoritative;
 user calculations own ordering, duplicates, and correctness. Its
 `metadata_fields` distinguishes all non-signal fields (`None`), no fields (an
 empty collection), and an explicit selection. Custom row conversion returns a
-SignalCalculation through `row_to_calculation`.
+SignalCalculation by overriding `row_to_calculation(row)`.
 
 `BinarySignalProcessor` accepts only scalar `-1/0/1` values and exposes
 `OpposingSignalPolicy.CLOSE` or `REVERSE`. `BinaryEntryExitSignalProcessor`

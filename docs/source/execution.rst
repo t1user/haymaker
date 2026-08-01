@@ -310,10 +310,10 @@ metadata, an empty collection copies none, and an explicit collection selects
 only those fields. The last returned row is authoritative: the user calculation
 owns ordering, duplicate handling, and correctness.
 
-An optional ``row_to_calculation`` hook can replace the standard last-row
-conversion, but it still returns only ``SignalCalculation``; it cannot replace
-framework-owned Signal identity. An optional audit sink must use ``DRAIN`` and
-records calculation history under
+Override ``row_to_calculation(row)`` when the standard field selection cannot
+express the required conversion. The override returns only
+``SignalCalculation``; it cannot replace framework-owned Signal identity. An
+optional audit sink must use ``DRAIN`` and records calculation history under
 ``{source_key}_{ACTIVE.localSymbol}_{run_started_at}``. The first successful
 write stores the complete frame; later writes append only new rows. A NEXT-only
 futures change does not rotate audit history. When saving is enabled, the
@@ -325,7 +325,7 @@ calculated dataframe must not be mutated after ``df()`` returns.
    :members: calculate_signal, create_signal, validate_signal_value
 
 .. autoclass:: haymaker.components.PandasSignalModel
-   :members: df, calculate_signal, create_signal, save_df
+   :members: df, row_to_calculation, calculate_signal, create_signal, save_df
 
 .. autoclass:: haymaker.datastore.AsyncDataStore
 

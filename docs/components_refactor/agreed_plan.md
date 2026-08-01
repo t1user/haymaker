@@ -101,8 +101,8 @@ either one field name for a scalar or an `(entry, exit)` field-name tuple for a
 SignalPair. The last returned row is authoritative and its index supplies
 `as_of` when possible. `metadata_fields=None` copies every non-signal row field,
 an empty collection copies none, and an explicit collection selects fields. A
-custom `row_to_calculation` hook may replace this conversion while returning the
-same `SignalCalculation` boundary.
+subclass may override `row_to_calculation(row)` while returning the same
+`SignalCalculation` boundary.
 
 Built-in binary processors consume Signal and query
 `Book.effective_quantity(source_key)`. STATE zero requests flat; EVENT zero is

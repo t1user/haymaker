@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import singledispatchmethod
@@ -198,7 +198,6 @@ class SignalModel(Atom, ABC):
         """
 
 
-RowToCalculation = Callable[[pd.Series], SignalCalculation]
 SignalFields = str | tuple[str, str]
 
 
@@ -215,23 +214,19 @@ class PandasSignalModel(SignalModel, ABC):
         metadata_fields: Row fields copied into Signal metadata. ``None`` copies
             every non-signal field, an empty collection copies none, and an
             explicit collection copies only those fields.
-        row_to_calculation: Optional hook replacing standard row conversion. It
-            returns SignalCalculation and never supplies Signal identity.
         audit_sink: Optional ordered ``DRAIN`` sink for complete calculation
             audit history. Other queued shutdown policies are rejected.
 
     ``df(data)`` receives a dataframe converted from DataFrame, BarDataList,
     mapping, or dataframe-compatible data. The default row conversion derives
     ``as_of`` from the last row's index and places other row fields in
-    metadata. Row order is authoritative: subclasses own sorting, duplicate
-    handling, and calculation correctness.
+    metadata. Override :meth:`row_to_calculation` when field selection cannot
+    express the required conversion. Row order is authoritative: subclasses
+    own sorting, duplicate handling, and calculation correctness.
     """
 
     signal_fields: SignalFields = field(default="signal", kw_only=True)
     metadata_fields: Collection[str] | None = field(default=None, kw_only=True)
-    row_to_calculation: RowToCalculation | None = field(
-        default=None, kw_only=True, repr=False
-    )
     audit_sink: QueuedDataSink | None = field(default=None, kw_only=True, repr=False)
     _audit_symbol: str | None = field(default=None, init=False, repr=False)
     _audit_active_con_id: int | None = field(default=None, init=False, repr=False)
@@ -303,16 +298,10 @@ class PandasSignalModel(SignalModel, ABC):
         if calculated.empty:
             raise ValueError("df() returned an empty dataframe")
         row = calculated.iloc[-1]
-        if self.row_to_calculation is not None:
-            calculation = self.row_to_calculation(row)
-            if not isinstance(calculation, SignalCalculation):
-                raise TypeError("row_to_calculation must return SignalCalculation")
-        else:
-            calculation = self._default_row_to_calculation(
-                row,
-                signal_fields=self.signal_fields,
-                metadata_fields=self.metadata_fields,
-            )
+        calculation = self.row_to_calculation(row)
+        if not isinstance(calculation, SignalCalculation):
+            raise TypeError("row_to_calculation must return SignalCalculation")
+
         return _PandasSignalCalculation(
             value=calculation.value,
             metadata=calculation.metadata,
@@ -333,15 +322,29 @@ class PandasSignalModel(SignalModel, ABC):
             return {"audit_symbol": audit_reference}
         return {}
 
-    @staticmethod
-    def _default_row_to_calculation(
+    def row_to_calculation(
+        self,
         row: pd.Series,
-        *,
-        signal_fields: SignalFields,
-        metadata_fields: Collection[str] | None,
     ) -> SignalCalculation:
-        """Convert one calculated row using standard value and metadata fields."""
+        """Convert the final calculated row into Signal contents.
 
+        The default implementation reads the configured ``signal_fields`` and
+        ``metadata_fields``. Override this method when a row needs custom value,
+        metadata, or observation-time conversion; return only calculated fields
+        and leave Signal identity to the framework.
+
+        Args:
+            row: Final row of the dataframe returned by :meth:`df`.
+
+        Returns:
+            Calculated Signal value, metadata, and observation time.
+
+        Raises:
+            KeyError: If a configured signal or metadata field is absent.
+        """
+
+        signal_fields = self.signal_fields
+        metadata_fields = self.metadata_fields
         fields = (signal_fields,) if isinstance(signal_fields, str) else signal_fields
         missing = [field for field in fields if field not in row]
         if missing:
