@@ -155,8 +155,14 @@ closely related runtime objects.
 
 ``storage``
    Base directory plus Mongo client arguments and the framework database name.
-   Dataframe library names and save frequency belong to strategy composition
-   and consumer constructors.
+   Dataframe library names and save frequency normally belong to strategy
+   composition and consumer constructors.
+
+``signal_persistence``
+   ``library`` selects the dataframe library used when a
+   :class:`~haymaker.components.PandasSignalModel` is constructed with
+   ``persistence=True``. Enablement remains model-specific; this section only
+   defines the runtime default. Custom persistence objects bypass it.
 
 ``blotter``
    Enablement and a safe built-in ``csv`` or ``mongo`` saver specification.
@@ -187,13 +193,18 @@ Timeout policy API
 
 .. autoclass:: haymaker.config.TimeoutPolicy
 
+Signal persistence settings API
+-------------------------------
+
+.. autoclass:: haymaker.config.SignalFramePersistenceSettings
+
 Dataloader Configuration
 ========================
 
 Dataloader configuration shares the ``connection`` and ``logging`` section
 shapes with live execution. Its narrower ``storage`` section contains only
 ``base_directory`` and ``mongodb.client``. ``mongodb.database`` is live-only;
-dataframe library and save-frequency settings are not framework configuration.
+dataframe library and save-frequency settings are not dataloader configuration.
 All of those unsupported paths are rejected.
 
 ``storage``

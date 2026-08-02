@@ -18,11 +18,19 @@ from .book import (
     DEFAULT_STATE_COLLECTION_NAME,
     Book,
 )
-from .config.settings import LiveConfig, TimeoutPolicy
+from .config.settings import (
+    LiveConfig,
+    SignalFramePersistenceSettings,
+    TimeoutPolicy,
+)
 from .contract_registry import ContractRegistry
 from .controller import Controller
 from .databases import MongoService, create_frame_store_provider
-from .datastore import FrameStoreProvider
+from .datastore import (
+    FrameStoreProvider,
+    SignalFramePersistence,
+    SignalFramePersistenceFactory,
+)
 from .handlers import IBHandlers
 from .order_defaults import OrderDefaults
 from .saver import MongoSaver
@@ -155,6 +163,8 @@ class RuntimeContext:
         book: Persistent typed accounting and order state.
         trader: Thin broker order gateway.
         frame_store_provider: Narrow dataframe persistence composition service.
+        signal_persistence_factory: Create one runtime-default Signal dataframe
+            persistence object per requesting model.
         order_defaults: Validated default order fields for execution models.
         timeout_policy: Default timeout interval and action.
         controller: Live controller installed by ``LiveRuntime``.
@@ -169,6 +179,7 @@ class RuntimeContext:
     book: Book = field(repr=False)
     trader: Trader = field(repr=False)
     frame_store_provider: FrameStoreProvider = field(repr=False)
+    signal_persistence_factory: Callable[[], SignalFramePersistence] = field(repr=False)
     order_defaults: OrderDefaults = field(repr=False)
     timeout_policy: TimeoutPolicy = field(repr=False)
     controller: Controller = field(init=False, repr=False)
@@ -233,6 +244,12 @@ class LiveRuntime:
             book=self.book,
             trader=trader,
             frame_store_provider=self.frame_store_provider,
+            signal_persistence_factory=SignalFramePersistenceFactory(
+                self.frame_store_provider,
+                SignalFramePersistenceSettings.from_mapping(
+                    self.config.signal_persistence
+                ).library,
+            ),
             order_defaults=OrderDefaults.from_mapping(self.config.orders),
             timeout_policy=TimeoutPolicy.from_mapping(self.config.timeout),
         )

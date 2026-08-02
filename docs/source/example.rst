@@ -64,7 +64,12 @@ position episode:
        datastore=history_store,
    )
    frames = DfAggregator(history_store)
-   signals = TrendModel(SOURCE, CONTRACT, SignalType.STATE)
+   signals = TrendModel(
+       SOURCE,
+       CONTRACT,
+       SignalType.STATE,
+       persistence=True,
+   )
    processor = BinarySignalProcessor(respect_blocked_direction=True)
    allocation = PortfolioWrapper(FixedSizeAllocator(1))
    execution = BracketExecutionModel(

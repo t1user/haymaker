@@ -312,12 +312,21 @@ owns ordering, duplicate handling, and correctness.
 
 Override ``row_to_calculation(row)`` when the standard field selection cannot
 express the required conversion. The override returns only
-``SignalCalculation``; it cannot replace framework-owned Signal identity. An
-optional audit sink must use ``DRAIN`` and records calculation history under
-``{source_key}_{ACTIVE.localSymbol}_{run_started_at}``. The first successful
-write stores the complete frame; later writes append only new rows. A NEXT-only
-futures change does not rotate audit history. When saving is enabled, the
-calculated dataframe must not be mutated after ``df()`` returns.
+``SignalCalculation``; it cannot replace framework-owned Signal identity.
+``persistence=False`` disables calculation history. ``persistence=True`` uses
+the runtime default configured by ``signal_persistence.library``. Supplying a
+:class:`~haymaker.datastore.SignalFramePersistence` object provides a custom
+non-blocking policy. The standard implementation records history under
+``{source_key}_{ACTIVE.localSymbol}_{run_started_at}``: the first accepted save
+writes the complete frame and later saves append only new rows. A NEXT-only
+futures change does not rotate history.
+
+Persistence work is queued before Signal emission so the accepted
+``audit_symbol`` can be included in metadata; no storage I/O is awaited. If the
+queue cannot accept the work, Haymaker logs the failure and emits the Signal
+without that reference. Calling ``create_signal()`` directly performs no
+persistence. When saving is enabled, the calculated dataframe must not be
+mutated after queue acceptance.
 
 .. autoclass:: haymaker.components.SignalCalculation
 
@@ -325,7 +334,13 @@ calculated dataframe must not be mutated after ``df()`` returns.
    :members: calculate_signal, create_signal, validate_signal_value
 
 .. autoclass:: haymaker.components.PandasSignalModel
-   :members: df, row_to_calculation, calculate_signal, create_signal, save_df
+   :members: df, row_to_calculation, calculate_signal, create_signal
+
+.. autoclass:: haymaker.datastore.SignalFramePersistence
+   :members: save
+
+.. autoclass:: haymaker.datastore.QueuedSignalFramePersistence
+   :members: save
 
 .. autoclass:: haymaker.datastore.AsyncDataStore
 

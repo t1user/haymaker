@@ -23,6 +23,9 @@ from haymaker.datastore import (
     BarSizeSymbolNamer,
     FrameStoreProvider,
     QueuedDataSink,
+    QueuedSignalFramePersistence,
+    SignalFramePersistenceFactory,
+    simple_symbol_namer,
 )
 
 
@@ -36,6 +39,35 @@ def accepts_queued_sink(store: QueuedDataSink) -> None:
 
 def accepts_frame_store_provider(provider: FrameStoreProvider) -> None:
     """Type-check the Arctic strategy-composition provider."""
+
+
+def test_signal_persistence_factory_creates_independent_draining_policies() -> None:
+    """Each SignalModel should receive isolated generation and queue state."""
+
+    first_sink = Mock(shutdown_policy=QueueShutdownPolicy.DRAIN)
+    second_sink = Mock(shutdown_policy=QueueShutdownPolicy.DRAIN)
+    provider = Mock(spec=FrameStoreProvider)
+    provider.queued_sink.side_effect = [first_sink, second_sink]
+    factory = SignalFramePersistenceFactory(provider, "signal_data")
+
+    first = factory()
+    second = factory()
+
+    assert isinstance(first, QueuedSignalFramePersistence)
+    assert isinstance(second, QueuedSignalFramePersistence)
+    assert first is not second
+    assert provider.queued_sink.call_args_list == [
+        call(
+            "signal_data",
+            symbol_namer=simple_symbol_namer,
+            shutdown_policy=QueueShutdownPolicy.DRAIN,
+        ),
+        call(
+            "signal_data",
+            symbol_namer=simple_symbol_namer,
+            shutdown_policy=QueueShutdownPolicy.DRAIN,
+        ),
+    ]
 
 
 def test_real_mongo_client_blocked_by_default() -> None:

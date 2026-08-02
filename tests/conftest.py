@@ -15,6 +15,7 @@ with ``@pytest.mark.mongo``.
 import datetime
 import logging
 import os
+from collections.abc import Callable
 from typing import Any, cast
 from unittest.mock import Mock
 
@@ -33,7 +34,7 @@ from haymaker.book import Book
 from haymaker.components import Streamer as ActualStreamer
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
-from haymaker.datastore import FrameStoreProvider
+from haymaker.datastore import FrameStoreProvider, SignalFramePersistence
 from haymaker.saver import AbstractBaseSaver
 from haymaker.trader import Trader
 
@@ -172,6 +173,7 @@ def atom_runtime_factory(monkeypatch, book):
         contract_registry: ContractRegistry | None = None,
         controller: Controller | None = None,
         frame_store_provider: FrameStoreProvider | None = None,
+        signal_persistence_factory: Callable[[], SignalFramePersistence] | None = None,
     ) -> AtomRuntimeHarness:
         provider = frame_store_provider
         if provider is None:
@@ -182,6 +184,13 @@ def atom_runtime_factory(monkeypatch, book):
             contract_registry=contract_registry or ContractRegistry(),
             controller=controller,
             frame_store_provider=provider,
+            signal_persistence_factory=(
+                signal_persistence_factory
+                if signal_persistence_factory is not None
+                else Mock(
+                    side_effect=RuntimeError("Signal persistence is not configured")
+                )
+            ),
         )
         return runtime.install(monkeypatch)
 

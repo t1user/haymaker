@@ -160,7 +160,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   resolved Contract, SignalType, and `created_at`. Observation `as_of` remains
   distinct because IB bars are left-labelled. Strategy composition may use the
   context's narrow `FrameStoreProvider` to build fully configured persistence
-  dependencies; the runtime does not inspect imported module data.
+  dependencies. `PandasSignalModel(persistence=True)` is the narrow exception:
+  it resolves one model-owned default persistence object from a runtime factory.
+  The runtime still does not inspect imported module data.
 - `EventTimeout` is a general user-owned event inactivity monitor; supervised
   workload restarts never cancel it. Positive intervals must be constructed
   on the running event loop, and owners must call `cancel()` when their own
@@ -182,8 +184,8 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   Telegram are optional YAML configuration, not runtime dependencies.
 - Queue shutdown uses one policy: `DRAIN` is critical and propagates processing
   failures or drain timeouts, while `DISCARD` is best effort and logs failures.
-  Book mutations and SignalModel audit sinks drain. Async Arctic queued sinks
-  otherwise default to `DISCARD`.
+  Book mutations and default Signal frame persistence queues drain. Async
+  Arctic queued sinks otherwise default to `DISCARD`.
   Awaited `AsyncDataStore` mutations finish an already-started database call
   before propagating cancellation. The dataloader uses only this awaited
   contract and completes each response's persistence and in-memory state
@@ -193,13 +195,16 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   contract and explicit `enqueue_*` methods, whose return means queue acceptance.
 - Datastore symbol naming is supplied when a store is constructed and is not
   replaced afterward. Framework-provided naming policies are frozen, consumers
-  treat injected stores as fully configured, and SignalModels hold their
-  optional audit sink per instance rather than through class state.
-- Live dataframe consumers never construct or discover persistence through
-  runtime state. Strategy module composition builds stores through
+  treat injected stores as fully configured, and each persisted
+  `PandasSignalModel` owns its `SignalFramePersistence` state rather than
+  sharing generations.
+- Strategy module composition builds stores through
   `RuntimeContext.frame_store_provider` and injects them: `DfAggregator`
-  requires `AsyncDataStore`, persisted streamers accept `AsyncDataStore | None`,
-  and PandasSignalModels accept a dedicated `DRAIN` `QueuedDataSink | None`.
+  requires `AsyncDataStore` and persisted streamers accept
+  `AsyncDataStore | None`. `PandasSignalModel.persistence` alone supports
+  `False`, runtime-default `True`, or a custom non-blocking
+  `SignalFramePersistence`; persistence enqueue failure never suppresses Signal
+  emission.
 - CLI entrypoints load framework configuration once. Live and dataloader
   configuration stay grouped by owning target where practical until that target
   constructs itself from its mapping. Controller one-run actions belong under
@@ -208,7 +213,8 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   only `base_directory`, `mongodb.client`, and `mongodb.database`; dataloader
   storage contains only `base_directory` and `mongodb.client`. Dataframe library
   names and save frequency belong to strategy composition and consumer
-  constructors, not framework storage configuration.
+  constructors, except for the default Signal calculation library configured
+  under `signal_persistence.library`.
   Bundled base profiles must enumerate supported settings, pin effective
   command defaults, and keep a concise inline comment after every setting.
   Environment variables may select a profile YAML file but must not directly

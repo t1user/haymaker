@@ -64,6 +64,13 @@ user calculations own ordering, duplicates, and correctness. Its
 empty collection), and an explicit selection. Custom row conversion returns a
 SignalCalculation by overriding `row_to_calculation(row)`.
 
+`PandasSignalModel.persistence` is its only persistence option. `False`
+disables it, `True` resolves a new model-owned default from RuntimeContext, and
+a `SignalFramePersistence` object supplies custom non-blocking behavior.
+Persistence queue acceptance precedes Signal emission so an accepted lookup
+reference can be attached, but enqueue failure is logged and never suppresses
+the Signal. Calling `create_signal()` directly has no persistence side effect.
+
 `BinarySignalProcessor` accepts only scalar `-1/0/1` values and exposes
 `OpposingSignalPolicy.CLOSE` or `REVERSE`. `BinaryEntryExitSignalProcessor`
 accepts only SignalPair, uses entry while flat and exit while positioned, and
@@ -147,9 +154,9 @@ PandasSignalModel audit symbols are
 `{source_key}_{ACTIVE.localSymbol}_{run_started_at}`. ACTIVE comes from the
 selector regardless of a transaction's Contract role; NEXT-only changes do not
 rotate history. A successful ACTIVE change writes a new complete generation,
-then only new rows append. Audit sinks must use ordered `DRAIN`; no failed
-calculation may create a generation. Saving uses the selector's ACTIVE Contract
-even when the emitted Signal uses `Atom.which_contract=NEXT`.
+then only new rows append. Default persistence uses an ordered `DRAIN` sink; no
+failed calculation may create a generation. Saving uses the selector's ACTIVE
+Contract even when the emitted Signal uses `Atom.which_contract=NEXT`.
 
 Every public export needs a usage-focused Google-style, Sphinx-compatible
 docstring and focused pytest coverage. Tests must cover structural connection

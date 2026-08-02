@@ -15,6 +15,7 @@ from haymaker.config import (
     DataloaderCommand,
     DataloaderStorageSettings,
     LiveCommand,
+    SignalFramePersistenceSettings,
     StorageSettings,
     TimeoutPolicy,
     load_dataloader_config,
@@ -71,6 +72,10 @@ def test_live_defaults_are_composed_by_target_objects() -> None:
     assert config.storage.base_directory == "ib_data"
     assert config.storage.mongodb.client == {"host": "localhost", "port": 27017}
     assert config.storage.mongodb.database == "test_data"
+    assert (
+        SignalFramePersistenceSettings.from_mapping(config.signal_persistence).library
+        == "signal_data"
+    )
     assert not hasattr(config.storage, "block_library")
     assert not hasattr(config.storage, "market_data_library")
     assert not hasattr(config.storage, "dataframe_save_frequency")
@@ -96,6 +101,27 @@ def test_live_accepts_filesystem_and_framework_mongo_settings() -> None:
         "port": 27018,
     }
     assert config.storage.mongodb.database == "framework"
+
+
+def test_live_accepts_default_signal_persistence_library() -> None:
+    """The runtime default library should remain independently configurable."""
+
+    config = load_live_config(
+        live_command(None, ("signal_persistence.library", "calculations")),
+        environ={},
+    )
+
+    settings = SignalFramePersistenceSettings.from_mapping(config.signal_persistence)
+
+    assert settings.library == "calculations"
+
+
+@pytest.mark.parametrize("library", ["", 1, False])
+def test_signal_persistence_rejects_invalid_library(library: object) -> None:
+    """A runtime default must identify a non-empty dataframe library."""
+
+    with pytest.raises((TypeError, ValueError), match="signal_persistence.library"):
+        SignalFramePersistenceSettings.from_mapping({"library": library})
 
 
 def test_order_defaults_reject_invalid_order_fields_during_construction() -> None:

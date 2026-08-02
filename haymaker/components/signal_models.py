@@ -13,10 +13,8 @@ from typing import Any, ClassVar, final
 import ib_insync as ibi
 import pandas as pd
 
-from ..async_wrappers import QueueShutdownPolicy
 from ..base import Atom
-from ..datastore import QueuedDataSink
-from ..misc import tree
+from ..datastore import SignalFramePersistence
 from .messages import Signal, SignalPair, SignalType
 
 log = logging.getLogger(__name__)
@@ -61,7 +59,7 @@ class SignalCalculation:
 
 @dataclass(frozen=True, kw_only=True)
 class _PandasSignalCalculation(SignalCalculation):
-    """Keep the calculated frame alive until its validated Signal is saved."""
+    """Keep the calculated frame available for optional emission-time saving."""
 
     frame: pd.DataFrame = field(repr=False, compare=False)
 
@@ -121,8 +119,9 @@ class SignalModel(Atom, ABC):
         """Calculate and return one framework-owned Signal.
 
         This method is the template boundary used by :meth:`onData`. Call it
-        directly when a calculated Signal is needed without emitting it;
-        subclasses customize :meth:`calculate_signal` and
+        directly when a calculated Signal is needed without emitting it or
+        invoking emission-time persistence; subclasses customize
+        :meth:`calculate_signal` and
         :meth:`validate_signal_value` instead.
 
         Args:
@@ -138,14 +137,7 @@ class SignalModel(Atom, ABC):
         """
 
         calculation = self.calculate_signal(data)
-        signal = self._signal_from_calculation(calculation)
-        additional_metadata = self._additional_signal_metadata(calculation)
-        if additional_metadata:
-            signal = replace(
-                signal,
-                metadata={**signal.metadata, **additional_metadata},
-            )
-        return signal
+        return self._signal_from_calculation(calculation)
 
     def _signal_from_calculation(self, calculation: object) -> Signal:
         """Construct and validate the Signal envelope owned by this model."""
@@ -163,14 +155,6 @@ class SignalModel(Atom, ABC):
         )
         self.validate_signal_value(signal.value)
         return signal
-
-    def _additional_signal_metadata(
-        self,
-        calculation: SignalCalculation,
-    ) -> Mapping[str, Any]:
-        """Return framework metadata to add after Signal validation."""
-
-        return {}
 
     def validate_signal_value(self, value: float | SignalPair) -> None:
         """Validate model-specific value constraints before Signal emission.
@@ -214,8 +198,10 @@ class PandasSignalModel(SignalModel, ABC):
         metadata_fields: Row fields copied into Signal metadata. ``None`` copies
             every non-signal field, an empty collection copies none, and an
             explicit collection copies only those fields.
-        audit_sink: Optional ordered ``DRAIN`` sink for complete calculation
-            audit history. Other queued shutdown policies are rejected.
+        persistence: ``False`` disables calculation-data persistence. ``True``
+            creates a model-owned persistence object from runtime YAML defaults.
+            A :class:`~haymaker.datastore.SignalFramePersistence` instance uses
+            that custom non-blocking policy instead.
 
     ``df(data)`` receives a dataframe converted from DataFrame, BarDataList,
     mapping, or dataframe-compatible data. The default row conversion derives
@@ -227,10 +213,11 @@ class PandasSignalModel(SignalModel, ABC):
 
     signal_fields: SignalFields = field(default="signal", kw_only=True)
     metadata_fields: Collection[str] | None = field(default=None, kw_only=True)
-    audit_sink: QueuedDataSink | None = field(default=None, kw_only=True, repr=False)
-    _audit_symbol: str | None = field(default=None, init=False, repr=False)
-    _audit_active_con_id: int | None = field(default=None, init=False, repr=False)
-    _audit_last_index: Any = field(default=None, init=False, repr=False)
+    persistence: bool | SignalFramePersistence = field(
+        default=False,
+        kw_only=True,
+        repr=False,
+    )
 
     @staticmethod
     def _validate_signal_fields(value: SignalFields) -> SignalFields:
@@ -265,13 +252,94 @@ class PandasSignalModel(SignalModel, ABC):
     def __post_init__(self) -> None:
         """Validate dataframe configuration and initialize Atom services."""
 
-        if self.audit_sink is not None and (
-            self.audit_sink.shutdown_policy is not QueueShutdownPolicy.DRAIN
-        ):
-            raise ValueError("SignalModel audit_sink must use DRAIN shutdown")
         self.signal_fields = self._validate_signal_fields(self.signal_fields)
         self.metadata_fields = self._normalize_metadata_fields(self.metadata_fields)
         super().__post_init__()
+        self.persistence = self._resolve_persistence(self.persistence)
+
+    @staticmethod
+    def _validate_persistence(
+        persistence: object,
+    ) -> SignalFramePersistence:
+        """Return a structurally valid custom persistence object."""
+
+        if not isinstance(persistence, SignalFramePersistence):
+            raise TypeError(
+                "persistence must be True, False, or a SignalFramePersistence"
+            )
+        return persistence
+
+    def _resolve_persistence(
+        self,
+        persistence: bool | SignalFramePersistence,
+    ) -> bool | SignalFramePersistence:
+        """Resolve the runtime default once while preserving explicit disablement."""
+
+        if persistence is False:
+            return False
+        if persistence is True:
+            persistence = self.runtime.signal_persistence_factory()
+        return self._validate_persistence(persistence)
+
+    @final
+    def onData(self, data: Any, *args: Any) -> None:
+        """Calculate, queue optional persistence, and emit one Signal.
+
+        Persistence only queues work and never waits for storage I/O. A failure
+        to accept persistence work is logged and the Signal is still emitted,
+        without an ``audit_symbol`` reference.
+
+        Args:
+            data: Dataframe-compatible upstream message.
+            *args: Additional event arguments, accepted for eventkit callbacks
+                and otherwise ignored.
+
+        Emits:
+            Signal: Validated Signal, with ``audit_symbol`` metadata only after
+            persistence queue acceptance.
+        """
+
+        calculation = self.calculate_signal(data)
+        signal = self._signal_from_calculation(calculation)
+        if not isinstance(calculation, _PandasSignalCalculation):
+            raise TypeError("PandasSignalModel calculation is missing its dataframe")
+        signal = self._with_persistence_reference(signal, calculation.frame)
+        self.dataEvent.emit(signal)
+
+    def _with_persistence_reference(
+        self,
+        signal: Signal,
+        frame: pd.DataFrame,
+    ) -> Signal:
+        """Queue calculated data and add its accepted storage reference."""
+
+        persistence = self.persistence
+        if persistence is False:
+            return signal
+        if persistence is True:
+            raise RuntimeError("Signal persistence was not initialized")
+        try:
+            reference = persistence.save(
+                frame,
+                source_key=self.source_key,
+                active_contract=self.contract_selector.active_contract,
+                run_started_at=self.runtime.run_started_at,
+            )
+            if reference is not None and not isinstance(reference, str):
+                raise TypeError("Signal persistence reference must be a string or None")
+        except Exception:
+            log.exception(
+                "%s could not queue calculated dataframe persistence; "
+                "emitting Signal without an audit reference",
+                self,
+            )
+            return signal
+        if reference is None:
+            return signal
+        return replace(
+            signal,
+            metadata={**signal.metadata, "audit_symbol": reference},
+        )
 
     @final
     def calculate_signal(self, data: Any) -> SignalCalculation:
@@ -308,19 +376,6 @@ class PandasSignalModel(SignalModel, ABC):
             as_of=calculation.as_of,
             frame=calculated,
         )
-
-    def _additional_signal_metadata(
-        self,
-        calculation: SignalCalculation,
-    ) -> Mapping[str, Any]:
-        """Save a validated dataframe and return its optional audit reference."""
-
-        if not isinstance(calculation, _PandasSignalCalculation):
-            raise TypeError("PandasSignalModel calculation is missing its dataframe")
-        audit_reference = self.save_df(calculation.frame)
-        if audit_reference is not None:
-            return {"audit_symbol": audit_reference}
-        return {}
 
     def row_to_calculation(
         self,
@@ -411,53 +466,6 @@ class PandasSignalModel(SignalModel, ABC):
         Returns:
             Calculated dataframe whose last row will produce the Signal.
         """
-
-    def save_df(self, frame: pd.DataFrame) -> str | None:
-        """Queue calculated dataframe rows when a save sink is configured.
-
-        Args:
-            frame: Complete calculated dataframe returned by :meth:`df`. The
-                caller must not mutate it after this method queues it.
-
-        Returns:
-            Physical dataframe symbol, or ``None`` when saving is disabled.
-
-        Raises:
-            RuntimeError: If saving is enabled before contract selection has
-                been initialized.
-        """
-
-        if self.audit_sink is None:
-            return None
-        active = self.contract_selector.active_contract
-        run_started_at = self.runtime.run_started_at
-        symbol = (
-            f"{self.source_key}_"
-            f"{active.localSymbol or active.symbol}_"
-            f"{run_started_at.isoformat()}"
-        )
-        is_new_generation = (
-            self._audit_active_con_id != active.conId or self._audit_symbol != symbol
-        )
-        metadata = {
-            "source_key": self.source_key,
-            "run_started_at": run_started_at,
-            "active_contract": tree(active),
-        }
-        if is_new_generation:
-            self.audit_sink.enqueue_write(symbol, frame, metadata)
-            self._audit_symbol = symbol
-            self._audit_active_con_id = active.conId
-            log.info("Started Signal dataframe generation %s", symbol)
-        else:
-            new_rows = frame
-            if self._audit_last_index is not None:
-                new_rows = frame.loc[frame.index > self._audit_last_index]
-            if not new_rows.empty:
-                self.audit_sink.enqueue_append(symbol, new_rows, metadata)
-                log.debug("Appended Signal dataframe generation %s", symbol)
-        self._audit_last_index = frame.index[-1]
-        return symbol
 
 
 __all__ = ["PandasSignalModel", "SignalCalculation", "SignalModel"]

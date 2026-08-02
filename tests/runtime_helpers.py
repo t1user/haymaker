@@ -60,10 +60,13 @@ When writing new tests:
   ``Atom.runtime`` with a partial object.
 - pass ``frame_store_provider`` to ``atom_runtime_factory`` when strategy
   composition needs a specific persistence provider.
+- pass ``signal_persistence_factory`` when testing
+  ``PandasSignalModel(persistence=True)``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Self, cast
@@ -76,7 +79,7 @@ from haymaker.book import Book
 from haymaker.config import TimeoutPolicy
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
-from haymaker.datastore import FrameStoreProvider
+from haymaker.datastore import FrameStoreProvider, SignalFramePersistence
 from haymaker.order_defaults import OrderDefaults
 from haymaker.trader import Trader
 
@@ -92,6 +95,11 @@ class AtomRuntimeHarness:
     trader: Trader | None = None
     frame_store_provider: FrameStoreProvider = field(
         default_factory=lambda: cast(FrameStoreProvider, Mock(spec=FrameStoreProvider))
+    )
+    signal_persistence_factory: Callable[[], SignalFramePersistence] = field(
+        default_factory=lambda: Mock(
+            side_effect=RuntimeError("Signal persistence is not configured")
+        )
     )
     order_defaults: OrderDefaults = field(default_factory=OrderDefaults)
     timeout_policy: TimeoutPolicy = field(default_factory=TimeoutPolicy)

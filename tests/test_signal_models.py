@@ -17,6 +17,7 @@ from haymaker.components import (
     SignalModel,
     SignalType,
 )
+from haymaker.datastore import QueuedSignalFramePersistence
 from haymaker.enums import ActiveNext
 
 
@@ -51,6 +52,37 @@ class FakeAuditSink:
 
     def enqueue_write_metadata(self, symbol, meta):
         self.calls.append(("metadata", symbol, meta))
+
+
+class RecordingPersistence:
+    """Record synchronous persistence calls and return a configured reference."""
+
+    def __init__(self, reference: str | None = "calculation-reference") -> None:
+        """Initialize the reference and empty call history."""
+
+        self.reference = reference
+        self.calls: list[tuple[pd.DataFrame, str, ibi.Contract, datetime]] = []
+
+    def save(
+        self,
+        frame: pd.DataFrame,
+        *,
+        source_key: str,
+        active_contract: ibi.Contract,
+        run_started_at: datetime,
+    ) -> str | None:
+        """Record one non-blocking persistence request."""
+
+        self.calls.append((frame, source_key, active_contract, run_started_at))
+        return self.reference
+
+
+def queued_persistence(
+    sink: FakeAuditSink | None = None,
+) -> QueuedSignalFramePersistence:
+    """Return default Signal persistence around a test sink."""
+
+    return QueuedSignalFramePersistence(sink or FakeAuditSink())
 
 
 def model(**kwargs):
@@ -330,7 +362,7 @@ def test_pandas_model_rejects_invalid_metadata_fields(
         model(metadata_fields=metadata_fields)
 
 
-def test_pandas_model_reports_all_missing_pair_fields_before_audit(
+def test_pandas_model_reports_all_missing_pair_fields_before_persistence(
     atom_runtime,
 ):
     class MissingPair(PandasSignalModel):
@@ -343,11 +375,11 @@ def test_pandas_model_reports_all_missing_pair_fields_before_audit(
         ibi.Future(conId=1, symbol="ES", exchange="CME"),
         SignalType.STATE,
         signal_fields=("in", "out"),
-        audit_sink=sink,
+        persistence=queued_persistence(sink),
     )
 
     with pytest.raises(KeyError, match="'in'.*'out'"):
-        subject.create_signal(frame())
+        subject.onData(frame())
 
     assert sink.calls == []
 
@@ -394,7 +426,7 @@ def test_custom_row_conversion_supplies_only_calculated_fields(atom_runtime):
     assert result.as_of is observed_at
 
 
-def test_invalid_custom_calculation_creates_no_audit_generation(atom_runtime):
+def test_invalid_custom_calculation_creates_no_persistence_generation(atom_runtime):
     class InvalidCalculationModel(Model):
         def row_to_calculation(self, row):
             return SignalCalculation(value=float("nan"))
@@ -404,16 +436,16 @@ def test_invalid_custom_calculation_creates_no_audit_generation(atom_runtime):
         "alpha",
         ibi.Future(conId=1, symbol="ES", exchange="CME", localSymbol="ESM6"),
         SignalType.STATE,
-        audit_sink=sink,
+        persistence=queued_persistence(sink),
     )
 
     with pytest.raises(ValueError, match="finite"):
-        subject.create_signal(frame())
+        subject.onData(frame())
 
     assert sink.calls == []
 
 
-def test_model_specific_validation_precedes_audit_persistence(atom_runtime):
+def test_model_specific_validation_precedes_persistence(atom_runtime):
     class RejectingModel(Model):
         def validate_signal_value(self, value):
             raise ValueError("rejected calculated value")
@@ -423,26 +455,29 @@ def test_model_specific_validation_precedes_audit_persistence(atom_runtime):
         "alpha",
         ibi.Future(conId=1, symbol="ES", exchange="CME"),
         SignalType.STATE,
-        audit_sink=sink,
+        persistence=queued_persistence(sink),
     )
 
     with pytest.raises(ValueError, match="rejected calculated value"):
-        subject.create_signal(frame())
+        subject.onData(frame())
 
     assert sink.calls == []
 
 
-def test_missing_explicit_metadata_creates_no_audit_generation(atom_runtime):
+def test_missing_explicit_metadata_creates_no_persistence_generation(atom_runtime):
     sink = FakeAuditSink()
-    subject = model(metadata_fields=("missing",), audit_sink=sink)
+    subject = model(
+        metadata_fields=("missing",),
+        persistence=queued_persistence(sink),
+    )
 
     with pytest.raises(KeyError, match="metadata.*'missing'"):
-        subject.create_signal(frame())
+        subject.onData(frame())
 
     assert sink.calls == []
 
 
-def test_successful_audit_writes_full_frame_then_only_new_rows(
+def test_successful_persistence_writes_full_frame_then_only_new_rows(
     atom_runtime,
     monkeypatch,
 ):
@@ -454,8 +489,11 @@ def test_successful_audit_writes_full_frame_then_only_new_rows(
     )
     install_selector(monkeypatch, atom_runtime, active=active)
     sink = FakeAuditSink()
-    subject = model(audit_sink=sink)
-    subject.create_signal(frame())
+    output = []
+    subject = model(persistence=queued_persistence(sink))
+    subject.dataEvent += output.append
+    subject.onData(frame())
+    subject.onData(frame())
     extended = pd.concat(
         [
             frame(),
@@ -466,7 +504,8 @@ def test_successful_audit_writes_full_frame_then_only_new_rows(
         ]
     )
 
-    result = subject.create_signal(extended)
+    subject.onData(extended)
+    result = output[-1]
 
     assert [call[0] for call in sink.calls] == ["write", "append"]
     assert len(sink.calls[0][2]) == 2
@@ -474,6 +513,44 @@ def test_successful_audit_writes_full_frame_then_only_new_rows(
     assert result.metadata["audit_symbol"] == sink.calls[0][1]
     assert sink.calls[0][3]["source_key"] == "alpha"
     assert sink.calls[0][3]["active_contract"] == misc.tree(active)
+
+
+def test_active_contract_change_starts_new_complete_generation(
+    atom_runtime,
+    monkeypatch,
+):
+    """ACTIVE rotation should not append adjusted history to the prior run."""
+
+    first = ibi.Future(
+        conId=1,
+        symbol="ES",
+        exchange="CME",
+        localSymbol="ESM6",
+    )
+    second = ibi.Future(
+        conId=2,
+        symbol="ES",
+        exchange="CME",
+        localSymbol="ESU6",
+    )
+    selector = SimpleNamespace(active_contract=first, next_contract=first)
+    monkeypatch.setattr(
+        atom_runtime.contract_registry,
+        "get_selector",
+        lambda blueprint: selector,
+    )
+    sink = FakeAuditSink()
+    subject = model(persistence=queued_persistence(sink))
+
+    subject.onData(frame())
+    selector.active_contract = second
+    selector.next_contract = second
+    subject.onData(frame())
+
+    assert [call[0] for call in sink.calls] == ["write", "write"]
+    assert [len(call[2]) for call in sink.calls] == [2, 2]
+    assert "ESM6" in sink.calls[0][1]
+    assert "ESU6" in sink.calls[1][1]
 
 
 def test_signal_uses_selected_contract_but_saved_data_uses_active(
@@ -507,24 +584,166 @@ def test_signal_uses_selected_contract_but_saved_data_uses_active(
         "alpha",
         ibi.Future(symbol="ES", exchange="CME"),
         SignalType.STATE,
-        audit_sink=sink,
+        persistence=queued_persistence(sink),
     )
+    output = []
+    subject.dataEvent += output.append
 
-    result = subject.create_signal(frame())
+    subject.onData(frame())
+    result = output[0]
 
     assert result.contract == next_contract
     assert "ESM6" in sink.calls[0][1]
     assert sink.calls[0][3]["active_contract"] == misc.tree(active)
 
 
-def test_saving_requires_initialized_contract_selector(atom_runtime):
-    subject = model(audit_sink=FakeAuditSink())
+def test_create_signal_has_no_persistence_side_effect(atom_runtime):
+    """Direct calculation must not unexpectedly write audit data."""
 
-    with pytest.raises(RuntimeError, match="Contract selector"):
-        subject.create_signal(frame())
+    persistence = RecordingPersistence()
+    subject = model(persistence=persistence)
+
+    result = subject.create_signal(frame())
+
+    assert persistence.calls == []
+    assert "audit_symbol" not in result.metadata
 
 
-def test_failed_calculation_creates_no_audit_generation(atom_runtime):
+def test_custom_persistence_is_queued_before_signal_emission(
+    atom_runtime,
+    monkeypatch,
+):
+    """Queue acceptance should provide metadata before downstream callbacks."""
+
+    active = ibi.Future(
+        conId=1,
+        symbol="ES",
+        exchange="CME",
+        localSymbol="ESM6",
+    )
+    install_selector(monkeypatch, atom_runtime, active=active)
+    order = []
+
+    class OrderedPersistence(RecordingPersistence):
+        def save(self, *args, **kwargs):
+            """Record ordering before delegating the persistence request."""
+
+            order.append("persistence")
+            return super().save(*args, **kwargs)
+
+    subject = model(persistence=OrderedPersistence())
+    output = []
+
+    def receive(signal):
+        """Record downstream Signal delivery order."""
+
+        order.append("signal")
+        output.append(signal)
+
+    subject.dataEvent += receive
+
+    subject.onData(frame())
+
+    assert order == ["persistence", "signal"]
+    assert output[0].metadata["audit_symbol"] == "calculation-reference"
+
+
+def test_true_persistence_resolves_runtime_default_once(
+    atom_runtime,
+    monkeypatch,
+):
+    """The runtime factory should create one policy for each model."""
+
+    active = ibi.Future(
+        conId=1,
+        symbol="ES",
+        exchange="CME",
+        localSymbol="ESM6",
+    )
+    install_selector(monkeypatch, atom_runtime, active=active)
+    persistence = RecordingPersistence()
+    calls = []
+
+    def factory():
+        """Return the model-specific test policy."""
+
+        calls.append("factory")
+        return persistence
+
+    atom_runtime.signal_persistence_factory = factory
+    subject = model(persistence=True)
+    subject.onData(frame())
+    subject.onData(frame())
+
+    assert subject.persistence is persistence
+    assert calls == ["factory"]
+    assert len(persistence.calls) == 2
+
+
+def test_false_persistence_does_not_consult_runtime_default(atom_runtime):
+    """Disabled persistence should require no runtime storage configuration."""
+
+    calls = []
+
+    def factory():
+        """Record an unexpected request for default persistence."""
+
+        calls.append("factory")
+        return RecordingPersistence()
+
+    atom_runtime.signal_persistence_factory = factory
+    subject = model(persistence=False)
+    output = []
+    subject.dataEvent += output.append
+
+    subject.onData(frame())
+
+    assert calls == []
+    assert len(output) == 1
+    assert "audit_symbol" not in output[0].metadata
+
+
+@pytest.mark.parametrize("persistence", [None, 1, "enabled"])
+def test_pandas_model_rejects_invalid_persistence(atom_runtime, persistence):
+    """Only explicit booleans and structural persistence objects are valid."""
+
+    with pytest.raises(TypeError, match="persistence must be"):
+        model(persistence=persistence)
+
+
+def test_persistence_failure_does_not_suppress_signal(
+    atom_runtime,
+    monkeypatch,
+    caplog,
+):
+    """An optional audit failure must not interrupt the trading pipeline."""
+
+    active = ibi.Future(
+        conId=1,
+        symbol="ES",
+        exchange="CME",
+        localSymbol="ESM6",
+    )
+    install_selector(monkeypatch, atom_runtime, active=active)
+
+    class FailingPersistence(RecordingPersistence):
+        def save(self, *args, **kwargs):
+            """Simulate a queue that can no longer accept work."""
+
+            raise RuntimeError("queue is closed")
+
+    subject = model(persistence=FailingPersistence())
+    output = []
+    subject.dataEvent += output.append
+
+    subject.onData(frame())
+
+    assert len(output) == 1
+    assert "audit_symbol" not in output[0].metadata
+    assert "could not queue calculated dataframe persistence" in caplog.text
+
+
+def test_failed_calculation_creates_no_persistence_generation(atom_runtime):
     class Failing(Model):
         def df(self, data):
             raise RuntimeError("calculation failed")
@@ -534,16 +753,16 @@ def test_failed_calculation_creates_no_audit_generation(atom_runtime):
         "alpha",
         ibi.Future(conId=1, symbol="ES", exchange="CME"),
         SignalType.STATE,
-        audit_sink=sink,
+        persistence=queued_persistence(sink),
     )
 
     with pytest.raises(RuntimeError):
-        subject.create_signal(frame())
+        subject.onData(frame())
 
     assert sink.calls == []
 
 
-def test_invalid_calculated_row_creates_no_audit_generation(atom_runtime):
+def test_invalid_calculated_row_creates_no_persistence_generation(atom_runtime):
     class MissingSignal(Model):
         def df(self, data):
             return data
@@ -553,18 +772,20 @@ def test_invalid_calculated_row_creates_no_audit_generation(atom_runtime):
         "alpha",
         ibi.Future(conId=1, symbol="ES", exchange="CME"),
         SignalType.STATE,
-        audit_sink=sink,
+        persistence=queued_persistence(sink),
     )
 
     with pytest.raises(KeyError, match="signal"):
-        subject.create_signal(frame())
+        subject.onData(frame())
 
     assert sink.calls == []
 
 
-def test_audit_sink_requires_drain_policy(atom_runtime):
+def test_queued_persistence_requires_drain_policy():
+    """The standard audit implementation must preserve accepted shutdown work."""
+
     sink = FakeAuditSink()
     sink.shutdown_policy = QueueShutdownPolicy.DISCARD
 
     with pytest.raises(ValueError, match="DRAIN"):
-        model(audit_sink=sink)
+        QueuedSignalFramePersistence(sink)

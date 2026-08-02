@@ -55,6 +55,9 @@ storage: # Filesystem and framework MongoDB settings.
       port: 27017 # MongoDB server port.
     database: test_data # Database used by framework state and Mongo savers.
 
+signal_persistence: # Defaults used by PandasSignalModel(persistence=True).
+  library: signal_data # Arctic library for calculated Signal dataframe history.
+
 blotter: # Completed-trade transaction logging.
   enabled: true # Create and attach the live trade blotter.
   saver: # Built-in saver used for blotter records.

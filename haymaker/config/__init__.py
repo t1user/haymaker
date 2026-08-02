@@ -13,6 +13,7 @@ from .settings import (
     LiveConfig,
     MongoClientSettings,
     MongoSettings,
+    SignalFramePersistenceSettings,
     StorageSettings,
     TimeoutPolicy,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "LiveConfig",
     "MongoClientSettings",
     "MongoSettings",
+    "SignalFramePersistenceSettings",
     "StorageSettings",
     "TimeoutPolicy",
     "load_dataloader_config",

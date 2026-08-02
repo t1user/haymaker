@@ -104,6 +104,14 @@ an empty collection copies none, and an explicit collection selects fields. A
 subclass may override `row_to_calculation(row)` while returning the same
 `SignalCalculation` boundary.
 
+`PandasSignalModel.persistence` accepts `False`, `True`, or a custom
+`SignalFramePersistence`. `True` creates a model-owned default from Runtime
+configuration; `False` performs no persistence. Custom and default policies
+must queue synchronously rather than wait for storage I/O. Queue acceptance
+precedes emission so the reference can be attached, while enqueue failure is
+logged and never suppresses the Signal. Direct `create_signal()` calls do not
+persist.
+
 Built-in binary processors consume Signal and query
 `Book.effective_quantity(source_key)`. STATE zero requests flat; EVENT zero is
 ignored. Matching non-zero direction is suppressed. `BinarySignalProcessor`
@@ -263,8 +271,9 @@ ACTIVE comes from the selector independently of transaction Contract or NEXT.
 The first successful calculation for a generation writes the complete
 dataframe; later saves append only new rows. ACTIVE rotation starts a new
 generation only after a successful calculation. A supervised restart continues
-the process run, while a new process creates a new run. Audit sinks are
-dedicated ordered `DRAIN` sinks. Metadata records source, run start, ACTIVE
+the process run, while a new process creates a new run. Default persistence uses
+a dedicated ordered `DRAIN` sink created from
+`signal_persistence.library`. Metadata records source, run start, ACTIVE
 Contract. Futures history may be back-adjusted without a downstream
 notification.
 

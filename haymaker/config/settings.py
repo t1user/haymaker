@@ -38,6 +38,35 @@ class StorageSettings:
 
 
 @dataclass(frozen=True)
+class SignalFramePersistenceSettings:
+    """Runtime defaults used by ``PandasSignalModel(persistence=True)``.
+
+    Attributes:
+        library: Arctic dataframe library for calculated Signal history.
+    """
+
+    library: str = "signal_data"
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> Self:
+        """Construct and validate Signal dataframe persistence defaults.
+
+        Args:
+            values: Merged ``signal_persistence`` configuration section.
+
+        Returns:
+            Validated runtime persistence settings.
+        """
+
+        settings = cls(**dict(values))
+        if not isinstance(settings.library, str):
+            raise TypeError("signal_persistence.library must be a string")
+        if not settings.library:
+            raise ValueError("signal_persistence.library must not be empty")
+        return settings
+
+
+@dataclass(frozen=True)
 class TimeoutPolicy:
     """Runtime defaults for market-data inactivity monitoring.
 
@@ -87,6 +116,7 @@ class LiveConfig:
         controller: Controller startup, reconciliation, and scheduling options.
         book: Typed state, order persistence, and rejection options.
         storage: Filesystem and framework Mongo infrastructure settings.
+        signal_persistence: Defaults for optional Signal dataframe persistence.
         blotter: Blotter enablement and saver specification.
         orders: Default IB order fields.
         timeout: Default streamer timeout policy.
@@ -98,6 +128,7 @@ class LiveConfig:
     controller: Mapping[str, Any]
     book: Mapping[str, Any]
     storage: StorageSettings
+    signal_persistence: Mapping[str, Any]
     blotter: Mapping[str, Any]
     orders: Mapping[str, Any]
     timeout: Mapping[str, Any]
