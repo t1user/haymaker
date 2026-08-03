@@ -21,3 +21,4 @@ _version.py
 build
 docs/build/
 .antigravitycli/
+uv.lock
