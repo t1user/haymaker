@@ -60,9 +60,7 @@ def test_fixed_size_allocator_missing_source_mapping_raises():
 
 
 def test_fixed_size_allocator_callable_receives_proposal():
-    allocator = FixedSizeAllocator(
-        lambda incoming: incoming.signal.metadata["atr"] / 2
-    )
+    allocator = FixedSizeAllocator(lambda incoming: incoming.signal.metadata["atr"] / 2)
 
     assert allocator.target_for(proposal()).target_quantity == 5
 
@@ -90,7 +88,9 @@ def test_portfolio_wrapper_rejects_allocator_returning_multiple_targets(
 ):
     class InvalidAllocator:
         def target_for(self, proposal):
-            return [PositionTarget(contract=proposal.signal.contract, target_quantity=1)]
+            return [
+                PositionTarget(contract=proposal.signal.contract, target_quantity=1)
+            ]
 
     with pytest.raises(TypeError, match="multiple"):
         PortfolioWrapper(InvalidAllocator()).onData(proposal())
@@ -111,10 +111,12 @@ def test_portfolio_wrapper_rejects_changed_identity(atom_runtime):
 
 class EchoPortfolio(Portfolio):
     def process(self, incoming: Signal) -> Iterable[PositionTarget]:
+        value = incoming.value
+        assert isinstance(value, float)
         return (
             PositionTarget(
                 contract=incoming.contract,
-                target_quantity=incoming.value,
+                target_quantity=value,
                 source_key=incoming.source_key,
             ),
         )
@@ -236,8 +238,10 @@ class BinaryAggregatePortfolio(Portfolio):
         self.directions = {}
 
     def process(self, incoming: Signal) -> Iterable[PositionTarget]:
+        value = incoming.value
+        assert isinstance(value, float)
         self.directions[incoming.source_key] = (
-            1 if incoming.value > 0 else -1 if incoming.value < 0 else 0
+            1 if value > 0 else -1 if value < 0 else 0
         )
         return (
             PositionTarget(
