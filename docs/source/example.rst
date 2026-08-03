@@ -138,22 +138,48 @@ Components used:
 
   Sends a :class:`ib_insync.order.MarketOrder` to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an ``atr`` column from the :class:`haymaker.block.AbstractDfBlock`).
 
+Save the pipeline in a Python strategy file, for example ``strategy.py``. This
+file is the trading setup passed to Haymaker: it contains the contracts,
+strategy components, and pipeline wiring for one or more strategies.
+
+To exclude a strategy from the daily futures roll, set
+``auto_roll_futures=False`` on its block:
+
 .. code-block:: python
-   :caption: Running the application
+   :caption: Optional strategy policy
 
-   from haymaker import app
+   strategy = EMACrossStrategy(
+       "ema_cross_ES",
+       es_contract,
+       12,
+       48,
+       24,
+       auto_roll_futures=False,
+   )
 
-   if __name__ == "__main__":
-       app.App().run()
-
-Run this as a script (e.g., ``strategy.py``):
+Run the strategy file with the ``haymaker`` command:
 
 .. code-block:: bash
    :caption: Starting the strategy
 
-   python strategy.py
+   haymaker strategy.py
 
-Ensure ``python`` is the correct interpreter. Long-running scripts should be managed as processes (see process management documentation—link TBD).
+Configuration can be supplied with ``--file``/``-f`` or environment variables
+as described in :doc:`configuration`:
+
+.. code-block:: bash
+   :caption: Starting with a YAML override
+
+   haymaker strategy.py --file live_config.yaml
+
+.. code-block:: bash
+   :caption: Starting with an environment-selected YAML override
+
+   export HAYMAKER_HAYMAKER_CONFIG_OVERRIDES=/path/to/live_config.yaml
+   haymaker strategy.py
+
+Ensure ``haymaker`` comes from the intended environment. Long-running process
+management, including systemd units, will be documented separately.
 
 Conclusion
 ----------

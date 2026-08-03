@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import itertools
 import logging
-from collections import abc
-from collections.abc import Callable
-from dataclasses import dataclass, field, fields
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from enum import Enum, auto
 from functools import partial
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -15,6 +16,7 @@ import ib_insync as ibi
 from haymaker import misc
 from haymaker.base import Atom
 from haymaker.state_machine import OrderInfo, Strategy
+from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
@@ -28,8 +30,29 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class ControllerError(Exception):
-    pass
+class ControllerError(ValueError):
+    """Raised when direct controller construction receives invalid policy."""
+
+
+class SyncOutcome(Enum):
+    """Result of a controller sync attempt."""
+
+    OK = auto()
+    FAILED = auto()
+    ABORTED = auto()
+
+    def __bool__(self) -> bool:
+        """Return True only when sync completed cleanly."""
+
+        return self is SyncOutcome.OK
+
+
+def _broker_messages_to_ignore(
+    codes: tuple[int, ...] | list[int],
+) -> tuple[int, ...]:
+    """Return broker message codes ignored by controller logging."""
+
+    return tuple(sorted(set(codes) | SUPERVISOR_OWNED_BROKER_CODES))
 
 
 @dataclass
@@ -56,9 +79,11 @@ class Controller(Atom):
     broker_request_timeout: int = 10
     sync_max_attempts: int = 3
     sync_resync_delay: float = 1
-    startup_delay: float = 1
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
+    ignore_errors: tuple[int, ...] | list[int] = field(default_factory=tuple)
+    future_roll_time: tuple[int, int] | None = None
+    future_roll_policies: dict[str, bool] = field(default_factory=dict)
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
@@ -72,67 +97,55 @@ class Controller(Atom):
     _health_check_triggers: list[str] = field(default_factory=list, repr=False)
     _new_position_lock: bool = False
     _trading_disabled: bool = False
-    _restart_on_failed_sync: bool = True
+    _restart_before_correction: bool = True
+    _sync_abort_event: asyncio.Event | None = field(default=None, repr=False)
+    _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
 
     @classmethod
-    def from_config(
+    def from_mapping(
         cls,
+        values: Mapping[str, Any],
+        *,
         trader: Trader,
         blotter: Blotter | None = None,
-        top_config: abc.MutableMapping | None = None,
         health_check_observables: list[list[Callable[[], bool]]] | None = None,
     ) -> Self:
+        """Construct a controller from configuration and runtime dependencies.
+
+        Args:
+            values: Merged ``controller`` configuration section, including
+                the nested one-run ``startup`` options.
+            trader: Runtime broker order gateway.
+            blotter: Optional transaction logger.
+            health_check_observables: Runtime-owned health-check collections.
+
+        Returns:
+            Controller ready to install in a runtime context.
         """
-        Extract proper attributes from configuration file and perform
-        required initializations based on it.
-        """
-        log.debug("Initializing Controller with config.")
-        if top_config is None:
-            top_config = {}
 
-        if health_check_observables is None:
-            health_check_observables = []
-
-        valid_fields = {field.name for field in fields(cls)}
-        config = {
-            k: v
-            for k, v in top_config.get("controller", {}).items()
-            if k in valid_fields
-        } or {}
-
-        field_names = [field.name for field in fields(cls)]
-        for param in config:
-            if param not in field_names:
-                raise ControllerError(
-                    f"Wrong parameter: {param} in 'controller' section of config."
-                )
-
-        top_kwargs = {
-            i: top_config.get(i, False)
-            for i in [
-                "cold_start",
-                "reset",
-                "zero",
-                "nuke",
-            ]
-        }
-
+        options = dict(values)
+        startup = options.pop("startup", {})
+        if not isinstance(startup, Mapping):
+            raise TypeError("controller.startup must be a mapping")
+        options.update(startup)
+        roll_time = options.get("future_roll_time")
+        if isinstance(roll_time, list):
+            options["future_roll_time"] = tuple(roll_time)
         return cls(
             trader=trader,
             blotter=blotter,
-            health_check_observables=health_check_observables,
-            **config,
-            **top_kwargs,
+            health_check_observables=health_check_observables or [],
+            **options,
         )
 
     def __post_init__(self) -> None:
         super().__init__()
+        self.ignore_errors = _broker_messages_to_ignore(self.ignore_errors)
         if self.missing_brackets not in ("ignore", "warn", "remove"):
             raise ControllerError(
                 "Wrong value for controller.missing_brackets: "
                 f"{self.missing_brackets!r}."
             )
-
         # these are essential (non-optional) events
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent, self._log_event_error)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent, self._log_event_error)
@@ -140,23 +153,15 @@ class Controller(Atom):
 
         # this is for logging
         self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
-        self.ib.errorEvent.connect(self.log_err, self._log_event_error)
+        # IB calls this errorEvent, but most payloads are broker messages, not
+        # actionable application errors. Keep "error" out of callback logs.
+        self.ib.errorEvent.connect(self.onErrEvent, self._log_event_error)
 
         self.set_hold()
 
         if self.blotter:
             self.ib.commissionReportEvent.connect(
                 self.onCommissionReport, self._log_event_error
-            )
-
-        if self.sync_frequency:
-            self._sync_timer = ev.Timer(self.sync_frequency)
-            self._sync_timer.connect(self.sync, error=self._log_event_error)
-
-        if self.health_check_frequency:
-            self._health_check_timer = ev.Timer(self.health_check_frequency)
-            self._health_check_timer.connect(
-                self.run_health_check, error=self._log_event_error
             )
 
         if self.log_order_events:
@@ -167,12 +172,30 @@ class Controller(Atom):
                 f"No qualified contracts for open position: {missing_contracts}"
             )
 
-        self.no_future_roll_strategies: list[str] = []
-        log.debug(f"Controller initiated: {self}")
-        log.debug(f"{self.contract_registry.current_contracts=}")
+        log.debug("Controller initialized: %s", self)
+
+    def __str__(self) -> str:
+        """Return a compact controller description suitable for logs."""
+
+        if self.future_roll_time is None:
+            future_roll = "off"
+        else:
+            hour, minute = self.future_roll_time
+            future_roll = f"{hour:02}:{minute:02} UTC"
+        return (
+            f"Controller<sync={self.sync_frequency}s, "
+            f"health_check={self.health_check_frequency}s, "
+            f"future_roll={future_roll}, "
+            f"missing_brackets={self.missing_brackets}>"
+        )
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
+
+    def set_sync_abort_event(self, event: asyncio.Event) -> None:
+        """Set the supervisor lifecycle event that aborts controller sync."""
+
+        self._sync_abort_event = event
 
     def run_health_check(self, *args) -> None:
         for func in itertools.chain(
@@ -192,6 +215,16 @@ class Controller(Atom):
         ]
 
     def set_hold(self) -> None:
+        """Hold event-driven record updates and arm first-sync reconfirmation.
+
+        The first sync after startup, reconnect, or an explicit hold may see
+        incomplete broker order/position registers.  If that first sync finds a
+        concrete order or position mismatch, the controller requests one fresh
+        broker connection before mutating local records.  A clean sync clears
+        this flag so later live mismatches are treated as reconciliation issues,
+        not connection freshness issues.
+        """
+
         self._hold = True
         log.debug("hold set")
 
@@ -200,8 +233,10 @@ class Controller(Atom):
             self._hold = False
             log.debug("hold released")
 
-    def set_no_future_roll_strategies(self, strategies: list[str]) -> None:
-        self.no_future_roll_strategies.extend(strategies)
+    def set_future_roll_policies(self, policies: Mapping[str, bool]) -> None:
+        """Replace strategy futures-roll policies with a defensive copy."""
+
+        self.future_roll_policies = dict(policies)
 
     async def run(self) -> bool:
         """
@@ -209,6 +244,7 @@ class Controller(Atom):
         date and any remaining initialization complete.
         """
         log.debug("Running controller...")
+        self._ensure_runtime_timers_started()
         self.set_hold()
         if self.nuke:
             await self.run_nuke()
@@ -225,15 +261,14 @@ class Controller(Atom):
                 self.disable_trading("state store read failed")
                 return False
 
-        if self.startup_delay:
-            log.debug(f"Startup delay before sync: {self.startup_delay}s")
-            await asyncio.sleep(self.startup_delay)
-        else:
-            log.debug(f"No startup delay.")
-
-        sync_ok = await self.sync()
-        if not sync_ok:
-            log.critical("Controller startup sync failed. Trading remains disabled.")
+        sync_outcome = await self.sync()
+        if not sync_outcome:
+            if sync_outcome is SyncOutcome.ABORTED:
+                log.debug("Controller startup sync aborted: connection unavailable.")
+            else:
+                log.critical(
+                    "Controller startup sync failed. Trading remains disabled."
+                )
             return False
 
         if self.zero:
@@ -248,57 +283,142 @@ class Controller(Atom):
             self.sm.clear_strategies()
 
         log.debug("Controller run sequence completed successfully.")
+        self._restart_before_correction = True
         # now Streamers will run
         return True
 
+    def _ensure_runtime_timers_started(self) -> None:
+        """Start app-lifetime controller timers on the active event loop."""
+
+        if self.sync_frequency and self._sync_timer is None:
+            self._sync_timer = ev.Timer(self.sync_frequency)
+            self._sync_timer.connect(self.sync, error=self._log_event_error)
+
+        if self.health_check_frequency and self._health_check_timer is None:
+            self._health_check_timer = ev.Timer(self.health_check_frequency)
+            self._health_check_timer.connect(
+                self.run_health_check, error=self._log_event_error
+            )
+
+        if self._future_roll_timer is None:
+            self.schedule_future_roll()
+
     def roll_futures(self, *args) -> None:
         """
-        This method is scheduled to run once a day in :class:`.app.App`
+        This method is scheduled to run once a day.
         """
         log.info(f"Running roll on controller object: {id(self)}")
-        roller = FutureRoller(self, self.no_future_roll_strategies)
+        roller = FutureRoller(self, self.future_roll_policies)
         roller.roll()
 
-    async def sync(self, *args) -> bool:
+    def schedule_future_roll(self) -> None:
+        """Schedule the daily futures roll for this controller lifetime."""
+
+        if self.future_roll_time is None:
+            return
+        if self._future_roll_timer is not None:
+            log.warning("Future roll already scheduled; ignoring duplicate request.")
+            return
+
+        roll_hour, roll_minute = self.future_roll_time
+        roll_time = datetime.time(
+            hour=roll_hour, minute=roll_minute, tzinfo=datetime.UTC
+        )
+        self._future_roll_timer = ev.Event.timerange(
+            start=roll_time, step=datetime.timedelta(days=1)  # type: ignore
+        )
+        self._future_roll_timer += self.roll_futures
+        log.debug(f"Future roll scheduled for {roll_time} UTC.")
+
+    async def sync(self, *args) -> SyncOutcome:
+        """Run sync unless the supervisor marks the connection unavailable."""
+
+        abort_event = self._sync_abort_event
+        if abort_event is None:
+            return await self._sync(*args)
+
+        if abort_event.is_set():
+            log.debug("Connection unavailable. Skipping sync.")
+            return SyncOutcome.ABORTED
+
+        sync_task = asyncio.create_task(self._sync(*args), name="controller-sync")
+        abort_task = asyncio.create_task(
+            abort_event.wait(), name="controller-sync-abort"
+        )
+
+        try:
+            done, _ = await asyncio.wait(
+                (sync_task, abort_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if abort_task in done and abort_event.is_set():
+                log.debug("Controller sync aborted: connection unavailable.")
+                sync_task.cancel()
+                await asyncio.gather(sync_task, return_exceptions=True)
+                return SyncOutcome.ABORTED
+
+            abort_task.cancel()
+            await asyncio.gather(abort_task, return_exceptions=True)
+            return await sync_task
+        except asyncio.CancelledError:
+            sync_task.cancel()
+            abort_task.cancel()
+            await asyncio.gather(sync_task, abort_task, return_exceptions=True)
+            raise
+        finally:
+            for task in (sync_task, abort_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(sync_task, abort_task, return_exceptions=True)
+
+    async def _sync(self, *args) -> SyncOutcome:
         """Run sync passes until state is clean, broken, or non-convergent.
 
-        ``SyncCoordinator`` performs one pass and never disables trading.  A
-        ``False`` result means broker state could not be verified or a recovery
-        action changed local or broker state, so the controller waits and
-        retries from fresh broker/local reads.  A coordinator can request a
-        reconnect before corrective mutations; the next pass is then allowed to
-        correct state if the same mismatch persists.  ``SyncBrokenStateError``
+        ``SyncCoordinator`` performs one pass and never disables trading.
+        Retryable broker-state verification failures or recovery actions
+        return ``False`` from the coordinator, so the controller waits and
+        retries from fresh broker/local reads. The first sync after hold may
+        request one reconnect before corrective mutations; a clean sync clears
+        that startup/reconnect reconfirmation flag so later mismatches are
+        corrected or rejected without another restart. ``SyncBrokenStateError``
         means broker/local state is unsafe and trading must be disabled
         immediately.
         """
 
         if not self.ib.isConnected():
             log.debug("No connection. Skipping sync.")
-            return False
+            return SyncOutcome.FAILED
 
         log.debug("--- Sync ---")
+
         for attempt in range(1, self.sync_max_attempts + 1):
             if attempt > 1:
                 log.debug(f"Sync attempt {attempt}/{self.sync_max_attempts}")
-            coordinator = SyncCoordinator(self, self._restart_on_failed_sync)
+            coordinator = SyncCoordinator(self, self._restart_before_correction)
             try:
                 if await coordinator.run():
-                    self._restart_on_failed_sync = True
+                    self._restart_before_correction = False
+                    if self._trading_disabled:
+                        log.debug(f"TRADING DISABLED")
                     log.debug("--- Sync completed ---")
-                    return True
+                    return SyncOutcome.OK
             except SyncBrokenStateError as exc:
                 self.disable_trading(str(exc))
-                return False
+                return SyncOutcome.FAILED
 
             if attempt < self.sync_max_attempts:
                 log.debug("Sync did not complete; will retry checks.")
                 await asyncio.sleep(self.sync_resync_delay)
                 if coordinator.request_restart:
-                    self._restart_on_failed_sync = False
+                    self._restart_before_correction = False
                     self.ib.disconnect()
 
+        if self._sync_abort_event is not None and self._sync_abort_event.is_set():
+            log.debug("Controller sync aborted before disabling trading.")
+            return SyncOutcome.ABORTED
+
         self.disable_trading("sync did not converge")
-        return False
+        return SyncOutcome.FAILED
 
     def onStart(self, data, *args) -> None:
         # prevent superclass from setting attributes here
@@ -525,7 +645,7 @@ class Controller(Atom):
 
         try:
             strategy, action, _, params, _ = order_info
-            position_id = params["position_id"]
+            position_id = params.get("position_id", "unknown")
 
             kwargs = {
                 "strategy": strategy,
@@ -631,6 +751,10 @@ class Controller(Atom):
         return order_info
 
     def _assign_trade(self, trade: ibi.Trade) -> Strategy | None:
+
+        # these are BAG contracts
+        if not trade.contract.isHashable():
+            return None
 
         # assumed unknown trade is to close a position
         active_strategies_list = [
@@ -812,46 +936,34 @@ class Controller(Atom):
             f"orderId: {trade.order.orderId}, permId: {trade.order.permId} "
         )
 
-    def log_err(
+    def onErrEvent(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ) -> None:
-        # Connected to ib.errorEvent
+        """Log broker messages with order context when it is available."""
 
-        if errorCode < 400:
-            # reqId is most likely orderId
-            # order rejected is errorCode = 201
-            # order cancelled is errorCode = 202
-            # 421: Error validating request.-'bN' : cause - Missing order exchange
-            order_info = self.sm.order.get(reqId)
-            if order_info:
-                strategy, action, trade, *_ = order_info
-                strategy_str = strategy
-                order = trade.order
-            else:
-                strategy, action, trade, order = "", "", "", ""
-                strategy_str = ""
+        order_info = self.sm.order.get(reqId)
+        if order_info:
+            strategy, action, trade, *_ = order_info
+            strategy_str = strategy
+            order = trade.order
+        else:
+            strategy, action, order = "", "", ""
+            strategy_str = ""
 
-            if errorCode == 202 and ("YOUR ORDER IS NOT ACCEPTED" not in errorString):
-                log.info(
-                    f"{errorString} code={errorCode} {contract=} "
-                    f"{strategy} | {action} | {order}"
-                )
-            elif errorCode == 201:
-                log.critical(
-                    f"ORDER REJECTED: {errorString} {errorCode=} {contract=}, "
-                    f"{strategy} | {action} | {order}"
-                )
-                self.sm.register_rejected_order(strategy_str)
-            elif errorCode in (321, 322, 323):
-                log.info(f"{errorString} {errorCode=}")
-            elif errorCode == 165:
-                log.debug(f"{errorString} {errorCode}")
-
-            else:
-                log.error(
-                    f"Error {errorCode}: {errorString} {contract}, "
-                    f"{strategy} | {action} | {order}"
-                )
+        context = f"{contract=}, {strategy} | {action} | {order}"
+        if errorCode == 201:
+            log.critical(f"ORDER REJECTED: {errorString} {errorCode=}, {context}")
+            self.sm.register_rejected_order(strategy_str)
+        elif errorCode == 202 and "YOUR ORDER IS NOT ACCEPTED" in errorString:
+            log.error(f"ORDER NOT ACCEPTED: {errorString} {errorCode=}, {context}")
+        elif errorCode in self.ignore_errors:
+            return
+        elif errorCode in (165, 321, 322, 323):
+            log.debug(f"Broker message {errorCode}: {errorString} {context}")
+        elif errorCode < 400:
+            log.error(f"Broker message {errorCode}: {errorString} {context}")
+        else:
+            log.debug(f"Broker message {errorCode}: {errorString} {context}")
 
     async def execute_stops_and_close_positions(self) -> None:
         await Terminator(self).run()

@@ -59,6 +59,26 @@ def test_timeout_created_from_atom(Atom, Timeout):
     assert "MyAtom" in str(t)
 
 
+def test_restart_timeout_from_atom_requires_bound_supervisor(
+    Atom, Timeout, atom_runtime
+) -> None:
+    """Restart-enabled Atom timeouts must be created during startup or later."""
+
+    class FakeDetails(Details):
+        def __post_init__(self):
+            pass
+
+    class MyAtom(Atom):
+        @property
+        def contract_details(self):
+            return FakeDetails(ibi.ContractDetails(contract=ibi.Future("NQ", "CME")))
+
+    setattr(atom_runtime, "request_restart", None)
+
+    with pytest.raises(RuntimeError, match="onStart"):
+        Timeout.from_atom(MyAtom(), ev.Event(), time=1)
+
+
 def test_timeout_from_atom_raises_when_no_details(Timeout, Atom):
     class MyAtom(Atom):
         def __str__(self):
@@ -80,6 +100,44 @@ def test_timeout_with_no_name_gets_a_number(Timeout):
     t1 = Timeout(ev.Event(), 0.2)
     assert str(t0).startswith("Timeout <0.1s> for <0>  event id:")
     assert str(t1).startswith("Timeout <0.2s> for <1>  event id:")
+
+
+def test_stale_streamer_requests_restart(Timeout):
+    reasons = []
+    timeout = Timeout(
+        ev.Event(),
+        time=0,
+        name="stale",
+        debug=False,
+        request_restart=reasons.append,
+    )
+
+    timeout.triggered_action()
+
+    assert reasons == [f"stale streamer: {timeout!s}"]
+
+
+def test_stale_streamer_rearms_timeout_when_restart_is_blocked(Timeout):
+    reasons = []
+
+    def blocked_restart(reason: str) -> bool:
+        reasons.append(reason)
+        return False
+
+    timeout = Timeout(
+        ev.Event(),
+        time=0.1,
+        name="stale",
+        debug=False,
+        request_restart=blocked_restart,
+    )
+    original_timeout = timeout._timeout
+    expected_reason = f"stale streamer: {timeout!s}"
+
+    timeout.triggered_action()
+
+    assert reasons == [expected_reason]
+    assert timeout._timeout is not original_timeout
 
 
 # ###########################################

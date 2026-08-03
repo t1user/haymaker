@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import itertools
 import logging
 import operator as op
@@ -13,7 +14,7 @@ from typing import Literal
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
-from .async_wrappers import QueueRunner
+from .async_wrappers import QueueRunner, QueueShutdownPolicy
 from .base import Atom
 from .dfaggregator import WrongStreamer
 from .streamers import Streamer
@@ -65,7 +66,11 @@ class BarAggregator(Atom):
         # reference point for last bar processed
         self._last_data_point: datetime | date | None = None
         # data queued during long backfills
-        self._queue: QueueRunner = QueueRunner(self._process, f"{self!s}")
+        self._queue: QueueRunner = QueueRunner(
+            self._process,
+            f"{self!s}",
+            shutdown_policy=QueueShutdownPolicy.DISCARD,
+        )
         # used to determine if backfill in progress
         self._backfill_event: asyncio.Event = asyncio.Event()
         # start with cleared state (will not block)
@@ -250,6 +255,7 @@ class BarAggregator(Atom):
         )
         self._future_adjust_flag = True
         super().onContractChanged(old_contract, new_contract)
+        log.warning(f"{self!s} will back-adjust data for {old_contract}")
 
     @cached_property
     def _id(self) -> int:
@@ -285,7 +291,7 @@ class CountBars(ev.Op):
 
     def on_source(self, new_bar: ibi.BarData, *args) -> None:
         if not self.bars or self.bars[-1].barCount == self._count:
-            bar = new_bar
+            bar = copy.copy(new_bar)
             bar.average = new_bar.average * new_bar.volume
             bar.barCount = 1
             self.bars.append(bar)
@@ -340,7 +346,7 @@ class VolumeBars(ev.Op):
         if new_bar.volume < 0 or new_bar.barCount < 0:
             return
         if not self.bars or self.bars[-1].volume >= self._volume:
-            bar = new_bar
+            bar = copy.copy(new_bar)
             bar.average = bar.average * bar.volume
             self.bars.append(bar)
         else:

@@ -1,6 +1,6 @@
 """
 `details` is a list of lists that would typically be passed by
-`haymaker.manager.InitData` to
+`haymaker.runtime.InitData` to
 `haymaker.contract_registry.ContractRegistry` during restart.
 
 `blueprints` is a list of blueprints for which it was acquired.

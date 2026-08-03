@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import eventkit as ev  # type: ignore
@@ -224,9 +225,7 @@ def test_OrderContainer_saves_zero_order_id_under_perm_id(order_saver):
 
     assert orders[12345] is order_info
     assert 0 not in orders
-    saved_order = order_saver.store["orders"][12345]["trade"]["Trade"]["order"][
-        "Order"
-    ]
+    saved_order = order_saver.store["orders"][12345]["trade"]["Trade"]["order"]["Order"]
     assert saved_order["permId"] == 12345
     assert "orderId" not in saved_order
 
@@ -400,6 +399,19 @@ def test_StrategyContainer_contains_only_Strategies(strategy_saver):
     cont.update({"a": {"x": 1, "y": 2}, "b": {"x": 4, "y": 9}})
     assert isinstance(cont["b"], Strategy)
     assert cont["a"].x == 1
+
+
+def test_StrategyContainer_decode_logs_strategy_count(strategy_saver, caplog):
+    source = StrategyContainer(strategy_saver)
+    source["one"] = {"position": 1}
+    data = source.encode()
+    data["_id"] = "record-id"
+    target = StrategyContainer(strategy_saver)
+
+    with caplog.at_level(logging.DEBUG):
+        target.decode(data)
+
+    assert "will decode data: 1 keys" in caplog.text
 
 
 def test_StrategyContainer_add_key(strategy_saver):
@@ -630,6 +642,19 @@ def test_strategy_has_position_attribute():
     strat = cont["new_strategy"]  # noqa
     s = cont["new_strategy"]
     assert isinstance(s.position, float)
+
+
+def test_strategy_container_flushes_only_pending_save(strategy_saver):
+    """Final cleanup should persist a delayed strategy change exactly once."""
+
+    cont = StrategyContainer(strategy_saver, save_delay=60)
+    cont.saver = strategy_saver
+    cont["new_strategy"].position = 1
+
+    cont.flush_pending_save()
+    cont.flush_pending_save()
+
+    assert len(strategy_saver.store["models"]) == 1
 
 
 def test_empty_strategy_contains_defaults():

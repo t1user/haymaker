@@ -1,7 +1,6 @@
 import os
 import pickle
 from dataclasses import dataclass
-from typing import ClassVar
 from unittest.mock import ANY, Mock
 
 import ib_insync as ibi
@@ -12,12 +11,11 @@ from config import TEST_ROOT  # type: ignore
 from haymaker.base import ActiveNext
 from haymaker.base import Atom as BaseAtom
 from haymaker.block import AbstractBaseBlock, AbstractDfBlock
-from haymaker.contract_registry import ContractRegistry
-from haymaker.datastore import CollectionNamerStrategySymbol
+from haymaker.datastore import QueuedDataSink
 
 
 @pytest.fixture
-def block() -> AbstractBaseBlock:
+def block(atom_runtime) -> AbstractBaseBlock:
     class Block(AbstractBaseBlock):
 
         def _signal(self, data):
@@ -29,6 +27,81 @@ def block() -> AbstractBaseBlock:
 def test_block_instantiates(block: AbstractBaseBlock):
     b = block
     assert isinstance(b, AbstractBaseBlock)
+
+
+def test_block_registers_default_future_roll_policy(atom_runtime) -> None:
+    """Blocks should opt into automatic futures rolling by default."""
+
+    class Block(AbstractBaseBlock):
+        def _signal(self, data):
+            return {}
+
+    Block("default-roll", ibi.Future("NQ", "CME"))
+
+    assert atom_runtime.future_roll_policies == {"default-roll": True}
+
+
+def test_block_registers_explicit_future_roll_opt_out(atom_runtime) -> None:
+    """A Block keyword should declare a strategy-level roll exclusion."""
+
+    class Block(AbstractBaseBlock):
+        def _signal(self, data):
+            return {}
+
+    Block(
+        "manual-roll",
+        ibi.Future("NQ", "CME"),
+        auto_roll_futures=False,
+    )
+
+    assert atom_runtime.future_roll_policies == {"manual-roll": False}
+
+
+def test_block_allows_repeated_consistent_future_roll_policy(atom_runtime) -> None:
+    """Multiple Blocks may share a strategy when their policies agree."""
+
+    class Block(AbstractBaseBlock):
+        def _signal(self, data):
+            return {}
+
+    Block("shared", ibi.Future("NQ", "CME"), auto_roll_futures=False)
+    Block("shared", ibi.Future("ES", "CME"), auto_roll_futures=False)
+
+    assert atom_runtime.future_roll_policies == {"shared": False}
+
+
+def test_block_rejects_conflicting_future_roll_policy(atom_runtime) -> None:
+    """Conflicting declarations for one persisted strategy should fail."""
+
+    class Block(AbstractBaseBlock):
+        def _signal(self, data):
+            return {}
+
+    Block("shared", ibi.Future("NQ", "CME"), auto_roll_futures=False)
+
+    with pytest.raises(ValueError, match="Conflicting auto_roll_futures"):
+        Block("shared", ibi.Future("ES", "CME"), auto_roll_futures=True)
+
+
+def test_future_roll_policy_is_keyword_only_for_block_subclasses(atom_runtime) -> None:
+    """Default policy must not prevent subclasses from adding required fields."""
+
+    @dataclass
+    class ParameterizedBlock(AbstractBaseBlock):
+        lookback: int
+
+        def _signal(self, data):
+            return {}
+
+    block = ParameterizedBlock(
+        "parameterized",
+        ibi.Future("NQ", "CME"),
+        20,
+        auto_roll_futures=False,
+    )
+
+    assert block.lookback == 20
+    assert atom_runtime.future_roll_policies == {"parameterized": False}
 
 
 def test_AbstractBaseBlock_is_abstract():
@@ -117,7 +190,7 @@ async def test_signal_correct(
 
 
 @pytest.fixture
-def basic_df_block():
+def basic_df_block(atom_runtime):
     class Block(AbstractDfBlock):
 
         def df(self, data):
@@ -166,34 +239,66 @@ async def test_df_block_accepts_df(
     assert {k: v for k, v in output_atom.output.items() if k in last_row} == last_row
 
 
-def test_DfBlock_has_correct_collection_namer():
-    class Block(AbstractDfBlock):
+def test_df_block_without_datastore_does_not_persist(atom_runtime):
+    """Omitting a queued sink should disable dataframe persistence."""
 
+    class Block(AbstractDfBlock):
         def df(self, data):
             return pd.DataFrame(data)
 
-    Block.set_datastore(Mock())
-
     block = Block("test_strategy", ibi.Future(symbol="NQ", exchange="CME"))
+    data = pd.DataFrame({"close": [1.0]})
 
-    store = block._datastore
+    row = block.df_row(data)
 
-    store.override_collection_namer.assert_called_once()
-    store.override_collection_namer.assert_called_once_with(
-        CollectionNamerStrategySymbol("test_strategy")
+    assert block.datastore is None
+    assert row["close"] == 1.0
+    atom_runtime.frame_store_provider.queued_sink.assert_not_called()
+
+
+def test_df_blocks_keep_explicit_datastores_isolated(atom_runtime):
+    """Each block should enqueue only through its injected sink."""
+
+    class Block(AbstractDfBlock):
+        def df(self, data):
+            return pd.DataFrame(data)
+
+    first_store = Mock(spec=QueuedDataSink)
+    second_store = Mock(spec=QueuedDataSink)
+
+    first = Block(
+        "first",
+        ibi.Future(symbol="NQ", exchange="CME"),
+        datastore=first_store,
+    )
+    second = Block(
+        "second",
+        ibi.Future(symbol="ES", exchange="CME"),
+        datastore=second_store,
     )
 
+    assert first.datastore is first_store
+    assert second.datastore is second_store
+    atom_runtime.frame_store_provider.queued_sink.assert_not_called()
 
-def test_next_correct() -> None:
+    data = pd.DataFrame({"close": [1.0]})
+    first.df_row(data)
+    first_store.enqueue_append.assert_called_once()
+    contract, persisted = first_store.enqueue_append.call_args.args
+    assert contract is first.contract
+    pd.testing.assert_frame_equal(persisted, data)
+    second_store.enqueue_append.assert_not_called()
+
+
+def test_next_correct(atom_runtime_factory) -> None:
 
     es = ibi.Future(symbol="ES", exchange="CME")
 
     mock_registry = Mock()
+    atom_runtime_factory(contract_registry=mock_registry)
 
     @dataclass
     class MyBlock(AbstractDfBlock):
-        contract_registry: ClassVar[ContractRegistry] = mock_registry
-
         strategy: str
         contract: ibi.Contract
         which_contract: ActiveNext = ActiveNext.NEXT
@@ -210,16 +315,15 @@ def test_next_correct() -> None:
     mock_registry.get_contract.assert_called_once_with(ANY, ActiveNext.NEXT)
 
 
-def test_active_correct() -> None:
+def test_active_correct(atom_runtime_factory) -> None:
 
     es = ibi.Future(symbol="ES", exchange="CME")
 
     mock_registry = Mock()
+    atom_runtime_factory(contract_registry=mock_registry)
 
     @dataclass
     class MyBlock(AbstractDfBlock):
-        contract_registry: ClassVar[ContractRegistry] = mock_registry
-
         strategy: str
         contract: ibi.Contract
 

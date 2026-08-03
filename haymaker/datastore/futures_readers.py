@@ -5,7 +5,7 @@ from typing import AsyncGenerator
 import ib_insync as ibi
 import pandas as pd
 
-from .async_datastore import AsyncAbstractBaseStore
+from .async_datastore import AsyncDataStore
 from .datastore import AbstractBaseStore
 
 _contract_fields: list[str] = [f.name for f in fields(ibi.Contract)]
@@ -59,7 +59,7 @@ class FuturesReader:
 @dataclass
 class AsyncFuturesReader:
     symbol: str
-    store: AsyncAbstractBaseStore
+    store: AsyncDataStore
 
     async def _all_symbols(self) -> AsyncGenerator[str, None]:
         for symbol in await self.store.keys():

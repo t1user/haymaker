@@ -11,16 +11,10 @@ import ib_insync as ibi
 import pandas as pd
 
 from haymaker import misc
-from haymaker.async_wrappers import QueueRunner
+from haymaker.async_wrappers import QueueRunner, QueueShutdownPolicy
 from haymaker.base import Atom
-from haymaker.config import CONFIG
 from haymaker.contract_selector import FutureSelector, custom_bday
-from haymaker.databases import get_mongo_client
-from haymaker.datastore import (
-    AsyncAbstractBaseStore,
-    AsyncArcticStore,
-    CollectionNamerBarsizeSetting,
-)
+from haymaker.datastore import AsyncDataStore
 from haymaker.details_processor import typical_session_length
 from haymaker.durationStr_converters import (
     barSizeSetting_to_timedelta,
@@ -34,10 +28,6 @@ from haymaker.streamers import Streamer
 from .stitcher import FuturesStitcher
 
 log = logging.getLogger(__name__)
-
-AGG_CONFIG = CONFIG.get("dfaggregator", {})
-MARKET_DATA_LIB_NAME = AGG_CONFIG.get("market_data_lib", "market_data")
-SAVE_FREQUENCY = AGG_CONFIG.get("aggregator_save_frequency", 900)
 
 
 class MissingStreamerParam(Exception):
@@ -58,24 +48,23 @@ class DfAggregator(Atom):
     For futures contracts ensure that a conitinuous series is created
     using appropriate back contracts.
 
-    Both arguments can be set either directly while instantiating the
-    class or system-wide in config in `dfaggregator` section.
+    A fully configured datastore is supplied directly. The save frequency is
+    ordinary strategy policy and defaults to 900 seconds.
 
     Args:
     -----
 
-    * datastore: custom datastore can be passed, it needs to handle
-    naming contract collections in a manner that can be interpreted by
-    streamer; if nothing is passed, default :class:`AsyncArcticStore`
-    will be used
+    * datastore: datastore passed by strategy composition; it needs to handle
+    naming contract symbols in a manner that can be interpreted by
+    streamer. Injected stores must be fully configured.
 
     * save_frequency: how often data will be saved to datastore, zero
     means data will not be saved (which maybe useful for testing but
     in a way defies the purpose of the whole object)
     """
 
-    datastore: AsyncAbstractBaseStore | None = None
-    save_frequency: int | None = None  # in seconds
+    datastore: AsyncDataStore
+    save_frequency: int = 900  # in seconds
 
     # ================================================================================
 
@@ -90,34 +79,15 @@ class DfAggregator(Atom):
     _timer_task: asyncio.Task | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
-        if self.save_frequency is None:
-            self.save_frequency = SAVE_FREQUENCY
         assert isinstance(
             self.save_frequency, int
         ), f"{self!s} save_frequency must be an int, not {type(self.save_frequency)}"
-        self._queue = QueueRunner(self.process_data, f"{self!s}")
+        self._queue = QueueRunner(
+            self.process_data,
+            f"{self!s}",
+            shutdown_policy=QueueShutdownPolicy.DISCARD,
+        )
         super().__init__()
-
-    @property
-    def store(self) -> AsyncAbstractBaseStore:
-        assert (barSizeSetting := self._streamer_params.get("barSizeSetting")), (
-            f"{self} cannot initialize "
-            f" datastore because barSizeSetting is not defined"
-        )
-        if self.datastore is None:
-            assert MARKET_DATA_LIB_NAME, (
-                f"{self} cannot initialize datastore because "
-                f"MARKET_DATA_LIB_NAME was not given"
-            )
-            self.datastore = AsyncArcticStore(
-                lib=MARKET_DATA_LIB_NAME,
-                host=get_mongo_client(),
-                collection_namer=CollectionNamerBarsizeSetting(barSizeSetting),
-            )
-        self.datastore.override_collection_namer(
-            CollectionNamerBarsizeSetting(barSizeSetting)
-        )
-        return self.datastore
 
     async def set_timer(self) -> None:
         # if many objects created, they shouldn't all save at the same time
@@ -193,7 +163,7 @@ class DfAggregator(Atom):
     async def save_data(self, *args) -> None:
         assert (contract := self.contract), f"Missing contract on {self}"
         if not self._df.empty:
-            await self.store.async_append(contract, self._df)
+            await self.datastore.append(contract, self._df)
 
     def process_current_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -365,7 +335,7 @@ class DfAggregator(Atom):
             f"{self!s} acquiring back data for contract: {contract.localSymbol} "
             f"{start_date=} {stop_date=}"
         )
-        if (df := await self.store.read(contract, start_date, stop_date)) is None:
+        if (df := await self.datastore.read(contract, start_date, stop_date)) is None:
             # don't pull data for current contract from broker, this
             # is :class:`Streamer`'s responsibility; data for previous
             # contracts may be missing if it's a new database and only
@@ -383,7 +353,7 @@ class DfAggregator(Atom):
 
                 df = pd.DataFrame(bars).set_index("date")
                 try:
-                    self.store.write(contract, pd.DataFrame(df))
+                    await self.datastore.write(contract, pd.DataFrame(df))
                 except Exception:
                     log.exception(
                         "Error while writing data from broker to datastore. "

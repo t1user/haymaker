@@ -3,6 +3,7 @@ from datetime import timedelta
 import pytest
 
 from haymaker.dataloader.helpers import (
+    DEFAULT_TARGET_BARS_PER_REQUEST,
     duration_in_secs,
     duration_str,
     timedelta_and_barSize_to_duration_str,
@@ -11,12 +12,20 @@ from haymaker.dataloader.helpers import (
 )
 
 
+def test_default_target_bars_per_request_is_moderate():
+    """The internal chunk target should avoid very large historical responses."""
+
+    assert DEFAULT_TARGET_BARS_PER_REQUEST == 10_000
+
+
 def test_duration_in_secs_1_hour():
-    assert duration_in_secs("1 hours") == 3600
-
-
-def test_duration_in_secs_1_hour_drop_s():
     assert duration_in_secs("1 hour") == 3600
+
+
+@pytest.mark.parametrize("bar_size", ["1 sec", "1 hours"])
+def test_duration_in_secs_rejects_noncanonical_bar_sizes(bar_size):
+    with pytest.raises(ValueError, match="Invalid IB bar size"):
+        duration_in_secs(bar_size)
 
 
 def test_duration_in_secs():
@@ -36,7 +45,14 @@ def test_duration_str():
     ],
 )
 def test_timedelta_and_barSize_to_duration_in_secs(duration, bar_size, output):
-    assert timedelta_to_duration_in_secs(duration, bar_size, max_bars=100_000) == output
+    assert (
+        timedelta_to_duration_in_secs(
+            duration,
+            bar_size,
+            target_bars_per_request=100_000,
+        )
+        == output
+    )
 
 
 @pytest.mark.parametrize(
@@ -49,13 +65,47 @@ def test_timedelta_and_barSize_to_duration_in_secs(duration, bar_size, output):
 )
 def test_timedelta_and_barSize_to_duration_str(duration, barSize, output):
     assert (
-        timedelta_and_barSize_to_duration_str(duration, barSize, max_bars=100_000)
+        timedelta_and_barSize_to_duration_str(
+            duration,
+            barSize,
+            target_bars_per_request=100_000,
+        )
         == output
     )
 
 
 def test_timedelta_and_barSize_to_duration_str_secs_fixed():
-    assert timedelta_and_barSize_to_duration_str(timedelta(days=5), "1 sec") == "2000 S"
+    assert (
+        timedelta_and_barSize_to_duration_str(timedelta(days=5), "1 secs") == "2000 S"
+    )
+
+
+def test_timedelta_and_barSize_to_duration_str_one_sec_short_range():
+    assert (
+        timedelta_and_barSize_to_duration_str(timedelta(seconds=10), "1 secs") == "30 S"
+    )
+
+
+def test_timedelta_and_barSize_to_duration_str_caps_year_duration():
+    assert (
+        timedelta_and_barSize_to_duration_str(
+            timedelta(days=100_000),
+            "1 day",
+            target_bars_per_request=1_000_000,
+        )
+        == "68 Y"
+    )
+
+
+def test_timedelta_and_barSize_to_duration_str_target_bars_reduces_request():
+    assert (
+        timedelta_and_barSize_to_duration_str(
+            timedelta(days=5),
+            "30 secs",
+            target_bars_per_request=10,
+        )
+        == "300 S"
+    )
 
 
 def test_timedelta_normalizer():

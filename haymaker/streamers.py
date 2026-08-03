@@ -15,13 +15,7 @@ import ib_insync as ibi
 from haymaker.misc import format_timestamp
 
 from .base import Atom
-from .config import CONFIG
-from .databases import get_mongo_client
-from .datastore import (
-    AsyncAbstractBaseStore,
-    AsyncArcticStore,
-    CollectionNamerBarsizeSetting,
-)
+from .datastore import AsyncDataStore
 from .details_processor import typical_session_length
 from .durationStr_converters import (
     datapoints_to_durationStr,
@@ -33,8 +27,6 @@ log = logging.getLogger(__name__)
 
 
 _counter = itertools.count().__next__
-
-MARKET_DATA_LIB_NAME = CONFIG.get("market_data_lib", "market_data")
 
 
 def bar_filter(bar: ibi.BarData) -> bool:
@@ -52,7 +44,7 @@ def bar_filter(bar: ibi.BarData) -> bool:
 
 class Streamer(Atom, ABC):
     instances: ClassVar[list["Streamer"]] = []
-    timeout: bool = True
+    timeout: bool | float = True
 
     def __new__(cls, *args, **kwargs):
         # Keep track of all :class:`.Streamer` instances created so that they
@@ -93,8 +85,10 @@ class Streamer(Atom, ABC):
         Automatically monitor event for stale data.  Can be switched
         off by overriding class variable `set_timeout`
         """
-        if self.timeout:
+        if self.timeout and isinstance(self.timeout, bool):
             Timeout.from_atom(self, event, name)
+        elif self.timeout:
+            Timeout.from_atom(self, event, name, self.timeout)
 
     @cached_property
     def _id(self) -> int:
@@ -141,12 +135,15 @@ class HistoricalDataStreamer(Streamer):
     that has been tested, other values may be incompatible with other
     framework components
 
-    * datastore: bool | AsyncAbstractBaseStore = False
+    * datastore: AsyncDataStore | None = None
 
-        ** if True, or a datastore is passed, last available datapoint
+        ** if a datastore is passed, last available datapoint
     will be ready from database and only newer data will be requested;
 
-        ** if False - no data will be read from datastore, only from
+        ** a passed datastore must be fully configured with the symbol
+    naming policy matching this streamer's bar size;
+
+        ** if None - no data will be read from datastore, only from
     broker
 
 
@@ -186,10 +183,16 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
-    datastore: bool | AsyncAbstractBaseStore = False
+    datastore: AsyncDataStore | None = None
+    timeout: bool | float = True
     _last_bar_date: datetime | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.datastore, bool):
+            raise TypeError(
+                "datastore must be an AsyncDataStore or None; "
+                "boolean shortcuts are not supported"
+            )
         Atom.__init__(self)
 
     def streaming_func(self) -> Awaitable:
@@ -205,35 +208,6 @@ class HistoricalDataStreamer(Streamer):
             timeout=0,
         )
 
-    @cached_property
-    def _datastore(self) -> None | AsyncAbstractBaseStore:
-        if self.datastore is False:
-            return None
-        elif self.datastore is True:
-            assert MARKET_DATA_LIB_NAME, (
-                f"{self} cannot initialize datastore because "
-                f"MARKET_DATA_LIB_NAME was not given."
-            )
-            return AsyncArcticStore(
-                lib=MARKET_DATA_LIB_NAME,
-                host=get_mongo_client(),
-                collection_namer=CollectionNamerBarsizeSetting(self.barSizeSetting),
-            )
-        elif (
-            getattr(self.datastore, "read") is not None
-            and getattr(self.datastore, "read_metadata") is not None
-            and getattr(self.datastore, "override_collection_namer") is not None
-        ):
-            self.datastore.override_collection_namer(
-                CollectionNamerBarsizeSetting(self.barSizeSetting)
-            )
-            return self.datastore
-        else:
-            raise ValueError(
-                f"datastore must be True, False or instance of async datastore, "
-                f"not{type(self.datastore)}"
-            )
-
     async def last_db_point(self) -> datetime | None:
         """
         Return datetime for the last bar availble in the datastore for
@@ -241,7 +215,7 @@ class HistoricalDataStreamer(Streamer):
 
         start_date: how far back should available data be searched
         """
-        if (store := self._datastore) is None:
+        if (store := self.datastore) is None:
             return None
 
         if up_to := (await store.read_metadata(self.contract)).get("up_to"):
@@ -327,6 +301,7 @@ class MktDataStreamer(Streamer):
 
     contract: ibi.Contract
     tickList: str
+    timeout: bool | float = True
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -359,6 +334,7 @@ class RealTimeBarsStreamer(Streamer):
     whatToShow: str
     useRTH: bool
     realTimeBarsOptions: list[ibi.TagValue] = field(default_factory=list)
+    timeout: bool | float = True
 
     def __post_init__(self):
         Atom.__init__(self)
@@ -401,6 +377,7 @@ class TickByTickStreamer(Streamer):
     tickType: str
     numberOfTicks: int = 0
     ignoreSize: bool = False
+    timeout: bool | float = True
 
     def __post_init__(self):
         Atom.__init__(self)

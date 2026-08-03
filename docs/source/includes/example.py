@@ -6,7 +6,6 @@ import pandas as pd
 
 from haymaker import (
     aggregators,
-    app,
     base,
     bracket_legs,
     block,
@@ -41,13 +40,12 @@ portfolio.FixedPortfolio(1)
 pipe = base.Pipe(
     streamers.HistoricalDataStreamer(es_contract, "10 D", "1 hours", "TRADES"),
     aggregators.BarAggregator(aggregators.NoFilter()),
-    EMACrossStrategy("ema_cross_ES", es_contract, 12, 48, 24),
+    EMACrossStrategy(
+        "ema_cross_ES", es_contract, 12, 48, 24, auto_roll_futures=False
+    ),
     signals.BinarySignalProcessor(),
     portfolio.PortfolioWrapper(),
     execution_models.EventDrivenExecModel(
         stop=bracket_legs.TrailingStop(3, vol_field="atr")
     ),
 )
-
-if __name__ == "__main__":
-    app.App().run()

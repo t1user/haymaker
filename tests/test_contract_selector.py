@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Type
 
 import pytest
@@ -11,6 +11,7 @@ from contract_details_data import (  # type: ignore
 )
 from ib_insync import Contract, ContractDetails, Future, Stock  # noqa
 
+import haymaker.contract_selector as contract_selector_module
 from haymaker import misc
 from haymaker.contract_selector import (
     AbstractBaseContractSelector,
@@ -21,6 +22,7 @@ from haymaker.contract_selector import (
     GoldComex,
     NoOffset,
     selector_factory,
+    utc_now_naive,
 )
 
 # this comes from CME website:
@@ -50,6 +52,19 @@ gold_details_dict = {
 gold_contract_list = [details.contract for details in gold_chain]  # type: ignore
 
 stock_chain: list[ContractDetails] = misc.decode_tree(stock_details_chain)
+
+
+def test_utc_now_naive_uses_utc_and_removes_timezone(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is UTC
+            return cls(2026, 7, 21, 23, 30, tzinfo=UTC)
+
+    monkeypatch.setattr(contract_selector_module, "datetime", FixedDateTime)
+
+    assert utc_now_naive() == datetime(2026, 7, 21, 23, 30)
+    assert utc_now_naive().tzinfo is None
 
 
 @pytest.mark.parametrize("symbol,expected_last_trading_day", gold_parameters)

@@ -13,8 +13,6 @@ from typing import Any, Callable, Literal
 import ib_insync as ibi
 import pandas as pd
 
-from .config import CONFIG
-
 
 def action(signal: int) -> str:
     """
@@ -179,14 +177,13 @@ def decode_tree(obj: Any) -> Any:
     return process_value(obj)
 
 
-def default_path(*dirnames: str) -> str:
+def default_path(*dirnames: str, base_directory: str = "ib_data") -> str:
     """
     Return path created by joining  ~/ib_data/ and recursively all dirnames
     If the path doesn't exist create it.
     """
     home = Path.home()
-    default_directory = CONFIG.get("data_folder", "ib_data")
-    path = Path(home, default_directory, *dirnames)
+    path = Path(home, base_directory, *dirnames)
     path.mkdir(exist_ok=True, parents=True)
     return str(path)
 

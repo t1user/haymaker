@@ -791,67 +791,64 @@ class TestMongoSaver:
         return mock_client, mock_db, mock_collection
 
     @pytest.fixture
-    def mock_config(self):
-        """Mock the CONFIG dictionary."""
-        return {"MongoSaver": {"db": "test_database"}}
-
-    @pytest.fixture
-    def mongo_saver_with_query_key(self, mock_mongo_client, mock_config):
+    def mongo_saver_with_query_key(self, mock_mongo_client):
         """Create MongoSaver instance with query_key."""
         mock_client, mock_db, mock_collection = mock_mongo_client
 
-        with (
-            patch("haymaker.saver.get_mongo_client", return_value=mock_client),
-            patch("haymaker.saver.CONFIG", mock_config),
-        ):
-            saver = MongoSaver(collection="test_collection", query_key="id")
-            saver.collection = mock_collection  # Ensure we're using the mock
-            return saver, mock_collection
+        saver = MongoSaver(
+            collection="test_collection",
+            query_key="id",
+            client=mock_client,
+            database="test_database",
+        )
+        saver.collection = mock_collection  # Ensure we're using the mock
+        return saver, mock_collection
 
     @pytest.fixture
-    def mongo_saver_without_query_key(self, mock_mongo_client, mock_config):
+    def mongo_saver_without_query_key(self, mock_mongo_client):
         """Create MongoSaver instance without query_key."""
         mock_client, mock_db, mock_collection = mock_mongo_client
 
-        with (
-            patch("haymaker.saver.get_mongo_client", return_value=mock_client),
-            patch("haymaker.saver.CONFIG", mock_config),
-        ):
-            saver = MongoSaver(collection="test_collection", query_key=None)
-            saver.collection = mock_collection  # Ensure we're using the mock
-            return saver, mock_collection
+        saver = MongoSaver(
+            collection="test_collection",
+            query_key=None,
+            client=mock_client,
+            database="test_database",
+        )
+        saver.collection = mock_collection  # Ensure we're using the mock
+        return saver, mock_collection
 
-    def test_init_with_query_key(self, mock_mongo_client, mock_config):
+    def test_init_with_query_key(self, mock_mongo_client):
         """Test MongoSaver initialization with query_key."""
         mock_client, mock_db, mock_collection = mock_mongo_client
 
-        with (
-            patch("haymaker.saver.get_mongo_client", return_value=mock_client),
-            patch("haymaker.saver.CONFIG", mock_config),
-        ):
+        saver = MongoSaver(
+            collection="test_collection",
+            query_key="user_id",
+            client=mock_client,
+            database="test_database",
+        )
 
-            saver = MongoSaver(collection="test_collection", query_key="user_id")
+        assert saver.query_key == "user_id"
+        assert saver.client == mock_client
+        assert saver.db == mock_db
+        mock_client.__getitem__.assert_called_once_with("test_database")
+        mock_db.__getitem__.assert_called_once_with("test_collection")
 
-            assert saver.query_key == "user_id"
-            assert saver.client == mock_client
-            assert saver.db == mock_db
-            mock_client.__getitem__.assert_called_once_with("test_database")
-            mock_db.__getitem__.assert_called_once_with("test_collection")
-
-    def test_init_without_query_key(self, mock_mongo_client, mock_config):
+    def test_init_without_query_key(self, mock_mongo_client):
         """Test MongoSaver initialization without query_key."""
         mock_client, mock_db, mock_collection = mock_mongo_client
 
-        with (
-            patch("haymaker.saver.get_mongo_client", return_value=mock_client),
-            patch("haymaker.saver.CONFIG", mock_config),
-        ):
+        saver = MongoSaver(
+            collection="users",
+            query_key=None,
+            client=mock_client,
+            database="test_database",
+        )
 
-            saver = MongoSaver(collection="users", query_key=None)
-
-            assert saver.query_key is None
-            assert saver.client == mock_client
-            assert saver.db == mock_db
+        assert saver.query_key is None
+        assert saver.client == mock_client
+        assert saver.db == mock_db
 
     def test_save_with_query_key_upsert(self, mongo_saver_with_query_key):
         """Test save method with query_key performs upsert."""
@@ -1067,12 +1064,11 @@ class TestMongoSaver:
         assert result == [{"id": "user1", "name": "Updated"}]
 
 
-# Integration-style tests that test the interaction with get_mongo_client
+# Explicit dependency-injection tests
 class TestMongoSaverIntegration:
 
-    @patch("haymaker.saver.get_mongo_client")
-    def test_mongo_client_initialization(self, mock_get_client):
-        """Test that MongoSaver properly initializes with get_mongo_client."""
+    def test_mongo_client_initialization(self):
+        """Test that MongoSaver uses the supplied client and database."""
         # Setup mocks
         mock_client = MagicMock(spec=pymongo.MongoClient)
         mock_db = MagicMock()
@@ -1080,16 +1076,12 @@ class TestMongoSaverIntegration:
 
         mock_client.__getitem__.return_value = mock_db
         mock_db.__getitem__.return_value = mock_collection
-        mock_get_client.return_value = mock_client
-
-        # Mock CONFIG
-        mock_config = {"MongoSaver": {"db": "production_db"}}
-
-        with patch("haymaker.saver.CONFIG", mock_config):
-            saver = MongoSaver(collection="users", query_key="email")
-
-        # Verify get_mongo_client was called
-        mock_get_client.assert_called_once()
+        saver = MongoSaver(
+            collection="users",
+            query_key="email",
+            client=mock_client,
+            database="production_db",
+        )
 
         # Verify database and collection selection
         mock_client.__getitem__.assert_called_once_with("production_db")
@@ -1101,22 +1093,6 @@ class TestMongoSaverIntegration:
         assert saver.collection == mock_collection
         assert saver.query_key == "email"
 
-    @patch("haymaker.saver.get_mongo_client")
-    def test_config_error_propagation(self, mock_get_client):
-        """Test that MongoDB configuration errors are properly propagated."""
-        # Make get_mongo_client raise a configuration error
-        mock_get_client.side_effect = pymongo.errors.ConfigurationError(
-            "Invalid config"
-        )
-
-        mock_config = {"MongoSaver": {"db": "test_db"}}
-
-        with patch("haymaker.saver.CONFIG", mock_config):
-            with pytest.raises(pymongo.errors.ConfigurationError):
-                MongoSaver(collection="test_collection")
-
-        mock_get_client.assert_called_once()
-
 
 # ##### Test if MongoSaver has no race conditions
 
@@ -1124,8 +1100,12 @@ class TestMongoSaverIntegration:
 @pytest.fixture
 def mongo_saver(monkeypatch):
     client = mongomock.MongoClient()
-    monkeypatch.setattr("haymaker.databases.get_mongo_client", lambda: client)
-    saver = MongoSaver(collection="test_collection", query_key="id", client=client)
+    saver = MongoSaver(
+        collection="test_collection",
+        query_key="id",
+        client=client,
+        database="test_data",
+    )
     yield saver
     client.close()
 

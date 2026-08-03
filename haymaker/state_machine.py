@@ -13,19 +13,13 @@ from typing import Any, TypeVar
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
-from .config import CONFIG as config
 from .misc import Lock, action_to_signal, decode_tree, tree
 from .saver import AbstractBaseSaver, AsyncSaveManager, MongoLatestSaver, MongoSaver
 
 log = logging.getLogger(__name__)
 
-CONFIG = config.get("state_machine") or {}
-
-
-SAVE_DELAY = CONFIG.get("save_delay", 1)
-STRATEGY_COLLECTION_NAME = CONFIG.get("strategy_collection_name", "strategies")
-ORDER_COLLECTION_NAME = CONFIG.get("order_collection_name", "orders")
-MAX_REJECTED_ORDERS = CONFIG.get("max_rejected_orders", 3)
+DEFAULT_ORDER_COLLECTION_NAME = "orders"
+DEFAULT_STRATEGY_COLLECTION_NAME = "strategies"
 
 
 class UnknownZeroOrderIdError(ValueError):
@@ -289,15 +283,17 @@ class StrategyContainer(UserDict):
     def __init__(
         self,
         saver: AbstractBaseSaver,
-        save_delay=SAVE_DELAY,
+        save_delay: float = 1,
         save_async: bool = True,
     ) -> None:
+        self._save_is_pending = False
         self._strategyChangeEvent = ev.Event("strategyChangeEvent")
         self.strategyChangeEvent = self._strategyChangeEvent.debounce(save_delay, False)
+        self._strategyChangeEvent += self._mark_save_pending
         self._strategyChangeEvent += self.strategyChangeEvent
         # will automatically save strategies to db on every change
-        # (but not more often than defined in CONFIG['state_machine']['save_delay'])
-        self.strategyChangeEvent += self.save
+        # but not more often than the configured state-machine save delay
+        self.strategyChangeEvent += self.flush_pending_save
         self.saver = (
             AsyncSaveManager(saver, name="StrategyContainer") if save_async else saver
         )
@@ -358,7 +354,8 @@ class StrategyContainer(UserDict):
         if data is None:
             return
         try:
-            log.debug(f"{self} will decode data: {len(data.keys())-1} keys.")
+            strategy_count = len(set(data) - {"_id", "timestamp"})
+            log.debug(f"{self} will decode data: {strategy_count} keys.")
         except Exception:
             log.debug(f"data for decoding: {data}")
             raise
@@ -383,6 +380,16 @@ class StrategyContainer(UserDict):
     def save(self) -> None:
         """Save data to database."""
         self.saver.save(self.encode())
+        self._save_is_pending = False
+
+    def _mark_save_pending(self) -> None:
+        """Record that the debounced strategy snapshot has not been saved yet."""
+        self._save_is_pending = True
+
+    def flush_pending_save(self) -> None:
+        """Save the current strategy snapshot when debounce has delayed it."""
+        if self._save_is_pending:
+            self.save()
 
     async def read(self) -> None:
         """
@@ -426,17 +433,22 @@ class StateMachine:
         order_saver: AbstractBaseSaver | None = None,
         strategy_saver: AbstractBaseSaver | None = None,
         save_async: bool = True,
+        save_delay: float = 1,
+        max_rejected_orders: int = 3,
     ) -> None:
 
         if order_saver is None:
-            order_saver = MongoSaver(ORDER_COLLECTION_NAME, query_key="orderId")
+            order_saver = MongoSaver(DEFAULT_ORDER_COLLECTION_NAME, query_key="orderId")
         if strategy_saver is None:
-            strategy_saver = MongoLatestSaver(STRATEGY_COLLECTION_NAME)
+            strategy_saver = MongoLatestSaver(DEFAULT_STRATEGY_COLLECTION_NAME)
 
         # dict of OrderInfo
         self._orders = OrderContainer(order_saver, save_async=save_async)
         # dict of Strategy data (same as ExecModel data)
-        self._strategies = StrategyContainer(strategy_saver, save_async=save_async)
+        self._strategies = StrategyContainer(
+            strategy_saver, save_delay=save_delay, save_async=save_async
+        )
+        self.max_rejected_orders = max_rejected_orders
         self.rejected_orders: dict[str, int] = defaultdict(int)
         log.debug(f"StateMachine initialized: {self}")
 
@@ -446,7 +458,7 @@ class StateMachine:
     def verify_for_rejections(self, strategy_str: str) -> bool:
         """Return True if order approved, False otherwise."""
         if (count := self.rejected_orders.get(strategy_str)) and (
-            count >= MAX_REJECTED_ORDERS
+            count >= self.max_rejected_orders
         ):
             log.info(
                 f"Supressing order because of multiple rejections for strategy: "
@@ -460,6 +472,10 @@ class StateMachine:
         # used by sync routines/error handlers
         self._strategies.save()
         log.debug("STRATEGIES SAVED")
+
+    def flush_pending_save(self) -> None:
+        """Flush a strategy snapshot still waiting on the debounce timer."""
+        self._strategies.flush_pending_save()
 
     def save_order(self, oi: OrderInfo) -> OrderInfo:
         self._orders.save(oi)

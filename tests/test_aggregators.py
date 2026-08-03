@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import ib_insync as ibi
@@ -6,13 +7,51 @@ import pytest
 from helpers import wait_for_condition
 from sample_barDataList import sample_barDataList
 
-from haymaker.aggregators import BarAggregator, NoFilter, WrongStreamer
+from haymaker.aggregators import (
+    BarAggregator,
+    CountBars,
+    NoFilter,
+    VolumeBars,
+    WrongStreamer,
+)
 from haymaker.base import Atom as BaseAtom
 from haymaker.base import Pipe
 from haymaker.streamers import HistoricalDataStreamer, MktDataStreamer
 
 
-def test_onStart_receives_streamer():
+@pytest.mark.parametrize("bar_filter", [CountBars(2), VolumeBars(20)])
+def test_grouping_filter_does_not_mutate_shared_source_bars(bar_filter):
+    """Grouping filters must not modify bars shared with other consumers."""
+    first = ibi.BarData(
+        open=100,
+        high=102,
+        low=99,
+        close=101,
+        volume=10,
+        average=100.5,
+        barCount=4,
+    )
+    second = ibi.BarData(
+        open=101,
+        high=103,
+        low=100,
+        close=102,
+        volume=10,
+        average=101.5,
+        barCount=5,
+    )
+    expected_first = replace(first)
+    expected_second = replace(second)
+
+    bar_filter.on_source(first)
+    bar_filter.on_source(second)
+
+    assert first == expected_first
+    assert second == expected_second
+    assert bar_filter.bars[0] is not first
+
+
+def test_onStart_receives_streamer(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -30,7 +69,7 @@ def test_onStart_receives_streamer():
         mock_sync_with_streamer.assert_called_with(streamer)
 
 
-def test_onStart_works_as_part_of_Pipe():
+def test_onStart_works_as_part_of_Pipe(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -55,7 +94,7 @@ def test_onStart_works_as_part_of_Pipe():
         mock_sync_with_streamer.assert_called_with(streamer)
 
 
-def test_HistoricalDataStreamerAccepted():
+def test_HistoricalDataStreamerAccepted(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -69,7 +108,7 @@ def test_HistoricalDataStreamerAccepted():
     assert aggregator.sync_with_streamer(streamer) is None
 
 
-def test_wrong_streamer_fails():
+def test_wrong_streamer_fails(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = MktDataStreamer(contract=blueprint, tickList="212")
     aggregator = BarAggregator(NoFilter())
@@ -119,7 +158,7 @@ def source_aggregator_output():
     return source, aggregator, output
 
 
-def test_BarAggregator_passes_onStart_signal(source_aggregator_output):
+def test_BarAggregator_passes_onStart_signal(source_aggregator_output, Atom):
     _, aggregator, output = source_aggregator_output
 
     streamer = HistoricalDataStreamer(

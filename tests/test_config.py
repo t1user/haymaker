@@ -1,133 +1,514 @@
-import os
-import sys
-import tempfile
-from collections import ChainMap
+"""Tests for live configuration merging and target-owned construction."""
+
+from __future__ import annotations
+
 from pathlib import Path
+from unittest.mock import Mock
 
+import ib_insync as ibi
 import pytest
-import yaml
 
-from haymaker.config.config import ConfigMaps
-
-
-def test_pytest_does_not_inherit_live_config_overrides():
-    """Verify pytest starts from repo/test config instead of local overrides.
-
-    This protects the suite from inheriting a developer's live-trading config
-    through ``HAYMAKER_*_CONFIG_OVERRIDES`` during import-time config loading.
-    """
-    assert "HAYMAKER_HAYMAKER_CONFIG_OVERRIDES" not in os.environ
-    assert "HAYMAKER_DATALOADER_CONFIG_OVERRIDES" not in os.environ
-
-
-@pytest.fixture
-def temp_yaml_file(tmp_path):
-    """Creates a temporary YAML file for testing."""
-    data = {"key": "value", "nested": {"subkey": "subvalue"}}
-    file_path = tmp_path / "test_config.yaml"
-    print(tmp_path)
-    with open(file_path, "w") as f:
-        yaml.dump(data, f)
-    return file_path
+import haymaker.config as config_package
+from haymaker.blotter import blotter_factory
+from haymaker.config import (
+    ConfigError,
+    DataloaderCommand,
+    DataloaderStorageSettings,
+    LiveCommand,
+    StorageSettings,
+    load_dataloader_config,
+    load_live_config,
+    parse_live_args,
+)
+from haymaker.config.loader import deep_merge, load_yaml
+from haymaker.contract_registry import ContractRegistry
+from haymaker.dataloader.contract_selectors import FuturesSelectionPolicy
+from haymaker.order_defaults import OrderDefaults
+from haymaker.supervisor import ConnectionSettings
+from haymaker.timeout import TimeoutPolicy
 
 
-@pytest.fixture
-def clear_env():
-    """Ensure environment variables are cleared before each test."""
-    old_env = os.environ.copy()
-    os.environ = {k: v for k, v in os.environ.items() if not k.startswith("HAYMAKER_")}
-    yield
-    os.environ.clear()
-    os.environ.update(old_env)
+def live_command(
+    config_file: Path | None = None,
+    *overrides: tuple[str, object],
+) -> LiveCommand:
+    """Return a minimal live loader command."""
+
+    return LiveCommand(Path("strategy.py"), config_file, overrides)
 
 
-@pytest.fixture
-def reset_sys_argv():
-    """Ensure sys.argv is restored after tests."""
-    original_argv = sys.argv.copy()
-    yield
-    sys.argv = original_argv
+def test_process_global_config_singleton_is_not_exported() -> None:
+    """Importing configuration must not create process-owned settings."""
+
+    assert not hasattr(config_package, "CONFIG")
+    assert not hasattr(config_package, "load_live_settings")
+    assert not hasattr(config_package, "load_dataloader_settings")
 
 
-def test_env_variable_loading(clear_env):
-    # `HAYMAKER_` needs to be chopped off
-    # all keys are small caps
-    os.environ["HAYMAKER_TEST_KEY"] = "test_value"
-    config = ConfigMaps()
-    assert config.environ["test_key"] == "test_value"
+def test_live_defaults_are_composed_by_target_objects() -> None:
+    config = load_live_config(live_command(), environ={})
+    connection = ConnectionSettings.from_mapping(config.connection)
+    controller = config.controller
+    futures = ContractRegistry(**dict(config.futures))
+    timeout = TimeoutPolicy.from_mapping(config.timeout)
+    orders = OrderDefaults.from_mapping(config.orders)
+
+    assert connection.client_id == 0
+    assert connection.probe_contract == ibi.Forex("EURUSD")
+    assert controller["startup"] == {
+        "cold_start": False,
+        "reset": False,
+        "zero": False,
+        "nuke": False,
+    }
+    assert controller["sync_frequency"] == 900
+    assert futures.futures_roll_bdays == 3
+    assert futures.futures_roll_margin_bdays == 3
+    assert timeout.seconds == 300
+    assert timeout.action == "restart"
+    assert orders.open["algoParams"] == [ibi.TagValue("adaptivePriority", "Normal")]
+    assert isinstance(config.storage, StorageSettings)
+    assert config.storage.base_directory == "ib_data"
+    assert config.storage.mongodb.client == {"host": "localhost", "port": 27017}
+    assert config.storage.mongodb.database == "test_data"
+    assert not hasattr(config.storage, "block_library")
+    assert not hasattr(config.storage, "market_data_library")
+    assert not hasattr(config.storage, "dataframe_save_frequency")
 
 
-def test_cmdline_parsing(reset_sys_argv):
-    with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as temp_file:
-        temp_path = Path(temp_file.name)  # Get the temporary file path
+def test_live_accepts_filesystem_and_framework_mongo_settings() -> None:
+    """Retained live storage infrastructure should remain configurable."""
 
-    try:
-        sys.argv = [
-            "script_name",
-            "--file",
-            str(temp_path),
-            "--set_option",
-            "option",
-            "value",
+    config = load_live_config(
+        live_command(
+            None,
+            ("storage.base_directory", "custom_data"),
+            ("storage.mongodb.client.host", "mongo.example"),
+            ("storage.mongodb.client.port", 27018),
+            ("storage.mongodb.database", "framework"),
+        ),
+        environ={},
+    )
+
+    assert config.storage.base_directory == "custom_data"
+    assert config.storage.mongodb.client == {
+        "host": "mongo.example",
+        "port": 27018,
+    }
+    assert config.storage.mongodb.database == "framework"
+
+
+def test_order_defaults_reject_invalid_order_fields_during_construction() -> None:
+    with pytest.raises(TypeError):
+        OrderDefaults.from_mapping({"open": {"notAnOrderField": True}})
+
+
+@pytest.mark.parametrize("oca_type", [1, 2, 3])
+def test_order_defaults_accept_ib_oca_types(oca_type: int) -> None:
+    assert OrderDefaults.from_mapping({"oca_type": oca_type}).oca_type == oca_type
+
+
+@pytest.mark.parametrize("oca_type", [0, 4, True, "2"])
+def test_order_defaults_reject_invalid_ib_oca_types(oca_type: object) -> None:
+    with pytest.raises(ValueError, match="must be one of: 1, 2, or 3"):
+        OrderDefaults.from_mapping({"oca_type": oca_type})
+
+
+def test_timeout_policy_rejects_unknown_action() -> None:
+    with pytest.raises(ValueError, match="restart or log"):
+        TimeoutPolicy.from_mapping({"action": "ignore"})
+
+
+def test_blotter_factory_rejects_unknown_saver_type() -> None:
+    with pytest.raises(ValueError, match="csv or mongo"):
+        blotter_factory(
+            {"enabled": True, "saver": {"type": "unknown", "options": {}}},
+            base_directory="ib_data",
+            mongo_client=Mock(),
+            database="test_data",
+        )
+
+
+def test_disabled_blotter_does_not_resolve_mongo_client() -> None:
+    mongo_client = Mock(side_effect=AssertionError("Mongo should remain lazy"))
+
+    assert (
+        blotter_factory(
+            {"enabled": False},
+            base_directory="ib_data",
+            mongo_client=mongo_client,
+            database=None,
+        )
+        is None
+    )
+    mongo_client.assert_not_called()
+
+
+def test_csv_blotter_receives_base_directory_without_resolving_mongo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saver = Mock()
+    blotter = Mock()
+    csv_saver = Mock(return_value=saver)
+    blotter_constructor = Mock(return_value=blotter)
+    mongo_client = Mock(side_effect=AssertionError("CSV should not use Mongo"))
+    monkeypatch.setattr("haymaker.blotter.CsvSaver", csv_saver)
+    monkeypatch.setattr("haymaker.blotter.Blotter", blotter_constructor)
+
+    result = blotter_factory(
+        {
+            "enabled": True,
+            "saver": {
+                "type": "csv",
+                "options": {"name": "trades", "folder": "blotter"},
+            },
+        },
+        base_directory="custom_data",
+        mongo_client=mongo_client,
+        database=None,
+    )
+
+    assert result is blotter
+    csv_saver.assert_called_once_with(
+        name="trades", folder="blotter", base_directory="custom_data"
+    )
+    blotter_constructor.assert_called_once_with(saver=saver)
+    mongo_client.assert_not_called()
+
+
+def test_mongo_blotter_requires_application_database() -> None:
+    mongo_client = Mock(side_effect=AssertionError("Database must fail first"))
+
+    with pytest.raises(ValueError, match="storage.mongodb.database"):
+        blotter_factory(
+            {
+                "enabled": True,
+                "saver": {
+                    "type": "mongo",
+                    "options": {"collection": "blotter"},
+                },
+            },
+            base_directory="ib_data",
+            mongo_client=mongo_client,
+            database=None,
+        )
+    mongo_client.assert_not_called()
+
+
+def test_mongo_blotter_receives_explicit_client_and_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = object()
+    saver = Mock()
+    blotter = Mock()
+    mongo_client = Mock(return_value=client)
+    mongo_saver = Mock(return_value=saver)
+    blotter_constructor = Mock(return_value=blotter)
+    monkeypatch.setattr("haymaker.blotter.MongoSaver", mongo_saver)
+    monkeypatch.setattr("haymaker.blotter.Blotter", blotter_constructor)
+
+    result = blotter_factory(
+        {
+            "enabled": True,
+            "saver": {
+                "type": "mongo",
+                "options": {"collection": "trades"},
+            },
+        },
+        base_directory="ib_data",
+        mongo_client=mongo_client,
+        database="framework",
+    )
+
+    assert result is blotter
+    mongo_saver.assert_called_once_with(
+        collection="trades", client=client, database="framework"
+    )
+    blotter_constructor.assert_called_once_with(saver=saver)
+
+
+def test_dataloader_defaults_are_profile_specific() -> None:
+    config = load_dataloader_config(DataloaderCommand(None, ()), environ={})
+    connection = ConnectionSettings.from_mapping(config.connection)
+    futures = FuturesSelectionPolicy.from_mapping(config.futures)
+
+    assert connection.client_id == 1
+    assert connection.app_timeout == 600
+    assert config.download["source"] == "contracts.csv"
+    assert config.download["number_of_workers"] == 10
+    assert config.pacing == {
+        "no_restriction": False,
+        "allowance_fraction": 1.0,
+    }
+    assert isinstance(config.storage, DataloaderStorageSettings)
+    assert config.storage.base_directory == "ib_data"
+    assert config.storage.mongodb.client == {"host": "localhost", "port": 27017}
+    assert not hasattr(config.storage.mongodb, "database")
+    assert not hasattr(config.storage, "block_library")
+    assert not hasattr(config.storage, "market_data_library")
+    assert not hasattr(config.storage, "dataframe_save_frequency")
+    assert futures.selector == "current_and_expired"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "storage.mongodb.database",
+        "storage.block_library",
+        "storage.market_data_library",
+        "storage.dataframe_save_frequency",
+    ],
+)
+def test_dataloader_rejects_unsupported_storage_settings(path: str) -> None:
+    """Dataloader configuration should reject live-only or removed settings."""
+
+    command = DataloaderCommand(None, ((path, "unused"),))
+
+    with pytest.raises(ConfigError, match=path.rsplit(".", maxsplit=1)[-1]):
+        load_dataloader_config(command, environ={})
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "storage.block_library",
+        "storage.market_data_library",
+        "storage.dataframe_save_frequency",
+    ],
+)
+def test_live_rejects_removed_dataframe_storage_settings(path: str) -> None:
+    """Removed consumer policy must not remain accepted as inert config."""
+
+    with pytest.raises(ConfigError, match=path.rsplit(".", maxsplit=1)[-1]):
+        load_live_config(live_command(None, (path, "unused")), environ={})
+
+
+def test_dataloader_accepts_its_filesystem_and_mongo_client_settings() -> None:
+    """Retained dataloader storage fields should remain configurable."""
+
+    command = DataloaderCommand(
+        None,
+        (
+            ("storage.base_directory", "custom_data"),
+            ("storage.mongodb.client.host", "mongo.example"),
+            ("storage.mongodb.client.port", 27018),
+        ),
+    )
+
+    config = load_dataloader_config(command, environ={})
+
+    assert config.storage.base_directory == "custom_data"
+    assert config.storage.mongodb.client == {
+        "host": "mongo.example",
+        "port": 27018,
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("futures.selector", "unknown"),
+        ("futures.full_chain_spec", "unknown"),
+    ],
+)
+def test_futures_target_rejects_unknown_policy(path: str, value: str) -> None:
+    command = DataloaderCommand(None, ((path, value),))
+    config = load_dataloader_config(command, environ={})
+
+    with pytest.raises(ValueError, match="futures"):
+        FuturesSelectionPolicy.from_mapping(config.futures)
+
+
+def test_deep_merge_recurses_and_replaces_lists() -> None:
+    merged = deep_merge(
+        {"section": {"kept": 1, "values": [1]}, "root": "old"},
+        {"section": {"values": [2]}, "root": "new"},
+    )
+
+    assert merged == {
+        "section": {"kept": 1, "values": [2]},
+        "root": "new",
+    }
+
+
+def test_deep_merge_replaces_discriminated_mapping_when_type_changes() -> None:
+    merged = deep_merge(
+        {"saver": {"type": "csv", "options": {"name": "blotter"}}},
+        {"saver": {"type": "mongo", "options": {"collection": "blotter"}}},
+    )
+
+    assert merged == {"saver": {"type": "mongo", "options": {"collection": "blotter"}}}
+
+
+def test_dotted_overrides_replace_discriminated_mapping_as_one_layer() -> None:
+    config = load_live_config(
+        live_command(
+            None,
+            ("blotter.saver.type", "mongo"),
+            ("blotter.saver.options.collection", "audit"),
+        ),
+        environ={},
+    )
+
+    assert config.blotter["saver"] == {
+        "type": "mongo",
+        "options": {"collection": "audit"},
+    }
+
+
+def test_source_precedence_environment_yaml_then_cli_yaml_then_cli_values(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "environment.yaml"
+    environment_file.write_text(
+        "controller:\n  sync_frequency: 10\n  broker_request_timeout: 20\n"
+    )
+    cli_file = tmp_path / "cli.yaml"
+    cli_file.write_text("controller:\n  sync_frequency: 30\n")
+    command = live_command(
+        cli_file,
+        ("controller.sync_frequency", 40),
+    )
+
+    config = load_live_config(
+        command,
+        environ={"HAYMAKER_HAYMAKER_CONFIG_OVERRIDES": str(environment_file)},
+    )
+
+    assert config.controller["sync_frequency"] == 40
+    assert config.controller["broker_request_timeout"] == 20
+
+
+def test_direct_environment_values_are_ignored() -> None:
+    config = load_live_config(
+        live_command(),
+        environ={
+            "HAYMAKER_CONNECTION__PORT": "9999",
+            "HAYMAKER_LOGGING_CONFIG": "other.yaml",
+        },
+    )
+
+    assert ConnectionSettings.from_mapping(config.connection).port == 4002
+    assert config.logging["config_file"] == "logging_config.yaml"
+
+
+def test_dedicated_cli_option_wins_over_generic_override() -> None:
+    command = parse_live_args(
+        [
+            "strategy.py",
+            "--set-option",
+            "controller.startup.reset",
+            "false",
+            "--reset",
         ]
-        config = ConfigMaps()
+    )
 
-        assert config.cmdline["file"] == str(temp_path)
-        assert config.cmdline["option"] == "value"
-    finally:
-        temp_path.unlink()  # Cleanup the temporary file
+    config = load_live_config(command, environ={})
 
-
-def test_yaml_parsing(temp_yaml_file):
-    config = ConfigMaps()
-    parsed_yaml = config.parse_yaml(temp_yaml_file)
-    assert parsed_yaml["key"] == "value"
-    assert parsed_yaml["nested"]["subkey"] == "subvalue"
+    assert config.controller["startup"]["reset"] is True
 
 
-def test_missing_yaml_file():
-    config = ConfigMaps()
-    with pytest.raises(FileNotFoundError):
-        config.parse_yaml("non_existent.yaml")
+def test_old_top_level_startup_section_is_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "old_startup.yaml"
+    config_file.write_text("startup:\n  reset: true\n")
+
+    with pytest.raises(ConfigError, match="startup"):
+        load_live_config(live_command(config_file), environ={})
 
 
-def test_config_merging(monkeypatch):
-    monkeypatch.setenv("HAYMAKER_TEST_KEY", "env_value")
-    sys.argv = ["script_name", "--set_option", "option", "cmdline_value"]
-    config_maps = ConfigMaps()
-    merged = ChainMap(*config_maps.maps)
-    assert merged["option"] == "cmdline_value"
-    assert merged.get("test_key") == "env_value"
+def test_cli_values_preserve_yaml_scalar_and_collection_types() -> None:
+    command = parse_live_args(
+        [
+            "strategy.py",
+            "--set-option",
+            "logging.log_broker",
+            "true",
+            "--set-option",
+            "controller.future_roll_time",
+            "[15, 30]",
+        ]
+    )
+
+    config = load_live_config(command, environ={})
+
+    assert config.logging["log_broker"] is True
+    assert config.controller["future_roll_time"] == [15, 30]
 
 
-def test_priorities_1(monkeypatch):
-    # cmdline overrides env value
-    monkeypatch.setenv("HAYMAKER_TEST_KEY", "env_value")
-    sys.argv = ["script_name", "--set_option", "test_key", "cmdline_value"]
-    config_maps = ConfigMaps()
-    merged = ChainMap(*config_maps.maps)
-    assert merged["test_key"] == "cmdline_value"
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("- one\n- two\n", "root"),
+        ("value: 1\nvalue: 2\n", "Duplicate YAML key"),
+        (
+            "value: !!python/object/apply:ib_insync.Forex [EURUSD]\n",
+            "constructor",
+        ),
+    ],
+)
+def test_yaml_rejects_invalid_document_shapes(
+    tmp_path: Path, text: str, message: str
+) -> None:
+    config_file = tmp_path / "invalid.yaml"
+    config_file.write_text(text)
+
+    with pytest.raises(ConfigError, match=message):
+        load_yaml(config_file)
 
 
-def test_priorities_2(monkeypatch, temp_yaml_file, reset_sys_argv):
-    # config file has priority before env
-    monkeypatch.setenv("HAYMAKER_KEY", "env_value")
-    # config file name passed as cli argument
-    sys.argv = [
-        "script_name",
-        "--file",
-        str(temp_yaml_file),
-    ]
-    config_maps = ConfigMaps()
-    merged = ChainMap(*config_maps.maps)
-    assert merged.get("key") == "value"
+def test_safe_yaml_loader_supports_standard_mapping_merges(tmp_path: Path) -> None:
+    config_file = tmp_path / "merged.yaml"
+    config_file.write_text(
+        "defaults: &defaults\n"
+        "  sync_frequency: 10\n"
+        "  health_check_frequency: 20\n"
+        "controller:\n"
+        "  <<: *defaults\n"
+        "  sync_frequency: 30\n"
+    )
+
+    config = load_yaml(config_file)
+
+    assert config["controller"] == {
+        "sync_frequency": 30,
+        "health_check_frequency": 20,
+    }
 
 
-def test_config_file_read_from_env(monkeypatch, temp_yaml_file, reset_sys_argv):
-    # config file is read from env
-    monkeypatch.setenv("HAYMAKER_KEY", "env_value")
-    monkeypatch.setenv("HAYMAKER_HAYMAKER_CONFIG_OVERRIDES", str(temp_yaml_file))
-    config_maps = ConfigMaps()
-    merged = ChainMap(*config_maps.maps)
-    # it would be 'env_value' if it wasn't overridden with config file
-    assert merged.get("key") == "value"
+def test_unknown_old_key_is_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "old.yaml"
+    config_file.write_text("coldstart: true\n")
+
+    with pytest.raises(ConfigError, match="coldstart"):
+        load_live_config(live_command(config_file), environ={})
+
+
+def test_target_rejects_unknown_section_key(tmp_path: Path) -> None:
+    config_file = tmp_path / "unknown.yaml"
+    config_file.write_text("connection:\n  unknown: true\n")
+    config = load_live_config(live_command(config_file), environ={})
+
+    with pytest.raises(TypeError, match="unknown"):
+        ConnectionSettings.from_mapping(config.connection)
+
+
+def test_missing_config_file_is_reported(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="Cannot load configuration"):
+        load_live_config(live_command(tmp_path / "missing.yaml"), environ={})
+
+
+def test_plain_probe_contract_mapping_is_converted(tmp_path: Path) -> None:
+    config_file = tmp_path / "probe.yaml"
+    config_file.write_text(
+        "connection:\n"
+        "  probe_contract:\n"
+        "    secType: STK\n"
+        "    symbol: SPY\n"
+        "    exchange: SMART\n"
+        "    currency: USD\n"
+    )
+
+    config = load_live_config(live_command(config_file), environ={})
+    settings = ConnectionSettings.from_mapping(config.connection)
+
+    assert settings.probe_contract == ibi.Stock("SPY", "SMART", "USD")

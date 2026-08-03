@@ -20,6 +20,7 @@ from .enums import ActiveNext
 
 if TYPE_CHECKING:
     from .contract_selector import AbstractBaseContractSelector
+    from .runtime import RuntimeContext
     from .state_machine import StateMachine, Strategy
 
 log = logging.getLogger(__name__)
@@ -60,7 +61,8 @@ class ContractManagingDescriptor:
             )
         except KeyError:
             raise MissingContractError(
-                f"Unknown contract: {contract_blueprint} on {obj}"
+                f"Unknown contract: {contract_blueprint} on "
+                f"{obj.__class__.__name__}"
             )
 
 
@@ -112,11 +114,11 @@ class Atom:
             (number of days prior to expiry during which NEXT will be used can be
             configured in config.)
 
-        ib (ClassVar[ibi.IB]): The instance of the :class:`ib_insync.ib.IB` client used
+        ib (ibi.IB): The instance of the :class:`ib_insync.ib.IB` client used
            for interacting with the broker. It can be used to communicate with
            the broker if neccessary.
 
-        sm (ClassVar[StateMachine]): Access to :class:`StateMachine` which is
+        sm (StateMachine): Access to :class:`StateMachine` which is
             Haymaker's central collection of information about current positions,
             orders and state of strategies.
 
@@ -131,9 +133,7 @@ class Atom:
             by calling `self.dataEvent.emit(data)`.
     """
 
-    ib: ClassVar[ibi.IB]
-    sm: ClassVar[StateMachine]
-    contract_registry: ClassVar[ContractRegistry] = ContractRegistry()
+    runtime: ClassVar[RuntimeContext]
     events: ClassVar[Sequence[str]] = (
         "startEvent",
         "dataEvent",
@@ -145,10 +145,37 @@ class Atom:
     _contract_blueprint: ibi.Contract | None = None
 
     @classmethod
-    def set_init_data(cls, ib: ibi.IB, sm: StateMachine, cr: ContractRegistry) -> None:
-        cls.ib = ib
-        cls.sm = sm
-        cls.contract_registry = cr
+    def set_runtime_context(cls, runtime: RuntimeContext) -> None:
+        """Install process runtime services on all Atoms."""
+
+        cls.runtime = runtime
+
+    @property
+    def ib(self) -> ibi.IB:
+        """Return the runtime IB client."""
+
+        return self.runtime.ib
+
+    @property
+    def sm(self) -> StateMachine:
+        """Return the runtime state machine."""
+
+        return self.runtime.sm
+
+    @property
+    def contract_registry(self) -> ContractRegistry:
+        """Return the runtime contract registry."""
+
+        return self.runtime.contract_registry
+
+    @property
+    def request_restart(self):
+        """Return the current runtime restart callback if it is available."""
+
+        runtime = getattr(type(self), "runtime", None)
+        if runtime is None:
+            return None
+        return runtime.request_restart
 
     def __init__(self) -> None:
         self._createEvents()
@@ -302,8 +329,8 @@ class Atom:
         rolling.  Actual position rolling is taken care of by
         `Controller` object.
         """
-        log.warning(
-            f"{self!s} contract changed: {old_contract.localSymbol} "
+        log.info(
+            f"{self!s} {self.which_contract!s} contract changed: {old_contract.localSymbol} "
             f"--> {new_contract.localSymbol}"
         )
         self._roll_contract_data = ContractRollData(old_contract, new_contract)

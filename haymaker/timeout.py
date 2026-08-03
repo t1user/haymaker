@@ -3,26 +3,51 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import ClassVar, Self
+from typing import Any, Callable, ClassVar, Literal, Self
 
 import eventkit as ev  # type: ignore
-import ib_insync as ibi
 
 from haymaker.base import Atom
-from haymaker.config import CONFIG as config
 from haymaker.contract_registry import Details
 
 log = logging.getLogger(__name__)
 
-CONFIG = config.get("timeout", {})
-# debug means log, otherwise restart
-TIMEOUT_DEBUG = CONFIG.get("debug", False)
-# zero means no timeout
-TIMEOUT_TIME = CONFIG.get("time", 0)
-
 _counter = itertools.count().__next__
+
+
+@dataclass(frozen=True)
+class TimeoutPolicy:
+    """Default stale-data timeout interval and action."""
+
+    seconds: float = 0
+    action: Literal["restart", "log"] = "restart"
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> Self:
+        """Construct and validate a timeout policy from plain configuration.
+
+        Args:
+            values: Merged ``timeout`` configuration section.
+
+        Returns:
+            Timeout policy ready to install in a runtime context.
+        """
+
+        policy = cls(**dict(values))
+        if policy.seconds < 0:
+            raise ValueError("timeout.seconds cannot be negative")
+        if policy.action not in ("restart", "log"):
+            raise ValueError("timeout.action must be restart or log")
+        return policy
+
+    @property
+    def log_only(self) -> bool:
+        """Return whether a timeout should only be logged."""
+
+        return self.action == "log"
 
 
 @dataclass
@@ -51,42 +76,47 @@ class Timeout:
     """
 
     instances: ClassVar[list["Timeout"]] = []
-    ib: ClassVar[ibi.IB]
 
     event: ev.Event
-    time: float = TIMEOUT_TIME
+    time: float = 0
     name: str = ""
     details: Details | None = None
-    debug: bool = TIMEOUT_DEBUG
+    debug: bool = False
+    request_restart: Callable[[str], bool | None] | None = None
     _timeout: ev.Event | None = field(repr=False, default=None)
     _now: datetime | None = None  # for testing only
     _sleep_taks: asyncio.Task | None = field(repr=False, default=None)
 
     @classmethod
-    def set_ib(cls, ib: ibi.IB):
-        cls.ib = ib
-
-    @classmethod
     def from_atom(
-        cls, atom: Atom, event: ev.Event, key: str = "", time: float = TIMEOUT_TIME
+        cls, atom: Atom, event: ev.Event, key: str = "", time: float | None = None
     ) -> Self:
-        """
-        Extract relevant information from passed `atom`.
+        """Create a timeout from Atom services after runtime startup begins.
 
         Args:
-        =====
+            atom: Atom whose contract details and restart callback are used.
+            event: Event to monitor.
+            key: Optional label appended to the Atom name.
+            time: Timeout interval in seconds.
 
-        atom: atom object from which information is to be extracted
+        Returns:
+            Configured timeout instance.
 
-        even: event to be monitored
-
-        key: if given, it will be concatinated with atom name to
-        create timout name
-
-        time: time after which timeout will be triggered, if not given
-        default value will be used from config
+        Raises:
+            RuntimeError: If a restart-enabled timeout is created before the
+                supervisor restart callback has been bound. Create Atom-derived
+                timeouts from ``onStart()`` or later.
         """
 
+        policy = atom.runtime.timeout_policy
+        if time is None:
+            time = policy.seconds
+        request_restart = atom.request_restart
+        if time and not policy.log_only and request_restart is None:
+            raise RuntimeError(
+                "Restart-enabled Timeout.from_atom() must be created from "
+                "onStart() or later, after the supervisor is bound."
+            )
         assert atom.contract_details.contract is not None, (
             f"{atom} is missing correct contract details."
             f"`Timeout.from_atom` can be used only with atoms that have details."
@@ -96,6 +126,8 @@ class Timeout:
             time,
             f"{str(atom)}-<<{key}>>",
             atom.contract_details,
+            debug=policy.log_only,
+            request_restart=request_restart,
         )
 
     @classmethod
@@ -162,8 +194,13 @@ class Timeout:
         if self.debug:
             log.error(f"{self!s} triggered. Possibly system reset needed.")
         else:
-            log.debug(f"Stale streamer {self!s} will disconnect ib...")
-            self.ib.disconnect()
+            log.debug(f"Stale streamer {self!s} will request restart.")
+            if self.request_restart is None:
+                log.error("Cannot restart: no timeout restart handler configured.")
+                return
+            restart_accepted = self.request_restart(f"stale streamer: {self!s}")
+            if restart_accepted is False:
+                self._set_timeout(self.event)
 
     def _set_timeout(self, event: ev.Event) -> None:
         self._timeout = event.timeout(self.time)

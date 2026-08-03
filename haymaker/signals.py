@@ -39,19 +39,12 @@ class AbstractBaseBinarySignalProcessor(Atom, ABC):
     signal in (open position) and signal out (close position), if
     `tuple` then first element is signal in and second is signal out
 
-    state_machine - this is for testing only and should not be passed
-    in non-testing environment
     """
 
     def __init__(
         self,
         signal_fields: str | tuple[str, str] | list[str] = "signal",
-        state_machine: StateMachine | None = None,
     ) -> None:
-        # passing state machine is only for testing
-        if state_machine:
-            self.sm = state_machine  # type: ignore
-
         if isinstance(signal_fields, str):
             self.signal_in_field = self.signal_out_field = signal_fields
         elif isinstance(signal_fields, (tuple, list)):
@@ -230,11 +223,10 @@ class LockableBinarySignalProcessor(AbstractBaseBinarySignalProcessor):
     def __init__(
         self,
         signal_fields: str | tuple[str, str] | list[str] = "signal",
-        state_machine: StateMachine | None = None,
     ) -> None:
         self._lock_direction = 0
         self._lock = False
-        super().__init__(signal_fields, state_machine=state_machine)
+        super().__init__(signal_fields)
 
     def onData(self, data: dict[str, Any], *args) -> None:
         data.update({"lock_direction": self._lock_direction, "lock": self._lock})
@@ -308,9 +300,8 @@ class AlwaysOnLockableBinarySignalProcessor(LockableBinarySignalProcessor):
     def __init__(
         self,
         signal_fields: str | tuple[str, str] | list[str] = "signal",
-        state_machine: StateMachine | None = None,
     ) -> None:
-        super().__init__(signal_fields, state_machine)
+        super().__init__(signal_fields)
         if self.signal_in_field != self.signal_out_field:
             log.exception(f"{self} requires single signal field, not {signal_fields}")
             raise
@@ -338,9 +329,8 @@ class AlwaysOnBinarySignalProcessor(BinarySignalProcessor):
     def __init__(
         self,
         signal_fields: str | tuple[str, str] | list[str] = "signal",
-        state_machine: StateMachine | None = None,
     ) -> None:
-        super().__init__(signal_fields, state_machine)
+        super().__init__(signal_fields)
         if self.signal_in_field != self.signal_out_field:
             log.exception(f"{self} requires single signal field, not {signal_fields}")
             raise

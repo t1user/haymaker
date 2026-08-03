@@ -5,12 +5,13 @@ import random
 from copy import deepcopy
 from itertools import count
 from types import SimpleNamespace
+from typing import Any, cast
 
 import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.controller.controller import Controller, ControllerError
+from haymaker.controller.controller import Controller, ControllerError, SyncOutcome
 from haymaker.controller.future_roller import FutureRoller
 from haymaker.controller.sync_brackets import (
     BracketSync,
@@ -22,9 +23,8 @@ from haymaker.controller.sync_coordinator import (
     SyncCoordinator,
 )
 from haymaker.state_machine import OrderInfo
+from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
-
-# from haymaker.manager import IB
 
 
 @pytest.fixture
@@ -58,6 +58,40 @@ def set_broker_state(
     monkeypatch.setattr(controller.ib, "openTrades", lambda: list(open_trades))
     monkeypatch.setattr(controller.ib, "trades", lambda: list(trades))
     monkeypatch.setattr(controller.ib, "fills", lambda: list(fills))
+
+
+def test_from_mapping_constructs_nested_startup_config(atom_runtime) -> None:
+    controller = Controller.from_mapping(
+        {
+            "startup": {"cold_start": False, "reset": True},
+            "sync_frequency": 30,
+            "future_roll_time": [14, 0],
+            "missing_brackets": "warn",
+        },
+        trader=Trader(atom_runtime.ib),
+    )
+
+    assert controller.sync_frequency == 30
+    assert controller.future_roll_time == (14, 0)
+    assert controller.missing_brackets == "warn"
+    assert controller.cold_start is False
+    assert controller.reset is True
+
+
+def test_from_mapping_rejects_unknown_controller_key(atom_runtime) -> None:
+    with pytest.raises(TypeError, match="unknown"):
+        Controller.from_mapping(
+            {"unknown": True},
+            trader=Trader(atom_runtime.ib),
+        )
+
+
+def test_from_mapping_rejects_non_mapping_startup(atom_runtime) -> None:
+    with pytest.raises(TypeError, match="controller.startup"):
+        Controller.from_mapping(
+            {"startup": True},
+            trader=Trader(atom_runtime.ib),
+        )
 
 
 # @pytest.fixture()
@@ -141,9 +175,11 @@ def set_broker_state(
 
 
 @pytest.mark.asyncio
-async def test_StateMachine_linked_to_ib_newOrderEvent(caplog, Atom):
-    controller = Controller(Trader(Atom.ib))  # noqa
-    Atom.ib.newOrderEvent.emit(ibi.Trade(order=ibi.Order(orderId=123, permId=45678)))
+async def test_StateMachine_linked_to_ib_newOrderEvent(caplog, atom_runtime):
+    controller = Controller(Trader(atom_runtime.ib))  # noqa
+    atom_runtime.ib.newOrderEvent.emit(
+        ibi.Trade(order=ibi.Order(orderId=123, permId=45678))
+    )
     assert await wait_for_condition(lambda: "123" in caplog.text)
 
 
@@ -230,8 +266,108 @@ async def test_sync_timeout_disables_trading(controller, monkeypatch):
 
     result = await controller.sync()
 
-    assert not result
+    assert result is SyncOutcome.FAILED
     assert disabled_reasons == ["sync did not converge"]
+
+
+@pytest.mark.asyncio
+async def test_sync_skips_when_connection_unavailable(controller, monkeypatch):
+    abort_event = asyncio.Event()
+    abort_event.set()
+    controller.set_sync_abort_event(abort_event)
+    sync_called = False
+
+    async def sync_body(*args):
+        nonlocal sync_called
+        sync_called = True
+        return SyncOutcome.OK
+
+    monkeypatch.setattr(controller, "_sync", sync_body)
+
+    result = await controller.sync()
+
+    assert result is SyncOutcome.ABORTED
+    assert not sync_called
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_run_treats_connection_unavailable_sync_as_abort(
+    controller, monkeypatch, caplog
+):
+    abort_event = asyncio.Event()
+    abort_event.set()
+    controller.set_sync_abort_event(abort_event)
+
+    async def sync_body(*args):
+        return SyncOutcome.OK
+
+    monkeypatch.setattr(controller, "_sync", sync_body)
+
+    with caplog.at_level(logging.DEBUG):
+        result = await controller.run()
+
+    assert not result
+    assert "Controller startup sync aborted: connection unavailable." in caplog.text
+    assert "Controller startup sync failed" not in caplog.text
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_aborts_in_flight_position_request(controller, monkeypatch):
+    abort_event = asyncio.Event()
+    request_started = asyncio.Event()
+    disabled_reasons = []
+    controller.set_sync_abort_event(abort_event)
+    controller.broker_request_timeout = 10
+    controller.sync_resync_delay = 0
+
+    async def pending_positions():
+        request_started.set()
+        await asyncio.sleep(10)
+        return []
+
+    monkeypatch.setattr(
+        controller, "disable_trading", lambda reason: disabled_reasons.append(reason)
+    )
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "positions", lambda: [])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", pending_positions)
+
+    sync_task = asyncio.create_task(controller.sync())
+    await asyncio.wait_for(request_started.wait(), timeout=1)
+    abort_event.set()
+
+    result = await asyncio.wait_for(sync_task, timeout=1)
+
+    assert result is SyncOutcome.ABORTED
+    assert disabled_reasons == []
+
+
+@pytest.mark.asyncio
+async def test_sync_cancellation_cancels_inner_sync(controller, monkeypatch):
+    inner_started = asyncio.Event()
+    inner_cancelled = asyncio.Event()
+
+    async def sync_body(*args):
+        inner_started.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            inner_cancelled.set()
+            raise
+
+    controller.set_sync_abort_event(asyncio.Event())
+    monkeypatch.setattr(controller, "_sync", sync_body)
+
+    sync_task = asyncio.create_task(controller.sync())
+    await asyncio.wait_for(inner_started.wait(), timeout=1)
+    sync_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await sync_task
+
+    assert inner_cancelled.is_set()
 
 
 @pytest.mark.asyncio
@@ -257,27 +393,6 @@ async def test_run_stops_before_sync_when_state_store_read_fails(
     assert not result
     assert not sync_called
     assert controller._trading_disabled
-
-
-@pytest.mark.asyncio
-async def test_run_waits_startup_delay_before_sync(controller, monkeypatch):
-    calls = []
-
-    async def sleep(delay):
-        calls.append(("sleep", delay))
-
-    async def sync():
-        calls.append(("sync", None))
-        return True
-
-    controller.startup_delay = 2
-    monkeypatch.setattr("haymaker.controller.controller.asyncio.sleep", sleep)
-    monkeypatch.setattr(controller, "sync", sync)
-
-    result = await controller.run()
-
-    assert result
-    assert calls == [("sleep", 2), ("sync", None)]
 
 
 @pytest.mark.asyncio
@@ -335,7 +450,7 @@ async def test_sync_disconnected_does_not_query_broker_state(controller, monkeyp
 
     result = await controller.sync()
 
-    assert not result
+    assert result is SyncOutcome.FAILED
     assert connection_attempts == 1
     assert disabled_reasons == []
 
@@ -351,7 +466,7 @@ async def test_sync_disconnected_does_not_release_hold(controller, monkeypatch):
 
     result = await controller.sync()
 
-    assert not result
+    assert result is SyncOutcome.FAILED
     assert controller._hold
     assert not controller._trading_disabled
 
@@ -398,7 +513,7 @@ async def test_broker_position_source_disagreement_disables_trading(
 
     result = await controller.sync()
 
-    assert not result
+    assert result is SyncOutcome.FAILED
     assert controller._trading_disabled
 
 
@@ -505,49 +620,176 @@ async def test_sync_coordinator_requests_restart_before_unknown_order_correction
     assert not controller._trading_disabled
 
 
-def test_from_config_loads_controller_sync_options(Atom):
-    controller = Controller.from_config(
-        Trader(Atom.ib),
-        top_config={
-            "controller": {
-                "broker_request_timeout": 3,
-                "sync_max_attempts": 2,
-                "sync_resync_delay": 0,
-                "startup_delay": 2,
-                "cancel_unknown_trades": True,
-                "missing_brackets": "warn",
-            },
-        },
+def test_direct_construction_loads_controller_sync_options(atom_runtime):
+    controller = Controller(
+        Trader(atom_runtime.ib),
+        ignore_errors=[202, 321, 10182, 1102],
+        broker_request_timeout=3,
+        sync_max_attempts=2,
+        sync_resync_delay=0,
+        cancel_unknown_trades=True,
+        missing_brackets="warn",
     )
 
     assert controller.broker_request_timeout == 3
     assert controller.sync_max_attempts == 2
     assert controller.sync_resync_delay == 0
-    assert controller.startup_delay == 2
     assert controller.cancel_unknown_trades
     assert controller.missing_brackets == "warn"
+    assert set(controller.ignore_errors) == SUPERVISOR_OWNED_BROKER_CODES | {202, 321}
 
 
-def test_from_config_ignores_unknown_controller_config(Atom):
-    controller = Controller.from_config(
-        Trader(Atom.ib),
-        top_config={
-            "controller": {
-                "invalid": True,
-                "broker_request_timeout": 3,
-            }
-        },
+def test_direct_controller_does_not_schedule_future_roll(controller):
+    assert controller._future_roll_timer is None
+
+
+def test_direct_construction_defers_future_roll_until_runtime_start(
+    atom_runtime, monkeypatch
+):
+    timeranges = []
+
+    class FakeTimerange:
+        callback = None
+
+        def __iadd__(self, callback):
+            self.callback = callback
+            return self
+
+    def fake_timerange(*, start, step):
+        timerange = FakeTimerange()
+        timeranges.append((start, step, timerange))
+        return timerange
+
+    monkeypatch.setattr(
+        "haymaker.controller.controller.ev.Event.timerange", fake_timerange
     )
 
-    assert controller.broker_request_timeout == 3
-    assert not hasattr(controller, "invalid")
+    controller = Controller(Trader(atom_runtime.ib), future_roll_time=(14, 0))
+
+    assert timeranges == []
+    assert controller._future_roll_timer is None
+
+    controller._ensure_runtime_timers_started()
+
+    start, step, timerange = timeranges[0]
+    assert controller.future_roll_time == (14, 0)
+    assert start == datetime.time(hour=14, minute=0, tzinfo=datetime.UTC)
+    assert step == datetime.timedelta(days=1)
+    assert timerange.callback == controller.roll_futures
+    assert controller._future_roll_timer is timerange
+
+    controller._ensure_runtime_timers_started()
+    assert len(timeranges) == 1
 
 
-def test_from_config_rejects_invalid_missing_brackets_value(Atom):
+def test_schedule_future_roll_ignores_duplicate_request(atom_runtime, monkeypatch):
+    timeranges = []
+
+    class FakeTimerange:
+        def __iadd__(self, callback):
+            return self
+
+    def fake_timerange(*, start, step):
+        timerange = FakeTimerange()
+        timeranges.append(timerange)
+        return timerange
+
+    monkeypatch.setattr(
+        "haymaker.controller.controller.ev.Event.timerange", fake_timerange
+    )
+
+    controller = Controller(
+        Trader(atom_runtime.ib),
+        future_roll_time=(14, 0),
+    )
+
+    controller.schedule_future_roll()
+
+    assert len(timeranges) == 1
+    assert controller._future_roll_timer is timeranges[0]
+
+
+def test_routine_order_cancellation_is_logged_at_debug(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    controller.onErrEvent(123, 202, "Order cancelled", ibi.Contract())
+
+    assert "Broker message 202: Order cancelled" in caplog.text
+
+
+def test_ignored_broker_message_is_not_logged(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+    controller.ignore_errors = [202]
+
+    controller.onErrEvent(123, 202, "Order cancelled", ibi.Contract())
+
+    assert "Order cancelled" not in caplog.text
+
+
+def test_supervisor_owned_broker_message_is_ignored_by_controller(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    controller.onErrEvent(
+        -1,
+        10182,
+        "Failed to request live updates (disconnected).",
+        ibi.Contract(),
+    )
+
+    assert "Failed to request live updates" not in caplog.text
+
+
+def test_ignored_order_cancellation_does_not_hide_failed_order(controller, caplog):
+    caplog.set_level(logging.ERROR)
+    controller.ignore_errors = [202]
+
+    controller.onErrEvent(123, 202, "YOUR ORDER IS NOT ACCEPTED", ibi.Contract())
+
+    assert "ORDER NOT ACCEPTED" in caplog.text
+
+
+def test_unknown_low_code_broker_message_is_visible(controller, caplog):
+    caplog.set_level(logging.ERROR)
+
+    controller.onErrEvent(123, 347, "Short sale slot validation failed", ibi.Contract())
+
+    assert "Broker message 347: Short sale slot validation failed" in caplog.text
+
+
+def test_known_request_validation_messages_remain_debug(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    controller.onErrEvent(123, 321, "Server validation message", ibi.Contract())
+
+    assert "Broker message 321: Server validation message" in caplog.text
+    assert caplog.records[-1].levelno == logging.DEBUG
+
+
+def test_unknown_high_code_broker_message_remains_debug(controller, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    controller.onErrEvent(123, 500, "Client side message", ibi.Contract())
+
+    assert "Broker message 500: Client side message" in caplog.text
+    assert caplog.records[-1].levelno == logging.DEBUG
+
+
+def test_order_rejection_is_visible_and_registered(controller, caplog, monkeypatch):
+    rejected = []
+    caplog.set_level(logging.CRITICAL)
+    monkeypatch.setattr(controller.sm, "register_rejected_order", rejected.append)
+
+    controller.onErrEvent(123, 201, "Rejected", ibi.Contract())
+
+    assert "ORDER REJECTED" in caplog.text
+    assert rejected == [""]
+
+
+def test_direct_construction_rejects_invalid_missing_brackets_value(atom_runtime):
     with pytest.raises(ControllerError, match="missing_brackets"):
-        Controller.from_config(
-            Trader(Atom.ib),
-            top_config={"controller": {"missing_brackets": "close"}},
+        Controller(
+            Trader(atom_runtime.ib),
+            missing_brackets=cast(Any, "close"),
         )
 
 
@@ -892,6 +1134,44 @@ async def test_sync_disables_trading_when_recovery_does_not_converge(
     assert controller._trading_disabled
 
 
+@pytest.mark.asyncio
+async def test_sync_success_clears_restart_before_correction(controller, monkeypatch):
+    restart_flags = []
+    controller._restart_before_correction = True
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+
+    async def successful_sync(self):
+        restart_flags.append(self._restart_before_correction)
+        return True
+
+    monkeypatch.setattr(SyncCoordinator, "run", successful_sync)
+
+    result = await controller.sync()
+
+    assert result
+    assert restart_flags == [True]
+    assert not controller._restart_before_correction
+
+
+@pytest.mark.asyncio
+async def test_completed_sync_arms_restart(controller, monkeypatch):
+    restart_flags = []
+    controller._restart_before_correction = False
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+
+    async def successful_sync(self):
+        restart_flags.append(self._restart_before_correction)
+        return True
+
+    monkeypatch.setattr(SyncCoordinator, "run", successful_sync)
+
+    result = await controller.run()
+
+    assert result
+    assert restart_flags == [False]
+    assert controller._restart_before_correction
+
+
 def test_bracket_sync_does_not_report_protected_broker_position(
     controller, trade, monkeypatch
 ):
@@ -1174,6 +1454,76 @@ def test_future_roll_replacement_order_preserves_order_info_params():
     assert captured["order"].trailStopPrice == 101250.0
     assert captured["order"].orderId == 0
     assert captured["order"].permId == 0
+
+
+def test_controller_copies_future_roll_policies(controller) -> None:
+    """Controller policy should not alias mutable runtime metadata."""
+
+    policies = {"automatic": True, "manual": False}
+
+    controller.set_future_roll_policies(policies)
+    policies["manual"] = True
+
+    assert controller.future_roll_policies == {
+        "automatic": True,
+        "manual": False,
+    }
+
+
+def test_future_roller_filters_declared_policy_and_warns_for_undeclared(
+    caplog,
+) -> None:
+    """Undeclared persisted strategies should roll with one diagnostic warning."""
+
+    contract = ibi.Future(conId=1, symbol="NQ", exchange="CME")
+    strategy_registry = SimpleNamespace(
+        strategies_by_contract=lambda: {contract: ["automatic", "manual", "persisted"]}
+    )
+    controller = cast(
+        Controller,
+        SimpleNamespace(sm=SimpleNamespace(strategy=strategy_registry)),
+    )
+    roller = FutureRoller(
+        controller,
+        {"automatic": True, "manual": False},
+    )
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING):
+        strategies = roller.strategies
+
+    assert strategies == {contract: ["automatic", "persisted"]}
+    assert caplog.messages == [
+        "Automatic futures-roll policy is undeclared for active strategies "
+        "['persisted']; defaulting to enabled."
+    ]
+
+
+def test_future_roller_holds_active_or_next_and_rolls_everything_else() -> None:
+    active = ibi.Future(conId=1, symbol="NG", exchange="NYMEX", localSymbol="NGQ26")
+    next_contract = ibi.Future(
+        conId=2, symbol="NG", exchange="NYMEX", localSymbol="NGU26"
+    )
+
+    class StrategyRegistry(dict):
+        def strategies_by_contract(self):
+            return {active: ["dt_NG"]}
+
+    strategies = StrategyRegistry(dt_NG=SimpleNamespace(position=-1))
+    contract_registry = SimpleNamespace(current_contracts={active, next_contract})
+    controller = cast(
+        Controller,
+        SimpleNamespace(
+            sm=SimpleNamespace(strategy=strategies),
+            contract_registry=contract_registry,
+        ),
+    )
+
+    assert FutureRoller(controller, {"dt_NG": True}).contracts_to_roll == set()
+
+    contract_registry.current_contracts = {next_contract}
+
+    assert FutureRoller(controller, {"dt_NG": True}).contracts_to_roll == {active}
 
 
 # def test_StateMachine_lined_to_ib_orderStatusEvent(caplog):

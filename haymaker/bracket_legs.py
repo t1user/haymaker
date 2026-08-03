@@ -6,7 +6,6 @@ from typing import Any, Optional
 
 import ib_insync as ibi
 
-from .base import Atom
 from .contract_registry import DetailsContainer
 from .misc import round_tick
 
@@ -34,12 +33,16 @@ class AbstractBracketLeg(ABC):
             self.vol_field = vol_field
 
     def __call__(
-        self, params: dict, trade: ibi.Trade, memo: Optional[dict] = None
+        self,
+        params: dict,
+        trade: ibi.Trade,
+        memo: Optional[dict] = None,
+        details: DetailsContainer | None = None,
     ) -> dict[str, Any]:
         # trade params are params extracted from trade
         # params are passed by the caller
         trade_params = self._extract_trade(trade)
-        trade_params["min_tick"] = self.min_tick(trade_params["contract"])
+        trade_params["min_tick"] = self.min_tick(trade_params["contract"], details)
         trade_params["vol_field_name"] = self.vol_field
         trade_params["vol_field_value"] = params[self.vol_field]
         trade_params["sl_points"] = self.stop_multiple * trade_params["vol_field_value"]
@@ -51,20 +54,17 @@ class AbstractBracketLeg(ABC):
             memo.update(self.__dict__)
         return order
 
-    @property
-    def details(self) -> DetailsContainer:
-        return Atom.contract_registry.details
-
-    def min_tick(self, contract):
+    def min_tick(self, contract, details: DetailsContainer | None = None):
+        details = details or DetailsContainer()
         try:
-            minTick = self.details[contract].minTick
+            minTick = details[contract].minTick
         except KeyError:
             log.critical(
                 f"No details for contract {contract}. "
                 f"Will attempt to send bracket order with minTick 0.25 ",
                 exc_info=True,
             )
-            log.debug(f"Details: {self.details}")
+            log.debug(f"Details: {details}")
             minTick = 0.25
         return minTick
 

@@ -13,14 +13,9 @@ import pandas as pd
 import pymongo  # type: ignore
 
 from .async_wrappers import SyncQueueRunner, make_async
-from .config import CONFIG as config
-from .databases import get_mongo_client
 from .misc import default_path, name_str
 
 log = logging.getLogger(__name__)
-
-
-CONFIG = config.get("saver") or {}
 
 
 class AbstractBaseSaver(ABC):
@@ -44,8 +39,17 @@ class AbstractBaseSaver(ABC):
 class AbstractBaseFileSaver(AbstractBaseSaver):
     _suffix = ""
 
-    def __init__(self, name: str, folder: str = "", use_timestamp: bool = True) -> None:
-        self.path = default_path(folder)
+    def __init__(
+        self,
+        name: str,
+        folder: str = "",
+        use_timestamp: bool = True,
+        base_directory: str = "ib_data",
+    ) -> None:
+        if base_directory == "ib_data":
+            self.path = default_path(folder)
+        else:
+            self.path = default_path(folder, base_directory=base_directory)
         self.name = name
         self.timestamp = datetime.now(timezone.utc) if use_timestamp else None
 
@@ -80,8 +84,14 @@ class PickleSaver(AbstractBaseFileSaver):
 class CsvSaver(AbstractBaseFileSaver):
     _suffix = "csv"
 
-    def __init__(self, name: str, folder: str = "", use_timestamp: bool = True) -> None:
-        super().__init__(name, folder, use_timestamp)
+    def __init__(
+        self,
+        name: str,
+        folder: str = "",
+        use_timestamp: bool = True,
+        base_directory: str = "ib_data",
+    ) -> None:
+        super().__init__(name, folder, use_timestamp, base_directory)
         self._fieldnames: list[str] | None = None
 
     def _path_exists(self, *args: str) -> bool:
@@ -126,6 +136,7 @@ class MongoSaver(AbstractBaseSaver):
         collection: str,
         query_key: str | None = None,
         client: pymongo.MongoClient | None = None,
+        database: str = "test_data",
     ) -> None:
         """
         `query_key` if for type of records that need to be recalled
@@ -135,12 +146,11 @@ class MongoSaver(AbstractBaseSaver):
 
         """
         if client is None:
-            self.client = get_mongo_client()
+            self.client = pymongo.MongoClient()
         else:
             self.client = client
 
-        db = CONFIG["MongoSaver"]["db"]
-        self.db = self.client[db]
+        self.db = self.client[database]
         self.collection = self.db[collection]
         self.query_key = query_key
 

@@ -1,0 +1,85 @@
+"""Configuration aggregates and storage settings."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True)
+class MongoClientSettings:
+    """Keyword arguments used to construct a Mongo client."""
+
+    client: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MongoSettings(MongoClientSettings):
+    """Mongo client arguments and framework database name."""
+
+    database: str | None = None
+
+
+@dataclass(frozen=True)
+class DataloaderStorageSettings:
+    """Filesystem and Mongo client settings used by the dataloader."""
+
+    base_directory: str = "ib_data"
+    mongodb: MongoClientSettings = field(default_factory=MongoClientSettings)
+
+
+@dataclass(frozen=True)
+class StorageSettings:
+    """Filesystem and framework Mongo settings used by live execution."""
+
+    base_directory: str = "ib_data"
+    mongodb: MongoSettings = field(default_factory=MongoSettings)
+
+
+@dataclass(frozen=True)
+class LiveConfig:
+    """Merged live configuration grouped by target or subsystem boundary.
+
+    Attributes:
+        connection: Broker connection and recovery options.
+        logging: Logging setup and broker-log options.
+        controller: Controller startup, reconciliation, and scheduling options.
+        state_machine: State persistence and rejection options.
+        storage: Filesystem and framework Mongo infrastructure settings.
+        blotter: Blotter enablement and saver specification.
+        orders: Default IB order fields.
+        timeout: Default streamer timeout policy.
+        futures: Live futures selection offsets.
+    """
+
+    connection: Mapping[str, Any]
+    logging: Mapping[str, Any]
+    controller: Mapping[str, Any]
+    state_machine: Mapping[str, Any]
+    storage: StorageSettings
+    blotter: Mapping[str, Any]
+    orders: Mapping[str, Any]
+    timeout: Mapping[str, Any]
+    futures: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class DataloaderConfig:
+    """Merged dataloader configuration grouped by target or subsystem boundary.
+
+    Attributes:
+        connection: Broker connection and recovery options.
+        logging: Logging setup options.
+        storage: Filesystem and Mongo client settings used by the dataloader.
+        download: Historical request and worker options.
+        pacing: Client-side request pacing options.
+        futures: Futures contract-selection policy.
+    """
+
+    connection: Mapping[str, Any]
+    logging: Mapping[str, Any]
+    storage: DataloaderStorageSettings
+    download: Mapping[str, Any]
+    pacing: Mapping[str, Any]
+    futures: Mapping[str, Any]

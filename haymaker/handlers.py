@@ -1,10 +1,10 @@
 """
-This module connects all `ib_insync` and `watchdog` events to logger:
+This module connects all `ib_insync` events to logger:
 `broker`.  Basically, it logs all broker messages.
 """
 
 import logging
-from typing import Dict, Set, Tuple
+from typing import Set
 
 import ib_insync as ibi
 
@@ -35,24 +35,13 @@ class IBHandlers:
         ib.tickNewsEvent += self.onTickNews
         ib.newsBulletinEvent += self.onNewsBulletin
         ib.scannerDataEvent += self.onScannerData
-        ib.errorEvent += self.onError
+        ib.errorEvent += self.onErrEvent
         ib.timeoutEvent += self.onTimeout
-        scheduledUpdate = ibi.Event().timerange(300, None, 600)
-        scheduledUpdate += self.onScheduledUpdate
         self.ib = ib
-        self.portfolio_items: Dict[str, Tuple[float, float, float]] = {}
 
     async def onConnected(self):
         self.log.info("Connection established")
-        self.account = self.ib.client.getAccounts()[0]
         await self.ib.accountSummaryAsync()
-        self._reset_pnl_subscription
-
-    def _reset_pnl_subscription(self) -> None:
-        key = (self.account, "")
-        if key in self.ib.wrapper.pnlKey2ReqId:
-            self.ib.cancelPnL(self.account)
-        self.ib.reqPnL(self.account)
 
     def onDisconnected(self):
         self.log.warning("Connection lost")
@@ -103,7 +92,6 @@ class IBHandlers:
         total = round(realized + unrealized)
         report = (item.contract.localSymbol, realized, unrealized, total)
         self.log.info(f"Portfolio item: {report}")
-        self.portfolio_items[item.contract.localSymbol] = (realized, unrealized, total)
 
     def onPosition(self, position: ibi.Position):
         self.log.info(
@@ -139,7 +127,7 @@ class IBHandlers:
     def onScannerData(self, data: ibi.ScanData):
         pass
 
-    def onError(
+    def onErrEvent(
         self, reqId: int, errorCode: int, errorString: str, contract: ibi.Contract
     ):
         # if errorCode not in (
@@ -155,24 +143,10 @@ class IBHandlers:
         #     10182,
         #     1100,
         # ):
-        self.log.error(f"ERROR: {errorCode} {errorString} {contract}")
+        self.log.debug(f"Broker message {errorCode}: {errorString} {contract}")
 
     def onTimeout(self, idlePeriod: float):
         self.log.debug(f"timeout: {idlePeriod}")
-
-    def onScheduledUpdate(self, time):
-        self.log.info(f"pnl: {self.ib.pnl()}")
-        summary = [0, 0, 0]
-        for _contract, value in self.portfolio_items.items():
-            summary[0] += value[0]
-            summary[1] += value[1]
-            summary[2] += value[2]
-        message = (
-            f"realized: {summary[0]}, " f"unrealized: {summary[1]}, total: {summary[2]}"
-        )
-        self.log.info(message)
-        positions = [(p.contract.localSymbol, p.position) for p in self.ib.positions()]
-        self.log.info(f"POSITIONS: {positions}")
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"

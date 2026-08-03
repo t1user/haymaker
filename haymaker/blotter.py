@@ -1,22 +1,17 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from typing import Any, Type, cast
+from typing import Any
 
 import ib_insync as ibi
+from pymongo import MongoClient  # type: ignore
 
 from . import misc
-from .config import CONFIG
-from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver  # noqa
+from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver
 
 log = logging.getLogger(__name__)
-
-
-blotter_dict = cast(dict, CONFIG.get("blotter"))
-blotter_class = blotter_dict["class"]
-blotter_kwargs = blotter_dict["kwds"]
-BLOTTER_SAVER = eval(f"{blotter_class}(**{blotter_kwargs})")
 
 
 class Blotter:
@@ -35,7 +30,7 @@ class Blotter:
     def __init__(
         self,
         save_immediately: bool = True,
-        saver: AbstractBaseSaver = BLOTTER_SAVER,
+        saver: AbstractBaseSaver | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -44,6 +39,8 @@ class Blotter:
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
         self.done_trades: list[int] = []
+        if saver is None:
+            saver = CsvSaver(name="blotter", folder="blotter", use_timestamp=False)
         self.saver = saver
         # ensure async saving
         self.save = AsyncSaveManager(saver).save
@@ -135,31 +132,56 @@ class Blotter:
         return f"Blotter(save_immediately={self.save_immediately}, saver={self.saver})"
 
 
-def blotter_factory(param: Type[Blotter] | bool | None) -> Blotter | None:
-    """
-    Instantiate Blotter based on passed param.
+def blotter_factory(
+    settings: Mapping[str, Any],
+    *,
+    base_directory: str,
+    mongo_client: Callable[[], MongoClient],
+    database: str | None,
+) -> Blotter | None:
+    """Construct a built-in blotter and saver from plain configuration.
 
     Args:
-        param: value read from config `use_blotter` key, which accepts
-            either a bool (wheather standard blotter should be used or not) or
-            a custom Blotter class
+        settings: Merged ``blotter`` configuration section.
+        base_directory: Application data directory used by the CSV saver.
+        mongo_client: Lazy accessor for the process-owned Mongo client.
+        database: Application database used by the Mongo saver.
+
     Returns:
-        An instance of :class:`Blotter` or `None`.
+        Configured blotter, or ``None`` when disabled.
     """
 
-    match param:
-        case False | None:
-            return None
-        case True:
-            return Blotter()
-    try:
-        blotter_instance = param()
-    except Exception as e:
-        log.exception(e)
+    config = dict(settings)
+    enabled = config.pop("enabled", True)
+    saver_config = config.pop("saver", None)
+    if config:
+        names = ", ".join(sorted(config))
+        raise TypeError(f"Unknown blotter configuration: {names}")
+    if not enabled:
         return None
-    if isinstance(blotter_instance, Blotter):
-        return blotter_instance
-    else:
-        raise TypeError(
-            f"Custom Blotter object recevied from config is not a Blotter: {param}"
+    if not isinstance(saver_config, Mapping):
+        raise ValueError("Enabled blotter requires saver settings")
+
+    saver_settings = dict(saver_config)
+    saver_type = saver_settings.pop("type", None)
+    saver_options = saver_settings.pop("options", {})
+    if saver_settings:
+        names = ", ".join(sorted(saver_settings))
+        raise TypeError(f"Unknown blotter saver configuration: {names}")
+    if not isinstance(saver_options, Mapping):
+        raise TypeError("blotter.saver.options must be a mapping")
+    options = dict(saver_options)
+
+    if saver_type == "csv":
+        saver: AbstractBaseSaver = CsvSaver(**options, base_directory=base_directory)
+    elif saver_type == "mongo":
+        if not database:
+            raise ValueError("storage.mongodb.database is required for Mongo savers")
+        saver = MongoSaver(
+            **options,
+            client=mongo_client(),
+            database=database,
         )
+    else:
+        raise ValueError("blotter.saver.type must be csv or mongo")
+    return Blotter(saver=saver)

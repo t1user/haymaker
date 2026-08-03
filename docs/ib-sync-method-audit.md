@@ -12,15 +12,6 @@ replacement.  It excludes the experimental dashboard.
 
 ## Not replaced
 
-- `haymaker/app.py` and `haymaker/dataloader/connect.py`: `IB.run()` starts the
-  `ib_insync` event loop and has no async replacement.
-- `haymaker/dataloader/connect.py`, `haymaker/dataloader/dataloader.py`, and
-  `haymaker/timeout.py`: `IB.disconnect()` is a synchronous state-clearing API
-  with no async replacement.
-- `haymaker/dataloader/connect.py`: `IB.connect()` has `connectAsync()`, but the
-  current reconnect helper is synchronous and is called directly from
-  synchronous event handlers.  Converting it would require changing that
-  dataloader connection mode rather than making a local call-site substitution.
 - `haymaker/trader.py`, `haymaker/controller/controller.py`, and
   `haymaker/controller/terminator.py`: `IB.placeOrder()` has no async
   replacement; it returns a live `Trade` object that is updated by events.

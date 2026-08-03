@@ -1,54 +1,80 @@
+"""Tests for profile-specific command parsing."""
+
+from pathlib import Path
+
 import pytest
 
-from haymaker.config.cli_options import CustomArgParser
+from haymaker.config.cli_options import (
+    dataloader_parser,
+    parse_dataloader_args,
+    parse_live_args,
+)
 
 
-def test_set_option_short():
-    parser = CustomArgParser.from_str("-s key value")
-    assert parser.output.get("key") == "value"
+def test_live_command_keeps_module_out_of_config_overrides() -> None:
+    command = parse_live_args(["strategy.py"])
+
+    assert command.module_path == Path("strategy.py")
+    assert command.overrides == ()
 
 
-def test_set_option_long():
-    parser = CustomArgParser.from_str("--set_option key value")
-    assert parser.output.get("key") == "value"
+def test_set_option_is_repeatable_and_typed() -> None:
+    command = parse_live_args(
+        [
+            "strategy.py",
+            "--set-option",
+            "controller.sync_frequency",
+            "60",
+            "--set-option",
+            "logging.log_broker",
+            "true",
+        ]
+    )
+
+    assert command.overrides == (
+        ("controller.sync_frequency", 60),
+        ("logging.log_broker", True),
+    )
 
 
-def test_set_option_with_multiple_options():
-    parser = CustomArgParser.from_str("-s key value -s key1 value1 -s key2 value2")
-    output = parser.output
-    assert output["key"] == "value"
-    assert output["key1"] == "value1"
-    assert output["key2"] == "value2"
+def test_live_dedicated_options_are_appended_after_generic_options() -> None:
+    command = parse_live_args(
+        [
+            "strategy.py",
+            "--set-option",
+            "controller.startup.reset",
+            "false",
+            "--reset",
+        ]
+    )
+
+    assert command.overrides[-1] == ("controller.startup.reset", True)
 
 
-def test_module_lookup_works():
-    parser = CustomArgParser.from_str("--test_option", "my_module.py")
-    assert parser.output.get("test_option")
+def test_dataloader_positional_and_gap_options_are_explicit_overrides() -> None:
+    command = parse_dataloader_args(["contracts.csv", "--gap-fill-mode", "schedule"])
+
+    assert command.overrides == (
+        ("download.source", "contracts.csv"),
+        ("download.gap_fill_mode", "schedule"),
+    )
 
 
-def test_common_options_work_for_non_default_modules():
-    parser = CustomArgParser.from_str("--set_option key value", "my_module.py")
-    assert parser.output.get("key") == "value"
+def test_config_file_path_expands_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", "/tmp/example-home")
+
+    command = parse_live_args(["strategy.py", "--file", "~/live.yaml"])
+
+    assert command.config_file == Path("/tmp/example-home/live.yaml")
 
 
-def test_source():
-    parser = CustomArgParser.from_str("myfile.yaml")
-    output = parser.output
-    assert output["source"] == "myfile.yaml"
+def test_old_cli_alias_is_rejected() -> None:
+    with pytest.raises(SystemExit):
+        parse_live_args(["strategy.py", "--coldstart"])
 
 
-def test_no_source():
-    parser = CustomArgParser.from_str("-r -f filename.yaml -z --nuke")
-    output = parser.output
-    with pytest.raises(KeyError):
-        output["source"]
+def test_dataloader_help_uses_normalized_option_name() -> None:
+    help_text = dataloader_parser().format_help()
 
-
-def test_app_options():
-    parser = CustomArgParser.from_str("-r -f filename.yaml -z --nuke")
-    output = parser.output
-    assert output["reset"]
-    assert output["zero"]
-    assert output["nuke"]
-    assert not output["coldstart"]
-    assert output["file"] == "filename.yaml"
+    assert "--gap-fill-mode" in help_text
+    assert "--gap_fill_mode" not in help_text

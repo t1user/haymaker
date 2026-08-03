@@ -15,7 +15,8 @@ with ``@pytest.mark.mongo``.
 import datetime
 import logging
 import os
-from typing import Any
+from typing import Any, cast
+from unittest.mock import Mock
 
 # Tests must not inherit local live-trading config. Keep this before importing
 # haymaker modules because config is resolved at import time.
@@ -25,10 +26,12 @@ os.environ.pop("HAYMAKER_DATALOADER_CONFIG_OVERRIDES", None)
 import ib_insync as ibi
 import pytest
 from ib_insync import Contract, ContractDetails
+from runtime_helpers import AtomRuntimeHarness
 
 from haymaker.base import Atom as BaseAtom
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
+from haymaker.datastore import FrameStoreProvider
 from haymaker.saver import AbstractBaseSaver
 from haymaker.state_machine import StateMachine
 from haymaker.streamers import Streamer as ActualStreamer
@@ -43,15 +46,6 @@ def pytest_configure(config):
         "markers",
         "mongo: test intentionally opens a real MongoDB or Arctic connection",
     )
-
-
-def clear_mongo_client_cache() -> None:
-    """Clear cached Mongo clients when the current object supports it."""
-    from haymaker import databases
-
-    cache_clear = getattr(databases.get_mongo_client, "cache_clear", None)
-    if cache_clear is not None:
-        cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -89,11 +83,9 @@ def block_real_mongo_access(monkeypatch, request):
                 "Use a fake datastore or mark the test with @pytest.mark.mongo."
             )
 
-    clear_mongo_client_cache()
     monkeypatch.setattr(databases, "MongoClient", forbidden_mongo_client)
     monkeypatch.setattr(datastore_module, "Arctic", ForbiddenArctic)
     yield
-    clear_mongo_client_cache()
 
 
 class FakeMongoSaver(AbstractBaseSaver):
@@ -170,8 +162,30 @@ def state_machine(order_saver, strategy_saver):
 
 
 @pytest.fixture
-def registry():
-    yield ContractRegistry()
+def atom_runtime_factory(monkeypatch, state_machine):
+    """Create and install test runtimes for Atom-dependent tests."""
+
+    def make(
+        *,
+        ib: ibi.IB | None = None,
+        sm: StateMachine | None = None,
+        contract_registry: ContractRegistry | None = None,
+        controller: Controller | None = None,
+        frame_store_provider: FrameStoreProvider | None = None,
+    ) -> AtomRuntimeHarness:
+        provider = frame_store_provider
+        if provider is None:
+            provider = cast(FrameStoreProvider, Mock(spec=FrameStoreProvider))
+        runtime = AtomRuntimeHarness(
+            ib=ib or ibi.IB(),
+            sm=sm or state_machine,
+            contract_registry=contract_registry or ContractRegistry(),
+            controller=controller,
+            frame_store_provider=provider,
+        )
+        return runtime.install(monkeypatch)
+
+    return make
 
 
 @pytest.fixture
@@ -252,16 +266,26 @@ def details():
 
 
 @pytest.fixture
-def Atom(state_machine, details, registry):
+def atom_runtime(atom_runtime_factory, details):
+    """Install a fresh Atom runtime for tests that use Atom services."""
+
+    registry = ContractRegistry()
     registry.details[details.contract] = details
-    sm = state_machine
-    BaseAtom.set_init_data(ibi.IB(), sm, registry)
+    return atom_runtime_factory(contract_registry=registry)
+
+
+@pytest.fixture
+def Atom(atom_runtime):
+    """Return the base Atom class after installing test runtime services."""
+
     return BaseAtom
 
 
 @pytest.fixture
-def controller(Atom):
-    return Controller(Trader(Atom.ib))
+def controller(atom_runtime):
+    controller = Controller(Trader(atom_runtime.ib))
+    atom_runtime.bind_controller(controller)
+    return controller
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ was) the 'current' futures contract at a given point in time.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import cached_property
 from logging import getLogger
 from typing import ClassVar, Self, Type
@@ -18,6 +18,17 @@ from pandas.tseries.offsets import CustomBusinessDay
 from . import misc
 
 log = getLogger(__name__)
+
+
+def utc_now_naive() -> datetime:
+    """Return the current UTC time without timezone information.
+
+    Broker contract dates are timezone-naive, so selectors use a naive UTC
+    value to keep comparisons compatible and independent of the host timezone.
+    """
+
+    return datetime.now(UTC).replace(tzinfo=None)
+
 
 # THESE ARE DEFAULTS THAT CAN BE OVERRIDEN IN CLASS INITIALIZATION
 # number of business days before last trading day that contract will be rolled
@@ -205,7 +216,7 @@ def future_wrapper_factory(contract: ibi.Contract) -> Type[AbstractBaseFutureWra
 
 
 class AbstractBaseContractSelector(ABC):
-    today = datetime.now()  # for testing only
+    today = utc_now_naive()  # for testing only
 
     @classmethod
     @abstractmethod
@@ -235,7 +246,7 @@ class AbstractBaseContractSelector(ABC):
 @dataclass
 class DefaultSelector(AbstractBaseContractSelector):
     contractChain: list[ibi.Contract]
-    today: datetime = field(default=datetime.now(), repr=False)
+    today: datetime = field(default_factory=utc_now_naive, repr=False)
 
     @classmethod
     def from_details(
@@ -280,7 +291,7 @@ class FutureSelector(AbstractBaseContractSelector):
     futuresChain: list[AbstractBaseFutureWrapper]
     roll_bdays: int = FUTURES_ROLL_BDAYS
     roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS
-    today: datetime = field(default=datetime.now(), repr=False)
+    today: datetime = field(default_factory=utc_now_naive, repr=False)
 
     def __post_init__(self):
         if not self.futuresChain:
@@ -294,7 +305,7 @@ class FutureSelector(AbstractBaseContractSelector):
         detailsChain: list[ibi.ContractDetails],
         roll_bdays: int = FUTURES_ROLL_BDAYS,
         roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS,
-        today: datetime = datetime.now(),
+        today: datetime | None = None,
         _future_wrapper_factory=future_wrapper_factory,  # for testing
         *args,
         **kwargs,
@@ -314,7 +325,7 @@ class FutureSelector(AbstractBaseContractSelector):
             ],
             roll_bdays,
             roll_margin_bdays,
-            today,
+            today or utc_now_naive(),
         )
 
     @classmethod
@@ -323,7 +334,7 @@ class FutureSelector(AbstractBaseContractSelector):
         futuresChain: list[ibi.Future],
         roll_bdays: int = FUTURES_ROLL_BDAYS,
         roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS,
-        today: datetime = datetime.now(),
+        today: datetime | None = None,
         _future_wrapper_factory=future_wrapper_factory,  # for testing
     ) -> Self:
 
@@ -336,7 +347,7 @@ class FutureSelector(AbstractBaseContractSelector):
             [future_wrapper(future) for future in futuresChain],
             roll_bdays,
             roll_margin_bdays,
-            today,
+            today or utc_now_naive(),
         )
 
     @cached_property
@@ -473,7 +484,7 @@ def selector_factory(
     details_list: list[ibi.ContractDetails],
     futures_roll_bdays: int = FUTURES_ROLL_BDAYS,
     futures_roll_margin_bdays: int = FUTURES_ROLL_MARGIN_BDAYS,
-    today: datetime = datetime.now(),  # for testing only
+    today: datetime | None = None,  # for testing only
 ) -> AbstractBaseContractSelector:
     first_details_instance = details_list[0]
     contract = first_details_instance.contract

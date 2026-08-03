@@ -15,6 +15,12 @@ from typing import Any
 import pytest
 
 import haymaker.async_wrappers as async_wrappers
+from haymaker.async_wrappers import (
+    QueueDrainTimeoutError,
+    QueueProcessingError,
+    QueueRunner,
+    QueueShutdownPolicy,
+)
 
 
 def sync_add(x: int, y: int) -> int:
@@ -74,6 +80,57 @@ async def test_make_async_raises_typeerror_on_non_callable():
 
 
 @pytest.mark.asyncio
+async def test_finish_on_cancel_waits_before_propagating_cancellation():
+    """A started side effect must settle before its caller is cancelled."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def operation() -> str:
+        started.set()
+        await release.wait()
+        finished.set()
+        return "done"
+
+    task = asyncio.create_task(async_wrappers.finish_on_cancel(operation()))
+    await started.wait()
+
+    task.cancel()
+    await asyncio.sleep(0)
+
+    assert not task.done()
+    assert not finished.is_set()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_finish_on_cancel_propagates_operation_failure():
+    """A protected operation failure must not be hidden by cancellation."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def operation() -> None:
+        started.set()
+        await release.wait()
+        raise RuntimeError("persistence failed")
+
+    task = asyncio.create_task(async_wrappers.finish_on_cancel(operation()))
+    await started.wait()
+    task.cancel()
+    release.set()
+
+    with pytest.raises(RuntimeError, match="persistence failed"):
+        await task
+
+
+@pytest.mark.asyncio
 async def test_fire_and_forget_schedules_task():
     results = []
 
@@ -113,3 +170,150 @@ async def test_fire_and_forget_logs_exceptions(caplog):
     assert any(
         "async_wrappers_queue" in record.message for record in error_logs
     ), "Expected 'async_wrappers_queue' in the error log message"
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_drains_pending_items_on_close():
+    processed = []
+
+    async def process(item):
+        processed.append(item)
+
+    queue = QueueRunner(process, "drain-test")
+
+    await queue.put("first")
+    await queue.put("second")
+    await queue.close()
+
+    assert processed == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_discards_pending_items_on_close():
+    processed = []
+
+    async def process(item):
+        processed.append(item)
+
+    queue = QueueRunner(
+        process,
+        "discard-test",
+        shutdown_policy=QueueShutdownPolicy.DISCARD,
+    )
+    queue._queue.put_nowait("pending")
+
+    await queue.close()
+
+    assert processed == []
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_close_is_bounded_after_worker_halts():
+    async def fail(item):
+        raise RuntimeError(item)
+
+    queue = QueueRunner(fail, "failed-worker", max_failures=1)
+    for item in range(3):
+        await queue.put(item)
+    await asyncio.sleep(0)
+
+    with pytest.raises(QueueProcessingError, match="failed to process queued work"):
+        await asyncio.wait_for(queue.close(timeout=0.01), timeout=0.1)
+
+    assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_discard_queue_logs_processing_failure_without_raising():
+    async def fail(item):
+        raise RuntimeError(item)
+
+    queue = QueueRunner(
+        fail,
+        "best-effort",
+        max_failures=1,
+        shutdown_policy=QueueShutdownPolicy.DISCARD,
+    )
+    await queue.put("broken")
+    await asyncio.sleep(0)
+
+    await queue.close()
+
+    assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_draining_queue_timeout_is_terminal():
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def process(item):
+        started.set()
+        await release.wait()
+
+    queue = QueueRunner(process, "timed-out-drain")
+    await queue.put("pending")
+    await started.wait()
+
+    with pytest.raises(QueueDrainTimeoutError, match="did not drain"):
+        await queue.close(timeout=0.001)
+
+
+@pytest.mark.asyncio
+async def test_close_all_closes_every_queue_before_raising(monkeypatch):
+    monkeypatch.setattr(QueueRunner, "_instances", [])
+
+    async def fail(item):
+        raise RuntimeError(item)
+
+    critical = QueueRunner(fail, "critical", max_failures=1)
+    best_effort = QueueRunner(
+        fail,
+        "best-effort-all",
+        max_failures=1,
+        shutdown_policy=QueueShutdownPolicy.DISCARD,
+    )
+    await critical.put("critical failure")
+    await best_effort.put("best effort failure")
+    await asyncio.sleep(0)
+
+    with pytest.raises(ExceptionGroup, match="Queue shutdown failed"):
+        await QueueRunner.close_all()
+
+    assert critical._closed
+    assert best_effort._closed
+    assert QueueRunner._instances == []
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_rejects_work_after_close():
+    async def process(item):
+        pass
+
+    queue = QueueRunner(process, "closed-test")
+    await queue.close()
+
+    with pytest.raises(RuntimeError, match="is closed"):
+        queue.push("late")
+    assert queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_background_tasks_are_cancelled_during_shutdown():
+    cancelled = asyncio.Event()
+
+    async def background_work():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    task = async_wrappers.create_background_task(
+        background_work(), name="background-test"
+    )
+    await asyncio.sleep(0)
+
+    await async_wrappers.cancel_background_tasks()
+
+    assert task.cancelled()
+    assert cancelled.is_set()
