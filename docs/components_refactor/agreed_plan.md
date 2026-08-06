@@ -22,10 +22,14 @@ value is ignored. Message values and conditional requirements remain runtime
 validation.
 
 The user-facing trading toolbox is exported explicitly from
-`haymaker.components`. It contains messages, streamers, aggregators,
-SignalModels, one-to-one processors, Portfolio boundaries, routing, execution
-models, bracket legs, and event timeout helpers. Runtime, Book, Controller,
-persistence, Trader, contract selection, and
+`haymaker.components`. It contains messages, streamers, bar aggregators,
+DataFrame aggregators, SignalModels, one-to-one processors, Portfolio
+boundaries, routing, execution models, bracket legs, and event timeout helpers.
+Bar aggregation and DataFrame aggregation are separate public component
+families: the former incrementally groups broker bar objects, while the latter
+maintains complete DataFrames, restores persisted history, and supports
+DataFrame transformations such as equal-volume grouping. Runtime, Book,
+Controller, persistence, Trader, contract selection, and
 `haymaker.config.TimeoutPolicy` stay outside. There are no forwarding modules
 or aliases for former top-level component paths. Each public component module
 owns its `__all__`; the package initializer declares which modules participate

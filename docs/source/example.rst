@@ -20,7 +20,7 @@ position episode:
    from haymaker.base import Pipe
    from haymaker.components import (
        BracketExecutionModel,
-       DfAggregator,
+       DataFrameAggregator,
        FixedSizeAllocator,
        FixedStop,
        HistoricalDataStreamer,
@@ -63,7 +63,7 @@ position episode:
        whatToShow="TRADES",
        datastore=history_store,
    )
-   frames = DfAggregator(history_store)
+   frames = DataFrameAggregator(history_store)
    signals = TrendModel(
        SOURCE,
        CONTRACT,
@@ -85,6 +85,11 @@ position episode:
        allocation,
        execution,
    )
+
+The same ``history_store`` is supplied to the streamer and
+``DataFrameAggregator``. The aggregator restores and periodically saves the
+complete DataFrame; on a later process start, the streamer reads the persisted
+endpoint and requests only the missing broker history.
 
 ``TrendModel`` places ``atr`` in Signal metadata. ``FixedSizeAllocator``
 preserves it in the PositionTarget, and ``FixedStop`` consumes it after the

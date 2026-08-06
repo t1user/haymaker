@@ -89,10 +89,9 @@ Market-data components
 ======================
 
 Streamers own Interactive Brokers subscriptions and emit broker objects while
-the runtime is connected. Historical bars normally feed either
-:class:`~haymaker.components.BarAggregator` for eventkit bar filters or
-:class:`~haymaker.components.DfAggregator` for dataframe history. Streamers are
-registered process-wide during strategy import and started by the runtime.
+the runtime is connected. Historical bars can feed the bar-object aggregation
+family or the separate DataFrame aggregation family. Streamers are registered
+process-wide during strategy import and started by the runtime.
 
 .. autoclass:: haymaker.components.Streamer
 
@@ -251,16 +250,20 @@ later rather than during module-level pipeline construction.
 .. autoclass:: haymaker.components.MarketDataTimeout
    :members: from_atom, cancel
 
-.. autoclass:: haymaker.components.BarAggregator
+Bar-object aggregation
+----------------------
 
-.. autoclass:: haymaker.components.DfAggregator
+:class:`~haymaker.components.BarAggregator` incrementally feeds completed
+``BarData`` objects through an eventkit bar filter and emits the resulting
+``BarDataList``. Use this family when downstream components should continue to
+operate on IB bar objects.
+
+.. autoclass:: haymaker.components.BarAggregator
 
 .. autoexception:: haymaker.components.aggregators.WrongStreamer
 
-.. autoexception:: haymaker.components.aggregators.MissingStreamerParam
-
 Bar filters
------------
+~~~~~~~~~~~
 
 The filter objects below group source bars and retain their output
 ``BarDataList``. ``NoFilter`` preserves one output bar per input bar.
@@ -275,7 +278,27 @@ The filter objects below group source bars and retain their output
 
 .. autoclass:: haymaker.components.NoFilter
 
+DataFrame aggregation
+---------------------
+
+:class:`~haymaker.components.DataFrameAggregator` is the parallel DataFrame
+pipeline. It combines current ``BarDataList`` snapshots with stored history,
+acquires missing previous futures contracts, stitches a continuous series,
+periodically saves it, and emits the complete DataFrame. Normally inject the
+same fully configured awaited datastore into it and
+:class:`~haymaker.components.HistoricalDataStreamer`: the aggregator saves the
+history and the streamer uses its persisted endpoint to shorten subsequent IB
+requests.
+
+The DataFrame components are public from both
+``haymaker.components.dataframe_aggregators`` and the package-level
+``haymaker.components`` toolbox.
+
+.. autoclass:: haymaker.components.DataFrameAggregator
+
 .. autoclass:: haymaker.components.VolumeGrouper
+
+.. autoexception:: haymaker.components.dataframe_aggregators.MissingStreamerParam
 
 Signal models
 =============

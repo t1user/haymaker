@@ -9,20 +9,14 @@ from collections import deque
 from collections.abc import Callable
 from datetime import date, datetime
 from functools import cached_property
-from typing import Literal
+from typing import Any, Awaitable, Literal, cast
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from ..async_wrappers import QueueRunner, QueueShutdownPolicy
 from ..base import Atom
-from ._dataframe_aggregators import (
-    DfAggregator,
-    MissingStreamerParam,
-    VolumeGrouper,
-    WrongStreamer,
-    custom_bday,
-)
+from .dataframe_aggregators import WrongStreamer
 from .streamers import Streamer
 from .streamers import HistoricalDataStreamer
 
@@ -87,27 +81,23 @@ class BarAggregator(Atom):
                 f"Streamer {type(source).__name__} is not compatible with {self!s}"
             )
 
-    def onStart(self, data: dict, *args) -> None:
-        """Syncing contract with streamer."""
-        assert args, f"No streamer passed to {self!s}"
-        streamer = args[0]
-        self.sync_with_streamer(streamer)
-        super().onStart(data, *args)
+    def onStart(self, data: Any, source: Atom | None = None) -> Awaitable[None] | None:
+        """Synchronize with the upstream streamer and forward startup.
 
-    def sync_with_streamer(self, streamer: Streamer) -> None:
-        # streamer class used only to verify compatibility
-        self.verify_streamer_compatibility(streamer)
+        Args:
+            data: Arbitrary mutable startup payload forwarded unchanged.
+            source: Immediate upstream Atom. A ``HistoricalDataStreamer`` is
+                required for contract synchronization.
+        """
+        self.sync_with_streamer(cast(Atom, source))
+        return super().onStart(data, source)
+
+    def sync_with_streamer(self, streamer: Atom) -> None:
         # sync contract with streamer
         # these 2 properties together ensure that self.contract
         # will be the same as on streamer
         self.which_contract = streamer.which_contract
         self._contract_blueprint = streamer._contract_blueprint
-
-    def verify_streamer_compatibility(self, streamer: Streamer) -> None:
-        if not isinstance(streamer, self._compatible_with):
-            raise WrongStreamer(
-                f"Streamer {type(streamer).__name__} is not compatible with {self!s}"
-            )
 
     def onDataBar(self, bars, *args) -> None:
         """
@@ -534,10 +524,8 @@ class NoFilter(ev.Op):
 __all__ = [
     "BarAggregator",
     "CountBars",
-    "DfAggregator",
     "NoFilter",
     "TickBars",
     "TimeBars",
     "VolumeBars",
-    "VolumeGrouper",
 ]

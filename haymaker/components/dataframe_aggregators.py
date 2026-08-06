@@ -1,10 +1,19 @@
+"""DataFrame-oriented aggregation components for historical bar pipelines.
+
+This public module complements :mod:`haymaker.components.aggregators`. Its
+components maintain and transform complete pandas DataFrames, whereas the bar
+aggregators operate on ``ib_insync`` bar objects.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import logging
 import random
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
-from typing import Any, ClassVar, Generator, Literal, cast
+from typing import Any, Awaitable, ClassVar, Generator, Literal, cast
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -31,26 +40,56 @@ log = logging.getLogger(__name__)
 
 
 class MissingStreamerParam(Exception):
+    """Required historical-request configuration is absent from the streamer."""
+
     pass
 
 
 class WrongStreamer(Exception):
+    """An aggregator was connected to an incompatible built-in streamer."""
+
     pass
 
 
 @dataclass(eq=False)
-class DfAggregator(Atom):
-    """Build and persist sufficient dataframe history from historical bars.
+class DataFrameAggregator(Atom):
+    """Maintain and emit a complete DataFrame from historical bar snapshots.
 
-    The component converts HistoricalDataStreamer snapshots to a monotonic
-    dataframe, reads older stored/broker bars when the requested history is
-    insufficient, and stitches futures history where required. It emits the
-    complete current dataframe.
+    Use this component between
+    :class:`~haymaker.components.HistoricalDataStreamer` and a DataFrame
+    consumer such as :class:`~haymaker.components.PandasSignalModel`. It is
+    the DataFrame-oriented counterpart to
+    :class:`~haymaker.components.BarAggregator`: instead of regrouping
+    individual broker bars, it combines each streamed snapshot with
+    previously persisted history and emits the complete, monotonically
+    indexed DataFrame.
+
+    For futures, the component restricts each contract to its active period,
+    obtains missing previous-contract data from the datastore or broker, and
+    joins the contracts into a continuous series. The current implementation
+    therefore requires a futures Contract and ``FutureSelector``.
+
+    Inject the same configured datastore into this component and its upstream
+    :class:`~haymaker.components.HistoricalDataStreamer` when
+    restart-efficient requests are required. This component persists the
+    maintained DataFrame; the streamer consults the persisted endpoint before
+    deciding how much history to request from IB.
 
     Args:
-        datastore: Fully configured awaited store. Its symbol naming must match
-            the connected streamer's bar size.
-        save_frequency: Seconds between background saves; zero disables saves.
+        datastore: Fully configured awaited store used to restore and persist
+            bar history. Its symbol naming must match the connected streamer's
+            bar size.
+        save_frequency: Seconds between periodic saves. Defaults to ``900``;
+            zero disables periodic persistence.
+
+    Input:
+        Complete ``ib_insync.BarDataList`` snapshots emitted by a
+        :class:`~haymaker.components.HistoricalDataStreamer`.
+
+    Emits:
+        The complete current ``pandas.DataFrame`` after each processed
+        snapshot. Branches receive the maintained DataFrame object and must
+        copy it before mutation.
 
     Raises:
         WrongStreamer: If connected to an incompatible built-in Streamer.
@@ -63,9 +102,7 @@ class DfAggregator(Atom):
 
     # ================================================================================
 
-    _compatible_with: ClassVar[tuple[type[Streamer], ...]] = (
-        HistoricalDataStreamer,
-    )
+    _compatible_with: ClassVar[tuple[type[Streamer], ...]] = (HistoricalDataStreamer,)
 
     _streamer_params: dict[str, Any] = field(
         init=False, repr=False, default_factory=dict
@@ -100,23 +137,26 @@ class DfAggregator(Atom):
         # if many objects created, they shouldn't all save at the same time
         await asyncio.sleep(random.randint(0, 30))
         log.debug(f"{self!s} setting save timer at {self.save_frequency}secs.")
-        self._save_timer = ev.Timer(self.save_frequency)
-        self._save_timer += self.save_data
+        timer = ev.Timer(self.save_frequency)
+        timer.connect(self.save_data)
+        self._save_timer = timer
 
-    def onStart(self, data: Any, *args: Any) -> None:
-        """Syncing contract with streamer."""
-        assert args, f"No streamer passed to {self!s}"
-        streamer = args[0]
-        self.sync_with_streamer(streamer)
+    def onStart(self, data: Any, source: Atom | None = None) -> Awaitable[None] | None:
+        """Synchronize with the upstream streamer and forward startup.
+
+        Args:
+            data: Arbitrary mutable startup payload forwarded unchanged.
+            source: Immediate upstream Atom. A ``HistoricalDataStreamer`` is
+                required for request parameters and contract synchronization.
+        """
+        self.sync_with_streamer(cast(Atom, source))
         if self._save_timer is None and self.save_frequency:
             self._timer_task = asyncio.create_task(
                 self.set_timer(), name=f"{self!s} timer setter"
             )
-        super().onStart(data, *args)
+        return super().onStart(data, source)
 
-    def sync_with_streamer(self, streamer: Streamer) -> None:
-        # streamer class used only to verify compatibility
-        self.verify_streamer_compatibility(streamer)
+    def sync_with_streamer(self, streamer: Atom) -> None:
         assert is_dataclass(streamer), f"Streamer: {streamer} must be a dataclass."
         self._streamer_params = {
             f.name: getattr(streamer, f.name) for f in fields(streamer)
@@ -127,12 +167,6 @@ class DfAggregator(Atom):
         log.debug(f"{self!s} streamer params: {self._streamer_params}")
         self.which_contract = streamer.which_contract
         self._contract_blueprint = streamer._contract_blueprint
-
-    def verify_streamer_compatibility(self, streamer: Streamer) -> None:
-        if not isinstance(streamer, self._compatible_with):
-            raise WrongStreamer(
-                f"Streamer {type(streamer).__name__} is not compatible with {self!s}"
-            )
 
     async def onData(self, data: ibi.BarDataList, *args: Any) -> None:
         # processing may be slow so queue data before processing
@@ -455,7 +489,13 @@ class DfAggregator(Atom):
 
 @dataclass(eq=False)
 class VolumeGrouper(Atom):
-    """Regroup a dataframe into completed equal-volume bars.
+    """Regroup a DataFrame into completed equal-volume rows.
+
+    Use this component in a DataFrame aggregation pipeline when volume-based
+    rows are preferred to the source bar interval. Unlike
+    :class:`~haymaker.components.VolumeBars`, which incrementally groups
+    ``ib_insync.BarData`` objects, this component recalculates groups from the
+    complete input DataFrame. The final incomplete group is excluded.
 
     Args:
         volume: Positive target volume for each grouped row.
@@ -463,7 +503,9 @@ class VolumeGrouper(Atom):
         label: Whether grouped timestamps use the left or right boundary.
 
     Emits:
-        A dataframe containing completed groups only when a new group closes.
+        The complete DataFrame of finished volume groups when a new group has
+        closed. The first input establishes the completion watermark and does
+        not emit.
 
     Raises:
         AssertionError: If input is not a dataframe or ``group_on`` is absent.
@@ -491,3 +533,9 @@ class VolumeGrouper(Atom):
         elif grouped.index[-2] > self._last_emitted_point:
             self._last_emitted_point = grouped.index[-2]
             self.dataEvent.emit(grouped.iloc[:-1])
+
+
+__all__ = [
+    "DataFrameAggregator",
+    "VolumeGrouper",
+]

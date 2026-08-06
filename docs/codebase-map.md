@@ -105,8 +105,15 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/components/messages.py`: frozen scalar-or-paired `Signal`,
   `SignalPair`, `PositionProposal`, and absolute `PositionTarget` messages plus
   signal, intent, and open-ended order role enums.
-- `haymaker/components/streamers.py`, `aggregators.py`: broker market-data
-  sources, bar grouping, dataframe aggregation, and history persistence.
+- `haymaker/components/streamers.py`: broker market-data sources. A persisted
+  historical streamer reads the stored endpoint to shorten its next IB history
+  request.
+- `haymaker/components/aggregators.py`: incremental bar-object aggregation and
+  count, volume, tick, time, and pass-through eventkit filters.
+- `haymaker/components/dataframe_aggregators.py`: the separate public
+  DataFrame aggregation family. `DataFrameAggregator` restores, stitches,
+  saves, and emits complete futures history; `VolumeGrouper` performs
+  DataFrame-native equal-volume grouping.
 - `haymaker/components/timeouts.py`: user-owned generic event inactivity
   callbacks and workload-owned, market-session-aware stale-data monitoring.
 - `haymaker/components/signal_models.py`: general SignalModel with a
@@ -163,8 +170,11 @@ return means queue acceptance, while final handling depends on the sink's
 Datastore symbol naming is fixed when each store wrapper is constructed.
 Framework-provided naming policies are frozen, stores expose the configured
 policy read-only, and consumers treat injected stores as fully configured.
-`DfAggregator` requires an awaited datastore. Persisted historical streamers
-accept an awaited datastore, while `None` disables their persistence lookup.
+`DataFrameAggregator` requires an awaited datastore. Injecting the same store
+into `HistoricalDataStreamer` lets the aggregator maintain complete history
+while the streamer uses the stored endpoint to shorten its next broker
+request. A historical streamer accepts an awaited datastore, while `None`
+disables its persistence lookup.
 `PandasSignalModel.persistence=False` disables calculation history,
 `True` creates an independent policy from the runtime default factory, and a
 custom `SignalFramePersistence` object overrides that default. Queue acceptance

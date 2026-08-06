@@ -199,8 +199,10 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   `PandasSignalModel` owns its `SignalFramePersistence` state rather than
   sharing generations.
 - Strategy module composition builds stores through
-  `RuntimeContext.frame_store_provider` and injects them: `DfAggregator`
-  requires `AsyncDataStore` and persisted streamers accept
+  `RuntimeContext.frame_store_provider` and injects them: `DataFrameAggregator`
+  requires `AsyncDataStore`; injecting that same store into
+  `HistoricalDataStreamer` lets the streamer shorten subsequent IB requests
+  from the persisted endpoint. Persisted streamers accept
   `AsyncDataStore | None`. `PandasSignalModel.persistence` alone supports
   `False`, runtime-default `True`, or a custom non-blocking
   `SignalFramePersistence`; persistence enqueue failure never suppresses Signal

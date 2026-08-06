@@ -52,6 +52,21 @@ target. Direct `Portfolio` implementations own source state, synchronization,
 `as_of`, duplicate/late input, timeout, and recomputation policies. Do not put
 those policies in the abstract base.
 
+## Market-data aggregation
+
+Keep the two public aggregation families distinct. `aggregators.py` operates
+on `ib_insync` bar objects through `BarAggregator` and its count, volume, tick,
+time, and pass-through filters. `dataframe_aggregators.py` maintains complete
+pandas DataFrames through `DataFrameAggregator` and contains DataFrame-native
+transformations such as `VolumeGrouper`.
+
+`DataFrameAggregator` is the persistence companion to
+`HistoricalDataStreamer`: normally inject the same fully configured awaited
+datastore into both. The aggregator restores and saves the complete history;
+the streamer consults the persisted endpoint to shorten its next IB request.
+Do not collapse the DataFrame components into `aggregators.py` or treat their
+public module as an implementation detail.
+
 SignalModels are identity-based dataclasses used by both flows. They own
 `source_key`, the Signal Contract, SignalType, `created_at`, and standard
 emission, but do not own futures-roll policy. User implementations return only

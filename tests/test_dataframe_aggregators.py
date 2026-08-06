@@ -10,10 +10,14 @@ from helpers import wait_for_condition
 from sample_barDataList import sample_barDataList
 
 from haymaker.base import ActiveNext, Atom
-from haymaker.contract_registry import ContractRegistry
-from haymaker.datastore import AsyncDataStore
-from haymaker.components._dataframe_aggregators import DfAggregator, WrongStreamer, custom_bday
+from haymaker.components.dataframe_aggregators import (
+    DataFrameAggregator,
+    WrongStreamer,
+)
 from haymaker.components.streamers import HistoricalDataStreamer, MktDataStreamer
+from haymaker.contract_registry import ContractRegistry
+from haymaker.contract_selector import custom_bday
+from haymaker.datastore import AsyncDataStore
 
 
 @pytest.fixture(scope="module")
@@ -30,22 +34,22 @@ def registry_with_data():
 
 @pytest.fixture(autouse=True)
 def install_atom_runtime(atom_runtime):
-    """Install default Atom runtime for dfaggregator tests."""
+    """Install the default Atom runtime for DataFrame aggregator tests."""
 
     return atom_runtime
 
 
 @pytest.fixture
 def registry_runtime(atom_runtime_factory, registry_with_data):
-    """Install the populated futures registry for dfaggregator tests."""
+    """Install the populated futures registry for DataFrame aggregator tests."""
 
     return atom_runtime_factory(contract_registry=registry_with_data)
 
 
-def make_aggregator() -> DfAggregator:
+def make_aggregator() -> DataFrameAggregator:
     """Return an in-memory test aggregator with an explicit datastore."""
 
-    return DfAggregator(datastore=Mock(spec=AsyncDataStore), save_frequency=0)
+    return DataFrameAggregator(datastore=Mock(spec=AsyncDataStore), save_frequency=0)
 
 
 def test_HistoricalDataStreamerAccepted():
@@ -59,7 +63,7 @@ def test_HistoricalDataStreamerAccepted():
 
     aggregator = make_aggregator()
     # test if no error raised
-    assert aggregator.sync_with_streamer(streamer) is None
+    assert aggregator.validate_source(streamer) is None
 
 
 def test_wrong_streamer_fails():
@@ -67,7 +71,28 @@ def test_wrong_streamer_fails():
     streamer = MktDataStreamer(contract=blueprint, tickList="212")
     aggregator = make_aggregator()
     with pytest.raises(WrongStreamer):
-        aggregator.sync_with_streamer(streamer)
+        aggregator.validate_source(streamer)
+
+
+def test_onStart_accepts_atom_interface():
+    """DataFrameAggregator accepts arbitrary data and named source."""
+    streamer = HistoricalDataStreamer(
+        contract=ibi.Future("NQ", exchange="CME"),
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+    aggregator = make_aggregator()
+    data = []
+
+    with (
+        patch.object(aggregator, "sync_with_streamer") as sync,
+        patch.object(Atom, "onStart", autospec=True) as parent_on_start,
+    ):
+        aggregator.onStart(data, source=streamer)
+
+    sync.assert_called_once_with(streamer)
+    parent_on_start.assert_called_once_with(aggregator, data, streamer)
 
 
 def test_sync_extracts_which_contract():
@@ -98,7 +123,7 @@ def test_sync_extracts_blueprint():
     assert aggregator._contract_blueprint is blueprint
 
 
-def test_DfAggregator_has_the_same_contract_as_Streamer(registry_runtime):
+def test_DataFrameAggregator_has_the_same_contract_as_Streamer(registry_runtime):
     blueprint = ibi.Future("ES", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -107,7 +132,7 @@ def test_DfAggregator_has_the_same_contract_as_Streamer(registry_runtime):
         whatToShow="TRADES",
     )
     streamer.which_contract = ActiveNext.NEXT
-    # even though which_contract is mistakenly set as different on DfAggregator
+    # even though which_contract is mistakenly set as different on DataFrameAggregator
     aggregator = make_aggregator()
     aggregator.which_contract = ActiveNext.ACTIVE
     aggregator._contract_blueprint = blueprint
@@ -140,7 +165,7 @@ def test_injected_datastore_is_used_without_runtime_discovery(atom_runtime):
 
     store = Mock(spec=AsyncDataStore)
 
-    aggregator = DfAggregator(datastore=store, save_frequency=0)
+    aggregator = DataFrameAggregator(datastore=store, save_frequency=0)
 
     assert aggregator.datastore is store
     atom_runtime.frame_store_provider.datastore.assert_not_called()
@@ -150,13 +175,13 @@ def test_datastore_is_required():
     """Aggregator construction should require an explicit datastore."""
 
     with pytest.raises(TypeError, match="datastore"):
-        DfAggregator()  # type: ignore[call-arg]
+        DataFrameAggregator()  # type: ignore[call-arg]
 
 
 def test_save_frequency_defaults_to_900_seconds():
     """Save cadence should be ordinary constructor policy."""
 
-    aggregator = DfAggregator(datastore=Mock(spec=AsyncDataStore))
+    aggregator = DataFrameAggregator(datastore=Mock(spec=AsyncDataStore))
 
     assert aggregator.save_frequency == 900
 
@@ -166,7 +191,7 @@ async def test_save_data_awaits_datastore_append(atom_runtime):
     """Saving current data waits for append completion."""
 
     store = Mock(spec=AsyncDataStore)
-    aggregator = DfAggregator(datastore=store, save_frequency=0)
+    aggregator = DataFrameAggregator(datastore=store, save_frequency=0)
     aggregator.contract = ibi.Future(symbol="NQ", exchange="CME")
     aggregator._df = pd.DataFrame({"close": [1.0]})
 
@@ -181,7 +206,7 @@ async def test_backfill_write_awaits_datastore_completion(atom_runtime):
 
     store = Mock(spec=AsyncDataStore)
     store.read.return_value = None
-    aggregator = DfAggregator(datastore=store, save_frequency=0)
+    aggregator = DataFrameAggregator(datastore=store, save_frequency=0)
     aggregator.contract = ibi.Future(symbol="NQ", exchange="CME")
     back_contract = ibi.Future(symbol="ES", exchange="CME", localSymbol="ESZ5")
     bars = [{"date": datetime(2025, 12, 1), "close": 1.0}]
@@ -207,7 +232,7 @@ def test_expiry_from_contract():
         localSymbol="GCM5",
         tradingClass="GC",
     )
-    assert DfAggregator.expiry_from_contract(gc) == datetime(2025, 6, 26)
+    assert DataFrameAggregator.expiry_from_contract(gc) == datetime(2025, 6, 26)
 
 
 def test_back_contracts(registry_runtime):
@@ -223,10 +248,10 @@ def test_back_contracts(registry_runtime):
         [
             contract
             for contract in contracts
-            if DfAggregator.expiry_from_contract(contract)
-            <= DfAggregator.expiry_from_contract(aggregator.contract)
+            if DataFrameAggregator.expiry_from_contract(contract)
+            <= DataFrameAggregator.expiry_from_contract(aggregator.contract)
         ],
-        key=lambda x: DfAggregator.expiry_from_contract(x),
+        key=lambda x: DataFrameAggregator.expiry_from_contract(x),
         reverse=True,
     )
     assert list(aggregator._back_contracts()) == previous_contracts
@@ -377,7 +402,7 @@ def test_compute_date_range(registry_runtime, conId, localSymbol, return_value):
         "useRTH": False,
     }
     # required timedelta will return 2D
-    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
+    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
         # this is "now" used by the method:
         mock_dt.now.return_value = datetime(2025, 12, 12)
         mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
@@ -453,7 +478,7 @@ def test_compute_date_range_longer_period(
         "useRTH": False,
     }
     # required timedelta will return 2D
-    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
+    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
         # this is "now" used by the method:
         mock_dt.now.return_value = datetime(2025, 12, 12)
         mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
@@ -465,7 +490,7 @@ def test_compute_date_range_longer_period(
 
 
 def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
-    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
+    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
@@ -483,7 +508,7 @@ def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
 def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
     registry_runtime,
 ):
-    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
+    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 4, 1)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
@@ -499,7 +524,7 @@ def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
 
 
 def test_aggregator_offset_by_durationStr_given_as_int(registry_runtime):
-    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
+    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
@@ -520,7 +545,7 @@ def test_aggregator_offset_by_durationStr_given_as_int(registry_runtime):
 def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
     registry_runtime,
 ):
-    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
+    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 2, 20)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
@@ -541,7 +566,7 @@ def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
 def test_aggregator_offset_by_durationStr_given_as_int_including_weekend(
     registry_runtime,
 ):
-    with patch("haymaker.components._dataframe_aggregators.datetime") as mock_dt:
+    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
         mock_dt.now.return_value = datetime(2026, 4, 1)
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")

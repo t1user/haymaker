@@ -69,6 +69,27 @@ def test_onStart_receives_streamer(Atom):
         mock_sync_with_streamer.assert_called_with(streamer)
 
 
+def test_onStart_accepts_atom_interface(Atom):
+    """BarAggregator accepts arbitrary data and the named source argument."""
+    streamer = HistoricalDataStreamer(
+        contract=ibi.Future("NQ", exchange="CME"),
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+    aggregator = BarAggregator(NoFilter())
+    data = []
+
+    with (
+        patch.object(aggregator, "sync_with_streamer") as sync,
+        patch.object(BaseAtom, "onStart", autospec=True) as parent_on_start,
+    ):
+        aggregator.onStart(data, source=streamer)
+
+    sync.assert_called_once_with(streamer)
+    parent_on_start.assert_called_once_with(aggregator, data, streamer)
+
+
 def test_onStart_works_as_part_of_Pipe(Atom):
     blueprint = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
@@ -105,7 +126,7 @@ def test_HistoricalDataStreamerAccepted(Atom):
 
     aggregator = BarAggregator(NoFilter())
     # test if no error raised
-    assert aggregator.sync_with_streamer(streamer) is None
+    assert aggregator.validate_source(streamer) is None
 
 
 def test_wrong_streamer_fails(Atom):
@@ -113,7 +134,7 @@ def test_wrong_streamer_fails(Atom):
     streamer = MktDataStreamer(contract=blueprint, tickList="212")
     aggregator = BarAggregator(NoFilter())
     with pytest.raises(WrongStreamer):
-        aggregator.sync_with_streamer(streamer)
+        aggregator.validate_source(streamer)
 
 
 @pytest.fixture
