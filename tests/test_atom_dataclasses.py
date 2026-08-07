@@ -6,7 +6,7 @@ import pytest
 from haymaker.base import Atom
 from haymaker.components import (
     BarAggregator,
-    DataFrameAggregator,
+    FuturesPandasAggregator,
     HistoricalDataStreamer,
     MktDataStreamer,
     PandasSignalModel,
@@ -22,7 +22,7 @@ from haymaker.controller import Controller
     "atom_type",
     (
         Controller,
-        DataFrameAggregator,
+        FuturesPandasAggregator,
         HistoricalDataStreamer,
         MktDataStreamer,
         PandasSignalModel,
@@ -40,7 +40,7 @@ def test_dataclass_atoms_preserve_identity_equality(atom_type: type[Atom]) -> No
     assert atom_type.__hash__ is object.__hash__
 
 
-@pytest.mark.parametrize("aggregator_type", (BarAggregator, DataFrameAggregator))
+@pytest.mark.parametrize("aggregator_type", (BarAggregator, FuturesPandasAggregator))
 def test_aggregator_onStart_matches_atom_interface(
     aggregator_type: type[Atom],
 ) -> None:

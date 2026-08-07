@@ -52,7 +52,7 @@ class WrongStreamer(Exception):
 
 
 @dataclass(eq=False)
-class DataFrameAggregator(Atom):
+class FuturesPandasAggregator(Atom):
     """Maintain and emit a complete DataFrame from historical bar snapshots.
 
     Use this component between
@@ -100,7 +100,8 @@ class DataFrameAggregator(Atom):
             ``onStart()`` after the streamer request identity is known.
 
     Raises:
-        TypeError: If ``datastore`` is ``False`` or ``None``.
+        TypeError: If ``datastore`` is ``False`` or ``None``, or if the
+            connected streamer does not resolve to a futures Contract.
         WrongStreamer: If connected to an incompatible built-in Streamer.
         MissingStreamerParam: If required historical request parameters are
             unavailable at startup.
@@ -125,7 +126,7 @@ class DataFrameAggregator(Atom):
     def __post_init__(self) -> None:
         if self.datastore is False or self.datastore is None:
             raise TypeError(
-                "DataFrameAggregator datastore must be True or an AsyncDataStore"
+                "FuturesPandasAggregator datastore must be True or an AsyncDataStore"
             )
         if self.datastore is not True:
             self._store = self.datastore
@@ -174,16 +175,22 @@ class DataFrameAggregator(Atom):
         return super().onStart(data, source)
 
     def sync_with_streamer(self, streamer: Atom) -> None:
-        assert is_dataclass(streamer), f"Streamer: {streamer} must be a dataclass."
-        self._streamer_params = {
-            f.name: getattr(streamer, f.name) for f in fields(streamer)
-        }
+        if not is_dataclass(streamer):
+            raise TypeError(f"Streamer: {streamer} must be a dataclass")
         # sync contract with streamer
         # these 2 properties together ensure that self.contract
         # will be the same as on streamer
-        log.debug(f"{self!s} streamer params: {self._streamer_params}")
         self.which_contract = streamer.which_contract
         self._contract_blueprint = streamer._contract_blueprint
+        if not isinstance(self.contract, ibi.Future):
+            raise TypeError(
+                f"FuturesPandasAggregator requires a futures Contract, "
+                f"not {self.contract!r}"
+            )
+        self._streamer_params = {
+            f.name: getattr(streamer, f.name) for f in fields(streamer)
+        }
+        log.debug(f"{self!s} streamer params: {self._streamer_params}")
 
     def _resolve_datastore(self) -> None:
         """Resolve the runtime-default store after streamer synchronization."""
@@ -212,7 +219,7 @@ class DataFrameAggregator(Atom):
         """
 
         if self._store is None:
-            raise RuntimeError("DataFrameAggregator datastore was not initialized")
+            raise RuntimeError("FuturesPandasAggregator datastore was not initialized")
         return self._store
 
     async def onData(self, data: ibi.BarDataList, *args: Any) -> None:
@@ -248,7 +255,7 @@ class DataFrameAggregator(Atom):
         return self._df
 
     async def save_data(self, *args) -> None:
-        assert (contract := self.contract), f"Missing contract on {self}"
+        contract = cast(ibi.Future, self.contract)
         if not self._df.empty:
             await self.store.append(contract, self._df)
 
@@ -257,8 +264,10 @@ class DataFrameAggregator(Atom):
         Return only the part of the `data` that corresponds to the
         period when current contract is active.
         """
-        assert isinstance(self.contract, ibi.Future)
-        assert (date_range := self._compute_date_range(self.contract)) is not None
+        contract = cast(ibi.Future, self.contract)
+        date_range = self._compute_date_range(contract)
+        if date_range is None:
+            raise RuntimeError(f"No active date range for {contract}")
         start, _ = date_range
         return data.loc[self._tz(start) :]  # type: ignore
 
@@ -294,10 +303,6 @@ class DataFrameAggregator(Atom):
         database, in which case it's a regular case, where we stich
         data from database and splice it newer data in :meth:`onData`.
         """
-        assert isinstance(
-            self.contract_selector, FutureSelector
-        ), f"contract on {self!s} is not a Future: {self.contract}"
-
         dfs = {}
 
         for contract in self._back_contracts():
@@ -340,10 +345,7 @@ class DataFrameAggregator(Atom):
         `contract_selector` and it shouldn't go back further than
         :meth:`.required_timedelta`
         """
-        selector = self.contract_selector
-        assert isinstance(
-            selector, FutureSelector
-        ), f"contract on {self!s} is not a Future: {self.contract}"
+        selector = cast(FutureSelector, self.contract_selector)
         start, stop = selector.date_ranges[contract]
         now = datetime.now()
         start_date = max(start, self.offset_by_durationStr())
@@ -398,14 +400,9 @@ class DataFrameAggregator(Atom):
         return data_from_broker
 
     def _back_contracts(self) -> Generator[ibi.Future, None, None]:
-        assert isinstance(
-            selector := self.contract_selector, FutureSelector
-        ), f"contract on {self!s} is not a Future: {self.contract}"
-        assert isinstance(
-            self.contract, ibi.Future
-        ), f"{self!s} attempting stiching on a non-Future"
-
-        expiry = self.expiry_from_contract(self.contract)
+        selector = cast(FutureSelector, self.contract_selector)
+        contract = cast(ibi.Future, self.contract)
+        expiry = self.expiry_from_contract(contract)
 
         for wrapper in reversed(selector.all_contracts):
             if self.expiry_from_contract(wrapper.contract) <= expiry:
@@ -587,6 +584,6 @@ class VolumeGrouper(Atom):
 
 
 __all__ = [
-    "DataFrameAggregator",
+    "FuturesPandasAggregator",
     "VolumeGrouper",
 ]

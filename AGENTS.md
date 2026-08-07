@@ -200,7 +200,7 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   sharing generations.
 - Strategy module composition may build custom stores through
   `RuntimeContext.frame_store_provider` and inject them into both market-data
-  components. Otherwise, `DataFrameAggregator()` and
+  components. Otherwise, `FuturesPandasAggregator()` and
   `HistoricalDataStreamer(datastore=True)` resolve the same runtime-cached
   market-data store by bar size, data type, and RTH policy; custom stores
   bypass that default and `False` disables only the streamer's lookup.

@@ -20,7 +20,7 @@ position episode:
    from haymaker.base import Pipe
    from haymaker.components import (
        BracketExecutionModel,
-       DataFrameAggregator,
+       FuturesPandasAggregator,
        FixedSizeAllocator,
        FixedStop,
        HistoricalDataStreamer,
@@ -55,7 +55,7 @@ position episode:
        whatToShow="TRADES",
        datastore=True,
    )
-   frames = DataFrameAggregator()
+   frames = FuturesPandasAggregator()
    signals = TrendModel(
        SOURCE,
        CONTRACT,

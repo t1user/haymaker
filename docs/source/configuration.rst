@@ -159,7 +159,7 @@ closely related runtime objects.
 
 ``market_data_store``
    ``library`` selects the dataframe library used by
-   :class:`~haymaker.components.DataFrameAggregator` when its datastore is
+   :class:`~haymaker.components.FuturesPandasAggregator` when its datastore is
    ``True`` and by :class:`~haymaker.components.HistoricalDataStreamer` when
    constructed with ``datastore=True``. Custom datastores bypass this runtime
    default.

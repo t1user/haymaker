@@ -281,19 +281,19 @@ The filter objects below group source bars and retain their output
 DataFrame aggregation
 ---------------------
 
-:class:`~haymaker.components.DataFrameAggregator` is the parallel DataFrame
-pipeline. It combines current ``BarDataList`` snapshots with stored history,
-acquires missing previous futures contracts, stitches a continuous series,
-periodically saves it, and emits the complete DataFrame. By default it resolves
-the runtime store configured by ``market_data_store.library`` after connecting
-to its streamer. Set ``HistoricalDataStreamer(datastore=True)`` to use that
-same cached store for persisted-endpoint lookup and shorter subsequent IB
-requests. Supplying the same custom awaited datastore to both components
-bypasses the runtime default.
+:class:`~haymaker.components.FuturesPandasAggregator` is the parallel,
+futures-only DataFrame pipeline. It combines current ``BarDataList`` snapshots
+with stored history, acquires missing previous futures contracts, stitches a
+continuous series, periodically saves it, and emits the complete DataFrame. By
+default it resolves the runtime store configured by
+``market_data_store.library`` after connecting to its streamer. Set
+``HistoricalDataStreamer(datastore=True)`` to use that same cached store for
+persisted-endpoint lookup and shorter subsequent IB requests. Supplying the
+same custom awaited datastore to both components bypasses the runtime default.
 
 The default store identity includes the Contract, bar size, ``whatToShow``, and
 ``useRTH`` policy, so incompatible historical series cannot share one symbol.
-``DataFrameAggregator`` does not support disabling its datastore; use
+``FuturesPandasAggregator`` does not support disabling its datastore; use
 ``save_frequency=0`` only to disable periodic saves, not history reads or
 broker-backfill writes.
 
@@ -301,7 +301,7 @@ The DataFrame components are public from both
 ``haymaker.components.dataframe_aggregators`` and the package-level
 ``haymaker.components`` toolbox.
 
-.. autoclass:: haymaker.components.DataFrameAggregator
+.. autoclass:: haymaker.components.FuturesPandasAggregator
 
 .. autoclass:: haymaker.components.VolumeGrouper
 

@@ -57,17 +57,17 @@ those policies in the abstract base.
 Keep the two public aggregation families distinct. `aggregators.py` operates
 on `ib_insync` bar objects through `BarAggregator` and its count, volume, tick,
 time, and pass-through filters. `dataframe_aggregators.py` maintains complete
-pandas DataFrames through `DataFrameAggregator` and contains DataFrame-native
-transformations such as `VolumeGrouper`.
+pandas DataFrames through `FuturesPandasAggregator` and contains
+DataFrame-native transformations such as `VolumeGrouper`.
 
-`DataFrameAggregator` is the persistence companion to
+`FuturesPandasAggregator` is the futures-only persistence companion to
 `HistoricalDataStreamer`. Its default datastore and
 `HistoricalDataStreamer(datastore=True)` resolve the same runtime-cached store
 for bar size, data type, and RTH policy. Supplying the same custom awaited
 datastore to both bypasses the runtime default. The aggregator restores and
 saves complete history; the streamer consults the persisted endpoint to
 shorten its next IB request. `False` is valid only for the streamer;
-DataFrameAggregator requires stored history.
+FuturesPandasAggregator requires stored history.
 Do not collapse the DataFrame components into `aggregators.py` or treat their
 public module as an implementation detail.
 

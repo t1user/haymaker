@@ -111,7 +111,7 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/components/aggregators.py`: incremental bar-object aggregation and
   count, volume, tick, time, and pass-through eventkit filters.
 - `haymaker/components/dataframe_aggregators.py`: the separate public
-  DataFrame aggregation family. `DataFrameAggregator` restores, stitches,
+  DataFrame aggregation family. `FuturesPandasAggregator` restores, stitches,
   saves, and emits complete futures history; `VolumeGrouper` performs
   DataFrame-native equal-volume grouping.
 - `haymaker/components/timeouts.py`: user-owned generic event inactivity
@@ -173,7 +173,7 @@ Framework-provided naming policies are frozen, stores expose the configured
 policy read-only, and consumers treat injected stores as fully configured.
 The runtime `MarketDataStoreFactory` caches awaited stores by bar size,
 `whatToShow`, and `useRTH`; its symbols include those dimensions plus the
-Contract. `DataFrameAggregator()` resolves that default at startup, while
+Contract. `FuturesPandasAggregator()` resolves that default at startup, while
 `HistoricalDataStreamer(datastore=True)` resolves the same store during
 construction. The streamer uses `False` to disable persisted-endpoint lookup;
 the aggregator always requires a default or custom datastore.

@@ -11,7 +11,7 @@ from sample_barDataList import sample_barDataList
 
 from haymaker.base import ActiveNext, Atom
 from haymaker.components.dataframe_aggregators import (
-    DataFrameAggregator,
+    FuturesPandasAggregator,
     WrongStreamer,
 )
 from haymaker.components.streamers import HistoricalDataStreamer, MktDataStreamer
@@ -46,10 +46,12 @@ def registry_runtime(atom_runtime_factory, registry_with_data):
     return atom_runtime_factory(contract_registry=registry_with_data)
 
 
-def make_aggregator() -> DataFrameAggregator:
+def make_aggregator() -> FuturesPandasAggregator:
     """Return an in-memory test aggregator with an explicit datastore."""
 
-    return DataFrameAggregator(datastore=Mock(spec=AsyncDataStore), save_frequency=0)
+    return FuturesPandasAggregator(
+        datastore=Mock(spec=AsyncDataStore), save_frequency=0
+    )
 
 
 def test_HistoricalDataStreamerAccepted():
@@ -75,7 +77,7 @@ def test_wrong_streamer_fails():
 
 
 def test_onStart_accepts_atom_interface():
-    """DataFrameAggregator accepts arbitrary data and named source."""
+    """FuturesPandasAggregator accepts arbitrary data and named source."""
     streamer = HistoricalDataStreamer(
         contract=ibi.Future("NQ", exchange="CME"),
         durationStr="1D",
@@ -123,7 +125,9 @@ def test_sync_extracts_blueprint():
     assert aggregator._contract_blueprint is blueprint
 
 
-def test_DataFrameAggregator_has_the_same_contract_as_Streamer(registry_runtime):
+def test_FuturesPandasAggregator_has_the_same_contract_as_Streamer(
+    registry_runtime,
+):
     blueprint = ibi.Future("ES", exchange="CME")
     streamer = HistoricalDataStreamer(
         contract=blueprint,
@@ -132,7 +136,7 @@ def test_DataFrameAggregator_has_the_same_contract_as_Streamer(registry_runtime)
         whatToShow="TRADES",
     )
     streamer.which_contract = ActiveNext.NEXT
-    # even though which_contract is mistakenly set as different on DataFrameAggregator
+    # even though which_contract is mistakenly set differently on the aggregator
     aggregator = make_aggregator()
     aggregator.which_contract = ActiveNext.ACTIVE
     aggregator._contract_blueprint = blueprint
@@ -160,12 +164,47 @@ def test_params_extracted_from_streamer():
     assert aggregator._streamer_params.get("whatToShow") == "TRADES"
 
 
+def test_sync_rejects_non_future_contract():
+    """The futures-only contract requirement is checked once during startup."""
+
+    streamer = HistoricalDataStreamer(
+        contract=ibi.Stock("AAPL", exchange="SMART", currency="USD"),
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+
+    with pytest.raises(TypeError, match="requires a futures Contract"):
+        make_aggregator().sync_with_streamer(streamer)
+
+
+def test_sync_accepts_continuous_future_after_contract_resolution(
+    atom_runtime_factory,
+):
+    """A continuous-future blueprint resolves to a concrete Future at startup."""
+
+    registry = ContractRegistry(today=datetime(2025, 12, 12))
+    atom_runtime_factory(contract_registry=registry)
+    streamer = HistoricalDataStreamer(
+        contract=ibi.ContFuture("ES", exchange="CME"),
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+    )
+    registry.reset_data([details[0]])
+
+    aggregator = make_aggregator()
+    aggregator.sync_with_streamer(streamer)
+
+    assert isinstance(aggregator.contract, ibi.Future)
+
+
 def test_injected_datastore_is_used_without_runtime_discovery(atom_runtime):
     """An aggregator should retain its injected datastore unchanged."""
 
     store = Mock(spec=AsyncDataStore)
 
-    aggregator = DataFrameAggregator(datastore=store, save_frequency=0)
+    aggregator = FuturesPandasAggregator(datastore=store, save_frequency=0)
 
     assert aggregator.datastore is store
     assert aggregator.store is store
@@ -187,7 +226,7 @@ def test_runtime_default_datastore_is_resolved_from_streamer(
         whatToShow="TRADES",
         useRTH=True,
     )
-    aggregator = DataFrameAggregator(save_frequency=0)
+    aggregator = FuturesPandasAggregator(save_frequency=0)
 
     with patch.object(Atom, "onStart", autospec=True):
         aggregator.onStart({}, source=streamer)
@@ -206,13 +245,13 @@ def test_disabled_datastore_is_rejected(datastore):
     """DataFrame aggregation requires stored history."""
 
     with pytest.raises(TypeError, match="True or an AsyncDataStore"):
-        DataFrameAggregator(datastore=datastore)  # type: ignore[arg-type]
+        FuturesPandasAggregator(datastore=datastore)  # type: ignore[arg-type]
 
 
 def test_runtime_default_store_is_unavailable_before_startup():
     """Default resolution requires request identity from the source streamer."""
 
-    aggregator = DataFrameAggregator(save_frequency=0)
+    aggregator = FuturesPandasAggregator(save_frequency=0)
 
     with pytest.raises(RuntimeError, match="was not initialized"):
         _ = aggregator.store
@@ -221,7 +260,7 @@ def test_runtime_default_store_is_unavailable_before_startup():
 def test_save_frequency_defaults_to_900_seconds():
     """Save cadence should be ordinary constructor policy."""
 
-    aggregator = DataFrameAggregator(datastore=Mock(spec=AsyncDataStore))
+    aggregator = FuturesPandasAggregator(datastore=Mock(spec=AsyncDataStore))
 
     assert aggregator.save_frequency == 900
 
@@ -231,7 +270,7 @@ async def test_save_data_awaits_datastore_append(atom_runtime):
     """Saving current data waits for append completion."""
 
     store = Mock(spec=AsyncDataStore)
-    aggregator = DataFrameAggregator(datastore=store, save_frequency=0)
+    aggregator = FuturesPandasAggregator(datastore=store, save_frequency=0)
     aggregator.contract = ibi.Future(symbol="NQ", exchange="CME")
     aggregator._df = pd.DataFrame({"close": [1.0]})
 
@@ -246,7 +285,7 @@ async def test_backfill_write_awaits_datastore_completion(atom_runtime):
 
     store = Mock(spec=AsyncDataStore)
     store.read.return_value = None
-    aggregator = DataFrameAggregator(datastore=store, save_frequency=0)
+    aggregator = FuturesPandasAggregator(datastore=store, save_frequency=0)
     aggregator.contract = ibi.Future(symbol="NQ", exchange="CME")
     back_contract = ibi.Future(symbol="ES", exchange="CME", localSymbol="ESZ5")
     bars = [{"date": datetime(2025, 12, 1), "close": 1.0}]
@@ -272,7 +311,7 @@ def test_expiry_from_contract():
         localSymbol="GCM5",
         tradingClass="GC",
     )
-    assert DataFrameAggregator.expiry_from_contract(gc) == datetime(2025, 6, 26)
+    assert FuturesPandasAggregator.expiry_from_contract(gc) == datetime(2025, 6, 26)
 
 
 def test_back_contracts(registry_runtime):
@@ -288,10 +327,10 @@ def test_back_contracts(registry_runtime):
         [
             contract
             for contract in contracts
-            if DataFrameAggregator.expiry_from_contract(contract)
-            <= DataFrameAggregator.expiry_from_contract(aggregator.contract)
+            if FuturesPandasAggregator.expiry_from_contract(contract)
+            <= FuturesPandasAggregator.expiry_from_contract(aggregator.contract)
         ],
-        key=lambda x: DataFrameAggregator.expiry_from_contract(x),
+        key=lambda x: FuturesPandasAggregator.expiry_from_contract(x),
         reverse=True,
     )
     assert list(aggregator._back_contracts()) == previous_contracts
