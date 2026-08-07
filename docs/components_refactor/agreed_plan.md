@@ -35,6 +35,12 @@ or aliases for former top-level component paths. Each public component module
 owns its `__all__`; the package initializer declares which modules participate
 and aggregates their non-overlapping exports.
 
+`DataFrameAggregator()` resolves a runtime-default awaited datastore at
+startup from its connected streamer's bar size, `whatToShow`, and `useRTH`.
+`HistoricalDataStreamer(datastore=True)` resolves the same cached store, while
+the streamer uses `False` to disable persisted-endpoint lookup. Supplying the
+same custom datastore to both components bypasses the runtime default.
+
 ## Runtime metadata
 
 Every Atom accesses one ready `RuntimeContext`. Its `book` is the process-owned

@@ -20,6 +20,7 @@ from .book import (
 )
 from .config.settings import (
     LiveConfig,
+    MarketDataStoreSettings,
     SignalFramePersistenceSettings,
     TimeoutPolicy,
 )
@@ -28,6 +29,7 @@ from .controller import Controller
 from .databases import MongoService, create_frame_store_provider
 from .datastore import (
     FrameStoreProvider,
+    MarketDataStoreFactory,
     SignalFramePersistence,
     SignalFramePersistenceFactory,
 )
@@ -163,6 +165,8 @@ class RuntimeContext:
         book: Persistent typed accounting and order state.
         trader: Thin broker order gateway.
         frame_store_provider: Narrow dataframe persistence composition service.
+        market_data_store_factory: Return shared runtime-default broker-bar
+            datastores by request identity.
         signal_persistence_factory: Create one runtime-default Signal dataframe
             persistence object per requesting model.
         order_defaults: Validated default order fields for execution models.
@@ -179,6 +183,7 @@ class RuntimeContext:
     book: Book = field(repr=False)
     trader: Trader = field(repr=False)
     frame_store_provider: FrameStoreProvider = field(repr=False)
+    market_data_store_factory: MarketDataStoreFactory = field(repr=False)
     signal_persistence_factory: Callable[[], SignalFramePersistence] = field(repr=False)
     order_defaults: OrderDefaults = field(repr=False)
     timeout_policy: TimeoutPolicy = field(repr=False)
@@ -244,6 +249,12 @@ class LiveRuntime:
             book=self.book,
             trader=trader,
             frame_store_provider=self.frame_store_provider,
+            market_data_store_factory=MarketDataStoreFactory(
+                self.frame_store_provider,
+                MarketDataStoreSettings.from_mapping(
+                    self.config.market_data_store
+                ).library,
+            ),
             signal_persistence_factory=SignalFramePersistenceFactory(
                 self.frame_store_provider,
                 SignalFramePersistenceSettings.from_mapping(

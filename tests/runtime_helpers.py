@@ -60,6 +60,8 @@ When writing new tests:
   ``Atom.runtime`` with a partial object.
 - pass ``frame_store_provider`` to ``atom_runtime_factory`` when strategy
   composition needs a specific persistence provider.
+- pass ``market_data_store_factory`` when testing a component's runtime-default
+  historical-bar datastore.
 - pass ``signal_persistence_factory`` when testing
   ``PandasSignalModel(persistence=True)``.
 """
@@ -79,7 +81,11 @@ from haymaker.book import Book
 from haymaker.config import TimeoutPolicy
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
-from haymaker.datastore import FrameStoreProvider, SignalFramePersistence
+from haymaker.datastore import (
+    FrameStoreProvider,
+    MarketDataStoreFactory,
+    SignalFramePersistence,
+)
 from haymaker.order_defaults import OrderDefaults
 from haymaker.trader import Trader
 
@@ -95,6 +101,12 @@ class AtomRuntimeHarness:
     trader: Trader | None = None
     frame_store_provider: FrameStoreProvider = field(
         default_factory=lambda: cast(FrameStoreProvider, Mock(spec=FrameStoreProvider))
+    )
+    market_data_store_factory: MarketDataStoreFactory = field(
+        default_factory=lambda: Mock(
+            spec=MarketDataStoreFactory,
+            side_effect=RuntimeError("Market-data storage is not configured"),
+        )
     )
     signal_persistence_factory: Callable[[], SignalFramePersistence] = field(
         default_factory=lambda: Mock(

@@ -61,9 +61,13 @@ pandas DataFrames through `DataFrameAggregator` and contains DataFrame-native
 transformations such as `VolumeGrouper`.
 
 `DataFrameAggregator` is the persistence companion to
-`HistoricalDataStreamer`: normally inject the same fully configured awaited
-datastore into both. The aggregator restores and saves the complete history;
-the streamer consults the persisted endpoint to shorten its next IB request.
+`HistoricalDataStreamer`. Its default datastore and
+`HistoricalDataStreamer(datastore=True)` resolve the same runtime-cached store
+for bar size, data type, and RTH policy. Supplying the same custom awaited
+datastore to both bypasses the runtime default. The aggregator restores and
+saves complete history; the streamer consults the persisted endpoint to
+shorten its next IB request. `False` is valid only for the streamer;
+DataFrameAggregator requires stored history.
 Do not collapse the DataFrame components into `aggregators.py` or treat their
 public module as an implementation detail.
 

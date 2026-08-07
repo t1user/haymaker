@@ -168,14 +168,54 @@ def test_injected_datastore_is_used_without_runtime_discovery(atom_runtime):
     aggregator = DataFrameAggregator(datastore=store, save_frequency=0)
 
     assert aggregator.datastore is store
-    atom_runtime.frame_store_provider.datastore.assert_not_called()
+    assert aggregator.store is store
+    atom_runtime.market_data_store_factory.assert_not_called()
 
 
-def test_datastore_is_required():
-    """Aggregator construction should require an explicit datastore."""
+def test_runtime_default_datastore_is_resolved_from_streamer(
+    atom_runtime_factory,
+):
+    """The default store should use the connected streamer's request identity."""
 
-    with pytest.raises(TypeError, match="datastore"):
-        DataFrameAggregator()  # type: ignore[call-arg]
+    store = Mock(spec=AsyncDataStore)
+    factory = Mock(return_value=store)
+    atom_runtime_factory(market_data_store_factory=factory)
+    streamer = HistoricalDataStreamer(
+        contract=ibi.Future("NQ", exchange="CME"),
+        durationStr="1D",
+        barSizeSetting="30 secs",
+        whatToShow="TRADES",
+        useRTH=True,
+    )
+    aggregator = DataFrameAggregator(save_frequency=0)
+
+    with patch.object(Atom, "onStart", autospec=True):
+        aggregator.onStart({}, source=streamer)
+
+    assert aggregator.datastore is True
+    assert aggregator.store is store
+    factory.assert_called_once_with(
+        bar_size_setting="30 secs",
+        what_to_show="TRADES",
+        use_rth=True,
+    )
+
+
+@pytest.mark.parametrize("datastore", [False, None])
+def test_disabled_datastore_is_rejected(datastore):
+    """DataFrame aggregation requires stored history."""
+
+    with pytest.raises(TypeError, match="True or an AsyncDataStore"):
+        DataFrameAggregator(datastore=datastore)  # type: ignore[arg-type]
+
+
+def test_runtime_default_store_is_unavailable_before_startup():
+    """Default resolution requires request identity from the source streamer."""
+
+    aggregator = DataFrameAggregator(save_frequency=0)
+
+    with pytest.raises(RuntimeError, match="was not initialized"):
+        _ = aggregator.store
 
 
 def test_save_frequency_defaults_to_900_seconds():

@@ -15,6 +15,7 @@ from haymaker.config import (
     DataloaderCommand,
     DataloaderStorageSettings,
     LiveCommand,
+    MarketDataStoreSettings,
     SignalFramePersistenceSettings,
     StorageSettings,
     TimeoutPolicy,
@@ -73,6 +74,10 @@ def test_live_defaults_are_composed_by_target_objects() -> None:
     assert config.storage.mongodb.client == {"host": "localhost", "port": 27017}
     assert config.storage.mongodb.database == "test_data"
     assert (
+        MarketDataStoreSettings.from_mapping(config.market_data_store).library
+        == "market_data"
+    )
+    assert (
         SignalFramePersistenceSettings.from_mapping(config.signal_persistence).library
         == "signal_data"
     )
@@ -116,12 +121,33 @@ def test_live_accepts_default_signal_persistence_library() -> None:
     assert settings.library == "calculations"
 
 
+def test_live_accepts_default_market_data_library() -> None:
+    """Runtime-created bar stores should use their dedicated library setting."""
+
+    config = load_live_config(
+        live_command(None, ("market_data_store.library", "bars")),
+        environ={},
+    )
+
+    settings = MarketDataStoreSettings.from_mapping(config.market_data_store)
+
+    assert settings.library == "bars"
+
+
 @pytest.mark.parametrize("library", ["", 1, False])
 def test_signal_persistence_rejects_invalid_library(library: object) -> None:
     """A runtime default must identify a non-empty dataframe library."""
 
     with pytest.raises((TypeError, ValueError), match="signal_persistence.library"):
         SignalFramePersistenceSettings.from_mapping({"library": library})
+
+
+@pytest.mark.parametrize("library", ["", 1, False])
+def test_market_data_store_rejects_invalid_library(library: object) -> None:
+    """The default broker-bar store requires a non-empty library."""
+
+    with pytest.raises((TypeError, ValueError), match="market_data_store.library"):
+        MarketDataStoreSettings.from_mapping({"library": library})
 
 
 def test_order_defaults_reject_invalid_order_fields_during_construction() -> None:

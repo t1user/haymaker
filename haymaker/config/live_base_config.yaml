@@ -55,6 +55,9 @@ storage: # Filesystem and framework MongoDB settings.
       port: 27017 # MongoDB server port.
     database: test_data # Database used by framework state and Mongo savers.
 
+market_data_store: # Defaults used by market-data components requesting a store.
+  library: market_data # Arctic library for persisted broker-bar history.
+
 signal_persistence: # Defaults used by PandasSignalModel(persistence=True).
   library: signal_data # Arctic library for calculated Signal dataframe history.
 

@@ -137,8 +137,10 @@ class HistoricalDataStreamer(Streamer):
         useRTH: Whether to request regular-trading-hours data only.
         formatDate: IB timestamp format. ``2`` is the supported aware-UTC
             setting.
-        datastore: Optional awaited store used to find the last persisted bar.
-            Its symbol naming must match ``barSizeSetting``.
+        datastore: ``False`` disables persisted-endpoint lookup. ``True`` uses
+            the runtime-default market-data store. An
+            :class:`~haymaker.datastore.AsyncDataStore` uses that custom store
+            instead. Defaults to ``False``.
         timeout: Runtime timeout policy override in seconds, ``True`` for the
             configured default, or ``False`` to disable monitoring.
 
@@ -155,18 +157,24 @@ class HistoricalDataStreamer(Streamer):
     whatToShow: str
     useRTH: bool = False
     formatDate: int = 2  # should be 2 for utc timestamp
-    datastore: AsyncDataStore | None = None
+    datastore: bool | AsyncDataStore = False
     timeout: bool | float = True
     _last_bar_date: date | datetime | None = None
 
     def __post_init__(self) -> None:
         self.whatToShow = wts_validator(self.whatToShow)
-        if isinstance(self.datastore, bool):
+        if self.datastore is None:
             raise TypeError(
-                "datastore must be an AsyncDataStore or None; "
-                "boolean shortcuts are not supported"
+                "HistoricalDataStreamer datastore must be False, True, "
+                "or an AsyncDataStore"
             )
         Atom.__init__(self)
+        if self.datastore is True:
+            self.datastore = self.runtime.market_data_store_factory(
+                bar_size_setting=self.barSizeSetting,
+                what_to_show=self.whatToShow,
+                use_rth=self.useRTH,
+            )
 
     def streaming_func(self) -> Awaitable:
         return self.ib.reqHistoricalDataAsync(
@@ -188,8 +196,11 @@ class HistoricalDataStreamer(Streamer):
             Last persisted bar date in its original date or datetime category,
             or ``None`` when no persisted data is available.
         """
-        if (store := self.datastore) is None:
+        store = self.datastore
+        if store is False:
             return None
+        if store is True:
+            raise RuntimeError("HistoricalDataStreamer datastore was not initialized")
 
         if up_to := (await store.read_metadata(self.contract)).get("up_to"):
             log.debug(f"{self!s} retrieved last date from datastore: {up_to}")

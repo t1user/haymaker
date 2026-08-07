@@ -29,8 +29,6 @@ position episode:
        PortfolioWrapper,
        SignalType,
    )
-   from haymaker.base import Atom
-   from haymaker.datastore import BarSizeSymbolNamer
 
 
    CONTRACT = ibi.ContFuture("ES", exchange="CME")
@@ -50,20 +48,14 @@ position episode:
            result["signal"] = (result["fast"] > result["slow"]).astype(float)
            return result
 
-
-   history_store = Atom.runtime.frame_store_provider.datastore(
-       "daily_history",
-       symbol_namer=BarSizeSymbolNamer("1 day"),
-   )
-
    streamer = HistoricalDataStreamer(
        contract=CONTRACT,
        durationStr=100,
        barSizeSetting="1 day",
        whatToShow="TRADES",
-       datastore=history_store,
+       datastore=True,
    )
-   frames = DataFrameAggregator(history_store)
+   frames = DataFrameAggregator()
    signals = TrendModel(
        SOURCE,
        CONTRACT,
@@ -86,10 +78,12 @@ position episode:
        execution,
    )
 
-The same ``history_store`` is supplied to the streamer and
-``DataFrameAggregator``. The aggregator restores and periodically saves the
-complete DataFrame; on a later process start, the streamer reads the persisted
-endpoint and requests only the missing broker history.
+``datastore=True`` on the streamer and the aggregator's default constructor
+resolve the same cached runtime store for this bar size, data type, and RTH
+policy. The aggregator restores and periodically saves the complete DataFrame;
+on a later process start, the streamer reads the persisted endpoint and
+requests only the missing broker history. Pass the same custom
+``AsyncDataStore`` to both components when the runtime default is unsuitable.
 
 ``TrendModel`` places ``atr`` in Signal metadata. ``FixedSizeAllocator``
 preserves it in the PositionTarget, and ``FixedStop`` consumes it after the

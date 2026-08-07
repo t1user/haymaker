@@ -38,6 +38,35 @@ class StorageSettings:
 
 
 @dataclass(frozen=True)
+class MarketDataStoreSettings:
+    """Runtime defaults used by market-data components requesting a store.
+
+    Attributes:
+        library: Arctic dataframe library for persisted broker-bar history.
+    """
+
+    library: str = "market_data"
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> Self:
+        """Construct and validate runtime-default market-data storage.
+
+        Args:
+            values: Merged ``market_data_store`` configuration section.
+
+        Returns:
+            Validated market-data store settings.
+        """
+
+        settings = cls(**dict(values))
+        if not isinstance(settings.library, str):
+            raise TypeError("market_data_store.library must be a string")
+        if not settings.library:
+            raise ValueError("market_data_store.library must not be empty")
+        return settings
+
+
+@dataclass(frozen=True)
 class SignalFramePersistenceSettings:
     """Runtime defaults used by ``PandasSignalModel(persistence=True)``.
 
@@ -116,6 +145,7 @@ class LiveConfig:
         controller: Controller startup, reconciliation, and scheduling options.
         book: Typed state, order persistence, and rejection options.
         storage: Filesystem and framework Mongo infrastructure settings.
+        market_data_store: Defaults for runtime-created broker-bar datastores.
         signal_persistence: Defaults for optional Signal dataframe persistence.
         blotter: Blotter enablement and saver specification.
         orders: Default IB order fields.
@@ -128,6 +158,7 @@ class LiveConfig:
     controller: Mapping[str, Any]
     book: Mapping[str, Any]
     storage: StorageSettings
+    market_data_store: Mapping[str, Any]
     signal_persistence: Mapping[str, Any]
     blotter: Mapping[str, Any]
     orders: Mapping[str, Any]

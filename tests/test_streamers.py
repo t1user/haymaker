@@ -125,10 +125,7 @@ def test_timer_float():
         MockTimeout.assert_called_once_with(streamer, event, name, 100)
 
 
-@pytest.mark.parametrize(
-    "datastore",
-    [None, FakeStore()],
-)
+@pytest.mark.parametrize("datastore", [False, FakeStore()])
 def test_HistoricalDataStreamer_keeps_injected_datastore(datastore):
     """A streamer should retain its explicit datastore dependency."""
 
@@ -143,17 +140,42 @@ def test_HistoricalDataStreamer_keeps_injected_datastore(datastore):
     assert streamer.datastore is datastore
 
 
-@pytest.mark.parametrize("datastore", [True, False])
-def test_HistoricalDataStreamer_rejects_boolean_datastore_shortcuts(datastore):
-    """Legacy boolean service-locator shortcuts should fail clearly."""
+def test_HistoricalDataStreamer_resolves_runtime_default_datastore(
+    atom_runtime_factory,
+):
+    """True should resolve the request-specific runtime datastore once."""
 
-    with pytest.raises(TypeError, match="boolean shortcuts"):
+    store = Mock()
+    factory = Mock(return_value=store)
+    atom_runtime_factory(market_data_store_factory=factory)
+
+    streamer = HistoricalDataStreamer(
+        ibi.Future(symbol="NQ", exchange="CME"),
+        10000,
+        "1 min",
+        "TRADES",
+        useRTH=True,
+        datastore=True,
+    )
+
+    assert streamer.datastore is store
+    factory.assert_called_once_with(
+        bar_size_setting="1 min",
+        what_to_show="TRADES",
+        use_rth=True,
+    )
+
+
+def test_HistoricalDataStreamer_rejects_none_datastore():
+    """False, rather than None, is the explicit disabled value."""
+
+    with pytest.raises(TypeError, match="False, True, or an AsyncDataStore"):
         HistoricalDataStreamer(
             ibi.Future(symbol="NQ", exchange="CME"),
             10000,
             "1 min",
             "TRADES",
-            datastore=datastore,  # type: ignore[arg-type]
+            datastore=None,  # type: ignore[arg-type]
         )
 
 
@@ -310,7 +332,7 @@ def test_HistoricalDataStreamer_ignores_unavailable_average_for_midpoint():
 
 
 @pytest.mark.asyncio
-async def test_HistoricalDataStreamer_sync_last_bar_date_store_none():
+async def test_HistoricalDataStreamer_sync_last_bar_date_store_disabled():
     """A streamer without a datastore should skip database reads."""
 
     streamer = HistoricalDataStreamer(
@@ -320,7 +342,7 @@ async def test_HistoricalDataStreamer_sync_last_bar_date_store_none():
         "TRADES",
     )
 
-    assert streamer.datastore is None
+    assert streamer.datastore is False
     assert await streamer.last_db_point() is None
 
 

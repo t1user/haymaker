@@ -34,9 +34,9 @@ Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
 `RuntimeContext` is the passive container exposed to `Atom` instances. It
 holds only ready runtime services, process `run_started_at`, supervised
 `workload_generation`, the narrow `FrameStoreProvider` composition capability,
-the per-model default Signal persistence factory, the supervisor restart
-callback, and source futures-roll policies; it does not construct services or
-inspect the user module.
+the cached market-data store factory, the per-model default Signal persistence
+factory, the supervisor restart callback, and source futures-roll policies; it
+does not construct services or inspect the user module.
 
 The `haymaker` console command owns live composition and logging: it configures
 Haymaker, starts threaded logging handlers, creates `LiveRuntime`, and imports
@@ -140,9 +140,10 @@ The research package is intentionally separate from live execution. It works dir
 
 - `haymaker/datastore/`: synchronous and asynchronous store abstractions,
   the awaited `AsyncDataStore`, queued `QueuedDataSink`, and composition-only
-  `FrameStoreProvider` protocols, Signal calculation persistence policy and
-  factory, ArcticStore, immutable construction-time symbol naming, futures
-  readers, and deprecated store helpers.
+  `FrameStoreProvider` protocol, cached market-data store factory, Signal
+  calculation persistence policy and factory, ArcticStore, immutable
+  construction-time symbol naming, futures readers, and deprecated store
+  helpers.
 - `haymaker/databases.py`: focused runtime-owned `MongoService` for lazy client
   construction, initial ping, reuse, and health-check registration, plus the
   private Arctic implementation of the narrow `FrameStoreProvider` contract.
@@ -170,11 +171,12 @@ return means queue acceptance, while final handling depends on the sink's
 Datastore symbol naming is fixed when each store wrapper is constructed.
 Framework-provided naming policies are frozen, stores expose the configured
 policy read-only, and consumers treat injected stores as fully configured.
-`DataFrameAggregator` requires an awaited datastore. Injecting the same store
-into `HistoricalDataStreamer` lets the aggregator maintain complete history
-while the streamer uses the stored endpoint to shorten its next broker
-request. A historical streamer accepts an awaited datastore, while `None`
-disables its persistence lookup.
+The runtime `MarketDataStoreFactory` caches awaited stores by bar size,
+`whatToShow`, and `useRTH`; its symbols include those dimensions plus the
+Contract. `DataFrameAggregator()` resolves that default at startup, while
+`HistoricalDataStreamer(datastore=True)` resolves the same store during
+construction. The streamer uses `False` to disable persisted-endpoint lookup;
+the aggregator always requires a default or custom datastore.
 `PandasSignalModel.persistence=False` disables calculation history,
 `True` creates an independent policy from the runtime default factory, and a
 custom `SignalFramePersistence` object overrides that default. Queue acceptance
@@ -352,9 +354,11 @@ subsystem composition boundary constructs them. Controller one-run actions are
 nested under `controller.startup`. Live storage contains only the shared base
 directory, Mongo client arguments, and framework database name. Dataloader
 storage uses the narrower `DataloaderStorageSettings`, containing only a base
-directory and Mongo client arguments. Dataframe library names are selected
-during strategy composition except for the runtime default
-`signal_persistence.library`; save frequency belongs to the consuming object.
+directory and Mongo client arguments. Custom dataframe library names are
+selected during strategy composition. Runtime defaults are
+`market_data_store.library` for broker-bar history and
+`signal_persistence.library` for Signal calculations; save frequency belongs
+to the consuming object.
 `DataloaderRuntime` passes its client arguments directly to its private
 `MongoService`; the base directory remains shared CLI logging infrastructure.
 Runtime components receive their specific section or ready service and do not

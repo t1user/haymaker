@@ -69,16 +69,19 @@ class DataFrameAggregator(Atom):
     joins the contracts into a continuous series. The current implementation
     therefore requires a futures Contract and ``FutureSelector``.
 
-    Inject the same configured datastore into this component and its upstream
-    :class:`~haymaker.components.HistoricalDataStreamer` when
-    restart-efficient requests are required. This component persists the
-    maintained DataFrame; the streamer consults the persisted endpoint before
-    deciding how much history to request from IB.
+    The default datastore and
+    ``HistoricalDataStreamer(datastore=True)`` resolve the same runtime-cached
+    store. Inject the same custom datastore into both components when the
+    runtime default is unsuitable. This component persists the maintained
+    DataFrame; the streamer consults the persisted endpoint before deciding how
+    much history to request from IB.
 
     Args:
-        datastore: Fully configured awaited store used to restore and persist
-            bar history. Its symbol naming must match the connected streamer's
-            bar size.
+        datastore: ``True`` uses the runtime-default market-data store after
+            startup has supplied the connected streamer's request identity. An
+            :class:`~haymaker.datastore.AsyncDataStore` uses that custom store
+            instead. Defaults to ``True``; ``False`` is not supported because
+            stored history is part of this component's aggregation contract.
         save_frequency: Seconds between periodic saves. Defaults to ``900``;
             zero disables periodic persistence.
 
@@ -91,13 +94,19 @@ class DataFrameAggregator(Atom):
         snapshot. Branches receive the maintained DataFrame object and must
         copy it before mutation.
 
+    Attributes:
+        store: Resolved awaited datastore. A custom datastore is available
+            immediately; the runtime default becomes available during
+            ``onStart()`` after the streamer request identity is known.
+
     Raises:
+        TypeError: If ``datastore`` is ``False`` or ``None``.
         WrongStreamer: If connected to an incompatible built-in Streamer.
         MissingStreamerParam: If required historical request parameters are
             unavailable at startup.
     """
 
-    datastore: AsyncDataStore
+    datastore: Literal[True] | AsyncDataStore = True
     save_frequency: int = 900  # in seconds
 
     # ================================================================================
@@ -109,10 +118,17 @@ class DataFrameAggregator(Atom):
     )
     _df: pd.DataFrame = field(init=False, repr=False, default_factory=pd.DataFrame)
     _queue: QueueRunner = field(init=False, repr=False)
+    _store: AsyncDataStore | None = field(init=False, repr=False, default=None)
     _save_timer: ev.Timer | None = field(init=False, repr=False, default=None)
     _timer_task: asyncio.Task | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
+        if self.datastore is False or self.datastore is None:
+            raise TypeError(
+                "DataFrameAggregator datastore must be True or an AsyncDataStore"
+            )
+        if self.datastore is not True:
+            self._store = self.datastore
         assert isinstance(
             self.save_frequency, int
         ), f"{self!s} save_frequency must be an int, not {type(self.save_frequency)}"
@@ -150,6 +166,7 @@ class DataFrameAggregator(Atom):
                 required for request parameters and contract synchronization.
         """
         self.sync_with_streamer(cast(Atom, source))
+        self._resolve_datastore()
         if self._save_timer is None and self.save_frequency:
             self._timer_task = asyncio.create_task(
                 self.set_timer(), name=f"{self!s} timer setter"
@@ -167,6 +184,36 @@ class DataFrameAggregator(Atom):
         log.debug(f"{self!s} streamer params: {self._streamer_params}")
         self.which_contract = streamer.which_contract
         self._contract_blueprint = streamer._contract_blueprint
+
+    def _resolve_datastore(self) -> None:
+        """Resolve the runtime-default store after streamer synchronization."""
+
+        if self._store is not None:
+            return
+        try:
+            bar_size_setting = self._streamer_params["barSizeSetting"]
+            what_to_show = self._streamer_params["whatToShow"]
+            use_rth = self._streamer_params["useRTH"]
+        except KeyError as exc:
+            raise MissingStreamerParam(exc.args[0]) from exc
+        self._store = self.runtime.market_data_store_factory(
+            bar_size_setting=bar_size_setting,
+            what_to_show=what_to_show,
+            use_rth=use_rth,
+        )
+
+    @property
+    def store(self) -> AsyncDataStore:
+        """Return the resolved custom or runtime-default datastore.
+
+        Raises:
+            RuntimeError: If the runtime default is requested before startup
+                has supplied the connected streamer's request identity.
+        """
+
+        if self._store is None:
+            raise RuntimeError("DataFrameAggregator datastore was not initialized")
+        return self._store
 
     async def onData(self, data: ibi.BarDataList, *args: Any) -> None:
         # processing may be slow so queue data before processing
@@ -203,7 +250,7 @@ class DataFrameAggregator(Atom):
     async def save_data(self, *args) -> None:
         assert (contract := self.contract), f"Missing contract on {self}"
         if not self._df.empty:
-            await self.datastore.append(contract, self._df)
+            await self.store.append(contract, self._df)
 
     def process_current_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -308,7 +355,8 @@ class DataFrameAggregator(Atom):
         return dt.replace(tzinfo=self.contract_details.zone_info)
 
     async def _historical_data_with_retry(self, **params) -> ibi.BarDataList:
-        for attempt in range(3):
+        attempt = 0
+        while True:
             try:
                 return await self.ib.reqHistoricalDataAsync(**params, timeout=0)
             except Exception:
@@ -316,6 +364,7 @@ class DataFrameAggregator(Atom):
                 if attempt == 2:
                     raise
                 await asyncio.sleep(2**attempt)
+                attempt += 1
 
     async def _pull_history_from_broker(
         self, contract: ibi.Contract, start_date: datetime, stop_date: datetime
@@ -376,7 +425,8 @@ class DataFrameAggregator(Atom):
             f"{self!s} acquiring back data for contract: {contract.localSymbol} "
             f"{start_date=} {stop_date=}"
         )
-        if (df := await self.datastore.read(contract, start_date, stop_date)) is None:
+        store = self.store
+        if (df := await store.read(contract, start_date, stop_date)) is None:
             # don't pull data for current contract from broker, this
             # is :class:`Streamer`'s responsibility; data for previous
             # contracts may be missing if it's a new database and only
@@ -394,7 +444,7 @@ class DataFrameAggregator(Atom):
 
                 df = pd.DataFrame(bars).set_index("date")
                 try:
-                    await self.datastore.write(contract, pd.DataFrame(df))
+                    await store.write(contract, pd.DataFrame(df))
                 except Exception:
                     log.exception(
                         "Error while writing data from broker to datastore. "
@@ -519,7 +569,8 @@ class VolumeGrouper(Atom):
     def __post_init__(self):
         super().__init__()
 
-    def onData(self, df, *args) -> None:
+    def onData(self, data, *args) -> None:
+        df = data
         assert isinstance(
             df, pd.DataFrame
         ), f"{self} accepts only pandas DataFrame not {type(df)}"

@@ -22,6 +22,8 @@ from haymaker.datastore import (
     AsyncDataStore,
     BarSizeSymbolNamer,
     FrameStoreProvider,
+    MarketDataStoreFactory,
+    MarketDataSymbolNamer,
     QueuedDataSink,
     QueuedSignalFramePersistence,
     SignalFramePersistenceFactory,
@@ -68,6 +70,67 @@ def test_signal_persistence_factory_creates_independent_draining_policies() -> N
             shutdown_policy=QueueShutdownPolicy.DRAIN,
         ),
     ]
+
+
+def test_market_data_store_factory_reuses_one_request_specific_store() -> None:
+    """Equivalent market-data consumers should share one configured store."""
+
+    store = Mock(spec=AsyncDataStore)
+    provider = Mock(spec=FrameStoreProvider)
+    provider.datastore.return_value = store
+    factory = MarketDataStoreFactory(provider, "market_data")
+
+    first = factory(
+        bar_size_setting="30 secs",
+        what_to_show="trades",
+        use_rth=False,
+    )
+    second = factory(
+        bar_size_setting="30 sec",
+        what_to_show="TRADES",
+        use_rth=False,
+    )
+
+    assert first is store
+    assert second is store
+    provider.datastore.assert_called_once()
+    (library,) = provider.datastore.call_args.args
+    symbol_namer = provider.datastore.call_args.kwargs["symbol_namer"]
+    assert library == "market_data"
+    assert isinstance(symbol_namer, MarketDataSymbolNamer)
+
+
+@pytest.mark.parametrize(
+    "bar_size_setting,what_to_show,use_rth",
+    [
+        ("1 min", "TRADES", False),
+        ("30 secs", "MIDPOINT", False),
+        ("30 secs", "TRADES", True),
+    ],
+)
+def test_market_data_store_factory_separates_material_request_fields(
+    bar_size_setting: str,
+    what_to_show: str,
+    use_rth: bool,
+) -> None:
+    """Every persisted-series dimension should select a distinct store."""
+
+    provider = Mock(spec=FrameStoreProvider)
+    provider.datastore.side_effect = [Mock(), Mock()]
+    factory = MarketDataStoreFactory(provider, "market_data")
+    first = factory(
+        bar_size_setting="30 secs",
+        what_to_show="TRADES",
+        use_rth=False,
+    )
+    second = factory(
+        bar_size_setting=bar_size_setting,
+        what_to_show=what_to_show,
+        use_rth=use_rth,
+    )
+
+    assert first is not second
+    assert provider.datastore.call_count == 2
 
 
 def test_real_mongo_client_blocked_by_default() -> None:

@@ -13,7 +13,7 @@ from haymaker.base import Atom
 from haymaker.config import LiveCommand, load_live_config
 from haymaker.contract_registry import ContractRegistry
 from haymaker.databases import MongoService
-from haymaker.datastore import SignalFramePersistenceFactory
+from haymaker.datastore import MarketDataStoreFactory, SignalFramePersistenceFactory
 from haymaker.runtime import InitData, LiveRuntime, RuntimeContext, StartupJobs
 from haymaker.components.streamers import Streamer
 from haymaker.supervisor import ConnectionSettings
@@ -53,6 +53,7 @@ def test_runtime_context_has_compact_repr_and_log_string(atom_runtime) -> None:
         book=atom_runtime.book,
         trader=Trader(atom_runtime.ib),
         frame_store_provider=atom_runtime.frame_store_provider,
+        market_data_store_factory=atom_runtime.market_data_store_factory,
         signal_persistence_factory=atom_runtime.signal_persistence_factory,
         order_defaults=atom_runtime.order_defaults,
         timeout_policy=atom_runtime.timeout_policy,
@@ -76,6 +77,11 @@ def test_live_runtime_builds_and_installs_ready_context(atom_runtime) -> None:
     assert runtime.context.contract_registry is atom_runtime.contract_registry
     assert runtime.context.controller is not None
     assert runtime.context.frame_store_provider is runtime.frame_store_provider
+    assert isinstance(
+        runtime.context.market_data_store_factory,
+        MarketDataStoreFactory,
+    )
+    assert runtime.context.market_data_store_factory.library == "market_data"
     assert isinstance(
         runtime.context.signal_persistence_factory,
         SignalFramePersistenceFactory,

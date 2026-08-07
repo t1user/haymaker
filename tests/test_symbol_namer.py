@@ -5,6 +5,7 @@ import pytest
 
 from haymaker.datastore import (
     BarSizeSymbolNamer,
+    MarketDataSymbolNamer,
     StrategySymbolNamer,
     simple_symbol_namer,
 )
@@ -59,6 +60,24 @@ def test_symbol_name_from_contract_and_barSizeSetting(contract, barSizeSetting, 
     assert symbol_name == output
 
 
+@pytest.mark.parametrize(
+    "contract,useRTH,output",
+    [
+        (FUTURE_CONTRACT, False, "NQH6_FUT_30_sec_TRADES_ALL"),
+        (FUTURE_CONTRACT, True, "NQH6_FUT_30_sec_TRADES_RTH"),
+        (STOCK_CONTRACT, False, "AAPL_STK_30_sec_TRADES_ALL"),
+    ],
+)
+def test_market_data_symbol_contains_complete_request_identity(
+    contract,
+    useRTH,
+    output,
+):
+    namer = MarketDataSymbolNamer("30 secs", "trades", useRTH)
+
+    assert namer(contract) == output
+
+
 def test_namer_raises_if_used_with_non_contract():
     namer = BarSizeSymbolNamer("30 secs")
     with pytest.raises(AssertionError):
@@ -69,6 +88,11 @@ def test_namer_raises_if_used_with_non_contract():
     "namer,field_name,new_value",
     [
         (BarSizeSymbolNamer("30 secs"), "barSizeSetting", "1 hour"),
+        (
+            MarketDataSymbolNamer("30 secs", "TRADES", False),
+            "whatToShow",
+            "MIDPOINT",
+        ),
         (StrategySymbolNamer("alpha"), "strategy", "beta"),
     ],
 )

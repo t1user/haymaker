@@ -34,7 +34,11 @@ from haymaker.book import Book
 from haymaker.components import Streamer as ActualStreamer
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
-from haymaker.datastore import FrameStoreProvider, SignalFramePersistence
+from haymaker.datastore import (
+    FrameStoreProvider,
+    MarketDataStoreFactory,
+    SignalFramePersistence,
+)
 from haymaker.saver import AbstractBaseSaver
 from haymaker.trader import Trader
 
@@ -173,6 +177,7 @@ def atom_runtime_factory(monkeypatch, book):
         contract_registry: ContractRegistry | None = None,
         controller: Controller | None = None,
         frame_store_provider: FrameStoreProvider | None = None,
+        market_data_store_factory: MarketDataStoreFactory | None = None,
         signal_persistence_factory: Callable[[], SignalFramePersistence] | None = None,
     ) -> AtomRuntimeHarness:
         provider = frame_store_provider
@@ -184,6 +189,14 @@ def atom_runtime_factory(monkeypatch, book):
             contract_registry=contract_registry or ContractRegistry(),
             controller=controller,
             frame_store_provider=provider,
+            market_data_store_factory=(
+                market_data_store_factory
+                if market_data_store_factory is not None
+                else Mock(
+                    spec=MarketDataStoreFactory,
+                    side_effect=RuntimeError("Market-data storage is not configured"),
+                )
+            ),
             signal_persistence_factory=(
                 signal_persistence_factory
                 if signal_persistence_factory is not None

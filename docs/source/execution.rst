@@ -284,11 +284,18 @@ DataFrame aggregation
 :class:`~haymaker.components.DataFrameAggregator` is the parallel DataFrame
 pipeline. It combines current ``BarDataList`` snapshots with stored history,
 acquires missing previous futures contracts, stitches a continuous series,
-periodically saves it, and emits the complete DataFrame. Normally inject the
-same fully configured awaited datastore into it and
-:class:`~haymaker.components.HistoricalDataStreamer`: the aggregator saves the
-history and the streamer uses its persisted endpoint to shorten subsequent IB
-requests.
+periodically saves it, and emits the complete DataFrame. By default it resolves
+the runtime store configured by ``market_data_store.library`` after connecting
+to its streamer. Set ``HistoricalDataStreamer(datastore=True)`` to use that
+same cached store for persisted-endpoint lookup and shorter subsequent IB
+requests. Supplying the same custom awaited datastore to both components
+bypasses the runtime default.
+
+The default store identity includes the Contract, bar size, ``whatToShow``, and
+``useRTH`` policy, so incompatible historical series cannot share one symbol.
+``DataFrameAggregator`` does not support disabling its datastore; use
+``save_frequency=0`` only to disable periodic saves, not history reads or
+broker-backfill writes.
 
 The DataFrame components are public from both
 ``haymaker.components.dataframe_aggregators`` and the package-level

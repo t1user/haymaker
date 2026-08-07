@@ -155,8 +155,14 @@ closely related runtime objects.
 
 ``storage``
    Base directory plus Mongo client arguments and the framework database name.
-   Dataframe library names and save frequency normally belong to strategy
-   composition and consumer constructors.
+   Save frequency remains a consumer constructor option.
+
+``market_data_store``
+   ``library`` selects the dataframe library used by
+   :class:`~haymaker.components.DataFrameAggregator` when its datastore is
+   ``True`` and by :class:`~haymaker.components.HistoricalDataStreamer` when
+   constructed with ``datastore=True``. Custom datastores bypass this runtime
+   default.
 
 ``signal_persistence``
    ``library`` selects the dataframe library used when a
@@ -197,6 +203,11 @@ Signal persistence settings API
 -------------------------------
 
 .. autoclass:: haymaker.config.SignalFramePersistenceSettings
+
+Market-data store settings API
+------------------------------
+
+.. autoclass:: haymaker.config.MarketDataStoreSettings
 
 Dataloader Configuration
 ========================

@@ -198,12 +198,13 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   treat injected stores as fully configured, and each persisted
   `PandasSignalModel` owns its `SignalFramePersistence` state rather than
   sharing generations.
-- Strategy module composition builds stores through
-  `RuntimeContext.frame_store_provider` and injects them: `DataFrameAggregator`
-  requires `AsyncDataStore`; injecting that same store into
-  `HistoricalDataStreamer` lets the streamer shorten subsequent IB requests
-  from the persisted endpoint. Persisted streamers accept
-  `AsyncDataStore | None`. `PandasSignalModel.persistence` alone supports
+- Strategy module composition may build custom stores through
+  `RuntimeContext.frame_store_provider` and inject them into both market-data
+  components. Otherwise, `DataFrameAggregator()` and
+  `HistoricalDataStreamer(datastore=True)` resolve the same runtime-cached
+  market-data store by bar size, data type, and RTH policy; custom stores
+  bypass that default and `False` disables only the streamer's lookup.
+  `PandasSignalModel.persistence` supports
   `False`, runtime-default `True`, or a custom non-blocking
   `SignalFramePersistence`; persistence enqueue failure never suppresses Signal
   emission.
@@ -213,10 +214,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   `controller.startup`. Logging and dataloader `download` remain user-facing
   subsystem groups composed across closely related objects. Live storage contains
   only `base_directory`, `mongodb.client`, and `mongodb.database`; dataloader
-  storage contains only `base_directory` and `mongodb.client`. Dataframe library
-  names and save frequency belong to strategy composition and consumer
-  constructors, except for the default Signal calculation library configured
-  under `signal_persistence.library`.
+  storage contains only `base_directory` and `mongodb.client`. Custom dataframe
+  library names belong to strategy composition. Runtime defaults are configured
+  under `market_data_store.library` for broker bars and
+  `signal_persistence.library` for Signal calculations; save frequency belongs
+  to its consumer.
   Bundled base profiles must enumerate supported settings, pin effective
   command defaults, and keep a concise inline comment after every setting.
   Environment variables may select a profile YAML file but must not directly
