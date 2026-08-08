@@ -486,10 +486,11 @@ recovery.
 
 .. autofunction:: haymaker.components.where
 
-Bracket legs
-============
+Bracket execution
+=================
 
-Bracket legs convert a completely filled entry Trade and validated Signal
+``BracketExecutionModel`` and its bracket legs form one dedicated execution
+family. The legs convert a completely filled entry Trade and validated Signal
 metadata into IB stop or take-profit order fields. Their ``vol_field`` defaults
 to ``atr`` and must be present in PositionTarget metadata.
 

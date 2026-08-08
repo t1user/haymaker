@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import ib_insync as ibi
 import pytest
 
-from haymaker.components.bracket_legs import (
+from haymaker.components.bracket_execution import (
     AdjustableFixedTrailingStop,
     AdjustableTrailingFixedStop,
     FixedStop,

@@ -454,7 +454,7 @@ haymaker/components/
     signals.py
     portfolio.py
     execution_models.py
-    bracket_legs.py
+    bracket_execution.py
 ```
 
 Core runtime, Atom, Controller, state, persistence and contract management remain outside.

@@ -150,8 +150,10 @@ preserves `position_id` through an episode, and attaches brackets only after a
 complete entry fill. Its stop-loss is critical; take-profit is optional and a
 missing take-profit is not a sync failure. Regular closes share the active
 brackets' OCA group rather than cancelling protection before submitting the
-close. Recovery must rebind callbacks to current live Trade objects and derive
-work from Book rather than replaying old intent.
+close. `BracketExecutionModel` and its bracket-leg hierarchy belong together in
+`bracket_execution.py`; keep the generic execution boundary and serial target
+model in `execution_models.py`. Recovery must rebind callbacks to current live
+Trade objects and derive work from Book rather than replaying old intent.
 
 Book owns order/fill/state persistence and blotter queries. Controller alone
 submits/cancels broker orders, registers OrderInfo immediately, handles status,
