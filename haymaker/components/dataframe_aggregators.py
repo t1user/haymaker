@@ -71,17 +71,15 @@ class FuturesPandasAggregator(Atom):
 
     The default datastore and
     ``HistoricalDataStreamer(datastore=True)`` resolve the same runtime-cached
-    store. Inject the same custom datastore into both components when the
-    runtime default is unsuitable. This component persists the maintained
-    DataFrame; the streamer consults the persisted endpoint before deciding how
-    much history to request from IB.
+    store. This component persists the maintained DataFrame; the streamer
+    consults the persisted endpoint before deciding how much history to request
+    from IB.
 
     Args:
         datastore: ``True`` uses the runtime-default market-data store after
-            startup has supplied the connected streamer's request identity. An
-            :class:`~haymaker.datastore.AsyncDataStore` uses that custom store
-            instead. Defaults to ``True``; ``False`` is not supported because
-            stored history is part of this component's aggregation contract.
+            startup has supplied the connected streamer's request identity.
+            Defaults to ``True``; ``False`` is not supported because stored
+            history is part of this component's aggregation contract.
         save_frequency: Seconds between periodic saves. Defaults to ``900``;
             zero disables periodic persistence.
 
@@ -95,9 +93,9 @@ class FuturesPandasAggregator(Atom):
         copy it before mutation.
 
     Attributes:
-        store: Resolved awaited datastore. A custom datastore is available
-            immediately; the runtime default becomes available during
-            ``onStart()`` after the streamer request identity is known.
+        store: Resolved awaited datastore. With default configuration it becomes
+            available during ``onStart()`` after the streamer request identity
+            is known.
 
     Raises:
         TypeError: If ``datastore`` is ``False`` or ``None``, or if the

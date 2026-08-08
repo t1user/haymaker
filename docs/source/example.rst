@@ -82,8 +82,9 @@ position episode:
 resolve the same cached runtime store for this bar size, data type, and RTH
 policy. The aggregator restores and periodically saves the complete DataFrame;
 on a later process start, the streamer reads the persisted endpoint and
-requests only the missing broker history. Pass the same custom
-``AsyncDataStore`` to both components when the runtime default is unsuitable.
+requests only the missing broker history. See
+:ref:`advanced-storage-configuration` when the runtime defaults are
+unsuitable.
 
 ``TrendModel`` places ``atr`` in Signal metadata. ``FixedSizeAllocator``
 preserves it in the PositionTarget, and ``FixedStop`` consumes it after the

@@ -11,6 +11,7 @@ Haymaker Documentation
    requirements
    installation
    configuration
+   storage
    logging
    supervisor
    ib_message_codes

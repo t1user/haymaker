@@ -138,9 +138,7 @@ class HistoricalDataStreamer(Streamer):
         formatDate: IB timestamp format. ``2`` is the supported aware-UTC
             setting.
         datastore: ``False`` disables persisted-endpoint lookup. ``True`` uses
-            the runtime-default market-data store. An
-            :class:`~haymaker.datastore.AsyncDataStore` uses that custom store
-            instead. Defaults to ``False``.
+            the runtime-default market-data store. Defaults to ``False``.
         timeout: Runtime timeout policy override in seconds, ``True`` for the
             configured default, or ``False`` to disable monitoring.
 

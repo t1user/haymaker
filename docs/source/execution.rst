@@ -288,8 +288,9 @@ continuous series, periodically saves it, and emits the complete DataFrame. By
 default it resolves the runtime store configured by
 ``market_data_store.library`` after connecting to its streamer. Set
 ``HistoricalDataStreamer(datastore=True)`` to use that same cached store for
-persisted-endpoint lookup and shorter subsequent IB requests. Supplying the
-same custom awaited datastore to both components bypasses the runtime default.
+persisted-endpoint lookup and shorter subsequent IB requests. The aggregator
+adopts the request settings from its connected streamer, so both components
+resolve the same store.
 
 The default store identity includes the Contract, bar size, ``whatToShow``, and
 ``useRTH`` policy, so incompatible historical series cannot share one symbol.
@@ -344,9 +345,8 @@ Override ``row_to_calculation(row)`` when the standard field selection cannot
 express the required conversion. The override returns only
 ``SignalCalculation``; it cannot replace framework-owned Signal identity.
 ``persistence=False`` disables calculation history. ``persistence=True`` uses
-the runtime default configured by ``signal_persistence.library``. Supplying a
-:class:`~haymaker.datastore.SignalFramePersistence` object provides a custom
-non-blocking policy. The standard implementation records history under
+the runtime default configured by ``signal_persistence.library``. The standard
+implementation records history under
 ``{source_key}_{ACTIVE.localSymbol}_{run_started_at}``: the first accepted save
 writes the complete frame and later saves append only new rows. A NEXT-only
 futures change does not rotate history.
@@ -358,6 +358,9 @@ without that reference. Calling ``create_signal()`` directly performs no
 persistence. When saving is enabled, the calculated dataframe must not be
 mutated after queue acceptance.
 
+Custom market-data stores and Signal persistence policies are described in
+:ref:`advanced-storage-configuration`.
+
 .. autoclass:: haymaker.components.SignalCalculation
 
 .. autoclass:: haymaker.components.SignalModel
@@ -365,16 +368,6 @@ mutated after queue acceptance.
 
 .. autoclass:: haymaker.components.PandasSignalModel
    :members: df, row_to_calculation, calculate_signal, create_signal
-
-.. autoclass:: haymaker.datastore.SignalFramePersistence
-   :members: save
-
-.. autoclass:: haymaker.datastore.QueuedSignalFramePersistence
-   :members: save
-
-.. autoclass:: haymaker.datastore.AsyncDataStore
-
-.. autoclass:: haymaker.datastore.QueuedDataSink
 
 One-to-one processing
 =====================

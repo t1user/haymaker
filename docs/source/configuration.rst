@@ -161,14 +161,17 @@ closely related runtime objects.
    ``library`` selects the dataframe library used by
    :class:`~haymaker.components.FuturesPandasAggregator` when its datastore is
    ``True`` and by :class:`~haymaker.components.HistoricalDataStreamer` when
-   constructed with ``datastore=True``. Custom datastores bypass this runtime
-   default.
+   constructed with ``datastore=True``.
 
 ``signal_persistence``
    ``library`` selects the dataframe library used when a
    :class:`~haymaker.components.PandasSignalModel` is constructed with
    ``persistence=True``. Enablement remains model-specific; this section only
-   defines the runtime default. Custom persistence objects bypass it.
+   defines the runtime default.
+
+The boolean component options cover normal configuration. See
+:ref:`advanced-storage-configuration` for custom datastore and Signal
+persistence objects.
 
 ``blotter``
    Enablement and a safe built-in ``csv`` or ``mongo`` saver specification.

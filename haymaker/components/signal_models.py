@@ -200,8 +200,6 @@ class PandasSignalModel(SignalModel, ABC):
             explicit collection copies only those fields.
         persistence: ``False`` disables calculation-data persistence. ``True``
             creates a model-owned persistence object from runtime YAML defaults.
-            A :class:`~haymaker.datastore.SignalFramePersistence` instance uses
-            that custom non-blocking policy instead.
 
     ``df(data)`` receives a dataframe converted from DataFrame, BarDataList,
     mapping, or dataframe-compatible data. The default row conversion derives
