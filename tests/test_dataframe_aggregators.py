@@ -12,6 +12,7 @@ from sample_barDataList import sample_barDataList
 from haymaker.base import ActiveNext, Atom
 from haymaker.components.dataframe_aggregators import (
     FuturesPandasAggregator,
+    VolumeGrouper,
     WrongStreamer,
 )
 from haymaker.components.streamers import HistoricalDataStreamer, MktDataStreamer
@@ -481,11 +482,10 @@ def test_compute_date_range(registry_runtime, conId, localSymbol, return_value):
         "useRTH": False,
     }
     # required timedelta will return 2D
-    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
-        # this is "now" used by the method:
-        mock_dt.now.return_value = datetime(2025, 12, 12)
-        mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
-
+    with patch(
+        "haymaker.components.dataframe_aggregators.utc_now_naive",
+        return_value=datetime(2025, 12, 12),
+    ):
         date_range_or_none = aggregator._compute_date_range(
             ibi.Future(conId=conId, localSymbol=localSymbol)
         )
@@ -557,11 +557,10 @@ def test_compute_date_range_longer_period(
         "useRTH": False,
     }
     # required timedelta will return 2D
-    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
-        # this is "now" used by the method:
-        mock_dt.now.return_value = datetime(2025, 12, 12)
-        mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
-
+    with patch(
+        "haymaker.components.dataframe_aggregators.utc_now_naive",
+        return_value=datetime(2025, 12, 12),
+    ):
         date_range_or_none = aggregator._compute_date_range(
             ibi.Future(conId=conId, localSymbol=localSymbol)
         )
@@ -569,8 +568,10 @@ def test_compute_date_range_longer_period(
 
 
 def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
-    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime(2026, 2, 20)
+    with patch(
+        "haymaker.components.dataframe_aggregators.utc_now_naive",
+        return_value=datetime(2026, 2, 20),
+    ):
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -587,8 +588,10 @@ def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
 def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
     registry_runtime,
 ):
-    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime(2026, 4, 1)
+    with patch(
+        "haymaker.components.dataframe_aggregators.utc_now_naive",
+        return_value=datetime(2026, 4, 1),
+    ):
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -603,8 +606,10 @@ def test_aggregator_offset_by_durationStr_given_as_str_including_weekend(
 
 
 def test_aggregator_offset_by_durationStr_given_as_int(registry_runtime):
-    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime(2026, 2, 20)
+    with patch(
+        "haymaker.components.dataframe_aggregators.utc_now_naive",
+        return_value=datetime(2026, 2, 20),
+    ):
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -624,8 +629,10 @@ def test_aggregator_offset_by_durationStr_given_as_int(registry_runtime):
 def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
     registry_runtime,
 ):
-    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime(2026, 2, 20)
+    with patch(
+        "haymaker.components.dataframe_aggregators.utc_now_naive",
+        return_value=datetime(2026, 2, 20),
+    ):
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -645,8 +652,10 @@ def test_aggregator_offset_by_durationStr_given_as_int_longer_than_one_day(
 def test_aggregator_offset_by_durationStr_given_as_int_including_weekend(
     registry_runtime,
 ):
-    with patch("haymaker.components.dataframe_aggregators.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime(2026, 4, 1)
+    with patch(
+        "haymaker.components.dataframe_aggregators.utc_now_naive",
+        return_value=datetime(2026, 4, 1),
+    ):
         aggregator = make_aggregator()
         aggregator.contract = ibi.Future("ES", exchange="CME")
         aggregator._streamer_params = {
@@ -740,3 +749,64 @@ async def test_pull_history_from_broker(registry_runtime):
     assert call_kwargs["whatToShow"] == what_to_show
     assert call_kwargs["barSizeSetting"] == bar_size_setting
     assert call_kwargs["useRTH"] == useRTH
+
+
+def volume_frame(volumes: list[int]) -> pd.DataFrame:
+    """Return a minimal date-indexed OHLCV frame for component tests."""
+
+    index = pd.date_range("2026-01-01", periods=len(volumes), freq="min", name="date")
+    return pd.DataFrame(
+        {
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": volumes,
+        },
+        index=index,
+    )
+
+
+@pytest.mark.parametrize("volumes", [[], [40]])
+def test_volume_grouper_accepts_initial_frame_without_completed_group(volumes):
+    """Short initial histories establish state without raising or emitting."""
+
+    grouper = VolumeGrouper(100)
+    emissions = []
+    grouper.dataEvent += emissions.append
+
+    grouper.onData(volume_frame(volumes))
+
+    assert emissions == []
+
+
+@pytest.mark.parametrize("label", ["left", "right"])
+def test_volume_grouper_emits_first_group_when_it_later_completes(label):
+    """An initially incomplete group should emit as soon as it reaches target."""
+
+    grouper = VolumeGrouper(100, label=label)
+    emissions = []
+    grouper.dataEvent += emissions.append
+    grouper.onData(volume_frame([40]))
+
+    grouper.onData(volume_frame([40, 60]))
+
+    assert len(emissions) == 1
+    assert len(emissions[0]) == 1
+    assert emissions[0].iloc[-1]["volume"] == 100
+
+
+@pytest.mark.parametrize("volume", [0, -1])
+def test_volume_grouper_rejects_non_positive_target(volume):
+    """A volume threshold must be positive as documented."""
+
+    with pytest.raises(ValueError, match="must be positive"):
+        VolumeGrouper(volume)
+
+
+@pytest.mark.parametrize("volume", [True, 100.0])
+def test_volume_grouper_rejects_non_integer_target(volume):
+    """Boolean and floating-point thresholds are not valid integer volumes."""
+
+    with pytest.raises(TypeError, match="must be an int"):
+        VolumeGrouper(volume)

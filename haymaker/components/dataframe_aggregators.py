@@ -22,7 +22,7 @@ import pandas as pd
 from haymaker import misc
 from haymaker.async_wrappers import QueueRunner, QueueShutdownPolicy
 from haymaker.base import Atom
-from haymaker.contract_selector import FutureSelector, custom_bday
+from haymaker.contract_selector import FutureSelector, custom_bday, utc_now_naive
 from haymaker.datastore import AsyncDataStore
 from haymaker.details_processor import typical_session_length
 from haymaker.durationStr_converters import (
@@ -345,8 +345,8 @@ class FuturesPandasAggregator(Atom):
         """
         selector = cast(FutureSelector, self.contract_selector)
         start, stop = selector.date_ranges[contract]
-        now = datetime.now()
-        start_date = max(start, self.offset_by_durationStr())
+        now = utc_now_naive()
+        start_date = max(start, self.offset_by_durationStr(now))
         stop_date = min(stop, now)
         # Don't make this timezone aware or datastore will reject it
         return (start_date, stop_date) if (start_date < stop_date) else None
@@ -483,18 +483,24 @@ class FuturesPandasAggregator(Atom):
         else:
             return durationStr
 
-    def offset_by_durationStr(self) -> datetime:
-        """
-        Return durationStr as timedelta, this is how far back we need data.
-        durationStr can be given either directly as a str acceptable
-        by :meth:`ib_insync.IB.reqHistoricalData` or number of
-        required datapoints. Both cases are accounted for in this method.
+    def offset_by_durationStr(self, now: datetime | None = None) -> datetime:
+        """Return the earliest required timezone-naive UTC timestamp.
 
-        Returned timedelta is longer by 10% than strictly necessary
-        to facilitate stiching of data for different contracts.
+        ``durationStr`` can be either a string accepted by
+        :meth:`ib_insync.IB.reqHistoricalData` or a number of required
+        datapoints. Both cases are accounted for in this method. The returned
+        range includes extra history to facilitate stitching data from
+        different contracts.
+
+        Args:
+            now: Timezone-naive UTC endpoint. Defaults to the current UTC time.
+
+        Returns:
+            Earliest timestamp required for the configured history window.
         """
         durationStr = self._streamer_params["durationStr"]
-        now = datetime.now()
+        if now is None:
+            now = utc_now_naive()
         if isinstance(durationStr, str):
             return offset_durationStr(durationStr, now)
         else:
@@ -553,6 +559,8 @@ class VolumeGrouper(Atom):
         not emit.
 
     Raises:
+        TypeError: If ``volume`` is not an integer.
+        ValueError: If ``volume`` is not positive.
         AssertionError: If input is not a dataframe or ``group_on`` is absent.
     """
 
@@ -560,11 +568,16 @@ class VolumeGrouper(Atom):
     group_on: str = "volume"
     label: Literal["left", "right"] = "left"
     _last_emitted_point: pd.Timestamp | None = field(repr=False, default=None)
+    _initialized: bool = field(init=False, repr=False, default=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        if isinstance(self.volume, bool) or not isinstance(self.volume, int):
+            raise TypeError("VolumeGrouper volume must be an int")
+        if self.volume <= 0:
+            raise ValueError("VolumeGrouper volume must be positive")
         super().__init__()
 
-    def onData(self, data, *args) -> None:
+    def onData(self, data: pd.DataFrame, *args: Any) -> None:
         df = data
         assert isinstance(
             df, pd.DataFrame
@@ -574,11 +587,40 @@ class VolumeGrouper(Atom):
             f"in passed DataFrame"
         )
         grouped = volume_grouper(df, self.volume, field=self.group_on, label=self.label)
-        if self._last_emitted_point is None:
-            self._last_emitted_point = grouped.index[-2]
-        elif grouped.index[-2] > self._last_emitted_point:
-            self._last_emitted_point = grouped.index[-2]
-            self.dataEvent.emit(grouped.iloc[:-1])
+        completed = self._completed_groups(df, grouped)
+        if not self._initialized:
+            self._initialized = True
+            if not completed.empty:
+                self._last_emitted_point = completed.index[-1]
+            return
+        if completed.empty:
+            return
+
+        last_completed_point = completed.index[-1]
+        if (
+            self._last_emitted_point is None
+            or last_completed_point > self._last_emitted_point
+        ):
+            self._last_emitted_point = last_completed_point
+            self.dataEvent.emit(completed)
+
+    def _completed_groups(
+        self, source: pd.DataFrame, grouped: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Return grouped rows whose source volume has reached the target."""
+
+        if grouped.empty:
+            return grouped
+
+        if self.label == "left":
+            start = source.index.searchsorted(grouped.index[-1], side="left")
+        elif len(grouped) == 1:
+            start = 0
+        else:
+            start = source.index.searchsorted(grouped.index[-2], side="right")
+
+        last_group_total = source.iloc[start:][self.group_on].sum(skipna=False)
+        return grouped if last_group_total >= self.volume else grouped.iloc[:-1]
 
 
 __all__ = [
