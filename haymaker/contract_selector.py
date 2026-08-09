@@ -405,6 +405,21 @@ class FutureSelector(AbstractBaseContractSelector):
             **output,
         }
 
+    @cached_property
+    def date_ranges_next(self) -> dict[ibi.Future, tuple[datetime, datetime]]:
+        """Return contract ranges shifted to the NEXT selection boundary.
+
+        NEXT changes to the succeeding contract ``roll_margin_bdays`` before
+        ACTIVE rolls. The futures chain is expected to contain a successor for
+        every range used by a consumer.
+        """
+
+        margin = pd.offsets.BusinessDay(self.roll_margin_bdays)
+        return {
+            contract: (start - margin, stop - margin)
+            for contract, (start, stop) in self.date_ranges.items()
+        }
+
     @staticmethod
     def _bdays(from_: datetime, to_: datetime) -> int:
         return len(pd.bdate_range(from_, to_)) - 1

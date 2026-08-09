@@ -15,6 +15,7 @@ from haymaker.durationStr_converters import (
     delta_to_durationStr,
     durationStr_to_datapoints,
     durationStr_to_offset,
+    ensure_duration_str,
     offset_durationStr,
 )
 
@@ -133,6 +134,14 @@ def test_datapoints_to_durationStr(
         datapoints_to_durationStr(datapoints, barSizeSetting, timedelta(hours=23))
         == durationStr
     )
+
+
+def test_ensure_duration_str_keeps_existing_string():
+    assert ensure_duration_str("5 D", "1 min", timedelta(hours=23)) == "5 D"
+
+
+def test_ensure_duration_str_converts_datapoints():
+    assert ensure_duration_str(10000, "1 min", timedelta(hours=23)) == "8 D"
 
 
 @pytest.mark.parametrize("days", [1, 2, 4, 5, 6, 7, 8, 14, 20, 21])

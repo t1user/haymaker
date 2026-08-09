@@ -296,7 +296,9 @@ The default store identity includes the Contract, bar size, ``whatToShow``, and
 ``useRTH`` policy, so incompatible historical series cannot share one symbol.
 ``FuturesPandasAggregator`` does not support disabling its datastore; use
 ``save_frequency=0`` only to disable periodic saves, not history reads or
-broker-backfill writes.
+broker-backfill writes. Periodic saves are best effort: a timer tick is skipped
+while an earlier save remains in progress, and a failed save is logged before
+the next complete-frame attempt retries the unsaved tail.
 
 The DataFrame components are public from both
 ``haymaker.components.dataframe_aggregators`` and the package-level

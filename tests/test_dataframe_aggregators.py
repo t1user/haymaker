@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -266,6 +267,44 @@ def test_save_frequency_defaults_to_900_seconds():
     assert aggregator.save_frequency == 900
 
 
+@pytest.mark.parametrize("save_frequency", [True, 1.5, "900"])
+def test_save_frequency_rejects_non_integer_values(save_frequency):
+    with pytest.raises(TypeError, match="save_frequency must be an int"):
+        FuturesPandasAggregator(
+            datastore=Mock(spec=AsyncDataStore),
+            save_frequency=save_frequency,  # type: ignore[arg-type]
+        )
+
+
+def test_save_frequency_rejects_negative_values():
+    with pytest.raises(ValueError, match="save_frequency must not be negative"):
+        FuturesPandasAggregator(datastore=Mock(spec=AsyncDataStore), save_frequency=-1)
+
+
+@pytest.mark.asyncio
+async def test_repeated_start_does_not_create_duplicate_timer_setter():
+    streamer = HistoricalDataStreamer(
+        contract=ibi.Future("NQ", exchange="CME"),
+        durationStr="1 D",
+        barSizeSetting="1 min",
+        whatToShow="TRADES",
+    )
+    aggregator = FuturesPandasAggregator(
+        datastore=Mock(spec=AsyncDataStore), save_frequency=900
+    )
+
+    with patch.object(aggregator, "set_timer", new_callable=AsyncMock) as set_timer:
+        aggregator.onStart({}, source=streamer)
+        timer_task = aggregator._timer_task
+        aggregator.onStart({}, source=streamer)
+
+        assert aggregator._timer_task is timer_task
+        assert timer_task is not None
+        await timer_task
+
+    set_timer.assert_awaited_once_with()
+
+
 @pytest.mark.asyncio
 async def test_save_data_awaits_datastore_append(atom_runtime):
     """Saving current data waits for append completion."""
@@ -278,6 +317,34 @@ async def test_save_data_awaits_datastore_append(atom_runtime):
     await aggregator.save_data()
 
     store.append.assert_awaited_once_with(aggregator.contract, aggregator._df)
+
+
+@pytest.mark.asyncio
+async def test_save_data_skips_overlapping_save(atom_runtime):
+    store = Mock(spec=AsyncDataStore)
+    aggregator = FuturesPandasAggregator(datastore=store, save_frequency=0)
+    aggregator.contract = ibi.Future(symbol="NQ", exchange="CME")
+    aggregator._df = pd.DataFrame({"close": [1.0]})
+    aggregator._save_in_progress = True
+
+    await aggregator.save_data()
+
+    store.append.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_save_data_logs_best_effort_failure(atom_runtime, caplog):
+    store = Mock(spec=AsyncDataStore)
+    store.append.side_effect = RuntimeError("unavailable")
+    aggregator = FuturesPandasAggregator(datastore=store, save_frequency=0)
+    aggregator.contract = ibi.Future(symbol="NQ", exchange="CME")
+    aggregator._df = pd.DataFrame({"close": [1.0]})
+
+    with caplog.at_level(logging.ERROR):
+        await aggregator.save_data()
+
+    assert "failed to save aggregated data" in caplog.text
+    assert aggregator._save_in_progress is False
 
 
 @pytest.mark.asyncio
@@ -567,6 +634,29 @@ def test_compute_date_range_longer_period(
         assert date_range_or_none == return_value
 
 
+def test_compute_date_range_uses_next_contract_ranges(registry_runtime):
+    aggregator = make_aggregator()
+    aggregator.which_contract = ActiveNext.NEXT
+    aggregator.contract = ibi.Future("ES", exchange="CME")
+    aggregator._streamer_params = {
+        "durationStr": "2 D",
+        "barSizeSetting": "30 secs",
+        "whatToShow": "TRADES",
+        "useRTH": False,
+    }
+    contract = aggregator.contract
+
+    assert contract.localSymbol == "ESH6"
+    with patch(
+        "haymaker.components.dataframe_aggregators.utc_now_naive",
+        return_value=datetime(2025, 12, 12),
+    ):
+        assert aggregator._compute_date_range(contract) == (
+            datetime(2025, 12, 11),
+            datetime(2025, 12, 12),
+        )
+
+
 def test_aggregator_offset_by_durationStr_given_as_str(registry_runtime):
     with patch(
         "haymaker.components.dataframe_aggregators.utc_now_naive",
@@ -714,7 +804,7 @@ async def test_pull_history_from_broker(registry_runtime):
 
     streamer = HistoricalDataStreamer(
         input_contract,
-        "2 D",
+        120,
         bar_size_setting,
         what_to_show,
         useRTH,
@@ -737,9 +827,7 @@ async def test_pull_history_from_broker(registry_runtime):
     )
     aggregator.ib.reqHistoricalDataAsync = AsyncMock()
 
-    await aggregator._pull_history_from_broker(
-        es, datetime(2025, 12, 10, 12, 0), datetime(2025, 12, 10, 9, 0)
-    )
+    await aggregator._pull_history_from_broker(es, datetime(2025, 12, 10, 9, 0))
 
     aggregator.ib.reqHistoricalDataAsync.assert_called_once()
 
@@ -749,6 +837,7 @@ async def test_pull_history_from_broker(registry_runtime):
     assert call_kwargs["whatToShow"] == what_to_show
     assert call_kwargs["barSizeSetting"] == bar_size_setting
     assert call_kwargs["useRTH"] == useRTH
+    assert call_kwargs["durationStr"] == "3600 S"
 
 
 def volume_frame(volumes: list[int]) -> pd.DataFrame:

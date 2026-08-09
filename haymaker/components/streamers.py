@@ -17,10 +17,7 @@ from haymaker.misc import format_timestamp
 from ..base import Atom
 from ..datastore import AsyncDataStore
 from ..details_processor import typical_session_length
-from ..durationStr_converters import (
-    datapoints_to_durationStr,
-    date_to_delta_wrapper,
-)
+from ..durationStr_converters import date_to_delta_wrapper, ensure_duration_str
 from ..validators import wts_validator
 from .timeouts import MarketDataTimeout
 
@@ -231,26 +228,14 @@ class HistoricalDataStreamer(Streamer):
             return datetime.strptime(value, "%Y%m%d").date()
         return format_timestamp(value)
 
-    def _ensure_durationStr(self) -> str:
-        """
-        Accept durationStr as either ready str to be passed to
-        :meth:`ib_insync.IB.reqHistoricalData` or if it's passed as a
-        number of required datapoints int, convert it to the correct str.
-        """
-        return (
-            datapoints_to_durationStr(
+    @property
+    def _durationStr(self) -> str:
+        if self._last_bar_date is None:
+            return ensure_duration_str(
                 self.durationStr,
                 self.barSizeSetting,
                 typical_session_length(self.contract_details.trading_hours),
             )
-            if isinstance(self.durationStr, int)
-            else self.durationStr
-        )
-
-    @property
-    def _durationStr(self) -> str:
-        if self._last_bar_date is None:
-            return self._ensure_durationStr()
         start_date = (
             self._last_bar_date
             if isinstance(self._last_bar_date, datetime)

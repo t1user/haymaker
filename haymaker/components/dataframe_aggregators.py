@@ -29,8 +29,10 @@ from haymaker.durationStr_converters import (
     barSizeSetting_to_timedelta,
     datapoints_to_timedelta,
     durationStr_to_datapoints,
+    ensure_duration_str,
     offset_durationStr,
 )
+from haymaker.enums import ActiveNext
 from haymaker.research.numba_tools import volume_grouper
 from haymaker.components.streamers import HistoricalDataStreamer, Streamer
 
@@ -81,7 +83,9 @@ class FuturesPandasAggregator(Atom):
             Defaults to ``True``; ``False`` is not supported because stored
             history is part of this component's aggregation contract.
         save_frequency: Seconds between periodic saves. Defaults to ``900``;
-            zero disables periodic persistence.
+            zero disables periodic persistence. A tick is skipped while an
+            earlier save remains in progress, and failed best-effort saves are
+            logged before the next interval retries the complete frame.
 
     Input:
         Complete ``ib_insync.BarDataList`` snapshots emitted by a
@@ -120,6 +124,7 @@ class FuturesPandasAggregator(Atom):
     _store: AsyncDataStore | None = field(init=False, repr=False, default=None)
     _save_timer: ev.Timer | None = field(init=False, repr=False, default=None)
     _timer_task: asyncio.Task | None = field(init=False, repr=False, default=None)
+    _save_in_progress: bool = field(init=False, repr=False, default=False)
 
     def __post_init__(self) -> None:
         if self.datastore is False or self.datastore is None:
@@ -128,9 +133,15 @@ class FuturesPandasAggregator(Atom):
             )
         if self.datastore is not True:
             self._store = self.datastore
-        assert isinstance(
-            self.save_frequency, int
-        ), f"{self!s} save_frequency must be an int, not {type(self.save_frequency)}"
+        if not isinstance(self.save_frequency, int) or isinstance(
+            self.save_frequency, bool
+        ):
+            raise TypeError(
+                f"{self!s} save_frequency must be an int, "
+                f"not {type(self.save_frequency)}"
+            )
+        if self.save_frequency < 0:
+            raise ValueError(f"{self!s} save_frequency must not be negative")
         self._queue = QueueRunner(
             self.process_data,
             f"{self!s}",
@@ -151,6 +162,8 @@ class FuturesPandasAggregator(Atom):
     async def set_timer(self) -> None:
         # if many objects created, they shouldn't all save at the same time
         await asyncio.sleep(random.randint(0, 30))
+        if self._save_timer is not None:
+            return
         log.debug(f"{self!s} setting save timer at {self.save_frequency}secs.")
         timer = ev.Timer(self.save_frequency)
         timer.connect(self.save_data)
@@ -166,7 +179,8 @@ class FuturesPandasAggregator(Atom):
         """
         self.sync_with_streamer(cast(Atom, source))
         self._resolve_datastore()
-        if self._save_timer is None and self.save_frequency:
+        timer_task_done = self._timer_task is None or self._timer_task.done()
+        if self._save_timer is None and timer_task_done and self.save_frequency:
             self._timer_task = asyncio.create_task(
                 self.set_timer(), name=f"{self!s} timer setter"
             )
@@ -253,9 +267,20 @@ class FuturesPandasAggregator(Atom):
         return self._df
 
     async def save_data(self, *args) -> None:
-        contract = cast(ibi.Future, self.contract)
-        if not self._df.empty:
+        if self._df.empty:
+            return
+        if self._save_in_progress:
+            log.debug(f"{self!s} skipping save while previous save is in progress.")
+            return
+
+        self._save_in_progress = True
+        try:
+            contract = cast(ibi.Future, self.contract)
             await self.store.append(contract, self._df)
+        except Exception:
+            log.exception(f"{self!s} failed to save aggregated data.")
+        finally:
+            self._save_in_progress = False
 
     def process_current_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -344,7 +369,12 @@ class FuturesPandasAggregator(Atom):
         :meth:`.required_timedelta`
         """
         selector = cast(FutureSelector, self.contract_selector)
-        start, stop = selector.date_ranges[contract]
+        date_ranges = (
+            selector.date_ranges_next
+            if self.which_contract is ActiveNext.NEXT
+            else selector.date_ranges
+        )
+        start, stop = date_ranges[contract]
         now = utc_now_naive()
         start_date = max(start, self.offset_by_durationStr(now))
         stop_date = min(stop, now)
@@ -367,7 +397,7 @@ class FuturesPandasAggregator(Atom):
                 attempt += 1
 
     async def _pull_history_from_broker(
-        self, contract: ibi.Contract, start_date: datetime, stop_date: datetime
+        self, contract: ibi.Contract, stop_date: datetime
     ) -> ibi.BarDataList:
         try:
             params = {
@@ -385,7 +415,11 @@ class FuturesPandasAggregator(Atom):
 
         params["endDateTime"] = self.to_datetime(stop_date)
         params["contract"] = contract
-        params["durationStr"] = self._streamer_params["durationStr"]
+        params["durationStr"] = ensure_duration_str(
+            self._streamer_params["durationStr"],
+            self._streamer_params["barSizeSetting"],
+            self.session_length,
+        )
         log.warning(f"{self!s} calling broker with params: {params}")
         data_from_broker = await self._historical_data_with_retry(**params)
         if data_from_broker:
@@ -433,9 +467,7 @@ class FuturesPandasAggregator(Atom):
                 log.warning(
                     f"{self!s} requesting data from broker for: {contract.localSymbol}"
                 )
-                bars = await self._pull_history_from_broker(
-                    contract, start_date, stop_date
-                )
+                bars = await self._pull_history_from_broker(contract, stop_date)
 
                 df = pd.DataFrame(bars).set_index("date")
                 try:

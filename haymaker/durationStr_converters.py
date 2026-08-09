@@ -125,6 +125,31 @@ def datapoints_to_durationStr(
         return f"{int(-(-number_of_sessions // 1))} D"
 
 
+def ensure_duration_str(
+    duration_str: str | int,
+    bar_size_setting: str,
+    session_length: timedelta,
+) -> str:
+    """Return an Interactive Brokers duration string.
+
+    Args:
+        duration_str: Ready IB duration string or required number of datapoints.
+        bar_size_setting: IB bar-size setting used for datapoint conversion.
+        session_length: Typical trading-session duration.
+
+    Returns:
+        The supplied string or a duration string calculated from datapoints.
+    """
+
+    if isinstance(duration_str, int):
+        return datapoints_to_durationStr(
+            duration_str,
+            bar_size_setting,
+            session_length,
+        )
+    return duration_str
+
+
 def durationStr_to_datapoints(
     durationStr: str,
     barSizeSetting: str,

@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Type
 
 import pytest
+import pandas as pd
 from contract_details_data import (  # type: ignore
     es_details_chain,
     gold_details_chain,
@@ -190,6 +191,85 @@ def test_date_ranges_correct_dates_assigned_to_contract():
     }
     for contract, (_, roll_date) in selector.date_ranges.items():
         assert roll_dates[contract] == roll_date
+
+
+def test_date_ranges_next_shift_active_ranges_by_roll_margin():
+    selector = FutureSelector.from_details(es_chain, roll_margin_bdays=5)
+    margin = pd.offsets.BusinessDay(selector.roll_margin_bdays)
+
+    assert list(selector.date_ranges_next) == list(selector.date_ranges)
+    assert selector.date_ranges_next is selector.date_ranges_next
+    for contract, (start, stop) in selector.date_ranges.items():
+        assert selector.date_ranges_next[contract] == (
+            start - margin,
+            stop - margin,
+        )
+
+
+@pytest.mark.parametrize(
+    "today,expected_symbol",
+    [
+        (datetime(2025, 12, 10), "ESZ5"),
+        (datetime(2025, 12, 11), "ESH6"),
+        (datetime(2025, 12, 12), "ESH6"),
+        (datetime(2025, 12, 16), "ESH6"),
+    ],
+)
+def test_date_ranges_next_matches_next_contract_selection(
+    today: datetime, expected_symbol: str
+) -> None:
+    """NEXT ranges and point-in-time contract selection share one schedule."""
+    selector = FutureSelector.from_details(
+        es_chain,
+        roll_margin_bdays=3,
+        today=today,
+    )
+
+    contracts_for_date = [
+        contract
+        for contract, (start, stop) in selector.date_ranges_next.items()
+        if start <= today < stop
+    ]
+
+    assert contracts_for_date == [selector.next_contract]
+    assert selector.next_contract.localSymbol == expected_symbol
+
+
+def test_date_ranges_next_counts_weekday_holiday_as_business_day() -> None:
+    """Lock the accepted weekday-only calendar across New Year's Day."""
+    front = Future(
+        conId=1,
+        symbol="TEST",
+        lastTradeDateOrContractMonth="20260105",
+        exchange="TEST",
+        localSymbol="TESTF6",
+    )
+    successor = Future(
+        conId=2,
+        symbol="TEST",
+        lastTradeDateOrContractMonth="20260205",
+        exchange="TEST",
+        localSymbol="TESTG6",
+    )
+
+    def selector_on(today: datetime) -> FutureSelector:
+        """Build a selector at a specific point in the boundary window."""
+        return FutureSelector(
+            [
+                NoOffset(front, roll_bdays=0),
+                NoOffset(successor, roll_bdays=0),
+            ],
+            roll_bdays=0,
+            roll_margin_bdays=3,
+            today=today,
+        )
+
+    before_boundary = selector_on(datetime(2025, 12, 30))
+    at_boundary = selector_on(datetime(2025, 12, 31))
+
+    assert at_boundary.date_ranges_next[successor][0] == datetime(2025, 12, 31)
+    assert before_boundary.next_contract == front
+    assert at_boundary.next_contract == successor
 
 
 @pytest.mark.parametrize("symbol,expected_last_trading_day", es_parameters)
