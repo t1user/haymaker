@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from typing import cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import ib_insync as ibi
@@ -451,6 +452,91 @@ def test_df_combined_correctly_in_append_data_overlapping():
         aggregator.append_data(last_batch)
 
     pd.testing.assert_frame_equal(aggregator._df, sample_df)
+
+
+@pytest.mark.asyncio
+async def test_process_data_bootstrap_converts_complete_snapshot() -> None:
+    """Bootstrap converts and retains the complete cumulative snapshot."""
+    snapshot = cast(ibi.BarDataList, sample_barDataList[:5])
+    expected = pd.DataFrame(snapshot).set_index("date")
+    aggregator = make_aggregator()
+    aggregator._streamer_params = {"durationStr": 1}
+    output = Mock()
+    aggregator.dataEvent.connect(output)
+
+    with patch.object(
+        aggregator,
+        "process_current_data",
+        side_effect=lambda df: df,
+    ) as process_current_data:
+        await aggregator.process_data(snapshot)
+
+    pd.testing.assert_frame_equal(process_current_data.call_args.args[0], expected)
+    pd.testing.assert_frame_equal(aggregator._df, expected)
+    assert aggregator._last_data_point == snapshot[-1].date
+    output.assert_called_once_with(aggregator._df)
+
+
+@pytest.mark.asyncio
+async def test_process_data_converts_only_bars_after_watermark() -> None:
+    """Steady-state processing converts only the unseen snapshot tail."""
+    previous_snapshot = cast(ibi.BarDataList, sample_barDataList[:-1])
+    snapshot = cast(ibi.BarDataList, sample_barDataList[:])
+    aggregator = make_aggregator()
+    aggregator._streamer_params = {"durationStr": 1}
+    aggregator._df = pd.DataFrame(previous_snapshot).set_index("date")
+    aggregator._last_data_point = previous_snapshot[-1].date
+    expected_tail = pd.DataFrame(snapshot[-1:]).set_index("date")
+    expected = pd.DataFrame(snapshot).set_index("date")
+
+    with (
+        patch.object(
+            aggregator,
+            "process_current_data",
+            side_effect=lambda df: df,
+        ) as process_current_data,
+        patch(
+            "haymaker.components.dataframe_aggregators.misc.concat_dfs"
+        ) as concat_dfs,
+    ):
+        await aggregator.process_data(snapshot)
+
+    pd.testing.assert_frame_equal(process_current_data.call_args.args[0], expected_tail)
+    pd.testing.assert_frame_equal(aggregator._df, expected)
+    assert aggregator._last_data_point == snapshot[-1].date
+    concat_dfs.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_data_ignores_snapshot_without_new_bars() -> None:
+    """A snapshot at the watermark performs no conversion or emission."""
+    snapshot = cast(ibi.BarDataList, sample_barDataList[:])
+    aggregator = make_aggregator()
+    aggregator._df = pd.DataFrame(snapshot).set_index("date")
+    aggregator._last_data_point = snapshot[-1].date
+    output = Mock()
+    aggregator.dataEvent.connect(output)
+
+    with patch.object(aggregator, "process_current_data") as process_current_data:
+        await aggregator.process_data(snapshot)
+
+    process_current_data.assert_not_called()
+    output.assert_not_called()
+
+
+def test_contract_change_resets_dataframe_watermark() -> None:
+    """A new concrete contract requires a fresh cumulative bootstrap."""
+    aggregator = make_aggregator()
+    aggregator._df = pd.DataFrame(sample_barDataList).set_index("date")
+    aggregator._last_data_point = sample_barDataList[-1].date
+
+    aggregator.onContractChanged(
+        ibi.Future(localSymbol="ESZ5"),
+        ibi.Future(localSymbol="ESH6"),
+    )
+
+    assert aggregator._df.empty
+    assert aggregator._last_data_point is None
 
 
 @pytest.mark.asyncio

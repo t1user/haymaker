@@ -11,7 +11,7 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field, fields, is_dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import cached_property
 from typing import Any, Awaitable, ClassVar, Generator, Literal, cast
 
@@ -125,6 +125,9 @@ class FuturesPandasAggregator(Atom):
     _save_timer: ev.Timer | None = field(init=False, repr=False, default=None)
     _timer_task: asyncio.Task | None = field(init=False, repr=False, default=None)
     _save_in_progress: bool = field(init=False, repr=False, default=False)
+    _last_data_point: date | datetime | None = field(
+        init=False, repr=False, default=None
+    )
 
     def __post_init__(self) -> None:
         if self.datastore is False or self.datastore is None:
@@ -239,12 +242,19 @@ class FuturesPandasAggregator(Atom):
         await self._queue.put(data)
 
     async def process_data(self, data: ibi.BarDataList) -> None:
-        raw_df = pd.DataFrame(data).set_index("date")
+        bars = self._unseen_bars(data)
+        if not bars:
+            return
+
+        incremental_update = self._last_data_point is not None and not self._df.empty
+        raw_df = pd.DataFrame(bars).set_index("date")
         current_df = self.process_current_data(raw_df)
         # implicit assumption: if we already have data in `self._df`,
         # together with the newly received data, it should give enough
         # datapoints
-        if (not self._df.empty) or (len(current_df) >= self.datapoints):
+        if incremental_update:
+            df = self._append_new_data(current_df)
+        elif (not self._df.empty) or (len(current_df) >= self.datapoints):
             df = self.append_data(current_df)
         else:
             back_data = await self.acquire_back_data(raw_df)
@@ -260,10 +270,47 @@ class FuturesPandasAggregator(Atom):
                 f"{self!s} acquired too little back data, "
                 f"acquired: {len(df)} required: {self.datapoints}"
             )
+        self._last_data_point = bars[-1].date
         self.dataEvent.emit(self._df)
+
+    def _unseen_bars(self, data: ibi.BarDataList) -> list[ibi.BarData]:
+        """Return the chronologically ordered tail after the watermark.
+
+        Args:
+            data: Complete cumulative snapshot from the historical streamer.
+
+        Returns:
+            All bars during bootstrap, otherwise only bars newer than the last
+            successfully processed bar.
+        """
+
+        if self._last_data_point is None or self._df.empty:
+            return list(data)
+
+        start = len(data)
+        while start and data[start - 1].date > self._last_data_point:
+            start -= 1
+        return list(data[start:])
 
     def append_data(self, *dfs: pd.DataFrame) -> pd.DataFrame:
         self._df = misc.concat_dfs(self._df, *dfs)
+        return self._df
+
+    def _append_new_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Append an unseen monotonic tail without de-duplicating full history.
+
+        Args:
+            df: Newly processed rows for the current contract.
+
+        Returns:
+            The complete maintained DataFrame.
+        """
+
+        if df.empty:
+            return self._df
+        if not df.index.is_monotonic_increasing or df.index[0] <= self._df.index[-1]:
+            return self.append_data(df)
+        self._df = pd.concat((self._df, df))
         return self._df
 
     async def save_data(self, *args) -> None:
@@ -561,6 +608,7 @@ class FuturesPandasAggregator(Atom):
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> None:
         self._df = pd.DataFrame()
+        self._last_data_point = None
         super().onContractChanged(old_contract, new_contract)
 
     def __str__(self) -> str:
