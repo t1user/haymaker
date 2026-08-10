@@ -352,6 +352,20 @@ def test_unknown_high_code_broker_message_remains_debug(controller, caplog):
     assert caplog.records[-1].levelno == logging.DEBUG
 
 
+def test_unaccepted_paper_trading_disclaimer_is_logged_as_error(controller, caplog):
+    caplog.set_level(logging.ERROR)
+
+    controller.onErrEvent(
+        -1,
+        10141,
+        "Paper trading disclaimer must first be accepted for API connection.",
+        ibi.Contract(),
+    )
+
+    assert "Broker message 10141: Paper trading disclaimer" in caplog.text
+    assert caplog.records[-1].levelno == logging.ERROR
+
+
 def test_order_rejection_is_visible_and_registered(controller_runtime, caplog):
     runtime, controller, _ = controller_runtime
     trade = controller.trade(

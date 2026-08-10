@@ -822,7 +822,7 @@ class Controller(Atom):
             log.debug("Broker message %s: %s %s", errorCode, errorString, context)
         elif errorCode in (165, 321, 322, 323):
             log.debug("Broker message %s: %s %s", errorCode, errorString, context)
-        elif errorCode < 400:
+        elif errorCode == 10141 or errorCode < 400:
             log.error("Broker message %s: %s %s", errorCode, errorString, context)
         else:
             log.debug("Broker message %s: %s %s", errorCode, errorString, context)

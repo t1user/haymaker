@@ -94,6 +94,9 @@ These commonly affect logging and user attention rather than socket recovery.
    * - ``347``
      - Short sale slot validation failed.
      - Potentially actionable order/request validation issue.
+   * - ``10141``
+     - Paper-trading disclaimer has not been accepted for the API connection.
+     - Error; the disclaimer must be accepted before the API can connect.
    * - ``500+``
      - Client-side API message range.
      - Usually debug unless it causes failed recovery or failed trading action.
