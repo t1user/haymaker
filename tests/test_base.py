@@ -264,6 +264,46 @@ def test_contract_descriptor_rejects_wrong_type(atom_runtime):
         Atom().contract = "ES"
 
 
+@pytest.mark.parametrize("which_contract", [ActiveNext.ACTIVE, ActiveNext.NEXT])
+def test_contract_descriptor_accepts_operational_roles(
+    atom_runtime, monkeypatch, which_contract
+):
+    atom = Atom()
+    blueprint = ibi.Future("ES", exchange="CME")
+    resolved = ibi.Future(conId=1, symbol="ES", exchange="CME")
+    atom.contract = blueprint
+    atom.which_contract = which_contract
+    monkeypatch.setattr(
+        atom_runtime.contract_registry,
+        "get_contract",
+        lambda contract, role: resolved,
+    )
+
+    assert atom.contract is resolved
+
+
+def test_contract_descriptor_rejects_previous_instance_role(atom_runtime):
+    atom = Atom()
+    atom.contract = ibi.Future("ES", exchange="CME")
+    atom.which_contract = ActiveNext.PREVIOUS
+
+    with pytest.raises(ValueError, match="supports only ACTIVE or NEXT"):
+        _ = atom.contract
+
+
+def test_contract_descriptor_rejects_previous_class_role(atom_runtime):
+    class PreviousContractAtom(Atom):
+        """Atom configured with the unsupported historical contract role."""
+
+        which_contract = ActiveNext.PREVIOUS
+
+    atom = PreviousContractAtom()
+    atom.contract = ibi.Future("ES", exchange="CME")
+
+    with pytest.raises(ValueError, match="supports only ACTIVE or NEXT"):
+        _ = atom.contract
+
+
 def test_contract_selector_requires_assigned_contract(atom_runtime):
     with pytest.raises(KeyError, match="contract not set"):
         _ = Atom().contract_selector

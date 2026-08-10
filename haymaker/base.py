@@ -36,8 +36,9 @@ class ContractManagingDescriptor:
     """Resolve an Atom's assigned contract through the runtime registry.
 
     Assignment registers an unqualified contract blueprint. Instance access
-    returns the registry's currently selected concrete contract, including the
-    configured ACTIVE or NEXT futures role.
+    returns the registry's currently selected concrete contract for the
+    configured ACTIVE or NEXT futures role. PREVIOUS remains available for
+    direct selector and registry queries, but is not an operational Atom role.
     """
 
     def __set_name__(self, obj: type[Atom], name: str) -> None:
@@ -65,9 +66,15 @@ class ContractManagingDescriptor:
         contract_blueprint = obj.__dict__.get(self.name)
         if contract_blueprint is None:
             return None
+        which_contract = obj.which_contract
+        if which_contract not in (ActiveNext.ACTIVE, ActiveNext.NEXT):
+            raise ValueError(
+                "Atom.which_contract supports only ACTIVE or NEXT, "
+                f"not {which_contract}"
+            )
         try:
             return obj.contract_registry.get_contract(
-                contract_blueprint, obj.which_contract
+                contract_blueprint, which_contract
             )
         except KeyError:
             raise MissingContractError(
@@ -123,9 +130,10 @@ class Atom:
             it is the selected concrete Contract. Components unrelated to a
             single instrument should leave it unset.
         which_contract (ActiveNext): Futures role returned by :attr:`contract`.
-            The default is :attr:`~haymaker.enums.ActiveNext.ACTIVE`; use
-            :attr:`~haymaker.enums.ActiveNext.NEXT` only when the component
-            intentionally operates on the early-entry contract.
+            Supported roles are :attr:`~haymaker.enums.ActiveNext.ACTIVE`, the
+            default, and :attr:`~haymaker.enums.ActiveNext.NEXT` for components
+            that intentionally operate on the early-entry contract. PREVIOUS is
+            reserved for direct selector and registry queries.
         ib (ib_insync.IB): Runtime broker client.
         book (Book): Runtime accounting and recovery service.
         contract_registry (ContractRegistry): Runtime contract qualification
