@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date, datetime, timedelta
 from functools import cached_property
@@ -17,6 +18,7 @@ from typing import Any, Awaitable, ClassVar, Generator, Literal, cast
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
+import numpy as np
 import pandas as pd
 
 from haymaker import misc
@@ -618,8 +620,407 @@ class FuturesPandasAggregator(Atom):
             return f"{self!r}"
 
 
+def _validate_positive_int(value: int, owner: str, parameter: str) -> None:
+    """Validate a positive integer grouping threshold.
+
+    Args:
+        value: Configured threshold.
+        owner: Public component name used in the error message.
+        parameter: Public parameter name used in the error message.
+
+    Raises:
+        TypeError: If ``value`` is not an integer or is a boolean.
+        ValueError: If ``value`` is not positive.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{owner} {parameter} must be an int")
+    if value <= 0:
+        raise ValueError(f"{owner} {parameter} must be positive")
+
+
+def _validate_boundary(value: str, owner: str, parameter: str) -> None:
+    """Validate a left/right grouping-boundary option.
+
+    Args:
+        value: Configured boundary value.
+        owner: Public component name used in the error message.
+        parameter: Public parameter name used in the error message.
+
+    Raises:
+        ValueError: If ``value`` is neither ``"left"`` nor ``"right"``.
+    """
+
+    if value not in ("left", "right"):
+        raise ValueError(f"{owner} {parameter} must be 'left' or 'right'")
+
+
+def _aggregation_rules(columns: pd.Index) -> dict[Any, str]:
+    """Return standard OHLCV aggregation rules for dataframe columns."""
+
+    rules = {column: "last" for column in columns}
+    rules.update(
+        {
+            column: operation
+            for column, operation in {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+                "barCount": "sum",
+            }.items()
+            if column in columns
+        }
+    )
+    return rules
+
+
+def _validate_ohlc(data: pd.DataFrame) -> None:
+    """Require the price columns needed to aggregate bars.
+
+    Args:
+        data: Source dataframe.
+
+    Raises:
+        ValueError: If an OHLC column is absent.
+    """
+
+    required = {"open", "high", "low", "close"}
+    missing = required.difference(data.columns)
+    if missing:
+        raise ValueError(f"data must contain OHLC columns; missing: {sorted(missing)}")
+
+
+def _aggregate_labelled_rows(
+    data: pd.DataFrame,
+    groups: pd.Index,
+    label: Literal["left", "right"],
+) -> pd.DataFrame:
+    """Aggregate source rows identified by positional group labels.
+
+    Args:
+        data: Source OHLC dataframe.
+        groups: One integer group label per source row.
+        label: Whether output uses the first or last source timestamp.
+
+    Returns:
+        Complete grouped dataframe, including its possibly incomplete final row.
+    """
+
+    _validate_ohlc(data)
+    if data.empty:
+        return data.copy()
+
+    original_columns = list(data.columns)
+    working = data.copy()
+    group_column = "__haymaker_group__"
+    timestamp_column = "__haymaker_timestamp__"
+    weighted_column = "__haymaker_weighted_average__"
+    while group_column in working.columns:
+        group_column = f"_{group_column}"
+    while timestamp_column in working.columns:
+        timestamp_column = f"_{timestamp_column}"
+    while weighted_column in working.columns:
+        weighted_column = f"_{weighted_column}"
+
+    working[group_column] = groups.to_numpy()
+    working[timestamp_column] = data.index
+    rules = _aggregation_rules(data.columns)
+    rules[timestamp_column] = "first" if label == "left" else "last"
+    weighted_average = "average" in data.columns and "volume" in data.columns
+    if weighted_average:
+        working[weighted_column] = working["average"] * working["volume"]
+        rules[weighted_column] = "sum"
+
+    grouped = working.groupby(group_column, sort=False).agg(rules)
+    if weighted_average:
+        grouped["average"] = grouped[weighted_column] / grouped["volume"]
+        grouped = grouped.drop(columns=weighted_column)
+    grouped = grouped.set_index(timestamp_column)
+    grouped.index.name = data.index.name
+    return grouped.loc[:, original_columns]
+
+
+def _add_weighted_average(
+    source: pd.DataFrame,
+    grouped: pd.DataFrame,
+    label: Literal["left", "right"],
+) -> pd.DataFrame:
+    """Replace grouped ``average`` values with volume-weighted averages.
+
+    Args:
+        source: Source rows used by :func:`volume_grouper`.
+        grouped: Grouped dataframe returned by :func:`volume_grouper`.
+        label: Whether group indexes identify their first or last source row.
+
+    Returns:
+        ``grouped`` with corrected averages when both required columns exist.
+    """
+
+    if (
+        grouped.empty
+        or "average" not in source.columns
+        or "volume" not in source.columns
+    ):
+        return grouped
+
+    if label == "left":
+        starts = source.index.searchsorted(grouped.index.to_numpy(), side="left")
+    else:
+        ends = source.index.searchsorted(grouped.index.to_numpy(), side="right")
+        starts = np.concatenate(([0], ends[:-1]))
+
+    price_volume = source["average"].to_numpy(dtype=float) * source["volume"].to_numpy(
+        dtype=float
+    )
+    numerators = np.add.reduceat(price_volume, starts)
+    result = grouped.copy()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result["average"] = numerators / result["volume"].to_numpy(dtype=float)
+    return result
+
+
+def _completed_threshold_groups(
+    source: pd.DataFrame,
+    grouped: pd.DataFrame,
+    target: int,
+    field: str,
+    label: Literal["left", "right"],
+) -> pd.DataFrame:
+    """Remove a final cumulative group that has not reached its target.
+
+    Args:
+        source: Source dataframe.
+        grouped: Dataframe grouped by cumulative ``field`` values.
+        target: Minimum completed-group total.
+        field: Source column accumulated toward ``target``.
+        label: Whether group indexes identify their first or last source row.
+
+    Returns:
+        Only groups whose cumulative field has reached ``target``.
+    """
+
+    if grouped.empty:
+        return grouped
+
+    if label == "left":
+        start = source.index.searchsorted(grouped.index[-1], side="left")
+    elif len(grouped) == 1:
+        start = 0
+    else:
+        start = source.index.searchsorted(grouped.index[-2], side="right")
+
+    last_group_total = source.iloc[start:][field].sum(skipna=False)
+    return grouped if last_group_total >= target else grouped.iloc[:-1]
+
+
+def _resample_rows(
+    data: pd.DataFrame,
+    rule: str | timedelta,
+    label: Literal["left", "right"],
+    closed: Literal["left", "right"],
+) -> pd.DataFrame:
+    """Aggregate rows into non-empty pandas time buckets.
+
+    Args:
+        data: Date-indexed source OHLC dataframe.
+        rule: Pandas resampling frequency.
+        label: Boundary used to label output buckets.
+        closed: Boundary included in each output bucket.
+
+    Returns:
+        All non-empty time buckets, including the final incomplete bucket.
+
+    Raises:
+        TypeError: If the source does not use a ``DatetimeIndex``.
+    """
+
+    _validate_ohlc(data)
+    if not isinstance(data.index, pd.DatetimeIndex):
+        raise TypeError("TimeGrouper requires a pandas DatetimeIndex")
+    if data.empty:
+        return data.copy()
+
+    original_columns = list(data.columns)
+    working = data.copy()
+    weighted_column = "__haymaker_weighted_average__"
+    while weighted_column in working.columns:
+        weighted_column = f"_{weighted_column}"
+
+    rules = _aggregation_rules(data.columns)
+    weighted_average = "average" in data.columns and "volume" in data.columns
+    if weighted_average:
+        working[weighted_column] = working["average"] * working["volume"]
+        rules[weighted_column] = "sum"
+
+    resampler = working.resample(rule, label=label, closed=closed)
+    sizes = resampler.size()
+    grouped = resampler.agg(rules).loc[sizes > 0]
+    if weighted_average:
+        grouped["average"] = grouped[weighted_column] / grouped["volume"]
+        grouped = grouped.drop(columns=weighted_column)
+    return grouped.loc[:, original_columns]
+
+
+class _DataFrameGrouper(Atom, ABC):
+    """Recalculate complete grouped frames and emit only new completions."""
+
+    def __init__(self) -> None:
+        self._last_emitted_point: Any | None = None
+        self._initialized = False
+        super().__init__()
+
+    def onData(self, data: pd.DataFrame, *args: Any) -> None:
+        """Regroup a cumulative dataframe and emit on completion progress.
+
+        Args:
+            data: Complete cumulative source dataframe.
+            *args: Additional event values, ignored.
+        """
+
+        assert isinstance(
+            data, pd.DataFrame
+        ), f"{self} accepts only pandas DataFrame not {type(data)}"
+        completed = self._completed_groups(data)
+        if not self._initialized:
+            self._initialized = True
+            if not completed.empty:
+                self._last_emitted_point = completed.index[-1]
+            return
+        if completed.empty:
+            return
+
+        last_completed_point = completed.index[-1]
+        if (
+            self._last_emitted_point is None
+            or last_completed_point > self._last_emitted_point
+        ):
+            self._last_emitted_point = last_completed_point
+            self.dataEvent.emit(completed)
+
+    @abstractmethod
+    def _completed_groups(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Return the complete frame containing only finished groups."""
+
+
 @dataclass(eq=False)
-class VolumeGrouper(Atom):
+class CountGrouper(_DataFrameGrouper):
+    """Regroup a DataFrame into rows containing a fixed source-row count.
+
+    Each output uses the first open, maximum high, minimum low, last close,
+    summed volume and ``barCount``, and a volume-weighted ``average`` when
+    those columns are available. Unknown columns retain their final value.
+    The final short group is excluded.
+
+    Args:
+        count: Positive number of source rows per output row.
+        label: Whether grouped timestamps use the first or last source row.
+
+    Emits:
+        The complete DataFrame of finished groups when a new group closes. The
+        first input establishes the completion watermark and does not emit.
+    """
+
+    count: int
+    label: Literal["left", "right"] = "left"
+
+    def __post_init__(self) -> None:
+        _validate_positive_int(self.count, type(self).__name__, "count")
+        _validate_boundary(self.label, type(self).__name__, "label")
+        super().__init__()
+
+    def _completed_groups(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Return fixed-count groups except for a final short group."""
+
+        groups = pd.RangeIndex(len(data)) // self.count
+        grouped = _aggregate_labelled_rows(data, groups, self.label)
+        if data.empty or len(data) % self.count == 0:
+            return grouped
+        return grouped.iloc[:-1]
+
+
+@dataclass(eq=False)
+class TickGrouper(_DataFrameGrouper):
+    """Regroup a DataFrame by cumulative source ``barCount`` values.
+
+    Whole source rows are assigned to a group, so its final ``barCount`` may
+    exceed ``count``. The final group is excluded until it reaches the target.
+
+    Args:
+        count: Positive minimum tick count for each grouped row.
+        label: Whether grouped timestamps use the first or last source row.
+
+    Emits:
+        The complete DataFrame of finished tick groups when a new group closes.
+        The first input establishes the completion watermark and does not emit.
+    """
+
+    count: int
+    label: Literal["left", "right"] = "left"
+
+    def __post_init__(self) -> None:
+        _validate_positive_int(self.count, type(self).__name__, "count")
+        _validate_boundary(self.label, type(self).__name__, "label")
+        super().__init__()
+
+    def _completed_groups(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Return cumulative tick groups that reached the configured count."""
+
+        grouped = volume_grouper(data, self.count, field="barCount", label=self.label)
+        grouped = _add_weighted_average(data, grouped, self.label)
+        return _completed_threshold_groups(
+            data, grouped, self.count, "barCount", self.label
+        )
+
+
+@dataclass(eq=False)
+class TimeGrouper(_DataFrameGrouper):
+    """Regroup a date-indexed DataFrame into fixed pandas time buckets.
+
+    Empty buckets are omitted. The final bucket is always treated as
+    incomplete and is emitted only after a source row arrives in a later
+    bucket, avoiding premature signals without requiring a trading calendar.
+
+    Args:
+        rule: Positive pandas resampling frequency such as ``"5min"``.
+        label: Boundary used to label output buckets.
+        closed: Boundary included in each output bucket.
+
+    Emits:
+        The complete DataFrame of finished non-empty time buckets when a new
+        bucket closes. The first input establishes the completion watermark and
+        does not emit.
+    """
+
+    rule: str | timedelta
+    label: Literal["left", "right"] = "left"
+    closed: Literal["left", "right"] = "left"
+
+    def __post_init__(self) -> None:
+        _validate_boundary(self.label, type(self).__name__, "label")
+        _validate_boundary(self.closed, type(self).__name__, "closed")
+        if isinstance(self.rule, timedelta):
+            if self.rule <= timedelta(0):
+                raise ValueError("TimeGrouper rule must be positive")
+        else:
+            try:
+                offset = pd.tseries.frequencies.to_offset(self.rule)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"TimeGrouper invalid rule: {self.rule!r}") from exc
+            if offset.n <= 0:
+                raise ValueError("TimeGrouper rule must be positive")
+        super().__init__()
+
+    def _completed_groups(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Return non-empty time buckets except for the final bucket."""
+
+        grouped = _resample_rows(data, self.rule, self.label, self.closed)
+        return grouped.iloc[:-1]
+
+
+@dataclass(eq=False)
+class VolumeGrouper(_DataFrameGrouper):
     """Regroup a DataFrame into completed equal-volume rows.
 
     Use this component in a DataFrame aggregation pipeline when volume-based
@@ -647,63 +1048,32 @@ class VolumeGrouper(Atom):
     volume: int
     group_on: str = "volume"
     label: Literal["left", "right"] = "left"
-    _last_emitted_point: pd.Timestamp | None = field(repr=False, default=None)
-    _initialized: bool = field(init=False, repr=False, default=False)
 
     def __post_init__(self) -> None:
-        if isinstance(self.volume, bool) or not isinstance(self.volume, int):
-            raise TypeError("VolumeGrouper volume must be an int")
-        if self.volume <= 0:
-            raise ValueError("VolumeGrouper volume must be positive")
+        _validate_positive_int(self.volume, type(self).__name__, "volume")
+        _validate_boundary(self.label, type(self).__name__, "label")
         super().__init__()
 
-    def onData(self, data: pd.DataFrame, *args: Any) -> None:
-        df = data
-        assert isinstance(
-            df, pd.DataFrame
-        ), f"{self} accepts only pandas DataFrame not {type(df)}"
-        assert self.group_on in df.columns, (
+    def _completed_groups(self, source: pd.DataFrame) -> pd.DataFrame:
+        """Return cumulative volume groups that reached the configured target."""
+
+        assert self.group_on in source.columns, (
             f"{self} attempts to group on {self.group_on}, which is not present "
             f"in passed DataFrame"
         )
-        grouped = volume_grouper(df, self.volume, field=self.group_on, label=self.label)
-        completed = self._completed_groups(df, grouped)
-        if not self._initialized:
-            self._initialized = True
-            if not completed.empty:
-                self._last_emitted_point = completed.index[-1]
-            return
-        if completed.empty:
-            return
-
-        last_completed_point = completed.index[-1]
-        if (
-            self._last_emitted_point is None
-            or last_completed_point > self._last_emitted_point
-        ):
-            self._last_emitted_point = last_completed_point
-            self.dataEvent.emit(completed)
-
-    def _completed_groups(
-        self, source: pd.DataFrame, grouped: pd.DataFrame
-    ) -> pd.DataFrame:
-        """Return grouped rows whose source volume has reached the target."""
-
-        if grouped.empty:
-            return grouped
-
-        if self.label == "left":
-            start = source.index.searchsorted(grouped.index[-1], side="left")
-        elif len(grouped) == 1:
-            start = 0
-        else:
-            start = source.index.searchsorted(grouped.index[-2], side="right")
-
-        last_group_total = source.iloc[start:][self.group_on].sum(skipna=False)
-        return grouped if last_group_total >= self.volume else grouped.iloc[:-1]
+        grouped = volume_grouper(
+            source, self.volume, field=self.group_on, label=self.label
+        )
+        grouped = _add_weighted_average(source, grouped, self.label)
+        return _completed_threshold_groups(
+            source, grouped, self.volume, self.group_on, self.label
+        )
 
 
 __all__ = [
+    "CountGrouper",
     "FuturesPandasAggregator",
+    "TickGrouper",
+    "TimeGrouper",
     "VolumeGrouper",
 ]

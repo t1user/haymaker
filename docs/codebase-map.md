@@ -112,8 +112,8 @@ The research package is intentionally separate from live execution. It works dir
   count, volume, tick, time, and pass-through eventkit filters.
 - `haymaker/components/dataframe_aggregators.py`: the separate public
   DataFrame aggregation family. `FuturesPandasAggregator` restores, stitches,
-  saves, and emits complete futures history; `VolumeGrouper` performs
-  DataFrame-native equal-volume grouping.
+  saves, and emits complete futures history; count, volume, tick, and time
+  groupers recalculate completed bars from cumulative DataFrames.
 - `haymaker/components/timeouts.py`: user-owned generic event inactivity
   callbacks and workload-owned, market-session-aware stale-data monitoring.
 - `haymaker/components/signal_models.py`: general SignalModel with a

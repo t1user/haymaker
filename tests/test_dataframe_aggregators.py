@@ -13,7 +13,10 @@ from sample_barDataList import sample_barDataList
 
 from haymaker.base import ActiveNext, Atom
 from haymaker.components.dataframe_aggregators import (
+    CountGrouper,
     FuturesPandasAggregator,
+    TickGrouper,
+    TimeGrouper,
     VolumeGrouper,
     WrongStreamer,
 )
@@ -942,6 +945,25 @@ def volume_frame(volumes: list[int]) -> pd.DataFrame:
     )
 
 
+def grouping_frame() -> pd.DataFrame:
+    """Return varied OHLCV rows for dataframe-grouper tests."""
+
+    index = pd.date_range("2026-01-01 09:00", periods=5, freq="min", name="date")
+    return pd.DataFrame(
+        {
+            "open": [10.0, 11.0, 13.0, 14.0, 15.0],
+            "high": [12.0, 14.0, 15.0, 16.0, 18.0],
+            "low": [9.0, 10.0, 12.0, 13.0, 14.0],
+            "close": [11.0, 13.0, 14.0, 15.0, 17.0],
+            "volume": [2, 3, 4, 4, 1],
+            "average": [10.0, 12.0, 14.0, 16.0, 18.0],
+            "barCount": [2, 3, 4, 4, 1],
+            "marker": ["a", "b", "c", "d", "e"],
+        },
+        index=index,
+    )
+
+
 @pytest.mark.parametrize("volumes", [[], [40]])
 def test_volume_grouper_accepts_initial_frame_without_completed_group(volumes):
     """Short initial histories establish state without raising or emitting."""
@@ -985,3 +1007,155 @@ def test_volume_grouper_rejects_non_integer_target(volume):
 
     with pytest.raises(TypeError, match="must be an int"):
         VolumeGrouper(volume)
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_index"),
+    [
+        ("left", ["2026-01-01 09:00", "2026-01-01 09:02"]),
+        ("right", ["2026-01-01 09:01", "2026-01-01 09:03"]),
+    ],
+)
+def test_count_grouper_emits_complete_fixed_count_groups(label, expected_index):
+    """Count grouping applies OHLCV rules and excludes a short final group."""
+
+    frame = grouping_frame()
+    grouper = CountGrouper(2, label=label)
+    emissions = []
+    grouper.dataEvent += emissions.append
+    grouper.onData(frame.iloc[:3])
+
+    grouper.onData(frame.iloc[:4])
+
+    assert len(emissions) == 1
+    grouped = emissions[0]
+    assert grouped.index.tolist() == [pd.Timestamp(value) for value in expected_index]
+    assert grouped.iloc[0].to_dict() == {
+        "open": 10.0,
+        "high": 14.0,
+        "low": 9.0,
+        "close": 13.0,
+        "volume": 5,
+        "average": pytest.approx(11.2),
+        "barCount": 5,
+        "marker": "b",
+    }
+    assert grouped.iloc[1]["marker"] == "d"
+
+
+def test_tick_grouper_closes_a_group_that_overshoots_its_target():
+    """Whole source rows may take a completed tick group beyond its target."""
+
+    frame = grouping_frame()
+    grouper = TickGrouper(5)
+    emissions = []
+    grouper.dataEvent += emissions.append
+    grouper.onData(frame.iloc[:3])
+
+    grouper.onData(frame.iloc[:4])
+
+    assert len(emissions) == 1
+    grouped = emissions[0]
+    assert grouped["barCount"].tolist() == [5, 8]
+    assert grouped["average"].tolist() == pytest.approx([11.2, 15.0])
+
+
+@pytest.mark.parametrize("label", ["left", "right"])
+def test_volume_grouper_calculates_volume_weighted_average(label):
+    """Volume groups use the weighted average rather than the final source value."""
+
+    frame = grouping_frame()
+    grouper = VolumeGrouper(5, label=label)
+    emissions = []
+    grouper.dataEvent += emissions.append
+    grouper.onData(frame.iloc[:3])
+
+    grouper.onData(frame.iloc[:4])
+
+    assert len(emissions) == 1
+    assert emissions[0]["average"].tolist() == pytest.approx([11.2, 15.0])
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_index"),
+    [
+        ("left", pd.Timestamp("2026-01-01 09:00")),
+        ("right", pd.Timestamp("2026-01-01 09:02")),
+    ],
+)
+def test_time_grouper_waits_for_a_row_in_the_next_bucket(label, expected_index):
+    """A time bucket emits only after a later bucket has received source data."""
+
+    frame = grouping_frame()
+    grouper = TimeGrouper("2min", label=label)
+    emissions = []
+    grouper.dataEvent += emissions.append
+    grouper.onData(frame.iloc[:2])
+
+    grouper.onData(frame.iloc[:3])
+
+    assert len(emissions) == 1
+    grouped = emissions[0]
+    assert grouped.index.tolist() == [expected_index]
+    assert grouped.iloc[0]["average"] == pytest.approx(11.2)
+
+
+def test_time_grouper_omits_empty_buckets():
+    """Calendar gaps do not create synthetic bars."""
+
+    first = grouping_frame().iloc[[0]].copy()
+    later = grouping_frame().iloc[[1]].copy()
+    later.index = pd.DatetimeIndex([pd.Timestamp("2026-01-01 09:10")], name="date")
+    grouper = TimeGrouper("5min")
+    emissions = []
+    grouper.dataEvent += emissions.append
+    grouper.onData(first)
+
+    grouper.onData(pd.concat((first, later)))
+
+    assert len(emissions) == 1
+    assert emissions[0].index.tolist() == [pd.Timestamp("2026-01-01 09:00")]
+
+
+@pytest.mark.parametrize("grouper_type", [CountGrouper, TickGrouper])
+@pytest.mark.parametrize("target", [0, -1])
+def test_count_groupers_reject_non_positive_targets(grouper_type, target):
+    """Count- and tick-group thresholds must be positive."""
+
+    with pytest.raises(ValueError, match="must be positive"):
+        grouper_type(target)
+
+
+@pytest.mark.parametrize("grouper_type", [CountGrouper, TickGrouper])
+@pytest.mark.parametrize("target", [True, 2.5])
+def test_count_groupers_reject_non_integer_targets(grouper_type, target):
+    """Count- and tick-group thresholds require real integers."""
+
+    with pytest.raises(TypeError, match="must be an int"):
+        grouper_type(target)
+
+
+@pytest.mark.parametrize("grouper_type", [CountGrouper, TickGrouper, VolumeGrouper])
+def test_row_groupers_reject_unknown_labels(grouper_type):
+    """Row-based groupers accept only left or right timestamp labels."""
+
+    with pytest.raises(ValueError, match="label must be 'left' or 'right'"):
+        grouper_type(2, label="middle")
+
+
+@pytest.mark.parametrize("rule", ["", timedelta(0)])
+def test_time_grouper_rejects_invalid_or_non_positive_rules(rule):
+    """Time grouping requires a valid positive pandas frequency."""
+
+    with pytest.raises(ValueError, match="TimeGrouper"):
+        TimeGrouper(rule)
+
+
+def test_time_grouper_requires_datetime_index():
+    """Time buckets cannot be computed from a non-temporal index."""
+
+    grouper = TimeGrouper("5min")
+    frame = grouping_frame().reset_index(drop=True)
+
+    with pytest.raises(TypeError, match="DatetimeIndex"):
+        grouper.onData(frame)

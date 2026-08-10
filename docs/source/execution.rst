@@ -304,9 +304,26 @@ The DataFrame components are public from both
 ``haymaker.components.dataframe_aggregators`` and the package-level
 ``haymaker.components`` toolbox.
 
+The DataFrame groupers recalculate their complete output from each cumulative
+input frame and emit only when a new group has completed. ``CountGrouper``
+uses a fixed number of source rows, ``VolumeGrouper`` and ``TickGrouper`` use
+cumulative thresholds, and ``TimeGrouper`` uses pandas time buckets. The final
+incomplete group is withheld. Time grouping also omits empty buckets and waits
+for a row in the following bucket before treating the previous one as complete.
+Grouped rows use first/max/min/last OHLC, summed volume and ``barCount``, a
+volume-weighted ``average``, and the last value of any other column.
+No pass-through grouper is needed: connect ``FuturesPandasAggregator`` directly
+to the next component when no regrouping is required.
+
 .. autoclass:: haymaker.components.FuturesPandasAggregator
 
+.. autoclass:: haymaker.components.CountGrouper
+
 .. autoclass:: haymaker.components.VolumeGrouper
+
+.. autoclass:: haymaker.components.TickGrouper
+
+.. autoclass:: haymaker.components.TimeGrouper
 
 .. autoexception:: haymaker.components.dataframe_aggregators.MissingStreamerParam
 
