@@ -1,7 +1,9 @@
 import asyncio
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, Mock, patch
 
+import eventkit as ev  # type: ignore
 import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
@@ -11,6 +13,8 @@ from haymaker.components.aggregators import (
     BarAggregator,
     CountBars,
     NoFilter,
+    TickBars,
+    TimeBars,
     VolumeBars,
     WrongStreamer,
 )
@@ -49,6 +53,130 @@ def test_grouping_filter_does_not_mutate_shared_source_bars(bar_filter):
     assert first == expected_first
     assert second == expected_second
     assert bar_filter.bars[0] is not first
+
+
+def test_CountBars_calculates_volume_weighted_average():
+    bar_filter = CountBars(2)
+
+    bar_filter.on_source(
+        ibi.BarData(open=100, high=101, low=99, close=100, volume=10, average=100)
+    )
+    bar_filter.on_source(
+        ibi.BarData(open=200, high=201, low=199, close=200, volume=30, average=200)
+    )
+
+    assert bar_filter.bars[-1].average == 175
+
+
+def test_TickBars_handles_threshold_overshoot_without_mutating_source():
+    bar_filter = TickBars(5)
+    output = Mock()
+    bar_filter.connect(output)
+    first = ibi.BarData(
+        open=100,
+        high=101,
+        low=99,
+        close=100,
+        volume=10,
+        average=100,
+        barCount=3,
+    )
+    second = ibi.BarData(
+        open=200,
+        high=201,
+        low=199,
+        close=200,
+        volume=30,
+        average=200,
+        barCount=3,
+    )
+    expected_first = replace(first)
+    expected_second = replace(second)
+
+    bar_filter.on_source(first)
+    bar_filter.on_source(second)
+
+    assert first == expected_first
+    assert second == expected_second
+    assert bar_filter.bars[-1].barCount == 6
+    assert bar_filter.bars[-1].average == 175
+    output.assert_called_once_with(bar_filter.bars)
+
+
+def test_TimeBars_aggregates_periods_without_mutating_source():
+    timer = ev.Event("timer")
+    bar_filter = TimeBars(timer)
+    output = Mock()
+    bar_filter.connect(output)
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first = ibi.BarData(
+        date=start,
+        open=100,
+        high=101,
+        low=99,
+        close=100,
+        volume=10,
+        average=100,
+        barCount=2,
+    )
+    second = ibi.BarData(
+        date=start + timedelta(seconds=30),
+        open=200,
+        high=201,
+        low=199,
+        close=200,
+        volume=30,
+        average=200,
+        barCount=4,
+    )
+    third = ibi.BarData(
+        date=start + timedelta(minutes=1),
+        open=300,
+        high=301,
+        low=299,
+        close=300,
+        volume=20,
+        average=300,
+        barCount=5,
+    )
+    expected = [replace(bar) for bar in (first, second, third)]
+
+    timer.emit(start)
+    bar_filter.on_source(first)
+    bar_filter.on_source(second)
+    timer.emit(start + timedelta(minutes=1))
+    bar_filter.on_source(third)
+    timer.emit(start + timedelta(minutes=2))
+
+    assert [first, second, third] == expected
+    assert bar_filter.bars[0].open == 100
+    assert bar_filter.bars[0].high == 201
+    assert bar_filter.bars[0].low == 99
+    assert bar_filter.bars[0].close == 200
+    assert bar_filter.bars[0].volume == 40
+    assert bar_filter.bars[0].average == 175
+    assert bar_filter.bars[0].barCount == 6
+    assert bar_filter.bars[1].average == 300
+    assert output.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("filter_type", "threshold"),
+    [(CountBars, 0), (VolumeBars, -1), (TickBars, 0)],
+)
+def test_grouping_filters_require_positive_threshold(filter_type, threshold):
+    with pytest.raises(ValueError, match="must be positive"):
+        filter_type(threshold)
+
+
+def test_BarAggregator_rejects_TimeBars():
+    with pytest.raises(TypeError, match="historical backfills"):
+        BarAggregator(TimeBars(ev.Timer(60)))
+
+
+def test_BarAggregator_rejects_unknown_future_adjustment():
+    with pytest.raises(ValueError, match="future_adjust_type"):
+        BarAggregator(NoFilter(), future_adjust_type="invalid")  # type: ignore[arg-type]
 
 
 def test_onStart_receives_streamer(Atom):
@@ -302,6 +430,25 @@ async def test_BarAggregator__of_bars_after_restart__adjustment_required(
     assert len(output.onData_data) == len(adjusted)
     for left, right in zip(output.onData_data, adjusted):
         assert left == right
+    assert output.onData_counter == 1
+
+
+@pytest.mark.asyncio
+async def test_BarAggregator_disabled_future_adjustment_survives_contract_change(
+    source_aggregator_output,
+):
+    source, aggregator, output = source_aggregator_output
+    aggregator.future_adjust_type = None
+
+    source.dataEvent.emit(sample_barDataList[:-1])
+    await wait_for_condition(lambda: output.onData_counter)
+    output.reset_data()
+
+    aggregator.onContractChanged(ibi.Future(conId=5), ibi.Future(conId=6))
+    source.dataEvent.emit(sample_barDataList)
+    await wait_for_condition(lambda: output.onData_counter)
+
+    assert aggregator._future_adjust_flag is False
     assert output.onData_counter == 1
 
 
@@ -635,6 +782,24 @@ async def test_BarAggregator_single_bar_data(source_aggregator_output):
     assert output.onData_counter == 1
     assert len(output.onData_data) == 1
     assert output.onData_data[0] == sample_barDataList[0]
+
+
+@pytest.mark.asyncio
+async def test_BarAggregator_single_bar_data_after_initialization(
+    source_aggregator_output,
+):
+    source, aggregator, output = source_aggregator_output
+    first = ibi.BarDataList([sample_barDataList[0]])
+    second = ibi.BarDataList([sample_barDataList[1]])
+
+    source.dataEvent.emit(first)
+    await wait_for_condition(lambda: output.onData_counter)
+    output.reset_data()
+    source.dataEvent.emit(second)
+    await wait_for_condition(lambda: output.onData_counter)
+
+    assert output.onData_counter == 1
+    assert aggregator.filter.bars[-1] == second[-1]
 
 
 @pytest.mark.asyncio

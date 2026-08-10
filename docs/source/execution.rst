@@ -267,6 +267,9 @@ Bar filters
 
 The filter objects below group source bars and retain their output
 ``BarDataList``. ``NoFilter`` preserves one output bar per input bar.
+``TimeBars`` is a live timer-driven event operator and cannot be used as a
+``BarAggregator`` filter because historical backfills do not follow wall-clock
+timer boundaries.
 
 .. autoclass:: haymaker.components.CountBars
 

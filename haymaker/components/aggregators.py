@@ -4,6 +4,7 @@ import asyncio
 import copy
 import itertools
 import logging
+import math
 import operator as op
 from collections import deque
 from collections.abc import Callable
@@ -30,10 +31,12 @@ class BarAggregator(Atom):
 
     The aggregator queues incoming ``BarDataList`` snapshots, backfills unseen
     completed bars in order, and emits only current filter output. It is
-    structurally compatible with HistoricalDataStreamer.
+    structurally compatible with HistoricalDataStreamer. Timer-driven filters
+    are not supported because historical backfills do not follow wall-clock
+    boundaries.
 
     Args:
-        filter: Count-, volume-, time-, or pass-through bar operation.
+        filter: Count-, tick-count-, volume-, or pass-through bar operation.
         future_adjust_type: ``"add"`` or ``"mul"`` back-adjusts retained
             prices after ACTIVE changes; ``None`` disables adjustment.
 
@@ -49,11 +52,17 @@ class BarAggregator(Atom):
 
     def __init__(
         self,
-        filter: CountBars | VolumeBars | TimeBars | NoFilter,
+        filter: CountBars | VolumeBars | TickBars | NoFilter,
         future_adjust_type: Literal["add", "mul", None] = "add",
-    ):
+    ) -> None:
+        if isinstance(filter, TimeBars):
+            raise TypeError(
+                "TimeBars cannot be used with BarAggregator historical backfills"
+            )
+        if future_adjust_type not in ("add", "mul", None):
+            raise ValueError("future_adjust_type must be 'add', 'mul', or None")
         Atom.__init__(self)
-        self.filter: CountBars | VolumeBars | TimeBars | NoFilter = filter
+        self.filter: CountBars | VolumeBars | TickBars | NoFilter = filter
         self.filter.connect(self.onDataBar)
         self.future_adjust_type = future_adjust_type
         # if future needs to be adjusted; set by onContractChanged
@@ -146,22 +155,23 @@ class BarAggregator(Atom):
         if self._future_adjust_flag:
             self.adjust_future(data_)
 
-        data, last_bar = data_[:-1], data_[-1]
+        last_bar = data_[-1]
 
         # wait for any ongoing backfill to complete
         await self._backfill_event.wait()
 
         # this is a fresh start
         if len(self.filter.bars) == 0:
-            await self.backfill(data)
+            await self.backfill(data_[:-1])
 
         # this is backfill after restart
-        elif self._last_data_point and (data[-1].date > self._last_data_point):
+        elif self._last_data_point:
             # we already have some data in the filter, we expect to add
             # only last few bars so its faster to iterate backwards to
-            # fine the new data
+            # find the new data
             accumulator: deque[ibi.BarData] = deque()
-            for bar in reversed(data):
+            for index in range(len(data_) - 2, -1, -1):
+                bar = data_[index]
                 if bar.date > self._last_data_point:
                     accumulator.appendleft(bar)
                 else:
@@ -220,6 +230,10 @@ class BarAggregator(Atom):
         be adjusted to
         """
 
+        if not self.filter.bars:
+            self._future_adjust_flag = False
+            return
+
         log.warning(f"{self!s} adjusting future.")
 
         old_bar = self.filter.bars[-1]
@@ -228,11 +242,14 @@ class BarAggregator(Atom):
             if bar_.date == old_bar.date:
                 new_bar = bar_
                 break
-        assert new_bar, f"{self!s} failed future adjustment: non-overlapping series."
+        if new_bar is None:
+            raise RuntimeError(
+                f"{self!s} failed future adjustment: non-overlapping series."
+            )
         reverse_operator = self.reverse_operator
         operator = self.operator
-        assert reverse_operator is not None
-        assert operator is not None
+        if reverse_operator is None or operator is None:
+            raise RuntimeError(f"{self!s} has no configured futures adjustment")
 
         value = reverse_operator(new_bar.close, old_bar.close)
         log.warning(
@@ -249,13 +266,15 @@ class BarAggregator(Atom):
     def onContractChanged(
         self, old_contract: ibi.Contract, new_contract: ibi.Contract
     ) -> None:
-        assert self._queue.qsize() == 0, (
-            f"{self!s} cannot process contract changed because there "
-            f"are unprocessed items in the queue."
-        )
-        self._future_adjust_flag = True
+        if self._queue.qsize() != 0:
+            raise RuntimeError(
+                f"{self!s} cannot process contract changed because there "
+                f"are unprocessed items in the queue."
+            )
+        self._future_adjust_flag = self.future_adjust_type is not None
         super().onContractChanged(old_contract, new_contract)
-        log.warning(f"{self!s} will back-adjust data for {old_contract}")
+        if self._future_adjust_flag:
+            log.warning(f"{self!s} will back-adjust data for {old_contract}")
 
     @cached_property
     def _id(self) -> int:
@@ -282,6 +301,8 @@ class CountBars(ev.Op):
     bars: ibi.BarDataList
 
     def __init__(self, count: int, source: ev.Event | None = None, *, label: str = ""):
+        if count <= 0:
+            raise ValueError("count must be positive")
         ev.Op.__init__(self, source)
         self._count = count
         self.bars = ibi.BarDataList()
@@ -299,10 +320,10 @@ class CountBars(ev.Op):
             bar.low = min(bar.low, new_bar.low)
             bar.close = new_bar.close
             bar.volume += new_bar.volume
-            bar.average = new_bar.average * new_bar.volume
+            bar.average += new_bar.average * new_bar.volume
             bar.barCount += 1
         if bar.barCount == self._count:
-            bar.average = bar.average / bar.volume
+            bar.average = bar.average / bar.volume if bar.volume else 0.0
             self.bars.updateEvent.emit(self.bars, True)
             self.emit(self.bars)
 
@@ -334,6 +355,8 @@ class VolumeBars(ev.Op):
     def __init__(
         self, volume: int, source: ev.Event | None = None, *, label: str = ""
     ) -> None:
+        if volume <= 0:
+            raise ValueError("volume must be positive")
         ev.Op.__init__(self, source)
         self._volume = volume
         self.bars = ibi.BarDataList()
@@ -393,15 +416,19 @@ class TickBars(ev.Op):
     def __init__(
         self, count: int, source: ev.Event | None = None, *, label: str = ""
     ) -> None:
+        if count <= 0:
+            raise ValueError("count must be positive")
         ev.Op.__init__(self, source)
         self._count = count
         self.bars = ibi.BarDataList()
         self.label = label
 
     def on_source(self, new_bar: ibi.BarData, *args) -> None:
-        if not self.bars or self.bars[-1].barCount == self._count:
-            bar = new_bar
-            new_bar.average = new_bar.average * new_bar.volume
+        if new_bar.volume < 0 or new_bar.barCount < 0:
+            return
+        if not self.bars or self.bars[-1].barCount >= self._count:
+            bar = copy.copy(new_bar)
+            bar.average = new_bar.average * new_bar.volume
             self.bars.append(bar)
         else:
             bar = self.bars[-1]
@@ -409,10 +436,10 @@ class TickBars(ev.Op):
             bar.low = min(bar.low, new_bar.low)
             bar.close = new_bar.close
             bar.volume += new_bar.volume
-            bar.average = new_bar.average * new_bar.volume
+            bar.average += new_bar.average * new_bar.volume
             bar.barCount += new_bar.barCount
-        if bar.barCount == self._count:
-            bar.average = bar.average / bar.volume
+        if bar.barCount >= self._count:
+            bar.average = bar.average / bar.volume if bar.volume else 0.0
             self.bars.updateEvent.emit(self.bars, True)
             self.emit(self.bars)
 
@@ -441,6 +468,7 @@ class TimeBars(ev.Op):
     __slots__ = ("_timer", "bars", "_running_price_volume", "label")
 
     bars: ibi.BarDataList
+    _timer: ev.Timer | None
 
     def __init__(
         self, timer: ev.Timer, source: ev.Event | None = None, *, label: str = ""
@@ -456,14 +484,19 @@ class TimeBars(ev.Op):
         if not self.bars:
             return
         bar = self.bars[-1]
-        if bar.open == 0:
-            bar = new_bar
+        if math.isnan(bar.open):
+            bar.open = new_bar.open
+            bar.high = new_bar.high
+            bar.low = new_bar.low
+        else:
+            bar.high = max(bar.high, new_bar.high)
+            bar.low = min(bar.low, new_bar.low)
         self._running_price_volume += new_bar.average * new_bar.volume
-        bar.high = max(bar.high, new_bar.high)
-        bar.low = min(bar.low, new_bar.low)
         bar.close = new_bar.close
         bar.volume += new_bar.volume
-        bar.average = self._running_price_volume / bar.volume
+        bar.average = (
+            self._running_price_volume / bar.volume if bar.volume else new_bar.average
+        )
         bar.barCount += new_bar.barCount
 
         self.bars.updateEvent.emit(self.bars, False)
@@ -471,11 +504,21 @@ class TimeBars(ev.Op):
     def _on_timer(self, time) -> None:
         if self.bars:
             bar = self.bars[-1]
-            if bar.close == 0 and len(self.bars) > 1:
+            if math.isnan(bar.close) and len(self.bars) > 1:
                 bar.open = bar.high = bar.low = bar.close = self.bars[-2].close
+                bar.average = bar.close
             self.bars.updateEvent.emit(self.bars, True)
             self.emit(bar)
-        self.bars.append(ibi.BarData(time))
+        self._running_price_volume = 0.0
+        self.bars.append(
+            ibi.BarData(
+                date=time,
+                open=math.nan,
+                high=math.nan,
+                low=math.nan,
+                close=math.nan,
+            )
+        )
 
     def _on_timer_done(self, timer) -> None:
         self._timer = None
