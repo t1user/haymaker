@@ -1,16 +1,20 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-07-30.
+Last updated: 2026-08-12.
 
 ## High-Level Purpose
 
-Haymaker is a Python framework for building Interactive Brokers trading systems on top of `ib_insync`. It has three main operating surfaces:
+Haymaker is a Python framework for building Interactive Brokers trading systems on top of `ib_insync`. It has four main operating surfaces:
 
 - live strategy execution as a long-running event-driven process,
 - historical data download from Interactive Brokers into Arctic/Mongo-backed stores,
+- experimental event-driven simulation of strategy component graphs from saved
+  dataloader bars, and
 - dataframe-first research and vector backtesting utilities.
 
-The package is still alpha-stage. Some public docs describe the live backtester bridge as in development, while the research package contains an active vector backtester and stop engine.
+The package is still alpha-stage. The event-driven simulator is an experimental
+extra and is not fully functional. It is separate from the active research
+vector backtester and stop engine.
 
 ## Architecture Overview
 
@@ -51,6 +55,14 @@ daily UTC futures-roll timers once on the active event loop when
 application and supervisor lifecycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count, owns Mongo/Arctic composition, and injects datastore construction into `Manager`. `Manager` owns the run-scoped `now` and derives the library from data type and bar size, while contract selectors share a target-owned `FuturesSelectionPolicy`. Arctic is the only supported dataloader backend.
+
+The event-driven backtester is a programmatic experimental extra. It installs a
+simulation runtime, invokes a user strategy factory, reads bars and
+contract-specific metadata through the read-only `BacktestDataStore` protocol,
+and replays the data through
+the live-style component graph. Backtester-owned adapters replace Interactive
+Brokers, wall-clock sessions, and external framework persistence; live socket
+supervision and broker-state reconciliation are outside its scope.
 
 The research package is intentionally separate from live execution. It works directly with pandas dataframes and NumPy/Numba kernels to validate signal timing, stops, synthetic data, and performance without depending on live `Atom` pipelines.
 
@@ -203,6 +215,20 @@ reference and never suppresses the Signal.
   `formatDate=2`, keeping intraday points as UTC-aware datetimes and
   daily/weekly/monthly points as dates.
 
+### Event-driven Backtester (Experimental)
+
+- `haymaker/backtester/`: programmatic strategy-graph simulation built around
+  `Backtester(store, start=None, end=None, initial_cash=100_000.0,
+  slippage_ticks=0.0)` and `await backtester.run(strategy_factory)`, with
+  backtester-local runtime, broker, clock, session, fill, and persistence
+  adapters.
+- The input store uses the dataloader's `whatToShow` plus bar-size library naming.
+  Bars define available sessions, while contract expiry and other
+  contract-specific values come only from datastore metadata.
+- Complete MKT, LMT, and STP fills and fixed OCA brackets form the initial
+  execution boundary. Missing commission metadata means zero commission;
+  tick-based slippage and fixed brackets require a positive `minTick`.
+
 ### Research and Backtesting
 
 - `haymaker/research/signal_converters.py`: canonical timing vocabulary and conversions between `signal`, `blip`, `transaction`, and `position`.
@@ -223,6 +249,8 @@ reference and never suppresses the Signal.
 - `dataloader contracts.csv [options]` uses the same command shell, maps the
   positional source file into dataloader configuration, and builds a
   dataloader runtime for the shared `App`.
+- `await Backtester(...).run(strategy_factory)` is the programmatic entry point
+  for experimental event-driven simulation; there is no backtester CLI.
 - Research code usually imports from `haymaker.research`, `haymaker.research.stop`, or `haymaker.research.backtester`.
 - Sphinx docs are built from `docs/source` with `make html` from the `docs/` directory.
 
@@ -317,6 +345,27 @@ reference and never suppresses the Signal.
    before discovering new work. A full process stop writes no separate
    dataloader checkpoint; the next process rediscovers remaining work from
    persisted datastore boundaries.
+
+### Event-driven Backtester Flow
+
+1. The caller supplies a read-only `BacktestDataStore` (normally an
+   `AsyncDataStore`) configured for a dataloader library and calls
+   `await Backtester(...).run(strategy_factory)`.
+2. The backtester reconstructs exact Contracts from series metadata, installs an
+   isolated simulation runtime, and calls the factory to build the ordinary
+   strategy component graph.
+3. The replay clock walks the union of saved bar timestamps. Bar presence is the
+   sole session signal for each Contract; missing data means no session at that
+   point.
+4. A completed bar is emitted through the event graph and asynchronous callbacks
+   settle before the clock advances. Orders created from that observation become
+   eligible only on the Contract's next saved bar.
+5. The simulated broker produces complete MKT, LMT, and STP fills and fixed OCA
+   cancellation events through the normal controller and Book path. Commission
+   defaults to zero when absent; configured slippage and bracket prices require
+   metadata `minTick`.
+6. Trailing and adjustable orders, partial fills, open-position futures rolls,
+   and live sync/recovery are not simulated.
 
 ### Research Flow
 
@@ -446,8 +495,9 @@ dataloader contracts.csv -f settings.yaml
 
 ## Technical Debt
 
-- Some docs still describe backtesting as non-functional, while the research package has an active refactored backtester. Clarify whether that note refers only to live-strategy simulation.
-- `pyproject.toml` has a mypy ignore override for `backtester` with a comment to remove after fixing it.
+- The event-driven backtester remains experimental and incomplete. Its supported
+  order boundary excludes trailing and adjustable orders, partial fills,
+  open-position futures rolls, and live synchronization/recovery.
 - Several modules contain explicit TODO/deprecated comments, especially dataloader futures selection, research numba tools, store deprecations, and old backtester utilities.
 - `haymaker/__init__.py` is empty; most public imports are exposed through subpackages, especially `haymaker.research`.
 

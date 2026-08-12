@@ -94,11 +94,6 @@ mypy_path = "$MYPY_CONFIG_FILE_DIR/stubs"
 disable_error_code = ["return"]
 # check_untyped_defs = true
 
-# remove this after fixing backtester
-[[tool.mypy.overrides]]
-ignore_errors = true
-module = "backtester"
-
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
 module = ["streamlit", "streamlit.*"]

@@ -18,5 +18,6 @@ Haymaker Documentation
    execution
    example
    dataloader
+   backtester
    research/index
    code

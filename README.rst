@@ -11,7 +11,7 @@ Functionality
 * **Strategy Execution**: Run your stategy in production. Haymaker is designed to serve as a long-running process, robustly recovering from any faults regardless whether they are due to local crashes, broker issues or internet disconnections.
 * **Historical Data Download**: Work within IB's limitations to download and store any data that is available regardless of how long it takes to get it.
 * **Strategy Research**: Develop your strategy using Haymaker's set of vector based tools aiding typical research pipeline.
-* **Backtesting**: Use your actual strategy trading code to simulate past behavior limiting look-ahead bias and avoiding discrepancies between testing and production. *Note: In development, currently non-functional, to come in future releases* 
+* **Backtesting (experimental extra)**: Replay dataloader bars through the event-driven strategy framework. This simulator is distinct from the research vector backtester and is not fully functional yet.
 
 Why Haymaker?
 =============
