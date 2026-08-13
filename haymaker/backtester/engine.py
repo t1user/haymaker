@@ -264,7 +264,15 @@ class Backtester:
                 tracker.observe(task)
             return task
 
-        loop.set_task_factory(tracking_task_factory)
+        loop.set_task_factory(
+            cast(
+                Callable[
+                    [asyncio.AbstractEventLoop, Coroutine[Any, Any, Any]],
+                    asyncio.Future[Any],
+                ],
+                tracking_task_factory,
+            )
+        )
 
         try:
             runtime = SimulationRuntime.create(
