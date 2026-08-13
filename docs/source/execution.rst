@@ -6,8 +6,8 @@ Haymaker strategies are ordinary Python modules that compose
 :class:`~haymaker.base.Atom` objects after the live runtime has installed a
 ready ``RuntimeContext``. ``Atom`` is intentionally
 general: custom Atoms may pass any object. The built-in trading toolbox is
-available from ``haymaker.components`` and uses structured immutable
-messages.
+available from ``haymaker.components`` and uses structured frozen message
+envelopes.
 
 Atom composition
 ================
@@ -25,9 +25,11 @@ source and raises ``TypeError`` or a more specific domain exception for an
 invalid source; returning a boolean does not reject a connection.
 Value-dependent checks happen in ``onData``.
 
-Fan-out sends the same object reference to every branch. Immutable standard
-messages are safe to share. A custom branch that mutates its input must copy it
-first.
+Fan-out sends the same object reference to every branch. Standard messages
+prevent field reassignment and copy metadata at the top level, but Contracts
+and nested metadata values remain shared mutable objects. Consumers must treat
+them as immutable or copy them before mutation. Signal, PositionProposal, and
+PositionTarget are intentionally unhashable.
 
 Atoms are stateful graph nodes rather than value records. A dataclass-based
 Atom must therefore use ``@dataclass(eq=False)``. Repeat ``eq=False`` on every
@@ -66,10 +68,11 @@ processors. It preserves the original Signal, chooses short/flat/long
 direction, and includes mandatory OPEN/CLOSE/REVERSE intent.
 
 :class:`~haymaker.components.PositionTarget` is an absolute signed setpoint for
-a concrete Contract. It never contains a captured current quantity or a
-proposed order delta. The numeric target is authoritative. Intent is optional
-for general direct execution and mandatory only for the one-to-one bracket
-path.
+a concrete Contract with a non-zero ``conId``. It never contains a captured
+current quantity or a proposed order delta. The numeric target is authoritative.
+Intent remains a typed optional field: direct execution omits it, while
+``PortfolioWrapper`` supplies the mandatory proposal intent for the one-to-one
+bracket path.
 
 .. autoclass:: haymaker.components.Signal
 
@@ -433,8 +436,9 @@ model:
        -> BracketExecutionModel
 
 ``PortfolioWrapper`` accepts only PositionProposal, calls the narrow
-``PositionAllocator.target_for()`` protocol, and emits at most one target while
-preserving source, Contract, metadata, and intent.
+``PositionAllocator.target_for()`` protocol, and emits at most one target. The
+allocator preserves source, Contract, and metadata; the wrapper owns transfer
+of the proposal's mandatory intent to the target.
 
 .. autoclass:: haymaker.components.PositionAllocator
 

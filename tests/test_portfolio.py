@@ -38,13 +38,13 @@ def proposal(
     )
 
 
-def test_fixed_size_allocator_preserves_proposal_attribution():
+def test_fixed_size_allocator_preserves_proposal_inputs_for_wrapper():
     target = FixedSizeAllocator(3).target_for(proposal(-1))
 
     assert target.target_quantity == -3
     assert target.source_key == "alpha"
     assert target.contract == signal().contract
-    assert target.intent is PositionIntent.OPEN
+    assert target.intent is None
     assert target.metadata == {"atr": 10}
 
 

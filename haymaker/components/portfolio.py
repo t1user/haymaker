@@ -5,10 +5,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import replace
-import math
 from typing import ClassVar, Protocol
 
 from ..base import Atom
+from ..validators import finite_number
 from .messages import PositionProposal, PositionTarget, Signal, SignalType
 
 
@@ -20,20 +20,15 @@ class PositionAllocator(Protocol):
     each immutable PositionProposal to
     :meth:`PositionAllocator.target_for`; implementations return one absolute
     PositionTarget or ``None`` to suppress execution. They must preserve
-    proposal Contract, source identity, and intent.
+    proposal Contract and source identity. PortfolioWrapper supplies the
+    proposal's mandatory intent on the emitted target.
     """
 
-    def target_for(
-        self, proposal: PositionProposal
-    ) -> PositionTarget | None:
+    def target_for(self, proposal: PositionProposal) -> PositionTarget | None:
         """Return the proposal's absolute signed target, or suppress it."""
 
 
-Sizing = (
-    float
-    | Mapping[str, float]
-    | Callable[[PositionProposal], float]
-)
+Sizing = float | Mapping[str, float] | Callable[[PositionProposal], float]
 
 
 class FixedSizeAllocator:
@@ -44,16 +39,15 @@ class FixedSizeAllocator:
             evaluated for each proposal.
 
     Missing mapping entries raise ``KeyError``. The signed result is proposal
-    direction multiplied by the allocated size; source, Contract, intent, and
-    Signal metadata are preserved.
+    direction multiplied by the allocated size; source, Contract, and Signal
+    metadata are preserved. PortfolioWrapper adds proposal intent when the
+    target enters the one-to-one execution path.
     """
 
     def __init__(self, sizing: Sizing = 1.0) -> None:
         self.sizing = sizing
 
-    def target_for(
-        self, proposal: PositionProposal
-    ) -> PositionTarget | None:
+    def target_for(self, proposal: PositionProposal) -> PositionTarget | None:
         """Allocate one immutable absolute target."""
 
         if not isinstance(proposal, PositionProposal):
@@ -64,17 +58,13 @@ class FixedSizeAllocator:
             size = self.sizing[proposal.signal.source_key]
         else:
             size = self.sizing
-        if isinstance(size, bool) or not isinstance(size, (int, float)):
-            raise TypeError("allocated size must be a real number")
-        if not math.isfinite(size):
-            raise ValueError("allocated size must be finite")
+        size = finite_number(size, "allocated size")
         if size < 0:
             raise ValueError("allocated size must not be negative")
         return PositionTarget(
             contract=proposal.signal.contract,
-            target_quantity=proposal.target_direction * float(size),
+            target_quantity=proposal.target_direction * size,
             source_key=proposal.signal.source_key,
-            intent=proposal.intent,
             metadata=proposal.signal.metadata,
         )
 
@@ -114,8 +104,6 @@ class PortfolioWrapper(Atom):
 
         if not isinstance(proposal, PositionProposal):
             raise TypeError("PortfolioWrapper accepts only PositionProposal")
-        if proposal.intent is None:
-            raise ValueError("PositionProposal intent is mandatory")
         target = self.allocator.target_for(proposal)
         if target is None:
             return
@@ -167,9 +155,7 @@ class Portfolio(Atom, ABC):
             isinstance(signal_type, SignalType)
             for signal_type in self.supported_signal_types
         ):
-            raise ValueError(
-                "supported_signal_types must contain SignalType values"
-            )
+            raise ValueError("supported_signal_types must contain SignalType values")
 
     @property
     def expected_sources(self) -> frozenset[str] | None:
@@ -191,10 +177,7 @@ class Portfolio(Atom, ABC):
 
         if not isinstance(signal, Signal):
             raise TypeError("Portfolio accepts only Signal")
-        if (
-            self.sources is not None
-            and signal.source_key not in self.sources
-        ):
+        if self.sources is not None and signal.source_key not in self.sources:
             raise KeyError(f"Unknown Portfolio source_key: {signal.source_key}")
         if signal.signal_type not in self.supported_signal_types:
             raise ValueError(

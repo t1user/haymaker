@@ -15,6 +15,7 @@ import pandas as pd
 
 from ..base import Atom
 from ..datastore import SignalFramePersistence
+from ..validators import non_empty_string
 from .messages import Signal, SignalPair, SignalType
 
 log = logging.getLogger(__name__)
@@ -92,10 +93,7 @@ class SignalModel(Atom, ABC):
         """Initialize Atom services and validate Signal identity configuration."""
 
         Atom.__init__(self)
-        if not isinstance(self.source_key, str):
-            raise TypeError("source_key must be a string")
-        if not self.source_key:
-            raise ValueError("source_key must not be empty")
+        self.source_key = non_empty_string(self.source_key, "source_key")
         if not isinstance(self.signal_type, SignalType):
             raise TypeError("signal_type must be a SignalType")
 

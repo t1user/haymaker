@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -18,6 +17,14 @@ from .async_wrappers import QueueShutdownPolicy, SyncQueueRunner, make_async
 from .blotter import Blotter
 from .misc import action_to_signal, decode_tree, sign, tree
 from .saver import AbstractBaseSaver, MongoSaver
+from .validators import (
+    aware_datetime,
+    finite_number,
+    ib_contract,
+    non_empty_string,
+    qualified_contract,
+    readonly_mapping,
+)
 
 log = logging.getLogger(__name__)
 
@@ -29,35 +36,8 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _aware(value: datetime, name: str) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(f"{name} must be timezone-aware")
-    return value
-
-
-def _mapping(value: Mapping[str, Any], name: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{name} must be a mapping")
-    return MappingProxyType(dict(value))
-
-
 def _contract_key(contract: ibi.Contract) -> int:
-    if not isinstance(contract, ibi.Contract):
-        raise TypeError("contract must be an ib_insync.Contract")
-    if not contract.conId:
-        raise ValueError("contract must have a non-zero conId")
-    return contract.conId
-
-
-def _finite_number(value: float, name: str) -> float:
-    """Return a finite float or raise a field-specific validation error."""
-
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"{name} must be a real number")
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"{name} must be finite")
-    return result
+    return qualified_contract(contract).conId
 
 
 def _execution_key(trade: ibi.Trade, fill: ibi.Fill) -> str:
@@ -86,17 +66,19 @@ class FillRecord:
     def __post_init__(self) -> None:
         if not isinstance(self.execution, ibi.Execution):
             raise TypeError("execution must be an ib_insync.Execution")
-        if not isinstance(self.contract, ibi.Contract):
-            raise TypeError("contract must be an ib_insync.Contract")
-        _aware(self.time, "time")
+        ib_contract(self.contract)
+        aware_datetime(self.time, "time")
         if self.commission_report is not None and not isinstance(
             self.commission_report, ibi.CommissionReport
         ):
             raise TypeError(
                 "commission_report must be None or an ib_insync.CommissionReport"
             )
-        if not self.deduplication_key:
-            raise ValueError("deduplication_key must not be empty")
+        object.__setattr__(
+            self,
+            "deduplication_key",
+            non_empty_string(self.deduplication_key, "deduplication_key"),
+        )
 
     @classmethod
     def from_fill(cls, trade: ibi.Trade, fill: ibi.Fill) -> FillRecord:
@@ -104,7 +86,7 @@ class FillRecord:
 
         return cls(
             execution=fill.execution,
-            time=_aware(fill.time, "fill.time"),
+            time=aware_datetime(fill.time, "fill.time"),
             contract=fill.contract,
             commission_report=(
                 fill.commissionReport
@@ -172,12 +154,12 @@ class OrderInfo:
     def __post_init__(self) -> None:
         if not isinstance(self.trade, ibi.Trade):
             raise TypeError("trade must be an ib_insync.Trade")
-        if not isinstance(self.role, str) or not self.role:
-            raise ValueError("role must be a non-empty string")
-        _aware(self.submitted_at, "submitted_at")
-        if not self.execution_model_name:
-            raise ValueError("execution_model_name must not be empty")
-        self.params = _mapping(self.params, "params")
+        self.role = non_empty_string(self.role, "role")
+        aware_datetime(self.submitted_at, "submitted_at")
+        self.execution_model_name = non_empty_string(
+            self.execution_model_name, "execution_model_name"
+        )
+        self.params = readonly_mapping(self.params, "params")
         self.fills = tuple(self.fills)
         self._applied_fill_keys.update(
             record.deduplication_key for record in self.fills
@@ -289,28 +271,34 @@ class PositionState:
     updated_at: datetime = field(default_factory=_utc_now)
 
     def __post_init__(self) -> None:
-        if not self.source_key:
-            raise ValueError("source_key must not be empty")
-        if not self.execution_model_name:
-            raise ValueError("execution_model_name must not be empty")
-        if self.contract is not None and not isinstance(self.contract, ibi.Contract):
-            raise TypeError("contract must be None or an ib_insync.Contract")
+        object.__setattr__(
+            self, "source_key", non_empty_string(self.source_key, "source_key")
+        )
+        object.__setattr__(
+            self,
+            "execution_model_name",
+            non_empty_string(self.execution_model_name, "execution_model_name"),
+        )
+        if self.contract is not None:
+            ib_contract(self.contract)
         if isinstance(self.blocked_direction, bool) or (
             self.blocked_direction not in (None, -1, 1)
         ):
             raise ValueError("blocked_direction must be None, -1, or 1")
-        object.__setattr__(self, "quantity", _finite_number(self.quantity, "quantity"))
+        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
         if self.target_quantity is not None:
             object.__setattr__(
                 self,
                 "target_quantity",
-                _finite_number(self.target_quantity, "target_quantity"),
+                finite_number(self.target_quantity, "target_quantity"),
             )
         if self.target_created_at is not None:
-            _aware(self.target_created_at, "target_created_at")
-        _aware(self.updated_at, "updated_at")
+            aware_datetime(self.target_created_at, "target_created_at")
+        aware_datetime(self.updated_at, "updated_at")
         object.__setattr__(
-            self, "bracket_inputs", _mapping(self.bracket_inputs, "bracket_inputs")
+            self,
+            "bracket_inputs",
+            readonly_mapping(self.bracket_inputs, "bracket_inputs"),
         )
 
 
@@ -325,16 +313,19 @@ class TargetState:
     updated_at: datetime = field(default_factory=_utc_now)
 
     def __post_init__(self) -> None:
-        if not self.execution_model_name:
-            raise ValueError("execution_model_name must not be empty")
+        object.__setattr__(
+            self,
+            "execution_model_name",
+            non_empty_string(self.execution_model_name, "execution_model_name"),
+        )
         _contract_key(self.contract)
         object.__setattr__(
             self,
             "target_quantity",
-            _finite_number(self.target_quantity, "target_quantity"),
+            finite_number(self.target_quantity, "target_quantity"),
         )
-        _aware(self.target_created_at, "target_created_at")
-        _aware(self.updated_at, "updated_at")
+        aware_datetime(self.target_created_at, "target_created_at")
+        aware_datetime(self.updated_at, "updated_at")
 
 
 class Book:
@@ -902,9 +893,8 @@ class Book:
     ) -> None:
         """Persist one Portfolio's normalized recovery mapping."""
 
-        if not portfolio_key:
-            raise ValueError("portfolio_key must not be empty")
-        copied = _mapping(state, "state")
+        portfolio_key = non_empty_string(portfolio_key, "portfolio_key")
+        copied = readonly_mapping(state, "state")
         self._portfolio_states[portfolio_key] = copied
         self._save(
             self._state_saver,

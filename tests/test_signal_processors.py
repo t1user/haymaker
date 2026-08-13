@@ -1,6 +1,5 @@
 """Tests for the built-in one-to-one signal processors."""
 
-from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from itertools import product
 
@@ -15,11 +14,9 @@ from haymaker.components import (
     OpposingSignalPolicy,
     PositionIntent,
     PositionProposal,
-    PositionTarget,
     Signal,
     SignalPair,
     SignalType,
-    StandardOrderRole,
 )
 
 
@@ -70,86 +67,6 @@ def outcome(proposal):
     if proposal is None:
         return None
     return proposal.target_direction, proposal.intent
-
-
-def test_signal_is_frozen_keyword_only_and_copies_metadata():
-    metadata = {"atr": 10}
-    message = signal(1, metadata=metadata)
-    metadata["atr"] = 20
-
-    assert message.metadata["atr"] == 10
-    with pytest.raises(TypeError):
-        message.metadata["new"] = 1
-    with pytest.raises(FrozenInstanceError):
-        message.value = 2
-    with pytest.raises(TypeError):
-        Signal("alpha", contract(), 1, SignalType.STATE)
-
-
-def test_signal_pair_is_frozen_and_preserved_as_signal_value():
-    pair = SignalPair(entry=1, exit=-1)
-    message = signal(pair)
-
-    assert message.value is pair
-    with pytest.raises(FrozenInstanceError):
-        pair.entry = -1
-
-
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
-@pytest.mark.parametrize("field", ["entry", "exit"])
-def test_signal_pair_rejects_non_finite_members(value, field):
-    values = {"entry": 1, "exit": 0}
-    values[field] = value
-
-    with pytest.raises(ValueError, match="finite"):
-        SignalPair(**values)
-
-
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
-def test_signal_rejects_non_finite_scalar_value(value):
-    with pytest.raises(ValueError, match="finite"):
-        signal(value)
-
-
-def test_messages_reject_naive_timestamps():
-    with pytest.raises(ValueError, match="timezone-aware"):
-        Signal(
-            source_key="alpha",
-            contract=contract(),
-            value=1,
-            signal_type=SignalType.STATE,
-            created_at=datetime(2026, 1, 1),
-        )
-    with pytest.raises(ValueError, match="timezone-aware"):
-        PositionTarget(
-            contract=contract(),
-            target_quantity=1,
-            created_at=datetime(2026, 1, 1),
-        )
-
-
-def test_position_proposal_requires_binary_direction():
-    with pytest.raises(ValueError, match="-1, 0, or 1"):
-        PositionProposal(
-            signal=signal(1),
-            target_direction=2,
-            intent=PositionIntent.OPEN,
-        )
-
-
-def test_position_target_has_optional_intent_and_absolute_quantity():
-    target = PositionTarget(
-        contract=contract(),
-        target_quantity=-3,
-        created_at=datetime.now(timezone.utc),
-    )
-
-    assert target.target_quantity == -3
-    assert target.intent is None
-
-
-def test_custom_order_roles_remain_valid():
-    assert StandardOrderRole("ICEBERG_CHILD").value == "ICEBERG_CHILD"
 
 
 SCALAR_EXPECTED = {

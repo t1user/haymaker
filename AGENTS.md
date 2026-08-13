@@ -230,11 +230,17 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   Dataclass-based Atoms use `@dataclass(eq=False)` at every decorated
   inheritance level so graph nodes retain identity equality. Built-in trading
   components live only under `haymaker.components`.
-- Built-in messages are immutable `Signal -> PositionProposal ->
-  PositionTarget` boundaries. Signal values are finite scalars or
-  `SignalPair(entry, exit)`. PositionTarget quantity is always an absolute
-  setpoint. `PositionIntent` is mandatory only on the one-to-one
-  PortfolioWrapper/BracketExecutionModel path and is only an initial assertion.
+- Built-in messages are frozen `Signal -> PositionProposal -> PositionTarget`
+  envelopes. Signal values are finite scalars or `SignalPair(entry, exit)`.
+  PositionTarget requires a concrete non-zero `conId` and its quantity is always
+  an absolute setpoint. Signal, PositionProposal, and PositionTarget are
+  intentionally unhashable; Contracts and nested metadata remain shared mutable
+  objects. `PositionIntent` is mandatory only on the one-to-one
+  PortfolioWrapper/BracketExecutionModel path, where PortfolioWrapper transfers
+  it to the target as an initial assertion.
+- Reuse `haymaker.validators` for primitive normalization of aware datetimes,
+  finite numbers, copied read-only mappings, non-empty strings, and IB
+  Contracts. Keep domain-specific checks with their owning component.
 - `Book` owns typed position/target/order recovery, fill idempotence, the
   critical ordered persistence queue, and blotter access. Controller owns
   broker calls, reconciliation, submission, rebinding, and fill/commission

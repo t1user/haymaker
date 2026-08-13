@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import logging
-import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
-from numbers import Real
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -17,6 +15,7 @@ import ib_insync as ibi
 from ..book import PositionState
 from ..contract_registry import DetailsContainer
 from ..misc import action, round_tick, sign
+from ..validators import finite_number, non_empty_string
 from .execution_models import ExecutionModel, _order_options
 from .messages import PositionIntent, PositionTarget, StandardOrderRole
 
@@ -406,8 +405,7 @@ class BracketExecutionModel(ExecutionModel):
         take_profit_order: Mapping[str, Any] = {},
         oca_type: int | None = None,
     ) -> None:
-        if not source_key:
-            raise ValueError("source_key must not be empty")
+        source_key = non_empty_string(source_key, "source_key")
         if not isinstance(stop, AbstractBracketLeg):
             raise TypeError("stop must be an AbstractBracketLeg")
         if take_profit is not None and not isinstance(take_profit, AbstractBracketLeg):
@@ -542,13 +540,7 @@ class BracketExecutionModel(ExecutionModel):
             raise KeyError(f"Missing bracket input(s): {names}")
         values: dict[str, float] = {}
         for name in required:
-            value = metadata[name]
-            if isinstance(value, bool) or not isinstance(value, Real):
-                raise TypeError(f"Bracket input {name!r} must be a real number")
-            normalized = float(value)
-            if not math.isfinite(normalized):
-                raise ValueError(f"Bracket input {name!r} must be finite")
-            values[name] = normalized
+            values[name] = finite_number(metadata[name], f"Bracket input {name!r}")
         return values
 
     def _converge(self) -> None:

@@ -12,7 +12,7 @@ import ib_insync as ibi
 from ..base import Atom
 from ..book import TargetState
 from ..misc import action, sign
-from ..validators import order_field_validator
+from ..validators import non_empty_string, order_field_validator, qualified_contract
 from .messages import PositionTarget, StandardOrderRole
 
 
@@ -44,9 +44,10 @@ class ExecutionModel(Atom, ABC):
 
     def __init__(self, *, name: str | None = None) -> None:
         super().__init__()
-        self.name = name or type(self).__name__
-        if not isinstance(self.name, str) or not self.name:
-            raise ValueError("ExecutionModel name must be a non-empty string")
+        self.name = non_empty_string(
+            type(self).__name__ if name is None else name,
+            "ExecutionModel name",
+        )
         runtime = getattr(self, "runtime", None)
         if runtime is None or getattr(runtime, "controller", None) is None:
             raise RuntimeError(f"{type(self).__name__} requires a ready RuntimeContext")
@@ -88,8 +89,7 @@ class ExecutionModel(Atom, ABC):
     def _validate_target(self, target: PositionTarget) -> None:
         if not isinstance(target, PositionTarget):
             raise TypeError(f"{type(self).__name__} accepts only PositionTarget")
-        if not target.contract.conId:
-            raise ValueError("PositionTarget contract must have a non-zero conId")
+        qualified_contract(target.contract, "PositionTarget contract")
 
     @abstractmethod
     def accept(self, target: PositionTarget) -> bool:

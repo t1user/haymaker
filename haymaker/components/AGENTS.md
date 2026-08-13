@@ -20,15 +20,17 @@ helpers out. Export names must be unique across modules.
 - `PositionProposal` is the frozen one-to-one boundary. It preserves the
   original Signal, adds direction `-1`, `0`, or `1`, and always has
   `PositionIntent.OPEN`, `CLOSE`, or `REVERSE`.
-- `PositionTarget` is a frozen absolute signed setpoint. It never carries a
-  captured current quantity or proposed delta. Its numeric target remains
-  authoritative after acceptance.
+- `PositionTarget` is a frozen absolute signed setpoint for a concrete Contract
+  with non-zero `conId`. It never carries a captured current quantity or
+  proposed delta. Its numeric target remains authoritative after acceptance.
 - `PositionIntent` is optional on general targets. It is mandatory only at the
   `PortfolioWrapper -> BracketExecutionModel` boundary and is an initial
   lifecycle assertion, not a lasting execution command.
 
-Copy a message before changing it. Metadata is only shallowly protected, so a
-branch that mutates nested objects must copy those objects explicitly.
+Signal, PositionProposal, and PositionTarget are intentionally unhashable.
+Freezing prevents field reassignment, not mutation of contained objects.
+Metadata is only shallowly protected and Contracts remain shared, so a branch
+that mutates either must copy explicitly.
 
 ## Supported flows
 
@@ -47,8 +49,10 @@ multiple SignalModels -> Portfolio -> PositionTarget(s)
     -> ExecutionRouter (optional) -> SerialTargetExecutionModel -> Controller
 ```
 
-`PortfolioWrapper` calls `PositionAllocator.target_for()` and emits at most one
-target. Direct `Portfolio` implementations own source state, synchronization,
+`PortfolioWrapper` calls `PositionAllocator.target_for()`, supplies proposal
+intent on the returned target, and emits at most one target. Allocators own
+quantity calculation and preserve Contract, source, and metadata. Direct
+`Portfolio` implementations own source state, synchronization,
 `as_of`, duplicate/late input, timeout, and recomputation policies. Do not put
 those policies in the abstract base.
 
@@ -132,6 +136,9 @@ level so stateful graph nodes retain identity equality and object hashing.
 Prefer a real class, ABC, or minimal runtime protocol for structural checks.
 Validate conditional message values in `onData`; do not introduce graph-wide
 type inference, capability negotiation, or automatic emission checking.
+Reuse primitive normalizers from `haymaker.validators` for aware datetimes,
+finite numbers, read-only mapping copies, non-empty strings, and IB Contracts.
+Keep domain validation with the component that owns its meaning.
 
 ## Execution and recovery
 

@@ -22,8 +22,8 @@ The live execution side is built around `Atom` pipelines. `Atom` is an
 arbitrary-message composition primitive providing validated event wiring,
 contract lookup, and shared access to process-owned runtime services. The
 pre-built trading toolbox lives under `haymaker.components` and communicates
-through immutable `Signal`, `PositionProposal`, and absolute `PositionTarget`
-messages.
+through frozen `Signal`, `PositionProposal`, and absolute `PositionTarget`
+message envelopes.
 
 Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
 
@@ -110,13 +110,18 @@ The research package is intentionally separate from live execution. It works dir
   direct TargetState, Portfolio recovery mappings, rejection tracking,
   execution affinity, blotter access, and one ordered critical persistence
   queue. Book performs no broker calls or allocation.
+- `haymaker/validators.py`: shared primitive normalization for aware datetimes,
+  finite numbers, read-only mapping copies, non-empty strings, and IB Contract
+  identity, plus IB request/order field validators. Domain-specific validation
+  remains with the owning component.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.
 
 ### Strategy Pipeline Components
 
 - `haymaker/components/messages.py`: frozen scalar-or-paired `Signal`,
   `SignalPair`, `PositionProposal`, and absolute `PositionTarget` messages plus
-  signal, intent, and open-ended order role enums.
+  signal, intent, and open-ended order role enums. Message metadata is copied
+  only at the top level; contained Contracts and nested values remain shared.
 - `haymaker/components/streamers.py`: broker market-data sources. A persisted
   historical streamer reads the stored endpoint to shorten its next IB history
   request.

@@ -10,9 +10,9 @@ import ib_insync as ibi
 
 from ..base import Atom
 from ..book import TargetState
+from ..validators import qualified_contract
 from .execution_models import ExecutionModel
 from .messages import PositionTarget
-
 
 TargetPredicate = Callable[[PositionTarget], bool]
 
@@ -60,9 +60,7 @@ class ExecutionRouter(Atom):
         self.rules = tuple(rules)
         if not all(isinstance(rule, ExecutionRule) for rule in self.rules):
             raise TypeError("rules must contain ExecutionRule instances")
-        if default_model is not None and not isinstance(
-            default_model, ExecutionModel
-        ):
+        if default_model is not None and not isinstance(default_model, ExecutionModel):
             raise TypeError("default_model must be an ExecutionModel or None")
         self.default_model = default_model
         models = [rule.model for rule in self.rules]
@@ -88,9 +86,7 @@ class ExecutionRouter(Atom):
     def onStart(self, data: object, source: Atom | None = None) -> None:
         """Start every configured model once per workload generation."""
 
-        missing = (
-            self.book.routing_affinity_names() - self.models_by_name.keys()
-        )
+        missing = self.book.routing_affinity_names() - self.models_by_name.keys()
         if missing:
             raise RuntimeError(
                 "Persisted execution-model affinity is unavailable: "
@@ -168,8 +164,7 @@ def contract_is(contract: ibi.Contract) -> TargetPredicate:
         PositionTarget predicate suitable for ExecutionRule.
     """
 
-    if not isinstance(contract, ibi.Contract) or not contract.conId:
-        raise ValueError("contract must be an IB Contract with non-zero conId")
+    contract = qualified_contract(contract)
     return lambda target: target.contract.conId == contract.conId
 
 

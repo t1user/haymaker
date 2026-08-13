@@ -1,57 +1,31 @@
-"""Immutable messages shared by Haymaker's built-in trading components."""
+"""Frozen message envelopes shared by Haymaker's trading components."""
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
-from numbers import Real
-from types import MappingProxyType
-from typing import Any, Literal
+from numbers import Integral
+from typing import Any, ClassVar, Literal
 
 import ib_insync as ibi
+
+from ..validators import (
+    aware_datetime,
+    finite_number,
+    ib_contract,
+    non_empty_string,
+    optional_aware_datetime,
+    qualified_contract,
+    readonly_mapping,
+)
 
 
 def utc_now() -> datetime:
     """Return the current timezone-aware UTC time."""
 
     return datetime.now(timezone.utc)
-
-
-def _validate_timestamp(value: datetime | None, field_name: str) -> None:
-    """Validate that an optional timestamp contains timezone information."""
-
-    if value is not None and (value.tzinfo is None or value.utcoffset() is None):
-        raise ValueError(f"{field_name} must be timezone-aware")
-
-
-def _finite_number(value: object, field_name: str) -> float:
-    """Return a finite float or raise a field-specific validation error."""
-
-    if isinstance(value, bool) or not isinstance(value, Real):
-        raise TypeError(f"{field_name} must be a real number")
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"{field_name} must be finite")
-    return result
-
-
-def _contract(value: ibi.Contract) -> ibi.Contract:
-    """Return an IB contract or raise a clear validation error."""
-
-    if not isinstance(value, ibi.Contract):
-        raise TypeError("contract must be an ib_insync.Contract")
-    return value
-
-
-def _metadata(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Copy metadata and expose the top-level mapping as read-only."""
-
-    if not isinstance(value, Mapping):
-        raise TypeError("metadata must be a mapping")
-    return MappingProxyType(dict(value))
 
 
 class SignalType(StrEnum):
@@ -131,8 +105,8 @@ class SignalPair:
     exit: float
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "entry", _finite_number(self.entry, "entry"))
-        object.__setattr__(self, "exit", _finite_number(self.exit, "exit"))
+        object.__setattr__(self, "entry", finite_number(self.entry, "entry"))
+        object.__setattr__(self, "exit", finite_number(self.exit, "exit"))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -153,6 +127,12 @@ class Signal:
     Raises:
         TypeError: If a field has the wrong structural type.
         ValueError: If an identity, number, or timestamp is invalid.
+
+    Note:
+        Freezing prevents field reassignment. The Contract and nested metadata
+        values remain shared mutable objects and must be treated as immutable or
+        copied by consumers that need to modify them. Signal is intentionally
+        unhashable.
     """
 
     source_key: str
@@ -162,18 +142,24 @@ class Signal:
     as_of: datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    __hash__: ClassVar[Any] = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.source_key, str) or not self.source_key:
-            raise ValueError("source_key must be a non-empty string")
-        object.__setattr__(self, "contract", _contract(self.contract))
+        object.__setattr__(
+            self, "source_key", non_empty_string(self.source_key, "source_key")
+        )
+        object.__setattr__(self, "contract", ib_contract(self.contract))
         if not isinstance(self.value, SignalPair):
-            object.__setattr__(self, "value", _finite_number(self.value, "value"))
+            object.__setattr__(self, "value", finite_number(self.value, "value"))
         if not isinstance(self.signal_type, SignalType):
             raise TypeError("signal_type must be a SignalType")
-        _validate_timestamp(self.as_of, "as_of")
-        _validate_timestamp(self.created_at, "created_at")
-        object.__setattr__(self, "metadata", _metadata(self.metadata))
+        object.__setattr__(self, "as_of", optional_aware_datetime(self.as_of, "as_of"))
+        object.__setattr__(
+            self, "created_at", aware_datetime(self.created_at, "created_at")
+        )
+        object.__setattr__(
+            self, "metadata", readonly_mapping(self.metadata, "metadata")
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -181,7 +167,7 @@ class PositionProposal:
     """Carry one signal processor's one-to-one position decision.
 
     Args:
-        signal: Original immutable signal.
+        signal: Original frozen signal envelope.
         target_direction: Desired short, flat, or long direction.
         intent: Mandatory episode transition asserted at this boundary.
         created_at: Time at which the proposal was created.
@@ -189,25 +175,33 @@ class PositionProposal:
     Raises:
         TypeError: If ``signal`` or ``intent`` has the wrong type.
         ValueError: If the direction or timestamp is invalid.
+
+    Note:
+        PositionProposal is intentionally unhashable because it preserves its
+        unhashable Signal.
     """
 
     signal: Signal
     target_direction: Literal[-1, 0, 1]
     intent: PositionIntent
     created_at: datetime = field(default_factory=utc_now)
+    __hash__: ClassVar[Any] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.signal, Signal):
             raise TypeError("signal must be a Signal")
-        if isinstance(self.target_direction, bool) or self.target_direction not in (
-            -1,
-            0,
-            1,
+        if isinstance(self.target_direction, bool) or not isinstance(
+            self.target_direction, Integral
         ):
+            raise TypeError("target_direction must be an integer")
+        if self.target_direction not in (-1, 0, 1):
             raise ValueError("target_direction must be -1, 0, or 1")
+        object.__setattr__(self, "target_direction", int(self.target_direction))
         if not isinstance(self.intent, PositionIntent):
             raise TypeError("intent must be a PositionIntent")
-        _validate_timestamp(self.created_at, "created_at")
+        object.__setattr__(
+            self, "created_at", aware_datetime(self.created_at, "created_at")
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -215,7 +209,7 @@ class PositionTarget:
     """Represent an absolute signed execution setpoint.
 
     Args:
-        contract: Concrete execution Contract.
+        contract: Concrete execution Contract with a non-zero ``conId``.
         target_quantity: Absolute signed quantity desired after convergence.
         created_at: Time at which this target superseded an earlier target.
         source_key: Optional one-to-one input identity.
@@ -227,6 +221,12 @@ class PositionTarget:
     Raises:
         TypeError: If a field has the wrong structural type.
         ValueError: If quantity, identity, or timestamp is invalid.
+
+    Note:
+        Freezing prevents field reassignment. The Contract and nested metadata
+        values remain shared mutable objects and must be treated as immutable or
+        copied by consumers that need to modify them. PositionTarget is
+        intentionally unhashable.
     """
 
     contract: ibi.Contract
@@ -235,22 +235,29 @@ class PositionTarget:
     source_key: str | None = None
     intent: PositionIntent | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    __hash__: ClassVar[Any] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "contract", _contract(self.contract))
+        object.__setattr__(self, "contract", qualified_contract(self.contract))
         object.__setattr__(
             self,
             "target_quantity",
-            _finite_number(self.target_quantity, "target_quantity"),
+            finite_number(self.target_quantity, "target_quantity"),
         )
-        _validate_timestamp(self.created_at, "created_at")
-        if self.source_key is not None and (
-            not isinstance(self.source_key, str) or not self.source_key
-        ):
-            raise ValueError("source_key must be None or a non-empty string")
+        object.__setattr__(
+            self, "created_at", aware_datetime(self.created_at, "created_at")
+        )
+        if self.source_key is not None:
+            object.__setattr__(
+                self,
+                "source_key",
+                non_empty_string(self.source_key, "source_key"),
+            )
         if self.intent is not None and not isinstance(self.intent, PositionIntent):
             raise TypeError("intent must be None or a PositionIntent")
-        object.__setattr__(self, "metadata", _metadata(self.metadata))
+        object.__setattr__(
+            self, "metadata", readonly_mapping(self.metadata, "metadata")
+        )
 
 
 __all__ = [
