@@ -142,14 +142,16 @@ The research package is intentionally separate from live execution. It works dir
   entry/exit, and stopped-direction lock semantics.
 - `haymaker/components/portfolio.py`: direct account-wide Portfolio,
   one-to-one PortfolioWrapper, and PositionAllocator boundary.
-- `haymaker/components/execution_router.py`: fixed first-match target routing
-  with persisted execution-model affinity.
-- `haymaker/components/execution_models.py`: the common stateful execution-model
-  boundary and serial Contract target convergence.
-- `haymaker/components/bracket_execution.py`: one-to-one bracket episode
-  execution and its user-configurable protective-order legs. Regular closes
-  join the episode's OCA group, keeping stop protection active until an exit
-  fills.
+- `haymaker/components/execution/`: public execution subpackage. Its initializer
+  aggregates the leaf modules' exports for both focused imports and promotion
+  through `haymaker.components`.
+  - `models.py`: the common stateful execution-model boundary and serial
+    Contract target convergence.
+  - `router.py`: fixed first-match target routing with persisted
+    execution-model affinity.
+  - `brackets.py`: one-to-one bracket episode execution and its
+    user-configurable protective-order legs. Regular closes join the episode's
+    OCA group, keeping stop protection active until an exit fills.
 - `haymaker/components/__init__.py`: registers public component modules and
   aggregates their module-owned, non-overlapping `__all__` exports into the
   supported package toolbox.

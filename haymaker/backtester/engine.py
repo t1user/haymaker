@@ -17,7 +17,7 @@ import pandas as pd
 
 from haymaker.async_wrappers import QueueRunner
 from haymaker.base import Atom
-from haymaker.components.bracket_execution import (
+from haymaker.components.execution.brackets import (
     BracketExecutionModel,
     FixedStop,
     FlexibleTakeProfitAsStopMultiple,

@@ -229,7 +229,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   validation occurs before wiring, and fan-out shares one object reference.
   Dataclass-based Atoms use `@dataclass(eq=False)` at every decorated
   inheritance level so graph nodes retain identity equality. Built-in trading
-  components live only under `haymaker.components`.
+  components live only under `haymaker.components`; routing, execution models,
+  and bracket execution are grouped under `haymaker.components.execution` and
+  re-exported by the root components package.
 - Built-in messages are frozen `Signal -> PositionProposal -> PositionTarget`
   envelopes. Signal values are finite scalars or `SignalPair(entry, exit)`.
   PositionTarget requires a concrete non-zero `conId` and its quantity is always

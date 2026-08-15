@@ -9,11 +9,11 @@ from typing import Any, ClassVar
 
 import ib_insync as ibi
 
-from ..base import Atom
-from ..book import TargetState
-from ..misc import action, sign
-from ..validators import non_empty_string, order_field_validator, qualified_contract
-from .messages import PositionTarget, StandardOrderRole
+from ...base import Atom
+from ...book import TargetState
+from ...misc import action, sign
+from ...validators import non_empty_string, order_field_validator, qualified_contract
+from ..messages import PositionTarget, StandardOrderRole
 
 
 def _order_options(value: Mapping[str, Any], name: str) -> dict[str, Any]:

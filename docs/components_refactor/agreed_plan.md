@@ -25,15 +25,17 @@ The user-facing trading toolbox is exported explicitly from
 `haymaker.components`. It contains messages, streamers, bar aggregators,
 DataFrame aggregators, SignalModels, one-to-one processors, Portfolio
 boundaries, routing, execution models, bracket legs, and event timeout helpers.
+Routing, execution models, and bracket execution are organized under the
+`haymaker.components.execution` subpackage and re-exported at the root.
 Bar aggregation and DataFrame aggregation are separate public component
 families: the former incrementally groups broker bar objects, while the latter
 maintains complete DataFrames, restores persisted history, and supports
 DataFrame transformations such as equal-volume grouping. Runtime, Book,
 Controller, persistence, Trader, contract selection, and
 `haymaker.config.TimeoutPolicy` stay outside. There are no forwarding modules
-or aliases for former top-level component paths. Each public component module
-owns its `__all__`; the package initializer declares which modules participate
-and aggregates their non-overlapping exports.
+or aliases for former top-level component paths. Each public leaf module owns
+its `__all__`; package initializers declare which modules participate and
+aggregate their non-overlapping exports.
 
 `FuturesPandasAggregator()` resolves a runtime-default awaited datastore at
 startup from its connected streamer's bar size, `whatToShow`, and `useRTH`.

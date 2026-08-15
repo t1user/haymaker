@@ -12,12 +12,12 @@ from uuid import uuid4
 
 import ib_insync as ibi
 
-from ..book import PositionState
-from ..contract_registry import DetailsContainer
-from ..misc import action, round_tick, sign
-from ..validators import finite_number, non_empty_string
-from .execution_models import ExecutionModel, _order_options
-from .messages import PositionIntent, PositionTarget, StandardOrderRole
+from ...book import PositionState
+from ...contract_registry import DetailsContainer
+from ...misc import action, round_tick, sign
+from ...validators import finite_number, non_empty_string
+from ..messages import PositionIntent, PositionTarget, StandardOrderRole
+from .models import ExecutionModel, _order_options
 
 log = logging.getLogger(__name__)
 
