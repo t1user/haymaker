@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import ClassVar
-
 import ib_insync as ibi
 
 from ...base import Atom
@@ -49,8 +47,6 @@ class ExecutionRouter(Atom):
     recovery.
     """
 
-    input_type: ClassVar[type] = PositionTarget
-
     def __init__(
         self,
         rules: Sequence[ExecutionRule],
@@ -73,15 +69,6 @@ class ExecutionRouter(Atom):
                 raise ValueError(f"Duplicate ExecutionModel name: {model.name!r}")
             self.models_by_name[model.name] = model
         self._started_generation = -1
-
-    def validate_source(self, source: Atom) -> None:
-        """Require an upstream Atom declaring PositionTarget output."""
-
-        if getattr(source, "output_type", None) is not PositionTarget:
-            raise TypeError(
-                "ExecutionRouter requires a source declaring "
-                "output_type=PositionTarget"
-            )
 
     def onStart(self, data: object, source: Atom | None = None) -> None:
         """Start every configured model once per workload generation."""

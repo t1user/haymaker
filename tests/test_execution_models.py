@@ -137,6 +137,11 @@ def test_serial_model_submits_absolute_adjustment(execution_runtime):
     assert model.book.order_by_id(1).role == StandardOrderRole.TARGET_ADJUSTMENT
 
 
+def test_serial_model_rejects_wrong_message_at_runtime(execution_runtime):
+    with pytest.raises(TypeError, match="only PositionTarget"):
+        SerialTargetExecutionModel(name="serial").onData({"quantity": 1})
+
+
 def test_serial_model_supports_same_side_resizing(execution_runtime):
     _, controller, trader = execution_runtime
     model = SerialTargetExecutionModel(name="serial")
@@ -190,9 +195,7 @@ def test_serial_recovery_resumes_persisted_target(execution_runtime):
 
 
 def test_bracket_model_rejects_missing_or_stale_intent(execution_runtime):
-    model = BracketExecutionModel(
-        "alpha", name="brackets", stop=FixedStop(2)
-    )
+    model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
 
     with pytest.raises(ValueError, match="requires PositionIntent"):
         model.onData(target(1, source_key="alpha", metadata={"atr": 5}))
@@ -222,9 +225,7 @@ def test_bracket_model_rejects_same_side_resize(execution_runtime):
             bracket_inputs={"atr": 5},
         )
     )
-    model = BracketExecutionModel(
-        "alpha", name="brackets", stop=FixedStop(2)
-    )
+    model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
 
     with pytest.raises(ValueError, match="same-side"):
         model.onData(
@@ -249,9 +250,7 @@ def test_bracket_model_rejects_invalid_oca_type(execution_runtime):
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), "five"])
 def test_bracket_model_validates_recovery_inputs(execution_runtime, value):
-    model = BracketExecutionModel(
-        "alpha", name="brackets", stop=FixedStop(2)
-    )
+    model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
 
     with pytest.raises((TypeError, ValueError), match="Bracket input"):
         model.onData(
@@ -370,8 +369,7 @@ async def test_entry_fill_continues_to_newer_close_target(execution_runtime):
     await asyncio.sleep(0)
 
     assert [
-        controller.book.order_by_id(trade.order.orderId).role
-        for trade in trader.trades
+        controller.book.order_by_id(trade.order.orderId).role for trade in trader.trades
     ] == [
         StandardOrderRole.OPEN,
         StandardOrderRole.STOP_LOSS,
@@ -394,9 +392,7 @@ async def test_reversal_closes_then_opens_new_episode(execution_runtime):
             bracket_inputs={"atr": 5},
         )
     )
-    model = BracketExecutionModel(
-        "alpha", name="brackets", stop=FixedStop(2)
-    )
+    model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
 
     model.onData(
         target(
@@ -433,9 +429,7 @@ def test_stop_fill_closes_episode_and_prevents_restart_reentry(
             bracket_inputs={"atr": 5},
         )
     )
-    model = BracketExecutionModel(
-        "alpha", name="brackets", stop=FixedStop(2)
-    )
+    model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
     stop = controller.trade(
         contract(),
         ibi.Order(action="SELL", totalQuantity=1, orderType="STP"),
@@ -471,6 +465,20 @@ class RecordingModel(ExecutionModel):
         self.recoveries += 1
 
 
+def test_router_rejects_wrong_message_at_runtime(execution_runtime):
+    router = ExecutionRouter(
+        [
+            ExecutionRule(
+                predicate=lambda target: True,
+                model=RecordingModel(name="model"),
+            )
+        ]
+    )
+
+    with pytest.raises(TypeError, match="only PositionTarget"):
+        router.onData({"quantity": 1})
+
+
 def test_router_first_match_and_default(execution_runtime):
     first = RecordingModel(name="first")
     second = RecordingModel(name="second")
@@ -494,9 +502,7 @@ def test_router_first_match_and_default(execution_runtime):
 
 def test_router_fails_closed_without_default(execution_runtime):
     model = RecordingModel(name="model")
-    router = ExecutionRouter(
-        [ExecutionRule(predicate=symbol_is("NQ"), model=model)]
-    )
+    router = ExecutionRouter([ExecutionRule(predicate=symbol_is("NQ"), model=model)])
 
     with pytest.raises(LookupError, match="No ExecutionModel"):
         router.onData(target(1))
@@ -743,9 +749,7 @@ def test_serial_recovery_rebinds_active_order_completion(execution_runtime):
 
 def test_bracket_recovery_rebinds_active_entry_fill(execution_runtime):
     runtime, _, trader = execution_runtime
-    model = BracketExecutionModel(
-        "alpha", name="brackets", stop=FixedStop(2)
-    )
+    model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
     model.onData(
         target(
             1,

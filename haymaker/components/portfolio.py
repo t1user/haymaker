@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import replace
-from typing import ClassVar, Protocol
+from typing import Protocol
 
 from ..base import Atom
 from ..validators import finite_number
@@ -81,23 +81,11 @@ class PortfolioWrapper(Atom):
     :class:`Portfolio` directly.
     """
 
-    input_type: ClassVar[type] = PositionProposal
-    output_type: ClassVar[type] = PositionTarget
-
     def __init__(self, allocator: PositionAllocator) -> None:
         super().__init__()
         if not callable(getattr(allocator, "target_for", None)):
             raise TypeError("allocator must implement target_for()")
         self.allocator = allocator
-
-    def validate_source(self, source: Atom) -> None:
-        """Require an upstream Atom declaring PositionProposal output."""
-
-        if getattr(source, "output_type", None) is not PositionProposal:
-            raise TypeError(
-                "PortfolioWrapper requires a source declaring "
-                "output_type=PositionProposal"
-            )
 
     def onData(self, proposal: PositionProposal, *args: object) -> None:
         """Allocate and emit at most one target."""
@@ -132,9 +120,6 @@ class Portfolio(Atom, ABC):
     absolute target.
     """
 
-    input_type: ClassVar[type] = Signal
-    output_type: ClassVar[type] = PositionTarget
-
     def __init__(
         self,
         sources: Collection[str] | None = None,
@@ -162,15 +147,6 @@ class Portfolio(Atom, ABC):
         """Return the declared source universe, if registration is enabled."""
 
         return self.sources
-
-    def validate_source(self, source: Atom) -> None:
-        """Require an upstream Atom declaring Signal output."""
-
-        if getattr(source, "output_type", None) is not Signal:
-            raise TypeError(
-                f"{type(self).__name__} requires a source declaring "
-                "output_type=Signal"
-            )
 
     def onData(self, signal: Signal, *args: object) -> None:
         """Validate one Signal and emit all recomputed targets."""

@@ -53,8 +53,6 @@ class FakeTrader:
 
 
 class Source(Atom):
-    output_type = object
-
     def run(self, data):
         self.startEvent.emit({})
         self.dataEvent.emit(data)

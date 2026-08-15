@@ -39,8 +39,6 @@ def signal(
 
 
 class SignalSource(Atom):
-    output_type = Signal
-
     def onData(self, data, *args):
         self.dataEvent.emit(data)
 
@@ -314,22 +312,7 @@ def test_on_data_emits_only_actionable_proposals(atom_runtime):
     assert outcome(output[0]) == (1, PositionIntent.OPEN)
 
 
-def test_connection_validation_happens_before_any_wiring(atom_runtime):
-    valid = BinarySignalProcessor()
-    invalid = BinarySignalProcessor()
-
-    class WrongSource(Atom):
-        output_type = dict
-
-    source = WrongSource()
-    with pytest.raises(TypeError):
-        source.connect(valid, invalid)
-
-    assert len(source.startEvent) == 0
-    assert len(source.dataEvent) == 0
-
-
-def test_processor_accepts_declared_signal_source(atom_runtime):
+def test_processor_accepts_arbitrary_atom_source(atom_runtime):
     source = SignalSource()
     processor = BinarySignalProcessor()
 

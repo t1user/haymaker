@@ -107,8 +107,6 @@ class FailingAsyncAtom(Atom):
 class CrossContractTarget(Atom):
     """Emit a direct target for a Contract different from the data source."""
 
-    output_type = PositionTarget
-
     def __init__(self, contract: ibi.Contract) -> None:
         self.contract = contract
         super().__init__()
@@ -130,8 +128,6 @@ class CrossContractTarget(Atom):
 
 class StartupTarget(Atom):
     """Submit one target before the first observed bar is processed."""
-
-    output_type = PositionTarget
 
     def onStart(self, data: object, source: Atom | None = None) -> None:
         """Emit a one-unit target for the source's resolved Contract."""

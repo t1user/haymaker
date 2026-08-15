@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import Any, ClassVar
+from typing import Any
 
 import ib_insync as ibi
 
@@ -39,9 +39,6 @@ class ExecutionModel(Atom, ABC):
     state change or broker submission.
     """
 
-    input_type: ClassVar[type] = PositionTarget
-    output_type: ClassVar[type] = PositionTarget
-
     def __init__(self, *, name: str | None = None) -> None:
         super().__init__()
         self.name = non_empty_string(
@@ -60,15 +57,6 @@ class ExecutionModel(Atom, ABC):
         """Return stable model name and implementation class."""
 
         return f"{self.name}[{type(self).__name__}]"
-
-    def validate_source(self, source: Atom) -> None:
-        """Require an upstream Atom declaring PositionTarget output."""
-
-        if getattr(source, "output_type", None) is not PositionTarget:
-            raise TypeError(
-                f"{type(self).__name__} requires a source declaring "
-                "output_type=PositionTarget"
-            )
 
     def onStart(self, data: Any, source: Atom | None = None) -> None:
         """Recover outstanding work once per supervised workload generation."""

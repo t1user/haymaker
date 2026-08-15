@@ -226,7 +226,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   data. Do not change real local `.env` files or credential files.
 - `Atom` remains an arbitrary-message composition primitive. It never mutates
   startup/data payloads automatically, base `onData` raises, connection
-  validation occurs before wiring, and fan-out shares one object reference.
+  validation for required upstream capabilities occurs before wiring, message
+  envelopes are validated in `onData`, and fan-out shares one object reference.
+  Do not add `input_type` or `output_type` message declarations.
   Dataclass-based Atoms use `@dataclass(eq=False)` at every decorated
   inheritance level so graph nodes retain identity equality. Built-in trading
   components live only under `haymaker.components`; routing, execution models,

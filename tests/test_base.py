@@ -199,15 +199,18 @@ def test_pipe_requires_atom_members():
 
 
 def test_pipe_delegates_source_validation_to_first_member():
-    class SignalOnly(Transform):
+    class CompatibleSource(Transform):
+        pass
+
+    class RequiresCompatibleSource(Transform):
         def validate_source(self, source):
-            if getattr(source, "output_type", None) != "signal":
-                raise TypeError("signal required")
+            if not isinstance(source, CompatibleSource):
+                raise TypeError("compatible source required")
 
     source = Transform("source")
-    pipe = Pipe(SignalOnly("first"), Transform("last"))
+    pipe = Pipe(RequiresCompatibleSource("first"), Transform("last"))
 
-    with pytest.raises(TypeError, match="signal required"):
+    with pytest.raises(TypeError, match="compatible source required"):
         source.connect(pipe)
 
     assert len(source.dataEvent) == 0

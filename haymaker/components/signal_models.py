@@ -8,7 +8,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import singledispatchmethod
-from typing import Any, ClassVar, final
+from typing import Any, final
 
 import ib_insync as ibi
 import pandas as pd
@@ -86,8 +86,6 @@ class SignalModel(Atom, ABC):
     source_key: str
     contract: ibi.Contract = field()
     signal_type: SignalType
-
-    output_type: ClassVar[type] = Signal
 
     def __post_init__(self) -> None:
         """Initialize Atom services and validate Signal identity configuration."""

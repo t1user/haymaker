@@ -83,6 +83,11 @@ def test_portfolio_wrapper_emits_zero_or_one_target(atom_runtime):
     assert output[0].intent is PositionIntent.REVERSE
 
 
+def test_portfolio_wrapper_rejects_wrong_message_at_runtime(atom_runtime):
+    with pytest.raises(TypeError, match="only PositionProposal"):
+        PortfolioWrapper(FixedSizeAllocator()).onData({"direction": 1})
+
+
 def test_portfolio_wrapper_rejects_allocator_returning_multiple_targets(
     atom_runtime,
 ):
@@ -131,6 +136,11 @@ def test_direct_portfolio_emits_targets_and_omits_intent(atom_runtime):
 
     assert output[0].target_quantity == 2
     assert output[0].intent is None
+
+
+def test_direct_portfolio_rejects_wrong_message_at_runtime(atom_runtime):
+    with pytest.raises(TypeError, match="only Signal"):
+        EchoPortfolio().onData({"value": 1})
 
 
 def test_registered_portfolio_rejects_unknown_source(atom_runtime):

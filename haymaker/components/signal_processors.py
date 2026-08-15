@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar, Literal, cast
+from typing import Literal, cast
 
 from ..base import Atom
 from ..misc import sign
@@ -16,12 +16,6 @@ from .messages import (
 )
 
 BinaryDirection = Literal[-1, 0, 1]
-
-
-def _emitted_type(source: Atom) -> type | None:
-    """Return a source's declared output type, if it has one."""
-
-    return getattr(source, "output_type", None)
 
 
 def _binary_direction(value: float, field_name: str) -> BinaryDirection:
@@ -49,23 +43,11 @@ class OpposingSignalPolicy(StrEnum):
 class _BaseBinarySignalProcessor(Atom):
     """Share validation and proposal construction for binary processors."""
 
-    input_type: ClassVar[type] = Signal
-    output_type: ClassVar[type] = PositionProposal
-
     def __init__(self, *, respect_blocked_direction: bool = False) -> None:
         super().__init__()
         if not isinstance(respect_blocked_direction, bool):
             raise TypeError("respect_blocked_direction must be a bool")
         self.respect_blocked_direction = respect_blocked_direction
-
-    def validate_source(self, source: Atom) -> None:
-        """Require an upstream Atom that declares Signal output."""
-
-        if _emitted_type(source) is not Signal:
-            raise TypeError(
-                f"{type(self).__name__} requires a source declaring "
-                "output_type=Signal"
-            )
 
     def onData(self, signal: Signal, *args: object) -> None:
         """Process one Signal and emit a proposal only when action is needed."""

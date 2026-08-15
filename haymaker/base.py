@@ -361,11 +361,13 @@ class Atom:
     def validate_source(self, source: Atom) -> None:
         """Validate one prospective upstream connection.
 
-        The default accepts every source. Built-in components override this
-        only for structural incompatibilities that can be known before data
-        arrives. An override must return normally when ``source`` is compatible
-        and raise ``TypeError`` or a more specific domain exception otherwise;
-        returning a boolean has no effect.
+        The default accepts every source. Components override this only when
+        they require a concrete upstream capability, such as a Streamer API.
+        Message types are validated by ``onData`` when values arrive rather
+        than advertised through connection metadata. An override must return
+        normally when ``source`` is compatible and raise ``TypeError`` or a
+        more specific domain exception otherwise; returning a boolean has no
+        effect.
 
         Args:
             source: Atom that would emit into this Atom.

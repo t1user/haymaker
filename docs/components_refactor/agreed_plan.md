@@ -15,11 +15,12 @@ decorated inheritance level so stateful graph nodes retain identity equality
 and object hashing.
 
 `source.connect(*targets)` asks every target to validate the source before any
-connection changes. Built-ins use `validate_source()` only for structural
-incompatibility visible at composition time. An override returns normally for
-a compatible source and raises for an incompatible source; a boolean return
-value is ignored. Message values and conditional requirements remain runtime
-validation.
+connection changes. Built-ins use `validate_source()` only when they require a
+concrete upstream capability visible at composition time. An override returns
+normally for a compatible source and raises for an incompatible source; a
+boolean return value is ignored. Atoms do not declare input or output message
+types. Message envelopes, values, and conditional requirements remain runtime
+validation in `onData()`.
 
 The user-facing trading toolbox is exported explicitly from
 `haymaker.components`. It contains messages, streamers, bar aggregators,

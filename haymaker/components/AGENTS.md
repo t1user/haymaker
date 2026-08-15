@@ -125,9 +125,11 @@ market-data timeout instances when a workload stops; never include general
 
 `Atom` accepts arbitrary messages. Base `onData` raises `NotImplementedError`;
 components must emit explicitly. `onStart(data, source)` receives and forwards
-arbitrary mutable startup data without reserving keys. `validate_source()` may
-reject only structural incompatibility known before values arrive. It must
-return normally for a compatible source and raise for an incompatible source;
+arbitrary mutable startup data without reserving keys. Components do not
+declare `input_type` or `output_type`. Use `validate_source()` only for a
+concrete upstream capability required before values arrive, not for message
+envelopes; validate messages in `onData()`. `validate_source()` must return
+normally for a compatible source and raise for an incompatible source;
 returning a boolean has no effect. `connect()` validates every target before
 changing any connection. Fan-out passes one shared object reference.
 Dataclass-based Atoms use `@dataclass(eq=False)` at every decorated inheritance
@@ -189,10 +191,11 @@ failed calculation may create a generation. Saving uses the selector's ACTIVE
 Contract even when the emitted Signal uses `Atom.which_contract=NEXT`.
 
 Every public export needs a usage-focused Google-style, Sphinx-compatible
-docstring and focused pytest coverage. Tests must cover structural connection
-validation, immutable messages, STATE/EVENT semantics, absolute target
-supersession, execution recovery, Fill deduplication, router affinity, and
-one-to-one episode attribution as applicable.
+docstring and focused pytest coverage. Tests must cover capability-based
+connection validation, runtime message validation, immutable messages,
+STATE/EVENT semantics, absolute target supersession, execution recovery, Fill
+deduplication, router affinity, and one-to-one episode attribution as
+applicable.
 
 This is a direct-cutover package. Do not add forwarding modules, compatibility
 aliases, legacy schema reads, or dual writes. The standalone migration script

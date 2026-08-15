@@ -20,10 +20,11 @@ reserved fields.
 
 ``source.connect(*targets)`` validates every target before changing any event
 connections. A component overrides ``validate_source`` only when an upstream
-class is structurally incompatible. The override returns normally for a valid
-source and raises ``TypeError`` or a more specific domain exception for an
-invalid source; returning a boolean does not reject a connection.
-Value-dependent checks happen in ``onData``.
+capability is structurally required, such as the API supplied by a Streamer.
+The override returns normally for a valid source and raises ``TypeError`` or a
+more specific domain exception for an invalid source; returning a boolean does
+not reject a connection. Atoms do not declare input or output message types.
+Each component validates messages when they arrive in ``onData``.
 
 Fan-out sends the same object reference to every branch. Standard messages
 prevent field reassignment and copy metadata at the top level, but Contracts
