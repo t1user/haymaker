@@ -274,6 +274,17 @@ Futures rolling remains Controller-owned. It reads PositionState, preserves
 source and `position_id`, submits role ROLL directly, and retains ACTIVE/NEXT
 held-contract rules.
 
+Direct-mode futures rolling remains deferred. The current roller accounts for
+one-to-one PositionState holdings but does not yet define futures-series
+identity, quantity convergence across contract expiries, or working-order and
+target recovery for direct Portfolio/SerialTargetExecutionModel flows. A later
+refactor must cover every supported work mode before direct futures-series
+rolling is considered complete. Direct target identity is intentionally
+unresolved: current execution uses concrete `conId`, while a later design must
+decide how Portfolio communicates which targets belong to one logical
+instrument and supersede each other. Router and ExecutionModel must not infer
+that policy from Contract fields before this boundary is agreed.
+
 PandasSignalModel audit symbols are:
 
 ```text
