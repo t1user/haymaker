@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+
 import ib_insync as ibi
 
 from ...base import Atom
-from ...book import TargetState
+from ...book import OrderInfo, TargetState
 from ...validators import qualified_contract
-from ..messages import PositionTarget
+from ..messages import PositionTarget, StandardOrderRole
 from .models import ExecutionModel
 
 TargetPredicate = Callable[[PositionTarget], bool]
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -42,9 +45,10 @@ class ExecutionRouter(Atom):
         default_model: Optional fallback. Without it unmatched targets fail
             closed.
 
-    Model names must be unique. Working-order affinity wins until those orders
-    become terminal; otherwise current rules own both held quantity and target
-    recovery.
+    Model names must be unique. Current rules always select the model. An
+    active direct adjustment order may continue only when those rules still
+    select its persisted owner; a disagreement blocks routed execution for the
+    workload rather than silently overriding the rules.
     """
 
     def __init__(
@@ -69,43 +73,62 @@ class ExecutionRouter(Atom):
                 raise ValueError(f"Duplicate ExecutionModel name: {model.name!r}")
             self.models_by_name[model.name] = model
         self._started_generation = -1
+        self._blocked_reason: str | None = None
 
     def onStart(self, data: object, source: Atom | None = None) -> None:
-        """Start every configured model once per workload generation."""
+        """Validate recovery and start models once per workload generation."""
 
-        missing = self.book.routing_affinity_names() - self.models_by_name.keys()
-        if missing:
-            raise RuntimeError(
-                "Persisted execution-model affinity is unavailable: "
-                f"{sorted(missing)}"
-            )
         generation = self.runtime.workload_generation
         if generation != self._started_generation:
             self._started_generation = generation
-            self._handoff_recoverable_targets()
-            for model in self.models_by_name.values():
-                model.onStart(data, self)
+            self._blocked_reason = self._working_order_block_reason()
+            assignments: tuple[TargetState, ...] = ()
+            if self._blocked_reason is None:
+                try:
+                    assignments = self._idle_target_assignments()
+                except Exception as exc:
+                    self._blocked_reason = (
+                        "idle target recovery could not be routed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+            if self._blocked_reason is not None:
+                log.critical("ExecutionRouter blocked: %s", self._blocked_reason)
+            else:
+                for state in assignments:
+                    self.book.update_target(state)
+                for model in self.models_by_name.values():
+                    model.onStart(data, self)
         super().onStart(data, source)
 
     def onData(self, target: PositionTarget, *args: object) -> None:
-        """Invoke only the model selected by affinity or first matching rule."""
+        """Invoke the selected model when active ownership remains consistent."""
 
         if not isinstance(target, PositionTarget):
             raise TypeError("ExecutionRouter accepts only PositionTarget")
-        affinity = (
-            self.book.affinity_for_source(target.source_key)
-            if target.source_key is not None
-            else self.book.affinity_for_contract(target.contract)
-        )
-        model: ExecutionModel | None
-        if affinity is not None:
-            model = self.models_by_name.get(affinity)
-            if model is None:
-                raise RuntimeError(
-                    f"Persisted ExecutionModel {affinity!r} is unavailable"
-                )
-        else:
-            model = self._model_for_rules(target)
+        if self._blocked_reason is not None:
+            log.critical(
+                "PositionTarget suppressed while ExecutionRouter is blocked: %s",
+                self._blocked_reason,
+            )
+            return
+        model = self._model_for_rules(target)
+        try:
+            owner = self.book.active_order_model_for_contract(
+                target.contract,
+                role=StandardOrderRole.TARGET_ADJUSTMENT,
+            )
+        except RuntimeError as exc:
+            log.critical("PositionTarget suppressed: %s", exc)
+            return
+        if owner is not None and owner != model.name:
+            log.critical(
+                "PositionTarget for conId=%s selected model %r while active "
+                "TARGET_ADJUSTMENT belongs to %r; target suppressed",
+                target.contract.conId,
+                model.name,
+                owner,
+            )
+            return
         model.onData(target)
 
     def _model_for_rules(self, target: PositionTarget) -> ExecutionModel:
@@ -117,21 +140,55 @@ class ExecutionRouter(Atom):
             raise LookupError(f"No ExecutionModel matched target {target!r}")
         return model
 
-    def _handoff_recoverable_targets(self) -> None:
-        """Assign idle direct targets to the models selected by current rules."""
+    def _working_order_block_reason(self) -> str | None:
+        """Return why active direct work cannot be recovered under current rules."""
 
+        grouped: dict[int, list[OrderInfo]] = {}
+        for info in self.book.active_orders(role=StandardOrderRole.TARGET_ADJUSTMENT):
+            grouped.setdefault(info.trade.contract.conId, []).append(info)
+
+        for con_id, orders in grouped.items():
+            owners = {info.execution_model_name for info in orders}
+            if len(owners) != 1:
+                return (
+                    f"conId={con_id} has active TARGET_ADJUSTMENT orders owned "
+                    f"by multiple models: {sorted(owners)}"
+                )
+            owner = next(iter(owners))
+            state = self.book.target_state(owner, orders[0].trade.contract)
+            if state is None:
+                return (
+                    f"active TARGET_ADJUSTMENT for conId={con_id}, model "
+                    f"{owner!r} has no recoverable TargetState"
+                )
+            try:
+                selected = self._model_for_rules(self._target_from_state(state))
+            except Exception as exc:
+                return (
+                    f"active TARGET_ADJUSTMENT for conId={con_id}, model "
+                    f"{owner!r} cannot be routed: {type(exc).__name__}: {exc}"
+                )
+            if selected.name != owner:
+                return (
+                    f"active TARGET_ADJUSTMENT for conId={con_id} belongs to "
+                    f"{owner!r}, but current rules select {selected.name!r}"
+                )
+        return None
+
+    def _idle_target_assignments(self) -> tuple[TargetState, ...]:
+        """Build current-rule ownership updates for idle recovered targets."""
+
+        assignments: list[TargetState] = []
         for state in self.book.latest_targets():
-            if self.book.affinity_for_contract(state.contract) is not None:
-                continue
-            target = PositionTarget(
+            if self.book.active_orders(
                 contract=state.contract,
-                target_quantity=state.target_quantity,
-                created_at=state.target_created_at,
-            )
-            model = self._model_for_rules(target)
+                role=StandardOrderRole.TARGET_ADJUSTMENT,
+            ):
+                continue
+            model = self._model_for_rules(self._target_from_state(state))
             if model.name == state.execution_model_name:
                 continue
-            self.book.update_target(
+            assignments.append(
                 TargetState(
                     execution_model_name=model.name,
                     contract=state.contract,
@@ -139,6 +196,17 @@ class ExecutionRouter(Atom):
                     target_created_at=state.target_created_at,
                 )
             )
+        return tuple(assignments)
+
+    @staticmethod
+    def _target_from_state(state: TargetState) -> PositionTarget:
+        """Reconstruct the PositionTarget fields persisted for direct recovery."""
+
+        return PositionTarget(
+            contract=state.contract,
+            target_quantity=state.target_quantity,
+            created_at=state.target_created_at,
+        )
 
 
 def contract_is(contract: ibi.Contract) -> TargetPredicate:
@@ -202,6 +270,11 @@ def where(predicate: TargetPredicate) -> TargetPredicate:
 
     Returns:
         The same callable for use in ExecutionRule.
+
+    Note:
+        Predicates used for recoverable direct execution must be deterministic
+        from the persisted Contract, target quantity, and creation time.
+        Signal metadata is not part of TargetState recovery.
     """
 
     if not callable(predicate):

@@ -67,7 +67,9 @@ class Terminator:
                     ),
                     role=StandardOrderRole.LIQUIDATION,
                     execution_model_name=(
-                        self.controller.book.affinity_for_contract(position.contract)
+                        self.controller.book.active_order_model_for_contract(
+                            position.contract
+                        )
                         or "reset_liquidation"
                     ),
                 )

@@ -850,7 +850,7 @@ class Controller(Atom):
                 execution_model_name=(
                     state.execution_model_name
                     if state is not None
-                    else self.book.affinity_for_contract(position.contract)
+                    else self.book.active_order_model_for_contract(position.contract)
                     or "nuke_liquidation"
                 ),
                 source_key=state.source_key if state is not None else None,

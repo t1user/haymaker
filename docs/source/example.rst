@@ -188,5 +188,6 @@ normalized mapping under a stable ``portfolio_key`` through Book.
 The serial model treats each target as an absolute setpoint. If a newer target
 arrives while an adjustment order works, it retains only the newer target and
 re-evaluates after completion. Router rules are evaluated in declaration order;
-persisted model affinity remains authoritative until the Contract is flat with
-no working orders.
+current rules remain authoritative. On restart, an active TARGET_ADJUSTMENT
+must still select the model that submitted it or the Router blocks locally;
+idle recovered targets are reassigned to the model selected by current rules.

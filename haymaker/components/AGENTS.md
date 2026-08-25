@@ -148,9 +148,17 @@ Execution models consume absolute targets, retain only the newest target for
 their natural identity, and use Book state plus working orders to derive the
 next broker action. Every model has a stable unique configured `name`; persist
 and recover that name. Router rules are fixed, ordered, and first-match wins.
-Only working orders retain persisted affinity and missing owners fail closed.
-Without working orders, current rules own held quantity and recovered direct
-targets; startup reassigns an idle target before model recovery.
+Current rules always select the model. Before recovery, each active direct
+`TARGET_ADJUSTMENT` must still select its persisted owner. A mismatch, missing
+TargetState, ambiguous ownership, or unroutable target blocks that Router
+locally; it does not cancel the order or disable Controller trading. Other
+order roles, including one-to-one bracket work, do not participate. Without
+active adjustments, current rules own held quantity and recovered direct
+targets; startup requires every idle target to be routable before applying any
+reassignment and starting model recovery.
+Treat an unchanged model name as a promise that its implementation and
+configuration remain recovery-compatible. Recovery predicates must be
+deterministic from persisted TargetState fields.
 
 `SerialTargetExecutionModel` owns one active Contract adjustment at a time and
 supports arbitrary same-side resizing. `BracketExecutionModel` owns one
@@ -194,8 +202,8 @@ Every public export needs a usage-focused Google-style, Sphinx-compatible
 docstring and focused pytest coverage. Tests must cover capability-based
 connection validation, runtime message validation, immutable messages,
 STATE/EVENT semantics, absolute target supersession, execution recovery, Fill
-deduplication, router affinity, and one-to-one episode attribution as
-applicable.
+deduplication, Router ownership validation, and one-to-one episode attribution
+as applicable.
 
 This is a direct-cutover package. Do not add forwarding modules, compatibility
 aliases, legacy schema reads, or dual writes. The standalone migration script

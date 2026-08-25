@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import haymaker.app as app_module
 from haymaker.app import App
 from haymaker.base import Atom
 from haymaker.config import LiveCommand, load_live_config
+from haymaker.components import StandardOrderRole
 from haymaker.contract_registry import ContractRegistry
 from haymaker.databases import MongoService
 from haymaker.datastore import MarketDataStoreFactory, SignalFramePersistenceFactory
@@ -315,6 +317,75 @@ async def test_live_runtime_stop_cancels_timeouts_before_controller_hold(
     await runtime.stop("restart requested")
 
     assert events == ["timeouts", "hold"]
+
+
+@pytest.mark.asyncio
+async def test_live_runtime_close_warns_about_active_target_adjustments(
+    caplog,
+) -> None:
+    """Final process close should expose unfinished direct execution work."""
+
+    events: list[object] = []
+    info = SimpleNamespace(
+        orderId=17,
+        permId=117,
+        execution_model_name="serial",
+        trade=SimpleNamespace(
+            contract=ibi.Future(
+                conId=123,
+                symbol="ES",
+                localSymbol="ESM6",
+            )
+        ),
+        signed_working_quantity=-2,
+    )
+
+    class FakeBook:
+        def active_orders(self, *, role=None):
+            events.append(("query", role))
+            return (info,)
+
+        async def close(self) -> None:
+            events.append("close")
+
+    runtime = object.__new__(LiveRuntime)
+    runtime.context = cast(RuntimeContext, SimpleNamespace(book=FakeBook()))
+
+    with caplog.at_level(logging.WARNING, logger="haymaker.runtime"):
+        await runtime.close()
+
+    assert events == [("query", StandardOrderRole.TARGET_ADJUSTMENT), "close"]
+    assert "active TARGET_ADJUSTMENT" in caplog.text
+    assert "serial" in caplog.text
+    assert "orderId': 17" in caplog.text
+    assert "conId': 123" in caplog.text
+    assert "working_quantity': -2" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_live_runtime_close_is_quiet_without_target_adjustments(
+    caplog,
+) -> None:
+    """Final process close should not warn when routed work is complete."""
+
+    events: list[object] = []
+
+    class FakeBook:
+        def active_orders(self, *, role=None):
+            events.append(("query", role))
+            return ()
+
+        async def close(self) -> None:
+            events.append("close")
+
+    runtime = object.__new__(LiveRuntime)
+    runtime.context = cast(RuntimeContext, SimpleNamespace(book=FakeBook()))
+
+    with caplog.at_level(logging.WARNING, logger="haymaker.runtime"):
+        await runtime.close()
+
+    assert events == [("query", StandardOrderRole.TARGET_ADJUSTMENT), "close"]
+    assert "active TARGET_ADJUSTMENT" not in caplog.text
 
 
 def test_live_runtime_binds_supervisor_controls(atom_runtime) -> None:

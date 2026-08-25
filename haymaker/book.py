@@ -948,36 +948,39 @@ class Book:
             *(info.execution_model_name for info in self._orders.values()),
         }
 
-    def routing_affinity_names(self) -> set[str]:
-        """Return model names owning working orders that must be recovered."""
+    def active_order_model_for_contract(
+        self,
+        contract: ibi.Contract,
+        *,
+        role: str | None = None,
+    ) -> str | None:
+        """Return the unambiguous active-order owner for one Contract.
 
-        return {info.execution_model_name for info in self.active_orders()}
+        Args:
+            contract: Concrete qualified Contract used to find active orders.
+            role: Optional exact order-role filter.
 
-    def affinity_for_source(self, source_key: str) -> str | None:
-        """Return working-order ownership for one source, if any."""
+        Returns:
+            The execution-model name, or ``None`` when no order matches.
 
-        candidates = {
-            info.execution_model_name
-            for info in self.active_orders(source_key=source_key)
-        }
-        return self._one_affinity(candidates, f"source_key={source_key!r}")
-
-    def affinity_for_contract(self, contract: ibi.Contract) -> str | None:
-        """Return working-order ownership for one direct execution Contract."""
+        Raises:
+            RuntimeError: More than one model owns matching active orders.
+        """
 
         con_id = _contract_key(contract)
         candidates = {
-            info.execution_model_name for info in self.active_orders(contract=contract)
+            info.execution_model_name
+            for info in self.active_orders(contract=contract, role=role)
         }
-        return self._one_affinity(candidates, f"conId={con_id}")
+        return self._one_active_order_model(candidates, f"conId={con_id}")
 
     @staticmethod
-    def _one_affinity(candidates: set[str], identity: str) -> str | None:
+    def _one_active_order_model(candidates: set[str], identity: str) -> str | None:
         """Require unambiguous ownership among relevant working orders."""
 
         if len(candidates) > 1:
             raise RuntimeError(
-                f"Ambiguous execution-model affinity for {identity}: "
+                f"Ambiguous active-order ownership for {identity}: "
                 f"{sorted(candidates)}"
             )
         return next(iter(candidates), None)

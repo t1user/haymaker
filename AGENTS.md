@@ -252,9 +252,16 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - Direct Portfolio consumes Signals and emits zero or more targets. The
   one-to-one path uses a signal processor, `PortfolioWrapper`, and
   `PositionAllocator`. Execution models have stable unique configured names;
-  working-order affinity fails closed when the named model is absent. Held
-  quantity or an idle latest target does not pin an old model: current Router
-  rules take ownership, and idle direct targets are reassigned on recovery.
+  preserving a name across deployments promises recovery-compatible behavior.
+  Current Router rules always select the model. At startup, every active direct
+  `TARGET_ADJUSTMENT` must still select its persisted owner; disagreement,
+  missing recovery state, or ambiguous ownership blocks that Router locally
+  without cancelling orders or disabling Controller trading. One-to-one and
+  non-adjustment orders do not participate. Held quantity or an idle latest
+  target does not pin an old model: current rules take ownership, and all idle
+  direct targets must be routable before any reassignment is applied. Final
+  process close warns if active adjustments remain so routing or model changes
+  can be deferred until they finish.
 - One-to-one scalar processors accept only `-1/0/1` and make opposing CLOSE
   versus REVERSE policy explicit. Paired processors use SignalPair entry while
   flat and exit while positioned. Protective STOP_LOSS and TAKE_PROFIT fills

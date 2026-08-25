@@ -36,6 +36,7 @@ from .datastore import (
 from .handlers import IBHandlers
 from .order_defaults import OrderDefaults
 from .saver import MongoSaver
+from .components.messages import StandardOrderRole
 from .components.streamers import Streamer
 from .components.timeouts import MarketDataTimeout
 from .trader import Trader
@@ -358,7 +359,37 @@ class LiveRuntime:
     async def close(self) -> None:
         """Flush final live-runtime state before process shutdown."""
 
+        self._warn_active_target_adjustments()
         await self.context.book.close()
+
+    def _warn_active_target_adjustments(self) -> None:
+        """Warn when a later deployment must preserve routed recovery."""
+
+        active = self.context.book.active_orders(
+            role=StandardOrderRole.TARGET_ADJUSTMENT
+        )
+        if not active:
+            return
+        orders = [
+            {
+                "orderId": info.orderId,
+                "permId": info.permId,
+                "execution_model_name": info.execution_model_name,
+                "contract": (
+                    info.trade.contract.localSymbol or info.trade.contract.symbol
+                ),
+                "conId": info.trade.contract.conId,
+                "working_quantity": info.signed_working_quantity,
+            }
+            for info in active
+        ]
+        log.warning(
+            "Process is exiting with active TARGET_ADJUSTMENT orders. Restart "
+            "with unchanged routing rules and recovery-compatible execution "
+            "model names and configuration, or finish/cancel these orders "
+            "before deploying execution changes: %s",
+            orders,
+        )
 
     def __str__(self) -> str:
         """Return a compact live-runtime description suitable for logs."""

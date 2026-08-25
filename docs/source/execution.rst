@@ -493,11 +493,22 @@ the unfilled protective orders when any exit fills.
 .. autoclass:: haymaker.components.BracketExecutionModel
 
 Router rules are fixed and evaluated in declaration order; first match wins.
-Without a default, unmatched targets fail closed. Working orders retain their
-persisted model affinity until terminal and require that named model during
-recovery. Held quantity and idle targets do not pin an old model: current rules
-take ownership, and startup reassigns each idle direct target before model
-recovery.
+Without a default, unmatched targets fail closed. Current rules always select
+the model; persisted ownership never overrides them. Before recovery, every
+active direct ``TARGET_ADJUSTMENT`` must still select the model that submitted
+it. A mismatch, ambiguous ownership, missing target state, or unroutable target
+blocks that Router locally. It does not cancel orders or disable Controller
+trading, and one-to-one bracket roles are outside this check.
+
+Held quantity and idle targets do not pin an old model. Startup computes all
+idle direct-target reassignments from current rules before applying any of
+them, then starts the models. Custom predicates used for recoverable execution
+must therefore be deterministic from persisted TargetState fields: Contract,
+target quantity, and target creation time. Metadata is unavailable during
+reconstruction. Reusing a configured model name across deployments asserts
+that the implementation and configuration remain recovery-compatible. Final
+process shutdown logs unfinished ``TARGET_ADJUSTMENT`` orders so operators can
+avoid changing routing or models until those orders finish.
 
 .. autoclass:: haymaker.components.ExecutionRule
 

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 import ib_insync as ibi
@@ -118,6 +119,34 @@ def apply_fill(controller, trade, quantity, exec_id="exec-1", complete=True):
     info = controller.book.order_by_id(trade.order.orderId)
     controller.register_position(info, fill)
     return fill
+
+
+def working_adjustment(
+    runtime,
+    controller,
+    owner,
+    *,
+    target_quantity=1,
+    symbol="ES",
+    con_id=1,
+):
+    """Persist a direct target and register its active adjustment order."""
+
+    target_contract = contract(symbol, con_id)
+    runtime.book.update_target(
+        TargetState(
+            execution_model_name=owner,
+            contract=target_contract,
+            target_quantity=target_quantity,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    return controller.trade(
+        target_contract,
+        ibi.MarketOrder("BUY", abs(target_quantity) or 1),
+        role=StandardOrderRole.TARGET_ADJUSTMENT,
+        execution_model_name=owner,
+    )
 
 
 def test_execution_model_string_includes_name_and_class(execution_runtime):
@@ -545,11 +574,8 @@ def test_router_starts_every_model_once_per_generation(execution_runtime):
     assert second.recoveries == 2
 
 
-def test_router_preserves_source_affinity_only_while_order_is_working(
-    execution_runtime,
-):
+def test_router_ignores_one_to_one_working_orders(execution_runtime):
     runtime, controller, _ = execution_runtime
-    owner = RecordingModel(name="owner")
     current_rule = RecordingModel(name="current")
     router = ExecutionRouter(
         [
@@ -557,13 +583,12 @@ def test_router_preserves_source_affinity_only_while_order_is_working(
                 predicate=lambda target: True,
                 model=current_rule,
             )
-        ],
-        default_model=owner,
+        ]
     )
     runtime.book.update_position(
         PositionState(
             source_key="alpha",
-            execution_model_name="owner",
+            execution_model_name="brackets",
             contract=contract(),
             quantity=1,
             target_quantity=1,
@@ -573,19 +598,17 @@ def test_router_preserves_source_affinity_only_while_order_is_working(
         contract(),
         ibi.MarketOrder("SELL", 1),
         role=StandardOrderRole.CLOSE,
-        execution_model_name="owner",
+        execution_model_name="brackets",
         source_key="alpha",
     )
     incoming = target(0, source_key="alpha")
+    runtime.workload_generation = 1
 
+    router.onStart({})
     router.onData(incoming)
 
-    assert owner.accepted == [incoming]
-    assert current_rule.accepted == []
-
-    working.orderStatus.status = ibi.OrderStatus.Filled
-    router.onData(incoming)
-
+    assert working.orderStatus.status == ibi.OrderStatus.Submitted
+    assert current_rule.recoveries == 1
     assert current_rule.accepted == [incoming]
 
 
@@ -616,36 +639,218 @@ def test_router_current_rules_own_held_position_without_working_order(
     assert old.accepted == []
 
 
-def test_router_fails_closed_for_missing_working_order_model(
+def test_router_recovers_when_active_order_still_selects_owner(execution_runtime):
+    runtime, controller, _ = execution_runtime
+    owner = RecordingModel(name="owner")
+    working_adjustment(runtime, controller, owner.name)
+    router = ExecutionRouter(
+        [ExecutionRule(predicate=lambda target: True, model=owner)]
+    )
+    incoming = target(2)
+    runtime.workload_generation = 1
+
+    router.onStart({})
+    router.onData(incoming)
+
+    assert owner.recoveries == 1
+    assert owner.accepted == [incoming]
+
+
+def test_router_blocks_missing_active_order_owner(
     execution_runtime,
+    caplog,
 ):
     runtime, controller, _ = execution_runtime
-    runtime.book.update_target(
-        TargetState(
-            execution_model_name="missing",
-            contract=contract(),
-            target_quantity=1,
-            target_created_at=datetime.now(timezone.utc),
-        )
-    )
-    controller.trade(
-        contract(),
-        ibi.MarketOrder("BUY", 1),
-        role=StandardOrderRole.TARGET_ADJUSTMENT,
-        execution_model_name="missing",
-    )
+    working_adjustment(runtime, controller, "missing")
+    configured = RecordingModel(name="configured")
     router = ExecutionRouter(
         [
             ExecutionRule(
                 predicate=lambda target: True,
-                model=RecordingModel(name="configured"),
+                model=configured,
             )
         ]
     )
     runtime.workload_generation = 1
 
-    with pytest.raises(RuntimeError, match="affinity"):
+    with caplog.at_level(
+        logging.CRITICAL, logger="haymaker.components.execution.router"
+    ):
         router.onStart({})
+        router.onData(target(2))
+
+    assert configured.recoveries == 0
+    assert configured.accepted == []
+    assert "belongs to 'missing', but current rules select 'configured'" in caplog.text
+    assert "PositionTarget suppressed while ExecutionRouter is blocked" in caplog.text
+
+
+def test_router_blocks_owner_still_configured_for_another_route(
+    execution_runtime,
+    caplog,
+):
+    runtime, controller, _ = execution_runtime
+    working_adjustment(runtime, controller, "old")
+    old = RecordingModel(name="old")
+    current = RecordingModel(name="current")
+    router = ExecutionRouter(
+        [
+            ExecutionRule(predicate=symbol_is("ES"), model=current),
+            ExecutionRule(predicate=symbol_is("NQ"), model=old),
+        ]
+    )
+    runtime.workload_generation = 1
+
+    with caplog.at_level(
+        logging.CRITICAL, logger="haymaker.components.execution.router"
+    ):
+        router.onStart({})
+
+    assert old.recoveries == 0
+    assert current.recoveries == 0
+    assert "belongs to 'old', but current rules select 'current'" in caplog.text
+
+
+def test_router_blocks_active_order_without_target_state(
+    execution_runtime,
+    caplog,
+):
+    runtime, controller, _ = execution_runtime
+    controller.trade(
+        contract(),
+        ibi.MarketOrder("BUY", 1),
+        role=StandardOrderRole.TARGET_ADJUSTMENT,
+        execution_model_name="owner",
+    )
+    owner = RecordingModel(name="owner")
+    router = ExecutionRouter(
+        [ExecutionRule(predicate=lambda target: True, model=owner)]
+    )
+    runtime.workload_generation = 1
+
+    with caplog.at_level(
+        logging.CRITICAL, logger="haymaker.components.execution.router"
+    ):
+        router.onStart({})
+
+    assert owner.recoveries == 0
+    assert "has no recoverable TargetState" in caplog.text
+
+
+def test_router_blocks_ambiguous_active_adjustment_owners(
+    execution_runtime,
+    caplog,
+):
+    runtime, controller, _ = execution_runtime
+    working_adjustment(runtime, controller, "first")
+    controller.trade(
+        contract(),
+        ibi.MarketOrder("BUY", 1),
+        role=StandardOrderRole.TARGET_ADJUSTMENT,
+        execution_model_name="second",
+    )
+    first = RecordingModel(name="first")
+    second = RecordingModel(name="second")
+    router = ExecutionRouter(
+        [ExecutionRule(predicate=lambda target: True, model=first)],
+        default_model=second,
+    )
+    runtime.workload_generation = 1
+
+    with caplog.at_level(
+        logging.CRITICAL, logger="haymaker.components.execution.router"
+    ):
+        router.onStart({})
+
+    assert first.recoveries == 0
+    assert second.recoveries == 0
+    assert "owned by multiple models: ['first', 'second']" in caplog.text
+
+
+def test_router_blocks_unroutable_active_adjustment(
+    execution_runtime,
+    caplog,
+):
+    runtime, controller, _ = execution_runtime
+    working_adjustment(runtime, controller, "owner")
+    owner = RecordingModel(name="owner")
+    router = ExecutionRouter([ExecutionRule(predicate=symbol_is("NQ"), model=owner)])
+    runtime.workload_generation = 1
+
+    with caplog.at_level(
+        logging.CRITICAL, logger="haymaker.components.execution.router"
+    ):
+        router.onStart({})
+
+    assert owner.recoveries == 0
+    assert "cannot be routed: LookupError" in caplog.text
+
+
+def test_router_suppresses_live_model_change_until_order_is_terminal(
+    execution_runtime,
+    caplog,
+):
+    runtime, controller, _ = execution_runtime
+    owner = RecordingModel(name="owner")
+    other = RecordingModel(name="other")
+    router = ExecutionRouter(
+        [
+            ExecutionRule(
+                predicate=lambda incoming: incoming.target_quantity > 0, model=owner
+            )
+        ],
+        default_model=other,
+    )
+    working = working_adjustment(runtime, controller, owner.name)
+    runtime.workload_generation = 1
+    router.onStart({})
+    flatten = target(0)
+
+    with caplog.at_level(
+        logging.CRITICAL, logger="haymaker.components.execution.router"
+    ):
+        router.onData(flatten)
+
+    assert owner.accepted == []
+    assert other.accepted == []
+    assert "target suppressed" in caplog.text
+
+    working.orderStatus.status = ibi.OrderStatus.Filled
+    router.onData(flatten)
+
+    assert other.accepted == [flatten]
+
+
+def test_router_does_not_partially_reassign_unroutable_idle_targets(
+    execution_runtime,
+    caplog,
+):
+    runtime, _, _ = execution_runtime
+    created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for symbol, con_id in (("ES", 1), ("NQ", 2)):
+        runtime.book.update_target(
+            TargetState(
+                execution_model_name="old",
+                contract=contract(symbol, con_id),
+                target_quantity=1,
+                target_created_at=created_at,
+            )
+        )
+    current = RecordingModel(name="current")
+    router = ExecutionRouter([ExecutionRule(predicate=symbol_is("ES"), model=current)])
+    runtime.workload_generation = 1
+
+    with caplog.at_level(
+        logging.CRITICAL, logger="haymaker.components.execution.router"
+    ):
+        router.onStart({})
+
+    assert current.recoveries == 0
+    assert (
+        runtime.book.latest_target_for_contract(contract("ES", 1)).execution_model_name
+        == "old"
+    )
+    assert "idle target recovery could not be routed" in caplog.text
 
 
 def test_router_hands_idle_recovered_target_to_current_model(execution_runtime):

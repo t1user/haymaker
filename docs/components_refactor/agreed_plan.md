@@ -254,19 +254,27 @@ Order keyword precedence is:
 built-in fallback < global order defaults < model constructor options
 ```
 
-## Routing and affinity
+## Routing and recovery ownership
 
 `ExecutionRouter` receives fixed ordered `ExecutionRule` objects and an
 optional default model. First match wins; no match without a default fails
 closed. Model instances are constructed before the Router and names must be
 unique. Every configured model starts once per workload generation.
 
-Persisted source or Contract affinity wins only while working orders remain.
-Once they are terminal, rules are evaluated again even if quantity is held.
-During recovery, idle direct targets are reassigned to the model selected by
-current rules before models resume convergence. Recovery fails closed if a
-working order references an absent model. There is no route key in messages or
-persistence.
+Current rules always select the model; persisted ownership never overrides
+them. Before recovery, every active direct `TARGET_ADJUSTMENT` must still select
+the model recorded on that order. A mismatch, ambiguous ownership, missing
+TargetState, or unroutable target blocks that Router locally without cancelling
+orders or disabling Controller trading. Other roles, including one-to-one
+bracket work, are excluded. A stable model name is a promise that its
+implementation and configuration remain recovery-compatible.
+
+Held quantity does not pin a model. During recovery, all idle direct-target
+reassignments must be routable under current rules before any are persisted,
+then models resume convergence. Predicates used for recoverable routing must be
+deterministic from persisted TargetState fields. Final process shutdown warns
+when active adjustments remain so operators can defer routing or model changes.
+There is no route key in messages or persistence.
 
 ## Futures and calculation audit
 
@@ -314,7 +322,7 @@ database as part of code implementation or tests.
 Public exports, Atom, and Pipe require usage-focused Google-style,
 Sphinx-compatible docstrings. Focused tests cover message validation,
 connection atomicity, STATE/EVENT transitions, locks, Portfolio allocation,
-target supersession, callback recovery, routing affinity, Fill deduplication,
-Trade rebinding, bracket creation, audit generations, and migration
-idempotence. Full validation includes pytest, mypy, Black, and Sphinx reference
-checks.
+target supersession, callback recovery, Router ownership validation, Fill
+deduplication, Trade rebinding, bracket creation, audit generations, and
+migration idempotence. Full validation includes pytest, mypy, Black, and Sphinx
+reference checks.

@@ -108,8 +108,8 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/book.py`: typed order/fill evidence, one-to-one PositionState,
   direct TargetState, Portfolio recovery mappings, rejection tracking,
-  execution affinity, blotter access, and one ordered critical persistence
-  queue. Book performs no broker calls or allocation.
+  active-order ownership queries, blotter access, and one ordered critical
+  persistence queue. Book performs no broker calls or allocation.
 - `haymaker/validators.py`: shared primitive normalization for aware datetimes,
   finite numbers, read-only mapping copies, non-empty strings, and IB Contract
   identity, plus IB request/order field validators. Domain-specific validation
@@ -147,8 +147,8 @@ The research package is intentionally separate from live execution. It works dir
   through `haymaker.components`.
   - `models.py`: the common stateful execution-model boundary and serial
     Contract target convergence.
-  - `router.py`: fixed first-match target routing with persisted
-    execution-model affinity.
+  - `router.py`: fixed first-match target routing plus startup validation that
+    active direct adjustments are still assigned to their persisted owners.
   - `brackets.py`: one-to-one bracket episode execution and its
     user-configurable protective-order legs. Regular closes join the episode's
     OCA group, keeping stop protection active until an exit fills.
@@ -307,10 +307,10 @@ reference and never suppresses the Signal.
 8. In the one-to-one flow, a binary processor emits PositionProposal and
    PortfolioWrapper allocates one absolute PositionTarget. In direct mode,
    Portfolio owns input state and may emit targets for several Contracts.
-9. ExecutionRouter optionally selects one stable named model. Working-order
-   source/Contract affinity overrides current rules until those orders become
-   terminal; otherwise current rules own held quantity and idle recovered
-   targets.
+9. ExecutionRouter optionally selects one stable named model using current
+   first-match rules. Before model recovery, active TARGET_ADJUSTMENT ownership
+   must agree with those rules; mismatch blocks that Router locally. Idle
+   recovered targets are reassigned only after every target can be routed.
 10. Execution models persist the newest target, derive required work from Book
     quantity and working orders, and call `Controller.trade()` with explicit
     role/model/source/episode attribution.
@@ -525,6 +525,9 @@ dataloader contracts.csv -f settings.yaml
   grace period, then submits liquidation orders even if some cancellations
   remain unconfirmed. Incomplete liquidation leaves Book state intact and
   prevents startup from enabling trading.
+- Final live-runtime close warns about active TARGET_ADJUSTMENT orders. Treat
+  the recorded model name as a recovery-compatibility promise and defer routing
+  or implementation changes until those direct orders are terminal.
 - Futures rolling changes active contracts, next-contract selection, and Book
   PositionState; changes can cause live trading differences.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.
