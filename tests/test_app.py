@@ -12,6 +12,7 @@ from haymaker.app import App
 from haymaker.base import Atom
 from haymaker.config import LiveCommand, load_live_config
 from haymaker.contract_registry import ContractRegistry
+from haymaker.controller.controller import SyncOutcome
 from haymaker.databases import MongoService
 from haymaker.runtime import InitData, LiveRuntime, RuntimeContext, StartupJobs
 from haymaker.streamers import Streamer
@@ -73,6 +74,7 @@ def test_live_runtime_builds_and_installs_ready_context(atom_runtime) -> None:
     assert runtime.context.sm is atom_runtime.sm
     assert runtime.context.contract_registry is atom_runtime.contract_registry
     assert runtime.context.controller is not None
+    assert not runtime.context.controller._trading_disabled
     assert runtime.context.frame_store_provider is runtime.frame_store_provider
     assert runtime.startup_jobs.streamers is Streamer.instances
     assert not hasattr(runtime.context, "config")
@@ -243,9 +245,9 @@ async def test_live_runtime_runs_startup_jobs_after_controller() -> None:
         def set_future_roll_policies(self, policies: dict[str, bool]) -> None:
             events.append(("policies", dict(policies)))
 
-        async def run(self) -> bool:
+        async def run(self) -> SyncOutcome:
             events.append("controller")
-            return False
+            return SyncOutcome.FAILED
 
     class FakeStartupJobs:
         async def run(self) -> None:
@@ -268,6 +270,36 @@ async def test_live_runtime_runs_startup_jobs_after_controller() -> None:
         "controller",
         "startup-jobs",
     ]
+
+
+@pytest.mark.asyncio
+async def test_live_runtime_skips_startup_jobs_after_aborted_controller() -> None:
+    """A requested restart must end the current workload before broker jobs."""
+
+    events: list[str] = []
+
+    class FakeController:
+        def set_future_roll_policies(self, policies: dict[str, bool]) -> None:
+            pass
+
+        async def run(self) -> SyncOutcome:
+            events.append("controller")
+            return SyncOutcome.ABORTED
+
+    class FakeStartupJobs:
+        async def run(self) -> None:
+            events.append("startup-jobs")
+
+    runtime = object.__new__(LiveRuntime)
+    runtime.context = cast(
+        RuntimeContext,
+        SimpleNamespace(controller=FakeController(), future_roll_policies={}),
+    )
+    runtime.startup_jobs = cast(StartupJobs, FakeStartupJobs())
+
+    await runtime.start()
+
+    assert events == ["controller"]
 
 
 def test_live_runtime_binds_supervisor_controls(atom_runtime) -> None:

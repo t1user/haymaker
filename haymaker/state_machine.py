@@ -22,6 +22,14 @@ DEFAULT_ORDER_COLLECTION_NAME = "orders"
 DEFAULT_STRATEGY_COLLECTION_NAME = "strategies"
 
 
+def _read_saver(saver: AbstractBaseSaver | AsyncSaveManager, *args: Any) -> Any:
+    """Read through a saver synchronously during process construction."""
+
+    if isinstance(saver, AsyncSaveManager):
+        return saver.read_sync(*args)
+    return saver.read(*args)
+
+
 class UnknownZeroOrderIdError(ValueError):
     """Raised when an unknown broker trade still has placeholder orderId 0."""
 
@@ -206,6 +214,12 @@ class OrderContainer(UserDict):
     async def read(self) -> None:
         """Read data from database and update itself."""
         order_data = await self.saver.read({"active": True})
+        self.decode(order_data)
+
+    def read_sync(self) -> None:
+        """Read order state directly during process construction."""
+
+        order_data = _read_saver(self.saver, {"active": True})
         self.decode(order_data)
 
     def __repr__(self) -> str:
@@ -399,6 +413,13 @@ class StrategyContainer(UserDict):
         assert isinstance(strategy_data, dict)
         self.decode(strategy_data)
 
+    def read_sync(self) -> None:
+        """Read strategy state directly during process construction."""
+
+        strategy_data = _read_saver(self.saver)
+        assert isinstance(strategy_data, dict)
+        self.decode(strategy_data)
+
     def __repr__(self) -> str:
         return f"StrategyContainer({self.data})"
 
@@ -435,6 +456,7 @@ class StateMachine:
         save_async: bool = True,
         save_delay: float = 1,
         max_rejected_orders: int = 3,
+        restore: bool = False,
     ) -> None:
 
         if order_saver is None:
@@ -450,6 +472,12 @@ class StateMachine:
         )
         self.max_rejected_orders = max_rejected_orders
         self.rejected_orders: dict[str, int] = defaultdict(int)
+        if restore:
+            try:
+                self.read_from_store_sync()
+            except Exception:
+                type(self)._instance = None
+                raise
         log.debug(f"StateMachine initialized: {self}")
 
     def register_rejected_order(self, strategy_str: str) -> None:
@@ -527,9 +555,18 @@ class StateMachine:
         """
         self._orders.delete(orderId)
 
-    async def read_from_store(self):
+    async def read_from_store(self) -> None:
+        """Restore persisted strategy and order state asynchronously."""
+
         log.debug("Will read data from store...")
         await asyncio.gather(self._strategies.read(), self._orders.read())
+
+    def read_from_store_sync(self) -> None:
+        """Restore persisted strategy and order state during construction."""
+
+        log.debug("Will read data from store...")
+        self._strategies.read_sync()
+        self._orders.read_sync()
 
     def save_order_status(self, trade: ibi.Trade) -> OrderInfo | None:
 

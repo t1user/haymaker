@@ -156,7 +156,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   their own `auto_roll_futures` policy while they are constructed. Strategy
   composition may use the context's narrow `FrameStoreProvider` to build fully
   configured persistence dependencies; the runtime does not inspect imported
-  module data.
+  module data. `StateMachine` optionally restores its own persisted state once
+  during construction, before `App` opens its first broker connection;
+  reconnects retain the current in-memory state. Controller reconciliation
+  routes restart requests through the supervisor callback and an aborted
+  controller run must not launch startup broker jobs.
 - Create restart-enabled `Timeout.from_atom()` instances from `onStart()` or
   later, after the supervisor restart callback has been bound. Zero-time and
   debug timeouts remain safe during pipeline construction.

@@ -14,7 +14,7 @@ from .base import Atom
 from .blotter import blotter_factory
 from .config.settings import LiveConfig
 from .contract_registry import ContractRegistry
-from .controller import Controller
+from .controller.controller import Controller, SyncOutcome
 from .databases import MongoService, create_frame_store_provider
 from .datastore import FrameStoreProvider
 from .handlers import IBHandlers
@@ -306,7 +306,9 @@ class LiveRuntime:
         self.context.controller.set_future_roll_policies(
             self.context.future_roll_policies
         )
-        await self.context.controller.run()
+        controller_outcome = await self.context.controller.run()
+        if controller_outcome is SyncOutcome.ABORTED:
+            return
         await self.startup_jobs.run()
 
     async def stop(self, reason: str) -> None:

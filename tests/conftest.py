@@ -123,18 +123,23 @@ class FakeMongoSaver(AbstractBaseSaver):
 
     def read(self, key: dict | None = None, /, *args) -> Any:
         s = self.store[self.collection]
-        if key:
-            try:
-                return [s.get(key)]  # type: ignore
-            except AttributeError:
-                return s  # type: ignore
-        else:
-            return s  # type: ignore
+        if isinstance(s, dict):
+            records = list(s.values())
+            if key:
+                return [
+                    record
+                    for record in records
+                    if all(record.get(name) == value for name, value in key.items())
+                ]
+            return records
+        return s
 
 
 class FakeMongoLatestSaver(FakeMongoSaver):
     def read(self, *args):
         s = self.store[self.collection]
+        if not s:
+            return {}
         try:
             return s[s.keys()[-1]]  # type: ignore
         except AttributeError:

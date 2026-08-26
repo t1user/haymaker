@@ -51,6 +51,14 @@ def test_live_dedicated_options_are_appended_after_generic_options() -> None:
     assert command.overrides[-1] == ("controller.startup.reset", True)
 
 
+def test_cold_start_disables_state_machine_restoration() -> None:
+    """The cold-start switch should construct an empty state machine."""
+
+    command = parse_live_args(["strategy.py", "--cold-start"])
+
+    assert command.overrides == (("state_machine.restore", False),)
+
+
 def test_dataloader_positional_and_gap_options_are_explicit_overrides() -> None:
     command = parse_dataloader_args(["contracts.csv", "--gap-fill-mode", "schedule"])
 

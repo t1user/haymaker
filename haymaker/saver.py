@@ -241,5 +241,10 @@ class AsyncSaveManager:
         # you don't want to proceed until you get the result
         return await make_async(self.saver.read, *args)
 
+    def read_sync(self, *args: Any) -> Any:
+        """Read directly when no application event loop is running."""
+
+        return self.saver.read(*args)
+
     def __repr__(self) -> str:
         return f"{self.__class__.__qualname__}({self.saver!r})"
