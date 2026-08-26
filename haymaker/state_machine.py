@@ -478,7 +478,12 @@ class StateMachine:
             except Exception:
                 type(self)._instance = None
                 raise
-        log.debug(f"StateMachine initialized: {self}")
+        log.debug(
+            "StateMachine initialized: restore=%s, strategies=%s, orders=%s",
+            restore,
+            len(self._strategies),
+            len(self._orders),
+        )
 
     def register_rejected_order(self, strategy_str: str) -> None:
         self.rejected_orders[strategy_str] += 1

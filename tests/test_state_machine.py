@@ -80,6 +80,27 @@ def test_StateMachine_restores_during_initialization(
         StateMachine._instance = None
 
 
+def test_StateMachine_initialization_log_is_compact(
+    order_saver, strategy_saver, caplog
+):
+    """Initialization should report state counts without serializing state."""
+
+    StateMachine._instance = None
+    try:
+        with caplog.at_level(logging.DEBUG, logger="haymaker.state_machine"):
+            StateMachine(
+                order_saver=order_saver,
+                strategy_saver=strategy_saver,
+                save_async=False,
+            )
+
+        assert caplog.messages == [
+            "StateMachine initialized: restore=False, strategies=0, orders=0"
+        ]
+    finally:
+        StateMachine._instance = None
+
+
 def test_StateMachine_restore_failure_does_not_leave_singleton(
     order_saver, strategy_saver, monkeypatch
 ):

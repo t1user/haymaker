@@ -83,6 +83,7 @@ class TelegramHandler(logging.handlers.HTTPHandler):
     def emit(self, record: logging.LogRecord) -> None:
         """Send a record to Telegram and report rejected deliveries."""
 
+        request_sent = False
         try:
             host = self.host
             connection = self.getConnection(host, self.secure)
@@ -108,6 +109,7 @@ class TelegramHandler(logging.handlers.HTTPHandler):
             connection.endheaders()
             if self.method == "POST":
                 connection.send(data.encode("utf-8"))
+            request_sent = True
 
             response = connection.getresponse()
             if response.status >= 400:
@@ -116,8 +118,17 @@ class TelegramHandler(logging.handlers.HTTPHandler):
                     "Telegram log delivery failed: "
                     f"{response.status} {response.reason}: {body}\n"
                 )
-        except Exception:
-            self.handleError(record)
+        except Exception as exc:
+            detail = str(exc).rstrip(".")
+            if request_sent:
+                sys.stderr.write(
+                    "Telegram delivery confirmation unavailable: "
+                    f"{detail}; notification may have been delivered.\n"
+                )
+            else:
+                sys.stderr.write(
+                    f"Telegram notification could not be sent: {detail}.\n"
+                )
 
 
 def filename_from_kwargs(

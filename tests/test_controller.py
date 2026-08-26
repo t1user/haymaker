@@ -971,7 +971,7 @@ async def test_sync_coordinator_back_reports_done_trade_before_restart_gate(
 
 @pytest.mark.asyncio
 async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
-    controller, trade, monkeypatch
+    controller, trade, monkeypatch, caplog
 ):
     old_trade = deepcopy(trade)
     old_trade.orderStatus = ibi.OrderStatus(status="Submitted", filled=0, remaining=1)
@@ -998,11 +998,18 @@ async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
         staticmethod(fail_bracket_sync),
     )
 
-    result = await SyncCoordinator(controller).run()
+    with caplog.at_level(
+        logging.WARNING, logger="haymaker.controller.sync_coordinator"
+    ):
+        result = await SyncCoordinator(controller).run()
 
     assert not result
     assert old_trade.order.orderId not in controller.sm.order
     assert not controller._trading_disabled
+    assert caplog.messages == [
+        f"Pruned stale local order {old_trade.order.orderId}; "
+        "order was absent at broker."
+    ]
 
 
 @pytest.mark.asyncio
