@@ -6,6 +6,7 @@ import pytest
 from haymaker.base import Atom
 from haymaker.components import (
     BarAggregator,
+    ExecutionRouter,
     FuturesPandasAggregator,
     HistoricalDataStreamer,
     MktDataStreamer,
@@ -22,6 +23,7 @@ from haymaker.controller import Controller
     "atom_type",
     (
         Controller,
+        ExecutionRouter,
         FuturesPandasAggregator,
         HistoricalDataStreamer,
         MktDataStreamer,

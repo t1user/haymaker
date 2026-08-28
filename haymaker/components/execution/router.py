@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import ib_insync as ibi
 
@@ -37,6 +37,7 @@ class ExecutionRule:
             raise TypeError("model must be an ExecutionModel")
 
 
+@dataclass(eq=False)
 class ExecutionRouter(Atom):
     """Route each target to exactly one stateful execution model.
 
@@ -51,29 +52,33 @@ class ExecutionRouter(Atom):
     workload rather than silently overriding the rules.
     """
 
-    def __init__(
-        self,
-        rules: Sequence[ExecutionRule],
-        default_model: ExecutionModel | None = None,
-    ) -> None:
-        super().__init__()
-        self.rules = tuple(rules)
+    rules: Sequence[ExecutionRule]
+    default_model: ExecutionModel | None = None
+    models_by_name: dict[str, ExecutionModel] = field(default_factory=dict, repr=False)
+    _started_generation: int = field(init=False, repr=False)
+    _blocked_reason: str | None = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Initialize Atom state and validate the fixed routing table."""
+
+        Atom.__init__(self)
+        self.rules = tuple(self.rules)
         if not all(isinstance(rule, ExecutionRule) for rule in self.rules):
             raise TypeError("rules must contain ExecutionRule instances")
-        if default_model is not None and not isinstance(default_model, ExecutionModel):
+        if self.default_model is not None and not isinstance(
+            self.default_model, ExecutionModel
+        ):
             raise TypeError("default_model must be an ExecutionModel or None")
-        self.default_model = default_model
         models = [rule.model for rule in self.rules]
-        if default_model is not None:
-            models.append(default_model)
-        self.models_by_name: dict[str, ExecutionModel] = {}
+        if self.default_model is not None:
+            models.append(self.default_model)
         for model in models:
             existing = self.models_by_name.get(model.name)
             if existing is not None and existing is not model:
                 raise ValueError(f"Duplicate ExecutionModel name: {model.name!r}")
             self.models_by_name[model.name] = model
         self._started_generation = -1
-        self._blocked_reason: str | None = None
+        self._blocked_reason = None
 
     def onStart(self, data: object, source: Atom | None = None) -> None:
         """Validate recovery and start models once per workload generation."""
@@ -100,10 +105,10 @@ class ExecutionRouter(Atom):
                     model.onStart(data, self)
         super().onStart(data, source)
 
-    def onData(self, target: PositionTarget, *args: object) -> None:
+    def onData(self, data: PositionTarget, *args: object) -> None:
         """Invoke the selected model when active ownership remains consistent."""
 
-        if not isinstance(target, PositionTarget):
+        if not isinstance(data, PositionTarget):
             raise TypeError("ExecutionRouter accepts only PositionTarget")
         if self._blocked_reason is not None:
             log.critical(
@@ -111,10 +116,10 @@ class ExecutionRouter(Atom):
                 self._blocked_reason,
             )
             return
-        model = self._model_for_rules(target)
+        model = self._model_for_rules(data)
         try:
             owner = self.book.active_order_model_for_contract(
-                target.contract,
+                data.contract,
                 role=StandardOrderRole.TARGET_ADJUSTMENT,
             )
         except RuntimeError as exc:
@@ -124,12 +129,12 @@ class ExecutionRouter(Atom):
             log.critical(
                 "PositionTarget for conId=%s selected model %r while active "
                 "TARGET_ADJUSTMENT belongs to %r; target suppressed",
-                target.contract.conId,
+                data.contract.conId,
                 model.name,
                 owner,
             )
             return
-        model.onData(target)
+        model.onData(data)
 
     def _model_for_rules(self, target: PositionTarget) -> ExecutionModel:
         model = next(
