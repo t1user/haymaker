@@ -16,6 +16,10 @@ TWS or IB Gateway, but it does not start, stop, or restart the gateway process.
 Recovery Policies
 -----------------
 
+* During live runtime construction, the state machine optionally restores its
+  own persisted state once. This happens before the first broker connection;
+  supervised reconnects retain current in-memory state and do not reload the
+  initial snapshot.
 * Work starts only after Haymaker has connected and successfully tested broker
   request availability.
 * An API socket disconnect, IB ``1101`` (data lost), or ``1300`` (API port
@@ -31,6 +35,9 @@ Recovery Policies
 * Repeated restart requests are combined, failed connection attempts are
   retried, and controller synchronization is aborted cleanly while the
   connection is unavailable.
+* Controller reconciliation requests broker-state refresh through the
+  supervisor. The controller never closes the API socket directly, and startup
+  broker jobs do not begin during that aborted workload cycle.
 
 Usage
 -----

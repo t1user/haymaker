@@ -63,7 +63,7 @@ def set_broker_state(
 def test_from_mapping_constructs_nested_startup_config(atom_runtime) -> None:
     controller = Controller.from_mapping(
         {
-            "startup": {"cold_start": False, "reset": True},
+            "startup": {"reset": True},
             "sync_frequency": 30,
             "future_roll_time": [14, 0],
             "missing_brackets": "warn",
@@ -74,7 +74,6 @@ def test_from_mapping_constructs_nested_startup_config(atom_runtime) -> None:
     assert controller.sync_frequency == 30
     assert controller.future_roll_time == (14, 0)
     assert controller.missing_brackets == "warn"
-    assert controller.cold_start is False
     assert controller.reset is True
 
 
@@ -248,7 +247,9 @@ async def test_on_exec_details_creates_unknown_record_for_unmatched_zero_order(
 
 
 @pytest.mark.asyncio
-async def test_sync_timeout_disables_trading(controller, monkeypatch):
+async def test_sync_timeout_requests_supervised_restart(
+    controller, atom_runtime, monkeypatch
+):
     disabled_reasons = []
 
     async def pending_positions():
@@ -266,8 +267,11 @@ async def test_sync_timeout_disables_trading(controller, monkeypatch):
 
     result = await controller.sync()
 
-    assert result is SyncOutcome.FAILED
-    assert disabled_reasons == ["sync did not converge"]
+    assert result is SyncOutcome.ABORTED
+    assert disabled_reasons == []
+    assert atom_runtime.restart_requests == [
+        "controller reconciliation requires fresh broker state"
+    ]
 
 
 @pytest.mark.asyncio
@@ -371,31 +375,6 @@ async def test_sync_cancellation_cancels_inner_sync(controller, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_stops_before_sync_when_state_store_read_fails(
-    controller, monkeypatch
-):
-    sync_called = False
-
-    async def fail_read_from_store():
-        raise RuntimeError("state store read failed")
-
-    async def sync():
-        nonlocal sync_called
-        sync_called = True
-        return True
-
-    controller.cold_start = False
-    monkeypatch.setattr(controller.sm, "read_from_store", fail_read_from_store)
-    monkeypatch.setattr(controller, "sync", sync)
-
-    result = await controller.run()
-
-    assert not result
-    assert not sync_called
-    assert controller._trading_disabled
-
-
-@pytest.mark.asyncio
 async def test_commission_report_skips_unknown_zero_order_id(
     controller, monkeypatch, caplog
 ):
@@ -493,8 +472,8 @@ async def test_sync_coordinator_returns_false_for_broker_state_timeout(
 
 
 @pytest.mark.asyncio
-async def test_broker_position_source_disagreement_disables_trading(
-    controller, trade, monkeypatch
+async def test_broker_position_source_disagreement_requests_restart(
+    controller, trade, atom_runtime, monkeypatch
 ):
     position = ibi.Position(
         account="DU123",
@@ -513,8 +492,11 @@ async def test_broker_position_source_disagreement_disables_trading(
 
     result = await controller.sync()
 
-    assert result is SyncOutcome.FAILED
-    assert controller._trading_disabled
+    assert result is SyncOutcome.ABORTED
+    assert not controller._trading_disabled
+    assert atom_runtime.restart_requests == [
+        "controller reconciliation requires fresh broker state"
+    ]
 
 
 def test_disabled_trading_does_not_register_order(controller, trade, monkeypatch):
@@ -830,7 +812,7 @@ async def test_unknown_broker_orders_can_be_left_active_by_config(
 
 @pytest.mark.asyncio
 async def test_unknown_broker_orders_skip_correction_trades(
-    controller, trade, monkeypatch
+    controller, trade, atom_runtime, monkeypatch
 ):
     bracket_checked = []
 
@@ -852,8 +834,11 @@ async def test_unknown_broker_orders_skip_correction_trades(
 
     result = await controller.sync()
 
-    assert result
+    assert result is SyncOutcome.ABORTED
     assert bracket_checked == []
+    assert atom_runtime.restart_requests == [
+        "controller reconciliation requires fresh broker state"
+    ]
 
 
 @pytest.mark.asyncio
@@ -986,7 +971,7 @@ async def test_sync_coordinator_back_reports_done_trade_before_restart_gate(
 
 @pytest.mark.asyncio
 async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
-    controller, trade, monkeypatch
+    controller, trade, monkeypatch, caplog
 ):
     old_trade = deepcopy(trade)
     old_trade.orderStatus = ibi.OrderStatus(status="Submitted", filled=0, remaining=1)
@@ -1013,11 +998,18 @@ async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
         staticmethod(fail_bracket_sync),
     )
 
-    result = await SyncCoordinator(controller).run()
+    with caplog.at_level(
+        logging.WARNING, logger="haymaker.controller.sync_coordinator"
+    ):
+        result = await SyncCoordinator(controller).run()
 
     assert not result
     assert old_trade.order.orderId not in controller.sm.order
     assert not controller._trading_disabled
+    assert caplog.messages == [
+        f"Pruned stale local order {old_trade.order.orderId}; "
+        "order was absent at broker."
+    ]
 
 
 @pytest.mark.asyncio
@@ -1132,6 +1124,59 @@ async def test_sync_disables_trading_when_recovery_does_not_converge(
     assert not result
     assert len(attempts) == controller.sync_max_attempts
     assert controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_routes_restart_through_runtime_callback(
+    controller, atom_runtime, monkeypatch
+):
+    async def restart_required(self):
+        self.request_restart = True
+        return False
+
+    def fail_direct_disconnect():
+        raise AssertionError("Controller must not disconnect the broker socket")
+
+    controller.sync_max_attempts = 2
+    controller.sync_resync_delay = 0
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "disconnect", fail_direct_disconnect)
+    monkeypatch.setattr(SyncCoordinator, "run", restart_required)
+
+    result = await controller.sync()
+
+    assert result is SyncOutcome.ABORTED
+    assert atom_runtime.restart_requests == [
+        "controller reconciliation requires fresh broker state"
+    ]
+    assert not controller._restart_before_correction
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_fails_closed_when_supervisor_rejects_restart(
+    controller, atom_runtime, monkeypatch
+):
+    disabled_reasons = []
+
+    async def restart_required(self):
+        self.request_restart = True
+        return False
+
+    controller.sync_max_attempts = 2
+    controller.sync_resync_delay = 0
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(SyncCoordinator, "run", restart_required)
+    monkeypatch.setattr(atom_runtime, "request_restart", lambda reason: False)
+    monkeypatch.setattr(
+        controller, "disable_trading", lambda reason: disabled_reasons.append(reason)
+    )
+
+    result = await controller.sync()
+
+    assert result is SyncOutcome.FAILED
+    assert disabled_reasons == ["supervisor restart request rejected"]
+    assert controller._restart_before_correction
 
 
 @pytest.mark.asyncio

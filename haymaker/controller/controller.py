@@ -67,7 +67,6 @@ class Controller(Atom):
 
     trader: Trader
     blotter: Blotter | None = None
-    cold_start: bool = True
     reset: bool = False
     zero: bool = False
     nuke: bool = False
@@ -238,7 +237,7 @@ class Controller(Atom):
 
         self.future_roll_policies = dict(policies)
 
-    async def run(self) -> bool:
+    async def run(self) -> SyncOutcome:
         """
         Main entry point into the programme.  Ensure records up to
         date and any remaining initialization complete.
@@ -249,18 +248,6 @@ class Controller(Atom):
         if self.nuke:
             await self.run_nuke()
 
-        if self.cold_start:
-            log.debug("Starting cold... (state NOT read from db)")
-        else:
-            try:
-                log.debug("Reading from store...")
-                await self.sm.read_from_store()
-                self.cold_start = True
-            except Exception as e:
-                log.exception(e)
-                self.disable_trading("state store read failed")
-                return False
-
         sync_outcome = await self.sync()
         if not sync_outcome:
             if sync_outcome is SyncOutcome.ABORTED:
@@ -269,7 +256,7 @@ class Controller(Atom):
                 log.critical(
                     "Controller startup sync failed. Trading remains disabled."
                 )
-            return False
+            return sync_outcome
 
         if self.zero:
             log.debug("Zeroing all records...")
@@ -285,7 +272,7 @@ class Controller(Atom):
         log.debug("Controller run sequence completed successfully.")
         self._restart_before_correction = True
         # now Streamers will run
-        return True
+        return SyncOutcome.OK
 
     def _ensure_runtime_timers_started(self) -> None:
         """Start app-lifetime controller timers on the active event loop."""
@@ -410,8 +397,7 @@ class Controller(Atom):
                 log.debug("Sync did not complete; will retry checks.")
                 await asyncio.sleep(self.sync_resync_delay)
                 if coordinator.request_restart:
-                    self._restart_before_correction = False
-                    self.ib.disconnect()
+                    return self._request_sync_restart()
 
         if self._sync_abort_event is not None and self._sync_abort_event.is_set():
             log.debug("Controller sync aborted before disabling trading.")
@@ -419,6 +405,24 @@ class Controller(Atom):
 
         self.disable_trading("sync did not converge")
         return SyncOutcome.FAILED
+
+    def _request_sync_restart(self) -> SyncOutcome:
+        """Request broker-state refresh through the owning supervisor."""
+
+        request_restart = self.request_restart
+        if request_restart is None:
+            self.disable_trading("supervisor restart callback unavailable")
+            return SyncOutcome.FAILED
+
+        accepted = request_restart(
+            "controller reconciliation requires fresh broker state"
+        )
+        if accepted is False:
+            self.disable_trading("supervisor restart request rejected")
+            return SyncOutcome.FAILED
+
+        self._restart_before_correction = False
+        return SyncOutcome.ABORTED
 
     def onStart(self, data, *args) -> None:
         # prevent superclass from setting attributes here

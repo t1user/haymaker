@@ -24,7 +24,6 @@ logging: # Framework logging setup and broker audit logging.
 
 controller: # Trading reconciliation, startup actions, and scheduling.
   startup: # One-run actions applied by Controller.run().
-    cold_start: false # Skip saved-state loading when true.
     reset: false # Close positions and clear strategy state after startup sync.
     zero: false # Clear all local strategy and order records after startup sync.
     nuke: false # Cancel orders, close positions, and disable trading.
@@ -42,6 +41,7 @@ controller: # Trading reconciliation, startup actions, and scheduling.
   missing_brackets: ignore # Action for missing protection: ignore, warn, or remove.
 
 state_machine: # Persistent strategy and order state.
+  restore: true # Restore persisted state once during construction.
   save_async: true # Save state through background queues.
   save_delay: 1 # Seconds to debounce strategy-state saves.
   strategy_collection_name: strategies # Mongo collection for strategy state.

@@ -1,5 +1,6 @@
 import logging
 from typing import Any
+from unittest.mock import Mock
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -33,6 +34,94 @@ def test_StateMachine_is_singleton(state_machine):
     """
     with pytest.raises(TypeError):
         StateMachine()
+
+
+def test_StateMachine_does_not_restore_by_default(
+    order_saver, strategy_saver, monkeypatch
+):
+    """Bare state-machine construction should remain storage-free."""
+
+    order_read = Mock(wraps=order_saver.read)
+    strategy_read = Mock(wraps=strategy_saver.read)
+    monkeypatch.setattr(order_saver, "read", order_read)
+    monkeypatch.setattr(strategy_saver, "read", strategy_read)
+    StateMachine._instance = None
+    try:
+        StateMachine(
+            order_saver=order_saver,
+            strategy_saver=strategy_saver,
+            save_async=False,
+        )
+        order_read.assert_not_called()
+        strategy_read.assert_not_called()
+    finally:
+        StateMachine._instance = None
+
+
+def test_StateMachine_restores_during_initialization(
+    order_saver, strategy_saver, monkeypatch
+):
+    """Explicit restoration should complete before construction returns."""
+
+    order_read = Mock(wraps=order_saver.read)
+    strategy_read = Mock(wraps=strategy_saver.read)
+    monkeypatch.setattr(order_saver, "read", order_read)
+    monkeypatch.setattr(strategy_saver, "read", strategy_read)
+    StateMachine._instance = None
+    try:
+        StateMachine(
+            order_saver=order_saver,
+            strategy_saver=strategy_saver,
+            restore=True,
+        )
+        strategy_read.assert_called_once_with()
+        order_read.assert_called_once_with({"active": True})
+    finally:
+        StateMachine._instance = None
+
+
+def test_StateMachine_initialization_log_is_compact(
+    order_saver, strategy_saver, caplog
+):
+    """Initialization should report state counts without serializing state."""
+
+    StateMachine._instance = None
+    try:
+        with caplog.at_level(logging.DEBUG, logger="haymaker.state_machine"):
+            StateMachine(
+                order_saver=order_saver,
+                strategy_saver=strategy_saver,
+                save_async=False,
+            )
+
+        assert caplog.messages == [
+            "StateMachine initialized: restore=False, strategies=0, orders=0"
+        ]
+    finally:
+        StateMachine._instance = None
+
+
+def test_StateMachine_restore_failure_does_not_leave_singleton(
+    order_saver, strategy_saver, monkeypatch
+):
+    """Failed restoration should permit a later clean construction attempt."""
+
+    def fail_restore():
+        """Represent a persistence failure during construction."""
+
+        raise RuntimeError("state store failed")
+
+    monkeypatch.setattr(strategy_saver, "read", fail_restore)
+    StateMachine._instance = None
+
+    with pytest.raises(RuntimeError, match="state store failed"):
+        StateMachine(
+            order_saver=order_saver,
+            strategy_saver=strategy_saver,
+            restore=True,
+        )
+
+    assert StateMachine._instance is None
 
 
 def test_OrderInfo_unpackable():

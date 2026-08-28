@@ -56,11 +56,11 @@ def test_live_defaults_are_composed_by_target_objects() -> None:
     assert connection.client_id == 0
     assert connection.probe_contract == ibi.Forex("EURUSD")
     assert controller["startup"] == {
-        "cold_start": False,
         "reset": False,
         "zero": False,
         "nuke": False,
     }
+    assert config.state_machine["restore"] is True
     assert controller["sync_frequency"] == 900
     assert futures.futures_roll_bdays == 3
     assert futures.futures_roll_margin_bdays == 3

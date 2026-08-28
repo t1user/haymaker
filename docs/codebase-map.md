@@ -36,9 +36,11 @@ the user strategy module so module-level pipelines are built against its
 already-installed `RuntimeContext`. Blocks register their futures-roll policy
 as they are constructed. Strategy module code may use the provider to build
 fully configured dataframe stores and inject them into consumers. The CLI then
-hands the composed runtime to the shared `App`. The app-lifetime `Controller`
-starts its periodic sync, health-check, and daily UTC futures-roll timers once
-on the active event loop when `Controller.run()` first executes. Live and
+hands the composed runtime to the shared `App`. The process-owned state machine
+restores its persisted state once during construction before `App` opens the
+broker connection. The app-lifetime `Controller` starts its periodic sync,
+health-check, and daily UTC futures-roll timers when `Controller.run()` first
+executes. Live and
 dataloader runtimes use the same application and supervisor lifecycle.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count, owns Mongo/Arctic composition, and injects datastore construction into `Manager`. `Manager` owns the run-scoped `now` and derives the library from data type and bar size, while contract selectors share a target-owned `FuturesSelectionPolicy`. Arctic is the only supported dataloader backend.
@@ -177,12 +179,15 @@ runtime configuration.
 
 1. The `haymaker` CLI creates `LiveRuntime`. It assembles live services, creates
    `StartupJobs` around the live streamer registry, and installs the passive
-   `RuntimeContext` on `Atom` before importing the user strategy module.
+   `RuntimeContext` on `Atom` before importing the user strategy module. During
+   this construction, `StateMachine` optionally restores its own persisted state
+   once, before any broker connection. Reconnects retain current in-memory state
+   instead of reloading the initial database snapshot.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
    Each block also registers its `auto_roll_futures` policy in the context.
-3. `App` starts the IB watchdog and waits for a successful historical-data probe.
+3. The supervisor connects to IB and waits for a successful historical-data probe.
 4. `Controller.run()` starts its app-lifetime timers once on the active event
-   loop, reads or initializes state, then `Controller.sync()` races the
+   loop, then `Controller.sync()` races the
    reconciliation pass against the supervisor's connection-unavailable event.
    If the supervisor enters broker recovery, restart, or shutdown, sync aborts
    without disabling trading. Otherwise the internal sync pass runs a bounded
@@ -193,8 +198,10 @@ runtime configuration.
    reads, and returns `False` after broker verification failures or recovery
    actions so sync can retry the checks before disabling trading. If unresolved
    order or position mismatches remain on the first pass, the coordinator can
-   ask the controller to reconnect before local order pruning, broker order
-   cancellation, or strategy-position correction is allowed on a later pass.
+   ask the controller to request a supervised reconnect before local order
+   pruning, broker order cancellation, or strategy-position correction is
+   allowed on a later pass. Only the supervisor closes the socket. An aborted
+   controller run ends that workload cycle before startup broker jobs begin.
    Non-retryable unsafe states raise `SyncBrokenStateError`, which disables
    trading immediately. A failed controller run still permits startup jobs to
    provide monitoring while outbound trading remains disabled.

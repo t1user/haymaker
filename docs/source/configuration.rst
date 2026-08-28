@@ -117,7 +117,8 @@ interpret. Use the bundled profile comments to find supported setting paths;
 unknown options fail when their target is constructed.
 
 Dedicated live switches are ``--cold-start``, ``--reset``, ``--zero``, and
-``--nuke``. The dataloader provides ``--gap-fill-mode`` and accepts the contract
+``--nuke``. ``--cold-start`` sets ``state_machine.restore`` to false for that
+process. The dataloader provides ``--gap-fill-mode`` and accepts the contract
 source CSV as its optional positional argument. Dedicated switches have the
 highest precedence.
 
