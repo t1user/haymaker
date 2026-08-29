@@ -200,14 +200,15 @@ class SyncCoordinator:
         record of trades is kept for further investigation.
         """
         for trade in trades:
-            log.error(
-                f"Will delete record for trade that IB doesn't know about: "
-                f"{trade.order.orderId}"
-            )
-            info = self.controller.book.order_by_id(trade.order.orderId)
+            order_id = trade.order.orderId
+            info = self.controller.book.order_by_id(order_id)
             if info is not None:
                 self._faulty_trades.append(info)
-            self.controller.book.prune_order(trade.order.orderId)
+            self.controller.book.prune_order(order_id)
+            log.warning(
+                "Pruned stale local order %s; order was absent at broker.",
+                order_id,
+            )
 
     def handle_error_positions(self, errors: dict[ibi.Contract, float]) -> None:
         log.error("Will attempt to fix position records")

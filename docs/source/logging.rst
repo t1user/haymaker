@@ -78,7 +78,10 @@ Messenger handlers are optional. Telegram is available through
 ``haymaker.logging.handlers.TelegramHandler`` when declared in a custom logging
 YAML file, but neither Telegram nor another messenger is required by the live
 runtime. The built-in Telegram handler uses a finite network timeout, and its
-queue/listener thread is independent from local output handlers.
+queue/listener thread is independent from local output handlers. If Telegram's
+delivery confirmation is unavailable after a request was sent, the handler
+writes one concise diagnostic to standard error and does not retry because the
+notification may already have been delivered.
 
 Dataloader Module
 -----------------

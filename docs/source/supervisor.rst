@@ -31,6 +31,9 @@ Recovery Policies
 * Repeated restart requests are combined, failed connection attempts are
   retried, and controller synchronization is aborted cleanly while the
   connection is unavailable.
+* Controller reconciliation requests broker-state refresh through the
+  supervisor. The controller never closes the API socket directly, and startup
+  broker jobs do not begin during that aborted workload cycle.
 
 Usage
 -----

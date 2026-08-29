@@ -206,6 +206,38 @@ def test_telegram_handler_reports_rejected_delivery(capsys, monkeypatch):
     assert connection.timeout == handler.timeout
 
 
+def test_telegram_handler_reports_missing_delivery_confirmation(capsys, monkeypatch):
+    handler = TelegramHandler(
+        host="api.telegram.org",
+        url="/bot-token/sendMessage",
+        chat_id=123,
+    )
+    connection = _TelegramConnection(None)
+    monkeypatch.setattr(handler, "getConnection", lambda host, secure: connection)
+    monkeypatch.setattr(
+        connection,
+        "getresponse",
+        Mock(side_effect=TimeoutError("The read operation timed out")),
+    )
+    record = logging.LogRecord(
+        "haymaker.controller.sync_coordinator",
+        logging.WARNING,
+        "/tmp/sync_coordinator.py",
+        200,
+        "Pruned stale local order 77523; order was absent at broker.",
+        (),
+        None,
+    )
+
+    handler.emit(record)
+
+    assert capsys.readouterr().err == (
+        "Telegram delivery confirmation unavailable: The read operation timed out; "
+        "notification may have been delivered.\n"
+    )
+    assert connection.sent_data
+
+
 def test_shutdown_logging_queue_stops_listener():
     """Logging output should run on a listener thread and restore handlers."""
 

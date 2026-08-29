@@ -8,7 +8,7 @@ from typing import cast
 import ib_insync as ibi
 
 from haymaker.components.messages import PositionTarget
-from haymaker.controller import Controller
+from haymaker.controller.controller import Controller, SyncOutcome
 
 from .broker import SimulatedIB
 
@@ -30,15 +30,15 @@ class SimulationController(Controller):
         super().__post_init__()
         self.release_hold()
 
-    async def run(self) -> bool:
+    async def run(self) -> SyncOutcome:
         """Enable replay callbacks without reconciliation or runtime timers.
 
         Returns:
-            Always ``True`` after releasing Controller's startup hold.
+            SyncOutcome.OK after releasing Controller's startup hold.
         """
 
         self.release_hold()
-        return True
+        return SyncOutcome.OK
 
     async def onData(
         self,

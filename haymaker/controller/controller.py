@@ -206,7 +206,7 @@ class Controller(Atom):
     def set_future_roll_policies(self, policies: Mapping[str, bool]) -> None:
         self.future_roll_policies = dict(policies)
 
-    async def run(self) -> bool:
+    async def run(self) -> SyncOutcome:
         """Restore Book, reconcile broker state, and arm runtime timers."""
 
         self._ensure_runtime_timers_started()
@@ -222,23 +222,25 @@ class Controller(Atom):
             except Exception:
                 log.exception("Book state restoration failed.")
                 self.disable_trading("state store read failed")
-                return False
+                return SyncOutcome.FAILED
         outcome = await self.sync()
         if not outcome:
-            if outcome is not SyncOutcome.ABORTED:
+            if outcome is SyncOutcome.ABORTED:
+                log.debug("Controller startup sync aborted: connection unavailable.")
+            else:
                 log.critical("Controller startup sync failed. Trading disabled.")
-            return False
+            return outcome
         if self.zero:
             self.clear_records()
             self.zero = False
         if self.reset:
             if not await self.execute_stops_and_close_positions():
                 self.disable_trading("account reset did not complete")
-                return False
+                return SyncOutcome.FAILED
             self.book.clear_state()
             self.reset = False
         self._restart_before_correction = True
-        return True
+        return SyncOutcome.OK
 
     def _ensure_runtime_timers_started(self) -> None:
         if self.sync_frequency and self._sync_timer is None:
@@ -313,12 +315,29 @@ class Controller(Atom):
             if attempt < self.sync_max_attempts:
                 await asyncio.sleep(self.sync_resync_delay)
                 if coordinator.request_restart:
-                    self._restart_before_correction = False
-                    self.ib.disconnect()
+                    return self._request_sync_restart()
         if self._sync_abort_event is not None and self._sync_abort_event.is_set():
             return SyncOutcome.ABORTED
         self.disable_trading("sync did not converge")
         return SyncOutcome.FAILED
+
+    def _request_sync_restart(self) -> SyncOutcome:
+        """Request fresh broker state through the owning supervisor."""
+
+        request_restart = self.request_restart
+        if request_restart is None:
+            self.disable_trading("supervisor restart callback unavailable")
+            return SyncOutcome.FAILED
+
+        accepted = request_restart(
+            "controller reconciliation requires fresh broker state"
+        )
+        if accepted is False:
+            self.disable_trading("supervisor restart request rejected")
+            return SyncOutcome.FAILED
+
+        self._restart_before_correction = False
+        return SyncOutcome.ABORTED
 
     def trade(
         self,

@@ -269,7 +269,8 @@ reference and never suppresses the Signal.
    `StartupJobs` around the live streamer registry, and installs the passive
    `RuntimeContext` on `Atom` before importing the user strategy module.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
-3. `App` starts the IB watchdog and waits for a successful historical-data probe.
+3. `ConnectionSupervisor` connects the IB client and waits for a successful
+   historical-data probe.
 4. `Controller.run()` starts its app-lifetime timers once on the active event
    loop, reads or initializes state, then `Controller.sync()` races the
    reconciliation pass against the supervisor's connection-unavailable event.
@@ -282,11 +283,13 @@ reference and never suppresses the Signal.
    reads, and returns `False` after broker verification failures or recovery
    actions so sync can retry the checks before disabling trading. If unresolved
    order or position mismatches remain on the first pass, the coordinator can
-   ask the controller to reconnect before local order pruning, broker order
-   cancellation, or strategy-position correction is allowed on a later pass.
+   ask the controller to request a supervised workload restart before local
+   order pruning, broker order cancellation, or position correction is allowed
+   on a later pass.
    Non-retryable unsafe states raise `SyncBrokenStateError`, which disables
-   trading immediately. A failed controller run still permits startup jobs to
-   provide monitoring while outbound trading remains disabled.
+   trading immediately. An aborted controller run skips startup jobs for that
+   workload generation; a failed run still permits those jobs to provide
+   monitoring while outbound trading remains disabled.
 5. `StartupJobs` downloads contract details, rebuilds contract selectors from
    one timezone-naive UTC timestamp, logs restart state, and runs all
    registered streamers. Each streamer creates a market-session-aware timeout

@@ -13,6 +13,7 @@ from haymaker.app import App
 from haymaker.base import Atom
 from haymaker.config import LiveCommand, load_live_config
 from haymaker.components import StandardOrderRole
+from haymaker.controller.controller import SyncOutcome
 from haymaker.contract_registry import ContractRegistry
 from haymaker.databases import MongoService
 from haymaker.datastore import MarketDataStoreFactory, SignalFramePersistenceFactory
@@ -259,9 +260,9 @@ async def test_live_runtime_runs_startup_jobs_after_controller(monkeypatch) -> N
         def set_future_roll_policies(self, policies: dict[str, bool]) -> None:
             events.append(("policies", dict(policies)))
 
-        async def run(self) -> bool:
+        async def run(self) -> SyncOutcome:
             events.append("controller")
-            return False
+            return SyncOutcome.FAILED
 
     class FakeStartupJobs:
         async def run(self) -> None:
@@ -290,6 +291,46 @@ async def test_live_runtime_runs_startup_jobs_after_controller(monkeypatch) -> N
         "startup-jobs",
         "timeouts",
     ]
+
+
+@pytest.mark.asyncio
+async def test_live_runtime_skips_startup_jobs_after_aborted_controller(
+    monkeypatch,
+) -> None:
+    """A requested restart must end the workload before broker jobs start."""
+
+    events: list[str] = []
+
+    class FakeController:
+        def set_future_roll_policies(self, policies: dict[str, bool]) -> None:
+            pass
+
+        async def run(self) -> SyncOutcome:
+            events.append("controller")
+            return SyncOutcome.ABORTED
+
+    class FakeStartupJobs:
+        async def run(self) -> None:
+            events.append("startup-jobs")
+
+    runtime = object.__new__(LiveRuntime)
+    runtime.context = cast(
+        RuntimeContext,
+        SimpleNamespace(
+            controller=FakeController(),
+            future_roll_policies={},
+            workload_generation=0,
+        ),
+    )
+    runtime.startup_jobs = cast(StartupJobs, FakeStartupJobs())
+    monkeypatch.setattr(
+        "haymaker.runtime.MarketDataTimeout._cancel_all",
+        lambda: events.append("timeouts"),
+    )
+
+    await runtime.start()
+
+    assert events == ["controller", "timeouts"]
 
 
 @pytest.mark.asyncio

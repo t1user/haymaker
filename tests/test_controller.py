@@ -1041,7 +1041,7 @@ async def test_run_keeps_book_when_explicit_reset_fails(controller_runtime):
 
     completed = await controller.run()
 
-    assert completed is False
+    assert completed is SyncOutcome.FAILED
     assert controller._trading_disabled is True
     assert controller.reset is True
     runtime.book.clear_state.assert_not_called()
@@ -1176,7 +1176,9 @@ async def test_nuke_liquidation_is_registered_with_episode_attribution(
 
 
 @pytest.mark.asyncio
-async def test_sync_timeout_disables_trading(controller, monkeypatch):
+async def test_sync_timeout_requests_supervisor_restart(
+    controller, atom_runtime, monkeypatch
+):
     disabled_reasons = []
 
     async def pending_positions():
@@ -1196,8 +1198,11 @@ async def test_sync_timeout_disables_trading(controller, monkeypatch):
 
     result = await controller.sync()
 
-    assert result is SyncOutcome.FAILED
-    assert disabled_reasons == ["sync did not converge"]
+    assert result is SyncOutcome.ABORTED
+    assert disabled_reasons == []
+    assert atom_runtime.restart_requests == [
+        "controller reconciliation requires fresh broker state"
+    ]
 
 
 @pytest.mark.asyncio
@@ -1227,7 +1232,7 @@ async def test_run_treats_connection_unavailable_sync_as_abort(
     with caplog.at_level(logging.DEBUG):
         result = await controller.run()
 
-    assert not result
+    assert result is SyncOutcome.ABORTED
     assert "Controller startup sync failed" not in caplog.text
     assert not controller._trading_disabled
 
@@ -1402,6 +1407,59 @@ async def test_sync_disables_trading_when_recovery_does_not_converge(
     assert result is SyncOutcome.FAILED
     assert len(attempts) == controller.sync_max_attempts
     assert controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_routes_restart_through_runtime_callback(
+    controller, atom_runtime, monkeypatch
+):
+    async def restart_required(self):
+        self.request_restart = True
+        return False
+
+    def fail_direct_disconnect():
+        raise AssertionError("Controller must not disconnect the broker socket")
+
+    controller.sync_max_attempts = 2
+    controller.sync_resync_delay = 0
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(controller.ib, "disconnect", fail_direct_disconnect)
+    monkeypatch.setattr(SyncCoordinator, "run", restart_required)
+
+    result = await controller.sync()
+
+    assert result is SyncOutcome.ABORTED
+    assert atom_runtime.restart_requests == [
+        "controller reconciliation requires fresh broker state"
+    ]
+    assert not controller._restart_before_correction
+    assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_sync_fails_closed_when_supervisor_rejects_restart(
+    controller, atom_runtime, monkeypatch
+):
+    disabled_reasons = []
+
+    async def restart_required(self):
+        self.request_restart = True
+        return False
+
+    controller.sync_max_attempts = 2
+    controller.sync_resync_delay = 0
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(SyncCoordinator, "run", restart_required)
+    monkeypatch.setattr(atom_runtime, "request_restart", lambda reason: False)
+    monkeypatch.setattr(
+        controller, "disable_trading", lambda reason: disabled_reasons.append(reason)
+    )
+
+    result = await controller.sync()
+
+    assert result is SyncOutcome.FAILED
+    assert disabled_reasons == ["supervisor restart request rejected"]
+    assert controller._restart_before_correction
 
 
 @pytest.mark.asyncio
@@ -1601,7 +1659,7 @@ async def test_sync_coordinator_back_reports_done_trade_before_restart_gate(
 
 @pytest.mark.asyncio
 async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
-    controller, trade, monkeypatch
+    controller, trade, monkeypatch, caplog
 ):
     old_trade = deepcopy(trade)
     info = save_active_order(controller, old_trade)
@@ -1617,11 +1675,18 @@ async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
         ),
     )
 
-    result = await SyncCoordinator(controller).run()
+    caplog.clear()
+    with caplog.at_level(
+        logging.WARNING, logger="haymaker.controller.sync_coordinator"
+    ):
+        result = await SyncCoordinator(controller).run()
 
     assert not result
     assert controller.book.order_by_id(info.orderId) is info
     assert not info.active
+    assert caplog.messages == [
+        f"Pruned stale local order {info.orderId}; order was absent at broker."
+    ]
 
 
 @pytest.mark.asyncio

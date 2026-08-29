@@ -25,7 +25,7 @@ from .config.settings import (
     TimeoutPolicy,
 )
 from .contract_registry import ContractRegistry
-from .controller import Controller
+from .controller.controller import Controller, SyncOutcome
 from .databases import MongoService, create_frame_store_provider
 from .datastore import (
     FrameStoreProvider,
@@ -344,7 +344,9 @@ class LiveRuntime:
             self.context.controller.set_future_roll_policies(
                 self.context.future_roll_policies
             )
-            await self.context.controller.run()
+            controller_outcome = await self.context.controller.run()
+            if controller_outcome is SyncOutcome.ABORTED:
+                return
             await self.startup_jobs.run()
         finally:
             MarketDataTimeout._cancel_all()
