@@ -51,6 +51,20 @@ def test_live_dedicated_options_are_appended_after_generic_options() -> None:
     assert command.overrides[-1] == ("controller.startup.reset", True)
 
 
+def test_cold_start_disables_book_restoration() -> None:
+    command = parse_live_args(
+        [
+            "strategy.py",
+            "--set-option",
+            "book.restore",
+            "true",
+            "--cold-start",
+        ]
+    )
+
+    assert command.overrides[-1] == ("book.restore", False)
+
+
 def test_dataloader_positional_and_gap_options_are_explicit_overrides() -> None:
     command = parse_dataloader_args(["contracts.csv", "--gap-fill-mode", "schedule"])
 

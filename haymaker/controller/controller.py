@@ -63,7 +63,6 @@ class Controller(Atom):
     """
 
     trader: Trader
-    cold_start: bool = True
     reset: bool = False
     zero: bool = False
     nuke: bool = False
@@ -207,22 +206,12 @@ class Controller(Atom):
         self.future_roll_policies = dict(policies)
 
     async def run(self) -> SyncOutcome:
-        """Restore Book, reconcile broker state, and arm runtime timers."""
+        """Reconcile broker state and arm runtime timers."""
 
         self._ensure_runtime_timers_started()
         self.set_hold()
         if self.nuke:
             await self.run_nuke()
-        if self.cold_start:
-            log.debug("Starting cold; Book state will not be loaded.")
-        else:
-            try:
-                await self.book.read_from_store()
-                self.cold_start = True
-            except Exception:
-                log.exception("Book state restoration failed.")
-                self.disable_trading("state store read failed")
-                return SyncOutcome.FAILED
         outcome = await self.sync()
         if not outcome:
             if outcome is SyncOutcome.ABORTED:

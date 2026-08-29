@@ -12,6 +12,9 @@ application to be restarted manually.
 
 The supervisor manages only Haymaker-owned API connections. It reconnects to
 TWS or IB Gateway, but it does not start, stop, or restart the gateway process.
+The live runtime restores persisted Book state during construction, before the
+supervisor opens the first broker connection. Reconnects retain that in-memory
+Book rather than reloading the initial database snapshot.
 
 Recovery Policies
 -----------------

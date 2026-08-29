@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import ib_insync as ibi
 
-from .async_wrappers import QueueShutdownPolicy, SyncQueueRunner, make_async
+from .async_wrappers import QueueShutdownPolicy, SyncQueueRunner
 from .blotter import Blotter
 from .misc import action_to_signal, decode_tree, sign, tree
 from .saver import AbstractBaseSaver, MongoSaver
@@ -345,6 +345,7 @@ class Book:
         blotter: Blotter | None = None,
         save_async: bool = True,
         max_rejected_orders: int = 3,
+        restore: bool = False,
     ) -> None:
         self._order_saver = order_saver or MongoSaver(
             DEFAULT_ORDER_COLLECTION_NAME, query_key="orderId"
@@ -360,6 +361,8 @@ class Book:
         self._portfolio_states: dict[str, Mapping[str, Any]] = {}
         self._rejected_orders: defaultdict[str, int] = defaultdict(int)
         self._save_async = save_async
+        if restore:
+            self._restore_documents(*self._read_documents())
         self._mutation_queue = (
             SyncQueueRunner(
                 "Book",
@@ -433,10 +436,13 @@ class Book:
         self._targets.clear()
         self._portfolio_states.clear()
 
-    async def read_from_store(self) -> None:
-        """Restore complete order evidence and typed state from persistence."""
+    def _restore_documents(
+        self,
+        order_documents: Sequence[Mapping[str, Any]],
+        state_documents: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Replace in-memory state with decoded persistence documents."""
 
-        order_documents, state_documents = await make_async(self._read_documents)
         self._orders = {}
         for document in order_documents:
             document = dict(document)

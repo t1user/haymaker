@@ -58,11 +58,11 @@ def test_live_defaults_are_composed_by_target_objects() -> None:
     assert connection.client_id == 0
     assert connection.probe_contract == ibi.Forex("EURUSD")
     assert controller["startup"] == {
-        "cold_start": False,
         "reset": False,
         "zero": False,
         "nuke": False,
     }
+    assert config.book["restore"] is True
     assert controller["sync_frequency"] == 900
     assert futures.futures_roll_bdays == 3
     assert futures.futures_roll_margin_bdays == 3
@@ -458,6 +458,23 @@ def test_dedicated_cli_option_wins_over_generic_override() -> None:
     config = load_live_config(command, environ={})
 
     assert config.controller["startup"]["reset"] is True
+
+
+def test_cold_start_cli_disables_book_restoration() -> None:
+    config = load_live_config(
+        parse_live_args(
+            [
+                "strategy.py",
+                "--set-option",
+                "book.restore",
+                "true",
+                "--cold-start",
+            ]
+        ),
+        environ={},
+    )
+
+    assert config.book["restore"] is False
 
 
 def test_old_top_level_startup_section_is_rejected(tmp_path: Path) -> None:

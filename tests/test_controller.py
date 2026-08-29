@@ -141,13 +141,12 @@ def save_active_order(
 def test_from_mapping_constructs_nested_startup_config(atom_runtime):
     controller = Controller.from_mapping(
         {
-            "startup": {"cold_start": False, "zero": True},
+            "startup": {"zero": True},
             "sync_frequency": 10,
         },
         trader=FakeTrader(),
     )
 
-    assert controller.cold_start is False
     assert controller.zero is True
     assert controller.sync_frequency == 10
 
@@ -1033,7 +1032,6 @@ async def test_run_keeps_book_when_explicit_reset_fails(controller_runtime):
     """Failed reset disables trading without discarding recovery state."""
 
     runtime, controller, _ = controller_runtime
-    controller.cold_start = True
     controller.reset = True
     controller.sync = AsyncMock(return_value=SyncOutcome.OK)
     controller.execute_stops_and_close_positions = AsyncMock(return_value=False)
@@ -1799,22 +1797,15 @@ async def test_clean_sync_releases_hold(controller_runtime, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_disables_trading_when_book_restore_fails(
-    controller_runtime, monkeypatch
-):
+async def test_controller_run_does_not_restore_book(controller_runtime, monkeypatch):
     runtime, controller, _ = controller_runtime
-    controller.cold_start = False
-    monkeypatch.setattr(
-        runtime.book,
-        "read_from_store",
-        AsyncMock(side_effect=RuntimeError("store failed")),
-    )
-    sync = AsyncMock()
+    restore = AsyncMock()
+    monkeypatch.setattr(runtime.book, "read_from_store", restore, raising=False)
+    sync = AsyncMock(return_value=SyncOutcome.OK)
     monkeypatch.setattr(controller, "sync", sync)
 
-    assert not await controller.run()
-    assert controller._trading_disabled
-    sync.assert_not_awaited()
+    assert await controller.run() is SyncOutcome.OK
+    restore.assert_not_awaited()
 
 
 def test_rejections_are_scoped_by_execution_model(controller_runtime):

@@ -119,11 +119,12 @@ def parse_live_args(argv: list[str]) -> LiveCommand:
     for option, path in (
         (namespace.reset, "controller.startup.reset"),
         (namespace.zero, "controller.startup.zero"),
-        (namespace.cold_start, "controller.startup.cold_start"),
         (namespace.nuke, "controller.startup.nuke"),
     ):
         if option is not None:
             overrides.append((path, option))
+    if namespace.cold_start is not None:
+        overrides.append(("book.restore", not namespace.cold_start))
     return LiveCommand(
         module_path=namespace.module_path.expanduser(),
         config_file=_config_file(namespace.file),

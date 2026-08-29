@@ -24,7 +24,6 @@ logging: # Framework logging setup and broker audit logging.
 
 controller: # Trading reconciliation, startup actions, and scheduling.
   startup: # One-run actions applied by Controller.run().
-    cold_start: false # Skip saved-state loading when true.
     reset: false # Close positions and clear typed Book state after startup sync.
     zero: false # Clear local Book projections after startup sync.
     nuke: false # Cancel orders, close positions, and disable trading.
@@ -42,6 +41,7 @@ controller: # Trading reconciliation, startup actions, and scheduling.
   missing_brackets: ignore # Action for missing protection: ignore, warn, or remove.
 
 book: # Typed persistent execution and accounting state.
+  restore: true # Load persisted Book state before the first broker connection.
   save_async: true # Save mutations through one ordered critical queue.
   state_collection_name: state # Mongo collection for typed recovery state.
   order_collection_name: orders # Mongo collection for Trade and Fill evidence.

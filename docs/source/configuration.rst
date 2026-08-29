@@ -144,14 +144,15 @@ closely related runtime objects.
    broker logging. See :doc:`logging`.
 
 ``controller``
-   One-run actions under ``controller.startup``, synchronization, health checks,
-   execution verification, error filtering, unknown-trade policy, bracket
-   policy, and futures-roll time.
+   Broker-facing one-run actions under ``controller.startup``, synchronization,
+   health checks, execution verification, error filtering, unknown-trade policy,
+   bracket policy, and futures-roll time.
 
 ``book``
-   Critical-save policy, ``orders`` and ``state`` Mongo collection names, and
-   the rejected-order limit. Book mutations use one ordered ``DRAIN`` queue;
-   whole-system strategy snapshots and snapshot debounce are not configured.
+   Construction-time state restoration, critical-save policy, ``orders`` and
+   ``state`` Mongo collection names, and the rejected-order limit. The bundled
+   live profile restores Book before the first broker connection; ``--cold-start``
+   disables that restoration. Book mutations use one ordered ``DRAIN`` queue.
 
 ``storage``
    Base directory plus Mongo client arguments and the framework database name.

@@ -265,14 +265,16 @@ reference and never suppresses the Signal.
 
 ### Live Execution Flow
 
-1. The `haymaker` CLI creates `LiveRuntime`. It assembles live services, creates
-   `StartupJobs` around the live streamer registry, and installs the passive
-   `RuntimeContext` on `Atom` before importing the user strategy module.
+1. The `haymaker` CLI creates `LiveRuntime`. It constructs Book, optionally
+   restores persisted state before any broker connection, assembles the other
+   live services, creates `StartupJobs` around the live streamer registry, and
+   installs the passive `RuntimeContext` on `Atom` before importing the user
+   strategy module.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
 3. `ConnectionSupervisor` connects the IB client and waits for a successful
    historical-data probe.
 4. `Controller.run()` starts its app-lifetime timers once on the active event
-   loop, reads or initializes state, then `Controller.sync()` races the
+   loop, then `Controller.sync()` races the
    reconciliation pass against the supervisor's connection-unavailable event.
    If the supervisor enters broker recovery, restart, or shutdown, sync aborts
    without disabling trading. Otherwise the internal sync pass runs a bounded
@@ -410,9 +412,10 @@ reference and never suppresses the Signal.
 The CLI assembles framework configuration once through
 `haymaker/config/loader.py`. Live and dataloader loading return `LiveConfig`
 or `DataloaderConfig`; sections remain mappings until the owning target or
-subsystem composition boundary constructs them. Controller one-run actions are
-nested under `controller.startup`. Live storage contains only the shared base
-directory, Mongo client arguments, and framework database name. Dataloader
+subsystem composition boundary constructs them. Broker-facing Controller
+one-run actions are nested under `controller.startup`; persisted-state loading
+belongs to `book.restore`. Live storage contains only the shared base directory,
+Mongo client arguments, and framework database name. Dataloader
 storage uses the narrower `DataloaderStorageSettings`, containing only a base
 directory and Mongo client arguments. Custom dataframe library names are
 selected during strategy composition. Runtime defaults are

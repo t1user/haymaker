@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import Mock
 
 import ib_insync as ibi
 import pytest
@@ -99,6 +100,42 @@ def test_order_info_persists_complete_trade_identifiers_and_fill():
 def test_order_info_requires_real_order_id_when_saved(book):
     with pytest.raises(ValueError, match="orderId 0"):
         book.save_order(order_info(trade(order_id=0)))
+
+
+def test_book_does_not_restore_by_default(order_saver, state_saver, monkeypatch):
+    """Bare Book construction should remain storage-free for focused callers."""
+
+    order_read = Mock(wraps=order_saver.read)
+    state_read = Mock(wraps=state_saver.read)
+    monkeypatch.setattr(order_saver, "read", order_read)
+    monkeypatch.setattr(state_saver, "read", state_read)
+
+    Book(
+        order_saver=order_saver,
+        state_saver=state_saver,
+        save_async=False,
+    )
+
+    order_read.assert_not_called()
+    state_read.assert_not_called()
+
+
+def test_book_restore_failure_stops_construction(order_saver, state_saver, monkeypatch):
+    """A persistence failure should prevent a partially restored Book."""
+
+    monkeypatch.setattr(
+        order_saver,
+        "read",
+        Mock(side_effect=RuntimeError("store failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="store failed"):
+        Book(
+            order_saver=order_saver,
+            state_saver=state_saver,
+            save_async=False,
+            restore=True,
+        )
 
 
 def test_order_lookup_uses_order_id_then_perm_id(book):
@@ -341,14 +378,9 @@ def test_roll_fill_preserves_block(book):
     assert book.position_state("alpha").blocked_direction == 1
 
 
-@pytest.mark.asyncio
-async def test_direct_quantity_recovers_from_completed_order_evidence(
-    order_saver, state_saver, monkeypatch
+def test_direct_quantity_recovers_from_completed_order_evidence(
+    order_saver, state_saver
 ):
-    async def inline_make_async(function, *args):
-        return function(*args)
-
-    monkeypatch.setattr("haymaker.book.make_async", inline_make_async)
     first = Book(
         order_saver=order_saver,
         state_saver=state_saver,
@@ -370,8 +402,8 @@ async def test_direct_quantity_recovers_from_completed_order_evidence(
         order_saver=order_saver,
         state_saver=state_saver,
         save_async=False,
+        restore=True,
     )
-    await recovered.read_from_store()
 
     assert recovered.active_orders() == ()
     assert recovered.aggregate_quantity(contract()) == 2
@@ -512,14 +544,9 @@ def test_blotter_lookup_merges_queued_and_persisted_rows(book):
     assert {row["realizedPNL"] for row in rows} == {2, 4}
 
 
-@pytest.mark.asyncio
-async def test_clear_state_persists_flat_tombstones_before_restart(
-    book, order_saver, state_saver, monkeypatch
+def test_clear_state_persists_flat_tombstones_before_restart(
+    book, order_saver, state_saver
 ):
-    async def inline_make_async(function, *args):
-        return function(*args)
-
-    monkeypatch.setattr("haymaker.book.make_async", inline_make_async)
     book.update_position(
         PositionState(
             source_key="alpha",
@@ -553,8 +580,8 @@ async def test_clear_state_persists_flat_tombstones_before_restart(
         order_saver=order_saver,
         state_saver=state_saver,
         save_async=False,
+        restore=True,
     )
-    await recovered.read_from_store()
 
     position = recovered.position_state("alpha")
     assert position.quantity == 0
