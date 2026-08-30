@@ -293,6 +293,7 @@ class Controller(Atom):
         if not self.ib.isConnected():
             return SyncOutcome.FAILED
         for attempt in range(1, self.sync_max_attempts + 1):
+            log.debug("Sync attempt %s/%s", attempt, self.sync_max_attempts)
             coordinator = SyncCoordinator(self, self._restart_before_correction)
             try:
                 if await coordinator.run():

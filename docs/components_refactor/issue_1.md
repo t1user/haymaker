@@ -101,6 +101,7 @@ Regression coverage reproduces a fill between the cached and requested reads,
 verifies convergence without restart, verifies unavailable-request recovery,
 and verifies persistent disagreement fails closed without a spurious restart.
 
-The historical attempt-number logging observation is cosmetic and was not part
-of this safety fix.
+Every reconciliation pass is now logged consistently as `Sync attempt N/M`,
+including the first attempt, so incident timelines no longer mix a generic
+banner with numbered retries.
 

@@ -1496,6 +1496,28 @@ async def test_sync_disables_trading_when_recovery_does_not_converge(
 
 
 @pytest.mark.asyncio
+async def test_sync_logs_every_attempt(controller, monkeypatch, caplog):
+    controller.sync_max_attempts = 3
+    controller.sync_resync_delay = 0
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+
+    async def retryable_sync_failure(self):
+        return False
+
+    monkeypatch.setattr(SyncCoordinator, "run", retryable_sync_failure)
+    caplog.set_level(logging.DEBUG, logger="haymaker.controller.controller")
+
+    await controller.sync()
+
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "haymaker.controller.controller"
+        and record.getMessage().startswith("Sync attempt ")
+    ] == ["Sync attempt 1/3", "Sync attempt 2/3", "Sync attempt 3/3"]
+
+
+@pytest.mark.asyncio
 async def test_sync_routes_restart_through_runtime_callback(
     controller, atom_runtime, monkeypatch
 ):
