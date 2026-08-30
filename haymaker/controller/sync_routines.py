@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from typing import Self
 
 import ib_insync as ibi
@@ -39,9 +40,7 @@ class OrderSync:
     def review_trades(self) -> Self:
         """Find Book-active trades no longer present in broker openTrades."""
 
-        broker_ids = {
-            trade.order.orderId for trade in self.ib.openTrades()
-        }
+        broker_ids = {trade.order.orderId for trade in self.ib.openTrades()}
         for info in self.book.active_orders():
             if info.orderId not in broker_ids:
                 self.inactive.append(info.trade)
@@ -73,10 +72,7 @@ class OrderSync:
             fill
             for fill in self.ib.fills()
             if fill.execution.orderId == trade.order.orderId
-            or (
-                trade.order.permId
-                and fill.execution.permId == trade.order.permId
-            )
+            or (trade.order.permId and fill.execution.permId == trade.order.permId)
         ]
         if not fills:
             return None
@@ -86,9 +82,7 @@ class OrderSync:
         trade.orderStatus = ibi.OrderStatus(
             orderId=trade.order.orderId,
             status=(
-                ibi.OrderStatus.Filled
-                if remaining == 0
-                else ibi.OrderStatus.Submitted
+                ibi.OrderStatus.Filled if remaining == 0 else ibi.OrderStatus.Submitted
             ),
             filled=filled,
             remaining=remaining,
@@ -115,23 +109,25 @@ class OrderSync:
 
 
 class PositionSync:
-    """Compare broker positions with aggregate fill-accounted Book quantity."""
+    """Compare one fresh broker snapshot with fill-accounted Book quantity."""
 
-    def __init__(self, ib: ibi.IB, book: Book) -> None:
-        self.ib = ib
+    def __init__(self, positions: Iterable[ibi.Position], book: Book) -> None:
+        self.positions = tuple(positions)
         self.book = book
+        self.broker_positions: dict[ibi.Contract, float] = {}
         self.errors: dict[ibi.Contract, float] = {}
         self.verify_positions().report()
 
     def verify_positions(self) -> Self:
-        broker = {
-            position.contract: position.position for position in self.ib.positions()
+        self.broker_positions = {
+            position.contract: position.position for position in self.positions
         }
         logical = self.book.logical_positions()
         self.errors = {
-            contract: logical.get(contract, 0.0) - broker.get(contract, 0.0)
-            for contract in set(broker) | set(logical)
-            if logical.get(contract, 0.0) != broker.get(contract, 0.0)
+            contract: logical.get(contract, 0.0)
+            - self.broker_positions.get(contract, 0.0)
+            for contract in set(self.broker_positions) | set(logical)
+            if logical.get(contract, 0.0) != self.broker_positions.get(contract, 0.0)
         }
         return self
 

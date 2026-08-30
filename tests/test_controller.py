@@ -2,6 +2,7 @@ import asyncio
 import datetime as dt
 import logging
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
@@ -11,7 +12,12 @@ import pytest
 from helpers import wait_for_condition
 
 from haymaker.book import OrderInfo, PositionState
-from haymaker.components import PositionTarget, StandardOrderRole
+from haymaker.components import (
+    BracketExecutionModel,
+    FixedStop,
+    PositionTarget,
+    StandardOrderRole,
+)
 from haymaker.controller import Controller
 from haymaker.controller.controller import ControllerError, SyncOutcome
 from haymaker.controller.sync_brackets import (
@@ -20,6 +26,7 @@ from haymaker.controller.sync_brackets import (
     BracketSyncError,
 )
 from haymaker.controller.sync_coordinator import (
+    BrokerPositionStatus,
     SyncBrokenStateError,
     SyncCoordinator,
     verify_broker_position_source,
@@ -1365,7 +1372,7 @@ async def test_sync_coordinator_returns_false_for_broker_state_timeout(
 
 
 @pytest.mark.asyncio
-async def test_broker_position_source_disagreement_requests_restart(
+async def test_broker_position_source_disagreement_retries_without_restart(
     controller, monkeypatch
 ):
     position = ibi.Position(
@@ -1381,8 +1388,89 @@ async def test_broker_position_source_disagreement_requests_restart(
     result = await coordinator.run()
 
     assert not result
-    assert coordinator.request_restart
+    assert not coordinator.request_restart
     assert not controller._trading_disabled
+
+
+@pytest.mark.asyncio
+async def test_fill_between_position_snapshots_retries_and_converges(
+    controller, atom_runtime, monkeypatch
+):
+    target_contract = contract()
+    initial_state = PositionState(
+        source_key="alpha",
+        execution_model_name="brackets",
+        contract=target_contract,
+        quantity=0,
+        target_quantity=1,
+        target_created_at=datetime.now(timezone.utc),
+        position_id="episode",
+        bracket_inputs={"atr": 2},
+    )
+    controller.book.update_position(initial_state)
+    broker_position = ibi.Position(
+        account="DU123",
+        contract=target_contract,
+        position=1,
+        avgCost=1,
+    )
+    cached_positions: list[ibi.Position] = []
+    request_count = 0
+
+    set_broker_state(controller, monkeypatch)
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(
+        controller.ib,
+        "positions",
+        lambda: list(cached_positions),
+    )
+
+    async def requested_positions():
+        nonlocal request_count
+        request_count += 1
+        if request_count == 1:
+            cached_positions.append(broker_position)
+            controller.book.update_position(replace(initial_state, quantity=1))
+        return [broker_position]
+
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
+    controller.sync_max_attempts = 2
+    controller.sync_resync_delay = 0
+
+    outcome = await controller.sync()
+
+    assert outcome is SyncOutcome.OK
+    assert request_count == 2
+    assert atom_runtime.restart_requests == []
+    assert not controller._trading_disabled
+    assert controller.book.position_state("alpha").quantity == 1
+
+
+@pytest.mark.asyncio
+async def test_persistent_position_snapshot_disagreement_fails_without_restart(
+    controller, atom_runtime, monkeypatch
+):
+    position = ibi.Position(
+        account="DU123",
+        contract=contract(),
+        position=1,
+        avgCost=1,
+    )
+    set_broker_state(controller, monkeypatch, positions=(position,))
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(
+        controller.ib,
+        "reqPositionsAsync",
+        AsyncMock(return_value=[]),
+    )
+    controller.sync_max_attempts = 2
+    controller.sync_resync_delay = 0
+
+    outcome = await controller.sync()
+
+    assert outcome is SyncOutcome.FAILED
+    assert atom_runtime.restart_requests == []
+    assert controller._trading_disabled
 
 
 @pytest.mark.asyncio
@@ -1705,7 +1793,7 @@ async def test_sync_coordinator_requests_restart_before_position_correction(
     monkeypatch.setattr(
         SyncCoordinator,
         "handle_error_positions",
-        lambda self, errors: corrected.append(errors),
+        lambda self, errors, broker_positions: corrected.append(errors),
     )
 
     coordinator = SyncCoordinator(controller, restart_before_correction=True)
@@ -1735,7 +1823,7 @@ async def test_sync_coordinator_allows_position_correction_after_restart(
     monkeypatch.setattr(
         SyncCoordinator,
         "handle_error_positions",
-        lambda self, errors: corrected.append(errors),
+        lambda self, errors, broker_positions: corrected.append(errors),
     )
 
     coordinator = SyncCoordinator(controller, restart_before_correction=False)
@@ -1744,6 +1832,109 @@ async def test_sync_coordinator_allows_position_correction_after_restart(
     assert not result
     assert not coordinator.request_restart
     assert corrected == [{contract(): 1.0}]
+
+
+@pytest.mark.asyncio
+async def test_sync_defers_position_correction_while_open_order_is_active(
+    controller, monkeypatch
+):
+    target_contract = contract()
+    controller.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=target_contract,
+            quantity=1,
+            target_quantity=1,
+            target_created_at=datetime.now(timezone.utc),
+            position_id="episode",
+        )
+    )
+    open_trade = ibi.Trade(
+        contract=target_contract,
+        order=ibi.MarketOrder("BUY", 1, orderId=77, permId=177),
+    )
+    save_active_order(
+        controller,
+        open_trade,
+        role=StandardOrderRole.OPEN,
+    )
+    set_broker_state(
+        controller,
+        monkeypatch,
+        open_trades=(open_trade,),
+    )
+    monkeypatch.setattr(
+        controller.ib,
+        "reqPositionsAsync",
+        AsyncMock(return_value=[]),
+    )
+
+    coordinator = SyncCoordinator(controller, restart_before_correction=True)
+    result = await coordinator.run()
+
+    assert result
+    assert not coordinator.request_restart
+    state = controller.book.position_state("alpha")
+    assert state is not None
+    assert state.quantity == 1
+    assert state.target_quantity == 1
+
+
+@pytest.mark.asyncio
+async def test_broker_flat_correction_supersedes_target_before_recovery(
+    controller, monkeypatch
+):
+    old_target_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    controller.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=1,
+            target_quantity=1,
+            target_created_at=old_target_time,
+            position_id="episode",
+            blocked_direction=1,
+            bracket_inputs={"atr": 2},
+        )
+    )
+    set_broker_state(controller, monkeypatch)
+    monkeypatch.setattr(
+        controller.ib,
+        "reqPositionsAsync",
+        AsyncMock(return_value=[]),
+    )
+
+    result = await SyncCoordinator(
+        controller,
+        restart_before_correction=False,
+    ).run()
+
+    assert not result
+    state = controller.book.position_state("alpha")
+    assert state is not None
+    assert state.quantity == 0
+    assert state.target_quantity == 0
+    assert state.target_created_at is not None
+    assert state.target_created_at > old_target_time
+    assert state.position_id is None
+    assert state.bracket_inputs == {}
+    assert state.blocked_direction == 1
+
+    submissions = []
+    monkeypatch.setattr(
+        controller,
+        "trade",
+        lambda *args, **kwargs: submissions.append((args, kwargs)),
+    )
+    BracketExecutionModel(
+        "alpha",
+        name="brackets",
+        stop=FixedStop(2),
+    ).recover()
+
+    assert submissions == []
 
 
 @pytest.mark.asyncio
@@ -1777,7 +1968,10 @@ async def test_broker_position_request_timeout_is_unavailable(monkeypatch):
         AsyncMock(side_effect=asyncio.TimeoutError),
     )
 
-    assert not await verify_broker_position_source(ib, 0.01)
+    snapshot = await verify_broker_position_source(ib, 0.01)
+
+    assert snapshot.status is BrokerPositionStatus.REQUEST_UNAVAILABLE
+    assert snapshot.positions == ()
 
 
 @pytest.mark.asyncio

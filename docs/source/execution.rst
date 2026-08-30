@@ -486,6 +486,21 @@ take-profit is optional and its absence is not a synchronization failure.
 Regular CLOSE orders join the active brackets' OCA group, allowing IB to cancel
 the unfilled protective orders when any exit fills.
 
+The model registers that source for Controller-owned futures rolling by
+default. A strategy that intentionally manages its own one-to-one roll can opt
+out at construction time:
+
+.. code-block:: python
+
+   execution = BracketExecutionModel(
+       "intraday_es",
+       stop=FixedStop(10),
+       auto_roll_futures=False,
+   )
+
+Contradictory roll settings for the same ``source_key`` are rejected during
+strategy construction.
+
 .. autoclass:: haymaker.components.ExecutionModel
 
 .. autoclass:: haymaker.components.SerialTargetExecutionModel
@@ -563,6 +578,14 @@ reconciliation, target verification, and futures rolling. Target verification
 waits only for OPEN, CLOSE, and TARGET_ADJUSTMENT work; protective stops and
 take-profits remain active without delaying the check. A superseded target is
 not checked or compared with the broker.
+
+Each synchronization pass uses the successfully requested broker-position
+snapshot as its authoritative input. Cached/fresh disagreement is retried
+without reconnecting; request timeout or failure asks the supervisor to
+recover broker state. Position correction is deferred for a Contract with
+active one-to-one OPEN/CLOSE work. When correction is eventually applied, the
+one-to-one target is aligned with the broker quantity so startup recovery does
+not recreate a position that reconciliation intentionally removed.
 
 .. autoclass:: haymaker.book.Book
 

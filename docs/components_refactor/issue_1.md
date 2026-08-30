@@ -1,8 +1,13 @@
 ## Issue: Controller forces IB reconnect on transient position snapshot race
 
+Status: resolved for the synchronization safety path on 2026-08-30.
+
 ### Summary
 
-A normal fill occurring during controller sync can make two non-atomic broker position reads temporarily disagree. The disagreement is incorrectly classified as a connection failure, causing the controller to disconnect the IB socket and trigger a full supervised workload restart.
+A normal fill occurring during controller sync can make two non-atomic broker
+position reads temporarily disagree. Before resolution, that disagreement was
+incorrectly classified as a connection failure and triggered a full supervised
+workload restart.
 
 This was not an external connectivity loss.
 
@@ -39,7 +44,7 @@ The NQ protective stop had reached `PreSubmitted` before disconnection and was r
 
 ### Root cause
 
-[`verify_broker_position_source()`](</home/tomek/haymaker/haymaker/controller/sync_coordinator.py:253>) performs inherently non-atomic reads:
+The affected `verify_broker_position_source()` performed inherently non-atomic reads:
 
 ```python
 positions = tuple(ib.positions())
@@ -48,7 +53,7 @@ requested_positions = tuple(await ib.reqPositionsAsync())
 
 A fill can arrive between those reads. That is exactly what happened: the cached snapshot was taken immediately before the NQU6 fill, while the requested snapshot included it.
 
-The actual bug is that all verification failures are reduced to the same Boolean result:
+The actual bug was that all verification failures were reduced to one Boolean result:
 
 ```python
 if not await verify_broker_position_source(...):
@@ -65,37 +70,37 @@ This conflates:
 - A disconnected or unusable broker connection.
 - A persistent position-source inconsistency.
 
-The controller then calls `self.ib.disconnect()` directly ([controller.py:409](</home/tomek/haymaker/haymaker/controller/controller.py:409>)). Because this bypasses the supervisor’s restart API, the supervisor correctly interprets it as an unexpected disconnection ([supervisor.py:354](</home/tomek/haymaker/haymaker/supervisor/supervisor.py:354>)).
+The affected implementation then called `self.ib.disconnect()` directly. That
+bypassed the supervisor's restart API, so the supervisor correctly interpreted
+it as an unexpected disconnection.
 
-The confusing `Sync attempt 2/3` without `1/3` is secondary: attempt 1 is logged only as `--- Sync ---`; numbered logging starts when `attempt > 1` ([controller.py:392](</home/tomek/haymaker/haymaker/controller/controller.py:392>)).
+The confusing historical `Sync attempt 2/3` without `1/3` was secondary:
+attempt 1 was logged only as `--- Sync ---`, while numbered logging started
+with later attempts.
 
-### Proposed solution
+### Resolution
 
-After the current refactor:
+Broker verification now returns one of three explicit outcomes:
 
-1. Represent verification outcomes explicitly, for example:
+- `MATCH`
+- `SNAPSHOT_DISAGREEMENT`
+- `REQUEST_UNAVAILABLE`
 
-   - `MATCH`
-   - `SNAPSHOT_DISAGREEMENT`
-   - `REQUEST_UNAVAILABLE`
+A cached/fresh disagreement consumes a local retry and never requests a
+reconnect. If the next request converges, synchronization continues normally;
+persistent disagreement exhausts the bounded retries and follows the existing
+fail-closed policy. Timeout or request failure alone asks the owning supervisor
+to recover broker state. Controller does not disconnect the IB socket.
 
-2. Treat an initial snapshot disagreement as retry-only. Take fresh readings after the configured delay without disconnecting.
+The successful `reqPositionsAsync()` response is the sole broker-position
+snapshot consumed by `PositionSync` during that pass. Position correction is
+also deferred for Contracts with active attributed OPEN/CLOSE orders, avoiding
+correction while a one-to-one transaction can still fill.
 
-3. Escalate only a repeated disagreement or an actual request/connectivity failure.
+Regression coverage reproduces a fill between the cached and requested reads,
+verifies convergence without restart, verifies unavailable-request recovery,
+and verifies persistent disagreement fails closed without a spurious restart.
 
-4. Route any required reconnect through the runtime/supervisor `request_restart()` callback. The controller must not call `ib.disconnect()` directly.
-
-5. Longer-term, use one authoritative broker-position snapshot per sync pass rather than comparing or consuming independently timed snapshots.
-
-6. Log attempt 1 explicitly as `Sync attempt 1/3` for an unambiguous incident timeline.
-
-### Acceptance criteria
-
-- A fill arriving between the cached and requested reads causes a retry, not a disconnect.
-- If the next read converges, sync completes without restarting or disabling trading.
-- A genuine request timeout/failure requests one supervisor-owned restart.
-- No sync attempt runs against a socket the controller deliberately disconnected.
-- Persistent non-convergence still follows the defined safety policy.
-- Regression tests simulate a fill appearing between the two reads.
-- Existing test [`test_broker_position_source_disagreement_disables_trading`](</home/tomek/haymaker/tests/test_controller.py:496>) is revised because it currently codifies the problematic outcome.
+The historical attempt-number logging observation is cosmetic and was not part
+of this safety fix.
 

@@ -140,6 +140,13 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   The dataloader has no connection modes: `DataloaderRuntime` creates its own
   `IB` object and always runs through the shared application and supervisor;
   see `haymaker/dataloader/AGENTS.md`.
+- Controller sync treats a successful `reqPositionsAsync()` result as the
+  authoritative broker-position snapshot for that pass. Cached/fresh
+  disagreement retries locally; request timeout or failure requests
+  supervisor-owned recovery. Position correction is deferred while attributed
+  OPEN/CLOSE work remains active. An applied one-to-one correction aligns the
+  persisted target to the corrected quantity, clears a flattened episode's
+  recovery inputs, and preserves its direction block.
 - Graceful shutdown is not currently a broad architecture priority. Terminal
   `Ctrl-C` has historically been acceptable. Before service-manager deployment,
   prefer minimal signal hardening for `SIGINT`/`SIGTERM`: request supervisor stop,
@@ -271,6 +278,10 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   orders are optional and their absence is not a sync failure. Regular closes
   join the active protective orders' OCA group so IB cancels the remaining
   exits only after one exit fills.
+- `BracketExecutionModel` owns one-to-one futures-roll policy. Automatic
+  Controller-owned rolling is the default; `auto_roll_futures=False` is the
+  explicit opt-out for a source that manages its own roll. Conflicting policy
+  declarations for the same `source_key` fail during strategy construction.
 - Explicit account reset gives pre-existing order cancellations a bounded grace
   period, then submits liquidation orders even when some cancellations remain
   unconfirmed because flattening is the priority. An incomplete liquidation

@@ -377,6 +377,10 @@ class BracketExecutionModel(ExecutionModel):
         stop: Required protective stop leg.
         take_profit: Optional take-profit leg. Stop-loss protection remains
             critical even when no take-profit is configured.
+        auto_roll_futures: Whether Controller-owned futures rolling should
+            automatically roll this source's open position. Defaults to
+            ``True``; disable only when the strategy intentionally manages its
+            own one-to-one futures roll.
         name: Stable configured model name.
         open_order: Model-specific entry Order fields.
         close_order: Model-specific close Order fields.
@@ -398,6 +402,7 @@ class BracketExecutionModel(ExecutionModel):
         *,
         stop: AbstractBracketLeg,
         take_profit: AbstractBracketLeg | None = None,
+        auto_roll_futures: bool = True,
         name: str | None = None,
         open_order: Mapping[str, Any] = {},
         close_order: Mapping[str, Any] = {},
@@ -410,6 +415,16 @@ class BracketExecutionModel(ExecutionModel):
             raise TypeError("stop must be an AbstractBracketLeg")
         if take_profit is not None and not isinstance(take_profit, AbstractBracketLeg):
             raise TypeError("take_profit must be an AbstractBracketLeg or None")
+        if not isinstance(auto_roll_futures, bool):
+            raise TypeError("auto_roll_futures must be a bool")
+        configured_roll_policy = self.runtime.future_roll_policies.get(source_key)
+        if (
+            configured_roll_policy is not None
+            and configured_roll_policy != auto_roll_futures
+        ):
+            raise ValueError(
+                f"Conflicting futures-roll policy for source {source_key!r}"
+            )
         self.source_key = source_key
         self.stop = stop
         self.take_profit = take_profit
@@ -438,6 +453,7 @@ class BracketExecutionModel(ExecutionModel):
         if self.oca_type not in {1, 2, 3}:
             raise ValueError("oca_type must be 1, 2, or 3")
         super().__init__(name=name)
+        self.runtime.future_roll_policies[source_key] = auto_roll_futures
 
     def accept(self, target: PositionTarget) -> bool:
         """Validate intent, persist target state, and converge the episode."""

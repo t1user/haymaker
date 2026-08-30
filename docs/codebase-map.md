@@ -54,6 +54,10 @@ daily UTC futures-roll timers once on the active event loop when
 `Controller.run()` first executes. Live and dataloader runtimes use the same
 application and supervisor lifecycle.
 
+One-to-one `BracketExecutionModel` instances register their source roll policy;
+automatic Controller-owned rolling is the default and explicit opt-out is
+available for a source that manages its own roll.
+
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count, owns Mongo/Arctic composition, and injects datastore construction into `Manager`. `Manager` owns the run-scoped `now` and derives the library from data type and bar size, while contract selectors share a target-owned `FuturesSelectionPolicy`. Arctic is the only supported dataloader backend.
 
 The event-driven backtester is a programmatic experimental extra. It installs a
@@ -278,16 +282,21 @@ reference and never suppresses the Signal.
    reconciliation pass against the supervisor's connection-unavailable event.
    If the supervisor enters broker recovery, restart, or shutdown, sync aborts
    without disabling trading. Otherwise the internal sync pass runs a bounded
-   retry loop around a sync coordinator. Each coordinator pass first checks
-   broker connection and validates broker position freshness, relinks current
-   `ibi.Trade` objects to local records, back-reports known completed fills,
-   runs order/position reconciliation against direct broker and Book
-   reads, and returns `False` after broker verification failures or recovery
-   actions so sync can retry the checks before disabling trading. If unresolved
-   order or position mismatches remain on the first pass, the coordinator can
-   ask the controller to request a supervised workload restart before local
-   order pruning, broker order cancellation, or position correction is allowed
-   on a later pass.
+   retry loop around a sync coordinator. Each pass compares cached positions
+   with a fresh `reqPositionsAsync()` result. A disagreement retries locally;
+   only request timeout or failure asks the supervisor to recover broker state.
+   The successful response is the sole broker-position snapshot used by that
+   pass. The coordinator then relinks current `ibi.Trade` objects to local
+   records, back-reports known completed fills, and compares Book quantity with
+   that snapshot. Position correction is deferred for Contracts with active
+   one-to-one OPEN/CLOSE work. If unresolved order or actionable position
+   mismatches remain on the first pass, the coordinator can ask the controller
+   to request one supervised workload restart before local order pruning,
+   broker order cancellation, or position correction is allowed on a later
+   pass. Applied one-to-one correction also aligns the persisted target to the
+   authoritative quantity and clears episode recovery inputs when flat, so a
+   supervised recovery cannot reopen the corrected position from a stale
+   setpoint.
    Non-retryable unsafe states raise `SyncBrokenStateError`, which disables
    trading immediately. An aborted controller run skips startup jobs for that
    workload generation; a failed run still permits those jobs to provide

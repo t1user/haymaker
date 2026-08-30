@@ -8,11 +8,10 @@ from collections.abc import Mapping
 from datetime import datetime
 from numbers import Real
 from types import MappingProxyType
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 import ib_insync as ibi
 
-T = TypeVar("T")
 K = TypeVar("K")
 V = TypeVar("V")
 
@@ -140,39 +139,6 @@ def qualified_contract(value: object, name: str = "contract") -> ibi.Contract:
     if not contract.conId:
         raise ValueError(f"{name} must have a non-zero conId")
     return contract
-
-
-class Validator:
-    """
-    Descriptor class to validate attributes of a class.
-
-    Args:
-        *validators: Callables that will be used to validate the attribute.
-
-    """
-
-    def __init__(self, *validators: Callable[[T], T]):
-        self.validators = validators
-
-    def __set_name__(self, owner, name) -> None:
-        self.private_name = "_" + name
-
-    def __get__(self, obj, objtype=None):
-        return getattr(obj, self.private_name)
-
-    def __set__(self, obj, value: Any) -> None:
-        if self.validate(value):
-            setattr(obj, self.private_name, value)
-
-    def validate(self, value) -> bool:
-        for validator in self.validators:
-            try:
-                validator(value)
-            except ValueError as exc:
-                raise ValueError(
-                    f"Failed to validate attr: {self.private_name.strip('_')} {exc}"
-                ) from exc
-        return True
 
 
 def bar_size_validator(s: str) -> str:

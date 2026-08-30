@@ -1,22 +1,22 @@
 """Single-pass controller sync checks for broker and local state.
 
-Sync starts by validating that ``ib.positions()`` agrees with
-``await ib.reqPositionsAsync()``.  If broker state verification fails, the pass
-requests a reconnect and returns ``False`` without attempting recovery or
-correction actions; :meth:`Controller.sync` owns checking the connection,
-restarting once, retrying, and deciding whether repeated failures should
-disable trading.
+Sync starts by comparing cached ``ib.positions()`` with a fresh
+``await ib.reqPositionsAsync()`` response. A transient disagreement returns
+``False`` for a local retry, while an unavailable request asks the owning
+supervisor for fresh broker state. The successfully requested positions are
+the sole broker snapshot consumed by the rest of that pass.
 
-After broker validation, each step reads current state directly from
-``controller.ib`` or ``controller.book`` instead of using stored broker/local
-snapshots.  The ordered flow is:
+After broker validation, each step reads current Book and order state while
+retaining that one broker-position snapshot. The ordered flow is:
 
 1. Relink broker ``ibi.Trade`` objects to local order records and back-report
    fills for orders that completed while the process was disconnected.
-2. Compare local aggregate logical Book positions with broker positions and
-   correct local position records when the existing recovery rules allow it.
-3. Skip correction trades when unresolved unknown broker orders remain active.
-4. Delegate bracket-record and broker stop-loss protection handling to
+2. Compare local aggregate logical Book positions with the fresh broker
+   snapshot, deferring Contracts with active OPEN/CLOSE work.
+3. Correct local position records when the existing recovery rules allow it,
+   aligning their persisted targets to the authoritative broker quantity.
+4. Skip correction trades when unresolved unknown broker orders remain active.
+5. Delegate bracket-record and broker stop-loss protection handling to
    :mod:`haymaker.controller.sync_brackets`.
 
 The coordinator does not disable trading and does not retry.  Any recovery
@@ -31,15 +31,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 import ib_insync as ibi
 
 from haymaker import misc
-from dataclasses import replace
-from datetime import datetime, timezone
-
-from haymaker.book import OrderInfo
+from haymaker.book import OrderInfo, PositionState
+from haymaker.components.messages import StandardOrderRole
 
 from .sync_brackets import BracketSyncAction, BracketSyncError
 from .sync_routines import OrderSync, PositionSync
@@ -56,6 +57,22 @@ class SyncBrokenStateError(Exception):
 
 class PositionsOutOfSync(Exception):
     """Raised when local positions cannot be reconciled to broker positions."""
+
+
+class BrokerPositionStatus(Enum):
+    """Classify freshness verification of broker position sources."""
+
+    MATCH = auto()
+    SNAPSHOT_DISAGREEMENT = auto()
+    REQUEST_UNAVAILABLE = auto()
+
+
+@dataclass(frozen=True)
+class BrokerPositionSnapshot:
+    """Return explicit broker verification status and the fresh positions."""
+
+    status: BrokerPositionStatus
+    positions: tuple[ibi.Position, ...] = ()
 
 
 class SyncCoordinator:
@@ -104,11 +121,14 @@ class SyncCoordinator:
                 trading immediately.
         """
 
-        if not await verify_broker_position_source(
+        position_snapshot = await verify_broker_position_source(
             self.controller.ib,
             self.controller.broker_request_timeout,
-        ):
-            self.request_restart = True
+        )
+        if position_snapshot.status is not BrokerPositionStatus.MATCH:
+            self.request_restart = (
+                position_snapshot.status is BrokerPositionStatus.REQUEST_UNAVAILABLE
+            )
             return False
 
         order_sync = OrderSync(self.controller.ib, self.controller.book)
@@ -118,11 +138,13 @@ class SyncCoordinator:
             self.handle_done_trades(order_sync.done)
             await asyncio.sleep(0)
 
-        position_sync = PositionSync(self.controller.ib, self.controller.book)
+        position_sync = PositionSync(
+            position_snapshot.positions,
+            self.controller.book,
+        )
+        position_errors = self._defer_active_position_errors(position_sync.errors)
 
-        if (
-            order_sync.is_error or position_sync.is_error
-        ) and self._restart_before_correction:
+        if (order_sync.is_error or position_errors) and self._restart_before_correction:
             self.request_restart = True
             return False
 
@@ -141,9 +163,12 @@ class SyncCoordinator:
             return False
 
         # position fixes
-        if position_sync.errors:
+        if position_errors:
             try:
-                self.handle_error_positions(position_sync.errors)
+                self.handle_error_positions(
+                    position_errors,
+                    position_sync.broker_positions,
+                )
             except PositionsOutOfSync as exc:
                 raise SyncBrokenStateError(
                     "local state does not match broker state"
@@ -210,10 +235,64 @@ class SyncCoordinator:
                 order_id,
             )
 
-    def handle_error_positions(self, errors: dict[ibi.Contract, float]) -> None:
+    def _defer_active_position_errors(
+        self,
+        errors: dict[ibi.Contract, float],
+    ) -> dict[ibi.Contract, float]:
+        """Defer position correction while one-to-one work can still fill."""
+
+        actionable: dict[ibi.Contract, float] = {}
+        for contract, difference in errors.items():
+            adjustments = tuple(
+                info
+                for info in self.controller.book.active_orders(contract=contract)
+                if info.role
+                in {
+                    StandardOrderRole.OPEN,
+                    StandardOrderRole.CLOSE,
+                }
+            )
+            if adjustments:
+                log.info(
+                    "Deferring position reconciliation for %s while "
+                    "OPEN/CLOSE order(s) remain active: %s",
+                    contract.localSymbol or contract.symbol,
+                    [info.orderId for info in adjustments],
+                )
+            else:
+                actionable[contract] = difference
+        return actionable
+
+    @staticmethod
+    def _corrected_position_state(
+        state: PositionState,
+        quantity: float,
+        corrected_at: datetime,
+    ) -> PositionState:
+        """Align one recovered episode and target to broker authority."""
+
+        flat = quantity == 0
+        return replace(
+            state,
+            quantity=quantity,
+            target_quantity=quantity,
+            target_created_at=corrected_at,
+            position_id=None if flat else state.position_id,
+            bracket_inputs={} if flat else state.bracket_inputs,
+            updated_at=corrected_at,
+        )
+
+    def handle_error_positions(
+        self,
+        errors: dict[ibi.Contract, float],
+        broker_positions: dict[ibi.Contract, float],
+    ) -> None:
+        """Correct recoverable Book positions and supersede stale targets."""
+
         log.error("Will attempt to fix position records")
         for contract, diff in errors.items():
             states = self.controller.book.positions_for_contract(contract)
+            corrected_at = datetime.now(timezone.utc)
             log.debug(
                 "Sources for contract %s: %s",
                 contract.localSymbol,
@@ -222,10 +301,10 @@ class SyncCoordinator:
             if len(states) == 1:
                 state = states[0]
                 self.controller.book.update_position(
-                    replace(
+                    self._corrected_position_state(
                         state,
-                        quantity=state.quantity - diff,
-                        updated_at=datetime.now(timezone.utc),
+                        state.quantity - diff,
+                        corrected_at,
                     )
                 )
                 log.error(
@@ -234,17 +313,13 @@ class SyncCoordinator:
                     -diff,
                 )
 
-            elif (
-                states
-                and self.controller.trader.position_for_contract(contract) == 0
-            ):
+            elif states and broker_positions.get(contract, 0.0) == 0:
                 for state in states:
                     self.controller.book.update_position(
-                        replace(
+                        self._corrected_position_state(
                             state,
-                            quantity=0.0,
-                            position_id=None,
-                            updated_at=datetime.now(timezone.utc),
+                            0.0,
+                            corrected_at,
                         )
                     )
                 log.error(
@@ -260,11 +335,10 @@ class SyncCoordinator:
                 for state in states:
                     if state.source_key in source_faults:
                         self.controller.book.update_position(
-                            replace(
+                            self._corrected_position_state(
                                 state,
-                                quantity=0.0,
-                                position_id=None,
-                                updated_at=datetime.now(timezone.utc),
+                                0.0,
+                                corrected_at,
                             )
                         )
                         log.error(
@@ -282,40 +356,60 @@ class SyncCoordinator:
             self._faulty_trades.clear()
 
 
-async def verify_broker_position_source(ib: ibi.IB, timeout: float) -> bool:
-    """
-    Return True when synchronous and requested broker positions agree.
+async def verify_broker_position_source(
+    ib: ibi.IB,
+    timeout: float,
+) -> BrokerPositionSnapshot:
+    """Verify cached broker positions and return one fresh snapshot.
 
-    Practically, if there's an unreported ib_gateway issue,
-    ``reqPositionAsync`` typically freezes, which is a sign that we
-    cannot rely on information received from broker.
+    Cached/fresh disagreement can result from ordinary event propagation and
+    therefore requests only a local sync retry. A timeout or failed request
+    means broker position state is unavailable and requires supervisor-owned
+    recovery.
+
+    Args:
+        ib: Connected IB client.
+        timeout: Maximum seconds to wait for the fresh position request.
+
+    Returns:
+        Explicit verification status and the requested positions when the
+        broker request completed.
     """
-    positions = tuple(ib.positions())
+    cached_positions = tuple(ib.positions())
     try:
         requested_positions = tuple(
             await asyncio.wait_for(ib.reqPositionsAsync(), timeout)
         )
     except asyncio.TimeoutError:
-        log.warning(f"broker position request timed out after {timeout}s")
-        return False
+        log.warning("Broker position request timed out after %ss", timeout)
+        return BrokerPositionSnapshot(BrokerPositionStatus.REQUEST_UNAVAILABLE)
     except Exception as exc:
-        log.warning(f"broker position request failed: {exc!r}")
-        return False
+        log.warning("Broker position request failed: %r", exc)
+        return BrokerPositionSnapshot(BrokerPositionStatus.REQUEST_UNAVAILABLE)
 
-    positions_dict = {
-        position.contract.localSymbol: position.position for position in positions
+    cached_quantities = {
+        position.contract.localSymbol: position.position
+        for position in cached_positions
+        if position.position
     }
-    requested_positions_dict = {
+    requested_quantities = {
         position.contract.localSymbol: position.position
         for position in requested_positions
         if position.position
     }
-    if positions_dict != requested_positions_dict:
+    if cached_quantities != requested_quantities:
         log.debug(
-            f"broker position sources disagree: "
-            f"positions={positions_dict} req_positions={requested_positions_dict}"
+            "Broker position sources disagree: positions=%s req_positions=%s",
+            cached_quantities,
+            requested_quantities,
         )
-        return False
-    else:
-        log.debug(f"broker positions: {positions_dict}")
-    return True
+        return BrokerPositionSnapshot(
+            BrokerPositionStatus.SNAPSHOT_DISAGREEMENT,
+            requested_positions,
+        )
+
+    log.debug("Broker positions: %s", requested_quantities)
+    return BrokerPositionSnapshot(
+        BrokerPositionStatus.MATCH,
+        requested_positions,
+    )

@@ -248,6 +248,11 @@ blocked. Stop-loss protection is critical while take-profit is optional. A
 regular close joins the active brackets' OCA group, so the first filled exit
 causes IB to cancel the remaining exits.
 
+It also registers the source's Controller-owned futures-roll policy:
+`auto_roll_futures=True` is the default, while `False` is the explicit opt-out
+for a one-to-one strategy that manages its own roll. Conflicting declarations
+for one source fail during construction.
+
 Order keyword precedence is:
 
 ```text
@@ -281,6 +286,16 @@ There is no route key in messages or persistence.
 Futures rolling remains Controller-owned. It reads PositionState, preserves
 source and `position_id`, submits role ROLL directly, and retains ACTIVE/NEXT
 held-contract rules.
+
+BracketExecutionModel declares that policy for its one-to-one source;
+undeclared recovered sources retain the safe automatic-roll default.
+
+Controller synchronization uses one successful `reqPositionsAsync()` result
+as the broker snapshot for an entire pass. Cached/fresh disagreement is a
+local-retry outcome, while an unavailable request asks the supervisor to
+recover broker state. Active OPEN/CLOSE work defers correction. An applied
+one-to-one correction aligns both quantity and target to broker authority,
+preventing stale target recovery from reopening a corrected-flat position.
 
 Direct-mode futures rolling remains deferred. The current roller accounts for
 one-to-one PositionState holdings but does not yet define futures-series

@@ -174,11 +174,23 @@ bracket-leg hierarchy in `brackets.py`. Recovery must rebind callbacks to
 current live Trade objects and derive work from Book rather than replaying old
 intent.
 
+The model registers automatic Controller-owned futures rolling for its source
+by default. `auto_roll_futures=False` is the explicit one-to-one opt-out;
+reject conflicting policy declarations for one `source_key`. SignalModels
+remain calculation components and must not own this policy.
+
 Book owns order/fill/state persistence and blotter queries. Controller alone
 submits/cancels broker orders, registers OrderInfo immediately, handles status,
 Fill and commission events, rebinds Trades, and reconciles aggregate Contract
 positions. Do not call the broker from Book or calculate Portfolio policy
 inside it.
+
+Synchronization consumes one successful fresh broker-position snapshot per
+pass. Cached/fresh disagreement retries without reconnecting, unavailable
+requests use supervisor recovery, and Contracts with active one-to-one
+OPEN/CLOSE work are deferred. Applied one-to-one corrections must align the
+persisted target with broker authority so recovery cannot replay a stale
+setpoint.
 
 Physical persistence is limited to `orders`, `state`, and `blotter`. State
 identities are `position:{source_key}`,

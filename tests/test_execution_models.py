@@ -223,6 +223,53 @@ def test_serial_recovery_resumes_persisted_target(execution_runtime):
     assert trader.trades[0].order.totalQuantity == 2
 
 
+def test_bracket_model_registers_automatic_future_roll_by_default(
+    execution_runtime,
+):
+    runtime, _, _ = execution_runtime
+
+    BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
+
+    assert runtime.future_roll_policies == {"alpha": True}
+
+
+def test_bracket_model_can_disable_automatic_future_roll(execution_runtime):
+    runtime, _, _ = execution_runtime
+
+    BracketExecutionModel(
+        "alpha",
+        name="brackets",
+        stop=FixedStop(2),
+        auto_roll_futures=False,
+    )
+
+    assert runtime.future_roll_policies == {"alpha": False}
+
+
+def test_bracket_model_rejects_invalid_or_conflicting_future_roll_policy(
+    execution_runtime,
+):
+    runtime, _, _ = execution_runtime
+
+    with pytest.raises(TypeError, match="auto_roll_futures must be a bool"):
+        BracketExecutionModel(
+            "invalid",
+            name="invalid",
+            stop=FixedStop(2),
+            auto_roll_futures=1,  # type: ignore[arg-type]
+        )
+    assert runtime.future_roll_policies == {}
+
+    BracketExecutionModel("alpha", name="first", stop=FixedStop(2))
+    with pytest.raises(ValueError, match="Conflicting futures-roll policy"):
+        BracketExecutionModel(
+            "alpha",
+            name="second",
+            stop=FixedStop(2),
+            auto_roll_futures=False,
+        )
+
+
 def test_bracket_model_rejects_missing_or_stale_intent(execution_runtime):
     model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
 
