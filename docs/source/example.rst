@@ -143,7 +143,7 @@ several execution targets after any one input:
                        if value == 0
                        else self.size if value > 0 else -self.size
                    ),
-                   source_key=source_key,
+                   target_key=f"allocation.{source_key}",
                )
                for source_key, value in self.latest.items()
            )
@@ -185,8 +185,10 @@ A synchronized implementation could instead require ``as_of``, wait for all
 registered sources, define duplicate/late input handling, and persist its
 normalized mapping under a stable ``portfolio_key`` through Book.
 
-The serial model treats each target as an absolute setpoint. If a newer target
-arrives while an adjustment order works, it retains only the newer target and
+Each ``allocation.*`` target key is a stable Portfolio-owned execution identity,
+not the Signal source attribution and not a Router override. The serial model
+treats each target as an absolute setpoint. If a newer target arrives while an
+adjustment order works, it retains only the newer target and
 re-evaluates after completion. Router rules are evaluated in declaration order;
 current rules remain authoritative. On restart, an active TARGET_ADJUSTMENT
 must still select the model that submitted it or the Router blocks locally;

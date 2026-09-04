@@ -39,7 +39,8 @@ Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
 holds only ready runtime services, process `run_started_at`, supervised
 `workload_generation`, the narrow `FrameStoreProvider` composition capability,
 the cached market-data store factory, the per-model default Signal persistence
-factory, the supervisor restart callback, and source futures-roll policies; it
+factory, the supervisor restart callback, and one-to-one source futures-roll
+policies; it
 does not construct services or inspect the user module.
 
 The `haymaker` console command owns live composition and logging: it configures
@@ -54,9 +55,10 @@ daily UTC futures-roll timers once on the active event loop when
 `Controller.run()` first executes. Live and dataloader runtimes use the same
 application and supervisor lifecycle.
 
-One-to-one `BracketExecutionModel` instances register their source roll policy;
-automatic Controller-owned rolling is the default and explicit opt-out is
-available for a source that manages its own roll.
+Execution models register one process-wide mode-specific futures-roll executor.
+`BracketExecutionModel` also registers each source policy; automatic rolling is
+the default and explicit opt-out is available for a source that manages its own
+roll. Direct and one-to-one modes are intentionally exclusive per process.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count, owns Mongo/Arctic composition, and injects datastore construction into `Manager`. `Manager` owns the run-scoped `now` and derives the library from data type and bar size, while contract selectors share a target-owned `FuturesSelectionPolicy`. Arctic is the only supported dataloader backend.
 
@@ -105,15 +107,18 @@ The research package is intentionally separate from live execution. It works dir
   manage the gateway process.
 - `haymaker/controller/`: broker submission, order/position reconciliation,
   execution verification, fill and commission event processing, Trade
-  rebinding, futures rolling, emergency modes, and broker message handling.
+  rebinding, futures-roll scheduling/discovery/recovery coordination, emergency
+  modes, and broker message handling.
   Sync retries broker-position freshness failures, back-reports known fills
   before comparison, and requests supervisor-owned recovery before correction
   where required.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/book.py`: typed order/fill evidence, one-to-one PositionState,
-  direct TargetState, Portfolio recovery mappings, rejection tracking,
-  active-order ownership queries, blotter access, and one ordered critical
-  persistence queue. Book performs no broker calls or allocation.
+  target-keyed direct TargetState, per-series RollState, Fill-derived direct
+  physical positions with durable per-target reset cutoffs, Portfolio recovery
+  mappings, rejection tracking, active-order ownership queries, blotter access,
+  and one ordered critical persistence queue. Book performs no broker calls or
+  allocation.
 - `haymaker/validators.py`: shared primitive normalization for aware datetimes,
   finite numbers, read-only mapping copies, non-empty strings, and IB Contract
   identity, plus IB request/order field validators. Domain-specific validation
@@ -150,12 +155,14 @@ The research package is intentionally separate from live execution. It works dir
   aggregates the leaf modules' exports for both focused imports and promotion
   through `haymaker.components`.
   - `models.py`: the common stateful execution-model boundary and serial
-    Contract target convergence.
+    target-key convergence.
   - `router.py`: fixed first-match target routing plus startup validation that
     active direct adjustments are still assigned to their persisted owners.
   - `brackets.py`: one-to-one bracket episode execution and its
     user-configurable protective-order legs. Regular closes join the episode's
     OCA group, keeping stop protection active until an exit fills.
+  - `future_roll.py`: public direct and bracket roll executors plus their
+    typed customization boundary; Controller retains discovery and scheduling.
 - `haymaker/components/__init__.py`: registers public component modules and
   aggregates their module-owned, non-overlapping `__all__` exports into the
   supported package toolbox.
@@ -310,7 +317,8 @@ reference and never suppresses the Signal.
    identifies the current market-data and roll-reference contract; `NEXT` is
    an early new-entry candidate. Existing positions retain their persisted held
    contract, and the futures roller acts only after that contract leaves the
-   allowed `ACTIVE`/`NEXT` set.
+   allowed `ACTIVE`/`NEXT` set. Qualified detail chains explicitly map each
+   concrete Future to its registered series; symbol guessing is not used.
 6. Streamers and aggregators emit market data into SignalModels. Custom models
    calculate only a SignalCalculation; the base supplies source, resolved
    Contract, SignalType, and local creation time.
@@ -319,21 +327,28 @@ reference and never suppresses the Signal.
    may persist a calculation generation named from source, ACTIVE contract, and
    process start; NEXT-only changes do not rotate it.
 8. In the one-to-one flow, a binary processor emits PositionProposal and
-   PortfolioWrapper allocates one absolute PositionTarget. In direct mode,
-   Portfolio owns input state and may emit targets for several Contracts.
+   PortfolioWrapper allocates one source-attributed absolute PositionTarget. In
+   direct mode, Portfolio owns input state and may emit targets for several
+   Contracts; every target carries a stable Portfolio-owned `target_key`.
 9. ExecutionRouter optionally selects one stable named model using current
    first-match rules. Before model recovery, active TARGET_ADJUSTMENT ownership
    must agree with those rules; mismatch blocks that Router locally. Idle
    recovered targets are reassigned only after every target can be routed.
 10. Execution models persist the newest target, derive required work from Book
     quantity and working orders, and call `Controller.trade()` with explicit
-    role/model/source/episode attribution.
+    role/model and direct-target or source/episode attribution. They register
+    exactly one process-wide direct or bracket futures-roll executor family.
 11. Controller registers complete OrderInfo immediately, applies normalized
     Fill evidence idempotently, attaches late CommissionReports regardless of
     optional blotter configuration, updates Book projections, rebinds Trades,
     and sends source/position-attributed blotter records when enabled. The
     global `controller.missing_brackets` option controls critical stop-loss
     reconciliation; take-profit orders are optional.
+12. The app-lifetime futures-roll timer asks FutureRoller to discover holdings
+    outside their registered series' ACTIVE/NEXT pair. A durable RollState is
+    written before a mode-specific executor submits BAG work. Startup sync
+    back-reports Fill evidence and resumes incomplete roll stages before
+    comparing Book with the broker snapshot.
 
 ### Dataloader Flow
 
@@ -543,8 +558,11 @@ dataloader contracts.csv -f settings.yaml
 - Final live-runtime close warns about active TARGET_ADJUSTMENT orders. Treat
   the recorded model name as a recovery-compatibility promise and defer routing
   or implementation changes until those direct orders are terminal.
-- Futures rolling changes active contracts, next-contract selection, and Book
-  PositionState; changes can cause live trading differences.
+- Futures rolling changes concrete holdings, target/position recovery, and
+  bracket protection. Preserve the registered mode and executor name while a
+  RollState is incomplete. Missing Fill evidence or critical stop replacement
+  blocks recovery rather than guessing. ContractRegistry series identity must
+  remain explicit and unambiguous.
 - Dataloader pacing and gap-fill scheduling can trigger IB pacing violations or silently create incomplete stores if date boundaries are wrong.
 
 ## AGENTS.md Notes

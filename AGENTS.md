@@ -116,8 +116,10 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   positions close to a roll. `Atom.which_contract` selects the role exposed by
   that atom; it does not redefine which contract is ACTIVE. OPEN uses the
   signal-selected contract, CLOSE uses Book's persisted held contract, and
-  `FutureRoller` permits held contracts that
-  are either ACTIVE or NEXT and rolls holdings outside that set. A NEXT-only
+  `FutureRoller` permits held contracts that are either ACTIVE or NEXT and
+  rolls holdings outside that set. ContractRegistry maps qualified expiry
+  `conId` values to their registered blueprint series; rolling never guesses
+  identity from symbol fields. A NEXT-only
   change does not require market-data back-adjustment. Selectors are rebuilt on
   each supervised workload start using one timezone-naive UTC timestamp, and
   live operation relies on the IB-driven daily workload restarts to refresh
@@ -244,20 +246,26 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - Built-in messages are frozen `Signal -> PositionProposal -> PositionTarget`
   envelopes. Signal values are finite scalars or `SignalPair(entry, exit)`.
   PositionTarget requires a concrete non-zero `conId` and its quantity is always
-  an absolute setpoint. Signal, PositionProposal, and PositionTarget are
-  intentionally unhashable; Contracts and nested metadata remain shared mutable
+  an absolute setpoint. Direct targets require a stable `target_key` and omit
+  `source_key`/intent; one-to-one targets use `source_key` instead. Signal,
+  PositionProposal, and PositionTarget are intentionally unhashable; Contracts
+  and nested metadata remain shared mutable
   objects. `PositionIntent` is mandatory only on the one-to-one
   PortfolioWrapper/BracketExecutionModel path, where PortfolioWrapper transfers
   it to the target as an initial assertion.
 - Reuse `haymaker.validators` for primitive normalization of aware datetimes,
   finite numbers, copied read-only mappings, non-empty strings, and IB
   Contracts. Keep domain-specific checks with their owning component.
-- `Book` owns typed position/target/order recovery, fill idempotence, the
-  critical ordered persistence queue, and blotter access. Controller owns
-  broker calls, reconciliation, submission, rebinding, and fill/commission
+- `Book` owns typed position/target/order/roll recovery, Fill-derived direct
+  physical attribution, fill idempotence, the critical ordered persistence
+  queue, and blotter access. Explicit reset retains order/Fill evidence and
+  persists a per-target cutoff used when rebuilding direct exposure. Controller
+  owns broker calls, reconciliation, submission, rebinding, and fill/commission
   event handling. Do not move Portfolio calculations or broker calls into Book.
-- Direct Portfolio consumes Signals and emits zero or more targets. The
-  one-to-one path uses a signal processor, `PortfolioWrapper`, and
+- Direct Portfolio consumes Signals and emits zero or more targets, each with a
+  stable Portfolio-owned `target_key`. The key identifies one execution setpoint
+  across updates and registered futures expiries; it is not a route override.
+  The one-to-one path uses a signal processor, `PortfolioWrapper`, and
   `PositionAllocator`. Execution models have stable unique configured names;
   preserving a name across deployments promises recovery-compatible behavior.
   Current Router rules always select the model. At startup, every active direct
@@ -278,10 +286,16 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   orders are optional and their absence is not a sync failure. Regular closes
   join the active protective orders' OCA group so IB cancels the remaining
   exits only after one exit fills.
-- `BracketExecutionModel` owns one-to-one futures-roll policy. Automatic
-  Controller-owned rolling is the default; `auto_roll_futures=False` is the
-  explicit opt-out for a source that manages its own roll. Conflicting policy
-  declarations for the same `source_key` fail during strategy construction.
+- Target execution models register exactly one process-wide mode-specific
+  `FutureRollExecutor` family. Controller owns the single daily schedule,
+  stale-holding discovery, and startup recovery coordination; direct or bracket
+  executors own durable sequencing. Modes cannot be mixed. Direct rolls preserve
+  `target_key` and wait for target adjustments. Bracket rolls preserve
+  `source_key`/`position_id`, roll broker-net exposure, and require an active
+  replacement stop before completion; take-profit replacement is optional.
+  `BracketExecutionModel` enables automatic rolling by default and
+  `auto_roll_futures=False` is the explicit per-source opt-out. Preserve mode and
+  executor name while persisted roll work is incomplete.
 - Explicit account reset gives pre-existing order cancellations a bounded grace
   period, then submits liquidation orders even when some cancellations remain
   unconfirmed because flattening is the priority. An incomplete liquidation

@@ -95,6 +95,7 @@ class Controller(Atom):
     _restart_before_correction: bool = True
     _sync_abort_event: asyncio.Event | None = field(default=None, repr=False)
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
+    future_roller: FutureRoller = field(init=False, repr=False)
 
     @classmethod
     def from_mapping(
@@ -122,6 +123,7 @@ class Controller(Atom):
 
     def __post_init__(self) -> None:
         Atom.__init__(self)
+        self.future_roller = FutureRoller(self)
         self.ignore_errors = _broker_messages_to_ignore(self.ignore_errors)
         if self.missing_brackets not in ("ignore", "warn", "remove"):
             raise ControllerError(
@@ -169,7 +171,13 @@ class Controller(Atom):
             raise ValueError("execution_model_name is required")
         await asyncio.sleep(self.execution_verification_delay)
         if await self.verify_target_integrity(target, execution_model_name):
-            self.verify_position_with_broker(target.contract)
+            contracts = (
+                tuple(self.book.direct_positions(target.target_key))
+                if target.target_key is not None
+                else (target.contract,)
+            )
+            for contract in contracts or (target.contract,):
+                self.verify_position_with_broker(contract)
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
@@ -203,7 +211,10 @@ class Controller(Atom):
             log.debug("hold released")
 
     def set_future_roll_policies(self, policies: Mapping[str, bool]) -> None:
+        """Install the one-to-one source policies collected during composition."""
+
         self.future_roll_policies = dict(policies)
+        self.future_roller.set_policies(self.future_roll_policies)
 
     async def run(self) -> SyncOutcome:
         """Reconcile broker state and arm runtime timers."""
@@ -244,9 +255,13 @@ class Controller(Atom):
             self.schedule_future_roll()
 
     def roll_futures(self, *args: object) -> None:
-        FutureRoller(self, self.future_roll_policies).roll()
+        """Run one scheduled futures-roll discovery pass."""
+
+        self.future_roller.roll()
 
     def schedule_future_roll(self) -> None:
+        """Install the single app-lifetime daily UTC roll callback."""
+
         if self.future_roll_time is None:
             return
         if self._future_roll_timer is not None:
@@ -336,12 +351,18 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
+        target_key: str | None = None,
         source_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
     ) -> ibi.Trade | None:
         """Submit and immediately register one fully attributed broker order."""
 
+        self._validate_order_attribution(
+            role=str(role),
+            target_key=target_key,
+            source_key=source_key,
+        )
         if self._trading_disabled:
             log.debug(
                 "Trade suppressed while trading is disabled: %s %s %s",
@@ -362,6 +383,7 @@ class Controller(Atom):
             order,
             role=role,
             execution_model_name=execution_model_name,
+            target_key=target_key,
             source_key=source_key,
             position_id=position_id,
             params=params,
@@ -374,6 +396,7 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
+        target_key: str | None = None,
         source_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
@@ -385,6 +408,7 @@ class Controller(Atom):
             trade,
             role=str(role),
             execution_model_name=execution_model_name,
+            target_key=target_key,
             source_key=source_key,
             position_id=position_id,
             params=params,
@@ -392,7 +416,7 @@ class Controller(Atom):
         trade.filledEvent += partial(
             self.log_trade,
             reason=str(role),
-            source_key=source_key or execution_model_name,
+            source_key=source_key or target_key or execution_model_name,
         )
         return trade
 
@@ -402,6 +426,7 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
+        target_key: str | None = None,
         source_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
@@ -413,6 +438,7 @@ class Controller(Atom):
             role=role,
             submitted_at=datetime.datetime.now(datetime.timezone.utc),
             execution_model_name=execution_model_name,
+            target_key=target_key,
             source_key=source_key,
             position_id=position_id,
             params=params or {},
@@ -426,6 +452,19 @@ class Controller(Atom):
             trade.contract.localSymbol or trade.contract.symbol,
         )
         return info
+
+    @staticmethod
+    def _validate_order_attribution(
+        *, role: str, target_key: str | None, source_key: str | None
+    ) -> None:
+        if target_key is not None and source_key is not None:
+            raise ValueError("An order cannot have both target_key and source_key")
+        if role == StandardOrderRole.TARGET_ADJUSTMENT:
+            if target_key is None or source_key is not None:
+                raise ValueError("TARGET_ADJUSTMENT requires target_key")
+        elif role == StandardOrderRole.ROLL:
+            if (target_key is None) == (source_key is None):
+                raise ValueError("ROLL requires exactly one target_key or source_key")
 
     def verify_market_open(self, contract: ibi.Contract) -> bool:
         details = self.contract_registry.get_details(contract)
@@ -463,9 +502,9 @@ class Controller(Atom):
 
         if self._hold:
             return
-        info = self.book.order_by_id(
-            trade.order.orderId
-        ) or self.book.order_by_perm_id(trade.order.permId)
+        info = self.book.order_by_id(trade.order.orderId) or self.book.order_by_perm_id(
+            trade.order.permId
+        )
         if info is None:
             if not trade.order.orderId:
                 log.warning(
@@ -499,9 +538,7 @@ class Controller(Atom):
                 order_info.trade.order.orderId,
             )
 
-    async def onExecDetailsEvent(
-        self, trade: ibi.Trade, fill: ibi.Fill
-    ) -> None:
+    async def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """Match, persist, and account one broker execution callback."""
 
         info = (
@@ -525,13 +562,11 @@ class Controller(Atom):
         if self._hold or not trade.order.orderId:
             return
         await asyncio.sleep(0)
-        info = self.book.order_by_id(
-            trade.order.orderId
-        ) or self.book.order_by_perm_id(trade.order.permId)
+        info = self.book.order_by_id(trade.order.orderId) or self.book.order_by_perm_id(
+            trade.order.permId
+        )
         if info is None:
-            log.error(
-                "Commission report for unknown orderId=%s", trade.order.orderId
-            )
+            log.error("Commission report for unknown orderId=%s", trade.order.orderId)
             return
         if not self.book.update_commission(trade, fill, report):
             log.warning(
@@ -546,6 +581,7 @@ class Controller(Atom):
         if blotter is None:
             return
         kwargs = {
+            "target_key": info.target_key,
             "source_key": info.source_key,
             "position_id": info.position_id,
             "role": info.role,
@@ -587,12 +623,16 @@ class Controller(Atom):
         actual = (
             position.quantity
             if position is not None
-            else self.book.aggregate_quantity(target.contract)
+            else (
+                self.book.direct_quantity(target.target_key)
+                if target.target_key is not None
+                else self.book.aggregate_quantity(target.contract)
+            )
         )
         if actual != target.target_quantity:
             log.error(
                 "Target not achieved for %s: target=%s actual=%s",
-                target.source_key or target.contract.localSymbol,
+                target.source_key or target.target_key or target.contract.localSymbol,
                 target.target_quantity,
                 actual,
             )
@@ -608,15 +648,18 @@ class Controller(Atom):
             StandardOrderRole.CLOSE,
             StandardOrderRole.TARGET_ADJUSTMENT,
         }
-        return tuple(
-            info
-            for info in self.book.active_orders(
+        if target.target_key is not None:
+            orders = self.book.active_orders(
+                target_key=target.target_key,
+                execution_model_name=execution_model_name,
+            )
+        else:
+            orders = self.book.active_orders(
                 source_key=target.source_key,
                 contract=target.contract,
                 execution_model_name=execution_model_name,
             )
-            if info.role in roles
-        )
+        return tuple(info for info in orders if info.role in roles)
 
     def _target_is_latest(
         self, target: PositionTarget, execution_model_name: str
@@ -633,10 +676,13 @@ class Controller(Atom):
                 and position_state.target_quantity == target.target_quantity
                 and position_state.target_created_at == target.created_at
             )
-        target_state = self.book.latest_target_for_contract(target.contract)
+        if target.target_key is None:
+            return False
+        target_state = self.book.target_state(target.target_key)
         return (
             target_state is not None
             and target_state.execution_model_name == execution_model_name
+            and target_state.contract.conId == target.contract.conId
             and target_state.target_quantity == target.target_quantity
             and target_state.target_created_at == target.created_at
         )
@@ -654,9 +700,7 @@ class Controller(Atom):
                 broker,
             )
 
-    def match_by_permId(
-        self, trade: ibi.Trade, fill: ibi.Fill
-    ) -> OrderInfo | None:
+    def match_by_permId(self, trade: ibi.Trade, fill: ibi.Fill) -> OrderInfo | None:
         """Find and rebind an order using broker permanent id."""
 
         info = self.book.order_by_perm_id(trade.order.permId)
@@ -692,17 +736,13 @@ class Controller(Atom):
         if not trade.order.orderId:
             raise ValueError("Cannot register unknown Trade with orderId 0")
         source_key = self._source_for_unknown_trade(trade)
-        state = (
-            self.book.position_state(source_key) if source_key is not None else None
-        )
+        state = self.book.position_state(source_key) if source_key is not None else None
         return OrderInfo(
             trade=trade,
             role=str(role),
             submitted_at=datetime.datetime.now(datetime.timezone.utc),
             execution_model_name=(
-                state.execution_model_name
-                if state is not None
-                else str(role).lower()
+                state.execution_model_name if state is not None else str(role).lower()
             ),
             source_key=source_key,
             position_id=state.position_id if state is not None else None,
@@ -717,9 +757,7 @@ class Controller(Atom):
         if existing is not None:
             return existing
         return self.book.save_order(
-            self._unknown_order_info(
-                trade, role=StandardOrderRole.MANUAL
-            )
+            self._unknown_order_info(trade, role=StandardOrderRole.MANUAL)
         )
 
     def assign_unknown_trade(self, trade: ibi.Trade) -> OrderInfo | None:
@@ -791,9 +829,7 @@ class Controller(Atom):
             )
 
     @staticmethod
-    def log_trade(
-        trade: ibi.Trade, reason: str = "", source_key: str = ""
-    ) -> None:
+    def log_trade(trade: ibi.Trade, reason: str = "", source_key: str = "") -> None:
         log.info(
             "%s trade filled: %s %s %s@%s --> %s orderId=%s permId=%s",
             reason,
@@ -821,7 +857,9 @@ class Controller(Atom):
         order = info.trade.order if info is not None else ""
         context = f"{contract=}, {model_name} | {role} | {order}"
         if errorCode == 201:
-            log.critical("ORDER REJECTED: %s errorCode=%s, %s", errorString, errorCode, context)
+            log.critical(
+                "ORDER REJECTED: %s errorCode=%s, %s", errorString, errorCode, context
+            )
             self.book.register_rejected_order(model_name)
         elif errorCode == 202 and "YOUR ORDER IS NOT ACCEPTED" in errorString:
             log.error("ORDER NOT ACCEPTED: %s, %s", errorString, context)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,8 +31,10 @@ from haymaker.components import (
     FixedStop,
     HistoricalDataStreamer,
     NoFilter,
+    Portfolio,
     PortfolioWrapper,
     PositionTarget,
+    Signal,
     SignalCalculation,
     SignalModel,
     SignalType,
@@ -94,6 +97,23 @@ class AlwaysLongSignalModel(SignalModel):
         )
 
 
+class DirectLongPortfolio(Portfolio):
+    """Map each scalar Signal to one stable direct target identity."""
+
+    def process(self, signal: Signal) -> Iterable[PositionTarget]:
+        """Emit the source value as its absolute direct target."""
+
+        if not isinstance(signal.value, float):
+            raise TypeError("DirectLongPortfolio requires scalar Signals")
+        return (
+            PositionTarget(
+                contract=signal.contract,
+                target_quantity=signal.value,
+                target_key=f"{signal.source_key}-target",
+            ),
+        )
+
+
 class FailingAsyncAtom(Atom):
     """Represent an asynchronous strategy callback failure."""
 
@@ -122,6 +142,7 @@ class CrossContractTarget(Atom):
             PositionTarget(
                 contract=contract,
                 target_quantity=1,
+                target_key="cross-contract-target",
             )
         )
 
@@ -138,6 +159,7 @@ class StartupTarget(Atom):
             PositionTarget(
                 contract=source.contract,
                 target_quantity=1,
+                target_key="startup-target",
             )
         )
         super().onStart(data, source)
@@ -784,8 +806,7 @@ async def test_result_exposes_order_working_at_end_of_range() -> None:
             ),
             BarAggregator(NoFilter(), future_adjust_type=None),
             AlwaysLongSignalModel("pending", blueprint, SignalType.STATE),
-            BinarySignalProcessor(),
-            PortfolioWrapper(FixedSizeAllocator(1)),
+            DirectLongPortfolio(),
             SerialTargetExecutionModel(name="pending_serial"),
         )
 
@@ -941,8 +962,7 @@ def _held_future_strategy(blueprint: ibi.ContFuture) -> None:
         ),
         BarAggregator(NoFilter(), future_adjust_type=None),
         AlwaysLongSignalModel("held_future", blueprint, SignalType.STATE),
-        BinarySignalProcessor(),
-        PortfolioWrapper(FixedSizeAllocator(1)),
+        DirectLongPortfolio(),
         SerialTargetExecutionModel(name="held_future_serial"),
     )
 
@@ -1089,8 +1109,7 @@ async def test_backtester_captures_fast_broker_callback_failures() -> None:
             ),
             BarAggregator(NoFilter(), future_adjust_type=None),
             AlwaysLongSignalModel("broker_failure", blueprint, SignalType.STATE),
-            BinarySignalProcessor(),
-            PortfolioWrapper(FixedSizeAllocator(1)),
+            DirectLongPortfolio(),
             SerialTargetExecutionModel(name="broker_failure_serial"),
         )
 

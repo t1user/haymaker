@@ -10,7 +10,7 @@ import ib_insync as ibi
 
 from ...base import Atom
 from ...book import OrderInfo, TargetState
-from ...validators import qualified_contract
+from ...validators import non_empty_string, qualified_contract
 from ..messages import PositionTarget, StandardOrderRole
 from .models import ExecutionModel
 
@@ -110,6 +110,8 @@ class ExecutionRouter(Atom):
 
         if not isinstance(data, PositionTarget):
             raise TypeError("ExecutionRouter accepts only PositionTarget")
+        if data.target_key is None:
+            raise ValueError("ExecutionRouter requires target_key")
         if self._blocked_reason is not None:
             log.critical(
                 "PositionTarget suppressed while ExecutionRouter is blocked: %s",
@@ -118,8 +120,8 @@ class ExecutionRouter(Atom):
             return
         model = self._model_for_rules(data)
         try:
-            owner = self.book.active_order_model_for_contract(
-                data.contract,
+            owner = self.book.active_order_model_for_target(
+                data.target_key,
                 role=StandardOrderRole.TARGET_ADJUSTMENT,
             )
         except RuntimeError as exc:
@@ -127,9 +129,9 @@ class ExecutionRouter(Atom):
             return
         if owner is not None and owner != model.name:
             log.critical(
-                "PositionTarget for conId=%s selected model %r while active "
+                "PositionTarget for target_key=%r selected model %r while active "
                 "TARGET_ADJUSTMENT belongs to %r; target suppressed",
-                data.contract.conId,
+                data.target_key,
                 model.name,
                 owner,
             )
@@ -148,35 +150,42 @@ class ExecutionRouter(Atom):
     def _working_order_block_reason(self) -> str | None:
         """Return why active direct work cannot be recovered under current rules."""
 
-        grouped: dict[int, list[OrderInfo]] = {}
+        grouped: dict[str, list[OrderInfo]] = {}
         for info in self.book.active_orders(role=StandardOrderRole.TARGET_ADJUSTMENT):
-            grouped.setdefault(info.trade.contract.conId, []).append(info)
+            if info.target_key is None:
+                return (
+                    f"active TARGET_ADJUSTMENT orderId={info.orderId} "
+                    "has no target_key"
+                )
+            grouped.setdefault(info.target_key, []).append(info)
 
-        for con_id, orders in grouped.items():
+        for target_key, orders in grouped.items():
             owners = {info.execution_model_name for info in orders}
             if len(owners) != 1:
                 return (
-                    f"conId={con_id} has active TARGET_ADJUSTMENT orders owned "
-                    f"by multiple models: {sorted(owners)}"
+                    f"target_key={target_key!r} has active TARGET_ADJUSTMENT "
+                    f"orders owned by multiple models: {sorted(owners)}"
                 )
             owner = next(iter(owners))
-            state = self.book.target_state(owner, orders[0].trade.contract)
+            state = self.book.target_state(target_key)
             if state is None:
                 return (
-                    f"active TARGET_ADJUSTMENT for conId={con_id}, model "
-                    f"{owner!r} has no recoverable TargetState"
+                    f"active TARGET_ADJUSTMENT for target_key={target_key!r}, "
+                    f"model {owner!r} has no recoverable TargetState"
                 )
             try:
                 selected = self._model_for_rules(self._target_from_state(state))
             except Exception as exc:
                 return (
-                    f"active TARGET_ADJUSTMENT for conId={con_id}, model "
-                    f"{owner!r} cannot be routed: {type(exc).__name__}: {exc}"
+                    f"active TARGET_ADJUSTMENT for target_key={target_key!r}, "
+                    f"model {owner!r} cannot be routed: "
+                    f"{type(exc).__name__}: {exc}"
                 )
             if selected.name != owner:
                 return (
-                    f"active TARGET_ADJUSTMENT for conId={con_id} belongs to "
-                    f"{owner!r}, but current rules select {selected.name!r}"
+                    f"active TARGET_ADJUSTMENT for target_key={target_key!r} "
+                    f"belongs to {owner!r}, but current rules select "
+                    f"{selected.name!r}"
                 )
         return None
 
@@ -186,7 +195,7 @@ class ExecutionRouter(Atom):
         assignments: list[TargetState] = []
         for state in self.book.latest_targets():
             if self.book.active_orders(
-                contract=state.contract,
+                target_key=state.target_key,
                 role=StandardOrderRole.TARGET_ADJUSTMENT,
             ):
                 continue
@@ -195,6 +204,7 @@ class ExecutionRouter(Atom):
                 continue
             assignments.append(
                 TargetState(
+                    target_key=state.target_key,
                     execution_model_name=model.name,
                     contract=state.contract,
                     target_quantity=state.target_quantity,
@@ -211,7 +221,22 @@ class ExecutionRouter(Atom):
             contract=state.contract,
             target_quantity=state.target_quantity,
             created_at=state.target_created_at,
+            target_key=state.target_key,
         )
+
+
+def target_key_is(target_key: str) -> TargetPredicate:
+    """Build a predicate matching one stable direct target identity.
+
+    Args:
+        target_key: Exact opaque key supplied by the direct Portfolio.
+
+    Returns:
+        PositionTarget predicate suitable for ExecutionRule.
+    """
+
+    target_key = non_empty_string(target_key, "target_key")
+    return lambda target: target.target_key == target_key
 
 
 def contract_is(contract: ibi.Contract) -> TargetPredicate:
@@ -278,7 +303,8 @@ def where(predicate: TargetPredicate) -> TargetPredicate:
 
     Note:
         Predicates used for recoverable direct execution must be deterministic
-        from the persisted Contract, target quantity, and creation time.
+        from the persisted target key, Contract, target quantity, and
+        creation time.
         Signal metadata is not part of TargetState recovery.
     """
 
@@ -290,6 +316,7 @@ def where(predicate: TargetPredicate) -> TargetPredicate:
 __all__ = [
     "ExecutionRouter",
     "ExecutionRule",
+    "target_key_is",
     "contract_is",
     "exchange_is",
     "security_type_is",

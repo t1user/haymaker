@@ -106,6 +106,23 @@ def test_order_conversion_preserves_trade_fill_and_identifiers():
     assert converted["migration_version"] == MIGRATION_VERSION
 
 
+def test_direct_adjustment_conversion_supplies_current_target_identity():
+    trade = legacy_trade()
+
+    converted = convert_order(
+        {
+            "strategy": "alpha",
+            "action": "TARGET_ADJUSTMENT",
+            "trade": tree(trade),
+        },
+        source_database="legacy",
+    )
+
+    assert converted["target_key"] == "legacy:alpha:1"
+    assert converted["source_key"] is None
+    assert converted["position_id"] is None
+
+
 def test_order_conversion_refuses_invented_submission_timestamp():
     trade = legacy_trade()
     trade.log = []

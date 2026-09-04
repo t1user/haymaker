@@ -10,6 +10,7 @@ from haymaker.base import ActiveNext
 from haymaker.contract_registry import ContractRegistry
 from haymaker.contract_selector import FutureSelector
 from haymaker.details_processor import Details
+from haymaker.misc import general_to_specific_contract_class
 
 # blueprints are for [es, dax, gc]
 # details are for corresponding contracts
@@ -143,6 +144,34 @@ def test_get_contract(registry_with_data):
         registry_with_data.get_contract(blueprint, ActiveNext.ACTIVE) == active_contract
     )
     assert registry_with_data.get_contract(blueprint, ActiveNext.NEXT) == next_contract
+
+
+def test_series_identity_resolves_every_registered_expiry(registry_with_data):
+    for blueprint, chain in zip(blueprints, details):
+        expected = registry_with_data.hash_contract(blueprint)
+        assert {
+            registry_with_data.series_key(
+                general_to_specific_contract_class(item.contract)
+            )
+            for item in chain
+        } == {expected}
+
+
+def test_series_identity_exposes_current_active_and_next(registry_with_data):
+    blueprint = blueprints[0]
+    series_key = registry_with_data.hash_contract(blueprint)
+    selector = registry_with_data.get_selector(blueprint)
+
+    assert registry_with_data.active_for_series(series_key) is selector.active_contract
+    assert registry_with_data.current_for_series(series_key) == (
+        selector.active_contract,
+        selector.next_contract,
+    )
+
+
+def test_series_identity_rejects_unregistered_con_id(registry_with_data):
+    with pytest.raises(KeyError, match="No registered futures series"):
+        registry_with_data.series_key(ibi.Future(conId=999_999))
 
 
 def test_get_details(registry_with_data):

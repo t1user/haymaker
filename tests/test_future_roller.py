@@ -1,14 +1,31 @@
-"""Focused futures-roll invariants for typed Book state."""
+"""Focused futures-roll discovery, execution, and recovery tests."""
 
+from __future__ import annotations
+
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import ib_insync as ibi
+import pytest
 
-from haymaker.book import OrderInfo, PositionState
-from haymaker.components import StandardOrderRole
-from haymaker.controller import Controller
+from haymaker.book import (
+    FutureRollMode,
+    FutureRollStage,
+    OrderInfo,
+    PositionState,
+    RollParticipant,
+    RollState,
+    TargetState,
+)
+from haymaker.components import (
+    BracketFutureRollExecutor,
+    DirectFutureRollExecutor,
+    FutureRollExecutor,
+    RollHolding,
+    StandardOrderRole,
+)
 from haymaker.controller.future_roller import FutureRoller
 
 
@@ -25,186 +42,701 @@ def future(con_id: int, local_symbol: str) -> ibi.Future:
     )
 
 
-def position(
-    source_key: str,
+class FakeRegistry:
+    """Expose explicit series ownership and ACTIVE/NEXT selection."""
+
+    def __init__(
+        self,
+        old: ibi.Future,
+        active: ibi.Future,
+        next_contract: ibi.Future,
+    ) -> None:
+        self._contracts = {contract.conId for contract in (old, active, next_contract)}
+        self.active = active
+        self.next_contract = next_contract
+
+    def series_key(self, contract: ibi.Future) -> str:
+        """Return the registered series for known concrete expiries."""
+
+        if contract.conId not in self._contracts:
+            raise KeyError(contract.conId)
+        return "ng-series"
+
+    def active_for_series(self, series_key: str) -> ibi.Future:
+        """Return the selected ACTIVE expiry."""
+
+        assert series_key == "ng-series"
+        return self.active
+
+    def current_for_series(self, series_key: str) -> tuple[ibi.Future, ibi.Future]:
+        """Return the accepted ACTIVE/NEXT expiry pair."""
+
+        assert series_key == "ng-series"
+        return self.active, self.next_contract
+
+    def get_details(self, contract: ibi.Contract) -> None:
+        """Disable market-hours filtering in focused tests."""
+
+        return None
+
+
+class FakeTrader:
+    """Return the test's authoritative broker quantity by conId."""
+
+    def __init__(self, positions: dict[int, float]) -> None:
+        self.positions = positions
+
+    def position_for_contract(self, contract: ibi.Contract) -> float:
+        """Return one concrete broker position."""
+
+        return self.positions.get(contract.conId, 0.0)
+
+
+class FakeController:
+    """Register roll orders in Book while recording broker side effects."""
+
+    def __init__(self, book, registry: FakeRegistry, positions: dict[int, float]):
+        self.book = book
+        self.contract_registry = registry
+        self.trader = FakeTrader(positions)
+        self.future_roll_policies: dict[str, bool] = {}
+        self.ib = SimpleNamespace()
+        self.trades: list[ibi.Trade] = []
+        self.cancelled: list[ibi.Trade] = []
+
+    def trade(
+        self,
+        contract: ibi.Contract,
+        order: ibi.Order,
+        *,
+        role: str,
+        execution_model_name: str,
+        target_key: str | None = None,
+        source_key: str | None = None,
+        position_id: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> ibi.Trade:
+        """Create an active Trade and persist its complete attribution."""
+
+        order.orderId = len(self.trades) + 100
+        order.permId = order.orderId + 1000
+        trade = ibi.Trade(
+            contract=contract,
+            order=order,
+            orderStatus=ibi.OrderStatus(
+                orderId=order.orderId,
+                status=ibi.OrderStatus.Submitted,
+                remaining=order.totalQuantity,
+            ),
+        )
+        self.trades.append(trade)
+        self.book.save_order(
+            OrderInfo(
+                trade=trade,
+                role=role,
+                submitted_at=datetime.now(timezone.utc),
+                execution_model_name=execution_model_name,
+                target_key=target_key,
+                source_key=source_key,
+                position_id=position_id,
+                params=params or {},
+            )
+        )
+        return trade
+
+    def cancel(self, trade: ibi.Trade) -> ibi.Trade:
+        """Make cancellation immediate while preserving normal callbacks."""
+
+        self.cancelled.append(trade)
+        trade.orderStatus.status = ibi.OrderStatus.Cancelled
+        trade.cancelledEvent.emit(trade)
+        return trade
+
+
+def make_controller(book, old: ibi.Future, active: ibi.Future, next_: ibi.Future):
+    """Build the narrow Controller surface used by the new FutureRoller."""
+
+    return FakeController(
+        book,
+        FakeRegistry(old, active, next_),
+        {old.conId: book.aggregate_quantity(old)},
+    )
+
+
+def execution_fill(
+    trade: ibi.Trade,
+    quantity: float,
+    exec_id: str,
+) -> ibi.Fill:
+    """Build one normalized execution for a concrete or combo order."""
+
+    return ibi.Fill(
+        contract=trade.contract,
+        execution=ibi.Execution(
+            execId=exec_id,
+            orderId=trade.order.orderId,
+            permId=trade.order.permId,
+            side="BOT" if trade.order.action == "BUY" else "SLD",
+            shares=quantity,
+            price=1.25,
+            time=datetime.now(timezone.utc),
+        ),
+        commissionReport=ibi.CommissionReport(execId=exec_id),
+        time=datetime.now(timezone.utc),
+    )
+
+
+def apply_fill(book, trade: ibi.Trade, quantity: float, exec_id: str) -> None:
+    """Persist one Fill and emit completion only after total quantity fills."""
+
+    fill = execution_fill(trade, quantity, exec_id)
+    trade.fills.append(fill)
+    trade.orderStatus.filled += quantity
+    trade.orderStatus.remaining = max(
+        trade.order.totalQuantity - trade.orderStatus.filled,
+        0,
+    )
+    if trade.orderStatus.remaining == 0:
+        trade.orderStatus.status = ibi.OrderStatus.Filled
+        trade.orderStatus.avgFillPrice = fill.execution.price
+    book.apply_fill(trade, fill)
+    if trade.orderStatus.status == ibi.OrderStatus.Filled:
+        trade.filledEvent.emit(trade)
+
+
+def persist_direct_position(
+    book,
     contract: ibi.Future,
     *,
-    quantity: float = 1,
-) -> PositionState:
-    """Build one attributed logical futures position."""
+    target_key: str = "ng-target",
+    quantity: float = 2,
+) -> None:
+    """Create direct TargetState plus authoritative completed Fill evidence."""
 
-    return PositionState(
-        source_key=source_key,
-        execution_model_name=f"{source_key}_brackets",
+    book.update_target(
+        TargetState(
+            target_key=target_key,
+            execution_model_name="serial",
+            contract=contract,
+            target_quantity=quantity,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    order = ibi.MarketOrder(
+        "BUY" if quantity > 0 else "SELL",
+        abs(quantity),
+        orderId=1 + len(book.orders()),
+    )
+    order.permId = order.orderId + 1000
+    trade = ibi.Trade(
         contract=contract,
-        quantity=quantity,
-        target_quantity=quantity,
-        target_created_at=datetime.now(timezone.utc),
-        position_id=f"{source_key}-episode",
-        blocked_direction=1,
-        bracket_inputs={"atr": 0.25},
-    )
-
-
-def roller_controller(book, active: ibi.Future, next_: ibi.Future, **methods):
-    """Build the narrow Controller surface used by FutureRoller."""
-
-    registry = SimpleNamespace(
-        current_contracts={active, next_},
-        selectors=[SimpleNamespace(active_contract=active)],
-        details={},
-    )
-    return cast(
-        Controller,
-        SimpleNamespace(
-            book=book,
-            contract_registry=registry,
-            **methods,
+        order=order,
+        orderStatus=ibi.OrderStatus(
+            orderId=order.orderId,
+            status=ibi.OrderStatus.Submitted,
+            remaining=abs(quantity),
         ),
     )
-
-
-def test_rolls_only_held_future_outside_active_and_next(book, caplog):
-    old = future(1, "NGQ26")
-    active = future(2, "NGU26")
-    next_ = future(3, "NGV26")
-    book.update_position(position("automatic", old))
-    book.update_position(position("manual", old))
-    book.update_position(position("active", active))
-    book.update_position(position("next", next_))
-    controller = roller_controller(book, active, next_)
-
-    roller = FutureRoller(
-        controller,
-        {"automatic": True, "manual": False, "active": True, "next": True},
+    book.save_order(
+        OrderInfo(
+            trade=trade,
+            role=StandardOrderRole.TARGET_ADJUSTMENT,
+            submitted_at=datetime.now(timezone.utc),
+            execution_model_name="serial",
+            target_key=target_key,
+        )
     )
-
-    assert roller.sources[old] == ["automatic"]
-    assert roller.contracts_to_roll == {old}
-    assert roller.match_old_to_new_future(old) is active
+    apply_fill(book, trade, abs(quantity), f"entry-{target_key}")
 
 
-def test_roll_order_preserves_source_episode_model_and_role(book):
-    old = future(1, "NGQ26")
-    active = future(2, "NGU26")
-    next_ = future(3, "NGV26")
-    state = position("alpha", old, quantity=-2)
-    book.update_position(state)
-    calls: list[tuple[ibi.Contract, ibi.Order, dict[str, Any]]] = []
+def persist_bracket_position(
+    book,
+    contract: ibi.Future,
+    *,
+    source_key: str = "alpha",
+    quantity: float = 1,
+    with_stop: bool = True,
+) -> ibi.Trade | None:
+    """Create a one-to-one episode and optional active critical stop."""
 
-    def trade(
-        contract: ibi.Contract,
-        order: ibi.Order,
-        **kwargs: Any,
-    ) -> ibi.Trade:
-        calls.append((contract, order, kwargs))
-        return ibi.Trade(contract=contract, order=order)
-
-    controller = roller_controller(book, active, next_, trade=trade)
-
-    FutureRoller(controller)._trade("alpha", state, old, active)
-
-    contract, order, attribution = calls[0]
-    assert isinstance(contract, ibi.Bag)
-    assert order.action == "SELL"
-    assert order.totalQuantity == 2
-    assert attribution["role"] == StandardOrderRole.ROLL
-    assert attribution["execution_model_name"] == "alpha_brackets"
-    assert attribution["source_key"] == "alpha"
-    assert attribution["position_id"] == "alpha-episode"
-
-
-def test_undeclared_persisted_source_rolls_with_warning(book, caplog):
-    old = future(1, "NGQ26")
-    active = future(2, "NGU26")
-    next_ = future(3, "NGV26")
-    book.update_position(position("automatic", old))
-    book.update_position(position("manual", old))
-    book.update_position(position("persisted", old))
-    controller = roller_controller(book, active, next_)
-
-    roller = FutureRoller(
-        controller,
-        {"automatic": True, "manual": False},
+    book.update_position(
+        PositionState(
+            source_key=source_key,
+            execution_model_name=f"{source_key}-brackets",
+            contract=contract,
+            quantity=quantity,
+            target_quantity=quantity,
+            target_created_at=datetime.now(timezone.utc),
+            position_id=f"{source_key}-episode",
+            blocked_direction=1 if quantity > 0 else -1,
+            bracket_inputs={"atr": 0.25},
+        )
     )
-
-    assert roller.sources == {old: ["automatic", "persisted"]}
-    assert "policy undeclared for ['persisted']; enabled" in caplog.text
-
-
-def test_source_adjustment_preserves_logical_episode_state(book):
-    old = future(1, "NGQ26")
-    active = future(2, "NGU26")
-    next_ = future(3, "NGV26")
-    original = position("alpha", old, quantity=3)
-    book.update_position(original)
-    controller = roller_controller(
-        book,
-        active,
-        next_,
-        cancel=lambda trade: None,
+    if not with_stop:
+        return None
+    order = ibi.StopOrder(
+        "SELL" if quantity > 0 else "BUY",
+        abs(quantity),
+        stopPrice=2.5,
+        orderId=20 + len(book.orders()),
     )
-
-    FutureRoller(controller)._adjust_source("alpha", old, active, 1.5)
-
-    adjusted = book.position_state("alpha")
-    assert adjusted is not None
-    assert adjusted.contract is active
-    assert adjusted.quantity == original.quantity
-    assert adjusted.target_quantity == original.target_quantity
-    assert adjusted.execution_model_name == original.execution_model_name
-    assert adjusted.position_id == original.position_id
-    assert adjusted.blocked_direction == original.blocked_direction
-    assert adjusted.bracket_inputs == original.bracket_inputs
-
-
-def test_replacement_protective_order_keeps_attribution_and_role(book):
-    old = future(1, "NGQ26")
-    active = future(2, "NGU26")
-    next_ = future(3, "NGV26")
-    old_trade = ibi.Trade(
-        contract=old,
-        order=ibi.StopOrder(
-            "SELL",
-            1,
-            stopPrice=2.5,
-            orderId=10,
+    order.permId = order.orderId + 1000
+    order.ocaGroup = "old-oca"
+    trade = ibi.Trade(
+        contract=contract,
+        order=order,
+        orderStatus=ibi.OrderStatus(
+            orderId=order.orderId,
+            status=ibi.OrderStatus.Submitted,
+            remaining=abs(quantity),
         ),
     )
-    info = OrderInfo(
-        trade=old_trade,
-        role=StandardOrderRole.STOP_LOSS,
-        submitted_at=datetime.now(timezone.utc),
-        execution_model_name="alpha_brackets",
+    book.save_order(
+        OrderInfo(
+            trade=trade,
+            role=StandardOrderRole.STOP_LOSS,
+            submitted_at=datetime.now(timezone.utc),
+            execution_model_name=f"{source_key}-brackets",
+            source_key=source_key,
+            position_id=f"{source_key}-episode",
+            params={"atr": 0.25},
+        )
+    )
+    return trade
+
+
+def test_direct_roll_moves_fill_evidence_and_target_contract(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    persist_direct_position(book, old)
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    roller.register_executor(
+        FutureRollMode.DIRECT,
+        DirectFutureRollExecutor(name="direct-roll"),
+    )
+
+    roller.roll()
+
+    roll_trade = controller.trades[-1]
+    info = book.order_by_id(roll_trade.order.orderId)
+    assert isinstance(roll_trade.contract, ibi.Bag)
+    assert roll_trade.order.action == "BUY"
+    assert roll_trade.order.totalQuantity == 2
+    assert info.role == StandardOrderRole.ROLL
+    assert info.target_key == "ng-target"
+    assert info.execution_model_name == "direct-roll"
+    assert book.roll_state("ng-series").stage is FutureRollStage.ROLL_ORDER_ACTIVE
+
+    apply_fill(book, roll_trade, 2, "direct-roll-fill")
+
+    assert book.direct_quantity("ng-target", old) == 0
+    assert book.direct_quantity("ng-target", active) == 2
+    assert book.target_state("ng-target").contract is active
+    assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
+
+
+def test_direct_roll_waits_for_active_target_adjustment(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    persist_direct_position(book, old)
+    controller = make_controller(book, old, active, next_)
+    active_adjustment = controller.trade(
+        old,
+        ibi.MarketOrder("BUY", 1),
+        role=StandardOrderRole.TARGET_ADJUSTMENT,
+        execution_model_name="serial",
+        target_key="ng-target",
+    )
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.DIRECT)
+
+    roller.roll()
+
+    assert book.roll_state("ng-series").stage is FutureRollStage.WAITING_FOR_ACTIVE_WORK
+    assert len(controller.trades) == 1
+
+    controller.cancel(active_adjustment)
+
+    assert len(controller.trades) == 2
+    assert book.order_by_id(controller.trades[-1].order.orderId).role == "ROLL"
+
+
+def test_partial_bracket_roll_fill_projects_both_concrete_positions(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    persist_bracket_position(book, old, quantity=2)
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.BRACKET)
+    roller.set_policies({"alpha": True})
+
+    roller.roll()
+    roll_trade = controller.trades[-1]
+    apply_fill(book, roll_trade, 1, "partial-roll")
+
+    assert book.aggregate_quantity(old) == 1
+    assert book.aggregate_quantity(active) == 1
+    assert book.position_state("alpha").contract is old
+    assert book.roll_state("ng-series").stage is FutureRollStage.ROLL_ORDER_ACTIVE
+
+
+def test_bracket_roll_projection_ignores_intermediate_logical_contract_moves(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    created_at = datetime.now(timezone.utc)
+    for source_key, quantity in (("long-a", 1), ("long-b", 1), ("short", -1)):
+        book.update_position(
+            PositionState(
+                source_key=source_key,
+                execution_model_name="brackets",
+                contract=active,
+                quantity=quantity,
+                target_quantity=quantity,
+                target_created_at=created_at,
+                position_id=f"{source_key}-episode",
+            )
+        )
+    state = book.update_roll(
+        RollState(
+            series_key="ng-series",
+            mode=FutureRollMode.BRACKET,
+            executor_name="bracket-roll",
+            old_contract=old,
+            new_contract=active,
+            participants=tuple(
+                RollParticipant(
+                    execution_model_name="brackets",
+                    source_key=source_key,
+                    quantity=quantity,
+                    position_id=f"{source_key}-episode",
+                    requires_trade=source_key == "long-a",
+                )
+                for source_key, quantity in (
+                    ("long-a", 1),
+                    ("long-b", 1),
+                    ("short", -1),
+                )
+            ),
+            stage=FutureRollStage.ROLL_ORDER_ACTIVE,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+    )
+    controller = make_controller(book, old, active, future(3, "NGV26"))
+    roll_trade = controller.trade(
+        FutureRollExecutor.make_combo(old, active),
+        ibi.MarketOrder("BUY", 1),
+        role=StandardOrderRole.ROLL,
+        execution_model_name=state.executor_name,
+        source_key="long-a",
+        position_id="long-a-episode",
+        params={
+            "roll_state_key": state.series_key,
+            "old_contract": old,
+            "new_contract": active,
+        },
+    )
+
+    apply_fill(book, roll_trade, 1, "offset-roll-fill")
+
+    assert book.aggregate_quantity(old) == 0
+    assert book.aggregate_quantity(active) == 1
+    assert book.logical_positions() == {active: 1}
+
+
+def test_bracket_roll_reinstalls_stop_before_completion(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    old_stop = persist_bracket_position(book, old)
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    roller.register_executor(
+        FutureRollMode.BRACKET,
+        BracketFutureRollExecutor(name="bracket-roll"),
+    )
+    roller.set_policies({"alpha": True})
+
+    roller.roll()
+    roll_trade = controller.trades[-1]
+    apply_fill(book, roll_trade, 1, "bracket-roll-fill")
+
+    state = book.position_state("alpha")
+    assert state.contract is active
+    assert state.quantity == 1
+    assert state.position_id == "alpha-episode"
+    assert old_stop in controller.cancelled
+    replacement_stops = book.active_orders(
         source_key="alpha",
-        position_id="alpha-episode",
-        params={"atr": 0.25},
+        contract=active,
+        role=StandardOrderRole.STOP_LOSS,
     )
-    calls: list[tuple[ibi.Contract, ibi.Order, dict[str, Any]]] = []
+    assert len(replacement_stops) == 1
+    assert replacement_stops[0].position_id == "alpha-episode"
+    assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
 
-    def trade(
-        contract: ibi.Contract,
-        order: ibi.Order,
-        **kwargs: Any,
-    ) -> ibi.Trade:
-        calls.append((contract, order, kwargs))
-        return ibi.Trade(contract=contract, order=order)
 
-    controller = roller_controller(book, active, next_, trade=trade)
-
-    FutureRoller(controller)._issue_replacement_order(
-        old_trade,
-        info=info,
-        new_contract=active,
-        fill_price=1,
+def test_bracket_roll_recovers_protection_cancellation_stage(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    old_stop = persist_bracket_position(book, old)
+    position = book.position_state("alpha")
+    book.update_position(replace(position, contract=active))
+    created_at = datetime.now(timezone.utc)
+    book.update_roll(
+        RollState(
+            series_key="ng-series",
+            mode=FutureRollMode.BRACKET,
+            executor_name="bracket-roll",
+            old_contract=old,
+            new_contract=active,
+            participants=(
+                RollParticipant(
+                    execution_model_name="alpha-brackets",
+                    source_key="alpha",
+                    quantity=1,
+                    position_id="alpha-episode",
+                    requires_trade=False,
+                ),
+            ),
+            stage=FutureRollStage.CANCELLING_PROTECTION,
+            old_protection_order_ids=(old_stop.order.orderId,),
+            reference_price=1.25,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+    )
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    roller.register_executor(
+        FutureRollMode.BRACKET,
+        BracketFutureRollExecutor(name="bracket-roll"),
     )
 
-    contract, order, attribution = calls[0]
-    assert contract is active
-    assert order.orderId == 0
-    assert order.auxPrice == 2.5
-    assert attribution["role"] == StandardOrderRole.STOP_LOSS
-    assert attribution["execution_model_name"] == "alpha_brackets"
-    assert attribution["source_key"] == "alpha"
-    assert attribution["position_id"] == "alpha-episode"
-    assert attribution["params"] == {"atr": 0.25}
+    assert roller.recover()
+
+    assert old_stop in controller.cancelled
+    assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
+    replacement = book.active_orders(
+        source_key="alpha",
+        contract=active,
+        role=StandardOrderRole.STOP_LOSS,
+    )
+    assert len(replacement) == 1
+
+
+def test_bracket_roll_blocks_if_normalized_fill_evidence_is_missing(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    persist_bracket_position(book, old)
+    created_at = datetime.now(timezone.utc)
+    book.update_roll(
+        RollState(
+            series_key="ng-series",
+            mode=FutureRollMode.BRACKET,
+            executor_name="bracket-roll",
+            old_contract=old,
+            new_contract=active,
+            participants=(
+                RollParticipant(
+                    execution_model_name="alpha-brackets",
+                    source_key="alpha",
+                    quantity=1,
+                    position_id="alpha-episode",
+                ),
+            ),
+            stage=FutureRollStage.ROLL_FILLED,
+            roll_order_id=99,
+            reference_price=1.25,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+    )
+    missing_fill_trade = ibi.Trade(
+        contract=FutureRollExecutor.make_combo(old, active),
+        order=ibi.MarketOrder("BUY", 1, orderId=99),
+        orderStatus=ibi.OrderStatus(
+            orderId=99,
+            status=ibi.OrderStatus.Filled,
+            filled=1,
+            remaining=0,
+        ),
+    )
+    book.save_order(
+        OrderInfo(
+            trade=missing_fill_trade,
+            role=StandardOrderRole.ROLL,
+            submitted_at=created_at,
+            execution_model_name="bracket-roll",
+            source_key="alpha",
+            position_id="alpha-episode",
+            params={
+                "roll_state_key": "ng-series",
+                "old_contract": old,
+                "new_contract": active,
+            },
+        )
+    )
+    controller = make_controller(book, old, active, future(3, "NGV26"))
+    roller = FutureRoller(controller)
+    roller.register_executor(
+        FutureRollMode.BRACKET,
+        BracketFutureRollExecutor(name="bracket-roll"),
+    )
+
+    assert roller.recover()
+
+    state = book.roll_state("ng-series")
+    assert state.stage is FutureRollStage.BLOCKED
+    assert (
+        state.failure_reason == "Bracket roll lacks complete normalized Fill evidence"
+    )
+    assert book.position_state("alpha").contract is old
+
+
+def test_bracket_roll_blocks_if_critical_stop_is_missing(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    persist_bracket_position(book, old, with_stop=False)
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.BRACKET)
+    roller.set_policies({"alpha": True})
+
+    roller.roll()
+    apply_fill(book, controller.trades[-1], 1, "unprotected-roll")
+
+    state = book.roll_state("ng-series")
+    assert state.stage is FutureRollStage.BLOCKED
+    assert state.failure_reason == "Rolled bracket position has no critical stop"
+
+
+def test_bracket_roll_selects_smallest_subset_equal_to_broker_net():
+    old = future(1, "NGQ26")
+    holdings = (
+        RollHolding(
+            contract=old,
+            quantity=1,
+            execution_model_name="brackets",
+            source_key="long-a",
+        ),
+        RollHolding(
+            contract=old,
+            quantity=1,
+            execution_model_name="brackets",
+            source_key="long-b",
+        ),
+        RollHolding(
+            contract=old,
+            quantity=-1,
+            execution_model_name="brackets",
+            source_key="short",
+        ),
+    )
+
+    assert BracketFutureRollExecutor._physical_sources(holdings) == {"long-a"}
+
+
+def test_executor_registration_reuses_one_mode_and_rejects_conflicts(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    controller = make_controller(book, old, active, future(3, "NGV26"))
+    roller = FutureRoller(controller)
+
+    direct = roller.register_executor(FutureRollMode.DIRECT)
+
+    assert roller.register_executor(FutureRollMode.DIRECT) is direct
+    with pytest.raises(ValueError, match="cannot be mixed"):
+        roller.register_executor(FutureRollMode.BRACKET)
+    with pytest.raises(ValueError, match="different FutureRollExecutor"):
+        roller.register_executor(
+            FutureRollMode.DIRECT,
+            DirectFutureRollExecutor(name="replacement"),
+        )
+
+
+def test_recovery_rebinds_active_roll_and_completes_from_fill(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    persist_direct_position(book, old)
+    controller = make_controller(book, old, active, next_)
+    initial = FutureRoller(controller)
+    initial.register_executor(
+        FutureRollMode.DIRECT,
+        DirectFutureRollExecutor(name="direct-roll"),
+    )
+    initial.roll()
+    original = controller.trades[-1]
+    rebound = ibi.Trade(
+        contract=original.contract,
+        order=original.order,
+        orderStatus=original.orderStatus,
+    )
+    book.rebind_trade(rebound)
+
+    recovered = FutureRoller(controller)
+    recovered.register_executor(
+        FutureRollMode.DIRECT,
+        DirectFutureRollExecutor(name="direct-roll"),
+    )
+
+    assert recovered.recover()
+    apply_fill(book, rebound, 2, "recovered-roll-fill")
+
+    assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
+    assert book.direct_quantity("ng-target", active) == 2
+    assert book.target_state("ng-target").contract is active
+
+
+def test_recovery_fails_closed_for_missing_executor_name(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    persist_direct_position(book, old)
+    controller = make_controller(book, old, active, next_)
+    book.update_roll(
+        RollState(
+            series_key="ng-series",
+            mode=FutureRollMode.DIRECT,
+            executor_name="removed-executor",
+            old_contract=old,
+            new_contract=active,
+            participants=(
+                RollParticipant(
+                    execution_model_name="serial",
+                    target_key="ng-target",
+                    quantity=2,
+                ),
+            ),
+        )
+    )
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.DIRECT)
+
+    with pytest.raises(RuntimeError, match="requires removed-executor"):
+        roller.recover()
+
+
+def test_direct_series_with_multiple_live_target_keys_blocks(book):
+    old = future(1, "NGQ26")
+    active = future(2, "NGU26")
+    next_ = future(3, "NGV26")
+    persist_direct_position(book, old, target_key="first", quantity=1)
+    persist_direct_position(book, old, target_key="second", quantity=1)
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.DIRECT)
+
+    roller.roll()
+
+    state = book.roll_state("ng-series")
+    assert state.stage is FutureRollStage.BLOCKED
+    assert state.failure_reason == "Direct series has multiple live target_key values"
+    assert controller.trades == []

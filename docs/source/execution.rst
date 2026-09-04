@@ -71,9 +71,11 @@ direction, and includes mandatory OPEN/CLOSE/REVERSE intent.
 :class:`~haymaker.components.PositionTarget` is an absolute signed setpoint for
 a concrete Contract with a non-zero ``conId``. It never contains a captured
 current quantity or a proposed order delta. The numeric target is authoritative.
-Intent remains a typed optional field: direct execution omits it, while
-``PortfolioWrapper`` supplies the mandatory proposal intent for the one-to-one
-bracket path.
+Direct Portfolio targets require a stable opaque ``target_key`` and omit
+``source_key`` and intent; the key survives changes between concrete expiries of
+the same registered futures series. One-to-one targets instead carry
+``source_key`` and the mandatory proposal intent supplied by
+``PortfolioWrapper``. A target cannot carry both identities.
 
 .. autoclass:: haymaker.components.Signal
 
@@ -459,9 +461,13 @@ Account-wide allocation uses a direct Portfolio:
        -> SerialTargetExecutionModel
 
 Implement ``process(signal)`` to update Portfolio state and return zero or more
-absolute targets. The optional ``sources`` collection rejects unknown source
-keys. The base class deliberately does not batch, debounce, time out, or
-interpret ``as_of``; concrete policies own those decisions.
+absolute targets. Every returned target needs a stable ``target_key`` identifying
+one logical setpoint across updates and, for registered futures, across concrete
+expiries. It must omit one-to-one ``source_key`` and intent. The optional
+``sources`` collection rejects unknown Signal source keys; Signal source identity
+and direct target identity are independent. The base class deliberately does not
+batch, debounce, time out, or interpret ``as_of``; concrete policies own those
+decisions.
 
 .. autoclass:: haymaker.components.Portfolio
    :members: process
@@ -473,9 +479,12 @@ Execution models have stable configured names used for recovery. They persist
 the newest target, inspect Book quantity and working orders, and derive the
 next order rather than replaying stale intent.
 
-:class:`~haymaker.components.SerialTargetExecutionModel` manages each concrete
-Contract independently, supports arbitrary same-side resizing, and permits at
-most one active TARGET_ADJUSTMENT order per Contract.
+:class:`~haymaker.components.SerialTargetExecutionModel` manages each stable
+direct ``target_key``, supports arbitrary same-side resizing, and permits at most
+one active TARGET_ADJUSTMENT order per key. A key cannot identify two live
+instruments. For Futures, explicit ContractRegistry series membership allows the
+same key to survive an expiry change; Haymaker does not guess series identity
+from symbol fields.
 
 :class:`~haymaker.components.BracketExecutionModel` manages one configured
 ``source_key``. Initial targets require consistent intent, same-side non-zero
@@ -507,6 +516,72 @@ strategy construction.
 
 .. autoclass:: haymaker.components.BracketExecutionModel
 
+Futures rolling
+---------------
+
+Controller owns the one daily UTC schedule, stale-holding discovery, and startup
+recovery coordination. It delegates broker work to exactly one process-wide
+:class:`~haymaker.components.FutureRollExecutor` family. Direct and bracket
+accounting cannot be mixed in one process. This matches the supported deployment
+model: a process uses either account-wide direct targets or independently
+managed one-to-one episodes.
+
+ContractRegistry supplies the futures-series identity from the registered
+blueprint and qualified contract-detail chain. A held Future is current while it
+is ACTIVE or NEXT. Once outside that pair, FutureRoller plans movement to ACTIVE
+and persists ``RollState`` before submitting any broker order. It never infers
+series membership from symbol, exchange, or multiplier alone.
+
+:class:`~haymaker.components.DirectFutureRollExecutor` waits for active
+TARGET_ADJUSTMENT work for the target key, re-reads Fill-derived physical
+quantity, submits one calendar-spread BAG, verifies the old/new Fill projection,
+updates the target's concrete Contract, and resumes
+``SerialTargetExecutionModel``. One live ``target_key`` may own a registered
+futures series.
+
+:class:`~haymaker.components.BracketFutureRollExecutor` preserves
+``source_key`` and ``position_id`` while processing logical episodes serially.
+Because IB exposes only the account net, offsetting logical sources are assigned
+deterministically to physical BAG work or to an observed spread-price
+adjustment. After moving an episode, the executor cancels its old protection and
+installs an active replacement stop before advancing. Take-profit replacement
+is optional and best effort.
+
+The built-ins are used automatically. Supply a custom, process-shared executor
+only when its persisted stages and recovery behavior are intentionally
+compatible:
+
+.. code-block:: python
+
+   roll_executor = DirectFutureRollExecutor(name="index_future_roll")
+   execution = SerialTargetExecutionModel(
+       name="index_targets",
+       future_roll_executor=roll_executor,
+   )
+
+Synchronization back-reports Fill evidence before resuming an incomplete roll.
+A missing executor, changed mode or executor name, lost roll evidence, failed
+critical stop replacement, or explicit ``BLOCKED`` state fails closed. Process
+shutdown warns about incomplete roll work; preserve the mode and executor name
+until it completes or is reviewed.
+
+.. autoclass:: haymaker.components.FutureRollExecutor
+   :members: holdings, create_state, advance, recover
+
+.. autoclass:: haymaker.components.DirectFutureRollExecutor
+
+.. autoclass:: haymaker.components.BracketFutureRollExecutor
+
+.. autoclass:: haymaker.components.FutureRollMode
+
+.. autoclass:: haymaker.components.FutureRollStage
+
+.. autoclass:: haymaker.components.RollHolding
+
+.. autoclass:: haymaker.components.RollParticipant
+
+.. autoclass:: haymaker.components.RollState
+
 Router rules are fixed and evaluated in declaration order; first match wins.
 Without a default, unmatched targets fail closed. Current rules always select
 the model; persisted ownership never overrides them. Before recovery, every
@@ -518,9 +593,9 @@ trading, and one-to-one bracket roles are outside this check.
 Held quantity and idle targets do not pin an old model. Startup computes all
 idle direct-target reassignments from current rules before applying any of
 them, then starts the models. Custom predicates used for recoverable execution
-must therefore be deterministic from persisted TargetState fields: Contract,
-target quantity, and target creation time. Metadata is unavailable during
-reconstruction. Reusing a configured model name across deployments asserts
+must therefore be deterministic from persisted TargetState fields:
+``target_key``, Contract, target quantity, and target creation time. Metadata is
+unavailable during reconstruction. Reusing a configured model name across deployments asserts
 that the implementation and configuration remain recovery-compatible. Final
 process shutdown logs unfinished ``TARGET_ADJUSTMENT`` orders so operators can
 avoid changing routing or models until those orders finish.
@@ -528,6 +603,8 @@ avoid changing routing or models until those orders finish.
 .. autoclass:: haymaker.components.ExecutionRule
 
 .. autoclass:: haymaker.components.ExecutionRouter
+
+.. autofunction:: haymaker.components.target_key_is
 
 .. autofunction:: haymaker.components.contract_is
 
@@ -567,14 +644,19 @@ Book and Controller ownership
 =============================
 
 :class:`~haymaker.book.Book` owns typed order, Fill, PositionState, TargetState,
-Portfolio recovery state, stopped-direction state, and blotter access. It uses
-one ordered critical ``DRAIN`` queue and performs no broker calls or Portfolio
-calculation.
+RollState, Portfolio recovery state, stopped-direction state, and blotter
+access. It rebuilds direct physical quantity from attributed Fill evidence and
+keeps incomplete roll projections stable while logical one-to-one states move
+serially. It uses one ordered critical ``DRAIN`` queue and performs no broker
+calls or Portfolio calculation. An explicit state clear stores a per-target
+Fill-evidence cutoff: historical orders and Fills remain available, but
+pre-reset executions cannot recreate a cleared direct position after restart.
+Fills that actually arrive after the clear are still accounted.
 
 :class:`~haymaker.controller.Controller` owns broker submission/cancellation,
 immediate OrderInfo registration, status and rejection handling, Fill and
 commission processing, Trade rebinding, blotter attribution, aggregate broker
-reconciliation, target verification, and futures rolling. Target verification
+reconciliation, target verification, and futures-roll coordination. Target verification
 waits only for OPEN, CLOSE, and TARGET_ADJUSTMENT work; protective stops and
 take-profits remain active without delaying the check. A superseded target is
 not checked or compared with the broker.

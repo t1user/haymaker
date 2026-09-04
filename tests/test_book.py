@@ -7,7 +7,17 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.blotter import Blotter
-from haymaker.book import Book, FillRecord, OrderInfo, PositionState, TargetState
+from haymaker.book import (
+    Book,
+    FillRecord,
+    FutureRollMode,
+    FutureRollStage,
+    OrderInfo,
+    PositionState,
+    RollParticipant,
+    RollState,
+    TargetState,
+)
 from haymaker.saver import AbstractBaseSaver
 
 
@@ -390,6 +400,8 @@ def test_direct_quantity_recovers_from_completed_order_evidence(
     info = order_info(
         trade_,
         source_key=None,
+        position_id=None,
+        target_key="es-target",
         execution_model_name="serial",
         role="TARGET_ADJUSTMENT",
     )
@@ -411,6 +423,7 @@ def test_direct_quantity_recovers_from_completed_order_evidence(
 
 def test_target_state_rejects_stale_target(book):
     newer = TargetState(
+        target_key="es-target",
         execution_model_name="serial",
         contract=contract(),
         target_quantity=2,
@@ -425,7 +438,7 @@ def test_target_state_rejects_stale_target(book):
     book.update_target(newer)
 
     assert book.update_target(older) is newer
-    assert book.target_state("serial", contract()).target_quantity == 2
+    assert book.target_state("es-target").target_quantity == 2
 
 
 def test_trade_rebinding_matches_perm_id(book):
@@ -562,6 +575,7 @@ def test_clear_state_persists_flat_tombstones_before_restart(
     )
     book.update_target(
         TargetState(
+            target_key="es-target",
             execution_model_name="serial",
             contract=contract(2),
             target_quantity=3,
@@ -573,7 +587,7 @@ def test_clear_state_persists_flat_tombstones_before_restart(
     book.clear_state()
 
     assert book.position_state("alpha") is None
-    assert book.target_state("serial", contract(2)) is None
+    assert book.target_state("es-target") is None
     assert book.load_portfolio_state("allocation") is None
 
     recovered = Book(
@@ -589,5 +603,120 @@ def test_clear_state_persists_flat_tombstones_before_restart(
     assert position.position_id is None
     assert position.blocked_direction is None
     assert position.bracket_inputs == {}
-    assert recovered.target_state("serial", contract(2)).target_quantity == 0
+    assert recovered.target_state("es-target") is None
     assert recovered.load_portfolio_state("allocation") == {}
+
+
+def test_clear_state_durably_resets_direct_fill_projection(
+    book, order_saver, state_saver
+):
+    trade_ = trade(quantity=2)
+    book.update_target(
+        TargetState(
+            target_key="es-target",
+            execution_model_name="serial",
+            contract=trade_.contract,
+            target_quantity=2,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    book.save_order(
+        order_info(
+            trade_,
+            role="TARGET_ADJUSTMENT",
+            execution_model_name="serial",
+            target_key="es-target",
+            source_key=None,
+            position_id=None,
+        )
+    )
+    execution = fill(trade_, quantity=2)
+    book.apply_fill(trade_, execution)
+    assert book.direct_quantity("es-target") == 2
+
+    book.clear_state()
+
+    assert book.direct_quantity("es-target") == 0
+    recovered = Book(
+        order_saver=order_saver,
+        state_saver=state_saver,
+        save_async=False,
+        restore=True,
+    )
+    assert recovered.target_state("es-target") is None
+    assert recovered.direct_quantity("es-target") == 0
+
+    recovered.update_target(
+        TargetState(
+            target_key="es-target",
+            execution_model_name="serial",
+            contract=trade_.contract,
+            target_quantity=1,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    assert recovered.direct_quantity("es-target") == 0
+
+
+def test_direct_fill_after_clear_cutoff_is_accounted(book):
+    trade_ = trade(quantity=2)
+    book.update_target(
+        TargetState(
+            target_key="es-target",
+            execution_model_name="serial",
+            contract=trade_.contract,
+            target_quantity=2,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    book.save_order(
+        order_info(
+            trade_,
+            role="TARGET_ADJUSTMENT",
+            execution_model_name="serial",
+            target_key="es-target",
+            source_key=None,
+            position_id=None,
+        )
+    )
+    book.clear_state()
+
+    late_fill = fill(trade_, exec_id="late-after-clear", quantity=1)
+    book.apply_fill(trade_, late_fill)
+
+    assert book.direct_quantity("es-target") == 1
+
+
+def test_roll_state_round_trips_through_book_persistence(
+    book, order_saver, state_saver
+):
+    created_at = datetime.now(timezone.utc)
+    state = RollState(
+        series_key="es-series",
+        mode=FutureRollMode.DIRECT,
+        executor_name="direct-roll",
+        old_contract=contract(1),
+        new_contract=contract(2),
+        participants=(
+            RollParticipant(
+                execution_model_name="serial",
+                target_key="es-target",
+                quantity=2,
+            ),
+        ),
+        stage=FutureRollStage.ROLL_ORDER_ACTIVE,
+        roll_order_id=42,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+    book.update_roll(state)
+    recovered = Book(
+        order_saver=order_saver,
+        state_saver=state_saver,
+        save_async=False,
+        restore=True,
+    )
+
+    assert recovered.roll_state("es-series") == state
+    assert recovered.roll_states(active_only=True) == (state,)

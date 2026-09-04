@@ -116,6 +116,7 @@ class AggregatePortfolio(Portfolio):
             PositionTarget(
                 contract=contract(),
                 target_quantity=total,
+                target_key="aggregate-es",
                 metadata={"sources": dict(self.values)},
             ),
         )
@@ -151,4 +152,4 @@ def test_direct_pipeline_routes_aggregate_target(atom_runtime):
     )
 
     assert len(trader.trades) == 1
-    assert atom_runtime.book.target_state("serial", contract()).target_quantity == 1
+    assert atom_runtime.book.target_state("aggregate-es").target_quantity == 1

@@ -20,7 +20,7 @@ from pymongo import MongoClient  # type: ignore
 from haymaker.book import FillRecord
 from haymaker.misc import decode_tree, tree
 
-MIGRATION_VERSION = "components-book-v1"
+MIGRATION_VERSION = "components-book-v2"
 
 KNOWN_ROLES = {
     "OPEN": "OPEN",
@@ -133,9 +133,13 @@ def convert_order(
         raise ValueError("legacy order with orderId 0 cannot use natural identity")
     source_key = str(document.get("strategy") or "UNKNOWN")
     action = str(document.get("action") or "UNKNOWN")
-    fills = [
-        FillRecord.from_fill(trade, fill).encode() for fill in trade.fills
-    ]
+    role = order_role(action)
+    target_key = (
+        f"legacy:{source_key}:{trade.contract.conId}"
+        if role == "TARGET_ADJUSTMENT"
+        else None
+    )
+    fills = [FillRecord.from_fill(trade, fill).encode() for fill in trade.fills]
     source_id = document.get("_id", trade.order.orderId)
     migration = provenance(
         source_database=source_database,
@@ -149,16 +153,15 @@ def convert_order(
         "clientId": trade.order.clientId,
         "permId": trade.order.permId,
         "trade": tree(trade),
-        "role": order_role(action),
+        "role": role,
         "submitted_at": _submitted_at(trade),
         "execution_model_name": f"legacy:{source_key}",
-        "source_key": source_key,
-        "position_id": params.get("position_id"),
+        "target_key": target_key,
+        "source_key": None if target_key is not None else source_key,
+        "position_id": None if target_key is not None else params.get("position_id"),
         "params": tree(params),
         "fills": fills,
-        "applied_fill_keys": [
-            fill["deduplication_key"] for fill in fills
-        ],
+        "applied_fill_keys": [fill["deduplication_key"] for fill in fills],
         "active": bool(document.get("active", trade.isActive())),
         "priority": document.get("priority", 0),
         **migration,
@@ -181,9 +184,7 @@ def convert_latest_strategy_snapshot(
         contract = state.get("active_contract")
         quantity = float(state.get("position", 0.0))
         lock = state.get("lock")
-        blocked_direction = (
-            int(lock) if not quantity and lock in (-1, 1) else None
-        )
+        blocked_direction = int(lock) if not quantity and lock in (-1, 1) else None
         params = dict(state.get("params") or {})
         bracket_inputs = _legacy_bracket_inputs(params)
         migration = provenance(
@@ -245,9 +246,7 @@ def _latest_snapshot(collection: Any) -> Mapping[str, Any] | None:
     return collection.find_one({}, sort=[("timestamp", -1)])
 
 
-def _ensure_target_compatible(
-    database: Any, *, source_database: str
-) -> None:
+def _ensure_target_compatible(database: Any, *, source_database: str) -> None:
     """Refuse a non-empty target that was not created by this converter."""
 
     for collection_name in ("orders", "state", "blotter"):
@@ -292,12 +291,8 @@ def validation_report(
 ) -> dict[str, Any]:
     """Return reconciliation totals and representative grouping counts."""
 
-    commissions = sum(
-        float(row.get("commission") or 0) for row in blotter
-    )
-    realized_pnl = sum(
-        float(row.get("realizedPNL") or 0) for row in blotter
-    )
+    commissions = sum(float(row.get("commission") or 0) for row in blotter)
+    realized_pnl = sum(float(row.get("realizedPNL") or 0) for row in blotter)
     grouping = Counter(
         (
             str(row.get("source_key")),
@@ -317,12 +312,8 @@ def validation_report(
             "orders": len(orders),
             "state": len(states),
             "blotter": len(blotter),
-            "active_orders": sum(
-                bool(order.get("active")) for order in orders
-            ),
-            "active_positions": sum(
-                bool(state.get("quantity")) for state in states
-            ),
+            "active_orders": sum(bool(order.get("active")) for order in orders),
+            "active_positions": sum(bool(state.get("quantity")) for state in states),
         },
         "totals": {
             "commission": commissions,
@@ -333,21 +324,15 @@ def validation_report(
             for (source_key, position_id), count in grouping.items()
         },
         "unmatched_blotter_order_ids": sorted(
-            order_id
-            for order_id in blotter_ids - order_ids
-            if order_id is not None
+            order_id for order_id in blotter_ids - order_ids if order_id is not None
         ),
         "broker_identifiers": {
             "orders_missing_order_id": sum(
                 not order.get("orderId") for order in orders
             ),
-            "orders_missing_perm_id": sum(
-                not order.get("permId") for order in orders
-            ),
+            "orders_missing_perm_id": sum(not order.get("permId") for order in orders),
             "fills_missing_exec_id": sum(
-                not fill.get("execution", {})
-                .get("Execution", {})
-                .get("execId")
+                not fill.get("execution", {}).get("Execution", {}).get("execId")
                 for order in orders
                 for fill in order.get("fills", ())
             ),
@@ -382,9 +367,7 @@ def migrate(
     ]
     snapshot = _latest_snapshot(source["strategies"])
     states = (
-        convert_latest_strategy_snapshot(
-            snapshot, source_database=source_database
-        )
+        convert_latest_strategy_snapshot(snapshot, source_database=source_database)
         if snapshot is not None
         else []
     )
@@ -398,9 +381,7 @@ def migrate(
     report["target_database"] = target_database
     report["source_counts"] = {
         "orders": source["orders"].estimated_document_count(),
-        "strategy_snapshots": source[
-            "strategies"
-        ].estimated_document_count(),
+        "strategy_snapshots": source["strategies"].estimated_document_count(),
         "blotter": source["blotter"].estimated_document_count(),
     }
     if apply:
@@ -425,16 +406,12 @@ def migrate(
             identity_field="migration_key",
         )
         report["target_counts"] = {
-            collection_name: target[
-                collection_name
-            ].estimated_document_count()
+            collection_name: target[collection_name].estimated_document_count()
             for collection_name in ("orders", "state", "blotter")
         }
     else:
         report["target_counts"] = {
-            collection_name: target[
-                collection_name
-            ].estimated_document_count()
+            collection_name: target[collection_name].estimated_document_count()
             for collection_name in ("orders", "state", "blotter")
         }
     return report

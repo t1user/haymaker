@@ -23,6 +23,9 @@ helpers out. Export names must be unique across the complete toolbox.
 - `PositionTarget` is a frozen absolute signed setpoint for a concrete Contract
   with non-zero `conId`. It never carries a captured current quantity or
   proposed delta. Its numeric target remains authoritative after acceptance.
+  Direct targets require one stable `target_key` and omit `source_key`/intent;
+  one-to-one targets use `source_key` instead. The identities are mutually
+  exclusive.
 - `PositionIntent` is optional on general targets. It is mandatory only at the
   `PortfolioWrapper -> BracketExecutionModel` boundary and is an initial
   lifecycle assertion, not a lasting execution command.
@@ -53,7 +56,9 @@ multiple SignalModels -> Portfolio -> PositionTarget(s)
 intent on the returned target, and emits at most one target. Allocators own
 quantity calculation and preserve Contract, source, and metadata. Direct
 `Portfolio` implementations own source state, synchronization,
-`as_of`, duplicate/late input, timeout, and recomputation policies. Do not put
+`as_of`, duplicate/late input, timeout, and recomputation policies. Every direct
+output has a stable Portfolio-owned `target_key`; it is independent of Signal
+`source_key` and is not a routing override. Do not put
 those policies in the abstract base.
 
 ## Market-data aggregation
@@ -160,24 +165,33 @@ Treat an unchanged model name as a promise that its implementation and
 configuration remain recovery-compatible. Recovery predicates must be
 deterministic from persisted TargetState fields.
 
-`SerialTargetExecutionModel` owns one active Contract adjustment at a time and
-supports arbitrary same-side resizing. `BracketExecutionModel` owns one
-`source_key`, validates initial intent, rejects non-zero same-side resizing,
+`SerialTargetExecutionModel` owns one active adjustment per stable
+`target_key` and supports arbitrary same-side resizing. Explicit
+ContractRegistry series membership allows that key to survive futures expiry
+changes; do not infer series identity from Contract symbols.
+`BracketExecutionModel` owns one `source_key`, validates initial intent, rejects
+non-zero same-side resizing,
 preserves `position_id` through an episode, and attaches brackets only after a
 complete entry fill. Its stop-loss is critical; take-profit is optional and a
 missing take-profit is not a sync failure. Regular closes share the active
 brackets' OCA group rather than cancelling protection before submitting the
 close. Execution components belong under `components/execution/`: keep the
 generic execution boundary and serial target model in `models.py`, routing and
-predicates in `router.py`, and `BracketExecutionModel` together with its
-bracket-leg hierarchy in `brackets.py`. Recovery must rebind callbacks to
+predicates in `router.py`, `BracketExecutionModel` together with its bracket-leg
+hierarchy in `brackets.py`, and mode-specific public roll executors in
+`future_roll.py`. Recovery must rebind callbacks to
 current live Trade objects and derive work from Book rather than replaying old
 intent.
 
-The model registers automatic Controller-owned futures rolling for its source
-by default. `auto_roll_futures=False` is the explicit one-to-one opt-out;
-reject conflicting policy declarations for one `source_key`. SignalModels
-remain calculation components and must not own this policy.
+Target execution models register one process-wide `FutureRollExecutor` family.
+Direct and bracket modes are exclusive. Controller owns the app-lifetime
+schedule, stale-holding discovery, and recovery coordination; the executor owns
+durable order sequencing. Direct rolls preserve `target_key`, while bracket
+rolls preserve `source_key`/`position_id` and do not complete before replacement
+stop protection is active. The bracket model registers automatic rolling for its
+source by default; `auto_roll_futures=False` is the explicit opt-out. Reject
+conflicting source policies, mode mixes, and incompatible executor names.
+SignalModels remain calculation components and must not own roll policy.
 
 Book owns order/fill/state persistence and blotter queries. Controller alone
 submits/cancels broker orders, registers OrderInfo immediately, handles status,
@@ -193,10 +207,12 @@ persisted target with broker authority so recovery cannot replay a stale
 setpoint.
 
 Physical persistence is limited to `orders`, `state`, and `blotter`. State
-identities are `position:{source_key}`,
-`target:{execution_model_name}:{conId}`, and
-`portfolio:{portfolio_key}`. Orders use actual IB identifiers and preserve
-complete serialized Trade plus normalized Fill/Execution evidence. Fill
+identities are `position:{source_key}`, `target:{target_key}`,
+`roll:{series_key}`, and `portfolio:{portfolio_key}`. Orders use actual IB
+identifiers and preserve complete serialized Trade plus normalized
+Fill/Execution evidence. Fill evidence remains immutable across an explicit
+reset; Book persists a per-target cutoff so pre-reset direct Fills do not
+rebuild cleared exposure while later Fills remain authoritative. Fill
 application must stay idempotent by execution key and ordered before state
 projection writes.
 

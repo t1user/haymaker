@@ -212,6 +212,9 @@ class PositionTarget:
         contract: Concrete execution Contract with a non-zero ``conId``.
         target_quantity: Absolute signed quantity desired after convergence.
         created_at: Time at which this target superseded an earlier target.
+        target_key: Optional stable identity of one direct Portfolio target.
+            Direct execution components require it and preserve it across
+            concrete futures Contracts.
         source_key: Optional one-to-one input identity.
         intent: Optional initial one-to-one lifecycle assertion. The numeric
             target remains authoritative after acceptance.
@@ -232,6 +235,7 @@ class PositionTarget:
     contract: ibi.Contract
     target_quantity: float
     created_at: datetime = field(default_factory=utc_now)
+    target_key: str | None = None
     source_key: str | None = None
     intent: PositionIntent | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -247,11 +251,21 @@ class PositionTarget:
         object.__setattr__(
             self, "created_at", aware_datetime(self.created_at, "created_at")
         )
+        if self.target_key is not None:
+            object.__setattr__(
+                self,
+                "target_key",
+                non_empty_string(self.target_key, "target_key"),
+            )
         if self.source_key is not None:
             object.__setattr__(
                 self,
                 "source_key",
                 non_empty_string(self.source_key, "source_key"),
+            )
+        if self.target_key is not None and self.source_key is not None:
+            raise ValueError(
+                "PositionTarget cannot have both target_key and source_key"
             )
         if self.intent is not None and not isinstance(self.intent, PositionIntent):
             raise TypeError("intent must be None or a PositionIntent")

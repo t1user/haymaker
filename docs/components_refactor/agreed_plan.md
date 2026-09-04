@@ -26,7 +26,8 @@ The user-facing trading toolbox is exported explicitly from
 `haymaker.components`. It contains messages, streamers, bar aggregators,
 DataFrame aggregators, SignalModels, one-to-one processors, Portfolio
 boundaries, routing, execution models, bracket legs, and event timeout helpers.
-Routing, execution models, and bracket execution are organized under the
+Routing, execution models, bracket execution, and the public mode-specific
+futures-roll executors are organized under the
 `haymaker.components.execution` subpackage and re-exported at the root.
 Bar aggregation and DataFrame aggregation are separate public component
 families: the former incrementally groups broker bar objects, while the latter
@@ -86,10 +87,12 @@ processor. It preserves the original Signal, selects direction `-1`, `0`, or
 
 `PositionTarget` is an absolute signed setpoint for a concrete execution
 Contract. It never captures current quantity or a proposed delta. Its numeric
-target remains authoritative after acceptance. `source_key` and
-`PositionIntent` are optional in the general message; the wrapper/bracket flow
-requires both. Intent is checked at initial acceptance and is not a durable
-execution command.
+target remains authoritative after acceptance. Direct Portfolio output requires
+one stable opaque `target_key` and omits `source_key` and intent. The same key
+identifies a logical futures target across concrete expiries in its registered
+series. The wrapper/bracket flow instead requires `source_key` and
+`PositionIntent`. The two identities are mutually exclusive. Intent is checked
+at initial acceptance and is not a durable execution command.
 
 Order attribution uses open-ended strings. `StandardOrderRole` supplies OPEN,
 CLOSE, TARGET_ADJUSTMENT, STOP_LOSS, TAKE_PROFIT, ROLL, LIQUIDATION,
@@ -167,7 +170,8 @@ policy.
 The abstract base does not batch, debounce, time out, or interpret `as_of`.
 Concrete implementations own input state, synchronization, duplicate/late
 handling, EVENT accumulation, and recomputation. One input may produce zero,
-one, or several targets, normally with `intent=None`.
+one, or several targets. Each emitted target has a stable Portfolio-owned
+`target_key` and omits the one-to-one `source_key` and intent.
 
 The direct composition is:
 
@@ -187,12 +191,19 @@ queries and recovery for:
 
 - `OrderInfo`: complete serialized IB Trade, actual broker identifiers,
   explicit normalized FillRecords, role, submission time, stable execution
-  model name, and optional source/position episode attribution;
+  model name, and exactly one optional direct-target or one-to-one
+  source/position attribution;
 - `PositionState`: one-to-one fill-accounted quantity, latest target, Contract,
   model name, episode ID, stopped direction, and only validated bracket
   recovery inputs;
-- `TargetState`: latest direct Contract target for one named model;
+- `TargetState`: latest direct Contract target keyed by stable `target_key`;
+- `RollState`: one current durable roll cursor per registered futures series;
 - normalized Portfolio recovery mappings keyed by `portfolio_key`.
+
+An explicit state clear retains historical order and Fill evidence but writes a
+per-target Fill-evidence cutoff. Recovery therefore does not reconstruct a
+cleared direct position from pre-reset executions, while a genuinely late Fill
+after the clear remains authoritative.
 
 FillRecord preserves the complete Execution, fill time and Contract, optional
 CommissionReport, and a deduplication key normally equal to `execId`. Explicit
@@ -206,7 +217,8 @@ documents use:
 
 ```text
 position:{source_key}
-target:{execution_model_name}:{conId}
+target:{target_key}
+roll:{series_key}
 portfolio:{portfolio_key}
 ```
 
@@ -221,7 +233,8 @@ Controller owns trading-disable and market-hours checks, broker submission,
 immediate OrderInfo registration, status/rejection handling, Fill and
 commission processing, offline Fill accounting, Trade rebinding, blotter
 attribution, aggregate Contract reconciliation, delayed target verification,
-and Controller-owned futures rolling.
+and Controller-owned futures-roll scheduling, discovery, and recovery
+coordination. Mode-specific public executors own roll order sequencing.
 
 Execution models consume absolute PositionTargets and have stable configured
 names. They validate a target before persistence or submission, retain only the
@@ -232,10 +245,12 @@ waits only for target-converging OPEN, CLOSE, and TARGET_ADJUSTMENT orders and
 silently abandons a check when a newer target supersedes it; protective orders
 do not delay verification.
 
-`SerialTargetExecutionModel` groups by concrete Contract, supports arbitrary
+`SerialTargetExecutionModel` groups by stable `target_key`, supports arbitrary
 quantities and same-side resizing, ignores optional intent, and permits one
-active TARGET_ADJUSTMENT order per Contract. It converges again after
-completion and recovery.
+active TARGET_ADJUSTMENT order per key. A key cannot identify two live
+instruments. Explicit ContractRegistry membership permits one futures key to
+survive a concrete expiry change. It converges again after completion, recovery,
+and a completed direct roll.
 
 `BracketExecutionModel` owns one configured source key. New targets require a
 matching source and initially consistent PositionIntent. Numeric target is
@@ -277,18 +292,47 @@ implementation and configuration remain recovery-compatible.
 Held quantity does not pin a model. During recovery, all idle direct-target
 reassignments must be routable under current rules before any are persisted,
 then models resume convergence. Predicates used for recoverable routing must be
-deterministic from persisted TargetState fields. Final process shutdown warns
-when active adjustments remain so operators can defer routing or model changes.
-There is no route key in messages or persistence.
+deterministic from persisted TargetState fields, including `target_key`. Final
+process shutdown warns when active adjustments remain so operators can defer
+routing or model changes. `target_key` is an execution-state identity available
+to predicates, not a route override; there is no separate route key.
 
 ## Futures and calculation audit
 
-Futures rolling remains Controller-owned. It reads PositionState, preserves
-source and `position_id`, submits role ROLL directly, and retains ACTIVE/NEXT
-held-contract rules.
+Controller owns the app-lifetime daily roll schedule, stale-holding discovery,
+and recovery coordination. Target execution models register exactly one
+process-wide `FutureRollExecutor` family. `DirectFutureRollExecutor` and
+`BracketFutureRollExecutor` are mutually exclusive because a supported process
+uses either direct or one-to-one accounting, never both.
 
-BracketExecutionModel declares that policy for its one-to-one source;
-undeclared recovered sources retain the safe automatic-roll default.
+ContractRegistry maps every qualified Future `conId` to the registered blueprint
+that supplied its detail chain. This explicit mapping is the futures-series
+identity; symbol-field inference is prohibited. ACTIVE and NEXT remain accepted
+held expiries. A position outside that pair is planned toward ACTIVE, and
+`RollState` is persisted before broker work.
+
+In direct mode, one live `target_key` owns the series. The executor waits for
+active TARGET_ADJUSTMENT work, refreshes Fill-derived physical quantity, submits
+a calendar-spread BAG with role ROLL, verifies old/new Fill evidence, moves
+TargetState to the new concrete Contract, and lets serial convergence resume.
+
+In bracket mode, the executor preserves each `source_key` and `position_id` and
+processes episodes serially. It submits only deterministic broker-net BAG work;
+offset logical sources use an observed spread price. Old protection is cancelled
+after movement, a replacement stop must become active before advancement, and
+take-profit replacement remains optional.
+
+Each persisted roll records mode, stable executor name, registered series,
+old/new Contracts, participants, durable stage, relevant order identifiers, and
+spread price. Synchronization back-reports Fill evidence before roll recovery
+and position comparison. Missing or incompatible executor registration,
+unrecoverable evidence, failed critical protection, and BLOCKED state fail
+closed. Process shutdown warns about incomplete roll work so mode and executor
+identity remain recovery-compatible across restart.
+
+BracketExecutionModel declares automatic rolling for its one-to-one source by
+default; `auto_roll_futures=False` is the explicit opt-out. SignalModels do not
+own roll policy.
 
 Controller synchronization uses one successful `reqPositionsAsync()` result
 as the broker snapshot for an entire pass. Cached/fresh disagreement is a
@@ -296,17 +340,6 @@ local-retry outcome, while an unavailable request asks the supervisor to
 recover broker state. Active OPEN/CLOSE work defers correction. An applied
 one-to-one correction aligns both quantity and target to broker authority,
 preventing stale target recovery from reopening a corrected-flat position.
-
-Direct-mode futures rolling remains deferred. The current roller accounts for
-one-to-one PositionState holdings but does not yet define futures-series
-identity, quantity convergence across contract expiries, or working-order and
-target recovery for direct Portfolio/SerialTargetExecutionModel flows. A later
-refactor must cover every supported work mode before direct futures-series
-rolling is considered complete. Direct target identity is intentionally
-unresolved: current execution uses concrete `conId`, while a later design must
-decide how Portfolio communicates which targets belong to one logical
-instrument and supersede each other. Router and ExecutionModel must not infer
-that policy from Contract fields before this boundary is agreed.
 
 PandasSignalModel audit symbols are:
 

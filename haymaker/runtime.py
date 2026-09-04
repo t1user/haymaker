@@ -362,6 +362,7 @@ class LiveRuntime:
         """Flush final live-runtime state before process shutdown."""
 
         self._warn_active_target_adjustments()
+        self._warn_active_futures_rolls()
         await self.context.book.close()
 
     def _warn_active_target_adjustments(self) -> None:
@@ -391,6 +392,29 @@ class LiveRuntime:
             "model names and configuration, or finish/cancel these orders "
             "before deploying execution changes: %s",
             orders,
+        )
+
+    def _warn_active_futures_rolls(self) -> None:
+        """Warn that incomplete roll state must remain recovery-compatible."""
+
+        states = self.context.book.roll_states(active_only=True)
+        orders = self.context.book.active_orders(role=StandardOrderRole.ROLL)
+        if not states and not orders:
+            return
+        log.warning(
+            "Process is exiting with incomplete futures-roll work. Preserve "
+            "the registered roll mode and executor name on restart: states=%s "
+            "active_order_ids=%s",
+            [
+                {
+                    "series_key": state.series_key,
+                    "mode": state.mode.value,
+                    "executor_name": state.executor_name,
+                    "stage": state.stage.value,
+                }
+                for state in states
+            ],
+            [info.orderId for info in orders],
         )
 
     def __str__(self) -> str:

@@ -138,6 +138,11 @@ class SyncCoordinator:
             self.handle_done_trades(order_sync.done)
             await asyncio.sleep(0)
 
+        try:
+            self.controller.future_roller.recover()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise SyncBrokenStateError("futures roll recovery failed") from exc
+
         position_sync = PositionSync(
             position_snapshot.positions,
             self.controller.book,

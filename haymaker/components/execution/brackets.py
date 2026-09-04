@@ -12,11 +12,12 @@ from uuid import uuid4
 
 import ib_insync as ibi
 
-from ...book import PositionState
+from ...book import FutureRollMode, PositionState, RollState
 from ...contract_registry import DetailsContainer
 from ...misc import action, round_tick, sign
 from ...validators import finite_number, non_empty_string
 from ..messages import PositionIntent, PositionTarget, StandardOrderRole
+from .future_roll import FutureRollExecutor
 from .models import ExecutionModel, _order_options
 
 log = logging.getLogger(__name__)
@@ -381,6 +382,9 @@ class BracketExecutionModel(ExecutionModel):
             automatically roll this source's open position. Defaults to
             ``True``; disable only when the strategy intentionally manages its
             own one-to-one futures roll.
+        future_roll_executor: Optional process-shared bracket futures-roll
+            executor. Omit it to use the built-in
+            :class:`BracketFutureRollExecutor`.
         name: Stable configured model name.
         open_order: Model-specific entry Order fields.
         close_order: Model-specific close Order fields.
@@ -403,6 +407,7 @@ class BracketExecutionModel(ExecutionModel):
         stop: AbstractBracketLeg,
         take_profit: AbstractBracketLeg | None = None,
         auto_roll_futures: bool = True,
+        future_roll_executor: FutureRollExecutor | None = None,
         name: str | None = None,
         open_order: Mapping[str, Any] = {},
         close_order: Mapping[str, Any] = {},
@@ -453,6 +458,11 @@ class BracketExecutionModel(ExecutionModel):
         if self.oca_type not in {1, 2, 3}:
             raise ValueError("oca_type must be 1, 2, or 3")
         super().__init__(name=name)
+        self.future_roll_executor = self.controller.future_roller.register_executor(
+            FutureRollMode.BRACKET,
+            future_roll_executor,
+        )
+        self.controller.future_roller.completedEvent += self.onFutureRollCompletedEvent
         self.runtime.future_roll_policies[source_key] = auto_roll_futures
 
     def accept(self, target: PositionTarget) -> bool:
@@ -463,6 +473,8 @@ class BracketExecutionModel(ExecutionModel):
                 f"Expected source_key {self.source_key!r}, "
                 f"got {target.source_key!r}"
             )
+        if target.target_key is not None:
+            raise ValueError("BracketExecutionModel does not accept target_key")
         if target.intent is None:
             raise ValueError("BracketExecutionModel requires PositionIntent")
         effective = self.book.effective_quantity(self.source_key)
@@ -560,6 +572,8 @@ class BracketExecutionModel(ExecutionModel):
         return values
 
     def _converge(self) -> None:
+        if self.book.roll_state_for_source(self.source_key) is not None:
+            return
         state = self.book.position_state(self.source_key)
         if state is None or state.target_quantity is None or state.contract is None:
             return
@@ -586,6 +600,15 @@ class BracketExecutionModel(ExecutionModel):
             self._submit_close(state)
         else:
             self._submit_open(state)
+
+    def onFutureRollCompletedEvent(self, state: RollState) -> None:
+        """Resume source convergence after its roll and protection complete."""
+
+        if any(
+            participant.source_key == self.source_key
+            for participant in state.participants
+        ):
+            self._converge()
 
     def _submit_open(self, state: PositionState) -> None:
         target = state.target_quantity or 0.0

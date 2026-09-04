@@ -10,10 +10,11 @@ from typing import Any
 import ib_insync as ibi
 
 from ...base import Atom
-from ...book import TargetState
+from ...book import FutureRollMode, RollState, TargetState
 from ...misc import action, sign
 from ...validators import non_empty_string, order_field_validator, qualified_contract
 from ..messages import PositionTarget, StandardOrderRole
+from .future_roll import FutureRollExecutor
 
 
 def _order_options(value: Mapping[str, Any], name: str) -> dict[str, Any]:
@@ -123,10 +124,13 @@ class SerialTargetExecutionModel(ExecutionModel):
         name: Stable configured model name.
         order: Model-specific IB order fields. Precedence is built-in market
             fallback, global opening defaults, then this mapping.
+        future_roll_executor: Optional process-shared direct futures-roll
+            executor. Omit it to use the built-in
+            :class:`DirectFutureRollExecutor`.
 
     The model supports arbitrary quantities and same-side resizing, ignores
     optional intent, and keeps at most one active ``TARGET_ADJUSTMENT`` order
-    per concrete Contract.
+    per stable direct ``target_key``.
     """
 
     def __init__(
@@ -134,6 +138,7 @@ class SerialTargetExecutionModel(ExecutionModel):
         *,
         name: str | None = None,
         order: Mapping[str, Any] = {},
+        future_roll_executor: FutureRollExecutor | None = None,
     ) -> None:
         self.order_options = {
             "orderType": "MKT",
@@ -141,59 +146,70 @@ class SerialTargetExecutionModel(ExecutionModel):
             **_order_options(order, "order"),
         }
         super().__init__(name=name)
+        self.future_roll_executor = self.controller.future_roller.register_executor(
+            FutureRollMode.DIRECT,
+            future_roll_executor,
+        )
+        self.controller.future_roller.completedEvent += self.onFutureRollCompletedEvent
 
     def accept(self, target: PositionTarget) -> bool:
         """Persist a newer target and submit only when no adjustment is active."""
 
-        current = self.book.latest_target_for_contract(target.contract)
+        if target.target_key is None:
+            raise ValueError("SerialTargetExecutionModel requires target_key")
+        if target.source_key is not None:
+            raise ValueError("SerialTargetExecutionModel does not accept source_key")
+        current = self.book.target_state(target.target_key)
         if current is not None and target.created_at < current.target_created_at:
             return False
+        self._validate_target_identity(target, current)
         self.book.update_target(
             TargetState(
+                target_key=target.target_key,
                 execution_model_name=self.name,
                 contract=target.contract,
                 target_quantity=target.target_quantity,
                 target_created_at=target.created_at,
             )
         )
-        self._converge(target.contract)
+        self._converge(target.target_key)
         return True
 
     def recover(self) -> None:
         """Resume every persisted target owned by this model."""
 
-        states = self.book.latest_target(self.name)
-        if isinstance(states, tuple):
-            for state in states:
-                for info in self.book.active_orders(
-                    contract=state.contract,
-                    role=StandardOrderRole.TARGET_ADJUSTMENT,
-                    execution_model_name=self.name,
-                ):
-                    self._bind_adjustment(info.trade, state.contract)
-                self._converge(state.contract)
+        for state in self.book.target_states(self.name):
+            for info in self.book.active_orders(
+                target_key=state.target_key,
+                role=StandardOrderRole.TARGET_ADJUSTMENT,
+                execution_model_name=self.name,
+            ):
+                self._bind_adjustment(info.trade, state.target_key)
+            self._converge(state.target_key)
 
-    def _bind_adjustment(self, trade: ibi.Trade, contract: ibi.Contract) -> None:
+    def _bind_adjustment(self, trade: ibi.Trade, target_key: str) -> None:
         """Resume convergence after one adjustment completes."""
 
         self._bind_once(
             trade,
-            filled=lambda _trade: self._defer(self._converge, contract),
-            cancelled=lambda _trade: self._defer(self._converge, contract),
+            filled=lambda _trade: self._defer(self._converge, target_key),
+            cancelled=lambda _trade: self._defer(self._converge, target_key),
         )
 
-    def _converge(self, contract: ibi.Contract) -> None:
+    def _converge(self, target_key: str) -> None:
+        if self.book.roll_state_for_target(target_key) is not None:
+            return
         active = self.book.active_orders(
-            contract=contract,
+            target_key=target_key,
             role=StandardOrderRole.TARGET_ADJUSTMENT,
             execution_model_name=self.name,
         )
         if active:
             return
-        state = self.book.latest_target_for_contract(contract)
+        state = self.book.target_state(target_key)
         if state is None or state.execution_model_name != self.name:
             return
-        current = self.book.aggregate_quantity(contract)
+        contract, current = self._execution_contract(state)
         delta = state.target_quantity - current
         if delta == 0:
             return
@@ -207,9 +223,85 @@ class SerialTargetExecutionModel(ExecutionModel):
             order,
             role=StandardOrderRole.TARGET_ADJUSTMENT,
             execution_model_name=self.name,
+            target_key=target_key,
         )
         if trade is not None:
-            self._bind_adjustment(trade, contract)
+            self._bind_adjustment(trade, target_key)
+
+    def _validate_target_identity(
+        self,
+        target: PositionTarget,
+        current: TargetState | None,
+    ) -> None:
+        """Reject target keys that ambiguously identify live instruments."""
+
+        if current is not None and not self._same_instrument(
+            current.contract, target.contract
+        ):
+            raise ValueError(
+                f"target_key {target.target_key!r} cannot change instrument"
+            )
+        for state in self.book.target_states():
+            if state.target_key == target.target_key:
+                continue
+            if not self._target_is_live(state):
+                continue
+            if self._same_instrument(state.contract, target.contract):
+                raise ValueError(
+                    f"Futures series or Contract for target_key "
+                    f"{target.target_key!r} is already owned by "
+                    f"{state.target_key!r}"
+                )
+
+    def _target_is_live(self, state: TargetState) -> bool:
+        return bool(
+            state.target_quantity
+            or self.book.direct_quantity(state.target_key)
+            or self.book.active_orders(target_key=state.target_key)
+            or self.book.roll_state_for_target(state.target_key)
+        )
+
+    def _same_instrument(self, first: ibi.Contract, second: ibi.Contract) -> bool:
+        if first.conId == second.conId:
+            return True
+        if not isinstance(first, ibi.Future) or not isinstance(second, ibi.Future):
+            return False
+        return self.contract_registry.series_key(
+            first
+        ) == self.contract_registry.series_key(second)
+
+    def _execution_contract(self, state: TargetState) -> tuple[ibi.Contract, float]:
+        positions = self.book.direct_positions(state.target_key)
+        if len(positions) > 1:
+            raise RuntimeError(
+                f"Direct target {state.target_key!r} has split physical holdings"
+            )
+        if not positions:
+            return state.contract, 0.0
+        held_contract, quantity = next(iter(positions.items()))
+        if not self._same_instrument(held_contract, state.contract):
+            raise RuntimeError(
+                f"Direct target {state.target_key!r} holds a different instrument"
+            )
+        if (
+            isinstance(held_contract, ibi.Future)
+            and held_contract.conId != state.contract.conId
+        ):
+            series_key = self.contract_registry.series_key(held_contract)
+            current = self.contract_registry.current_for_series(series_key)
+            if all(held_contract.conId != contract.conId for contract in current):
+                return held_contract, state.target_quantity
+        return held_contract, quantity
+
+    def onFutureRollCompletedEvent(self, state: RollState) -> None:
+        """Resume convergence after a completed roll containing this model."""
+
+        for participant in state.participants:
+            if (
+                participant.target_key is not None
+                and participant.execution_model_name == self.name
+            ):
+                self._converge(participant.target_key)
 
 
 __all__ = [

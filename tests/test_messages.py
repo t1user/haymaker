@@ -212,6 +212,23 @@ def test_position_target_validates_optional_source_key(source_key, exception, me
         target(source_key=source_key)
 
 
+@pytest.mark.parametrize(
+    ("target_key", "exception", "message"),
+    [
+        (1, TypeError, "target_key must be a string"),
+        ("", ValueError, "target_key must not be empty"),
+    ],
+)
+def test_position_target_validates_optional_target_key(target_key, exception, message):
+    with pytest.raises(exception, match=message):
+        target(target_key=target_key)
+
+
+def test_position_target_rejects_mixed_direct_and_one_to_one_identity():
+    with pytest.raises(ValueError, match="both target_key and source_key"):
+        target(target_key="direct", source_key="one-to-one")
+
+
 @pytest.mark.parametrize("message", [signal(), proposal(), target()])
 def test_envelope_messages_are_explicitly_unhashable(message):
     with pytest.raises(TypeError, match="unhashable"):

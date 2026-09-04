@@ -384,7 +384,11 @@ async def test_live_runtime_close_warns_about_active_target_adjustments(
     class FakeBook:
         def active_orders(self, *, role=None):
             events.append(("query", role))
-            return (info,)
+            return (info,) if role == StandardOrderRole.TARGET_ADJUSTMENT else ()
+
+        def roll_states(self, *, active_only=False):
+            events.append(("roll_states", active_only))
+            return ()
 
         async def close(self) -> None:
             events.append("close")
@@ -395,7 +399,12 @@ async def test_live_runtime_close_warns_about_active_target_adjustments(
     with caplog.at_level(logging.WARNING, logger="haymaker.runtime"):
         await runtime.close()
 
-    assert events == [("query", StandardOrderRole.TARGET_ADJUSTMENT), "close"]
+    assert events == [
+        ("query", StandardOrderRole.TARGET_ADJUSTMENT),
+        ("roll_states", True),
+        ("query", StandardOrderRole.ROLL),
+        "close",
+    ]
     assert "active TARGET_ADJUSTMENT" in caplog.text
     assert "serial" in caplog.text
     assert "orderId': 17" in caplog.text
@@ -416,6 +425,10 @@ async def test_live_runtime_close_is_quiet_without_target_adjustments(
             events.append(("query", role))
             return ()
 
+        def roll_states(self, *, active_only=False):
+            events.append(("roll_states", active_only))
+            return ()
+
         async def close(self) -> None:
             events.append("close")
 
@@ -425,7 +438,12 @@ async def test_live_runtime_close_is_quiet_without_target_adjustments(
     with caplog.at_level(logging.WARNING, logger="haymaker.runtime"):
         await runtime.close()
 
-    assert events == [("query", StandardOrderRole.TARGET_ADJUSTMENT), "close"]
+    assert events == [
+        ("query", StandardOrderRole.TARGET_ADJUSTMENT),
+        ("roll_states", True),
+        ("query", StandardOrderRole.ROLL),
+        "close",
+    ]
     assert "active TARGET_ADJUSTMENT" not in caplog.text
 
 

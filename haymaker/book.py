@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Literal
 from uuid import uuid4
@@ -135,6 +136,7 @@ class OrderInfo:
         role: Standard or custom order role.
         submitted_at: Time the controller accepted the submission.
         execution_model_name: Stable configured model identity.
+        target_key: Optional direct-target identity.
         source_key: Optional one-to-one input identity.
         position_id: Optional independently managed position episode.
         params: Diagnostic inputs captured at submission.
@@ -145,6 +147,7 @@ class OrderInfo:
     role: str
     submitted_at: datetime
     execution_model_name: str
+    target_key: str | None = None
     source_key: str | None = None
     position_id: str | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
@@ -159,6 +162,12 @@ class OrderInfo:
         self.execution_model_name = non_empty_string(
             self.execution_model_name, "execution_model_name"
         )
+        if self.target_key is not None:
+            self.target_key = non_empty_string(self.target_key, "target_key")
+        if self.source_key is not None:
+            self.source_key = non_empty_string(self.source_key, "source_key")
+        if self.target_key is not None and self.source_key is not None:
+            raise ValueError("OrderInfo cannot have both target_key and source_key")
         self.params = readonly_mapping(self.params, "params")
         self.fills = tuple(self.fills)
         self._applied_fill_keys.update(
@@ -228,6 +237,7 @@ class OrderInfo:
             "trade": tree(self.trade),
             "role": self.role,
             "submitted_at": self.submitted_at,
+            "target_key": self.target_key,
             "execution_model_name": self.execution_model_name,
             "source_key": self.source_key,
             "position_id": self.position_id,
@@ -247,6 +257,7 @@ class OrderInfo:
             role=str(data["role"]),
             submitted_at=decode_tree(data["submitted_at"]),
             execution_model_name=str(data["execution_model_name"]),
+            target_key=data.get("target_key"),
             source_key=data.get("source_key"),
             position_id=data.get("position_id"),
             params=decode_tree(data.get("params", {})),
@@ -304,15 +315,25 @@ class PositionState:
 
 @dataclass(frozen=True, kw_only=True)
 class TargetState:
-    """Recover the latest shared direct-execution target."""
+    """Recover the latest shared direct-execution target.
 
+    ``fill_evidence_start_at`` is Book-owned reset state. It preserves order
+    and Fill history while excluding evidence that predates an explicit
+    account-state clear from the rebuilt direct position.
+    """
+
+    target_key: str
     execution_model_name: str
     contract: ibi.Contract
     target_quantity: float
     target_created_at: datetime
+    fill_evidence_start_at: datetime | None = None
     updated_at: datetime = field(default_factory=_utc_now)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "target_key", non_empty_string(self.target_key, "target_key")
+        )
         object.__setattr__(
             self,
             "execution_model_name",
@@ -325,7 +346,218 @@ class TargetState:
             finite_number(self.target_quantity, "target_quantity"),
         )
         aware_datetime(self.target_created_at, "target_created_at")
+        if self.fill_evidence_start_at is not None:
+            aware_datetime(
+                self.fill_evidence_start_at,
+                "fill_evidence_start_at",
+            )
         aware_datetime(self.updated_at, "updated_at")
+
+
+class FutureRollMode(StrEnum):
+    """Identify the process's mutually exclusive futures-roll accounting mode.
+
+    ``DIRECT`` rolls account-wide targets attributed by ``target_key``.
+    ``BRACKET`` rolls one-to-one episodes attributed by ``source_key`` and
+    reinstalls their protective orders.
+    """
+
+    BRACKET = "BRACKET"
+    DIRECT = "DIRECT"
+
+
+class FutureRollStage(StrEnum):
+    """Record durable progress through one recoverable futures-series roll.
+
+    Values describe broker work as well as bracket-protection replacement.
+    ``BLOCKED`` is intentionally durable and requires operator review;
+    ``COMPLETE`` is the only state excluded from active recovery.
+    """
+
+    PLANNED = "PLANNED"
+    WAITING_FOR_ACTIVE_WORK = "WAITING_FOR_ACTIVE_WORK"
+    ROLL_ORDER_ACTIVE = "ROLL_ORDER_ACTIVE"
+    ROLL_FILLED = "ROLL_FILLED"
+    LOADING_REFERENCE_PRICE = "LOADING_REFERENCE_PRICE"
+    CANCELLING_PROTECTION = "CANCELLING_PROTECTION"
+    INSTALLING_STOP = "INSTALLING_STOP"
+    INSTALLING_TAKE_PROFIT = "INSTALLING_TAKE_PROFIT"
+    COMPLETE = "COMPLETE"
+    BLOCKED = "BLOCKED"
+
+
+@dataclass(frozen=True, kw_only=True)
+class RollParticipant:
+    """Persist one logical holding participating in a futures-series roll.
+
+    Args:
+        execution_model_name: Stable target-model name that owns the holding.
+        quantity: Signed quantity attributed to this participant.
+        source_key: One-to-one identity in bracket mode.
+        target_key: Direct execution identity in direct mode.
+        position_id: Optional one-to-one position episode.
+        requires_trade: Whether this participant supplies the physical BAG
+            order. Offset logical sources may require only price adjustment and
+            protection replacement.
+
+    Exactly one of ``source_key`` and ``target_key`` is required.
+    """
+
+    execution_model_name: str
+    quantity: float
+    source_key: str | None = None
+    target_key: str | None = None
+    position_id: str | None = None
+    requires_trade: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "execution_model_name",
+            non_empty_string(self.execution_model_name, "execution_model_name"),
+        )
+        if (self.source_key is None) == (self.target_key is None):
+            raise ValueError(
+                "RollParticipant requires exactly one source_key or target_key"
+            )
+        if self.source_key is not None:
+            object.__setattr__(
+                self, "source_key", non_empty_string(self.source_key, "source_key")
+            )
+        if self.target_key is not None:
+            object.__setattr__(
+                self, "target_key", non_empty_string(self.target_key, "target_key")
+            )
+        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
+        if not self.quantity:
+            raise ValueError("RollParticipant quantity must not be zero")
+        if not isinstance(self.requires_trade, bool):
+            raise TypeError("requires_trade must be a bool")
+
+
+@dataclass(frozen=True, kw_only=True)
+class RollState:
+    """Recover the current roll operation for one registered futures series.
+
+    Args:
+        series_key: ContractRegistry identity shared by all qualified expiries
+            of one registered blueprint.
+        mode: Exclusive direct or bracket accounting mode.
+        executor_name: Stable FutureRollExecutor recovery identity.
+        old_contract: Concrete held Future being left.
+        new_contract: Concrete ACTIVE Future being entered.
+        participants: Frozen logical holdings included in this operation.
+        participant_index: Durable cursor for serial participant processing.
+        stage: Last durably accepted roll stage.
+        roll_order_id: Current BAG order id, when one is active or filled.
+        old_protection_order_ids: Bracket orders being replaced.
+        replacement_stop_order_id: New critical stop order id.
+        replacement_take_profit_order_id: New optional take-profit order id.
+        reference_price: Filled or observed calendar-spread price used to shift
+            protective prices.
+        failure_reason: Actionable explanation when ``stage`` is ``BLOCKED``.
+        created_at: Start time of this roll generation.
+        updated_at: Time of the latest durable transition.
+
+    Book stores one current record per ``series_key``. Framework executors
+    normally construct and advance it; custom executors must persist each stage
+    before performing its broker side effect.
+    """
+
+    series_key: str
+    mode: FutureRollMode
+    executor_name: str
+    old_contract: ibi.Future
+    new_contract: ibi.Future
+    participants: Sequence[RollParticipant]
+    participant_index: int = 0
+    stage: FutureRollStage = FutureRollStage.PLANNED
+    roll_order_id: int | None = None
+    old_protection_order_ids: Sequence[int] = ()
+    replacement_stop_order_id: int | None = None
+    replacement_take_profit_order_id: int | None = None
+    reference_price: float | None = None
+    failure_reason: str | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+    updated_at: datetime = field(default_factory=_utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "series_key", non_empty_string(self.series_key, "series_key")
+        )
+        object.__setattr__(
+            self,
+            "executor_name",
+            non_empty_string(self.executor_name, "executor_name"),
+        )
+        if not isinstance(self.mode, FutureRollMode):
+            raise TypeError("mode must be a FutureRollMode")
+        if not isinstance(self.stage, FutureRollStage):
+            raise TypeError("stage must be a FutureRollStage")
+        if not isinstance(self.old_contract, ibi.Future) or not isinstance(
+            self.new_contract, ibi.Future
+        ):
+            raise TypeError("old_contract and new_contract must be Futures")
+        qualified_contract(self.old_contract, "old_contract")
+        qualified_contract(self.new_contract, "new_contract")
+        if self.old_contract.conId == self.new_contract.conId:
+            raise ValueError("old_contract and new_contract must differ")
+        participants = tuple(self.participants)
+        if not participants or not all(
+            isinstance(participant, RollParticipant) for participant in participants
+        ):
+            raise ValueError("participants must contain RollParticipant values")
+        object.__setattr__(self, "participants", participants)
+        if not isinstance(self.participant_index, int) or isinstance(
+            self.participant_index, bool
+        ):
+            raise TypeError("participant_index must be an integer")
+        if not 0 <= self.participant_index <= len(participants):
+            raise ValueError("participant_index is outside participants")
+        old_order_ids = tuple(self.old_protection_order_ids)
+        if not all(
+            isinstance(order_id, int) and order_id > 0 for order_id in old_order_ids
+        ):
+            raise ValueError("old_protection_order_ids must be positive integers")
+        object.__setattr__(self, "old_protection_order_ids", old_order_ids)
+        for name in (
+            "roll_order_id",
+            "replacement_stop_order_id",
+            "replacement_take_profit_order_id",
+        ):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value <= 0
+            ):
+                raise ValueError(f"{name} must be None or a positive integer")
+        if self.reference_price is not None:
+            object.__setattr__(
+                self,
+                "reference_price",
+                finite_number(self.reference_price, "reference_price"),
+            )
+        if self.failure_reason is not None:
+            object.__setattr__(
+                self,
+                "failure_reason",
+                non_empty_string(self.failure_reason, "failure_reason"),
+            )
+        aware_datetime(self.created_at, "created_at")
+        aware_datetime(self.updated_at, "updated_at")
+
+    @property
+    def current_participant(self) -> RollParticipant | None:
+        """Return the participant at the durable cursor, if any."""
+
+        if self.participant_index == len(self.participants):
+            return None
+        return self.participants[self.participant_index]
+
+    @property
+    def terminal(self) -> bool:
+        """Return whether automatic work must no longer advance."""
+
+        return self.stage in {FutureRollStage.COMPLETE, FutureRollStage.BLOCKED}
 
 
 class Book:
@@ -357,7 +589,9 @@ class Book:
         self.max_rejected_orders = max_rejected_orders
         self._orders: dict[int, OrderInfo] = {}
         self._positions: dict[str, PositionState] = {}
-        self._targets: dict[tuple[str, int], TargetState] = {}
+        self._targets: dict[str, TargetState] = {}
+        self._target_fill_cutoffs: dict[str, datetime] = {}
+        self._rolls: dict[str, RollState] = {}
         self._portfolio_states: dict[str, Mapping[str, Any]] = {}
         self._rejected_orders: defaultdict[str, int] = defaultdict(int)
         self._save_async = save_async
@@ -415,11 +649,29 @@ class Book:
                 target,
                 target_quantity=0.0,
                 target_created_at=cleared_at,
+                fill_evidence_start_at=cleared_at,
                 updated_at=cleared_at,
             )
+            document = self._encode_target(cleared_target)
+            document["cleared"] = True
+            self._save(self._state_saver, document)
+            self._target_fill_cutoffs[target.target_key] = cleared_at
+        for roll in self._rolls.values():
             self._save(
                 self._state_saver,
-                self._encode_target(cleared_target),
+                self._encode_roll(
+                    replace(
+                        roll,
+                        participant_index=len(roll.participants),
+                        stage=FutureRollStage.COMPLETE,
+                        roll_order_id=None,
+                        old_protection_order_ids=(),
+                        replacement_stop_order_id=None,
+                        replacement_take_profit_order_id=None,
+                        failure_reason=None,
+                        updated_at=cleared_at,
+                    )
+                ),
             )
         for portfolio_key in self._portfolio_states:
             self._save(
@@ -434,6 +686,7 @@ class Book:
             )
         self._positions.clear()
         self._targets.clear()
+        self._rolls.clear()
         self._portfolio_states.clear()
 
     def _restore_documents(
@@ -450,9 +703,16 @@ class Book:
             info = OrderInfo.decode(document)
             if not info.orderId:
                 raise ValueError("Persisted order must have a non-zero orderId")
+            if info.role == "TARGET_ADJUSTMENT" and info.target_key is None:
+                raise ValueError(
+                    "Persisted TARGET_ADJUSTMENT lacks target_key; "
+                    "direct execution requires a fresh Book database"
+                )
             self._orders[info.orderId] = info
         self._positions = {}
         self._targets = {}
+        self._target_fill_cutoffs = {}
+        self._rolls = {}
         self._portfolio_states = {}
         for raw in state_documents:
             document = dict(raw)
@@ -463,12 +723,15 @@ class Book:
                 self._positions[position_state.source_key] = position_state
             elif state_type == "target":
                 target_state = self._decode_target(document)
-                self._targets[
-                    (
-                        target_state.execution_model_name,
-                        target_state.contract.conId,
+                if target_state.fill_evidence_start_at is not None:
+                    self._target_fill_cutoffs[target_state.target_key] = (
+                        target_state.fill_evidence_start_at
                     )
-                ] = target_state
+                if not document.get("cleared", False):
+                    self._targets[target_state.target_key] = target_state
+            elif state_type == "roll":
+                roll_state = self._decode_roll(document)
+                self._rolls[roll_state.series_key] = roll_state
             elif state_type == "portfolio":
                 self._portfolio_states[str(document["portfolio_key"])] = (
                     MappingProxyType(decode_tree(document.get("state", {})))
@@ -512,21 +775,24 @@ class Book:
             None,
         )
 
-    def active_orders(
+    def orders(
         self,
         *,
+        target_key: str | None = None,
         source_key: str | None = None,
         contract: ibi.Contract | None = None,
         role: str | None = None,
         execution_model_name: str | None = None,
+        active_only: bool = False,
     ) -> tuple[OrderInfo, ...]:
-        """Query active orders using any supported attribution fields."""
+        """Query persisted orders using any supported attribution fields."""
 
         con_id = contract.conId if contract is not None else None
         return tuple(
             info
             for info in self._orders.values()
-            if info.active
+            if (not active_only or info.active)
+            and (target_key is None or info.target_key == target_key)
             and (source_key is None or info.source_key == source_key)
             and (con_id is None or info.trade.contract.conId == con_id)
             and (role is None or info.role == role)
@@ -534,6 +800,26 @@ class Book:
                 execution_model_name is None
                 or info.execution_model_name == execution_model_name
             )
+        )
+
+    def active_orders(
+        self,
+        *,
+        target_key: str | None = None,
+        source_key: str | None = None,
+        contract: ibi.Contract | None = None,
+        role: str | None = None,
+        execution_model_name: str | None = None,
+    ) -> tuple[OrderInfo, ...]:
+        """Query active orders using any supported attribution fields."""
+
+        return self.orders(
+            target_key=target_key,
+            source_key=source_key,
+            contract=contract,
+            role=role,
+            execution_model_name=execution_model_name,
+            active_only=True,
         )
 
     def prune_order(self, order_id: int) -> None:
@@ -585,70 +871,94 @@ class Book:
         self._save(self._state_saver, self._encode_position(state))
         return state
 
-    def target_state(
-        self, execution_model_name: str, contract: ibi.Contract
-    ) -> TargetState | None:
-        """Return the latest direct target for a model and concrete Contract."""
+    def target_state(self, target_key: str) -> TargetState | None:
+        """Return the latest direct target for one stable target identity."""
 
-        return self._targets.get((execution_model_name, _contract_key(contract)))
+        return self._targets.get(target_key)
 
     def update_target(self, state: TargetState) -> TargetState:
         """Replace and persist one latest direct target."""
 
-        key = (state.execution_model_name, _contract_key(state.contract))
-        current = self._targets.get(key)
+        cutoff = self._target_fill_cutoffs.get(state.target_key)
+        if cutoff is not None and state.fill_evidence_start_at != cutoff:
+            state = replace(state, fill_evidence_start_at=cutoff)
+        elif state.fill_evidence_start_at is not None:
+            self._target_fill_cutoffs[state.target_key] = state.fill_evidence_start_at
+        current = self._targets.get(state.target_key)
         if current is not None and (
             state.target_created_at < current.target_created_at
         ):
             return current
-        self._targets[key] = state
+        self._targets[state.target_key] = state
         self._save(self._state_saver, self._encode_target(state))
         return state
 
-    def latest_target(
-        self,
-        execution_model_name: str,
-        contract: ibi.Contract | None = None,
-    ) -> TargetState | tuple[TargetState, ...] | None:
-        """Recover globally current targets owned by one execution model."""
+    def target_states(
+        self, execution_model_name: str | None = None
+    ) -> tuple[TargetState, ...]:
+        """Return recovered direct targets, optionally restricted by owner."""
 
-        if contract is not None:
-            state = self.latest_target_for_contract(contract)
-            if state is not None and state.execution_model_name == execution_model_name:
-                return state
-            return None
         return tuple(
             state
-            for state in self.latest_targets()
-            if state.execution_model_name == execution_model_name
+            for state in self._targets.values()
+            if execution_model_name is None
+            or state.execution_model_name == execution_model_name
         )
 
     def latest_targets(self) -> tuple[TargetState, ...]:
-        """Return one globally current direct target per concrete Contract."""
+        """Return every latest direct target, one per target_key."""
 
-        latest: dict[int, TargetState] = {}
-        for state in self._targets.values():
-            con_id = _contract_key(state.contract)
-            current = latest.get(con_id)
-            if current is None or (
-                state.target_created_at,
-                state.updated_at,
-            ) > (
-                current.target_created_at,
-                current.updated_at,
-            ):
-                latest[con_id] = state
-        return tuple(latest.values())
+        return tuple(self._targets.values())
 
-    def latest_target_for_contract(self, contract: ibi.Contract) -> TargetState | None:
-        """Return the globally current direct target for one Contract."""
+    def roll_state(self, series_key: str) -> RollState | None:
+        """Return the current persisted roll for one futures series."""
 
-        con_id = _contract_key(contract)
+        return self._rolls.get(series_key)
+
+    def roll_states(self, *, active_only: bool = False) -> tuple[RollState, ...]:
+        """Return all current series rolls, optionally excluding completed ones."""
+
+        return tuple(
+            state
+            for state in self._rolls.values()
+            if not active_only or state.stage is not FutureRollStage.COMPLETE
+        )
+
+    def update_roll(self, state: RollState) -> RollState:
+        """Replace and persist one series roll recovery state."""
+
+        self._rolls[state.series_key] = state
+        self._save(self._state_saver, self._encode_roll(state))
+        return state
+
+    def roll_state_for_source(self, source_key: str) -> RollState | None:
+        """Return a non-complete roll containing one one-to-one source."""
+
         return next(
             (
                 state
-                for state in self.latest_targets()
-                if state.contract.conId == con_id
+                for state in self._rolls.values()
+                if state.stage is not FutureRollStage.COMPLETE
+                and any(
+                    participant.source_key == source_key
+                    for participant in state.participants
+                )
+            ),
+            None,
+        )
+
+    def roll_state_for_target(self, target_key: str) -> RollState | None:
+        """Return a non-complete roll containing one direct target."""
+
+        return next(
+            (
+                state
+                for state in self._rolls.values()
+                if state.stage is not FutureRollStage.COMPLETE
+                and any(
+                    participant.target_key == target_key
+                    for participant in state.participants
+                )
             ),
             None,
         )
@@ -661,45 +971,186 @@ class Book:
         working = sum(
             info.signed_working_quantity
             for info in self.active_orders(source_key=source_key)
-            if info.role in {"OPEN", "CLOSE", "TARGET_ADJUSTMENT", "ROLL"}
+            if info.role in {"OPEN", "CLOSE", "TARGET_ADJUSTMENT"}
         )
         return quantity + working
+
+    def direct_positions(self, target_key: str) -> Mapping[ibi.Contract, float]:
+        """Rebuild one direct target's physical quantities from Fill evidence."""
+
+        quantities: defaultdict[int, float] = defaultdict(float)
+        contracts: dict[int, ibi.Contract] = {}
+        cutoff = self._target_fill_cutoffs.get(target_key)
+        for info in self._orders.values():
+            if info.target_key != target_key:
+                continue
+            if isinstance(info.trade.contract, ibi.Bag):
+                if info.role != "ROLL":
+                    continue
+                old_contract = info.params.get("old_contract")
+                new_contract = info.params.get("new_contract")
+                if not isinstance(old_contract, ibi.Contract) or not isinstance(
+                    new_contract, ibi.Contract
+                ):
+                    raise ValueError(
+                        f"Direct ROLL orderId={info.orderId} lacks old/new Contracts"
+                    )
+                contracts[old_contract.conId] = old_contract
+                contracts[new_contract.conId] = new_contract
+                for record in info.fills:
+                    if cutoff is not None and record.time < cutoff:
+                        continue
+                    direction = self._fill_direction(record)
+                    quantity = record.execution.shares * direction
+                    quantities[old_contract.conId] -= quantity
+                    quantities[new_contract.conId] += quantity
+                continue
+            contract = info.trade.contract
+            if not contract.conId:
+                continue
+            contracts[contract.conId] = contract
+            for record in info.fills:
+                if cutoff is not None and record.time < cutoff:
+                    continue
+                quantities[
+                    contract.conId
+                ] += record.execution.shares * self._fill_direction(record)
+        return MappingProxyType(
+            {
+                contracts[con_id]: quantity
+                for con_id, quantity in quantities.items()
+                if quantity
+            }
+        )
+
+    def direct_quantity(
+        self, target_key: str, contract: ibi.Contract | None = None
+    ) -> float:
+        """Return one direct target's total or Contract-specific quantity."""
+
+        positions = self.direct_positions(target_key)
+        if contract is None:
+            return sum(positions.values())
+        con_id = _contract_key(contract)
+        return sum(
+            quantity
+            for held_contract, quantity in positions.items()
+            if held_contract.conId == con_id
+        )
+
+    @staticmethod
+    def _fill_direction(record: FillRecord) -> int:
+        if record.execution.side == "BOT":
+            return 1
+        if record.execution.side == "SLD":
+            return -1
+        raise ValueError(f"Ambiguous fill side: {record.execution.side}")
 
     def aggregate_quantity(self, contract: ibi.Contract) -> float:
         """Return aggregate fill-accounted logical quantity for a Contract."""
 
         con_id = _contract_key(contract)
+        rolling_sources = {
+            participant.source_key
+            for state in self._active_bracket_rolls()
+            for participant in state.participants
+        }
         one_to_one = sum(
             state.quantity
             for state in self._positions.values()
-            if state.contract is not None and state.contract.conId == con_id
+            if state.source_key not in rolling_sources
+            and state.contract is not None
+            and state.contract.conId == con_id
+        ) + sum(
+            quantity
+            for state in self._active_bracket_rolls()
+            for held_contract, quantity in self._roll_physical_quantities(state).items()
+            if held_contract.conId == con_id
         )
-        direct = 0.0
-        for info in self._orders.values():
-            if info.source_key is not None or info.trade.contract.conId != con_id:
-                continue
-            direct += sum(
-                record.execution.shares * (1 if record.execution.side == "BOT" else -1)
-                for record in info.fills
-            )
+        direct = sum(
+            quantity
+            for target_key in self._direct_target_keys()
+            for held_contract, quantity in self.direct_positions(target_key).items()
+            if held_contract.conId == con_id
+        )
         return one_to_one + direct
 
     def logical_positions(self) -> dict[ibi.Contract, float]:
         """Return non-zero aggregate logical quantities by concrete Contract."""
 
         contracts: dict[int, ibi.Contract] = {}
-        for state in self._positions.values():
-            if state.contract is not None and state.contract.conId:
-                contracts[state.contract.conId] = state.contract
-        for info in self._orders.values():
-            contract = info.trade.contract
-            if contract.conId:
+        rolling_sources = {
+            participant.source_key
+            for state in self._active_bracket_rolls()
+            for participant in state.participants
+        }
+        for position_state in self._positions.values():
+            if (
+                position_state.source_key not in rolling_sources
+                and position_state.contract is not None
+                and position_state.contract.conId
+            ):
+                contracts[position_state.contract.conId] = position_state.contract
+        for roll_state in self._active_bracket_rolls():
+            for contract in self._roll_physical_quantities(roll_state):
+                contracts[contract.conId] = contract
+        for target_key in self._direct_target_keys():
+            for contract in self.direct_positions(target_key):
                 contracts[contract.conId] = contract
         return {
             contract: quantity
             for contract in contracts.values()
             if (quantity := self.aggregate_quantity(contract))
         }
+
+    def _direct_target_keys(self) -> set[str]:
+        """Return every direct identity present in target or order evidence."""
+
+        return {
+            *self._targets,
+            *(
+                info.target_key
+                for info in self._orders.values()
+                if info.target_key is not None
+            ),
+        }
+
+    def _active_bracket_rolls(self) -> tuple[RollState, ...]:
+        """Return incomplete one-to-one rolls that own broker projections."""
+
+        return tuple(
+            state
+            for state in self._rolls.values()
+            if state.mode is FutureRollMode.BRACKET
+            and state.stage is not FutureRollStage.COMPLETE
+        )
+
+    def _roll_physical_quantities(
+        self, state: RollState
+    ) -> Mapping[ibi.Contract, float]:
+        """Project broker-net old/new quantities from persisted roll Fills."""
+
+        old_quantity = sum(participant.quantity for participant in state.participants)
+        moved = sum(
+            record.execution.shares * self._fill_direction(record)
+            for info in self.orders(role="ROLL")
+            if info.submitted_at >= state.created_at
+            if info.params.get("roll_state_key") == state.series_key
+            and info.params.get("old_contract") == state.old_contract
+            and info.params.get("new_contract") == state.new_contract
+            for record in info.fills
+        )
+        quantities = {
+            state.old_contract: old_quantity - moved,
+            state.new_contract: moved,
+        }
+        return MappingProxyType(
+            {
+                contract: quantity
+                for contract, quantity in quantities.items()
+                if quantity
+            }
+        )
 
     def aggregate_with_working(
         self, contract: ibi.Contract, execution_model_name: str | None = None
@@ -980,6 +1431,20 @@ class Book:
         }
         return self._one_active_order_model(candidates, f"conId={con_id}")
 
+    def active_order_model_for_target(
+        self,
+        target_key: str,
+        *,
+        role: str | None = None,
+    ) -> str | None:
+        """Return the unambiguous active-order owner for one direct target."""
+
+        candidates = {
+            info.execution_model_name
+            for info in self.active_orders(target_key=target_key, role=role)
+        }
+        return self._one_active_order_model(candidates, f"target_key={target_key!r}")
+
     @staticmethod
     def _one_active_order_model(candidates: set[str], identity: str) -> str | None:
         """Require unambiguous ownership among relevant working orders."""
@@ -1024,27 +1489,110 @@ class Book:
         )
 
     @staticmethod
+    def _encode_roll_participant(participant: RollParticipant) -> dict[str, Any]:
+        return {
+            "execution_model_name": participant.execution_model_name,
+            "quantity": participant.quantity,
+            "source_key": participant.source_key,
+            "target_key": participant.target_key,
+            "position_id": participant.position_id,
+            "requires_trade": participant.requires_trade,
+        }
+
+    @staticmethod
+    def _decode_roll_participant(data: Mapping[str, Any]) -> RollParticipant:
+        return RollParticipant(
+            execution_model_name=str(data["execution_model_name"]),
+            quantity=float(data["quantity"]),
+            source_key=data.get("source_key"),
+            target_key=data.get("target_key"),
+            position_id=data.get("position_id"),
+            requires_trade=bool(data.get("requires_trade", True)),
+        )
+
+    @classmethod
+    def _encode_roll(cls, state: RollState) -> dict[str, Any]:
+        return {
+            "state_key": f"roll:{state.series_key}",
+            "state_type": "roll",
+            "series_key": state.series_key,
+            "mode": state.mode.value,
+            "executor_name": state.executor_name,
+            "old_contract": tree(state.old_contract),
+            "new_contract": tree(state.new_contract),
+            "participants": [
+                cls._encode_roll_participant(participant)
+                for participant in state.participants
+            ],
+            "participant_index": state.participant_index,
+            "stage": state.stage.value,
+            "roll_order_id": state.roll_order_id,
+            "old_protection_order_ids": list(state.old_protection_order_ids),
+            "replacement_stop_order_id": state.replacement_stop_order_id,
+            "replacement_take_profit_order_id": (
+                state.replacement_take_profit_order_id
+            ),
+            "reference_price": state.reference_price,
+            "failure_reason": state.failure_reason,
+            "created_at": state.created_at,
+            "updated_at": state.updated_at,
+        }
+
+    @classmethod
+    def _decode_roll(cls, data: Mapping[str, Any]) -> RollState:
+        return RollState(
+            series_key=str(data["series_key"]),
+            mode=FutureRollMode(str(data["mode"])),
+            executor_name=str(data["executor_name"]),
+            old_contract=decode_tree(data["old_contract"]),
+            new_contract=decode_tree(data["new_contract"]),
+            participants=tuple(
+                cls._decode_roll_participant(participant)
+                for participant in data["participants"]
+            ),
+            participant_index=int(data.get("participant_index", 0)),
+            stage=FutureRollStage(str(data["stage"])),
+            roll_order_id=data.get("roll_order_id"),
+            old_protection_order_ids=tuple(data.get("old_protection_order_ids", ())),
+            replacement_stop_order_id=data.get("replacement_stop_order_id"),
+            replacement_take_profit_order_id=data.get(
+                "replacement_take_profit_order_id"
+            ),
+            reference_price=data.get("reference_price"),
+            failure_reason=data.get("failure_reason"),
+            created_at=decode_tree(data["created_at"]),
+            updated_at=decode_tree(data["updated_at"]),
+        )
+
+    @staticmethod
     def _encode_target(state: TargetState) -> dict[str, Any]:
         return {
-            "state_key": (
-                f"target:{state.execution_model_name}:{state.contract.conId}"
-            ),
+            "state_key": f"target:{state.target_key}",
             "state_type": "target",
+            "target_key": state.target_key,
             "execution_model_name": state.execution_model_name,
             "conId": state.contract.conId,
             "contract": tree(state.contract),
             "target_quantity": state.target_quantity,
             "target_created_at": state.target_created_at,
+            "fill_evidence_start_at": state.fill_evidence_start_at,
             "updated_at": state.updated_at,
         }
 
     @staticmethod
     def _decode_target(data: Mapping[str, Any]) -> TargetState:
+        if "target_key" not in data:
+            raise ValueError(
+                "Persisted TargetState lacks target_key; direct execution "
+                "requires a fresh Book database"
+            )
         return TargetState(
+            target_key=str(data["target_key"]),
             execution_model_name=str(data["execution_model_name"]),
             contract=decode_tree(data["contract"]),
             target_quantity=float(data["target_quantity"]),
             target_created_at=decode_tree(data["target_created_at"]),
+            fill_evidence_start_at=decode_tree(data.get("fill_evidence_start_at")),
             updated_at=decode_tree(data["updated_at"]),
         )
 
@@ -1052,7 +1600,11 @@ class Book:
 __all__ = [
     "Book",
     "FillRecord",
+    "FutureRollMode",
+    "FutureRollStage",
     "OrderInfo",
+    "RollParticipant",
+    "RollState",
     "PositionState",
     "TargetState",
 ]

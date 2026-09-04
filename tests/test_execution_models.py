@@ -18,6 +18,7 @@ from haymaker.components import (
     StandardOrderRole,
     TakeProfitAsStopMultiple,
     symbol_is,
+    target_key_is,
 )
 from haymaker.controller import Controller
 
@@ -72,6 +73,32 @@ def contract(symbol="ES", con_id=1):
     )
 
 
+class SeriesRegistry:
+    """Resolve several concrete test Futures to one registered series."""
+
+    def __init__(self, current: tuple[ibi.Future, ibi.Future]) -> None:
+        self.current = current
+        self.details: dict[ibi.Contract, object] = {}
+
+    def series_key(self, contract: ibi.Future) -> str:
+        """Return one explicit series identity for the test contracts."""
+
+        if contract.symbol != "ES":
+            raise KeyError(contract.symbol)
+        return "es-series"
+
+    def current_for_series(self, series_key: str) -> tuple[ibi.Future, ibi.Future]:
+        """Return the configured ACTIVE/NEXT pair."""
+
+        assert series_key == "es-series"
+        return self.current
+
+    def get_details(self, contract: ibi.Contract):
+        """Disable market-hours filtering in focused tests."""
+
+        return None
+
+
 def target(
     quantity,
     *,
@@ -81,10 +108,14 @@ def target(
     con_id=1,
     metadata=None,
     created_at=None,
+    target_key=None,
 ):
     return PositionTarget(
         contract=contract(symbol, con_id),
         target_quantity=quantity,
+        target_key=(
+            None if source_key is not None else target_key or f"{symbol.lower()}-target"
+        ),
         source_key=source_key,
         intent=intent,
         metadata=metadata or {},
@@ -129,12 +160,14 @@ def working_adjustment(
     target_quantity=1,
     symbol="ES",
     con_id=1,
+    target_key="es-target",
 ):
     """Persist a direct target and register its active adjustment order."""
 
     target_contract = contract(symbol, con_id)
     runtime.book.update_target(
         TargetState(
+            target_key=target_key,
             execution_model_name=owner,
             contract=target_contract,
             target_quantity=target_quantity,
@@ -146,7 +179,15 @@ def working_adjustment(
         ibi.MarketOrder("BUY", abs(target_quantity) or 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name=owner,
+        target_key=target_key,
     )
+
+
+def test_target_key_predicate_matches_only_the_requested_identity():
+    predicate = target_key_is("es-target")
+
+    assert predicate(target(1, target_key="es-target"))
+    assert not predicate(target(1, target_key="other"))
 
 
 def test_execution_model_string_includes_name_and_class(execution_runtime):
@@ -164,6 +205,64 @@ def test_serial_model_submits_absolute_adjustment(execution_runtime):
     assert trader.trades[0].order.action == "BUY"
     assert trader.trades[0].order.totalQuantity == 3
     assert model.book.order_by_id(1).role == StandardOrderRole.TARGET_ADJUSTMENT
+
+
+def test_serial_model_rejects_another_live_key_for_same_contract(
+    execution_runtime,
+):
+    model = SerialTargetExecutionModel(name="serial")
+    model.onData(target(1, target_key="first"))
+
+    with pytest.raises(ValueError, match="already owned by 'first'"):
+        model.onData(target(1, target_key="second"))
+
+
+def test_serial_target_key_can_follow_concrete_expiry_within_one_series(
+    execution_runtime,
+):
+    runtime, _, trader = execution_runtime
+    old = contract(con_id=1)
+    active = contract(con_id=2)
+    runtime.contract_registry = SeriesRegistry((old, active))
+    model = SerialTargetExecutionModel(name="serial")
+    model.onData(target(0, con_id=1))
+
+    model.onData(target(1, con_id=2))
+
+    assert trader.trades[-1].contract.conId == 2
+
+
+def test_serial_resizes_on_held_active_or_next_expiry(execution_runtime):
+    runtime, controller, trader = execution_runtime
+    held = contract(con_id=1)
+    next_contract = contract(con_id=2)
+    runtime.contract_registry = SeriesRegistry((held, next_contract))
+    model = SerialTargetExecutionModel(name="serial")
+    model.onData(target(1, con_id=1))
+    apply_fill(controller, trader.trades[-1], 1)
+
+    model.onData(target(2, con_id=2))
+
+    assert trader.trades[-1].contract.conId == held.conId
+    assert trader.trades[-1].order.totalQuantity == 1
+
+
+def test_serial_pauses_adjustment_while_held_expiry_needs_roll(
+    execution_runtime,
+):
+    runtime, controller, trader = execution_runtime
+    held = contract(con_id=1)
+    active = contract(con_id=2)
+    next_contract = contract(con_id=3)
+    runtime.contract_registry = SeriesRegistry((active, next_contract))
+    model = SerialTargetExecutionModel(name="serial")
+    model.onData(target(1, con_id=1))
+    apply_fill(controller, trader.trades[-1], 1)
+
+    model.onData(target(2, con_id=2))
+
+    assert len(trader.trades) == 1
+    assert model.book.target_state("es-target").target_quantity == 2
 
 
 def test_serial_model_rejects_wrong_message_at_runtime(execution_runtime):
@@ -210,6 +309,7 @@ def test_serial_recovery_resumes_persisted_target(execution_runtime):
     model = SerialTargetExecutionModel(name="serial")
     model.book.update_target(
         TargetState(
+            target_key="es-target",
             execution_model_name="serial",
             contract=contract(),
             target_quantity=2,
@@ -648,7 +748,7 @@ def test_router_ignores_one_to_one_working_orders(execution_runtime):
         execution_model_name="brackets",
         source_key="alpha",
     )
-    incoming = target(0, source_key="alpha")
+    incoming = target(0)
     runtime.workload_generation = 1
 
     router.onStart({})
@@ -678,7 +778,7 @@ def test_router_current_rules_own_held_position_without_working_order(
             target_quantity=1,
         )
     )
-    incoming = target(0, source_key="alpha")
+    incoming = target(0)
 
     router.onData(incoming)
 
@@ -768,6 +868,7 @@ def test_router_blocks_active_order_without_target_state(
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name="owner",
+        target_key="es-target",
     )
     owner = RecordingModel(name="owner")
     router = ExecutionRouter(
@@ -795,6 +896,7 @@ def test_router_blocks_ambiguous_active_adjustment_owners(
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name="second",
+        target_key="es-target",
     )
     first = RecordingModel(name="first")
     second = RecordingModel(name="second")
@@ -877,6 +979,7 @@ def test_router_does_not_partially_reassign_unroutable_idle_targets(
     for symbol, con_id in (("ES", 1), ("NQ", 2)):
         runtime.book.update_target(
             TargetState(
+                target_key=f"{symbol.lower()}-target",
                 execution_model_name="old",
                 contract=contract(symbol, con_id),
                 target_quantity=1,
@@ -893,10 +996,7 @@ def test_router_does_not_partially_reassign_unroutable_idle_targets(
         router.onStart({})
 
     assert current.recoveries == 0
-    assert (
-        runtime.book.latest_target_for_contract(contract("ES", 1)).execution_model_name
-        == "old"
-    )
+    assert runtime.book.target_state("es-target").execution_model_name == "old"
     assert "idle target recovery could not be routed" in caplog.text
 
 
@@ -905,6 +1005,7 @@ def test_router_hands_idle_recovered_target_to_current_model(execution_runtime):
     created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     runtime.book.update_target(
         TargetState(
+            target_key="es-target",
             execution_model_name="old",
             contract=contract(),
             target_quantity=2,
@@ -919,7 +1020,7 @@ def test_router_hands_idle_recovered_target_to_current_model(execution_runtime):
 
     router.onStart({})
 
-    state = runtime.book.latest_target_for_contract(contract())
+    state = runtime.book.target_state("es-target")
     assert state.execution_model_name == "current"
     assert state.target_quantity == 2
     assert state.target_created_at == created_at
@@ -934,10 +1035,12 @@ def test_serial_recovery_handoff_converges_from_existing_quantity(
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name="old",
+        target_key="es-target",
     )
     apply_fill(controller, filled, 1)
     runtime.book.update_target(
         TargetState(
+            target_key="es-target",
             execution_model_name="old",
             contract=contract(),
             target_quantity=2,
@@ -956,10 +1059,7 @@ def test_serial_recovery_handoff_converges_from_existing_quantity(
     assert adjustment is not filled
     assert adjustment.order.action == "BUY"
     assert adjustment.order.totalQuantity == 1
-    assert (
-        runtime.book.latest_target_for_contract(contract()).execution_model_name
-        == "current"
-    )
+    assert runtime.book.target_state("es-target").execution_model_name == "current"
 
 
 def test_stale_serial_target_is_not_emitted_as_accepted(execution_runtime):

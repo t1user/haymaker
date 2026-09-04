@@ -122,7 +122,7 @@ class EchoPortfolio(Portfolio):
             PositionTarget(
                 contract=incoming.contract,
                 target_quantity=value,
-                source_key=incoming.source_key,
+                target_key="es-target",
             ),
         )
 
@@ -192,6 +192,7 @@ class AnalogAggregatePortfolio(Portfolio):
             PositionTarget(
                 contract=incoming.contract,
                 target_quantity=total,
+                target_key="es-target",
             ),
             PositionTarget(
                 contract=ibi.Future(
@@ -200,6 +201,7 @@ class AnalogAggregatePortfolio(Portfolio):
                     exchange="CME",
                 ),
                 target_quantity=-total,
+                target_key="nq-target",
             ),
         )
 
@@ -257,6 +259,7 @@ class BinaryAggregatePortfolio(Portfolio):
             PositionTarget(
                 contract=incoming.contract,
                 target_quantity=sum(self.directions.values()),
+                target_key="es-target",
             ),
         )
 
