@@ -16,6 +16,7 @@ from ...misc import action, sign
 from ...validators import non_empty_string, order_field_validator, qualified_contract
 from ..messages import PositionTarget, StandardOrderRole
 from .future_roll import FutureRollExecutor
+from .roll_policies import FutureRollPolicy
 
 
 def _order_options(value: Mapping[str, Any], name: str) -> dict[str, Any]:
@@ -146,6 +147,8 @@ class SerialTargetExecutionModel(ExecutionModel):
         future_roll_executor: Optional process-shared direct futures-roll
             executor. Omit it to use the built-in
             :class:`DirectFutureRollExecutor`.
+        roll_policy: Optional FutureRollPolicy for this model's holdings.
+            The default rolls only past contracts into ACTIVE.
 
     The model supports arbitrary quantities and same-side resizing, ignores
     optional intent, and keeps at most one active ``TARGET_ADJUSTMENT`` order
@@ -159,6 +162,7 @@ class SerialTargetExecutionModel(ExecutionModel):
         name: str | None = None,
         order: Mapping[str, Any] = {},
         future_roll_executor: FutureRollExecutor | None = None,
+        roll_policy: FutureRollPolicy | None = None,
     ) -> None:
         self.order_options = {
             "orderType": "MKT",
@@ -171,6 +175,10 @@ class SerialTargetExecutionModel(ExecutionModel):
             future_roll_executor,
         )
         self.controller.future_roller.completedEvent += self.onFutureRollCompletedEvent
+        if roll_policy is not None:
+            self.controller.future_roller.register_policy(
+                roll_policy, model_name=self.name
+            )
 
     def accept(self, target: PositionTarget) -> bool:
         """Persist the newest concrete target without changing its Contract."""

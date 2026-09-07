@@ -120,8 +120,10 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   Contract. Book keeps held and pending-target Contracts and bracket inputs
   separate; PortfolioWrapper never resolves the held Contract. Recovery derives
   continuation from persisted state rather than a transient filled callback.
-  Currently `FutureRoller` permits held contracts that are either ACTIVE or NEXT and
-  rolls holdings outside that set. ContractRegistry maps qualified expiry
+  `FutureRoller` defaults to rolling only selector `past_contracts` into ACTIVE,
+  retaining NEXT and all later eligible expiries. Custom FutureRollPolicy
+  instances select triggers and destinations; stable occurrence labels prevent
+  repeated fixed-schedule rolls after recovery. ContractRegistry maps qualified expiry
   `conId` values to their registered blueprint series; rolling never guesses
   identity from symbol fields. A NEXT-only
   change does not require market-data back-adjustment. Selectors are rebuilt on

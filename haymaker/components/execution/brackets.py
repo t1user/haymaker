@@ -18,6 +18,7 @@ from ...misc import action, round_tick, sign
 from ...validators import finite_number, non_empty_string
 from ..messages import PositionIntent, PositionTarget, StandardOrderRole
 from .future_roll import FutureRollExecutor
+from .roll_policies import FutureRollPolicy
 from .models import ExecutionModel, _order_options
 
 log = logging.getLogger(__name__)
@@ -385,6 +386,8 @@ class BracketExecutionModel(ExecutionModel):
         future_roll_executor: Optional process-shared bracket futures-roll
             executor. Omit it to use the built-in
             :class:`BracketFutureRollExecutor`.
+        roll_policy: Optional FutureRollPolicy for this source. The default
+            rolls past contracts into ACTIVE; auto_roll_futures=False wins.
         name: Stable configured model name.
         open_order: Model-specific entry Order fields.
         close_order: Model-specific close Order fields.
@@ -415,6 +418,7 @@ class BracketExecutionModel(ExecutionModel):
         take_profit: AbstractBracketLeg | None = None,
         auto_roll_futures: bool = True,
         future_roll_executor: FutureRollExecutor | None = None,
+        roll_policy: FutureRollPolicy | None = None,
         name: str | None = None,
         open_order: Mapping[str, Any] = {},
         close_order: Mapping[str, Any] = {},
@@ -470,6 +474,10 @@ class BracketExecutionModel(ExecutionModel):
             future_roll_executor,
         )
         self.controller.future_roller.completedEvent += self.onFutureRollCompletedEvent
+        if roll_policy is not None:
+            self.controller.future_roller.register_policy(
+                roll_policy, source_key=source_key
+            )
         self.runtime.future_roll_policies[source_key] = auto_roll_futures
 
     def accept(self, target: PositionTarget) -> bool:

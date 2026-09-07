@@ -54,3 +54,8 @@ Contract. Direct targets always refer to their exact concrete Contract.
   mixin, and post-accounting completion feedback through Router. Independent
   tests demonstrate user-owned flat-before-open sequencing and repeat-safe
   recovery notifications. Full pytest: 1,620 passed; mypy: 110 files clean.
+- Checkpoint 6: public roll policies select triggers and same-series endpoints;
+  default policy retains every eligible later expiry. Check-time selector
+  snapshots and durable schedule markers prevent fixed-schedule cascades across
+  restart. Public daily/custom check behavior documented. Full pytest: 1,626
+  passed; mypy: 111 files clean; Black and diff checks passed.

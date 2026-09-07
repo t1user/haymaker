@@ -440,8 +440,12 @@ class RollState:
         mode: Exclusive direct or bracket accounting mode.
         executor_name: Stable FutureRollExecutor recovery identity.
         old_contract: Concrete held Future being left.
-        new_contract: Concrete ACTIVE Future being entered.
+        new_contract: Concrete policy-selected Future being entered.
         participants: Frozen logical holdings included in this operation.
+        target_transfers: Idempotent concrete target snapshots for direct rolls.
+        occurrence_keys: Schedule markers to record upon successful completion.
+        completed_occurrences: Previously completed schedule markers retained
+            when the next operation replaces this series' current record.
         participant_index: Durable cursor for serial participant processing.
         stage: Last durably accepted roll stage.
         roll_order_id: Current BAG order id, when one is active or filled.
@@ -466,6 +470,8 @@ class RollState:
     new_contract: ibi.Future
     participants: Sequence[RollParticipant]
     target_transfers: Sequence[TargetState] = ()
+    occurrence_keys: Sequence[str] = ()
+    completed_occurrences: Sequence[str] = ()
     participant_index: int = 0
     stage: FutureRollStage = FutureRollStage.PLANNED
     roll_order_id: int | None = None
@@ -513,6 +519,9 @@ class RollState:
         if not all(isinstance(target, TargetState) for target in transfers):
             raise TypeError("target_transfers must contain TargetState values")
         object.__setattr__(self, "target_transfers", transfers)
+        for name in ("occurrence_keys", "completed_occurrences"):
+            keys = tuple(non_empty_string(key, name) for key in getattr(self, name))
+            object.__setattr__(self, name, tuple(dict.fromkeys(keys)))
         if not isinstance(self.participant_index, int) or isinstance(
             self.participant_index, bool
         ):
@@ -1509,6 +1518,8 @@ class Book:
                 Book._encode_target(t) for t in state.target_transfers
             ],
             "participant_index": state.participant_index,
+            "occurrence_keys": list(state.occurrence_keys),
+            "completed_occurrences": list(state.completed_occurrences),
             "stage": state.stage.value,
             "roll_order_id": state.roll_order_id,
             "old_protection_order_ids": list(state.old_protection_order_ids),
@@ -1538,6 +1549,8 @@ class Book:
                 Book._decode_target(t) for t in data.get("target_transfers", ())
             ),
             participant_index=int(data.get("participant_index", 0)),
+            occurrence_keys=tuple(data.get("occurrence_keys", ())),
+            completed_occurrences=tuple(data.get("completed_occurrences", ())),
             stage=FutureRollStage(str(data["stage"])),
             roll_order_id=data.get("roll_order_id"),
             old_protection_order_ids=tuple(data.get("old_protection_order_ids", ())),

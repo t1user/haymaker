@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import eventkit as ev  # type: ignore
@@ -23,6 +26,13 @@ from haymaker.components.execution.future_roll import (
     FutureRollExecutor,
     RollHolding,
 )
+from haymaker.components.execution.roll_policies import (
+    FutureRollPolicy,
+    PastToActiveRollPolicy,
+    RollDecision,
+)
+from haymaker.contract_selector import FutureSelector
+from haymaker.validators import aware_datetime, non_empty_string
 
 if TYPE_CHECKING:
     from .controller import Controller
@@ -45,6 +55,30 @@ class FutureRoller:
         self.future_roll_policies: dict[str, bool] = {}
         self.executor: FutureRollExecutor | None = None
         self.completedEvent = ev.Event("futureRollCompleted")
+        self._policies: dict[tuple[str, str], FutureRollPolicy] = {}
+        self._default_policy = PastToActiveRollPolicy()
+        self._checking = False
+
+    def register_policy(
+        self,
+        policy: FutureRollPolicy,
+        *,
+        source_key: str | None = None,
+        model_name: str | None = None,
+    ) -> None:
+        """Configure one source (bracket) or execution model (direct) policy.
+
+        Register during graph construction. Automatic-roll source opt-outs
+        still take precedence. Policy selection never changes accepted work.
+        """
+        if not isinstance(policy, FutureRollPolicy):
+            raise TypeError("policy must be a FutureRollPolicy")
+        if (source_key is None) == (model_name is None):
+            raise ValueError("Supply exactly one of source_key or model_name")
+        kind, value = (
+            ("source", source_key) if source_key is not None else ("model", model_name)
+        )
+        self._policies[kind, non_empty_string(value, kind)] = policy
 
     def register_executor(
         self,
@@ -115,8 +149,25 @@ class FutureRoller:
             executor.recover(state)
         return True
 
-    def roll(self, *args: object) -> None:
-        """Resume existing work, then plan every currently stale series."""
+    def roll(self, *args: object, now: datetime | None = None) -> None:
+        """Check due rolls on the event loop, using the default or custom policy.
+
+        Controller already schedules one daily process-lifetime check. Custom
+        schedulers may call this method more often; do not add reconnect timers.
+        ``now`` is an optional aware check time for deterministic policies/tests.
+        In-flight work always resumes its persisted endpoints and stage.
+        """
+        if self._checking:
+            return
+        check_time = aware_datetime(now or datetime.now(timezone.utc), "now")
+        self._checking = True
+        try:
+            self._check(check_time.astimezone(timezone.utc))
+        finally:
+            self._checking = False
+
+    def _check(self, now: datetime) -> None:
+        """Validate policy plans before initiating any newly discovered work."""
 
         executor = self.executor
         if executor is None:
@@ -129,25 +180,21 @@ class FutureRoller:
         if not holdings:
             log.debug("No futures positions require rolling.")
             return
-        grouped = self._stale_holdings(holdings)
+        grouped = self._due_holdings(holdings, now)
         for series_key, by_contract in grouped.items():
             current = self.book.roll_state(series_key)
             if current is not None and current.stage is not FutureRollStage.COMPLETE:
                 continue
-            old_contract = min(
+            endpoints = max(
                 by_contract,
-                key=lambda contract: (
-                    contract.lastTradeDateOrContractMonth,
-                    contract.localSymbol,
-                    contract.conId,
+                key=lambda pair: (
+                    pair[0].lastTradeDateOrContractMonth,
+                    pair[0].conId,
                 ),
             )
-            old_holdings = by_contract[old_contract]
-            new_contract = self.controller.contract_registry.active_for_series(
-                series_key
-            )
-            if old_contract.conId == new_contract.conId:
-                continue
+            old_contract, new_contract = endpoints
+            planned = by_contract[endpoints]
+            old_holdings = [holding for holding, _ in planned]
             if not self._broker_quantity_matches(old_contract):
                 self._persist_blocked_discovery(
                     series_key,
@@ -180,6 +227,15 @@ class FutureRoller:
                     str(exc),
                 )
                 continue
+            state = replace(
+                state,
+                occurrence_keys=tuple(
+                    key
+                    for holding, decision in planned
+                    for key in self._occurrence_keys(holding, decision)
+                ),
+                completed_occurrences=current.completed_occurrences if current else (),
+            )
             self.book.update_roll(state)
             log.warning(
                 "Rolling futures series %s from %s to %s",
@@ -189,18 +245,22 @@ class FutureRoller:
             )
             executor.advance(state)
 
-    def _stale_holdings(
-        self, holdings: Sequence[RollHolding]
-    ) -> dict[str, dict[ibi.Future, list[RollHolding]]]:
-        grouped: dict[str, dict[ibi.Future, list[RollHolding]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
+    def _due_holdings(
+        self, holdings: Sequence[RollHolding], now: datetime
+    ) -> dict[
+        str, dict[tuple[ibi.Future, ibi.Future], list[tuple[RollHolding, RollDecision]]]
+    ]:
+        """Group validated endpoints; never guess series membership from symbols."""
+        grouped: dict[
+            str,
+            dict[tuple[ibi.Future, ibi.Future], list[tuple[RollHolding, RollDecision]]],
+        ] = defaultdict(lambda: defaultdict(list))
         for holding in holdings:
             try:
                 series_key = self.controller.contract_registry.series_key(
                     holding.contract
                 )
-                current = self.controller.contract_registry.current_for_series(
+                selector = self.controller.contract_registry.selector_for_series(
                     series_key
                 )
             except (KeyError, TypeError, ValueError) as exc:
@@ -210,9 +270,53 @@ class FutureRoller:
                     exc,
                 )
                 continue
-            if all(holding.contract.conId != contract.conId for contract in current):
-                grouped[series_key][holding.contract].append(holding)
+            current = self.book.roll_state(series_key)
+            if current is not None and current.stage is not FutureRollStage.COMPLETE:
+                continue
+            if not isinstance(selector, FutureSelector):
+                raise TypeError("Futures rolling requires a FutureSelector")
+            selector = replace(selector, today=now.replace(tzinfo=None))
+            identity = (
+                ("source", holding.source_key)
+                if holding.source_key is not None
+                else ("model", holding.execution_model_name)
+            )
+            policy = self._policies.get(identity, self._default_policy)
+            decision = policy.plan(holding, selector, now=now)
+            if decision is None:
+                continue
+            if not isinstance(decision, RollDecision):
+                raise TypeError(
+                    "FutureRollPolicy.plan must return RollDecision or None"
+                )
+            keys = self._occurrence_keys(holding, decision)
+            if keys and current and keys[0] in current.completed_occurrences:
+                continue
+            if (
+                self.controller.contract_registry.series_key(decision.destination)
+                != series_key
+            ):
+                raise ValueError("Roll destination must belong to the holding's series")
+            if decision.destination.conId == holding.contract.conId:
+                raise ValueError("Roll destination must differ from the held Contract")
+            grouped[series_key][holding.contract, decision.destination].append(
+                (holding, decision)
+            )
         return grouped
+
+    @staticmethod
+    def _occurrence_keys(
+        holding: RollHolding, decision: RollDecision
+    ) -> tuple[str, ...]:
+        """Mark replacement exposure too, preventing fixed-schedule cascades."""
+        if decision.occurrence is None:
+            return ()
+        if holding.source_key is not None:
+            return (json.dumps(("source", holding.source_key, decision.occurrence)),)
+        return tuple(
+            json.dumps(("contract", con_id, decision.occurrence))
+            for con_id in (holding.contract.conId, decision.destination.conId)
+        )
 
     def _broker_quantity_matches(self, contract: ibi.Future) -> bool:
         return self.book.aggregate_quantity(
@@ -245,6 +349,11 @@ class FutureRoller:
             new_contract=new_contract,
             participants=participants,
             stage=FutureRollStage.BLOCKED,
+            completed_occurrences=(
+                previous.completed_occurrences
+                if (previous := self.book.roll_state(series_key)) is not None
+                else ()
+            ),
             failure_reason=reason,
             updated_at=datetime.now(timezone.utc),
         )
@@ -262,7 +371,13 @@ class FutureRoller:
         """Notify target models and discover the next stale expiry."""
 
         self.completedEvent.emit(state)
-        self.roll()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            if not self._checking:
+                self.roll()
+        else:
+            loop.call_soon(self.roll)
 
     def __repr__(self) -> str:
         return (

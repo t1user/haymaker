@@ -332,9 +332,13 @@ uses either direct or one-to-one accounting, never both.
 
 ContractRegistry maps every qualified Future `conId` to the registered blueprint
 that supplied its detail chain. This explicit mapping is the futures-series
-identity; symbol-field inference is prohibited. ACTIVE and NEXT remain accepted
-held expiries. A position outside that pair is planned toward ACTIVE, and
-`RollState` is persisted before broker work.
+identity; symbol-field inference is prohibited. PastToActiveRollPolicy moves
+only selector past_contracts into ACTIVE, retaining every later eligible expiry.
+Custom FutureRollPolicy instances select the trigger and same-series destination
+using a date-refreshed selector. RollDecision occurrence labels persist across
+completed operations to prevent repeat fixed-schedule rolls. Controller keeps
+one daily timer and exposes roll() for user-owned check schedules. Accepted
+endpoints and occurrence markers are persisted in RollState before broker work.
 
 In direct mode, each concrete Contract owns a setpoint. The executor waits for
 endpoint adjustments, captures durable absolute target transfers, and submits

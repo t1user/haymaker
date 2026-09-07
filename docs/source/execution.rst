@@ -601,10 +601,65 @@ model: a process uses either account-wide direct targets or independently
 managed one-to-one episodes.
 
 ContractRegistry supplies the futures-series identity from the registered
-blueprint and qualified contract-detail chain. A held Future is current while it
-is ACTIVE or NEXT. Once outside that pair, FutureRoller plans movement to ACTIVE
-and persists ``RollState`` before submitting any broker order. It never infers
+blueprint and qualified contract-detail chain. The default
+:class:`~haymaker.components.PastToActiveRollPolicy` moves only
+``selector.past_contracts`` into ACTIVE; NEXT and all later eligible expiries
+are retained. FutureRoller persists ``RollState`` before any broker order and never infers
 series membership from symbol, exchange, or multiplier alone.
+
+Custom triggers and destinations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Supply ``roll_policy=`` to either execution model to customize the trigger and
+destination without replacing durable execution. A bracket policy applies to
+its source; a direct policy applies to that model's concrete holdings.
+``auto_roll_futures=False`` remains the one-to-one opt-out. Policies receive a
+full selector evaluated at the current check time, without changing the graph's
+ACTIVE/NEXT selection. For example, roll twenty business days before the
+holding's roll day into its successor:
+
+.. code-block:: python
+
+   import pandas as pd
+   from haymaker.components import FutureRollPolicy, RollDecision
+
+   class EarlyRoll(FutureRollPolicy):
+       def plan(self, holding, selector, *, now):
+           chain = selector.all_contracts
+           index = next(i for i, item in enumerate(chain)
+                        if item.contract.conId == holding.contract.conId)
+           held = chain[index]
+           trigger = held.roll_day - pd.offsets.BusinessDay(20)
+           if now.replace(tzinfo=None) < trigger:
+               return None
+           # A missing successor raises rather than selecting an arbitrary expiry.
+           return RollDecision(
+               destination=chain[index + 1].contract,
+               occurrence=f"early-{held.roll_day:%Y-%m-%d}",
+           )
+
+Use your trading calendar instead of pandas' weekday calendar where holidays
+matter. A fixed schedule should use a stable ``occurrence`` label for that
+scheduled event. Completed occurrence markers survive restart and prevent
+rolling its replacement again on every check. With no label, the trigger must
+become false after rolling. Each decision moves a whole holding to another
+qualified member of the same registered series; it is not a general spread
+allocation API. When several expiries are due, later expiries are handled first.
+
+Controller already checks daily. A user-owned scheduler on the event loop may
+call ``controller.future_roller.roll()`` more often; do not create a new timer
+on every reconnect. Accepted endpoints are persisted: recovery resumes them
+without reevaluating the policy.
+
+.. autoclass:: haymaker.components.FutureRollPolicy
+   :members: plan
+
+.. autoclass:: haymaker.components.PastToActiveRollPolicy
+
+.. autoclass:: haymaker.components.RollDecision
+
+Durable execution
+~~~~~~~~~~~~~~~~~
 
 :class:`~haymaker.components.DirectFutureRollExecutor` waits for active
 TARGET_ADJUSTMENT work on both roll endpoints, re-reads Fill-derived quantity,

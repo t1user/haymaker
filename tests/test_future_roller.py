@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,10 +23,14 @@ from haymaker.components import (
     BracketFutureRollExecutor,
     DirectFutureRollExecutor,
     FutureRollExecutor,
+    FutureRollPolicy,
+    PastToActiveRollPolicy,
+    RollDecision,
     RollHolding,
     StandardOrderRole,
 )
 from haymaker.controller.future_roller import FutureRoller
+from haymaker.contract_selector import FutureSelector
 
 
 def future(con_id: int, local_symbol: str) -> ibi.Future:
@@ -54,6 +58,15 @@ class FakeRegistry:
         self._contracts = {contract.conId for contract in (old, active, next_contract)}
         self.active = active
         self.next_contract = next_contract
+        self.chain = list({c.conId: c for c in (old, active, next_contract)}.values())
+        for contract, offset in ((old, -30), (active, 30), (next_contract, 90)):
+            contract.lastTradeDateOrContractMonth = (
+                datetime.now(timezone.utc) + timedelta(days=offset)
+            ).strftime("%Y%m%d")
+
+    def selector_for_series(self, series_key: str) -> FutureSelector:
+        """Expose a real date-aware chain without replacing qualified objects."""
+        return FutureSelector.from_contracts(self.chain)
 
     def series_key(self, contract: ibi.Future) -> str:
         """Return the registered series for known concrete expiries."""
@@ -330,6 +343,108 @@ def test_direct_roll_moves_fill_evidence_and_target_contract(book):
     assert book.direct_quantity(active) == 2
     assert book.target_state(active).contract is active
     assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
+
+
+def test_default_policy_retains_every_eligible_expiry(book):
+    """The third expiry is not stale merely because it is neither ACTIVE nor NEXT."""
+    old, active, next_, later = [future(i, f"NG{i}") for i in range(1, 5)]
+    registry = FakeRegistry(old, active, next_)
+    later.lastTradeDateOrContractMonth = (
+        datetime.now(timezone.utc) + timedelta(days=180)
+    ).strftime("%Y%m%d")
+    registry.chain.append(later)
+    registry._contracts.add(later.conId)
+    for contract in (active, next_, later):
+        persist_direct_position(book, contract)
+    controller = FakeController(book, registry, {})
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.DIRECT)
+    roller.roll()
+    assert controller.trades == []
+    assert book.roll_states() == ()
+
+
+class FixedSuccessorPolicy(FutureRollPolicy):
+    """Keep a fixed schedule condition true to exercise occurrence deduplication."""
+
+    def plan(self, holding, selector, *, now):
+        chain = [wrapper.contract for wrapper in selector.all_contracts]
+        index = next(
+            i for i, c in enumerate(chain) if c.conId == holding.contract.conId
+        )
+        return RollDecision(destination=chain[index + 1], occurrence="fixed-schedule")
+
+
+def test_fixed_schedule_does_not_cascade_after_completion_or_recovery(book):
+    """A fresh coordinator honors Book's completed occurrence, not old callbacks."""
+    old, active, next_ = [future(i, f"NG{i}") for i in range(1, 4)]
+    persist_direct_position(book, active)
+    controller = make_controller(book, old, active, next_)
+    controller.trader.positions[active.conId] = 2
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.DIRECT)
+    roller.register_policy(FixedSuccessorPolicy(), model_name="serial")
+    roller.roll()
+    state = book.roll_state("ng-series")
+    assert state.old_contract == active
+    assert state.new_contract == next_
+    # A successor beyond NEXT lets the repeated condition propose another roll.
+    later = future(4, "NG4")
+    later.lastTradeDateOrContractMonth = (
+        datetime.now(timezone.utc) + timedelta(days=180)
+    ).strftime("%Y%m%d")
+    controller.contract_registry.chain.append(later)
+    controller.contract_registry._contracts.add(4)
+    apply_fill(book, controller.trades[-1], 2, "scheduled-fill")
+    completed = book.roll_state("ng-series")
+    assert len(completed.completed_occurrences) == 2
+    assert book._decode_roll(book._encode_roll(completed)) == completed
+    fresh = FutureRoller(controller)
+    fresh.register_executor(FutureRollMode.DIRECT)
+    fresh.register_policy(FixedSuccessorPolicy(), model_name="serial")
+    fresh.roll()
+    assert len(controller.trades) == 1
+
+
+def test_custom_check_refreshes_selector_date_without_mutating_graph(book):
+    """Custom early checks use their time, not the last workload start date."""
+    old, active, next_ = [future(i, f"NG{i}") for i in range(1, 4)]
+    registry = FakeRegistry(old, active, next_)
+    selector = registry.selector_for_series("ng-series")
+    holding = RollHolding(contract=active, quantity=1, execution_model_name="serial")
+    policy = PastToActiveRollPolicy()
+    now = datetime.now(timezone.utc)
+    assert policy.plan(holding, selector, now=now) is None
+    future_time = now + timedelta(days=45)
+    refreshed = replace(selector, today=future_time.replace(tzinfo=None))
+    assert policy.plan(holding, refreshed, now=future_time).destination == next_
+    assert selector.active_contract == active
+
+
+@pytest.mark.parametrize("result", ["invalid", "same", "unknown"])
+def test_invalid_policy_plan_has_no_broker_or_state_side_effect(book, result):
+    """Bad endpoints fail before new roll state or orders are created."""
+    old, active, next_ = [future(i, f"NG{i}") for i in range(1, 4)]
+    persist_direct_position(book, old)
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.DIRECT)
+
+    class BadPolicy(FutureRollPolicy):
+        """Return one deliberately invalid user decision."""
+
+        def plan(self, holding, selector, *, now):
+            if result == "invalid":
+                return "not a RollDecision"
+            return RollDecision(
+                destination=old if result == "same" else future(99, "NG99")
+            )
+
+    roller.register_policy(BadPolicy(), model_name="serial")
+    with pytest.raises((TypeError, ValueError, KeyError)):
+        roller.roll()
+    assert not controller.trades
+    assert not book.roll_states()
 
 
 def test_direct_roll_waits_for_active_target_adjustment(book):

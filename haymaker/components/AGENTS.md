@@ -210,6 +210,14 @@ source by default; `auto_roll_futures=False` is the explicit opt-out. Reject
 conflicting source policies, mode mixes, and incompatible executor names.
 SignalModels remain calculation components and must not own roll policy.
 
+`roll_policies.py` owns FutureRollPolicy, RollDecision, and the default
+PastToActiveRollPolicy. Only selector past_contracts roll by default; all later
+eligible expiries remain held. Policies receive a date-refreshed selector and
+choose a same-series destination. Fixed schedules use stable occurrence labels;
+Book carries completion markers across series operations to prevent cascades.
+Controller's public roll() check may be called by a user-owned scheduler on the
+event loop, but reconnects must not duplicate process-lifetime timers.
+
 Book owns order/fill/state persistence and blotter queries. Controller alone
 submits/cancels broker orders, registers OrderInfo immediately, handles status,
 Fill and commission events, rebinds Trades, and reconciles aggregate Contract

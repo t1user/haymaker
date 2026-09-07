@@ -355,11 +355,13 @@ reference and never suppresses the Signal.
     and sends source/position-attributed blotter records when enabled. The
     global `controller.missing_brackets` option controls critical stop-loss
     reconciliation; take-profit orders are optional.
-12. The app-lifetime futures-roll timer asks FutureRoller to discover holdings
-    outside their registered series' ACTIVE/NEXT pair. A durable RollState is
+12. The app-lifetime futures-roll timer asks FutureRoller to evaluate policies.
+    Default PastToActiveRollPolicy selects only selector past_contracts; custom
+    triggers/destinations use the full date-refreshed chain. A durable RollState is
     written before a mode-specific executor submits BAG work. Startup sync
     back-reports Fill evidence and resumes incomplete roll stages before
-    comparing Book with the broker snapshot.
+    comparing Book with the broker snapshot. Completed schedule occurrence
+    markers prevent repeated fixed-schedule rolls, including after restart.
 
 ### Dataloader Flow
 

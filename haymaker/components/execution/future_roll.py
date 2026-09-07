@@ -331,6 +331,10 @@ class FutureRollExecutor(ABC):
         completed = replace(
             state,
             participant_index=len(state.participants),
+            completed_occurrences=(
+                *state.completed_occurrences,
+                *state.occurrence_keys,
+            ),
             stage=FutureRollStage.COMPLETE,
             roll_order_id=None,
             old_protection_order_ids=(),

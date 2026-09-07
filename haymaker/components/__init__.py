@@ -6,6 +6,7 @@ from .execution import brackets as _execution_brackets
 from .execution import future_roll as _execution_future_roll
 from .execution import models as _execution_models
 from .execution import router as _execution_router
+from .execution import roll_policies as _execution_roll_policies
 from . import messages as _messages
 from . import portfolio as _portfolio
 from . import signal_models as _signal_models
@@ -18,6 +19,7 @@ from .execution.brackets import *  # noqa: F401,F403
 from .execution.future_roll import *  # noqa: F401,F403
 from .execution.models import *  # noqa: F401,F403
 from .execution.router import *  # noqa: F401,F403
+from .execution.roll_policies import *  # noqa: F401,F403
 from .messages import *  # noqa: F401,F403
 from .portfolio import *  # noqa: F401,F403
 from .signal_models import *  # noqa: F401,F403
@@ -32,6 +34,7 @@ _PUBLIC_MODULES = (
     _execution_router,
     _execution_brackets,
     _execution_future_roll,
+    _execution_roll_policies,
     _messages,
     _portfolio,
     _signal_models,
