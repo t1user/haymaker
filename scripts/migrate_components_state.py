@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -17,10 +17,10 @@ from typing import Any
 import ib_insync as ibi
 from pymongo import MongoClient  # type: ignore
 
-from haymaker.book import FillRecord
+from haymaker.book import Book, FillRecord, OrderInfo
 from haymaker.misc import decode_tree, tree
 
-MIGRATION_VERSION = "components-book-v2"
+MIGRATION_VERSION = "components-book-v3-concrete-contracts"
 
 KNOWN_ROLES = {
     "OPEN": "OPEN",
@@ -124,7 +124,23 @@ def _legacy_bracket_inputs(params: Mapping[str, Any]) -> dict[str, Any]:
 def convert_order(
     document: Mapping[str, Any], *, source_database: str
 ) -> dict[str, Any]:
-    """Convert one legacy order document without modifying the input."""
+    """Convert legacy or component orders without discarding explicit evidence."""
+
+    if "execution_model_name" in document and "role" in document:
+        result = dict(document)
+        source_id = result.pop("_id", result.get("orderId"))
+        result.pop("target_key", None)
+        # Explicit fills, commission updates, timestamps and IB identifiers are
+        # already authoritative. Do not rebuild them from diagnostic Trade data.
+        OrderInfo.decode(result)
+        result.update(
+            provenance(
+                source_database=source_database,
+                source_collection="orders",
+                source_id=source_id,
+            )
+        )
+        return result
 
     trade = decode_tree(document["trade"])
     if not isinstance(trade, ibi.Trade):
@@ -211,6 +227,177 @@ def convert_latest_strategy_snapshot(
                 **migration,
             }
         )
+    return converted
+
+
+def _exposure(
+    orders: Sequence[Mapping[str, Any]], cutoff: datetime | None = None
+) -> dict[int, ibi.Contract]:
+    """Locate non-flat concrete exposure using normalized fills, including BAG legs."""
+    quantities: dict[int, float] = defaultdict(float)
+    contracts: dict[int, ibi.Contract] = {}
+    seen: set[str] = set()
+    for document in orders:
+        info = OrderInfo.decode(
+            {k: v for k, v in document.items() if k != "target_key"}
+        )
+        has_legs = any(not isinstance(fill.contract, ibi.Bag) for fill in info.fills)
+        for fill in info.fills:
+            if fill.deduplication_key in seen or (cutoff and fill.time <= cutoff):
+                continue
+            seen.add(fill.deduplication_key)
+            quantity = fill.execution.shares * (
+                1 if fill.execution.side in {"BOT", "BUY"} else -1
+            )
+            legs = [(fill.contract, quantity)]
+            if isinstance(fill.contract, ibi.Bag):
+                if has_legs:
+                    continue
+                old, new = info.params.get("old_contract"), info.params.get(
+                    "new_contract"
+                )
+                if not isinstance(old, ibi.Contract) or not isinstance(
+                    new, ibi.Contract
+                ):
+                    raise ValueError(
+                        "Cannot reconcile BAG evidence without explicit roll endpoints"
+                    )
+                legs = [(old, -quantity), (new, quantity)]
+            for contract, delta in legs:
+                contracts[contract.conId] = contract
+                quantities[contract.conId] += delta
+    return {
+        key: contracts[key]
+        for key, quantity in quantities.items()
+        if abs(quantity) > 1e-12
+    }
+
+
+def convert_component_states(
+    documents: Sequence[Mapping[str, Any]],
+    orders: Sequence[Mapping[str, Any]],
+    *,
+    source_database: str,
+) -> list[dict[str, Any]]:
+    """Convert old keyed/component state only when concrete ownership is unambiguous.
+
+    Pending roll work must finish under its original implementation. Old source
+    state without separate held/target fields is reconciled to episode evidence.
+    A keyed direct target spanning other held/working Contracts cannot be split
+    automatically; the operator must resolve that allocation before conversion.
+    """
+    converted: list[dict[str, Any]] = []
+    identities: set[str] = set()
+    for document in documents:
+        result = dict(document)
+        source_id = result.pop("_id", result.get("state_key"))
+        kind = result.get("state_type")
+        if kind == "position":
+            if "target_contract" not in result:
+                result["target_contract"] = result.get("contract")
+                result["target_bracket_inputs"] = result.get("bracket_inputs", {})
+                episode_orders = [
+                    order
+                    for order in orders
+                    if order.get("source_key") == result["source_key"]
+                    and order.get("position_id") == result.get("position_id")
+                ]
+                held = _exposure(episode_orders)
+                pending = {
+                    decode_tree(order["trade"])
+                    .contract.conId: decode_tree(order["trade"])
+                    .contract
+                    for order in episode_orders
+                    if order.get("active") and order["role"] == "OPEN"
+                }
+                candidates = held if result.get("quantity") else pending
+                if len(candidates) > 1 or (result.get("quantity") and not candidates):
+                    raise ValueError(
+                        f"Cannot establish held Contract for source {result['source_key']!r}"
+                    )
+                if candidates:
+                    result["contract"] = tree(next(iter(candidates.values())))
+                    openings = [
+                        order for order in episode_orders if order["role"] == "OPEN"
+                    ]
+                    if openings:
+                        opening = min(
+                            openings,
+                            key=lambda order: decode_tree(order["submitted_at"]),
+                        )
+                        params = decode_tree(opening.get("params", {}))
+                        required = decode_tree(result.get("bracket_inputs", {}))
+                        if any(name not in params for name in required):
+                            raise ValueError(
+                                "Original episode bracket inputs are missing from OPEN evidence"
+                            )
+                        result["bracket_inputs"] = tree(
+                            {name: params[name] for name in required}
+                        )
+                elif not result.get("quantity"):
+                    result["contract"] = None
+            Book._decode_position(result)
+        elif kind == "target":
+            contract = decode_tree(result["contract"])
+            key = result.pop("target_key", None)
+            related = [
+                order
+                for order in orders
+                if order.get("source_key") is None
+                and (
+                    order.get("target_key") == key
+                    if key is not None
+                    else decode_tree(order["trade"]).contract.conId == contract.conId
+                )
+            ]
+            cutoff = decode_tree(result.get("fill_evidence_start_at"))
+            members = set(_exposure(related, cutoff))
+            members.update(
+                decode_tree(order["trade"]).contract.conId
+                for order in related
+                if order.get("active")
+            )
+            if members - {contract.conId}:
+                raise ValueError(
+                    f"Ambiguous concrete allocation for target {key!r}: conIds={sorted(members)}"
+                )
+            result["conId"] = contract.conId
+            result["state_key"] = f"target:{contract.conId}"
+            Book._decode_target(result)
+        elif kind == "roll":
+            if result.get("stage") != "COMPLETE":
+                raise ValueError(
+                    "Finish pending roll work before changing the roll schema"
+                )
+            result["participants"] = [
+                {
+                    key: value
+                    for key, value in participant.items()
+                    if key != "target_key"
+                }
+                for participant in result["participants"]
+            ]
+            if result.get("target_transfers"):
+                raise ValueError(
+                    "Review stored roll transfers before component schema conversion"
+                )
+            Book._decode_roll(result)
+        elif kind != "portfolio":
+            raise ValueError(f"Unknown component state_type: {kind!r}")
+        identity = result["state_key"]
+        if identity in identities:
+            raise ValueError(
+                f"Multiple old states map to {identity!r}; allocation must be resolved explicitly"
+            )
+        identities.add(identity)
+        result.update(
+            provenance(
+                source_database=source_database,
+                source_collection="state",
+                source_id=source_id,
+            )
+        )
+        converted.append(result)
     return converted
 
 
@@ -304,6 +491,20 @@ def validation_report(
         for source_key, position_id in grouping
         if source_key != "None" and position_id != "None"
     ]
+    fill_records = {
+        fill["deduplication_key"]: FillRecord.decode(fill)
+        for order in orders
+        for fill in order.get("fills", ())
+    }
+    reports = [
+        record.commission_report
+        for record in fill_records.values()
+        if record.commission_report is not None
+    ]
+    order_groups = Counter(
+        (str(order.get("source_key")), str(order.get("position_id")))
+        for order in orders
+    )
     return {
         "counts": {
             "orders": len(orders),
@@ -315,6 +516,15 @@ def validation_report(
         "totals": {
             "commission": commissions,
             "realized_pnl": realized_pnl,
+        },
+        "fill_totals": {
+            "unique_fills": len(fill_records),
+            "commission": sum(report.commission for report in reports),
+            "realized_pnl": sum(report.realizedPNL for report in reports),
+        },
+        "order_source_position_groups": {
+            f"{source}|{position}": count
+            for (source, position), count in order_groups.items()
         },
         "source_position_groups": {
             f"{source_key}|{position_id}": count
@@ -358,9 +568,10 @@ def migrate(
         source_database=source_database,
     )
 
+    original_orders = list(source["orders"].find({}))
     orders = [
         convert_order(document, source_database=source_database)
-        for document in source["orders"].find({})
+        for document in original_orders
     ]
     snapshot = _latest_snapshot(source["strategies"])
     states = (
@@ -368,6 +579,15 @@ def migrate(
         if snapshot is not None
         else []
     )
+    component_states = list(source["state"].find({}))
+    if component_states:
+        if snapshot is not None:
+            raise ValueError(
+                "Source mixes strategy snapshots and component state; choose one authoritative source"
+            )
+        states = convert_component_states(
+            component_states, original_orders, source_database=source_database
+        )
     blotter = [
         convert_blotter(document, source_database=source_database)
         for document in source["blotter"].find({})
@@ -379,6 +599,7 @@ def migrate(
     report["source_counts"] = {
         "orders": source["orders"].estimated_document_count(),
         "strategy_snapshots": source["strategies"].estimated_document_count(),
+        "state": len(component_states),
         "blotter": source["blotter"].estimated_document_count(),
     }
     if apply:

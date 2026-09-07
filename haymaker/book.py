@@ -660,7 +660,20 @@ class Book:
                 self._state_saver,
                 self._encode_position(cleared_position),
             )
-        for target in self._targets.values():
+        targets_to_clear = dict(self._targets)
+        # Residual liquidation/manual evidence can exist without a Portfolio
+        # target. It needs the same durable reset cutoff as attributed targets.
+        for contract in self.direct_positions():
+            targets_to_clear.setdefault(
+                contract.conId,
+                TargetState(
+                    execution_model_name="reset",
+                    contract=contract,
+                    target_quantity=0,
+                    target_created_at=cleared_at,
+                ),
+            )
+        for target in targets_to_clear.values():
             cleared_target = replace(
                 target,
                 target_quantity=0.0,

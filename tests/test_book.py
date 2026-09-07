@@ -604,18 +604,20 @@ def test_clear_state_persists_flat_tombstones_before_restart(
     assert recovered.load_portfolio_state("allocation") == {}
 
 
+@pytest.mark.parametrize("with_target", [False, True])
 def test_clear_state_durably_resets_direct_fill_projection(
-    book, order_saver, state_saver
+    book, order_saver, state_saver, with_target
 ):
     trade_ = trade(quantity=2)
-    book.update_target(
-        TargetState(
-            execution_model_name="serial",
-            contract=trade_.contract,
-            target_quantity=2,
-            target_created_at=datetime.now(timezone.utc),
+    if with_target:
+        book.update_target(
+            TargetState(
+                execution_model_name="serial",
+                contract=trade_.contract,
+                target_quantity=2,
+                target_created_at=datetime.now(timezone.utc),
+            )
         )
-    )
     book.save_order(
         order_info(
             trade_,

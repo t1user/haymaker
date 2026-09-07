@@ -44,7 +44,7 @@ otherwise generate value equality again.
    :members:
 
 Blueprints and concrete Contracts
---------------------------------
+---------------------------------
 
 Assign an ordinary ``ibi.Contract`` blueprint to ``atom.contract``. Reading
 ``atom.contract`` resolves its current ``which_contract`` role. Reading
@@ -508,7 +508,7 @@ interpret ``as_of``; concrete policies own those decisions.
    :members: process, positions_for_blueprint
 
 Portfolio accounting and optional state
---------------------------------------
+---------------------------------------
 
 Use ``self.book.aggregate_quantity(contract)`` for filled quantity in an exact
 Contract and ``self.book.active_orders(contract=contract)`` for working orders.
@@ -608,7 +608,7 @@ are retained. FutureRoller persists ``RollState`` before any broker order and ne
 series membership from symbol, exchange, or multiplier alone.
 
 Custom triggers and destinations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Supply ``roll_policy=`` to either execution model to customize the trigger and
 destination without replacing durable execution. A bracket policy applies to
@@ -835,3 +835,18 @@ The standalone converter is dry-run by default and never modifies its source:
 Inspect the count, P&L, identifier, active-state, and episode report. Add
 ``--apply`` only after selecting an empty target database. Compatible reruns
 are idempotent; mixed or foreign target data is refused.
+
+The converter accepts legacy strategy snapshots or component ``state`` records,
+not a mixture of both. It preserves complete Trade diagnostics and authoritative
+explicit Fill/CommissionReport evidence. Older one-to-one records without
+separate held/pending Contracts are reconciled to episode order evidence;
+missing or ambiguous evidence is refused. Direct keyed records convert only
+when their held and working exposure belongs to the target's concrete Contract.
+Multiple old targets mapping to one conId require an explicit allocation
+decision before conversion. Finish pending rolls under the old implementation
+before changing their schema. Existing non-empty databases produced by another
+converter version are incompatible targets.
+
+The report distinguishes optional blotter totals from deduplicated Fill-level
+commission/P&L totals and includes source/episode order grouping even when
+blotter writing was disabled. No live schema fallback or dual writes exist.

@@ -65,3 +65,11 @@ Contract. Direct targets always refer to their exact concrete Contract.
   Recovery between the two transfer writes is explicitly tested. Target
   verification now waits for pending roll state, not standing protection.
   Full pytest: 1,631 passed; mypy: 111 files clean; Black/diff checks passed.
+- Checkpoint 8: converter supports explicit component evidence and refuses
+  ambiguous keyed allocations, missing episode evidence, mixed source schemas
+  and pending rolls. Versioned provenance makes reruns idempotent. Added
+  Fill-level commission/P&L reports independent of optional blotter. Reset
+  cutoffs now also cover residual evidence without a Portfolio target. Final
+  semantics documented; no database conversion executed. Full pytest: 1,637
+  passed; mypy: 112 files clean; Black/diff checks passed. Strict documentation
+  and additional diagnostic checks continue in checkpoint 9.

@@ -278,12 +278,12 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   to Portfolio, not to broker Fill attribution. Multiple expiries may coexist.
   The one-to-one path uses a signal processor, `PortfolioWrapper`, and
   `PositionAllocator`. Execution models have stable unique configured names;
+  preserving a name across deployments promises recovery-compatible behavior.
   PortfolioStateMixin optionally exposes explicit load_state/save_state under
   portfolio_key, defaulting to Book; independent persistence is permitted.
   Execution targetReachedEvent forwards completion via Atom feedback, including
   through Router. It follows fill accounting, carries persisted target fields,
   and may repeat after recovery. Custom Portfolio feedback must be idempotent.
-  preserving a name across deployments promises recovery-compatible behavior.
   Current Router rules always select the model. At startup, every active direct
   `TARGET_ADJUSTMENT` must still select its persisted owner; disagreement,
   missing recovery state, or ambiguous ownership blocks that Router locally
@@ -305,7 +305,8 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - Target execution models register exactly one process-wide mode-specific
   `FutureRollExecutor` family. Controller owns the single daily schedule,
   stale-holding discovery, and startup recovery coordination; direct or bracket
-  executors own durable sequencing. Modes cannot be mixed. Direct rolls wait for endpoint adjustments and persist an idempotent
+  executors own durable sequencing. Modes cannot be mixed. Direct rolls wait
+  for endpoint adjustments and persist an idempotent
   target transfer: old target zero, destination target plus old target; newer
   explicit targets supersede that snapshot. Bracket rolls preserve
   `source_key`/`position_id`, roll broker-net exposure, and require an active

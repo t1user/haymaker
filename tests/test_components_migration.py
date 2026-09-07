@@ -14,6 +14,7 @@ MIGRATION_VERSION = _MIGRATION["MIGRATION_VERSION"]
 convert_blotter = _MIGRATION["convert_blotter"]
 convert_latest_strategy_snapshot = _MIGRATION["convert_latest_strategy_snapshot"]
 convert_order = _MIGRATION["convert_order"]
+convert_component_states = _MIGRATION["convert_component_states"]
 migrate = _MIGRATION["migrate"]
 order_role = _MIGRATION["order_role"]
 validation_report = _MIGRATION["validation_report"]
@@ -339,6 +340,7 @@ def test_migration_defaults_to_non_mutating_dry_run():
     assert report["source_counts"] == {
         "orders": 1,
         "strategy_snapshots": 1,
+        "state": 0,
         "blotter": 1,
     }
     assert report["target_counts"] == {
@@ -382,3 +384,138 @@ def test_migration_refuses_mixed_or_foreign_target_database():
             source_database="legacy",
             target_database="fresh",
         )
+
+
+def component_order(*, source_key=None, target_key=None):
+    """Build old component evidence with explicit fills absent from Trade.fills."""
+    from haymaker.book import FillRecord, OrderInfo
+
+    trade = legacy_trade()
+    record = FillRecord.from_fill(trade, trade.fills[0])
+    trade.fills.clear()
+    document = OrderInfo(
+        trade=trade,
+        role="OPEN" if source_key else "TARGET_ADJUSTMENT",
+        source_key=source_key,
+        position_id="episode" if source_key else None,
+        execution_model_name="model",
+        submitted_at=trade.log[0].time,
+        params={"atr": 5},
+        fills=(record,),
+    ).encode()
+    if target_key is not None:
+        document["target_key"] = target_key
+    return document
+
+
+def keyed_target(con_id=1, key="old-key"):
+    """Represent the old logical-key direct state."""
+    from haymaker.book import Book, TargetState
+
+    document = Book._encode_target(
+        TargetState(
+            contract=ibi.Future("ES", conId=con_id, exchange="CME"),
+            execution_model_name="model",
+            target_quantity=1,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    document["target_key"] = key
+    document["state_key"] = f"target:{key}"
+    return document
+
+
+def test_component_order_keeps_authoritative_fills_and_commissions():
+    """Trade is diagnostic; conversion must preserve its separate Fill evidence."""
+    original = component_order(target_key="old-key")
+    converted = convert_order(original, source_database="old")
+    assert "target_key" not in converted
+    assert original["target_key"] == "old-key"
+    assert converted["fills"] == original["fills"]
+    assert converted["submitted_at"] == original["submitted_at"]
+    assert converted["execution_model_name"] == "model"
+    report = validation_report([converted], [], [])
+    assert report["fill_totals"] == {
+        "unique_fills": 1,
+        "commission": 1,
+        "realized_pnl": 2,
+    }
+
+
+def test_component_state_separates_held_and_pending_contract_and_inputs():
+    """The overwritten old target Contract cannot be mistaken for the holding."""
+    from haymaker.book import Book, PositionState
+
+    incoming = ibi.Future("ES", conId=2, exchange="CME")
+    state = Book._encode_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="model",
+            contract=incoming,
+            quantity=1,
+            target_quantity=-1,
+            target_created_at=datetime.now(timezone.utc),
+            position_id="episode",
+            bracket_inputs={"atr": 9},
+        )
+    )
+    del state["target_contract"]
+    del state["target_bracket_inputs"]
+    result = convert_component_states(
+        [state], [component_order(source_key="alpha")], source_database="old"
+    )[0]
+    restored = Book._decode_position(result)
+    assert restored.contract.conId == 1
+    assert restored.target_contract == incoming
+    assert restored.bracket_inputs == {"atr": 5}
+    assert restored.target_bracket_inputs == {"atr": 9}
+
+
+def test_keyed_direct_state_converts_only_unambiguous_concrete_ownership():
+    """Do not invent allocation between an old holding and a different target."""
+    orders = [component_order(target_key="old-key")]
+    converted = convert_component_states(
+        [keyed_target()], orders, source_database="old"
+    )[0]
+    assert converted["state_key"] == "target:1"
+    assert "target_key" not in converted
+    with pytest.raises(ValueError, match="Ambiguous concrete allocation"):
+        convert_component_states(
+            [keyed_target(con_id=2)], orders, source_database="old"
+        )
+    with pytest.raises(ValueError, match="Multiple old states"):
+        convert_component_states(
+            [keyed_target(), keyed_target(key="other")], orders, source_database="old"
+        )
+
+
+def test_component_conversion_apply_is_idempotent_and_source_is_unchanged():
+    """A fresh target can be safely retried with deterministic provenance."""
+    from copy import deepcopy
+
+    client = FakeClient()
+    orders = [component_order(target_key="old-key")]
+    states = [keyed_target()]
+    original = deepcopy((orders, states))
+    client["old"]["orders"] = FakeCollection(orders)
+    client["old"]["state"] = FakeCollection(states)
+    first = migrate(client, source_database="old", target_database="fresh", apply=True)
+    second = migrate(client, source_database="old", target_database="fresh", apply=True)
+    assert (
+        first["target_counts"]
+        == second["target_counts"]
+        == {"orders": 1, "state": 1, "blotter": 0}
+    )
+    assert (orders, states) == original
+
+
+def test_pending_roll_schema_change_is_refused_before_writes():
+    """A converter does not reinterpret in-flight broker sequencing."""
+    client = FakeClient()
+    client["old"]["state"] = FakeCollection(
+        [{"state_type": "roll", "stage": "ROLL_ORDER_ACTIVE"}]
+    )
+    with pytest.raises(ValueError, match="Finish pending roll"):
+        migrate(client, source_database="old", target_database="fresh", apply=True)
+    assert client["fresh"]["orders"].documents == []
+    assert client["fresh"]["state"].documents == []
