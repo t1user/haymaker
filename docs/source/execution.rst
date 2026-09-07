@@ -669,6 +669,17 @@ after recovery is idempotent; newer explicit targets supersede it. Holdings in
 other expiries remain independent. Custom executors can override
 ``target_transfers()`` without replacing the broker execution sequence.
 
+An optional Portfolio callback can subscribe to
+``controller.future_roller.completedEvent``. It receives the completed
+``RollState`` after Book has accounted for the movement and applied target
+transfers. Use its concrete endpoints to update your source allocation model
+and save your normalized Portfolio state if required. This notification is not
+a durable message queue: on process recovery, reconcile allocations with Book's
+latest targets and holdings instead of requiring an old callback to replay.
+Ordinary upstream ``targetReachedEvent`` feedback remains a PositionTarget.
+Target verification waits for roll sequencing (within its configured retry
+limit), but does not wait for standing protective stop/take-profit orders.
+
 :class:`~haymaker.components.BracketFutureRollExecutor` preserves
 ``source_key`` and ``position_id`` while processing logical episodes serially.
 Because IB exposes only the account net, offsetting logical sources are assigned

@@ -59,3 +59,9 @@ Contract. Direct targets always refer to their exact concrete Contract.
   snapshots and durable schedule markers prevent fixed-schedule cascades across
   restart. Public daily/custom check behavior documented. Full pytest: 1,626
   passed; mypy: 111 files clean; Black and diff checks passed.
+- Checkpoint 7: independent IB-boundary roll tests now cover physical combo
+  legs, additive transfers, newer targets, missed callbacks, critical bracket
+  replacement, preserved episode identity and a reversal requested mid-roll.
+  Recovery between the two transfer writes is explicitly tested. Target
+  verification now waits for pending roll state, not standing protection.
+  Full pytest: 1,631 passed; mypy: 111 files clean; Black/diff checks passed.

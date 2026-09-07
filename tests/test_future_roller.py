@@ -473,6 +473,45 @@ def test_direct_roll_waits_for_active_target_adjustment(book):
     assert book.order_by_id(controller.trades[-1].order.orderId).role == "ROLL"
 
 
+def test_direct_transfer_recovery_after_only_first_target_was_written(
+    book, monkeypatch
+):
+    """A crash between absolute writes cannot add to the destination twice."""
+    old, active, next_ = [future(i, f"NG{i}") for i in range(1, 4)]
+    persist_direct_position(book, old)
+    persist_direct_position(book, active, quantity=3)
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    executor = roller.register_executor(FutureRollMode.DIRECT)
+    roller.roll()
+    trade = controller.trades[-1]
+    # Suppress the callback, then reproduce persisted ROLL_FILLED recovery.
+    trade.filledEvent.clear()
+    apply_fill(book, trade, 2, "transfer-crash")
+    state = replace(book.roll_state("ng-series"), stage=FutureRollStage.ROLL_FILLED)
+    book.update_roll(state)
+    original = book.update_target
+
+    def interrupted(target):
+        """Fail the destination write after successfully writing the old zero."""
+        if target.contract == active:
+            raise RuntimeError("simulated process interruption")
+        return original(target)
+
+    monkeypatch.setattr(book, "update_target", interrupted)
+    with pytest.raises(RuntimeError, match="simulated"):
+        executor.advance(state)
+    assert book.target_state(old).target_quantity == 0
+    assert book.target_state(active).target_quantity == 3
+    monkeypatch.setattr(book, "update_target", original)
+    # Round-trip the journal to discard any reliance on the old Python object.
+    book.update_roll(book._decode_roll(book._encode_roll(book.roll_state("ng-series"))))
+    roller.recover()
+    assert book.target_state(active).target_quantity == 5
+    roller.recover()
+    assert book.target_state(active).target_quantity == 5
+
+
 def test_partial_bracket_roll_fill_projects_both_concrete_positions(book):
     old = future(1, "NGQ26")
     active = future(2, "NGU26")

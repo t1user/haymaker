@@ -30,6 +30,11 @@ class EpisodeBroker(ibi.IB):
         self.submitted: list[ibi.Trade] = []
         self.quantities: dict[ibi.Contract, float] = {}
         self._execution_number = 0
+        self.contracts: dict[int, ibi.Contract] = {}
+
+    def register_contracts(self, *contracts: ibi.Contract) -> None:
+        """Supply qualified combo-leg identities to the independent broker ledger."""
+        self.contracts.update((contract.conId, contract) for contract in contracts)
 
     def placeOrder(self, contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:
         """Accept a broker order and assign real-shaped IB identifiers."""
@@ -77,6 +82,7 @@ class EpisodeBroker(ibi.IB):
         broker = EpisodeBroker()
         broker.quantities = deepcopy(self.quantities)
         broker._execution_number = self._execution_number
+        broker.contracts = deepcopy(self.contracts)
         broker.submitted = [
             ibi.Trade(
                 contract=deepcopy(trade.contract),
@@ -103,9 +109,15 @@ class EpisodeBroker(ibi.IB):
         self._execution_number += 1
         now = datetime.now(timezone.utc)
         side = 1 if trade.order.action == "BUY" else -1
-        self.quantities[trade.contract] = (
-            self.quantities.get(trade.contract, 0) + side * quantity
-        )
+        if isinstance(trade.contract, ibi.Bag):
+            for leg in trade.contract.comboLegs:
+                contract = self.contracts[leg.conId]
+                delta = side * quantity * leg.ratio * (1 if leg.action == "BUY" else -1)
+                self.quantities[contract] = self.quantities.get(contract, 0) + delta
+        else:
+            self.quantities[trade.contract] = (
+                self.quantities.get(trade.contract, 0) + side * quantity
+            )
         execution = ibi.Execution(
             execId=f"episode-{self._execution_number}",
             orderId=trade.order.orderId,
@@ -122,6 +134,7 @@ class EpisodeBroker(ibi.IB):
         complete = trade.remaining() == 0
         if complete:
             trade.orderStatus.status = ibi.OrderStatus.Filled
+            trade.orderStatus.avgFillPrice = execution.price
         self.execDetailsEvent.emit(trade, fill)
         self.orderStatusEvent.emit(trade)
         trade.fillEvent.emit(trade, fill)

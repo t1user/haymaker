@@ -600,7 +600,11 @@ class Controller(Atom):
         retries = 0
         if not self._target_is_latest(target, execution_model_name):
             return False
-        while self._active_target_orders(target, execution_model_name):
+        while self._active_target_orders(target, execution_model_name) or (
+            self.book.roll_state_for_source(target.source_key)
+            if target.source_key is not None
+            else self.book.roll_state_for_contract(target.contract)
+        ):
             if retries >= self.execution_verification_max_retries:
                 break
             retries += 1
