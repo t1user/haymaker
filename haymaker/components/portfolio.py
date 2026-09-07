@@ -79,6 +79,10 @@ class PortfolioWrapper(Atom):
     one absolute PositionTarget. It is the supported adapter for dedicated
     one-to-one execution paths; account-wide recomputation uses
     :class:`Portfolio` directly.
+
+    The wrapper preserves the proposal Contract, including on CLOSE. It does
+    not look up holdings: BracketExecutionModel resolves the source's held
+    Contract and orchestrates closing or reversing its episode.
     """
 
     def __init__(self, allocator: PositionAllocator) -> None:

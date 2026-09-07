@@ -174,10 +174,19 @@ class Controller(Atom):
             contracts = (
                 tuple(self.book.direct_positions(target.target_key))
                 if target.target_key is not None
-                else (target.contract,)
+                else self._episode_contracts(target)
             )
             for contract in contracts or (target.contract,):
                 self.verify_position_with_broker(contract)
+
+    def _episode_contracts(self, target: PositionTarget) -> tuple[ibi.Contract, ...]:
+        """Verify held execution identity, not a CLOSE message's destination."""
+        state = (
+            self.book.position_state(target.source_key)
+            if target.source_key is not None
+            else None
+        )
+        return (state.contract,) if state is not None and state.contract else ()
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
         self._health_check_functions.append(func)
@@ -656,7 +665,6 @@ class Controller(Atom):
         else:
             orders = self.book.active_orders(
                 source_key=target.source_key,
-                contract=target.contract,
                 execution_model_name=execution_model_name,
             )
         return tuple(info for info in orders if info.role in roles)
@@ -671,8 +679,8 @@ class Controller(Atom):
             return (
                 position_state is not None
                 and position_state.execution_model_name == execution_model_name
-                and position_state.contract is not None
-                and position_state.contract.conId == target.contract.conId
+                and position_state.target_contract is not None
+                and position_state.target_contract.conId == target.contract.conId
                 and position_state.target_quantity == target.target_quantity
                 and position_state.target_created_at == target.created_at
             )

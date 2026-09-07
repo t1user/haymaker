@@ -207,6 +207,8 @@ def convert_latest_strategy_snapshot(
                 "quantity": quantity,
                 "target_quantity": quantity,
                 "target_created_at": snapshot_time,
+                "target_contract": tree(contract),
+                "target_bracket_inputs": tree(bracket_inputs),
                 "position_id": state.get("position_id") or None,
                 "blocked_direction": blocked_direction,
                 "bracket_inputs": tree(bracket_inputs),

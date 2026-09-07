@@ -36,3 +36,7 @@ Contract. Direct targets always refer to their exact concrete Contract.
 - Checkpoint 1: independent IB-boundary harness and three pipeline tests added.
   Full pytest: 1,596 passed. Mypy: 110 source files clean. Black and diff checks
   passed. Blotter-disabled commission persistence is exercised explicitly.
+- Checkpoint 2: held/pending Contract and bracket-input separation, source-based
+  CLOSE verification, durable reversal recovery, and first-fill-only block
+  clearing. Independent suite covers 17 scenarios, including restarts before,
+  during and after close fills. Full pytest: 1,610 passed; mypy: 110 files clean.

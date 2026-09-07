@@ -398,6 +398,13 @@ class BracketExecutionModel(ExecutionModel):
     orders' OCA group so the filled close cancels remaining brackets. Non-zero
     same-side resizing is not supported; use
     :class:`~haymaker.components.SerialTargetExecutionModel` for that policy.
+
+    OPEN uses the incoming target Contract. CLOSE uses the held or pending-entry
+    Contract recorded for this source, regardless of the target Contract.
+    REVERSE closes that episode completely before opening the incoming
+    Contract as a new episode. Book persists the held and pending-target
+    Contracts and their bracket inputs separately, so restarts and changes to
+    ACTIVE/NEXT cannot redirect a close or lose a reversal destination.
     """
 
     def __init__(
@@ -496,7 +503,6 @@ class BracketExecutionModel(ExecutionModel):
             state = PositionState(
                 source_key=self.source_key,
                 execution_model_name=self.name,
-                contract=target.contract,
             )
         elif state.execution_model_name != self.name and (
             state.quantity or self.book.active_orders(source_key=self.source_key)
@@ -506,17 +512,15 @@ class BracketExecutionModel(ExecutionModel):
                 f"{state.execution_model_name!r}"
             )
         bracket_inputs = (
-            self._bracket_inputs(target.metadata)
-            if target.target_quantity
-            else state.bracket_inputs if state is not None else {}
+            self._bracket_inputs(target.metadata) if target.target_quantity else {}
         )
         state = replace(
             state,
             execution_model_name=self.name,
-            contract=target.contract,
+            target_contract=target.contract,
             target_quantity=target.target_quantity,
             target_created_at=target.created_at,
-            bracket_inputs=bracket_inputs,
+            target_bracket_inputs=bracket_inputs,
             updated_at=datetime.now(timezone.utc),
         )
         self.book.update_position(state)
@@ -575,7 +579,7 @@ class BracketExecutionModel(ExecutionModel):
         if self.book.roll_state_for_source(self.source_key) is not None:
             return
         state = self.book.position_state(self.source_key)
-        if state is None or state.target_quantity is None or state.contract is None:
+        if state is None or state.target_quantity is None:
             return
         active_adjustments = tuple(
             info
@@ -612,16 +616,19 @@ class BracketExecutionModel(ExecutionModel):
 
     def _submit_open(self, state: PositionState) -> None:
         target = state.target_quantity or 0.0
-        if target == 0 or state.contract is None:
+        if target == 0:
             return
-        if state.position_id is None:
+        contract = state.target_contract
+        if contract is None:
+            raise RuntimeError("Pending entry has no target Contract in Book")
+        if state.position_id is None or state.contract != state.target_contract:
             state = self.book.create_position_episode(
                 self.source_key,
                 self.name,
-                state.contract,
+                contract,
                 target_quantity=target,
                 target_created_at=state.target_created_at or datetime.now(timezone.utc),
-                bracket_inputs=state.bracket_inputs,
+                bracket_inputs=state.target_bracket_inputs,
             )
         order = ibi.Order(
             **self.open_options,
@@ -629,7 +636,7 @@ class BracketExecutionModel(ExecutionModel):
             totalQuantity=abs(target),
         )
         trade = self.controller.trade(
-            state.contract,
+            contract,
             order,
             role=StandardOrderRole.OPEN,
             execution_model_name=self.name,
@@ -641,7 +648,8 @@ class BracketExecutionModel(ExecutionModel):
             self._bind_entry(trade)
 
     def _submit_close(self, state: PositionState) -> None:
-        assert state.contract is not None
+        if state.contract is None:
+            raise RuntimeError("Cannot close an episode without its held Contract")
         options = {
             **self.close_options,
             **self._active_bracket_oca_options(),

@@ -113,7 +113,8 @@ The research package is intentionally separate from live execution. It works dir
   before comparison, and requests supervisor-owned recovery before correction
   where required.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
-- `haymaker/book.py`: typed order/fill evidence, one-to-one PositionState,
+- `haymaker/book.py`: typed order/fill evidence, one-to-one PositionState
+  separating held Contract/bracket inputs from pending-target Contract/inputs,
   target-keyed direct TargetState, per-series RollState, Fill-derived direct
   physical positions with durable per-target reset cutoffs, Portfolio recovery
   mappings, rejection tracking, active-order ownership queries, blotter access,

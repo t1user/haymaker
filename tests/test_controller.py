@@ -1067,6 +1067,7 @@ async def test_target_verification_uses_absolute_quantity(controller_runtime, ca
             contract=contract(),
             quantity=2,
             target_quantity=target.target_quantity,
+            target_contract=target.contract,
             target_created_at=target.created_at,
         )
     )
@@ -1096,6 +1097,7 @@ async def test_target_verification_does_not_wait_for_protective_orders(
             source_key="alpha",
             execution_model_name="brackets",
             contract=target.contract,
+            target_contract=target.contract,
             quantity=1,
             target_quantity=1,
             target_created_at=target.created_at,

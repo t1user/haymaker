@@ -7,6 +7,7 @@ projection methods, and use the real Trader and Controller.
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import ib_insync as ibi
@@ -70,6 +71,23 @@ class EpisodeBroker(ibi.IB):
             for contract, quantity in self.quantities.items()
             if quantity
         ]
+
+    def restarted(self) -> EpisodeBroker:
+        """Rebuild broker data without retaining any old Trade event callbacks."""
+        broker = EpisodeBroker()
+        broker.quantities = deepcopy(self.quantities)
+        broker._execution_number = self._execution_number
+        broker.submitted = [
+            ibi.Trade(
+                contract=deepcopy(trade.contract),
+                order=deepcopy(trade.order),
+                orderStatus=deepcopy(trade.orderStatus),
+                fills=deepcopy(trade.fills),
+                log=deepcopy(trade.log),
+            )
+            for trade in self.submitted
+        ]
+        return broker
 
     async def fill(
         self,

@@ -252,7 +252,16 @@ instruments. Explicit ContractRegistry membership permits one futures key to
 survive a concrete expiry change. It converges again after completion, recovery,
 and a completed direct roll.
 
-`BracketExecutionModel` owns one configured source key. New targets require a
+`BracketExecutionModel` owns one configured source key. OPEN uses the incoming
+Contract; CLOSE uses the source's held or pending-entry Contract in Book,
+regardless of the incoming Contract. REVERSE closes the old episode completely
+before opening the incoming Contract. Book persists episode and pending-target
+Contracts and bracket inputs separately; acceptance and ACTIVE/NEXT changes
+never overwrite the identity of a holding. PortfolioWrapper only allocates and
+transfers intent. Reversal continuation is durable, not dependent on a replayed
+`filledEvent` callback.
+
+New targets require a
 matching source and initially consistent PositionIntent. Numeric target is
 authoritative afterward. It supports no-op, OPEN, CLOSE, and REVERSE, rejects
 non-zero same-side resizing, creates a new `position_id` for each opening

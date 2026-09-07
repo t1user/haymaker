@@ -281,6 +281,8 @@ class SyncCoordinator:
             state,
             quantity=quantity,
             target_quantity=quantity,
+            target_contract=None if flat else state.contract,
+            target_bracket_inputs={} if flat else state.bracket_inputs,
             target_created_at=corrected_at,
             position_id=None if flat else state.position_id,
             bracket_inputs={} if flat else state.bracket_inputs,

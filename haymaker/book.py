@@ -268,7 +268,13 @@ class OrderInfo:
 
 @dataclass(frozen=True, kw_only=True)
 class PositionState:
-    """Recover one independently managed one-to-one position episode."""
+    """Recover an episode separately from its latest accepted target.
+
+    ``contract`` and ``bracket_inputs`` belong to the holding or submitted
+    entry. ``target_contract`` and ``target_bracket_inputs`` belong to the
+    pending opening destination; accepting a reversal must not change the
+    Contract or protection inputs of the episode being closed.
+    """
 
     source_key: str
     execution_model_name: str
@@ -276,6 +282,8 @@ class PositionState:
     quantity: float = 0.0
     target_quantity: float | None = None
     target_created_at: datetime | None = None
+    target_contract: ibi.Contract | None = None
+    target_bracket_inputs: Mapping[str, Any] = field(default_factory=dict)
     position_id: str | None = None
     blocked_direction: Literal[-1, 1] | None = None
     bracket_inputs: Mapping[str, Any] = field(default_factory=dict)
@@ -292,6 +300,13 @@ class PositionState:
         )
         if self.contract is not None:
             ib_contract(self.contract)
+        if self.target_contract is not None:
+            ib_contract(self.target_contract)
+        object.__setattr__(
+            self,
+            "target_bracket_inputs",
+            readonly_mapping(self.target_bracket_inputs, "target_bracket_inputs"),
+        )
         if isinstance(self.blocked_direction, bool) or (
             self.blocked_direction not in (None, -1, 1)
         ):
@@ -635,6 +650,8 @@ class Book:
                 quantity=0.0,
                 target_quantity=0.0,
                 target_created_at=cleared_at,
+                target_contract=None,
+                target_bracket_inputs={},
                 position_id=None,
                 blocked_direction=None,
                 bracket_inputs={},
@@ -1196,10 +1213,13 @@ class Book:
             source_key=source_key,
             execution_model_name=execution_model_name,
             contract=contract,
+            target_contract=contract,
             target_quantity=target_quantity,
             target_created_at=target_created_at,
             position_id=str(uuid4()),
             bracket_inputs=bracket_inputs,
+            target_bracket_inputs=bracket_inputs,
+            blocked_direction=self.blocked_direction(source_key),
         )
         return self.update_position(state)
 
@@ -1212,6 +1232,8 @@ class Book:
                 state,
                 quantity=0.0,
                 target_quantity=0.0,
+                target_contract=None,
+                target_bracket_inputs={},
                 position_id=None,
                 bracket_inputs={},
                 updated_at=_utc_now(),
@@ -1299,6 +1321,10 @@ class Book:
                 contract=trade.contract,
                 quantity=quantity,
                 target_quantity=target_quantity,
+                target_contract=None if protective_exit else state.target_contract,
+                target_bracket_inputs=(
+                    {} if protective_exit else state.target_bracket_inputs
+                ),
                 blocked_direction=blocked,
                 position_id=None if episode_closed else state.position_id,
                 bracket_inputs=(
@@ -1467,6 +1493,8 @@ class Book:
             "quantity": state.quantity,
             "target_quantity": state.target_quantity,
             "target_created_at": state.target_created_at,
+            "target_contract": tree(state.target_contract),
+            "target_bracket_inputs": tree(dict(state.target_bracket_inputs)),
             "position_id": state.position_id,
             "blocked_direction": state.blocked_direction,
             "bracket_inputs": tree(dict(state.bracket_inputs)),
@@ -1482,6 +1510,8 @@ class Book:
             quantity=float(data.get("quantity", 0.0)),
             target_quantity=data.get("target_quantity"),
             target_created_at=decode_tree(data.get("target_created_at")),
+            target_contract=decode_tree(data["target_contract"]),
+            target_bracket_inputs=decode_tree(data["target_bracket_inputs"]),
             position_id=data.get("position_id"),
             blocked_direction=data.get("blocked_direction"),
             bracket_inputs=decode_tree(data.get("bracket_inputs", {})),

@@ -77,6 +77,15 @@ the same registered futures series. One-to-one targets instead carry
 ``source_key`` and the mandatory proposal intent supplied by
 ``PortfolioWrapper``. A target cannot carry both identities.
 
+One-to-one Contract selection belongs to ``BracketExecutionModel``, not the
+wrapper. OPEN uses the incoming target Contract. CLOSE uses the source's held
+or pending-entry Contract in Book even if the incoming target names another
+expiry. REVERSE completely closes that episode before opening the incoming
+Contract under a new position ID. Book stores held and pending-target Contracts
+and their bracket inputs separately; changing ACTIVE/NEXT or accepting a newer
+target never changes the identity of an existing holding. Recovery resumes the
+pending operation without requiring an old Trade callback to be replayed.
+
 .. autoclass:: haymaker.components.Signal
 
 .. autoclass:: haymaker.components.SignalPair

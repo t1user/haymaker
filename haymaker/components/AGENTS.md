@@ -171,6 +171,12 @@ ContractRegistry series membership allows that key to survive futures expiry
 changes; do not infer series identity from Contract symbols.
 `BracketExecutionModel` owns one `source_key`, validates initial intent, rejects
 non-zero same-side resizing,
+uses the incoming Contract for OPEN, and uses Book's held or pending-entry
+Contract for CLOSE regardless of the incoming Contract. REVERSE fully closes
+the old episode before opening the incoming Contract. PositionState separates
+`contract`/`bracket_inputs` from `target_contract`/`target_bracket_inputs`.
+Acceptance never overwrites an existing holding. PortfolioWrapper only
+allocates and transfers intent; it does not resolve held Contracts. The model
 preserves `position_id` through an episode, and attaches brackets only after a
 complete entry fill. Its stop-loss is critical; take-profit is optional and a
 missing take-profit is not a sync failure. Regular closes share the active

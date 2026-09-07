@@ -116,7 +116,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   positions close to a roll. `Atom.which_contract` selects the role exposed by
   that atom; it does not redefine which contract is ACTIVE. OPEN uses the
   signal-selected contract, CLOSE uses Book's persisted held contract, and
-  `FutureRoller` permits held contracts that are either ACTIVE or NEXT and
+  REVERSE completely closes the old episode before opening the incoming
+  Contract. Book keeps held and pending-target Contracts and bracket inputs
+  separate; PortfolioWrapper never resolves the held Contract. Recovery derives
+  continuation from persisted state rather than a transient filled callback.
+  Currently `FutureRoller` permits held contracts that are either ACTIVE or NEXT and
   rolls holdings outside that set. ContractRegistry maps qualified expiry
   `conId` values to their registered blueprint series; rolling never guesses
   identity from symbol fields. A NEXT-only
