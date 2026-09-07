@@ -73,3 +73,10 @@ Contract. Direct targets always refer to their exact concrete Contract.
   semantics documented; no database conversion executed. Full pytest: 1,637
   passed; mypy: 112 files clean; Black/diff checks passed. Strict documentation
   and additional diagnostic checks continue in checkpoint 9.
+- Checkpoint 9: validation and the separate components/Portfolio review are
+  complete; see `final_review.md`. Full pytest: 1,637 passed; mypy: 112 files
+  clean; all 38 changed Python files pass Black. Remaining findings include a
+  reproduced stale-quantity bracket-roll wait, repeated fill-history query
+  work, two Portfolio configuration surprises, five existing Pyright override
+  diagnostics, and 81 strict Sphinx reference warnings. These are reported,
+  not silently fixed or represented as passing acceptance checks.
