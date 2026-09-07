@@ -87,12 +87,11 @@ processor. It preserves the original Signal, selects direction `-1`, `0`, or
 
 `PositionTarget` is an absolute signed setpoint for a concrete execution
 Contract. It never captures current quantity or a proposed delta. Its numeric
-target remains authoritative after acceptance. Direct Portfolio output requires
-one stable opaque `target_key` and omits `source_key` and intent. The same key
-identifies a logical futures target across concrete expiries in its registered
-series. The wrapper/bracket flow instead requires `source_key` and
-`PositionIntent`. The two identities are mutually exclusive. Intent is checked
-at initial acceptance and is not a durable execution command.
+target remains authoritative after acceptance. Direct Portfolio output omits
+source and intent and targets the exact concrete conId. Multiple expiries may
+coexist; Portfolio owns their allocation. The wrapper/bracket flow instead
+requires source_key and PositionIntent. Intent is checked at initial acceptance
+and is not a durable execution command.
 
 Order attribution uses open-ended strings. `StandardOrderRole` supplies OPEN,
 CLOSE, TARGET_ADJUSTMENT, STOP_LOSS, TAKE_PROFIT, ROLL, LIQUIDATION,
@@ -171,7 +170,7 @@ The abstract base does not batch, debounce, time out, or interpret `as_of`.
 Concrete implementations own input state, synchronization, duplicate/late
 handling, EVENT accumulation, and recomputation. One input may produce zero,
 one, or several targets. Each emitted target has a stable Portfolio-owned
-`target_key` and omits the one-to-one `source_key` and intent.
+concrete Contract and omits the one-to-one `source_key` and intent.
 
 The direct composition is:
 
@@ -208,7 +207,7 @@ queries and recovery for:
 - `PositionState`: one-to-one fill-accounted quantity, latest target, Contract,
   model name, episode ID, stopped direction, and only validated bracket
   recovery inputs;
-- `TargetState`: latest direct Contract target keyed by stable `target_key`;
+- `TargetState`: latest direct Contract target keyed by concrete `conId`;
 - `RollState`: one current durable roll cursor per registered futures series;
 - normalized Portfolio recovery mappings keyed by `portfolio_key`.
 
@@ -229,7 +228,7 @@ documents use:
 
 ```text
 position:{source_key}
-target:{target_key}
+target:{conId}
 roll:{series_key}
 portfolio:{portfolio_key}
 ```
@@ -257,12 +256,10 @@ waits only for target-converging OPEN, CLOSE, and TARGET_ADJUSTMENT orders and
 silently abandons a check when a newer target supersedes it; protective orders
 do not delay verification.
 
-`SerialTargetExecutionModel` groups by stable `target_key`, supports arbitrary
+`SerialTargetExecutionModel` groups by concrete conId, supports arbitrary
 quantities and same-side resizing, ignores optional intent, and permits one
-active TARGET_ADJUSTMENT order per key. A key cannot identify two live
-instruments. Explicit ContractRegistry membership permits one futures key to
-survive a concrete expiry change. It converges again after completion, recovery,
-and a completed direct roll.
+active TARGET_ADJUSTMENT per Contract. It never chooses a different held
+expiry. It converges after completion, recovery, and a completed direct roll.
 
 `BracketExecutionModel` owns one configured source key. OPEN uses the incoming
 Contract; CLOSE uses the source's held or pending-entry Contract in Book,
@@ -313,10 +310,9 @@ implementation and configuration remain recovery-compatible.
 Held quantity does not pin a model. During recovery, all idle direct-target
 reassignments must be routable under current rules before any are persisted,
 then models resume convergence. Predicates used for recoverable routing must be
-deterministic from persisted TargetState fields, including `target_key`. Final
+deterministic from persisted Contract, quantity and creation time. Final
 process shutdown warns when active adjustments remain so operators can defer
-routing or model changes. `target_key` is an execution-state identity available
-to predicates, not a route override; there is no separate route key.
+routing or model changes. There is no route override or user-defined target key.
 
 ## Futures and calculation audit
 
@@ -332,10 +328,11 @@ identity; symbol-field inference is prohibited. ACTIVE and NEXT remain accepted
 held expiries. A position outside that pair is planned toward ACTIVE, and
 `RollState` is persisted before broker work.
 
-In direct mode, one live `target_key` owns the series. The executor waits for
-active TARGET_ADJUSTMENT work, refreshes Fill-derived physical quantity, submits
-a calendar-spread BAG with role ROLL, verifies old/new Fill evidence, moves
-TargetState to the new concrete Contract, and lets serial convergence resume.
+In direct mode, each concrete Contract owns a setpoint. The executor waits for
+endpoint adjustments, captures durable absolute target transfers, and submits
+the calendar-spread BAG. Completion zeros the old target and adds its target to
+the destination exactly once; newer explicit targets take precedence. Separate
+holdings in other expiries are permitted. Serial convergence then resumes.
 
 In bracket mode, the executor preserves each `source_key` and `position_id` and
 processes episodes serially. It submits only deterministic broker-net BAG work;

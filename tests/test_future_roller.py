@@ -111,7 +111,6 @@ class FakeController:
         *,
         role: str,
         execution_model_name: str,
-        target_key: str | None = None,
         source_key: str | None = None,
         position_id: str | None = None,
         params: dict[str, Any] | None = None,
@@ -136,7 +135,6 @@ class FakeController:
                 role=role,
                 submitted_at=datetime.now(timezone.utc),
                 execution_model_name=execution_model_name,
-                target_key=target_key,
                 source_key=source_key,
                 position_id=position_id,
                 params=params or {},
@@ -208,14 +206,12 @@ def persist_direct_position(
     book,
     contract: ibi.Future,
     *,
-    target_key: str = "ng-target",
     quantity: float = 2,
 ) -> None:
     """Create direct TargetState plus authoritative completed Fill evidence."""
 
     book.update_target(
         TargetState(
-            target_key=target_key,
             execution_model_name="serial",
             contract=contract,
             target_quantity=quantity,
@@ -243,10 +239,9 @@ def persist_direct_position(
             role=StandardOrderRole.TARGET_ADJUSTMENT,
             submitted_at=datetime.now(timezone.utc),
             execution_model_name="serial",
-            target_key=target_key,
         )
     )
-    apply_fill(book, trade, abs(quantity), f"entry-{target_key}")
+    apply_fill(book, trade, abs(quantity), f"entry-{contract.conId}")
 
 
 def persist_bracket_position(
@@ -325,15 +320,15 @@ def test_direct_roll_moves_fill_evidence_and_target_contract(book):
     assert roll_trade.order.action == "BUY"
     assert roll_trade.order.totalQuantity == 2
     assert info.role == StandardOrderRole.ROLL
-    assert info.target_key == "ng-target"
+    assert info.source_key is None
     assert info.execution_model_name == "direct-roll"
     assert book.roll_state("ng-series").stage is FutureRollStage.ROLL_ORDER_ACTIVE
 
     apply_fill(book, roll_trade, 2, "direct-roll-fill")
 
-    assert book.direct_quantity("ng-target", old) == 0
-    assert book.direct_quantity("ng-target", active) == 2
-    assert book.target_state("ng-target").contract is active
+    assert book.direct_quantity(old) == 0
+    assert book.direct_quantity(active) == 2
+    assert book.target_state(active).contract is active
     assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
 
 
@@ -348,7 +343,6 @@ def test_direct_roll_waits_for_active_target_adjustment(book):
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name="serial",
-        target_key="ng-target",
     )
     roller = FutureRoller(controller)
     roller.register_executor(FutureRollMode.DIRECT)
@@ -691,8 +685,8 @@ def test_recovery_rebinds_active_roll_and_completes_from_fill(book):
     apply_fill(book, rebound, 2, "recovered-roll-fill")
 
     assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
-    assert book.direct_quantity("ng-target", active) == 2
-    assert book.target_state("ng-target").contract is active
+    assert book.direct_quantity(active) == 2
+    assert book.target_state(active).contract is active
 
 
 def test_recovery_fails_closed_for_missing_executor_name(book):
@@ -711,7 +705,6 @@ def test_recovery_fails_closed_for_missing_executor_name(book):
             participants=(
                 RollParticipant(
                     execution_model_name="serial",
-                    target_key="ng-target",
                     quantity=2,
                 ),
             ),
@@ -724,19 +717,18 @@ def test_recovery_fails_closed_for_missing_executor_name(book):
         roller.recover()
 
 
-def test_direct_series_with_multiple_live_target_keys_blocks(book):
+def test_direct_series_can_hold_an_existing_destination_position(book):
+    """A direct roll adds to the destination instead of claiming the whole series."""
     old = future(1, "NGQ26")
     active = future(2, "NGU26")
     next_ = future(3, "NGV26")
-    persist_direct_position(book, old, target_key="first", quantity=1)
-    persist_direct_position(book, old, target_key="second", quantity=1)
+    persist_direct_position(book, old, quantity=1)
+    persist_direct_position(book, active, quantity=2)
     controller = make_controller(book, old, active, next_)
     roller = FutureRoller(controller)
     roller.register_executor(FutureRollMode.DIRECT)
-
     roller.roll()
-
     state = book.roll_state("ng-series")
-    assert state.stage is FutureRollStage.BLOCKED
-    assert state.failure_reason == "Direct series has multiple live target_key values"
-    assert controller.trades == []
+    assert state.stage is FutureRollStage.ROLL_ORDER_ACTIVE
+    assert len(controller.trades) == 1
+    assert state.target_transfers[1].target_quantity == 3

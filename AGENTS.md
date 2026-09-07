@@ -255,8 +255,8 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - Built-in messages are frozen `Signal -> PositionProposal -> PositionTarget`
   envelopes. Signal values are finite scalars or `SignalPair(entry, exit)`.
   PositionTarget requires a concrete non-zero `conId` and its quantity is always
-  an absolute setpoint. Direct targets require a stable `target_key` and omit
-  `source_key`/intent; one-to-one targets use `source_key` instead. Signal,
+  an absolute setpoint. Direct targets address their exact concrete conId and
+  omit source_key/intent; one-to-one targets identify their episode by source_key. Signal,
   PositionProposal, and PositionTarget are intentionally unhashable; Contracts
   and nested metadata remain shared mutable
   objects. `PositionIntent` is mandatory only on the one-to-one
@@ -271,9 +271,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   persists a per-target cutoff used when rebuilding direct exposure. Controller
   owns broker calls, reconciliation, submission, rebinding, and fill/commission
   event handling. Do not move Portfolio calculations or broker calls into Book.
-- Direct Portfolio consumes Signals and emits zero or more targets, each with a
-  stable Portfolio-owned `target_key`. The key identifies one execution setpoint
-  across updates and registered futures expiries; it is not a route override.
+- Direct Portfolio consumes Signals and allocates among concrete Contracts.
+  Each target is the absolute setpoint for its conId; source allocations belong
+  to Portfolio, not to broker Fill attribution. Multiple expiries may coexist.
   The one-to-one path uses a signal processor, `PortfolioWrapper`, and
   `PositionAllocator`. Execution models have stable unique configured names;
   preserving a name across deployments promises recovery-compatible behavior.
@@ -298,8 +298,9 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
 - Target execution models register exactly one process-wide mode-specific
   `FutureRollExecutor` family. Controller owns the single daily schedule,
   stale-holding discovery, and startup recovery coordination; direct or bracket
-  executors own durable sequencing. Modes cannot be mixed. Direct rolls preserve
-  `target_key` and wait for target adjustments. Bracket rolls preserve
+  executors own durable sequencing. Modes cannot be mixed. Direct rolls wait for endpoint adjustments and persist an idempotent
+  target transfer: old target zero, destination target plus old target; newer
+  explicit targets supersede that snapshot. Bracket rolls preserve
   `source_key`/`position_id`, roll broker-net exposure, and require an active
   replacement stop before completion; take-profit replacement is optional.
   `BracketExecutionModel` enables automatic rolling by default and

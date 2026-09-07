@@ -134,11 +134,7 @@ def convert_order(
     source_key = str(document.get("strategy") or "UNKNOWN")
     action = str(document.get("action") or "UNKNOWN")
     role = order_role(action)
-    target_key = (
-        f"legacy:{source_key}:{trade.contract.conId}"
-        if role == "TARGET_ADJUSTMENT"
-        else None
-    )
+    direct = role == "TARGET_ADJUSTMENT"
     fills = [FillRecord.from_fill(trade, fill).encode() for fill in trade.fills]
     source_id = document.get("_id", trade.order.orderId)
     migration = provenance(
@@ -156,9 +152,8 @@ def convert_order(
         "role": role,
         "submitted_at": _submitted_at(trade),
         "execution_model_name": f"legacy:{source_key}",
-        "target_key": target_key,
-        "source_key": None if target_key is not None else source_key,
-        "position_id": None if target_key is not None else params.get("position_id"),
+        "source_key": None if direct else source_key,
+        "position_id": None if direct else params.get("position_id"),
         "params": tree(params),
         "fills": fills,
         "applied_fill_keys": [fill["deduplication_key"] for fill in fills],

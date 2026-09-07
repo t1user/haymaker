@@ -5,7 +5,7 @@ from runpy import run_path
 import ib_insync as ibi
 import pytest
 
-from haymaker.misc import tree
+from haymaker.misc import decode_tree, tree
 
 _MIGRATION = run_path(
     str(Path(__file__).parents[1] / "scripts" / "migrate_components_state.py")
@@ -118,7 +118,8 @@ def test_direct_adjustment_conversion_supplies_current_target_identity():
         source_database="legacy",
     )
 
-    assert converted["target_key"] == "legacy:alpha:1"
+    assert "target_key" not in converted
+    assert decode_tree(converted["trade"]).contract.conId == trade.contract.conId
     assert converted["source_key"] is None
     assert converted["position_id"] is None
 

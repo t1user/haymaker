@@ -195,7 +195,6 @@ class FutureRoller:
         grouped: dict[str, dict[ibi.Future, list[RollHolding]]] = defaultdict(
             lambda: defaultdict(list)
         )
-        direct_keys: dict[str, set[str]] = defaultdict(set)
         for holding in holdings:
             try:
                 series_key = self.controller.contract_registry.series_key(
@@ -211,27 +210,8 @@ class FutureRoller:
                     exc,
                 )
                 continue
-            if holding.target_key is not None:
-                direct_keys[series_key].add(holding.target_key)
             if all(holding.contract.conId != contract.conId for contract in current):
                 grouped[series_key][holding.contract].append(holding)
-        for series_key, keys in direct_keys.items():
-            if len(keys) > 1 and series_key in grouped:
-                by_contract = grouped.pop(series_key)
-                old_contract = next(iter(by_contract))
-                new_contract = self.controller.contract_registry.active_for_series(
-                    series_key
-                )
-                holdings_for_series = tuple(
-                    holding for values in by_contract.values() for holding in values
-                )
-                self._persist_blocked_discovery(
-                    series_key,
-                    old_contract,
-                    new_contract,
-                    holdings_for_series,
-                    "Direct series has multiple live target_key values",
-                )
         return grouped
 
     def _broker_quantity_matches(self, contract: ibi.Future) -> bool:
@@ -253,7 +233,6 @@ class FutureRoller:
                 execution_model_name=holding.execution_model_name,
                 quantity=holding.quantity,
                 source_key=holding.source_key,
-                target_key=holding.target_key,
                 position_id=holding.position_id,
             )
             for holding in holdings

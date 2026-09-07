@@ -109,7 +109,6 @@ class DirectLongPortfolio(Portfolio):
             PositionTarget(
                 contract=signal.contract,
                 target_quantity=signal.value,
-                target_key=f"{signal.source_key}-target",
             ),
         )
 
@@ -142,7 +141,6 @@ class CrossContractTarget(Atom):
             PositionTarget(
                 contract=contract,
                 target_quantity=1,
-                target_key="cross-contract-target",
             )
         )
 
@@ -159,7 +157,6 @@ class StartupTarget(Atom):
             PositionTarget(
                 contract=source.contract,
                 target_quantity=1,
-                target_key="startup-target",
             )
         )
         super().onStart(data, source)

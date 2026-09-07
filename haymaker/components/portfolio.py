@@ -107,8 +107,6 @@ class PortfolioWrapper(Atom):
             raise ValueError("PositionAllocator changed proposal Contract")
         if target.source_key != proposal.signal.source_key:
             raise ValueError("PositionAllocator changed proposal source_key")
-        if target.target_key is not None:
-            raise ValueError("PositionAllocator supplied direct target_key")
         self.dataEvent.emit(replace(target, intent=proposal.intent))
 
 
@@ -123,7 +121,9 @@ class Portfolio(Atom, ABC):
     Concrete implementations own input state, synchronization, duplicate,
     lateness, timeout, and recomputation policy. Base Portfolio immediately
     passes each valid Signal to :meth:`process` and emits every returned
-    absolute target.
+    absolute target. Each target addresses its exact qualified Contract; the
+    Portfolio chooses how to allocate among expiries and must aggregate all
+    source allocations for a Contract before emitting its setpoint.
     """
 
     def __init__(
@@ -174,8 +174,6 @@ class Portfolio(Atom, ABC):
                 raise TypeError(
                     "Portfolio.process() must yield PositionTarget instances"
                 )
-            if target.target_key is None:
-                raise ValueError("Portfolio targets require target_key")
             if target.source_key is not None:
                 raise ValueError("Portfolio targets must not contain source_key")
             if target.intent is not None:

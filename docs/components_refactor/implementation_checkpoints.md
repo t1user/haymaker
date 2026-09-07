@@ -44,3 +44,9 @@ Contract. Direct targets always refer to their exact concrete Contract.
   atomic overlap rejection, strict explicit nth selection, and the narrow
   SignalModel selection hook. Aggregators use public blueprint access. Full
   pytest: 1,615 passed; additional aggregator checks: 129 passed; mypy clean.
+- Checkpoint 4: removed user-defined direct execution keys across messages,
+  orders, targets, Router and roll participants. Direct execution is concrete
+  Contract convergence; old implicit held-expiry tests now assert explicit
+  Portfolio allocation. Added two independent direct pipeline scenarios.
+  Existing direct roll plumbing now saves additive target-transfer snapshots
+  to keep the schema cutover functional. Full pytest: 1,615 passed; mypy clean.

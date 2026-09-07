@@ -99,11 +99,10 @@ direction, and includes mandatory OPEN/CLOSE/REVERSE intent.
 :class:`~haymaker.components.PositionTarget` is an absolute signed setpoint for
 a concrete Contract with a non-zero ``conId``. It never contains a captured
 current quantity or a proposed order delta. The numeric target is authoritative.
-Direct Portfolio targets require a stable opaque ``target_key`` and omit
-``source_key`` and intent; the key survives changes between concrete expiries of
-the same registered futures series. One-to-one targets instead carry
-``source_key`` and the mandatory proposal intent supplied by
-``PortfolioWrapper``. A target cannot carry both identities.
+Direct Portfolio targets omit ``source_key`` and intent. Each is an absolute
+setpoint for its exact concrete Contract; multiple expiries can have independent
+targets. One-to-one targets instead carry ``source_key`` and the mandatory
+proposal intent supplied by ``PortfolioWrapper``.
 
 One-to-one Contract selection belongs to ``BracketExecutionModel``, not the
 wrapper. OPEN uses the incoming target Contract. CLOSE uses the source's held
@@ -498,13 +497,12 @@ Account-wide allocation uses a direct Portfolio:
        -> SerialTargetExecutionModel
 
 Implement ``process(signal)`` to update Portfolio state and return zero or more
-absolute targets. Every returned target needs a stable ``target_key`` identifying
-one logical setpoint across updates and, for registered futures, across concrete
-expiries. It must omit one-to-one ``source_key`` and intent. The optional
-``sources`` collection rejects unknown Signal source keys; Signal source identity
-and direct target identity are independent. The base class deliberately does not
-batch, debounce, time out, or interpret ``as_of``; concrete policies own those
-decisions.
+absolute targets for concrete Contracts. It must omit one-to-one
+``source_key`` and intent. Portfolio owns allocation among expiries: a target
+for NEXT never implicitly reduces a holding in ACTIVE. Emit a separate ACTIVE
+target to reduce it. The optional ``sources`` collection rejects unknown
+Signal source keys. Base Portfolio does not batch, debounce, time out, or
+interpret ``as_of``; concrete policies own those decisions.
 
 .. autoclass:: haymaker.components.Portfolio
    :members: process
@@ -516,12 +514,11 @@ Execution models have stable configured names used for recovery. They persist
 the newest target, inspect Book quantity and working orders, and derive the
 next order rather than replaying stale intent.
 
-:class:`~haymaker.components.SerialTargetExecutionModel` manages each stable
-direct ``target_key``, supports arbitrary same-side resizing, and permits at most
-one active TARGET_ADJUSTMENT order per key. A key cannot identify two live
-instruments. For Futures, explicit ContractRegistry series membership allows the
-same key to survive an expiry change; Haymaker does not guess series identity
-from symbol fields.
+:class:`~haymaker.components.SerialTargetExecutionModel` manages each concrete
+Contract independently, supports arbitrary same-side resizing, and permits at
+most one active TARGET_ADJUSTMENT per conId. New targets supersede old targets
+for that Contract, not for its whole futures series. Portfolio chooses which
+Contracts to trade; execution does not substitute another held expiry.
 
 :class:`~haymaker.components.BracketExecutionModel` manages one configured
 ``source_key``. Initial targets require consistent intent, same-side non-zero
@@ -570,11 +567,12 @@ and persists ``RollState`` before submitting any broker order. It never infers
 series membership from symbol, exchange, or multiplier alone.
 
 :class:`~haymaker.components.DirectFutureRollExecutor` waits for active
-TARGET_ADJUSTMENT work for the target key, re-reads Fill-derived physical
-quantity, submits one calendar-spread BAG, verifies the old/new Fill projection,
-updates the target's concrete Contract, and resumes
-``SerialTargetExecutionModel``. One live ``target_key`` may own a registered
-futures series.
+TARGET_ADJUSTMENT work on both roll endpoints, re-reads Fill-derived quantity,
+and submits a calendar-spread BAG. A durable target-transfer snapshot makes the
+old target zero and adds its target to the destination. Reapplying that snapshot
+after recovery is idempotent; newer explicit targets supersede it. Holdings in
+other expiries remain independent. Custom executors can override
+``target_transfers()`` without replacing the broker execution sequence.
 
 :class:`~haymaker.components.BracketFutureRollExecutor` preserves
 ``source_key`` and ``position_id`` while processing logical episodes serially.
@@ -631,7 +629,7 @@ Held quantity and idle targets do not pin an old model. Startup computes all
 idle direct-target reassignments from current rules before applying any of
 them, then starts the models. Custom predicates used for recoverable execution
 must therefore be deterministic from persisted TargetState fields:
-``target_key``, Contract, target quantity, and target creation time. Metadata is
+Contract, target quantity, and target creation time. Metadata is
 unavailable during reconstruction. Reusing a configured model name across deployments asserts
 that the implementation and configuration remain recovery-compatible. Final
 process shutdown logs unfinished ``TARGET_ADJUSTMENT`` orders so operators can
@@ -640,8 +638,6 @@ avoid changing routing or models until those orders finish.
 .. autoclass:: haymaker.components.ExecutionRule
 
 .. autoclass:: haymaker.components.ExecutionRouter
-
-.. autofunction:: haymaker.components.target_key_is
 
 .. autofunction:: haymaker.components.contract_is
 

@@ -115,7 +115,7 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/book.py`: typed order/fill evidence, one-to-one PositionState
   separating held Contract/bracket inputs from pending-target Contract/inputs,
-  target-keyed direct TargetState, per-series RollState, Fill-derived direct
+  conId-keyed direct TargetState, per-series RollState, Fill-derived direct
   physical positions with durable per-target reset cutoffs, Portfolio recovery
   mappings, rejection tracking, active-order ownership queries, blotter access,
   and one ordered critical persistence queue. Book performs no broker calls or
@@ -162,7 +162,7 @@ SignalModels customize the envelope Contract via `select_signal_contract`.
   aggregates the leaf modules' exports for both focused imports and promotion
   through `haymaker.components`.
   - `models.py`: the common stateful execution-model boundary and serial
-    target-key convergence.
+    concrete-Contract convergence.
   - `router.py`: fixed first-match target routing plus startup validation that
     active direct adjustments are still assigned to their persisted owners.
   - `brackets.py`: one-to-one bracket episode execution and its
@@ -336,7 +336,7 @@ reference and never suppresses the Signal.
 8. In the one-to-one flow, a binary processor emits PositionProposal and
    PortfolioWrapper allocates one source-attributed absolute PositionTarget. In
    direct mode, Portfolio owns input state and may emit targets for several
-   Contracts; every target carries a stable Portfolio-owned `target_key`.
+   Contracts; every target is the absolute setpoint for its concrete conId.
 9. ExecutionRouter optionally selects one stable named model using current
    first-match rules. Before model recovery, active TARGET_ADJUSTMENT ownership
    must agree with those rules; mismatch blocks that Router locally. Idle

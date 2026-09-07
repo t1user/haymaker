@@ -25,6 +25,7 @@ from ...book import (
     OrderInfo,
     RollParticipant,
     RollState,
+    TargetState,
 )
 from ...validators import finite_number, non_empty_string
 from ..messages import StandardOrderRole
@@ -45,7 +46,6 @@ class RollHolding:
         quantity: Signed logical quantity held in that expiry.
         execution_model_name: Target model that owns the logical state.
         source_key: One-to-one source identity in bracket mode.
-        target_key: Direct target identity in direct mode.
         position_id: Optional one-to-one position episode.
     """
 
@@ -53,7 +53,6 @@ class RollHolding:
     quantity: float
     execution_model_name: str
     source_key: str | None = None
-    target_key: str | None = None
     position_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -67,10 +66,8 @@ class RollHolding:
             "execution_model_name",
             non_empty_string(self.execution_model_name, "execution_model_name"),
         )
-        if (self.source_key is None) == (self.target_key is None):
-            raise ValueError(
-                "RollHolding requires exactly one source_key or target_key"
-            )
+        if self.source_key is not None:
+            non_empty_string(self.source_key, "source_key")
 
 
 class FutureRollExecutor(ABC):
@@ -180,7 +177,7 @@ class FutureRollExecutor(ABC):
 
     def _submit_roll(self, state: RollState, participant: RollParticipant) -> None:
         combo = self.make_combo(state.old_contract, state.new_contract)
-        identity = participant.source_key or participant.target_key
+        identity = participant.source_key or str(state.old_contract.conId)
         params = {
             "roll_state_key": state.series_key,
             "old_contract": state.old_contract,
@@ -194,7 +191,6 @@ class FutureRollExecutor(ABC):
             ),
             role=StandardOrderRole.ROLL,
             execution_model_name=self.name,
-            target_key=participant.target_key,
             source_key=participant.source_key,
             position_id=participant.position_id,
             params=params,
@@ -348,38 +344,31 @@ class FutureRollExecutor(ABC):
 
 
 class DirectFutureRollExecutor(FutureRollExecutor):
-    """Roll one account-wide direct target using Fill-derived attribution.
+    """Roll a concrete direct holding and durably transfer its absolute target.
 
-    Args:
-        name: Stable recovery identity. The class name is used when omitted.
-
-    Direct execution requires one live target key per registered futures
-    series. Existing TARGET_ADJUSTMENT work is allowed to finish; no new
-    adjustment is submitted while the RollState is active. After the complete
-    BAG Fill, the executor verifies the old/new physical projection, moves the
-    persisted TargetState Contract, and resumes serial convergence.
+    Existing endpoint adjustments finish first. A saved post-roll target
+    snapshot transfers the old target additively to the destination exactly
+    once; newer explicit Portfolio targets supersede that snapshot. Different
+    expiries in the same series may coexist. Override target_transfers() to
+    customize the target policy without replacing broker execution.
     """
 
     mode = FutureRollMode.DIRECT
 
     def holdings(self) -> tuple[RollHolding, ...]:
-        """Return every non-flat direct futures holding."""
-
-        holdings: list[RollHolding] = []
-        for state in self.book.target_states():
-            for contract, quantity in self.book.direct_positions(
-                state.target_key
-            ).items():
-                if isinstance(contract, ibi.Future) and quantity:
-                    holdings.append(
-                        RollHolding(
-                            contract=contract,
-                            quantity=quantity,
-                            execution_model_name=state.execution_model_name,
-                            target_key=state.target_key,
-                        )
+        """Return each non-flat concrete Future with its current target owner."""
+        result = []
+        for contract, quantity in self.book.direct_positions().items():
+            state = self.book.target_state(contract)
+            if isinstance(contract, ibi.Future) and state is not None and quantity:
+                result.append(
+                    RollHolding(
+                        contract=contract,
+                        quantity=quantity,
+                        execution_model_name=state.execution_model_name,
                     )
-        return tuple(holdings)
+                )
+        return tuple(result)
 
     def create_state(
         self,
@@ -388,33 +377,51 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         new_contract: ibi.Future,
         holdings: Sequence[RollHolding],
     ) -> RollState:
-        """Create one direct plan after enforcing unique series ownership."""
-
-        keys = {holding.target_key for holding in holdings}
-        if len(keys) != 1:
-            raise ValueError(
-                f"Direct futures series {series_key!r} has multiple target keys"
-            )
-        participants = tuple(
-            RollParticipant(
-                target_key=holding.target_key,
-                execution_model_name=holding.execution_model_name,
-                quantity=holding.quantity,
-            )
-            for holding in holdings
-        )
+        """Capture one concrete holding; other expiries are independent."""
+        if len(holdings) != 1 or holdings[0].contract.conId != old_contract.conId:
+            raise ValueError("A direct roll requires exactly one old-Contract holding")
+        holding = holdings[0]
         return RollState(
             series_key=series_key,
             mode=self.mode,
             executor_name=self.name,
             old_contract=old_contract,
             new_contract=new_contract,
-            participants=participants,
+            participants=(
+                RollParticipant(
+                    execution_model_name=holding.execution_model_name,
+                    quantity=holding.quantity,
+                ),
+            ),
+        )
+
+    def target_transfers(self, state: RollState) -> tuple[TargetState, ...]:
+        """Capture default post-roll targets before submission.
+
+        The old target becomes zero and is added to the destination's target.
+        A custom executor may override this allocation policy. Return absolute
+        TargetStates; the executor saves them before any roll submission.
+        """
+        old = self.book.target_state(state.old_contract)
+        if old is None:
+            raise ValueError("Direct roll requires the old Contract's TargetState")
+        new = self.book.target_state(state.new_contract)
+        now = datetime.now(timezone.utc)
+        return (
+            replace(old, target_quantity=0, target_created_at=now, updated_at=now),
+            TargetState(
+                execution_model_name=(
+                    new.execution_model_name if new else old.execution_model_name
+                ),
+                contract=state.new_contract,
+                target_quantity=(new.target_quantity if new else 0)
+                + old.target_quantity,
+                target_created_at=now,
+            ),
         )
 
     def advance(self, state: RollState) -> None:
-        """Wait for adjustments, submit the BAG, or finalize its Fill."""
-
+        """Wait for endpoint adjustments, execute the roll, or resume completion."""
         if state.terminal:
             return
         if state.stage is FutureRollStage.ROLL_ORDER_ACTIVE:
@@ -433,55 +440,36 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         }:
             self._block(state, f"Unsupported direct roll stage {state.stage.value}")
             return
-        participant = state.current_participant
-        if participant is None or participant.target_key is None:
-            self._block(state, "Direct roll participant is missing target_key")
-            return
-        active = self.book.active_orders(
-            target_key=participant.target_key,
-            role=StandardOrderRole.TARGET_ADJUSTMENT,
+        active = tuple(
+            info
+            for contract in (state.old_contract, state.new_contract)
+            for info in self.book.active_orders(
+                contract=contract, role=StandardOrderRole.TARGET_ADJUSTMENT
+            )
         )
         if active:
-            waiting = replace(
-                state,
-                stage=FutureRollStage.WAITING_FOR_ACTIVE_WORK,
-                updated_at=datetime.now(timezone.utc),
+            self.book.update_roll(
+                replace(state, stage=FutureRollStage.WAITING_FOR_ACTIVE_WORK)
             )
-            self.book.update_roll(waiting)
             for info in active:
                 self._bind_adjustment(info.trade, state.series_key)
             return
-        positions = self.book.direct_positions(participant.target_key)
-        old_quantity = sum(
-            quantity
-            for contract, quantity in positions.items()
-            if contract.conId == state.old_contract.conId
-        )
-        other = {
-            contract: quantity
-            for contract, quantity in positions.items()
-            if contract.conId != state.old_contract.conId and quantity
-        }
-        if other:
-            self._block(state, "Direct target has unexplained split holdings")
-            return
-        if not old_quantity:
+        quantity = self.book.direct_quantity(state.old_contract)
+        if not quantity:
             self._complete(state)
             return
-        refreshed = replace(
-            participant,
-            quantity=old_quantity,
-        )
+        participant = replace(state.participants[0], quantity=quantity)
         planned = self.book.update_roll(
             replace(
                 state,
-                participants=(refreshed,),
+                participants=(participant,),
                 participant_index=0,
+                target_transfers=state.target_transfers or self.target_transfers(state),
                 stage=FutureRollStage.PLANNED,
                 updated_at=datetime.now(timezone.utc),
             )
         )
-        self._submit_roll(planned, refreshed)
+        self._submit_roll(planned, participant)
 
     def _bind_adjustment(self, trade: ibi.Trade, series_key: str) -> None:
         key = -trade.order.orderId
@@ -496,15 +484,23 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         )
 
     def onAdjustmentFilledEvent(self, trade: ibi.Trade, series_key: str) -> None:
-        """Resume a waiting direct roll after target work fills."""
-
-        state = self.book.roll_state(series_key)
-        if state is not None:
-            self.advance(state)
+        """Continue a waiting roll after accounting for the adjustment."""
+        self._defer_resume(series_key)
 
     def onAdjustmentCancelledEvent(self, trade: ibi.Trade, series_key: str) -> None:
-        """Resume a waiting direct roll after target work cancels."""
+        """Continue a waiting roll after endpoint cancellation."""
+        self._defer_resume(series_key)
 
+    def _defer_resume(self, series_key: str) -> None:
+        """Let asynchronous accounting settle; support synchronous drivers too."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._resume_series(series_key)
+        else:
+            loop.call_soon(self._resume_series, series_key)
+
+    def _resume_series(self, series_key: str) -> None:
         state = self.book.roll_state(series_key)
         if state is not None:
             self.advance(state)
@@ -513,41 +509,17 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         current = self.book.roll_state(state.series_key)
         if current is None or current.stage is not FutureRollStage.ROLL_FILLED:
             return
-        state = current
-        participant = state.current_participant
-        if participant is None or participant.target_key is None:
-            self._block(state, "Filled direct roll has no target participant")
+        if self.book.direct_quantity(current.old_contract):
+            self._block(current, "Direct roll did not flatten its old Contract")
             return
-        positions = self.book.direct_positions(participant.target_key)
-        old_quantity = sum(
-            quantity
-            for contract, quantity in positions.items()
-            if contract.conId == state.old_contract.conId
-        )
-        new_quantity = sum(
-            quantity
-            for contract, quantity in positions.items()
-            if contract.conId == state.new_contract.conId
-        )
-        if old_quantity or new_quantity != participant.quantity:
-            self._block(
-                state,
-                "Direct roll Fill evidence does not match the planned movement",
-            )
+        if not current.target_transfers:
+            self._block(current, "Direct roll lacks durable target transfers")
             return
-        target_state = self.book.target_state(participant.target_key)
-        if (
-            target_state is not None
-            and target_state.contract.conId == state.old_contract.conId
-        ):
-            self.book.update_target(
-                replace(
-                    target_state,
-                    contract=state.new_contract,
-                    updated_at=datetime.now(timezone.utc),
-                )
-            )
-        self._complete(state)
+        for target in current.target_transfers:
+            # Book ignores older snapshots. Re-applying an identical absolute
+            # target is idempotent across crashes between the two writes.
+            self.book.update_target(target)
+        self._complete(current)
 
 
 class BracketFutureRollExecutor(FutureRollExecutor):

@@ -23,9 +23,8 @@ helpers out. Export names must be unique across the complete toolbox.
 - `PositionTarget` is a frozen absolute signed setpoint for a concrete Contract
   with non-zero `conId`. It never carries a captured current quantity or
   proposed delta. Its numeric target remains authoritative after acceptance.
-  Direct targets require one stable `target_key` and omit `source_key`/intent;
-  one-to-one targets use `source_key` instead. The identities are mutually
-  exclusive.
+  Direct targets address a concrete conId and omit source_key/intent;
+  one-to-one targets address a managed source episode.
 - `PositionIntent` is optional on general targets. It is mandatory only at the
   `PortfolioWrapper -> BracketExecutionModel` boundary and is an initial
   lifecycle assertion, not a lasting execution command.
@@ -57,8 +56,8 @@ intent on the returned target, and emits at most one target. Allocators own
 quantity calculation and preserve Contract, source, and metadata. Direct
 `Portfolio` implementations own source state, synchronization,
 `as_of`, duplicate/late input, timeout, and recomputation policies. Every direct
-output has a stable Portfolio-owned `target_key`; it is independent of Signal
-`source_key` and is not a routing override. Do not put
+output addresses an exact Contract. Portfolio owns allocations among concrete
+expiries; SerialTargetExecutionModel must not substitute another held Contract. Do not put
 those policies in the abstract base.
 
 ## Market-data aggregation
@@ -169,10 +168,9 @@ Treat an unchanged model name as a promise that its implementation and
 configuration remain recovery-compatible. Recovery predicates must be
 deterministic from persisted TargetState fields.
 
-`SerialTargetExecutionModel` owns one active adjustment per stable
-`target_key` and supports arbitrary same-side resizing. Explicit
-ContractRegistry series membership allows that key to survive futures expiry
-changes; do not infer series identity from Contract symbols.
+`SerialTargetExecutionModel` owns one active adjustment per concrete conId,
+supports same-side resizing, and allows independent targets in several
+expiries. Series grouping is Portfolio policy using registry membership.
 `BracketExecutionModel` owns one `source_key`, validates initial intent, rejects
 non-zero same-side resizing,
 uses the incoming Contract for OPEN, and uses Book's held or pending-entry
@@ -196,7 +194,8 @@ intent.
 Target execution models register one process-wide `FutureRollExecutor` family.
 Direct and bracket modes are exclusive. Controller owns the app-lifetime
 schedule, stale-holding discovery, and recovery coordination; the executor owns
-durable order sequencing. Direct rolls preserve `target_key`, while bracket
+durable order sequencing. Direct rolls persist absolute target-transfer snapshots; newer targets take
+precedence. Bracket
 rolls preserve `source_key`/`position_id` and do not complete before replacement
 stop protection is active. The bracket model registers automatic rolling for its
 source by default; `auto_roll_futures=False` is the explicit opt-out. Reject
@@ -217,7 +216,7 @@ persisted target with broker authority so recovery cannot replay a stale
 setpoint.
 
 Physical persistence is limited to `orders`, `state`, and `blotter`. State
-identities are `position:{source_key}`, `target:{target_key}`,
+identities are `position:{source_key}`, `target:{conId}`,
 `roll:{series_key}`, and `portfolio:{portfolio_key}`. Orders use actual IB
 identifiers and preserve complete serialized Trade plus normalized
 Fill/Execution evidence. Fill evidence remains immutable across an explicit

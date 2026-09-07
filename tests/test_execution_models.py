@@ -18,7 +18,7 @@ from haymaker.components import (
     StandardOrderRole,
     TakeProfitAsStopMultiple,
     symbol_is,
-    target_key_is,
+    contract_is,
 )
 from haymaker.controller import Controller
 
@@ -108,14 +108,10 @@ def target(
     con_id=1,
     metadata=None,
     created_at=None,
-    target_key=None,
 ):
     return PositionTarget(
         contract=contract(symbol, con_id),
         target_quantity=quantity,
-        target_key=(
-            None if source_key is not None else target_key or f"{symbol.lower()}-target"
-        ),
         source_key=source_key,
         intent=intent,
         metadata=metadata or {},
@@ -160,14 +156,12 @@ def working_adjustment(
     target_quantity=1,
     symbol="ES",
     con_id=1,
-    target_key="es-target",
 ):
     """Persist a direct target and register its active adjustment order."""
 
     target_contract = contract(symbol, con_id)
     runtime.book.update_target(
         TargetState(
-            target_key=target_key,
             execution_model_name=owner,
             contract=target_contract,
             target_quantity=target_quantity,
@@ -179,15 +173,13 @@ def working_adjustment(
         ibi.MarketOrder("BUY", abs(target_quantity) or 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name=owner,
-        target_key=target_key,
     )
 
 
-def test_target_key_predicate_matches_only_the_requested_identity():
-    predicate = target_key_is("es-target")
-
-    assert predicate(target(1, target_key="es-target"))
-    assert not predicate(target(1, target_key="other"))
+def test_contract_predicate_matches_exact_concrete_contract():
+    predicate = contract_is(contract(con_id=1))
+    assert predicate(target(1, con_id=1))
+    assert not predicate(target(1, con_id=2))
 
 
 def test_execution_model_string_includes_name_and_class(execution_runtime):
@@ -207,17 +199,18 @@ def test_serial_model_submits_absolute_adjustment(execution_runtime):
     assert model.book.order_by_id(1).role == StandardOrderRole.TARGET_ADJUSTMENT
 
 
-def test_serial_model_rejects_another_live_key_for_same_contract(
+def test_serial_updates_one_concrete_target_while_its_order_is_active(
     execution_runtime,
 ):
+    _, _, trader = execution_runtime
     model = SerialTargetExecutionModel(name="serial")
-    model.onData(target(1, target_key="first"))
+    model.onData(target(1))
+    model.onData(target(2))
+    assert len(trader.trades) == 1
+    assert model.book.target_state(contract()).target_quantity == 2
 
-    with pytest.raises(ValueError, match="already owned by 'first'"):
-        model.onData(target(1, target_key="second"))
 
-
-def test_serial_target_key_can_follow_concrete_expiry_within_one_series(
+def test_serial_accepts_separate_concrete_expiries_within_one_series(
     execution_runtime,
 ):
     runtime, _, trader = execution_runtime
@@ -232,7 +225,7 @@ def test_serial_target_key_can_follow_concrete_expiry_within_one_series(
     assert trader.trades[-1].contract.conId == 2
 
 
-def test_serial_resizes_on_held_active_or_next_expiry(execution_runtime):
+def test_serial_adjusts_requested_expiry_not_other_held_expiry(execution_runtime):
     runtime, controller, trader = execution_runtime
     held = contract(con_id=1)
     next_contract = contract(con_id=2)
@@ -243,11 +236,11 @@ def test_serial_resizes_on_held_active_or_next_expiry(execution_runtime):
 
     model.onData(target(2, con_id=2))
 
-    assert trader.trades[-1].contract.conId == held.conId
-    assert trader.trades[-1].order.totalQuantity == 1
+    assert trader.trades[-1].contract.conId == next_contract.conId
+    assert trader.trades[-1].order.totalQuantity == 2
 
 
-def test_serial_pauses_adjustment_while_held_expiry_needs_roll(
+def test_serial_executes_concrete_target_without_implicit_roll_decision(
     execution_runtime,
 ):
     runtime, controller, trader = execution_runtime
@@ -261,8 +254,9 @@ def test_serial_pauses_adjustment_while_held_expiry_needs_roll(
 
     model.onData(target(2, con_id=2))
 
-    assert len(trader.trades) == 1
-    assert model.book.target_state("es-target").target_quantity == 2
+    assert len(trader.trades) == 2
+    assert model.book.target_state(active).target_quantity == 2
+    assert model.book.target_state(held).target_quantity == 1
 
 
 def test_serial_model_rejects_wrong_message_at_runtime(execution_runtime):
@@ -309,7 +303,6 @@ def test_serial_recovery_resumes_persisted_target(execution_runtime):
     model = SerialTargetExecutionModel(name="serial")
     model.book.update_target(
         TargetState(
-            target_key="es-target",
             execution_model_name="serial",
             contract=contract(),
             target_quantity=2,
@@ -868,7 +861,6 @@ def test_router_blocks_active_order_without_target_state(
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name="owner",
-        target_key="es-target",
     )
     owner = RecordingModel(name="owner")
     router = ExecutionRouter(
@@ -896,7 +888,6 @@ def test_router_blocks_ambiguous_active_adjustment_owners(
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name="second",
-        target_key="es-target",
     )
     first = RecordingModel(name="first")
     second = RecordingModel(name="second")
@@ -932,7 +923,7 @@ def test_router_blocks_unroutable_active_adjustment(
         router.onStart({})
 
     assert owner.recoveries == 0
-    assert "cannot be routed: LookupError" in caplog.text
+    assert "cannot be routed: No ExecutionModel matched" in caplog.text
 
 
 def test_router_suppresses_live_model_change_until_order_is_terminal(
@@ -979,7 +970,6 @@ def test_router_does_not_partially_reassign_unroutable_idle_targets(
     for symbol, con_id in (("ES", 1), ("NQ", 2)):
         runtime.book.update_target(
             TargetState(
-                target_key=f"{symbol.lower()}-target",
                 execution_model_name="old",
                 contract=contract(symbol, con_id),
                 target_quantity=1,
@@ -996,7 +986,7 @@ def test_router_does_not_partially_reassign_unroutable_idle_targets(
         router.onStart({})
 
     assert current.recoveries == 0
-    assert runtime.book.target_state("es-target").execution_model_name == "old"
+    assert runtime.book.target_state(contract()).execution_model_name == "old"
     assert "idle target recovery could not be routed" in caplog.text
 
 
@@ -1005,7 +995,6 @@ def test_router_hands_idle_recovered_target_to_current_model(execution_runtime):
     created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     runtime.book.update_target(
         TargetState(
-            target_key="es-target",
             execution_model_name="old",
             contract=contract(),
             target_quantity=2,
@@ -1020,7 +1009,7 @@ def test_router_hands_idle_recovered_target_to_current_model(execution_runtime):
 
     router.onStart({})
 
-    state = runtime.book.target_state("es-target")
+    state = runtime.book.target_state(contract())
     assert state.execution_model_name == "current"
     assert state.target_quantity == 2
     assert state.target_created_at == created_at
@@ -1035,12 +1024,10 @@ def test_serial_recovery_handoff_converges_from_existing_quantity(
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.TARGET_ADJUSTMENT,
         execution_model_name="old",
-        target_key="es-target",
     )
     apply_fill(controller, filled, 1)
     runtime.book.update_target(
         TargetState(
-            target_key="es-target",
             execution_model_name="old",
             contract=contract(),
             target_quantity=2,
@@ -1059,7 +1046,7 @@ def test_serial_recovery_handoff_converges_from_existing_quantity(
     assert adjustment is not filled
     assert adjustment.order.action == "BUY"
     assert adjustment.order.totalQuantity == 1
-    assert runtime.book.target_state("es-target").execution_model_name == "current"
+    assert runtime.book.target_state(contract()).execution_model_name == "current"
 
 
 def test_stale_serial_target_is_not_emitted_as_accepted(execution_runtime):

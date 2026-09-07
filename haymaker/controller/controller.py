@@ -172,8 +172,8 @@ class Controller(Atom):
         await asyncio.sleep(self.execution_verification_delay)
         if await self.verify_target_integrity(target, execution_model_name):
             contracts = (
-                tuple(self.book.direct_positions(target.target_key))
-                if target.target_key is not None
+                (target.contract,)
+                if target.source_key is None
                 else self._episode_contracts(target)
             )
             for contract in contracts or (target.contract,):
@@ -360,7 +360,6 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
-        target_key: str | None = None,
         source_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
@@ -369,7 +368,6 @@ class Controller(Atom):
 
         self._validate_order_attribution(
             role=str(role),
-            target_key=target_key,
             source_key=source_key,
         )
         if self._trading_disabled:
@@ -392,7 +390,6 @@ class Controller(Atom):
             order,
             role=role,
             execution_model_name=execution_model_name,
-            target_key=target_key,
             source_key=source_key,
             position_id=position_id,
             params=params,
@@ -405,7 +402,6 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
-        target_key: str | None = None,
         source_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
@@ -417,7 +413,6 @@ class Controller(Atom):
             trade,
             role=str(role),
             execution_model_name=execution_model_name,
-            target_key=target_key,
             source_key=source_key,
             position_id=position_id,
             params=params,
@@ -425,7 +420,7 @@ class Controller(Atom):
         trade.filledEvent += partial(
             self.log_trade,
             reason=str(role),
-            source_key=source_key or target_key or execution_model_name,
+            source_key=source_key or execution_model_name,
         )
         return trade
 
@@ -435,7 +430,6 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
-        target_key: str | None = None,
         source_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
@@ -447,7 +441,6 @@ class Controller(Atom):
             role=role,
             submitted_at=datetime.datetime.now(datetime.timezone.utc),
             execution_model_name=execution_model_name,
-            target_key=target_key,
             source_key=source_key,
             position_id=position_id,
             params=params or {},
@@ -463,17 +456,10 @@ class Controller(Atom):
         return info
 
     @staticmethod
-    def _validate_order_attribution(
-        *, role: str, target_key: str | None, source_key: str | None
-    ) -> None:
-        if target_key is not None and source_key is not None:
-            raise ValueError("An order cannot have both target_key and source_key")
-        if role == StandardOrderRole.TARGET_ADJUSTMENT:
-            if target_key is None or source_key is not None:
-                raise ValueError("TARGET_ADJUSTMENT requires target_key")
-        elif role == StandardOrderRole.ROLL:
-            if (target_key is None) == (source_key is None):
-                raise ValueError("ROLL requires exactly one target_key or source_key")
+    def _validate_order_attribution(*, role: str, source_key: str | None) -> None:
+        """Reserve direct adjustment attribution for concrete account targets."""
+        if role == StandardOrderRole.TARGET_ADJUSTMENT and source_key is not None:
+            raise ValueError("TARGET_ADJUSTMENT must not have source_key")
 
     def verify_market_open(self, contract: ibi.Contract) -> bool:
         details = self.contract_registry.get_details(contract)
@@ -590,7 +576,6 @@ class Controller(Atom):
         if blotter is None:
             return
         kwargs = {
-            "target_key": info.target_key,
             "source_key": info.source_key,
             "position_id": info.position_id,
             "role": info.role,
@@ -632,16 +617,12 @@ class Controller(Atom):
         actual = (
             position.quantity
             if position is not None
-            else (
-                self.book.direct_quantity(target.target_key)
-                if target.target_key is not None
-                else self.book.aggregate_quantity(target.contract)
-            )
+            else (self.book.direct_quantity(target.contract))
         )
         if actual != target.target_quantity:
             log.error(
                 "Target not achieved for %s: target=%s actual=%s",
-                target.source_key or target.target_key or target.contract.localSymbol,
+                target.source_key or target.contract.localSymbol,
                 target.target_quantity,
                 actual,
             )
@@ -657,9 +638,9 @@ class Controller(Atom):
             StandardOrderRole.CLOSE,
             StandardOrderRole.TARGET_ADJUSTMENT,
         }
-        if target.target_key is not None:
+        if target.source_key is None:
             orders = self.book.active_orders(
-                target_key=target.target_key,
+                contract=target.contract,
                 execution_model_name=execution_model_name,
             )
         else:
@@ -684,9 +665,7 @@ class Controller(Atom):
                 and position_state.target_quantity == target.target_quantity
                 and position_state.target_created_at == target.created_at
             )
-        if target.target_key is None:
-            return False
-        target_state = self.book.target_state(target.target_key)
+        target_state = self.book.target_state(target.contract)
         return (
             target_state is not None
             and target_state.execution_model_name == execution_model_name

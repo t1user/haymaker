@@ -480,8 +480,6 @@ class BracketExecutionModel(ExecutionModel):
                 f"Expected source_key {self.source_key!r}, "
                 f"got {target.source_key!r}"
             )
-        if target.target_key is not None:
-            raise ValueError("BracketExecutionModel does not accept target_key")
         if target.intent is None:
             raise ValueError("BracketExecutionModel requires PositionIntent")
         effective = self.book.effective_quantity(self.source_key)
