@@ -145,6 +145,22 @@ accepted, the model must not mutate it.
 Advanced storage interfaces
 ---------------------------
 
+Custom Portfolio recovery
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``PortfolioStateMixin`` is optional. Its default ``load_state`` and
+``save_state`` delegate to Book under a stable ``portfolio_key``. Loading is
+explicit, usually during startup before new inputs; save a normalized mapping
+of allocation state rather than Signal objects. With asynchronous Book saving,
+return from ``save_state`` means ordered queue acceptance, not backend commit.
+
+Override those methods to use an independent backend, or implement persistence
+directly in your Portfolio without the mixin. Independently owned stores need
+their own startup, cancellation and drain handling. Neither approach promises
+an atomic transaction between Portfolio state and execution targets. Recovery
+must reconcile the saved decision state with Book's latest targets and fills;
+completion feedback can be repeated or missed across process boundaries.
+
 .. autoclass:: haymaker.datastore.AsyncDataStore
 
 .. autoclass:: haymaker.datastore.QueuedDataSink

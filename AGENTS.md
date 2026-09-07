@@ -276,6 +276,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   to Portfolio, not to broker Fill attribution. Multiple expiries may coexist.
   The one-to-one path uses a signal processor, `PortfolioWrapper`, and
   `PositionAllocator`. Execution models have stable unique configured names;
+  PortfolioStateMixin optionally exposes explicit load_state/save_state under
+  portfolio_key, defaulting to Book; independent persistence is permitted.
+  Execution targetReachedEvent forwards completion via Atom feedback, including
+  through Router. It follows fill accounting, carries persisted target fields,
+  and may repeat after recovery. Custom Portfolio feedback must be idempotent.
   preserving a name across deployments promises recovery-compatible behavior.
   Current Router rules always select the model. At startup, every active direct
   `TARGET_ADJUSTMENT` must still select its persisted owner; disagreement,

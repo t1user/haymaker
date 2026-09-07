@@ -505,7 +505,47 @@ Signal source keys. Base Portfolio does not batch, debounce, time out, or
 interpret ``as_of``; concrete policies own those decisions.
 
 .. autoclass:: haymaker.components.Portfolio
-   :members: process
+   :members: process, positions_for_blueprint
+
+Portfolio accounting and optional state
+--------------------------------------
+
+Use ``self.book.aggregate_quantity(contract)`` for filled quantity in an exact
+Contract and ``self.book.active_orders(contract=contract)`` for working orders.
+``self.positions_for_blueprint(signal.contract)`` returns filled quantities
+across all registered members of that blueprint, including held past expiries.
+The query requires initialized registry membership. Neither desired targets
+nor working quantities are actual fills.
+
+In direct mode, allocation to each ``source_key`` belongs to your Portfolio.
+Net fills cannot determine how much of a combined broker position belongs to
+each input. Keep that allocation mapping yourself.
+
+``PortfolioStateMixin`` optionally supplies explicit ``load_state()`` and
+``save_state(mapping)`` methods backed by Book. Declare ``portfolio_key``, load
+before consuming inputs, and save your normalized allocation mapping when it
+changes. Base Portfolio has no mandatory persistence. For an independent store,
+override those methods or omit the mixin entirely; see :doc:`storage` for
+advanced storage ownership and lifecycle.
+
+.. autoclass:: haymaker.components.PortfolioStateMixin
+   :members: load_state, save_state
+
+Execution completion feedback
+-----------------------------
+
+ExecutionModel's ``dataEvent`` reports acceptance, not completion.
+``targetReachedEvent`` reports a converged PositionTarget after Book reflects
+the fills. It also travels upstream through Atom's normal ``onFeedback`` path;
+ExecutionRouter forwards model feedback to the connected Portfolio.
+
+Override ``Portfolio.onFeedback(target, *args)`` to implement sequencing such
+as closing A before requesting B. Check the concrete Contract, quantity and
+target creation time against your own pending allocation. Notifications contain
+persisted target fields, not arbitrary execution metadata. They may repeat
+after restart, so feedback policy must be idempotent. Book queries remain the
+recovery authority if a notification was missed. This is an extension point,
+not a built-in cross-Contract allocation algorithm.
 
 Execution and routing
 =====================

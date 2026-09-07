@@ -593,6 +593,18 @@ class BracketExecutionModel(ExecutionModel):
         current = state.quantity
         target = state.target_quantity
         if current == target:
+            if (
+                state.target_contract is not None
+                and state.target_created_at is not None
+            ):
+                self._notify_target_reached(
+                    PositionTarget(
+                        contract=state.target_contract,
+                        target_quantity=target,
+                        source_key=self.source_key,
+                        created_at=state.target_created_at,
+                    )
+                )
             return
         if current and target and sign(current) == sign(target):
             raise RuntimeError(

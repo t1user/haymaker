@@ -1356,7 +1356,9 @@ class Book:
     def load_portfolio_state(self, portfolio_key: str) -> Mapping[str, Any] | None:
         """Load one Portfolio recovery mapping."""
 
-        return self._portfolio_states.get(portfolio_key)
+        return self._portfolio_states.get(
+            non_empty_string(portfolio_key, "portfolio_key")
+        )
 
     def blotter_records(
         self, source_key: str, position_id: str | None = None

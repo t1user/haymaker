@@ -60,6 +60,14 @@ output addresses an exact Contract. Portfolio owns allocations among concrete
 expiries; SerialTargetExecutionModel must not substitute another held Contract. Do not put
 those policies in the abstract base.
 
+Portfolio `positions_for_blueprint` queries filled concrete holdings using
+registry membership, not desired source allocations. PortfolioStateMixin is
+opt-in and supplies explicit load_state/save_state with a portfolio_key;
+independent storage can override these methods. Execution targetReachedEvent
+also travels upstream as normal Atom feedback, forwarded by Router. Completion
+follows Book accounting and may repeat after restart; user policy must be
+idempotent and must not depend on replay of an old callback or target metadata.
+
 ## Market-data aggregation
 
 Keep the two public aggregation families distinct. `aggregators.py` operates

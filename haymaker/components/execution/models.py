@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any
@@ -38,6 +39,12 @@ class ExecutionModel(Atom, ABC):
     only target state and broker evidence in Book, and emit accepted targets
     to Controller for delayed verification. Invalid targets raise before any
     state change or broker submission.
+
+    ``targetReachedEvent`` emits a PositionTarget after accounting confirms
+    convergence, and forwards it through Atom's reverse feedback path. It is
+    distinct from ``dataEvent`` (target acceptance). Built-in completion
+    notifications contain persisted identity, quantity and creation time,
+    not arbitrary target metadata, and may be repeated after recovery.
     """
 
     def __init__(self, *, name: str | None = None) -> None:
@@ -52,6 +59,9 @@ class ExecutionModel(Atom, ABC):
         self.controller = runtime.controller
         self._started_generation = -1
         self._bound_trades: dict[int, ibi.Trade] = {}
+        self.targetReachedEvent = ibi.Event("targetReachedEvent")
+        self.targetReachedEvent += self.feedbackEvent.emit
+        self._reached: dict[str | int, tuple[datetime, float]] = {}
         self.connect(self.controller)
 
     def __str__(self) -> str:
@@ -65,6 +75,7 @@ class ExecutionModel(Atom, ABC):
         generation = self.runtime.workload_generation
         if generation != self._started_generation:
             self._started_generation = generation
+            self._reached.clear()
             self.recover()
         super().onStart(data, source)
 
@@ -100,6 +111,14 @@ class ExecutionModel(Atom, ABC):
             asyncio.get_running_loop().call_soon(callback, *args)
         except RuntimeError:
             callback(*args)
+
+    def _notify_target_reached(self, target: PositionTarget) -> None:
+        """Emit once per live accepted setpoint, after its Book projection settles."""
+        identity = target.source_key or target.contract.conId
+        version = (target.created_at, target.target_quantity)
+        if self._reached.get(identity) != version:
+            self._reached[identity] = version
+            self.targetReachedEvent.emit(target)
 
     def _bind_once(
         self,
@@ -207,6 +226,13 @@ class SerialTargetExecutionModel(ExecutionModel):
             return
         delta = state.target_quantity - self.book.direct_quantity(contract)
         if not delta:
+            self._notify_target_reached(
+                PositionTarget(
+                    contract=state.contract,
+                    target_quantity=state.target_quantity,
+                    created_at=state.target_created_at,
+                )
+            )
             return
         order = ibi.Order(
             **self.order_options, action=action(sign(delta)), totalQuantity=abs(delta)

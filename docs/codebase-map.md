@@ -130,6 +130,10 @@ members back to them. `blueprint_for`, `contracts_for`, and `get_selector`
 accept either form; overlapping declarations fail atomically. Atom exposes
 `contract_blueprint` separately from its dynamically resolved `contract`.
 SignalModels customize the envelope Contract via `select_signal_contract`.
+Portfolio provides a blueprint-grouped filled-position query and the optional
+PortfolioStateMixin for explicit normalized recovery mappings. Execution
+completion travels through targetReachedEvent and reverse Atom feedback;
+Router forwards it without taking ownership of Portfolio allocation policy.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.
 
 ### Strategy Pipeline Components

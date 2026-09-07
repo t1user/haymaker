@@ -8,6 +8,7 @@ import pytest
 from haymaker.components import (
     FixedSizeAllocator,
     Portfolio,
+    PortfolioStateMixin,
     PortfolioWrapper,
     PositionIntent,
     PositionProposal,
@@ -15,6 +16,72 @@ from haymaker.components import (
     Signal,
     SignalType,
 )
+
+
+class SavedPortfolio(PortfolioStateMixin, Portfolio):
+    """Opt-in state storage without changing the Portfolio processing contract."""
+
+    portfolio_key = "test_allocations"
+
+    def process(self, signal: Signal) -> Iterable[PositionTarget]:
+        """No trades are needed to test the persistence boundary."""
+        return ()
+
+
+def test_portfolio_state_mixin_loads_only_when_explicitly_requested(atom_runtime):
+    first = SavedPortfolio()
+    assert first.load_state() is None
+    first.save_state({"allocations": {"alpha": 2}})
+    second = SavedPortfolio()
+    assert second.load_state() == {"allocations": {"alpha": 2}}
+    assert (
+        atom_runtime.book.load_portfolio_state("test_allocations")
+        == second.load_state()
+    )
+
+
+def test_portfolio_state_mixin_allows_independent_backend(atom_runtime):
+    """A user can replace storage without inventing another store protocol."""
+
+    class Independent(SavedPortfolio):
+        def load_state(self):
+            """Read the user's independently owned state."""
+            return self.saved
+
+        def save_state(self, state):
+            """Write only the user's independently owned state."""
+            self.saved = dict(state)
+
+    portfolio = Independent()
+    portfolio.save_state({"alpha": 1})
+    assert portfolio.load_state() == {"alpha": 1}
+    assert atom_runtime.book.load_portfolio_state(portfolio.portfolio_key) is None
+
+
+def test_portfolio_blueprint_positions_query_filled_not_desired_quantities(
+    atom_runtime,
+):
+    """The helper combines registry membership with accounting, not allocations."""
+    from haymaker.book import PositionState
+
+    blueprint = ibi.Stock("AAPL", "SMART", "USD")
+    held = ibi.Stock("AAPL", "SMART", "USD", conId=11)
+    atom_runtime.contract_registry.register_blueprint(blueprint)
+    atom_runtime.contract_registry.reset_data([[ibi.ContractDetails(contract=held)]])
+    atom_runtime.book.update_position(
+        PositionState(
+            source_key="source",
+            execution_model_name="brackets",
+            contract=held,
+            quantity=2,
+            target_quantity=5,
+        )
+    )
+    portfolio = SavedPortfolio()
+    assert portfolio.positions_for_blueprint(blueprint) == {held: 2}
+    assert portfolio.positions_for_blueprint(held) == {held: 2}
+    with pytest.raises(TypeError):
+        portfolio.positions_for_blueprint(held)[held] = 7
 
 
 def signal(source_key: str = "alpha", value: float = 1) -> Signal:

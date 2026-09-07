@@ -86,6 +86,8 @@ class ContractRegistry:
         This is a membership query, not a trading-eligibility decision.
         """
         key = self.blueprint_key(contract)
+        if key not in self._selectors:
+            raise RuntimeError(f"Blueprint is not qualified yet: {key}")
         return tuple(
             member
             for member in self.details

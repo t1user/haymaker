@@ -77,6 +77,8 @@ class ExecutionRouter(Atom):
             if existing is not None and existing is not model:
                 raise ValueError(f"Duplicate ExecutionModel name: {model.name!r}")
             self.models_by_name[model.name] = model
+        for model in self.models_by_name.values():
+            model.feedbackEvent += self.onFeedback
         self._started_generation = -1
         self._blocked_reason = None
 

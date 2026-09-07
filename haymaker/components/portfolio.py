@@ -5,11 +5,49 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import replace
-from typing import Protocol
+from types import MappingProxyType
+from typing import Any, Protocol
+
+import ib_insync as ibi
 
 from ..base import Atom
 from ..validators import finite_number
 from .messages import PositionProposal, PositionTarget, Signal, SignalType
+
+
+class PortfolioStateMixin(Atom):
+    """Opt into explicit persistence of a custom Portfolio's normalized state.
+
+    Declare a stable ``portfolio_key`` on your subclass and combine this mixin
+    with :class:`Portfolio`. Call :meth:`load_state` before consuming inputs and
+    :meth:`save_state` when your allocation state changes. Neither loading nor
+    saving is automatic. The default uses Book's ordered state persistence;
+    override these two methods for an independent backend and manage that
+    backend's lifecycle yourself. There is no cross-backend transaction with
+    execution targets.
+
+    Example::
+
+        class MyPortfolio(PortfolioStateMixin, Portfolio):
+            portfolio_key = "account_allocation"
+
+            def onStart(self, data, source=None):
+                self.allocations = dict(self.load_state() or {})
+                super().onStart(data, source)
+
+    Implement ``process`` and save a normalized recovery mapping appropriate
+    to your policy, not raw received Signals.
+    """
+
+    portfolio_key: str
+
+    def load_state(self) -> Mapping[str, Any] | None:
+        """Load the saved mapping, or return None for a first run."""
+        return self.book.load_portfolio_state(self.portfolio_key)
+
+    def save_state(self, state: Mapping[str, Any]) -> None:
+        """Save normalized state using Book's configured ordered write policy."""
+        self.book.save_portfolio_state(self.portfolio_key, state)
 
 
 class PositionAllocator(Protocol):
@@ -154,6 +192,37 @@ class Portfolio(Atom, ABC):
 
         return self.sources
 
+    def positions_for_blueprint(
+        self, contract: ibi.Contract
+    ) -> Mapping[ibi.Contract, float]:
+        """Query filled holdings across a registered declaration's members.
+
+        Args:
+            contract: Registered blueprint or any qualified member of it.
+
+        Returns:
+            Read-only mapping of non-flat concrete Contracts to signed filled
+            quantities. Working orders and desired allocations are not fills;
+            query Book's active orders and targets separately. For one exact
+            Contract use ``self.book.aggregate_quantity(contract)``.
+
+        Raises:
+            KeyError: If the Contract has no registered blueprint membership.
+
+        Source-level allocations in direct mode belong to the custom Portfolio:
+        net broker fills cannot identify each contributing Signal source.
+        """
+        members = {
+            member.conId for member in self.contract_registry.contracts_for(contract)
+        }
+        return MappingProxyType(
+            {
+                held: quantity
+                for held, quantity in self.book.logical_positions().items()
+                if held.conId in members
+            }
+        )
+
     def onData(self, signal: Signal, *args: object) -> None:
         """Validate one Signal and emit all recomputed targets."""
 
@@ -189,5 +258,6 @@ __all__ = [
     "FixedSizeAllocator",
     "Portfolio",
     "PortfolioWrapper",
+    "PortfolioStateMixin",
     "PositionAllocator",
 ]

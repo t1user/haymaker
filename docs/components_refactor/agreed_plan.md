@@ -184,6 +184,14 @@ multiple Signal paths
 
 ## Book and persistence
 
+PortfolioStateMixin is opt-in: declare portfolio_key and explicitly load/save
+normalized state through Book, or override persistence independently. Portfolio
+owns source allocations; its positions_for_blueprint helper combines registry
+membership with filled Book quantities. Execution completion is a
+targetReachedEvent forwarded along Atom feedback (also through Router), after
+accounting settles. It contains persisted target fields and may repeat after
+recovery. Custom policies own idempotent cross-Contract sequencing.
+
 ### Blueprint and Contract access
 
 Atoms expose the assigned declaration through `contract_blueprint`, separately

@@ -117,3 +117,51 @@ async def test_one_source_can_reallocate_between_concrete_contracts(direct):
     assert runtime.book.target_state(old.contract).target_quantity == 0
     assert runtime.book.direct_quantity(old.contract) == 0
     assert runtime.book.direct_quantity(opening.contract) == 3
+
+
+async def test_completion_feedback_observes_accounted_fills_and_repeats_on_restart(
+    direct,
+):
+    """A Portfolio can wait for convergence without depending on Trade callbacks."""
+    runtime, broker, portfolio, model, router = direct
+    completed = []
+
+    def onFeedback(target):
+        """Observe Book quantities at the moment completion is delivered."""
+        completed.append((target, runtime.book.direct_quantity(target.contract)))
+
+    portfolio.feedbackEvent += onFeedback
+    portfolio.onData(signal("alpha", 101, 2))
+    await broker.fill(broker.submitted[0], 1)
+    assert completed == []
+    await broker.fill(broker.submitted[0], 1)
+    assert len(completed) == 1
+    assert completed[0][1] == 2
+    assert completed[0][0].target_quantity == 2
+    model.recover()
+    assert len(completed) == 1
+    runtime.workload_generation += 1
+    router.onStart({})
+    assert len(completed) == 2
+    assert len(broker.submitted) == 1
+
+
+async def test_portfolio_can_wait_for_flat_before_opening_another_contract(direct):
+    """The user's feedback policy, not the execution model, sequences expiries."""
+    runtime, broker, portfolio, model, router = direct
+    portfolio.onData(signal("alpha", 101, 2))
+    await broker.fill(broker.submitted[0])
+
+    def onFeedback(target):
+        """Open B only once the requested zero in A has actually converged."""
+        if target.contract.conId == 101 and target.target_quantity == 0:
+            portfolio.onData(signal("alpha", 102, 3))
+
+    portfolio.feedbackEvent += onFeedback
+    portfolio.onData(signal("alpha", 101, 0))
+    close = broker.submitted[-1]
+    await broker.fill(close, 1)
+    assert len(broker.submitted) == 2
+    await broker.fill(close, 1)
+    assert broker.submitted[-1].contract.conId == 102
+    assert runtime.book.direct_quantity(close.contract) == 0

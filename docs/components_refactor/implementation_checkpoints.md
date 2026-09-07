@@ -50,3 +50,7 @@ Contract. Direct targets always refer to their exact concrete Contract.
   Portfolio allocation. Added two independent direct pipeline scenarios.
   Existing direct roll plumbing now saves additive target-transfer snapshots
   to keep the schema cutover functional. Full pytest: 1,615 passed; mypy clean.
+- Checkpoint 5: Portfolio blueprint position queries, optional explicit state
+  mixin, and post-accounting completion feedback through Router. Independent
+  tests demonstrate user-owned flat-before-open sequencing and repeat-safe
+  recovery notifications. Full pytest: 1,620 passed; mypy: 110 files clean.
