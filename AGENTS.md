@@ -131,6 +131,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   process `run_started_at`; a NEXT-only change does not rotate audit history.
   `Atom.contract_selector` is a required runtime-backed property: access raises
   until the Atom has a Contract and the registry has initialized its selector.
+  `Atom.contract_blueprint` returns a copy of the registered declaration.
+  Registry lookup accepts qualified members and covers the full chain. Distinct
+  declarations with overlapping qualified conIds fail rather than creating
+  ambiguous identity. Explicit nth selection raises when unavailable; NEXT
+  alone retains its intentional last-available fallback.
 - IB/TWS connection outages, especially around a broker's daily restart period,
   are expected and should normally be recoverable. Do not treat a connection
   outage alone as an unsafe broker/local state; emergency trading disablement

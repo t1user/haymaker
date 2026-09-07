@@ -303,15 +303,16 @@ def test_FutureSelector_no_negative_indices():
     selector = FutureSelector.from_details(
         es_chain, roll_margin_bdays=5, today=datetime(2025, 9, 10)
     )
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         selector.nth_contract(-1)
 
 
-def test_FutureSelector_no_out_of_bounds_error():
+def test_FutureSelector_rejects_out_of_bounds_index():
     selector = FutureSelector.from_details(
         es_chain, roll_margin_bdays=5, today=datetime(2025, 9, 10)
     )
-    assert selector.nth_contract(200).contract.localSymbol == "ESM0"
+    with pytest.raises(IndexError):
+        selector.nth_contract(200)
 
 
 #####################

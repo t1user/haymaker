@@ -84,8 +84,12 @@ SignalModels are identity-based dataclasses used by both flows. They own
 `source_key`, the Signal Contract, SignalType, `created_at`, and standard
 emission, but do not own futures-roll policy. User implementations return only
 `SignalCalculation(value, metadata, as_of)`; do not make them reconstruct or
-override the framework-owned Signal envelope. `as_of` is the observation label
-and remains distinct from local creation time, notably for IB's left-labelled
+override the framework-owned Signal envelope.
+`select_signal_contract()` is the narrow Contract-selection hook: default
+`self.contract`, or another qualified chain member, or `contract_blueprint` for
+a custom direct Portfolio. A blueprint Signal is not accepted by one-to-one
+allocation, which requires a concrete opening Contract. `as_of` is the
+observation label and remains distinct from local creation time, notably for IB's left-labelled
 bars. PandasSignalModel treats the last row returned by `df()` as authoritative;
 user calculations own ordering, duplicates, and correctness. Its
 `metadata_fields` distinguishes all non-signal fields (`None`), no fields (an

@@ -185,6 +185,18 @@ multiple Signal paths
 
 ## Book and persistence
 
+### Blueprint and Contract access
+
+Atoms expose the assigned declaration through `contract_blueprint`, separately
+from `contract` resolved by `which_contract`. Registry lookups accept either
+the declaration or a qualified member. Registration snapshots declarations;
+different declarations whose qualified results overlap fail atomically.
+Explicit `nth_contract(n)` selects an exact eligible maturity and raises when
+unavailable. NEXT preserves its intentional fallback. SignalModels customize
+only `select_signal_contract()` to emit a different qualified member or a
+blueprint for a custom direct Portfolio; one-to-one allocation still requires
+a qualified opening Contract. Audit selection remains ACTIVE-based.
+
 One process-owned `Book` replaces whole-system strategy snapshots. Book
 performs no Portfolio calculation and no broker API calls. It owns typed
 queries and recovery for:

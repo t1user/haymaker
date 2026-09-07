@@ -128,7 +128,8 @@ def test_sync_extracts_blueprint():
     streamer.which_contract = ActiveNext.NEXT
     aggregator = make_aggregator()
     aggregator.sync_with_streamer(streamer)
-    assert aggregator._contract_blueprint is blueprint
+    assert aggregator.contract_blueprint == blueprint
+    assert aggregator.contract_blueprint is not blueprint
 
 
 def test_FuturesPandasAggregator_has_the_same_contract_as_Streamer(

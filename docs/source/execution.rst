@@ -43,6 +43,34 @@ otherwise generate value equality again.
 .. autoclass:: haymaker.base.Pipe
    :members:
 
+Blueprints and concrete Contracts
+--------------------------------
+
+Assign an ordinary ``ibi.Contract`` blueprint to ``atom.contract``. Reading
+``atom.contract`` resolves its current ``which_contract`` role. Reading
+``atom.contract_blueprint`` returns the original declaration as a safe copy;
+``atom.contract_selector`` exposes the initialized selector and raises if it
+is not ready.
+
+For futures, ``selector.nth_contract(0).contract`` is ACTIVE and index one is
+the following eligible expiry. Index one is not necessarily NEXT: NEXT stays
+at ACTIVE until the configured margin. Explicit nth requests raise when the
+requested maturity is unavailable; NEXT retains its last-available fallback.
+Wrappers also expose ``roll_day`` and expiry information.
+
+The registry's ``blueprint_for(contract)``, ``get_selector(contract)`` and
+``contracts_for(contract)`` accept a declaration or qualified member. Membership
+comes from qualification, not symbol guessing. Identical declarations share
+registration; distinct declarations resolving to overlapping conIds raise.
+The registry keeps declaration copies so qualification cannot mutate identity.
+
+SignalModels normally emit ``self.contract``. Override
+``select_signal_contract()`` to return another qualified chain member, or
+``self.contract_blueprint`` for a custom direct Portfolio to resolve. The
+framework still constructs source identity, value, metadata and timestamps.
+The one-to-one allocator requires a qualified Contract. Selecting a different
+Signal Contract does not change the selector's ACTIVE audit identity.
+
 Trading messages
 ================
 

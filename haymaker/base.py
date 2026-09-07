@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -47,7 +48,7 @@ class ContractManagingDescriptor:
     def __set__(self, obj: Atom, value: ibi.Contract) -> None:
         if not isinstance(value, ibi.Contract):
             raise TypeError(f"attr contract must be ibi.Contract, not: {type(value)}")
-        obj.__dict__[self.name] = value
+        obj.__dict__[self.name] = deepcopy(value)
         obj.contract_registry.register_blueprint(value)
 
     @overload
@@ -161,6 +162,9 @@ class Atom:
         * ``onContractChanged(old_contract, new_contract)`` reacts when the
           resolved contract changes; Controller remains responsible for rolling
           held positions.
+        * ``contract_blueprint`` returns a copy of the assigned declaration,
+          independent of current ACTIVE/NEXT selection. ``contract_selector``
+          exposes its initialized chain and Contract-selection operations.
         * ``validate_source(source)`` returns normally for a compatible
           prospective upstream Atom and raises for structural incompatibility.
           The default accepts every Atom.
@@ -267,6 +271,21 @@ class Atom:
             # empty details
             details = Details(ibi.ContractDetails())
         return details
+
+    @property
+    def contract_blueprint(self) -> ibi.Contract:
+        """Return the assigned Contract declaration, independently of ACTIVE/NEXT.
+
+        A copy prevents callers or broker qualification from mutating the
+        registered identity. Pass this declaration to a custom direct
+        Portfolio when it should select a concrete Contract itself.
+
+        Raises:
+            KeyError: If this Atom has no assigned Contract.
+        """
+        if self._contract_blueprint is None:
+            raise KeyError(f"Contract not set on {type(self).__name__}")
+        return deepcopy(self._contract_blueprint)
 
     @property
     def contract_selector(self) -> AbstractBaseContractSelector:

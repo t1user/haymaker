@@ -40,3 +40,7 @@ Contract. Direct targets always refer to their exact concrete Contract.
   CLOSE verification, durable reversal recovery, and first-fill-only block
   clearing. Independent suite covers 17 scenarios, including restarts before,
   during and after close fills. Full pytest: 1,610 passed; mypy: 110 files clean.
+- Checkpoint 3: public blueprint snapshots, full qualified-member lookup,
+  atomic overlap rejection, strict explicit nth selection, and the narrow
+  SignalModel selection hook. Aggregators use public blueprint access. Full
+  pytest: 1,615 passed; additional aggregator checks: 129 passed; mypy clean.

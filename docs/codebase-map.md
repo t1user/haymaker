@@ -124,6 +124,12 @@ The research package is intentionally separate from live execution. It works dir
   finite numbers, read-only mapping copies, non-empty strings, and IB Contract
   identity, plus IB request/order field validators. Domain-specific validation
   remains with the owning component.
+
+ContractRegistry snapshots blueprint declarations and maps all qualified
+members back to them. `blueprint_for`, `contracts_for`, and `get_selector`
+accept either form; overlapping declarations fail atomically. Atom exposes
+`contract_blueprint` separately from its dynamically resolved `contract`.
+SignalModels customize the envelope Contract via `select_signal_contract`.
 - `haymaker/contract_registry.py`, `contract_selector.py`, `details_processor.py`: broker contract qualification, futures selection, metadata normalization.
 
 ### Strategy Pipeline Components

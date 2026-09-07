@@ -140,7 +140,7 @@ class SignalModel(Atom, ABC):
 
         if not isinstance(calculation, SignalCalculation):
             raise TypeError("calculate_signal() must return SignalCalculation")
-        contract = self.contract
+        contract = self.select_signal_contract()
         signal = Signal(
             source_key=self.source_key,
             contract=contract,
@@ -151,6 +151,17 @@ class SignalModel(Atom, ABC):
         )
         self.validate_signal_value(signal.value)
         return signal
+
+    def select_signal_contract(self) -> ibi.Contract:
+        """Choose the Signal Contract without constructing its other fields.
+
+        The default is ``self.contract``, resolved using ``which_contract``.
+        Override to return ``self.contract_selector.nth_contract(n).contract``
+        for another futures maturity, or ``self.contract_blueprint`` for a
+        custom direct Portfolio to interpret. One-to-one allocation requires a
+        qualified Contract. This selection does not change ACTIVE audit data.
+        """
+        return self.contract
 
     def validate_signal_value(self, value: float | SignalPair) -> None:
         """Validate model-specific value constraints before Signal emission.

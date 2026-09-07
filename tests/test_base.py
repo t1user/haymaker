@@ -24,6 +24,21 @@ def test_atom_has_explicit_events():
     assert atom.feedbackEvent.name() == "feedbackEvent"
 
 
+def test_atom_exposes_unmodified_blueprint_copy(atom_runtime):
+    """Blueprint access is independent of mutable inputs and selected roles."""
+    atom = Atom()
+    with pytest.raises(KeyError, match="Contract not set"):
+        _ = atom.contract_blueprint
+    supplied = ibi.Future("ES", exchange="CME")
+    atom.contract = supplied
+    supplied.conId = 7
+    public = atom.contract_blueprint
+    public.currency = "USD"
+    assert atom.contract_blueprint == ibi.Future("ES", exchange="CME")
+    atom.which_contract = ActiveNext.NEXT
+    assert atom.contract_blueprint == ibi.Future("ES", exchange="CME")
+
+
 def test_base_on_data_requires_explicit_implementation():
     with pytest.raises(NotImplementedError):
         Atom().onData(object())

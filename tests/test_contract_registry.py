@@ -96,8 +96,9 @@ def test_number_of_current_contracts(registry_with_data):
 
 
 def test_number_of_all_contracts(registry_with_data):
-    # ACTIVE, NEXT (same) and PREVIOUS (different) for each blueprint
-    assert len(registry_with_data.all_contracts) == len(blueprints) * 2
+    assert registry_with_data.all_contracts == {
+        item.contract for chain in details for item in chain
+    }
 
 
 @pytest.mark.parametrize("contract_index", [0, 1, 2])
@@ -179,3 +180,41 @@ def test_get_details(registry_with_data):
     det = details[0]
     contract = det[0].contract
     assert registry_with_data.get_details(contract).details == det[0]
+
+
+def test_qualified_member_finds_original_blueprint_and_full_chain(registry_with_data):
+    """Qualification supplies identity without another user-defined key."""
+    member = details[0][-1].contract
+    assert registry_with_data.blueprint_for(member) == blueprints[0]
+    assert registry_with_data.get_selector(member) is registry_with_data.get_selector(
+        blueprints[0]
+    )
+    assert set(registry_with_data.contracts_for(member)) == {
+        d.contract for d in details[0]
+    }
+
+
+def test_distinct_blueprints_with_same_qualification_fail_atomically():
+    """Optional declaration fields cannot create duplicate physical series."""
+    registry = ContractRegistry(today=datetime(2025, 12, 16))
+    first = ibi.Future("ES", exchange="CME")
+    second = ibi.Future("ES", exchange="CME", currency="USD")
+    registry.register_blueprint(first)
+    registry.register_blueprint(second)
+    with pytest.raises(ValueError, match="multiple registered blueprints") as error:
+        registry.reset_data([details[0], details[0]])
+    assert str(first) in str(error.value)
+    assert str(second) in str(error.value)
+    assert not registry.selectors
+    assert not registry.all_contracts
+
+
+def test_blueprint_registration_is_insulated_from_qualification_mutation():
+    """Broker requests may mutate their copies, not the declaration identity."""
+    registry = ContractRegistry()
+    original = ibi.Future("ES", exchange="CME")
+    registry.register_blueprint(original)
+    original.conId = 999
+    request = registry.blueprints[0]
+    request.currency = "USD"
+    assert registry.blueprints == [ibi.Future("ES", exchange="CME")]

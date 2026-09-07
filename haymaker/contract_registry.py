@@ -1,4 +1,5 @@
 from collections import UserDict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from logging import getLogger
@@ -57,7 +58,39 @@ class ContractRegistry:
         return self.today or utc_now_naive()
 
     def register_blueprint(self, blueprint: Blueprint) -> None:
-        self._blueprints[self.hash_contract(blueprint)] = blueprint
+        """Capture an unchanging declaration; identical declarations share it."""
+        self._blueprints.setdefault(self.hash_contract(blueprint), deepcopy(blueprint))
+
+    def blueprint_key(self, contract: ibi.Contract) -> ContractKey:
+        """Identify a registered declaration or one of its qualified members.
+
+        Raises:
+            KeyError: If no registered blueprint owns the Contract. Membership
+                comes from qualification, never from guessed symbol matching.
+        """
+        key = self.hash_contract(contract)
+        if key in self._blueprints:
+            return key
+        try:
+            return self._series_by_con_id[contract.conId]
+        except KeyError as exc:
+            raise KeyError(f"No registered blueprint owns {contract!r}") from exc
+
+    def blueprint_for(self, contract: ibi.Contract) -> Blueprint:
+        """Return a copy of the declaration owning a blueprint or qualified member."""
+        return deepcopy(self._blueprints[self.blueprint_key(contract)])
+
+    def contracts_for(self, contract: ibi.Contract) -> tuple[ibi.Contract, ...]:
+        """Return all qualified members, including past and later futures expiries.
+
+        This is a membership query, not a trading-eligibility decision.
+        """
+        key = self.blueprint_key(contract)
+        return tuple(
+            member
+            for member in self.details
+            if self._series_by_con_id.get(member.conId) == key
+        )
 
     def get_contract(
         self, blueprint: Blueprint, which: ActiveNext = ActiveNext.ACTIVE
@@ -71,7 +104,11 @@ class ContractRegistry:
             return self._blueprints.get(self.hash_contract(blueprint))
 
     def get_selector(self, blueprint: Blueprint) -> AbstractBaseContractSelector | None:
-        return self._selectors.get(self.hash_contract(blueprint))
+        """Look up the initialized selector from a declaration or qualified member."""
+        try:
+            return self._selectors.get(self.blueprint_key(blueprint))
+        except KeyError:
+            return None
 
     def get_details(self, contract: ibi.Contract | None) -> Details | None:
         if contract is None:
@@ -83,29 +120,37 @@ class ContractRegistry:
                 return None
 
     def reset_data(self, input_details: list[list[ibi.ContractDetails]]) -> None:
+        """Atomically rebuild selectors and reject overlapping declarations."""
         today = self._today
-        self._series_by_con_id.clear()
+        selectors: dict[ContractKey, AbstractBaseContractSelector] = {}
+        members: dict[int, ContractKey] = {}
+        details = DetailsContainer()
 
-        for blueprint, details_list in zip(self._blueprints, input_details):
-            self._selectors[blueprint] = selector_factory(
+        for blueprint, details_list in zip(
+            self._blueprints, input_details, strict=True
+        ):
+            selectors[blueprint] = selector_factory(
                 details_list,
                 self.futures_roll_bdays,
                 self.futures_roll_margin_bdays,
                 today=today,
             )
 
-            for details in details_list:
-                if details.contract:
-                    self.details[details.contract] = details
-                    con_id = details.contract.conId
+            for item in details_list:
+                if item.contract:
+                    details[item.contract] = item
+                    con_id = item.contract.conId
                     if con_id:
-                        existing = self._series_by_con_id.get(con_id)
+                        existing = members.get(con_id)
                         if existing is not None and existing != blueprint:
                             raise ValueError(
                                 f"conId={con_id} belongs to multiple "
-                                "registered futures series"
+                                f"registered blueprints: {existing!r} and {blueprint!r}"
                             )
-                        self._series_by_con_id[con_id] = blueprint
+                        members[con_id] = blueprint
+        self._selectors = selectors
+        self._series_by_con_id = members
+        self.details = details
 
     def series_key(self, contract: ibi.Future) -> ContractKey:
         """Return the registered blueprint identity for a qualified Future.
@@ -177,19 +222,13 @@ class ContractRegistry:
 
     @property
     def all_contracts(self) -> set[ibi.Contract]:
-        return {
-            contract
-            for selector in self._selectors.values()
-            for contract in (
-                selector.active_contract,
-                selector.next_contract,
-                selector.previous_contract,
-            )
-        }
+        """Return every qualified registered member, not only adjacent expiries."""
+        return set(self.details)
 
     @property
     def blueprints(self) -> list[ibi.Contract]:
-        return list(self._blueprints.values())
+        """Return declaration copies safe to pass to broker qualification."""
+        return deepcopy(list(self._blueprints.values()))
 
     @property
     def selectors(self) -> list[AbstractBaseContractSelector]:

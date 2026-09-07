@@ -429,10 +429,20 @@ class FutureSelector(AbstractBaseContractSelector):
         return self._bdays(self.today, self._active_contract().roll_day)
 
     def nth_contract(self, index: int) -> AbstractBaseFutureWrapper:
-        """Return active contract at given index."""
-        assert index >= 0
-        # if index to large, return last element
-        index = index if index < len(self.contracts) - 1 else len(self.contracts) - 1
+        """Return an exact eligible chain member; zero denotes ACTIVE.
+
+        Unlike NEXT, index one always requests the following eligible expiry.
+        The returned wrapper exposes ``contract``, ``roll_day`` and expiry data.
+
+        Raises:
+            ValueError: If index is negative.
+            TypeError: If index is not an integer (booleans are not indices).
+            IndexError: If that maturity is unavailable. No silent clamping.
+        """
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise TypeError("Contract index must be an integer")
+        if index < 0:
+            raise ValueError("Contract index must not be negative")
         return self.contracts[index]
 
     def _active_contract(self) -> AbstractBaseFutureWrapper:
@@ -442,7 +452,7 @@ class FutureSelector(AbstractBaseContractSelector):
         return (
             self._active_contract()
             if self.bdays_till_roll > self.roll_margin_bdays
-            else self.nth_contract(1)
+            else self.nth_contract(min(1, len(self.contracts) - 1))
         )
 
     def _previous_contract(self) -> AbstractBaseFutureWrapper:

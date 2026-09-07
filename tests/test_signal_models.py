@@ -29,6 +29,30 @@ class Model(PandasSignalModel):
         return result
 
 
+def test_signal_contract_hook_can_pass_blueprint_to_direct_portfolio(atom_runtime):
+    """User overrides only Contract selection; the framework builds the envelope."""
+
+    class BlueprintModel(Model):
+        def select_signal_contract(self) -> ibi.Contract:
+            """Leave concrete Contract selection to the direct Portfolio."""
+            return self.contract_blueprint
+
+    blueprint = ibi.Stock("AAPL", "SMART", "USD")
+    model = BlueprintModel("alpha", blueprint, SignalType.STATE)
+    qualified = ibi.Stock("AAPL", "SMART", "USD", conId=123)
+    atom_runtime.contract_registry.reset_data(
+        [[ibi.ContractDetails(contract=qualified)]]
+    )
+    frame = pd.DataFrame({"close": [12]})
+    signal = model.create_signal(frame)
+    assert model.contract == qualified
+    assert signal.contract == blueprint
+    assert signal.contract.conId == 0
+    assert signal.source_key == "alpha"
+    assert signal.value == 1
+    assert signal.metadata["atr"] == 2.5
+
+
 class EntryExitModel(PandasSignalModel):
     def df(self, data: pd.DataFrame) -> pd.DataFrame:
         result = data.copy()
