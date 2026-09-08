@@ -46,6 +46,21 @@ otherwise generate value equality again.
 Blueprints and concrete Contracts
 ---------------------------------
 
+.. autoclass:: haymaker.enums.ActiveNext
+
+.. autoclass:: haymaker.contract_registry.ContractRegistry
+   :members: blueprint_key, blueprint_for, contracts_for, get_selector
+
+.. autoclass:: haymaker.contract_selector.AbstractBaseContractSelector
+
+.. autoclass:: haymaker.contract_selector.AbstractBaseFutureWrapper
+   :members: roll_day, last_trading_day
+
+.. autoclass:: haymaker.contract_selector.FutureSelector
+   :members: nth_contract, active_contract, next_contract, past_contracts
+
+.. autoclass:: haymaker.details_processor.Details
+
 Assign an ordinary ``ibi.Contract`` blueprint to ``atom.contract``. Reading
 ``atom.contract`` resolves its current ``which_contract`` role. Reading
 ``atom.contract_blueprint`` returns the original declaration as a safe copy;
@@ -428,7 +443,7 @@ Custom market-data stores and Signal persistence policies are described in
 .. autoclass:: haymaker.components.SignalCalculation
 
 .. autoclass:: haymaker.components.SignalModel
-   :members: calculate_signal, create_signal, validate_signal_value
+   :members: calculate_signal, create_signal, validate_signal_value, onData, select_signal_contract
 
 .. autoclass:: haymaker.components.PandasSignalModel
    :members: df, row_to_calculation, calculate_signal, create_signal
@@ -480,6 +495,7 @@ allocator preserves source, Contract, and metadata; the wrapper owns transfer
 of the proposal's mandatory intent to the target.
 
 .. autoclass:: haymaker.components.PositionAllocator
+   :members: target_for
 
 .. autoclass:: haymaker.components.FixedSizeAllocator
    :members: target_for

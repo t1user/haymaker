@@ -407,7 +407,7 @@ def stop_loss(
         acted on it. Future leakage invalidates research results.
 
     Returns:
-        Dataframe with columns:
+        pandas.DataFrame: Transaction columns described below.
 
         - ``position``: resulting position after transactions on the bar
         - ``open_price``: signed price of an opening transaction

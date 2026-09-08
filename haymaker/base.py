@@ -117,34 +117,34 @@ class Atom:
     Attributes:
         events (Sequence[str]): Names of the standard lifecycle events:
             ``startEvent``, ``dataEvent``, and ``feedbackEvent``.
-        startEvent (eventkit.Event): Downstream startup event. The base
+        startEvent (eventkit.event.Event): Downstream startup event. The base
             :meth:`onStart` emits the unchanged startup payload and this Atom as
             its source.
-        dataEvent (eventkit.Event): Downstream data event. Subclasses emit it
+        dataEvent (eventkit.event.Event): Downstream data event. Subclasses emit it
             explicitly after producing output.
-        feedbackEvent (eventkit.Event): Reverse-direction feedback event. The
+        feedbackEvent (eventkit.event.Event): Reverse-direction feedback event. The
             base :meth:`onFeedback` emits the supplied payload unchanged.
-        contract (ib_insync.Contract | None): Optional contract associated with
+        contract (ib_insync.contract.Contract | None): Optional contract associated with
             this component. Assignment registers the unqualified blueprint;
             access asks :attr:`contract_registry` for its current resolution.
             Before startup this may still be the blueprint; after qualification
             it is the selected concrete Contract. Components unrelated to a
             single instrument should leave it unset.
-        which_contract (ActiveNext): Futures role returned by :attr:`contract`.
-            Supported roles are :attr:`~haymaker.enums.ActiveNext.ACTIVE`, the
-            default, and :attr:`~haymaker.enums.ActiveNext.NEXT` for components
+        which_contract (haymaker.enums.ActiveNext): Futures role returned by :attr:`contract`.
+            Supported roles are ``ActiveNext.ACTIVE``, the
+            default, and ``ActiveNext.NEXT`` for components
             that intentionally operate on the early-entry contract. PREVIOUS is
             reserved for direct selector and registry queries.
-        ib (ib_insync.IB): Runtime broker client.
+        ib (ib_insync.ib.IB): Runtime broker client.
         book (Book): Runtime accounting and recovery service.
-        contract_registry (ContractRegistry): Runtime contract qualification
+        contract_registry (haymaker.contract_registry.ContractRegistry): Runtime contract qualification
             and selection registry.
         request_restart (Callable | None): Current supervisor restart callback,
             or ``None`` before one has been installed.
-        contract_details (Details): Details for the resolved :attr:`contract`.
+        contract_details (haymaker.details_processor.Details): Details for the resolved :attr:`contract`.
             These normally become available during startup. Missing details
             produce an empty ``Details`` value and an error log.
-        contract_selector (AbstractBaseContractSelector): Selector registered
+        contract_selector (haymaker.contract_selector.AbstractBaseContractSelector): Selector registered
             for the contract blueprint. Access raises until a contract has been
             assigned and its selector initialized by the runtime.
 

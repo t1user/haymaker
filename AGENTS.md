@@ -314,6 +314,11 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   `BracketExecutionModel` enables automatic rolling by default and
   `auto_roll_futures=False` is the explicit per-source opt-out. Preserve mode and
   executor name while persisted roll work is incomplete.
+  Before bracket roll submission, wait for all unprocessed source OPEN/CLOSE
+  orders and refresh episode quantities after accounting settles. Skip sources
+  that became flat, retain their completion attribution, and preserve offsets
+  from already processed sources. Changed episode identity or an impossible
+  remaining physical allocation blocks before further broker work.
 - Explicit account reset gives pre-existing order cancellations a bounded grace
   period, then submits liquidation orders even when some cancellations remain
   unconfirmed because flattening is the priority. An incomplete liquidation

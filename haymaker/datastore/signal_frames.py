@@ -69,7 +69,7 @@ class QueuedSignalFramePersistence:
 
     Args:
         sink: Queue-only dataframe sink configured with
-            :attr:`~haymaker.async_wrappers.QueueShutdownPolicy.DRAIN`.
+            ``QueueShutdownPolicy.DRAIN``.
 
     Raises:
         ValueError: If the sink does not use the required ``DRAIN`` policy.

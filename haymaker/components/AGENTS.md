@@ -210,6 +210,13 @@ source by default; `auto_roll_futures=False` is the explicit opt-out. Reject
 conflicting source policies, mode mixes, and incompatible executor names.
 SignalModels remain calculation components and must not own roll policy.
 
+Bracket roll plans refresh every unprocessed episode after all pending source
+OPEN/CLOSE work settles. A zero, non-trading RollParticipant records a source
+closed while waiting, so it receives completion without submitting a BAG or
+replacing protection. Rebuild net allocation with completed non-trading offsets;
+never reuse a stale quantity or discard an offset already applied logically.
+Reject changed non-flat episode identity or an unrepresentable remaining net.
+
 `roll_policies.py` owns FutureRollPolicy, RollDecision, and the default
 PastToActiveRollPolicy. Only selector past_contracts roll by default; all later
 eligible expiries remain held. Policies receive a date-refreshed selector and

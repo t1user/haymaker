@@ -2,10 +2,10 @@
 
 Reviewed 2026-09-07 after implementation checkpoints 1–8. This review does not
 silently implement additional behavioral changes. The implementation is not a
-claim of live-production readiness: the first finding needs attention before
-relying on rolling during in-flight one-to-one execution.
+claim of live-production readiness. All actionable findings below were resolved
+in the follow-up of 2026-09-08; original evidence is retained for traceability.
 
-## Remaining findings
+## Findings and resolution
 
 Follow-up status (2026-09-08): the stale bracket-roll finding is fixed. Pending
 episodes are refreshed together after active work/accounting settles; flat
@@ -19,6 +19,14 @@ bare-string source declarations are rejected. All five override parameter
 diagnostics are fixed; Pyright reports zero errors (the two intentional
 aggregated-export warnings remain). Full pytest: 1,647 passed; mypy: 112 files
 clean. The stale target-key docstring is corrected.
+
+Documentation follow-up: strict Sphinx now builds with zero warnings, including
+external-reference validation. Canonical library type links, explicit framework
+API targets, and corrected research docstrings replace the unresolved references.
+The documentation-only type formatter is cacheable and tested; missing
+references are not globally suppressed. Final pytest: 1,651 passed; mypy: 113
+files clean. Pyright has zero errors and two known warnings for the intentionally
+aggregated public export lists. No actionable review finding remains open.
 
 ### High: waiting bracket rolls retain a stale participant quantity
 
@@ -120,7 +128,7 @@ creation time.
   database, production configuration, credentials, or environment files were
   changed. Nothing was pushed.
 
-## Validation
+## Original validation (before follow-up)
 
 - Full pytest: **1,637 passed**.
 - Mypy: **112 source files clean**, including the converter and broker harness.

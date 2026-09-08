@@ -121,10 +121,10 @@ class Details:
     and processing information that's most relevant for Haymaker.
 
     Attributes:
-        details (ibi.ContractDetails): The original contract details object.
-        trading_hours (list[tuple[datetime, datetime]]): List of tuples with
+        details (ib_insync.contract.ContractDetails): The original contract details object.
+        trading_hours (list[tuple[datetime.datetime, datetime.datetime]]): List of tuples with
             start and end of trading hours for this contract.
-        liquid_hours (list[tuple[datetime, datetime]]): List of tuples with
+        liquid_hours (list[tuple[datetime.datetime, datetime.datetime]]): List of tuples with
             start and end of liquid hours for this contract.
     """
 

@@ -56,7 +56,7 @@ class PositionAllocator(Protocol):
     Implement this protocol when :class:`FixedSizeAllocator` does not express
     the required one-to-one sizing policy. :class:`PortfolioWrapper` passes
     each immutable PositionProposal to
-    :meth:`PositionAllocator.target_for`; implementations return one absolute
+    :meth:`~haymaker.components.PositionAllocator.target_for`; implementations return one absolute
     PositionTarget or ``None`` to suppress execution. They must preserve
     proposal Contract and source identity. PortfolioWrapper supplies the
     proposal's mandatory intent on the emitted target.

@@ -23,8 +23,7 @@ Primary API
 
 .. autofunction:: haymaker.research.auto_perf
 
-.. autoclass:: haymaker.research.Results
-   :members:
+.. autoclass:: haymaker.research.Results(stats, daily, positions, df, warnings)
 
 Typical Pattern
 ===============
@@ -41,4 +40,3 @@ Typical Pattern
    result = perf(tx, slippage=1)
 
 The :doc:`examples` page links to notebooks with executed outputs.
-

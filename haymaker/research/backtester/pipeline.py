@@ -7,12 +7,12 @@ Public interface
     Convert a DataFrame containing ``position`` or ``blip`` into a
     :class:`TransactionFrame`-compatible DataFrame ready for :func:`perf`.
     This is meant as an alternative to
-    :func:`~haymaker.research.stop.interface.stop_loss`
+    :func:`~haymaker.research.stop.stop_loss`
     for strategies that don't use stop-loss.
 
 ``perf(data, slippage, skip_last_open, raise_exceptions)``
     Main entry point.  Accepts the output of :func:`no_stop` or
-    :func:`~haymaker.research.stop.interface.stop_loss`.
+    :func:`~haymaker.research.stop.stop_loss`.
 
 ``auto_perf(data, price_column, slippage, skip_last_open, raise_exceptions)``
     Convenience wrapper around :func:`perf`.  If ``data`` already matches
@@ -47,7 +47,15 @@ from .engine import _perf_engine, _perf_engine_python
 
 
 class Results(NamedTuple):
-    """Output of :func:`perf`."""
+    """Output of :func:`perf` as an immutable tuple of result objects.
+
+    Attributes:
+        stats (pandas.Series): Performance summary statistics.
+        daily (pandas.DataFrame): Daily performance data.
+        positions (pandas.DataFrame): Trade-level position records.
+        df (pandas.DataFrame): Enriched bar-level calculation data.
+        warnings (list[str]): Diagnostics produced while calculating results.
+    """
 
     stats: pd.Series
     daily: pd.DataFrame
@@ -66,7 +74,7 @@ class _TransactionFrame:
     """Internal validator for the DataFrame passed to :func:`perf`.
 
     Not part of the public API.  Researchers should use :func:`no_stop` or
-    :func:`~haymaker.research.stop.interface.stop_loss` to produce valid input.
+    :func:`~haymaker.research.stop.stop_loss` to produce valid input.
     """
 
     REQUIRED_COLUMNS: ClassVar[frozenset[str]] = frozenset(
@@ -111,7 +119,7 @@ def no_stop(
         price_column: Column used for execution prices and mark-to-market.
 
     Returns:
-        DataFrame with columns: ``bar_price``, ``position``, ``open_price``,
+        pandas.DataFrame: Columns ``bar_price``, ``position``, ``open_price``,
         ``close_price``, ``stop_price``.
     """
     if price_column not in df.columns:
@@ -580,7 +588,7 @@ def perf(
 
     Args:
         data:             Output of :func:`no_stop` or
-                          :func:`~haymaker.research.stop.interface.stop_loss`
+                          :func:`~haymaker.research.stop.stop_loss`
                           with ``bar_price`` added.  Must have columns:
                           ``bar_price``, ``open_price``, ``close_price``,
                           ``stop_price``, ``position``.
@@ -615,7 +623,7 @@ def auto_perf(
     This is a convenience wrapper around :func:`perf` for notebook and
     exploratory workflows.  It first checks whether ``data`` already satisfies
     the transaction-frame schema produced by :func:`no_stop` or
-    :func:`~haymaker.research.stop.interface.stop_loss`.  If so, it passes the
+    :func:`~haymaker.research.stop.stop_loss`.  If so, it passes the
     dataframe directly to :func:`perf`.
 
     If ``data`` does not match that schema, the wrapper treats it as a raw

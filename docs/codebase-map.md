@@ -282,6 +282,11 @@ reference and never suppresses the Signal.
   for experimental event-driven simulation; there is no backtester CLI.
 - Research code usually imports from `haymaker.research`, `haymaker.research.stop`, or `haymaker.research.backtester`.
 - Sphinx docs are built from `docs/source` with `make html` from the `docs/` directory.
+  Validate references with `.venv/bin/python -m sphinx -n -W --keep-going -b html
+  docs/source /tmp/haymaker-docs` from the repository root. External inventories
+  require network access. `docs/sphinx_helpers.py` maps known private library
+  annotation paths to their documented public types; unknown references still
+  receive ordinary Sphinx validation.
 
 ## Data Flow
 
@@ -362,6 +367,11 @@ reference and never suppresses the Signal.
     back-reports Fill evidence and resumes incomplete roll stages before
     comparing Book with the broker snapshot. Completed schedule occurrence
     markers prevent repeated fixed-schedule rolls, including after restart.
+    Bracket execution waits for OPEN/CLOSE work across all unprocessed sources,
+    then refreshes quantities and net allocation before submission. Flat sources
+    are skipped with attribution retained. Already processed logical offsets
+    cannot be discarded; incompatible episode changes or remaining net block
+    before further broker work.
 
 ### Dataloader Flow
 

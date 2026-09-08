@@ -2,6 +2,8 @@
 Research Package
 ****************
 
+.. py:module:: haymaker.research
+
 The :mod:`haymaker.research` package is a lightweight layer for strategy
 research with pandas dataframes. It is meant for fast iteration: generate a
 hypothetical strategy state, convert it into transactions, apply optional stop
@@ -22,4 +24,3 @@ tools, and notebooks.
    upsampling
    bootstrap
    examples
-

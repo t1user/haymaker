@@ -80,3 +80,14 @@ Contract. Direct targets always refer to their exact concrete Contract.
   work, two Portfolio configuration surprises, five existing Pyright override
   diagnostics, and 81 strict Sphinx reference warnings. These are reported,
   not silently fixed or represented as passing acceptance checks.
+
+## Approved review follow-up (2026-09-08)
+
+- `9a175ea`: refresh waiting bracket episodes and net allocation, skip flat
+  sources, reject replaced episodes, defer resumption until accounting settles.
+- `b329d7f`: replay direct evidence once per compound query, reject invalid
+  Portfolio configuration, and align override parameter names.
+- Documentation references corrected without global suppression; strict Sphinx
+  passes. Final pytest: 1,651 passed; mypy: 113 files clean; Black/diff clean.
+  Pyright: zero errors, two known aggregated-export warnings. All actionable
+  findings in final_review.md are resolved. No database migration or push.

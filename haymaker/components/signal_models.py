@@ -76,7 +76,7 @@ class SignalModel(Atom, ABC):
 
     Subclasses implement :meth:`calculate_signal` and return only calculated
     value, metadata, and observation time. SignalModel owns construction of the
-    immutable Signal envelope and emits it from :meth:`onData`.
+    immutable Signal envelope and emits it from :meth:`SignalModel.onData`.
 
     Raises:
         TypeError: If ``source_key`` or ``signal_type`` has the wrong type.
@@ -114,11 +114,11 @@ class SignalModel(Atom, ABC):
     def create_signal(self, data: Any) -> Signal:
         """Calculate and return one framework-owned Signal.
 
-        This method is the template boundary used by :meth:`onData`. Call it
+        This method is the template boundary used by :meth:`SignalModel.onData`. Call it
         directly when a calculated Signal is needed without emitting it or
         invoking emission-time persistence; subclasses customize
         :meth:`calculate_signal` and
-        :meth:`validate_signal_value` instead.
+        :meth:`SignalModel.validate_signal_value` instead.
 
         Args:
             data: Arbitrary upstream message accepted by the implementation.

@@ -9,7 +9,10 @@
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from sphinx_helpers import PublicTypeFormatter  # noqa: E402
 
 project = "Haymaker"
 copyright = "2025, t1user"
@@ -32,6 +35,12 @@ extensions = [
 templates_path = ["_templates"]
 exclude_patterns: list[str] = []
 autosectionlabel_prefix_document = True
+always_use_bars_union = True
+typehints_formatter = PublicTypeFormatter()
+autodoc_type_aliases = {
+    "pd.DataFrame": "pandas.DataFrame",
+    "pd.Series": "pandas.Series",
+}
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -43,6 +52,7 @@ html_theme = "furo"
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
     "eventkit": ("https://eventkit.readthedocs.io/en/latest", None),
     "ib_insync": ("https://ib-insync.readthedocs.io/", None),
 }
