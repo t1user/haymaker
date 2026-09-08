@@ -115,6 +115,19 @@ def test_fixed_size_allocator_preserves_proposal_inputs_for_wrapper():
     assert target.metadata == {"atr": 10}
 
 
+@pytest.mark.parametrize("sizing", [0, {"alpha": 0}, lambda proposal: 0])
+def test_fixed_size_allocator_rejects_zero(sizing):
+    """Suppression is explicit, not an OPEN target with zero quantity."""
+    with pytest.raises(ValueError, match="must be positive"):
+        FixedSizeAllocator(sizing).target_for(proposal())
+
+
+def test_portfolio_rejects_bare_source_string(atom_runtime):
+    """A single source must not silently become a universe of characters."""
+    with pytest.raises(TypeError, match="not a string"):
+        EchoPortfolio(sources="alpha")
+
+
 def test_fixed_size_allocator_uses_source_mapping():
     allocator = FixedSizeAllocator({"alpha": 2, "beta": 4})
 

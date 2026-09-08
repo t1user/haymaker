@@ -13,6 +13,13 @@ sources are skipped and completed physical offsets are preserved. Independent
 entry/close regressions and offset/replaced-episode tests pass. The findings
 below retain the original evidence; further resolution is recorded below.
 
+Query/configuration follow-up: logical_positions now replays direct evidence
+once per compound query, with no cache lifecycle added. Zero allocation and
+bare-string source declarations are rejected. All five override parameter
+diagnostics are fixed; Pyright reports zero errors (the two intentional
+aggregated-export warnings remain). Full pytest: 1,647 passed; mypy: 112 files
+clean. The stale target-key docstring is corrected.
+
 ### High: waiting bracket rolls retain a stale participant quantity
 
 `haymaker/components/execution/future_roll.py:659–697` waits for source OPEN or

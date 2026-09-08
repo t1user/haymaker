@@ -30,6 +30,25 @@ def contract(con_id: int = 1) -> ibi.Future:
     )
 
 
+def test_compound_position_query_replays_direct_evidence_once(book, monkeypatch):
+    """Adding Contracts must not multiply the number of fill-history scans."""
+    direct = Mock(return_value={contract(1): 2.0, contract(2): 3.0})
+    monkeypatch.setattr(book, "direct_positions", direct)
+    book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="model",
+            contract=contract(1),
+            quantity=-1,
+        )
+    )
+    assert book.logical_positions() == {contract(1): 1, contract(2): 3}
+    direct.assert_called_once_with()
+    direct.reset_mock()
+    assert book.aggregate_quantity(contract(1)) == 1
+    direct.assert_called_once_with()
+
+
 def trade(
     *,
     order_id: int = 1,

@@ -49,9 +49,10 @@ class _BaseBinarySignalProcessor(Atom):
             raise TypeError("respect_blocked_direction must be a bool")
         self.respect_blocked_direction = respect_blocked_direction
 
-    def onData(self, signal: Signal, *args: object) -> None:
+    def onData(self, data: Signal, *args: object) -> None:
         """Process one Signal and emit a proposal only when action is needed."""
 
+        signal = data
         if not isinstance(signal, Signal):
             raise TypeError(f"{type(self).__name__} accepts only Signal")
         proposal = self.process(signal)

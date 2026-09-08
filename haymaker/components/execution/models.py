@@ -80,9 +80,10 @@ class ExecutionModel(Atom, ABC):
             self.recover()
         super().onStart(data, source)
 
-    def onData(self, target: PositionTarget, *args: object) -> None:
+    def onData(self, data: PositionTarget, *args: object) -> None:
         """Validate and accept one target."""
 
+        target = data
         self._validate_target(target)
         if self.accept(target):
             self.dataEvent.emit(target, self.name)

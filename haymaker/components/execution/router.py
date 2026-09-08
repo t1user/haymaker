@@ -263,7 +263,7 @@ def where(predicate: TargetPredicate) -> TargetPredicate:
 
     Note:
         Predicates used for recoverable direct execution must be deterministic
-        from the persisted target key, Contract, target quantity, and
+        from the persisted concrete Contract, target quantity, and
         creation time.
         Signal metadata is not part of TargetState recovery.
     """

@@ -80,6 +80,9 @@ class FixedSizeAllocator:
     direction multiplied by the allocated size; source, Contract, and Signal
     metadata are preserved. PortfolioWrapper adds proposal intent when the
     target enters the one-to-one execution path.
+
+    Zero or negative sizes raise ValueError. To suppress a proposal, provide
+    a custom PositionAllocator returning None rather than a zero OPEN target.
     """
 
     def __init__(self, sizing: Sizing = 1.0) -> None:
@@ -97,8 +100,10 @@ class FixedSizeAllocator:
         else:
             size = self.sizing
         size = finite_number(size, "allocated size")
-        if size < 0:
-            raise ValueError("allocated size must not be negative")
+        if size <= 0:
+            raise ValueError(
+                "allocated size must be positive; use a custom allocator returning None to suppress execution"
+            )
         return PositionTarget(
             contract=proposal.signal.contract,
             target_quantity=proposal.target_direction * size,
@@ -129,9 +134,10 @@ class PortfolioWrapper(Atom):
             raise TypeError("allocator must implement target_for()")
         self.allocator = allocator
 
-    def onData(self, proposal: PositionProposal, *args: object) -> None:
+    def onData(self, data: PositionProposal, *args: object) -> None:
         """Allocate and emit at most one target."""
 
+        proposal = data
         if not isinstance(proposal, PositionProposal):
             raise TypeError("PortfolioWrapper accepts only PositionProposal")
         target = self.allocator.target_for(proposal)
@@ -153,7 +159,8 @@ class Portfolio(Atom, ABC):
 
     Args:
         sources: Optional complete expected source universe. ``None`` enables
-            dynamic membership without a completeness policy.
+            dynamic membership without a completeness policy. For one source,
+            pass ``{"alpha"}``, not the bare string ``"alpha"``.
         supported_signal_types: Signal semantics accepted by this Portfolio.
 
     Concrete implementations own input state, synchronization, duplicate,
@@ -174,6 +181,10 @@ class Portfolio(Atom, ABC):
         ),
     ) -> None:
         super().__init__()
+        if isinstance(sources, str):
+            raise TypeError(
+                "sources must be a collection of keys, for example {'alpha'}, not a string"
+            )
         self.sources = frozenset(sources) if sources is not None else None
         if self.sources is not None and (
             not all(isinstance(source, str) and source for source in self.sources)
@@ -223,9 +234,10 @@ class Portfolio(Atom, ABC):
             }
         )
 
-    def onData(self, signal: Signal, *args: object) -> None:
+    def onData(self, data: Signal, *args: object) -> None:
         """Validate one Signal and emit all recomputed targets."""
 
+        signal = data
         if not isinstance(signal, Signal):
             raise TypeError("Portfolio accepts only Signal")
         if self.sources is not None and signal.source_key not in self.sources:

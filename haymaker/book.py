@@ -1072,32 +1072,24 @@ class Book:
         """Return aggregate fill-accounted logical quantity for a Contract."""
 
         con_id = _contract_key(contract)
-        rolling_sources = {
-            participant.source_key
-            for state in self._active_bracket_rolls()
-            for participant in state.participants
-        }
-        one_to_one = sum(
-            state.quantity
-            for state in self._positions.values()
-            if state.source_key not in rolling_sources
-            and state.contract is not None
-            and state.contract.conId == con_id
-        ) + sum(
-            quantity
-            for state in self._active_bracket_rolls()
-            for held_contract, quantity in self._roll_physical_quantities(state).items()
-            if held_contract.conId == con_id
+        return next(
+            (
+                quantity
+                for held, quantity in self.logical_positions().items()
+                if held.conId == con_id
+            ),
+            0.0,
         )
-        return one_to_one + self.direct_quantity(contract)
 
     def logical_positions(self) -> dict[ibi.Contract, float]:
-        """Return non-zero aggregate logical quantities by concrete Contract."""
+        """Return aggregate holdings, replaying direct Fill evidence only once."""
 
         contracts: dict[int, ibi.Contract] = {}
+        quantities: defaultdict[int, float] = defaultdict(float)
+        active_rolls = self._active_bracket_rolls()
         rolling_sources = {
             participant.source_key
-            for state in self._active_bracket_rolls()
+            for state in active_rolls
             for participant in state.participants
         }
         for position_state in self._positions.values():
@@ -1107,15 +1099,20 @@ class Book:
                 and position_state.contract.conId
             ):
                 contracts[position_state.contract.conId] = position_state.contract
-        for roll_state in self._active_bracket_rolls():
-            for contract in self._roll_physical_quantities(roll_state):
+                quantities[position_state.contract.conId] += position_state.quantity
+        for roll_state in active_rolls:
+            for contract, quantity in self._roll_physical_quantities(
+                roll_state
+            ).items():
                 contracts[contract.conId] = contract
-        for contract in self.direct_positions():
+                quantities[contract.conId] += quantity
+        for contract, quantity in self.direct_positions().items():
             contracts[contract.conId] = contract
+            quantities[contract.conId] += quantity
         return {
-            contract: quantity
-            for contract in contracts.values()
-            if (quantity := self.aggregate_quantity(contract))
+            contracts[con_id]: quantity
+            for con_id, quantity in quantities.items()
+            if quantity
         }
 
     def _active_bracket_rolls(self) -> tuple[RollState, ...]:

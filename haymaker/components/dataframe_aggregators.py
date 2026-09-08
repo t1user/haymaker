@@ -1054,9 +1054,10 @@ class VolumeGrouper(_DataFrameGrouper):
         _validate_boundary(self.label, type(self).__name__, "label")
         super().__init__()
 
-    def _completed_groups(self, source: pd.DataFrame) -> pd.DataFrame:
+    def _completed_groups(self, data: pd.DataFrame) -> pd.DataFrame:
         """Return cumulative volume groups that reached the configured target."""
 
+        source = data
         assert self.group_on in source.columns, (
             f"{self} attempts to group on {self.group_on}, which is not present "
             f"in passed DataFrame"
