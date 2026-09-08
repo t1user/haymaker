@@ -688,6 +688,13 @@ adjustment. After moving an episode, the executor cancels its old protection and
 installs an active replacement stop before advancing. Take-profit replacement
 is optional and best effort.
 
+Before submitting work, bracket rolling waits for OPEN/CLOSE orders of all
+unprocessed sources, then refreshes their quantities and net allocation from
+Book. Episodes that closed while waiting are skipped; changed episode identity
+blocks before submission. Completed logical offsets are preserved; if changed
+remaining quantities cannot represent that offset safely, the roll blocks for
+review instead of submitting an inconsistent BAG.
+
 The built-ins are used automatically. Supply a custom, process-shared executor
 only when its persisted stages and recovery behavior are intentionally
 compatible:

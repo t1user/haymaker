@@ -599,10 +599,13 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         )
 
     @staticmethod
-    def _physical_sources(holdings: Sequence[RollHolding]) -> set[str | None]:
+    def _physical_sources(
+        holdings: Sequence[RollHolding], *, total: float | None = None
+    ) -> set[str | None]:
         """Choose the smallest deterministic source subset equal to broker net."""
 
-        total = sum(holding.quantity for holding in holdings)
+        if total is None:
+            total = sum(holding.quantity for holding in holdings)
         if not total:
             return set()
         for size in range(1, len(holdings) + 1):
@@ -656,8 +659,32 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         if participant.source_key is None:
             self._block(state, "Bracket roll participant is missing source_key")
             return
+        refreshed = self._refresh_pending(state)
+        if refreshed is None:
+            return
+        state = refreshed
+        participant = state.current_participant
+        if participant is None:
+            self._complete(state)
+        elif not participant.quantity:
+            self._finish_participant(state)
+        elif participant.requires_trade:
+            self._submit_roll(state, participant)
+        else:
+            self._request_reference_price(state)
+
+    def _refresh_pending(self, state: RollState) -> RollState | None:
+        """Reconcile all unprocessed episodes before planning any broker work.
+
+        Completed non-trading participants may offset remaining physical work.
+        Preserve that offset when rebuilding the subset, not just the current
+        participant's quantity. Zero non-trading entries retain notification
+        attribution for episodes closed while waiting.
+        """
+        remaining = state.participants[state.participant_index :]
         active_work = tuple(
             info
+            for participant in remaining
             for info in self.book.active_orders(source_key=participant.source_key)
             if info.role in {StandardOrderRole.OPEN, StandardOrderRole.CLOSE}
         )
@@ -671,11 +698,64 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             )
             for info in active_work:
                 self._bind_adjustment(info.trade, waiting.series_key)
-            return
-        if participant.requires_trade:
-            self._submit_roll(state, participant)
-        else:
-            self._request_reference_price(state)
+            return None
+        pending = []
+        for participant in remaining:
+            position = self.book.position_state(participant.source_key or "")
+            if position is None or (
+                position.quantity
+                and (
+                    position.position_id != participant.position_id
+                    or position.contract != state.old_contract
+                    or position.execution_model_name != participant.execution_model_name
+                )
+            ):
+                self._block(
+                    state, "Unprocessed source episode changed before roll submission"
+                )
+                return None
+            pending.append(
+                replace(participant, quantity=position.quantity, requires_trade=False)
+            )
+        completed = tuple(state.participants[: state.participant_index])
+        holdings = tuple(
+            RollHolding(
+                contract=state.old_contract,
+                quantity=p.quantity,
+                execution_model_name=p.execution_model_name,
+                source_key=p.source_key,
+                position_id=p.position_id,
+            )
+            for p in pending
+            if p.quantity
+        )
+        net = sum(p.quantity for p in pending) + sum(
+            p.quantity for p in completed if not p.requires_trade
+        )
+        try:
+            physical = self._physical_sources(holdings, total=net)
+        except ValueError:
+            self._block(
+                state,
+                "Changed source quantities cannot preserve completed roll offsets",
+            )
+            return None
+        participants = completed + tuple(
+            replace(p, requires_trade=p.source_key in physical) for p in pending
+        )
+        if (
+            participants == state.participants
+            and state.stage is FutureRollStage.PLANNED
+        ):
+            return state
+        return self.book.update_roll(
+            replace(
+                state,
+                participants=participants,
+                stage=FutureRollStage.PLANNED,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
 
     def _bind_adjustment(self, trade: ibi.Trade, series_key: str) -> None:
         key = -trade.order.orderId
@@ -691,14 +771,14 @@ class BracketFutureRollExecutor(FutureRollExecutor):
 
     def onAdjustmentFilledEvent(self, trade: ibi.Trade, series_key: str) -> None:
         """Resume a waiting bracket roll after OPEN/CLOSE work fills."""
-
-        state = self.book.roll_state(series_key)
-        if state is not None:
-            self.advance(state)
+        self._defer(self._resume_pending, series_key)
 
     def onAdjustmentCancelledEvent(self, trade: ibi.Trade, series_key: str) -> None:
         """Resume a waiting bracket roll after OPEN/CLOSE work cancels."""
+        self._defer(self._resume_pending, series_key)
 
+    def _resume_pending(self, series_key: str) -> None:
+        """Load current durable work after broker accounting callbacks settle."""
         state = self.book.roll_state(series_key)
         if state is not None:
             self.advance(state)

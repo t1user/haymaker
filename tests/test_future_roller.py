@@ -345,6 +345,69 @@ def test_direct_roll_moves_fill_evidence_and_target_contract(book):
     assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
 
 
+def test_pending_bracket_allocation_is_rebuilt_for_all_sources(book):
+    """A changed offsetting source changes which sources need physical trades."""
+    old, active, next_ = [future(i, f"NG{i}") for i in range(1, 4)]
+    persist_bracket_position(book, old, source_key="alpha", quantity=2)
+    persist_bracket_position(book, old, source_key="beta", quantity=-1)
+    controller = make_controller(book, old, active, next_)
+    roller = FutureRoller(controller)
+    executor = roller.register_executor(FutureRollMode.BRACKET)
+    state = executor.create_state("ng-series", old, active, executor.holdings())
+    book.update_roll(state)
+    book.update_position(
+        replace(book.position_state("beta"), quantity=0, position_id=None)
+    )
+    refreshed = executor._refresh_pending(state)
+    assert [
+        (p.source_key, p.quantity, p.requires_trade) for p in refreshed.participants
+    ] == [
+        ("alpha", 2, True),
+        ("beta", 0, False),
+    ]
+    assert book._decode_roll(book._encode_roll(refreshed)) == refreshed
+
+
+def test_completed_nonphysical_source_offset_survives_pending_refresh(book):
+    """Do not turn the second half of a net-zero logical roll into a real BAG."""
+    old, active, next_ = [future(i, f"NG{i}") for i in range(1, 4)]
+    persist_bracket_position(book, active, source_key="alpha", quantity=1)
+    persist_bracket_position(book, old, source_key="beta", quantity=-1)
+    controller = make_controller(book, old, active, next_)
+    executor = FutureRoller(controller).register_executor(FutureRollMode.BRACKET)
+    state = RollState(
+        series_key="ng-series",
+        mode=FutureRollMode.BRACKET,
+        executor_name=executor.name,
+        old_contract=old,
+        new_contract=active,
+        participant_index=1,
+        participants=(
+            RollParticipant(
+                source_key="alpha",
+                position_id="alpha-episode",
+                execution_model_name="alpha-brackets",
+                quantity=1,
+                requires_trade=False,
+            ),
+            RollParticipant(
+                source_key="beta",
+                position_id="beta-episode",
+                execution_model_name="beta-brackets",
+                quantity=-1,
+                requires_trade=False,
+            ),
+        ),
+    )
+    book.update_roll(state)
+    refreshed = executor._refresh_pending(state)
+    assert not refreshed.current_participant.requires_trade
+    book.update_position(replace(book.position_state("beta"), quantity=-2))
+    assert executor._refresh_pending(refreshed) is None
+    assert book.roll_state("ng-series").stage is FutureRollStage.BLOCKED
+    assert not controller.trades
+
+
 def test_default_policy_retains_every_eligible_expiry(book):
     """The third expiry is not stale merely because it is neither ACTIVE nor NEXT."""
     old, active, next_, later = [future(i, f"NG{i}") for i in range(1, 5)]

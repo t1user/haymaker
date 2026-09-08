@@ -7,6 +7,12 @@ relying on rolling during in-flight one-to-one execution.
 
 ## Remaining findings
 
+Follow-up status (2026-09-08): the stale bracket-roll finding is fixed. Pending
+episodes are refreshed together after active work/accounting settles; flat
+sources are skipped and completed physical offsets are preserved. Independent
+entry/close regressions and offset/replaced-episode tests pass. The findings
+below retain the original evidence; further resolution is recorded below.
+
 ### High: waiting bracket rolls retain a stale participant quantity
 
 `haymaker/components/execution/future_roll.py:659–697` waits for source OPEN or

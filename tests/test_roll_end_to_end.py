@@ -1,6 +1,7 @@
 """Independent real-Controller roll scenarios, driven only at the IB boundary."""
 
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 
 import ib_insync as ibi
 import pytest
@@ -19,6 +20,82 @@ from haymaker.components import (
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
 from haymaker.details_processor import Details
+
+
+@pytest.mark.parametrize("close_first", [False, True])
+async def test_bracket_roll_refreshes_after_pending_entry_or_close(
+    rolling, close_first
+):
+    """Pending entry grows the roll; pending close removes it without a BAG."""
+    runtime, broker, controller, (old, active, _) = rolling
+    model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
+    model.onData(
+        PositionTarget(
+            source_key="alpha",
+            contract=old,
+            target_quantity=2,
+            intent=PositionIntent.OPEN,
+            metadata={"atr": 5},
+        )
+    )
+    entry = broker.submitted[-1]
+    await broker.fill(entry, 1)
+    if close_first:
+        await broker.fill(entry, 1)
+        model.onData(
+            PositionTarget(
+                source_key="alpha",
+                contract=old,
+                target_quantity=0,
+                intent=PositionIntent.CLOSE,
+            )
+        )
+    pending = broker.submitted[-1]
+    controller.future_roller.roll()
+    key = runtime.contract_registry.series_key(old)
+    assert runtime.book.roll_state(key).stage is FutureRollStage.WAITING_FOR_ACTIVE_WORK
+    await broker.fill(pending)
+    await settle_events()
+    if close_first:
+        assert not any(isinstance(t.contract, ibi.Bag) for t in broker.submitted)
+        assert runtime.book.roll_state(key).stage is FutureRollStage.COMPLETE
+        assert runtime.book.position_state("alpha").quantity == 0
+    else:
+        combo = broker.submitted[-1]
+        assert isinstance(combo.contract, ibi.Bag)
+        assert combo.order.totalQuantity == 2
+        await broker.fill(combo)
+        assert (
+            runtime.book.position_state("alpha").quantity
+            == broker.quantities[active]
+            == 2
+        )
+
+
+async def test_bracket_roll_rejects_replaced_episode_before_submission(rolling):
+    """Recovery cannot use an old episode's plan for a new episode."""
+    runtime, broker, controller, (old, _, _) = rolling
+    model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
+    model.onData(
+        PositionTarget(
+            source_key="alpha",
+            contract=old,
+            target_quantity=2,
+            intent=PositionIntent.OPEN,
+            metadata={"atr": 5},
+        )
+    )
+    entry = broker.submitted[-1]
+    await broker.fill(entry, 1)
+    controller.future_roller.roll()
+    key = runtime.contract_registry.series_key(old)
+    # Simulate incompatible restored episode state, not a normal fill transition.
+    runtime.book.update_position(
+        replace(runtime.book.position_state("alpha"), position_id="different")
+    )
+    await broker.fill(entry, 1)
+    assert runtime.book.roll_state(key).stage is FutureRollStage.BLOCKED
+    assert not any(isinstance(t.contract, ibi.Bag) for t in broker.submitted)
 
 
 @pytest.fixture

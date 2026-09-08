@@ -397,7 +397,8 @@ class RollParticipant:
 
     Args:
         execution_model_name: Stable target-model name that owns the holding.
-        quantity: Signed quantity attributed to this participant.
+        quantity: Signed quantity attributed to this participant. A zero
+            non-trading source records an episode that closed while waiting.
         source_key: One-to-one identity in bracket mode.
         position_id: Optional one-to-one position episode.
         requires_trade: Whether this participant supplies the physical BAG
@@ -424,8 +425,8 @@ class RollParticipant:
                 self, "source_key", non_empty_string(self.source_key, "source_key")
             )
         object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
-        if not self.quantity:
-            raise ValueError("RollParticipant quantity must not be zero")
+        if not self.quantity and (self.source_key is None or self.requires_trade):
+            raise ValueError("Zero roll quantity is only valid for a skipped source")
         if not isinstance(self.requires_trade, bool):
             raise TypeError("requires_trade must be a bool")
 
