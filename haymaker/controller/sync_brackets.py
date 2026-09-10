@@ -67,12 +67,8 @@ class BracketSync:
 
         for source_key, state in self.controller.book.position_states().items():
             orders = self.controller.book.active_orders(source_key=source_key)
-            entry_active = any(
-                info.role == StandardOrderRole.OPEN for info in orders
-            )
-            exit_active = any(
-                info.role == StandardOrderRole.CLOSE for info in orders
-            )
+            entry_active = any(info.role == StandardOrderRole.OPEN for info in orders)
+            exit_active = any(info.role == StandardOrderRole.CLOSE for info in orders)
             brackets = tuple(
                 info
                 for info in orders
@@ -83,16 +79,14 @@ class BracketSync:
                 }
             )
             if not state.quantity and not exit_active:
-                self.obsolete_brackets.extend(
-                    (source_key, info) for info in brackets
-                )
+                self.obsolete_brackets.extend((source_key, info) for info in brackets)
             elif (
                 state.quantity
                 and state.bracket_inputs
                 and not entry_active
+                and not exit_active
                 and not any(
-                    info.role == StandardOrderRole.STOP_LOSS
-                    for info in brackets
+                    info.role == StandardOrderRole.STOP_LOSS for info in brackets
                 )
             ):
                 self.missing_brackets.append(
@@ -106,14 +100,10 @@ class BracketSync:
             ProtectionIssue(position.contract, position.position)
             for position in self.controller.ib.positions()
             if position.position
-            and not self._position_is_protected(
-                position.contract, position.position
-            )
+            and not self._position_is_protected(position.contract, position.position)
         ]
 
-    def _position_is_protected(
-        self, contract: ibi.Contract, quantity: float
-    ) -> bool:
+    def _position_is_protected(self, contract: ibi.Contract, quantity: float) -> bool:
         action = "SELL" if quantity > 0 else "BUY"
         types = {"STP", "STP LMT", "TRAIL", "FIX PEGGED"}
         protected = sum(

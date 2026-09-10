@@ -68,26 +68,25 @@ class OrderSync:
         return self
 
     def _reconstruct_from_fills(self, trade: ibi.Trade) -> ibi.Trade | None:
+        """Merge persisted and broker execution evidence, including fill price."""
+        info = self.book.order_by_id(trade.order.orderId)
+        if info is None:
+            return None
         fills = [
             fill
             for fill in self.ib.fills()
-            if fill.execution.orderId == trade.order.orderId
-            or (trade.order.permId and fill.execution.permId == trade.order.permId)
+            if (
+                fill.execution.permId == trade.order.permId
+                if trade.order.permId
+                else (
+                    fill.execution.orderId == trade.order.orderId
+                    and fill.execution.clientId == trade.order.clientId
+                )
+            )
         ]
-        if not fills:
+        if not fills and not info.fills:
             return None
-        trade.fills = fills
-        filled = sum(fill.execution.shares for fill in fills)
-        remaining = max(trade.order.totalQuantity - filled, 0)
-        trade.orderStatus = ibi.OrderStatus(
-            orderId=trade.order.orderId,
-            status=(
-                ibi.OrderStatus.Filled if remaining == 0 else ibi.OrderStatus.Submitted
-            ),
-            filled=filled,
-            remaining=remaining,
-        )
-        return trade
+        return info.execution_trade(fills)
 
     def report(self) -> Self:
         if any(self.lists):

@@ -302,6 +302,15 @@ python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E
   orders are optional and their absence is not a sync failure. Regular closes
   join the active protective orders' OCA group so IB cancels the remaining
   exits only after one exit fills.
+  Runtime initializes Contract details before Controller reconciliation.
+  After order/fill and position recovery, Controller calls registered model-owned
+  initial-protection hooks before missing-bracket remediation. Bracket models
+  share live/recovery installation using held episode inputs and normalized
+  quantity-weighted entry executions. Never require a new Signal or commission
+  report. Existing stop evidence prevents reinstallation; do not reconstruct a
+  previously active trailing stop from the original entry price. A surviving
+  take-profit supplies its OCA identity. Partial entries, active closes and
+  rolls retain their own sequencing; incomplete recovery evidence fails closed.
 - Target execution models register exactly one process-wide mode-specific
   `FutureRollExecutor` family. Controller owns the single daily schedule,
   stale-holding discovery, and startup recovery coordination; direct or bracket

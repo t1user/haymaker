@@ -300,7 +300,9 @@ reference and never suppresses the Signal.
 2. User strategy module-level code builds `Atom` pipelines and registers streamers.
 3. `ConnectionSupervisor` connects the IB client and waits for a successful
    historical-data probe.
-4. `Controller.run()` starts its app-lifetime timers once on the active event
+4. `LiveRuntime` first initializes Contract details and selectors through
+   `StartupJobs.init_data`, so recovery can build protective orders using the
+   actual minimum tick. `Controller.run()` starts its app-lifetime timers once on the active event
    loop, then `Controller.sync()` races the
    reconciliation pass against the supervisor's connection-unavailable event.
    If the supervisor enters broker recovery, restart, or shutdown, sync aborts
@@ -319,21 +321,25 @@ reference and never suppresses the Signal.
    pass. Applied one-to-one correction also aligns the persisted target to the
    authoritative quantity and clears episode recovery inputs when flat, so a
    supervised recovery cannot reopen the corrected position from a stale
-   setpoint.
+   setpoint. Once orders and positions are reconciled, Controller invokes
+   source-registered model protection hooks before missing-bracket remediation.
+   BracketExecutionModel shares live and recovery installation, using saved held
+   inputs and normalized quantity-weighted entry executions. Existing stops
+   are not reinstalled, including historical terminal stops; previously active
+   trailing state is outside initial protection recovery.
    Non-retryable unsafe states raise `SyncBrokenStateError`, which disables
    trading immediately. An aborted controller run skips startup jobs for that
    workload generation; a failed run still permits those jobs to provide
    monitoring while outbound trading remains disabled.
-5. `StartupJobs` downloads contract details, rebuilds contract selectors from
-   one timezone-naive UTC timestamp, logs restart state, and runs all
+5. `StartupJobs.run()` logs restart state and runs all
    registered streamers. Each streamer creates a market-session-aware timeout
    for its subscription. `LiveRuntime` cancels those workload-owned monitors
    before supervised cleanup and again when the workload exits; unrelated
    user-owned `EventTimeout` instances are untouched. Selector `ACTIVE`
    identifies the current market-data and roll-reference contract; `NEXT` is
    an early new-entry candidate. Existing positions retain their persisted held
-   contract, and the futures roller acts only after that contract leaves the
-   allowed `ACTIVE`/`NEXT` set. Qualified detail chains explicitly map each
+   contract, and the default futures roller moves only selector `past_contracts`
+   into ACTIVE. Qualified detail chains explicitly map each
    concrete Future to its registered series; symbol guessing is not used.
 6. Streamers and aggregators emit market data into SignalModels. Custom models
    calculate only a SignalCalculation; the base supplies source, resolved

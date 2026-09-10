@@ -16,7 +16,9 @@ retaining that one broker-position snapshot. The ordered flow is:
 3. Correct local position records when the existing recovery rules allow it,
    aligning their persisted targets to the authoritative broker quantity.
 4. Skip correction trades when unresolved unknown broker orders remain active.
-5. Delegate bracket-record and broker stop-loss protection handling to
+5. Let registered ExecutionModels restore missed initial brackets using the
+   reconciled entry fills and already initialized Contract details.
+6. Delegate remaining bracket-record and broker stop-loss protection handling to
    :mod:`haymaker.controller.sync_brackets`.
 
 The coordinator does not disable trading and does not retry.  Any recovery
@@ -131,7 +133,12 @@ class SyncCoordinator:
             )
             return False
 
-        order_sync = OrderSync(self.controller.ib, self.controller.book)
+        try:
+            order_sync = OrderSync(self.controller.ib, self.controller.book)
+        except (TypeError, ValueError) as exc:
+            raise SyncBrokenStateError(
+                "Order execution evidence is inconsistent"
+            ) from exc
 
         self.controller.release_hold()
         if order_sync.done:
@@ -180,6 +187,7 @@ class SyncCoordinator:
                 ) from exc
             return False
 
+        self.controller.recover_protection()
         try:
             BracketSyncAction.from_policy(
                 self.controller.missing_brackets,

@@ -69,6 +69,18 @@ class EpisodeBroker(ibi.IB):
         """Return only currently working broker trades."""
         return [trade for trade in self.submitted if trade.isActive()]
 
+    def trades(self) -> list[ibi.Trade]:
+        """Return broker session history independently of the local Book."""
+        return list(self.submitted)
+
+    def fills(self) -> list[ibi.Fill]:
+        """Return execution history available to offline-fill reconciliation."""
+        return [fill for trade in self.submitted for fill in trade.fills]
+
+    async def reqPositionsAsync(self) -> list[ibi.Position]:
+        """Provide the authoritative broker snapshot without a network request."""
+        return self.positions()
+
     def positions(self, account: str = "") -> list[ibi.Position]:
         """Return the independently accumulated broker position snapshot."""
         return [
@@ -101,8 +113,10 @@ class EpisodeBroker(ibi.IB):
         quantity: float | None = None,
         *,
         notify_filled: bool = True,
+        notify_events: bool = True,
+        price: float = 100,
     ) -> ibi.Fill:
-        """Execute shares, apply broker OCA, and emit normal IB fill events."""
+        """Execute shares and OCA, optionally withholding all events while offline."""
         quantity = trade.remaining() if quantity is None else quantity
         if not trade.isActive() or not 0 < quantity <= trade.remaining():
             raise ValueError("Fill must belong to an active order's remainder")
@@ -125,7 +139,7 @@ class EpisodeBroker(ibi.IB):
             time=now,
             side="BOT" if side > 0 else "SLD",
             shares=quantity,
-            price=100,
+            price=price,
         )
         fill = ibi.Fill(trade.contract, execution, ibi.CommissionReport(), now)
         trade.fills.append(fill)
@@ -134,17 +148,21 @@ class EpisodeBroker(ibi.IB):
         complete = trade.remaining() == 0
         if complete:
             trade.orderStatus.status = ibi.OrderStatus.Filled
-            trade.orderStatus.avgFillPrice = execution.price
-        self.execDetailsEvent.emit(trade, fill)
-        self.orderStatusEvent.emit(trade)
-        trade.fillEvent.emit(trade, fill)
+        trade.orderStatus.avgFillPrice = (
+            sum(item.execution.shares * item.execution.price for item in trade.fills)
+            / trade.orderStatus.filled
+        )
+        if notify_events:
+            self.execDetailsEvent.emit(trade, fill)
+            self.orderStatusEvent.emit(trade)
+            trade.fillEvent.emit(trade, fill)
         await settle_events()
         if complete:
             if trade.order.ocaGroup:
                 for other in self.openTrades():
                     if other.order.ocaGroup == trade.order.ocaGroup:
                         self.cancelOrder(other.order)
-            if notify_filled:
+            if notify_filled and notify_events:
                 trade.filledEvent.emit(trade)
         await settle_events()
         return fill

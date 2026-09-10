@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import ib_insync as ibi
 import pytest
+from helpers import wait_for_condition
 
 from haymaker.book import PositionState, TargetState
 from haymaker.components import (
@@ -535,7 +536,7 @@ async def test_entry_fill_continues_to_newer_close_target(execution_runtime):
     apply_fill(controller, entry, 1)
     entry.orderStatus.avgFillPrice = 100
     entry.filledEvent.emit(entry)
-    await asyncio.sleep(0)
+    await wait_for_condition(lambda: len(trader.trades) == 3)
 
     assert [
         controller.book.order_by_id(trade.order.orderId).role for trade in trader.trades

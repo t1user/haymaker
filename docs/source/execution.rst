@@ -585,6 +585,29 @@ take-profit is optional and its absence is not a synchronization failure.
 Regular CLOSE orders join the active brackets' OCA group, allowing IB to cancel
 the unfilled protective orders when any exit fills.
 
+If an entry fills completely while Haymaker is offline, its model restores
+missed initial brackets automatically after order/position reconciliation and
+before the configured missing-bracket policy acts. It uses the held episode's
+saved calculation inputs (for example ATR), quantity-weighted execution price,
+and the same configured bracket legs as a live entry. No new Signal or commission
+report is needed. Keep the model's bracket configuration recovery-compatible
+across restarts.
+
+Repeated recovery does not duplicate stops. A surviving take-profit supplies its
+existing OCA group when the initial stop was never installed. An existing stop
+is left untouched, and a missing optional take-profit alone is not repaired.
+Partial entries still wait for complete filling; active closes and rolls keep
+their own sequencing. An already closed episode receives no new brackets.
+
+This is **initial installation recovery**, not general replacement of protection
+that was previously active and then cancelled, rejected or otherwise lost.
+In particular, the original entry price cannot reproduce a trailing stop's
+later broker-maintained state. Those cases retain the configured
+``controller.missing_brackets`` policy. Missing or inconsistent entry evidence,
+unresolved broker-order attribution, missing Contract ticks, or failed required
+stop submission prevents automatic initial installation; failed recovery during
+Controller reconciliation disables trading and reports the affected source.
+
 The model registers that source for Controller-owned futures rolling by
 default. A strategy that intentionally manages its own one-to-one roll can opt
 out at construction time:

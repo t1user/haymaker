@@ -199,6 +199,17 @@ hierarchy in `brackets.py`, and mode-specific public roll executors in
 current live Trade objects and derive work from Book rather than replaying old
 intent.
 
+Initial protection recovery is model-owned, not Controller price calculation.
+Controller invokes the source-registered hook after order/position reconciliation
+and before missing-bracket remediation; Contract details are already initialized.
+Live entry callbacks defer until Fill accounting settles and share the same
+installation method. Use held bracket inputs and normalized entry executions,
+including weighted price; never use pending-target inputs or broker net cost.
+Existing stop evidence (including historical terminal stops) prevents automatic
+reinstallation. A surviving take-profit lends its OCA group and type; missing
+optional take-profit alone is not repaired. Complete evidence and exact episode
+identity are required. Keep partial entries, active exits and rolls separate.
+
 Target execution models register one process-wide `FutureRollExecutor` family.
 Direct and bracket modes are exclusive. Controller owns the app-lifetime
 schedule, stale-holding discovery, and recovery coordination; the executor owns

@@ -102,7 +102,12 @@ class InitData:
 
 
 class StartupJobs:
-    """Run startup data collection and all streamers for a runtime context."""
+    """Hold contract initialization and run streamers after Controller recovery.
+
+    LiveRuntime awaits ``init_data`` before Controller.run(), so recovery can
+    price protection using qualified Contract details. ``run`` starts only the
+    market-data jobs, after Controller's reconciliation outcome is available.
+    """
 
     def __init__(
         self, init_data: InitData, ib: ibi.IB, streamers: Sequence[Streamer]
@@ -112,9 +117,7 @@ class StartupJobs:
         self.streamers = streamers
 
     async def run(self) -> None:
-        """Initialize contract data and run all registered streamers."""
-
-        await self.init_data()
+        """Run streamers after runtime contract initialization and recovery."""
 
         log.info(
             f"Open positions on restart: "
@@ -344,6 +347,9 @@ class LiveRuntime:
             self.context.controller.set_future_roll_policies(
                 self.context.future_roll_policies
             )
+            # Recovery builds price-sensitive protective orders before any
+            # streamer starts; it needs actual Contract ticks, not fallbacks.
+            await self.startup_jobs.init_data()
             controller_outcome = await self.context.controller.run()
             if controller_outcome is SyncOutcome.ABORTED:
                 return

@@ -289,6 +289,17 @@ blocked. Stop-loss protection is critical while take-profit is optional. A
 regular close joins the active brackets' OCA group, so the first filled exit
 causes IB to cancel the remaining exits.
 
+Initial bracket installation is shared by live entry completion and recovery.
+Controller first reconciles orders, deduplicated executions and positions, then
+invokes registered model-owned protection hooks before missing-bracket policy.
+Runtime initializes Contract details before Controller recovery. The model uses
+the held episode's inputs and complete quantity-weighted entry fills, never a
+new target's inputs or broker net average cost. Existing stop evidence prevents
+reinstallation; a lone active take-profit lends its OCA identity. Partial
+entries, active exits and rolls retain their existing sequencing. Previously
+active/cancelled/rejected stops are not reconstructed from the initial entry.
+Incomplete or inconsistent evidence fails explicitly instead of guessing.
+
 It also registers the source's Controller-owned futures-roll policy:
 `auto_roll_futures=True` is the default, while `False` is the explicit opt-out
 for a one-to-one strategy that manages its own roll. Conflicting declarations

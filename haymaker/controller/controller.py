@@ -95,6 +95,9 @@ class Controller(Atom):
     _restart_before_correction: bool = True
     _sync_abort_event: asyncio.Event | None = field(default=None, repr=False)
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
+    _protection_recovery: dict[str, Callable[[], None]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     future_roller: FutureRoller = field(init=False, repr=False)
 
     @classmethod
@@ -224,6 +227,34 @@ class Controller(Atom):
 
         self.future_roll_policies = dict(policies)
         self.future_roller.set_policies(self.future_roll_policies)
+
+    def register_protection_recovery(
+        self, source_key: str, callback: Callable[[], None]
+    ) -> None:
+        """Register one model-owned initial-protection recovery hook per source.
+
+        Framework plumbing calls these only after broker evidence and positions
+        are reconciled, before missing-bracket remediation. Hooks must be
+        repeat-safe and must not perform ordinary target convergence.
+        """
+        previous = self._protection_recovery.get(source_key)
+        if previous is not None and previous != callback:
+            raise ValueError(
+                f"Protection recovery already registered for {source_key!r}"
+            )
+        self._protection_recovery[source_key] = callback
+
+    def recover_protection(self) -> None:
+        """Give models a repair opportunity before missing-bracket remediation."""
+        if self.reset or self.zero or self.nuke or self._trading_disabled:
+            return
+        for source_key, callback in self._protection_recovery.items():
+            try:
+                callback()
+            except Exception as exc:
+                raise SyncBrokenStateError(
+                    f"Initial bracket recovery failed for {source_key!r}: {exc}"
+                ) from exc
 
     async def run(self) -> SyncOutcome:
         """Reconcile broker state and arm runtime timers."""

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import ib_insync as ibi
 
-from ...book import FutureRollMode, PositionState, RollState
+from ...book import FutureRollMode, OrderInfo, PositionState, RollState
 from ...contract_registry import DetailsContainer
 from ...misc import action, round_tick, sign
 from ...validators import finite_number, non_empty_string
@@ -408,6 +408,12 @@ class BracketExecutionModel(ExecutionModel):
     Contract as a new episode. Book persists the held and pending-target
     Contracts and their bracket inputs separately, so restarts and changes to
     ACTIVE/NEXT cannot redirect a close or lose a reversal destination.
+
+    If entry completion was missed while offline, recovery installs the initial
+    brackets from saved episode inputs and the quantity-weighted entry fills.
+    Keep the model configuration recovery-compatible. Existing stops are not
+    recreated, and missing optional take-profits alone do not require repair.
+    Missing execution evidence or Contract ticks prevents automatic installation.
     """
 
     def __init__(
@@ -479,6 +485,9 @@ class BracketExecutionModel(ExecutionModel):
                 roll_policy, source_key=source_key
             )
         self.runtime.future_roll_policies[source_key] = auto_roll_futures
+        self.controller.register_protection_recovery(
+            source_key, self.recover_protection
+        )
 
     def accept(self, target: PositionTarget) -> bool:
         """Validate intent, persist target state, and converge the episode."""
@@ -550,7 +559,76 @@ class BracketExecutionModel(ExecutionModel):
                     self._bind_entry(info.trade)
                 elif info.role == StandardOrderRole.CLOSE:
                     self._bind_convergence(info.trade)
+            self.recover_protection()
             self._converge()
+
+    def recover_protection(self) -> None:
+        """Restore missed initial brackets from the held episode's entry fills.
+
+        Controller invokes this after reconciliation and before its configured
+        missing-bracket policy. Existing stops, including terminal historical
+        stops, are not recreated: recovering broker-maintained trailing state
+        or intentionally removed protection is outside initial installation.
+        Partial entries, active exits and rolls retain their existing sequencing.
+
+        Raises:
+            RuntimeError: If the episode or complete entry evidence is ambiguous.
+        """
+        pending = self._initial_protection()
+        if pending is None:
+            return
+        state, orders = pending
+        entries = [info for info in orders if info.role == StandardOrderRole.OPEN]
+        if len(entries) != 1:
+            raise RuntimeError(
+                "Missing or ambiguous entry evidence for initial brackets"
+            )
+        # Unknown broker orders must be resolved before deciding a leg is absent.
+        if any(
+            trade.contract == state.contract
+            and self.book.order_by_id(trade.order.orderId) is None
+            and self.book.order_by_perm_id(trade.order.permId) is None
+            for trade in self.ib.openTrades()
+        ):
+            raise RuntimeError("Unattributed broker orders prevent bracket recovery")
+        details = self.contract_registry.get_details(state.contract)
+        if (
+            details is None
+            or finite_number(details.minTick, "Contract minimum tick") <= 0
+        ):
+            raise RuntimeError(
+                "Contract minimum tick is unavailable for bracket recovery"
+            )
+        self.ensure_entry_brackets(entries[0].trade)
+
+    def _initial_protection(self) -> tuple[PositionState, tuple[OrderInfo, ...]] | None:
+        """Select an unprotected episode without interfering with other stages."""
+        state = self.book.position_state(self.source_key)
+        if state is None or not state.quantity:
+            return None
+        if state.execution_model_name != self.name:
+            raise RuntimeError(f"Source {self.source_key!r} belongs to another model")
+        orders = self._episode_orders(state)
+        if self.book.roll_state_for_source(self.source_key) is not None or any(
+            info.role == StandardOrderRole.STOP_LOSS
+            or (
+                info.active
+                and info.role in {StandardOrderRole.OPEN, StandardOrderRole.CLOSE}
+            )
+            for info in orders
+        ):
+            return None
+        return state, orders
+
+    def _episode_orders(self, state: PositionState) -> tuple[OrderInfo, ...]:
+        """Restrict evidence to the current independently managed episode."""
+        if state.position_id is None:
+            raise RuntimeError("Held position has no episode identity")
+        return tuple(
+            info
+            for info in self.book.orders(source_key=self.source_key)
+            if info.position_id == state.position_id
+        )
 
     @staticmethod
     def _expected_intent(effective: float, target: float) -> PositionIntent:
@@ -729,16 +807,111 @@ class BracketExecutionModel(ExecutionModel):
         return {"ocaGroup": groups.pop(), "ocaType": self.oca_type}
 
     def _on_entry_filled(self, trade: ibi.Trade) -> None:
-        """Attach protection only after a complete entry fill."""
+        """Run initial installation after Controller's fill accounting settles."""
 
         if trade.filled() < trade.order.totalQuantity:
             return
-        state = self.book.position_state(self.source_key)
-        if state is None or state.position_id is None:
+        self._defer(self._complete_entry, trade)
+
+    def _complete_entry(self, trade: ibi.Trade) -> None:
+        """Install protection before resuming a newer close or reversal target."""
+        try:
+            self.ensure_entry_brackets(trade)
+        except Exception as exc:
+            self.controller.disable_trading(
+                f"Initial bracket installation failed for {self.source_key!r}: {exc}"
+            )
             return
-        oca_group = str(uuid4())
-        dynamic = {"ocaGroup": oca_group, "ocaType": self.oca_type}
-        params = dict(state.bracket_inputs)
+        self._defer(self._converge)
+
+    def ensure_entry_brackets(self, entry_trade: ibi.Trade) -> None:
+        """Install missing initial protection using accounted entry executions.
+
+        Both live completion and recovery use the configured bracket legs, the
+        held episode's saved inputs, and its quantity-weighted execution price.
+        Repeated calls leave existing stops untouched. A surviving take-profit
+        supplies the OCA group; otherwise a new group is created for both legs.
+        A missing optional take-profit alone is not repaired.
+
+        Args:
+            entry_trade: The current episode's fully filled opening Trade.
+
+        Raises:
+            RuntimeError: If evidence is incomplete, inconsistent or submission
+                of the required stop is suppressed.
+        """
+        pending = self._initial_protection()
+        if pending is None:
+            return
+        state, orders = pending
+        info = self.book.order_by_id(
+            entry_trade.order.orderId
+        ) or self.book.order_by_perm_id(entry_trade.order.permId)
+        if info is None:
+            raise RuntimeError("Entry order has no persisted evidence")
+        if info.position_id != state.position_id:
+            return  # A delayed callback must never protect a subsequent episode.
+        trade = self._entry_for_brackets(info, state)
+        dynamic, has_take_profit = self._initial_oca_options(orders, state)
+        self._install_entry_brackets(trade, state, dynamic, has_take_profit)
+
+    def _entry_for_brackets(self, info: OrderInfo, state: PositionState) -> ibi.Trade:
+        """Require a complete, fill-accounted entry for this exact held episode."""
+        trade = info.execution_trade()
+        if (
+            info.role != StandardOrderRole.OPEN
+            or info.source_key != self.source_key
+            or info.execution_model_name != self.name
+            or state.execution_model_name != self.name
+            or trade.contract != state.contract
+            or trade.orderStatus.filled != trade.order.totalQuantity
+            or trade.orderStatus.filled != abs(state.quantity)
+            or trade.order.action != action(sign(state.quantity))
+            or any(
+                fill.contract != state.contract
+                or fill.execution.side != ("BOT" if state.quantity > 0 else "SLD")
+                for fill in trade.fills
+            )
+        ):
+            raise RuntimeError("Incomplete or inconsistent entry evidence for brackets")
+        return trade
+
+    def _initial_oca_options(
+        self, orders: tuple[OrderInfo, ...], state: PositionState
+    ) -> tuple[dict[str, Any], bool]:
+        """Reuse a surviving take-profit's OCA identity, or allocate one group."""
+        take_profits = [
+            order for order in orders if order.role == StandardOrderRole.TAKE_PROFIT
+        ]
+        if take_profits and (
+            len(take_profits) != 1
+            or not take_profits[0].active
+            or take_profits[0].trade.contract != state.contract
+            or take_profits[0].trade.remaining() != abs(state.quantity)
+            or take_profits[0].trade.order.action != action(-sign(state.quantity))
+            or not take_profits[0].trade.order.ocaGroup
+            or take_profits[0].trade.order.ocaType not in {1, 2, 3}
+        ):
+            raise RuntimeError(
+                "Existing take-profit is incompatible with initial brackets"
+            )
+        oca_group = (
+            take_profits[0].trade.order.ocaGroup if take_profits else str(uuid4())
+        )
+        oca_type = (
+            take_profits[0].trade.order.ocaType if take_profits else self.oca_type
+        )
+        return {"ocaGroup": oca_group, "ocaType": oca_type}, bool(take_profits)
+
+    def _install_entry_brackets(
+        self,
+        trade: ibi.Trade,
+        state: PositionState,
+        dynamic: Mapping[str, Any],
+        has_take_profit: bool,
+    ) -> None:
+        """Use the configured leg builders for both live and recovered entries."""
+        params = dict(self._bracket_inputs(state.bracket_inputs))
         for leg, role, base_options in (
             (self.stop, StandardOrderRole.STOP_LOSS, self.stop_options),
             (
@@ -747,7 +920,9 @@ class BracketExecutionModel(ExecutionModel):
                 self.take_profit_options,
             ),
         ):
-            if leg is None:
+            if leg is None or (
+                role == StandardOrderRole.TAKE_PROFIT and has_take_profit
+            ):
                 continue
             memo: dict[str, Any] = {}
             leg_options = leg(
@@ -757,7 +932,7 @@ class BracketExecutionModel(ExecutionModel):
                 self.contract_registry.details,
             )
             order = ibi.Order(**{**base_options, **leg_options, **dynamic})
-            self.controller.trade(
+            submitted = self.controller.trade(
                 trade.contract,
                 order,
                 role=role,
@@ -766,7 +941,15 @@ class BracketExecutionModel(ExecutionModel):
                 position_id=state.position_id,
                 params=memo,
             )
-        self._defer(self._converge)
+            if submitted is None and role == StandardOrderRole.STOP_LOSS:
+                raise RuntimeError("Critical initial stop submission was suppressed")
+            if role == StandardOrderRole.STOP_LOSS and submitted is not None:
+                if submitted.orderStatus.status == ibi.OrderStatus.Filled:
+                    return  # Do not install another exit while this fill is accounted.
+                if not submitted.isActive():
+                    raise RuntimeError(
+                        "Critical initial stop was rejected or cancelled"
+                    )
 
 
 __all__ = [

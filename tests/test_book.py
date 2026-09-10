@@ -131,6 +131,59 @@ def test_order_info_requires_real_order_id_when_saved(book):
         book.save_order(order_info(trade(order_id=0)))
 
 
+def test_execution_trade_merges_saved_and_broker_fills_without_accounting():
+    """Reconstruction preserves evidence and derives a quantity-weighted price."""
+    entry = trade(quantity=3)
+    first = fill(entry, quantity=2)
+    first.execution.price = 100
+    second = fill(entry, exec_id="exec-2")
+    second.execution.price = 103
+    info = order_info(entry, fills=(FillRecord.from_fill(entry, first),))
+    reconstructed = info.execution_trade((first, second, second))
+    assert reconstructed.orderStatus.avgFillPrice == 101
+    assert reconstructed.orderStatus.filled == 3
+    assert reconstructed.orderStatus.remaining == 0
+    assert reconstructed.orderStatus.status == ibi.OrderStatus.Filled
+    assert len(reconstructed.fills) == 2
+    assert len(info.fills) == 1
+    assert entry.orderStatus.filled == 0
+
+
+def test_execution_trade_rejects_conflicting_duplicate_evidence():
+    """A repeated execId cannot silently change the recovered entry price."""
+    entry = trade()
+    first = fill(entry)
+    conflicting = fill(entry)
+    conflicting.execution.price += 10
+    info = order_info(entry, fills=(FillRecord.from_fill(entry, first),))
+    with pytest.raises(ValueError, match="Conflicting execution"):
+        info.execution_trade((conflicting,))
+
+
+def test_execution_trade_does_not_count_combo_legs_as_extra_bag_fills():
+    """Generic order reconstruction must preserve roll evidence without double counting."""
+    entry = trade(quantity=1)
+    entry.contract = ibi.Bag(symbol="ES", exchange="CME")
+    combo = fill(entry)
+    combo.execution.price = 5
+    leg = fill(entry, exec_id="leg-exec")
+    leg = ibi.Fill(contract(), leg.execution, leg.commissionReport, leg.time)
+    reconstructed = order_info(entry).execution_trade((combo, leg))
+    assert reconstructed.orderStatus.filled == 1
+    assert reconstructed.orderStatus.avgFillPrice == 5
+    assert len(reconstructed.fills) == 2
+
+
+@pytest.mark.parametrize("quantity,price", [(0, 100), (3, 100), (1, float("nan"))])
+def test_execution_trade_rejects_invalid_execution_values(quantity, price):
+    """Incomplete or corrupt evidence must not become valid-looking price data."""
+    entry = trade()
+    execution = fill(entry, quantity=quantity)
+    execution.execution.price = price
+    with pytest.raises(ValueError):
+        order_info(entry).execution_trade((execution,))
+
+
 def test_book_does_not_restore_by_default(order_saver, state_saver, monkeypatch):
     """Bare Book construction should remain storage-free for focused callers."""
 

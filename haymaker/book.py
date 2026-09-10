@@ -99,6 +99,15 @@ class FillRecord:
             deduplication_key=_execution_key(trade, fill),
         )
 
+    def to_fill(self) -> ibi.Fill:
+        """Return IB-shaped execution evidence, without requiring a commission."""
+        return ibi.Fill(
+            self.contract,
+            self.execution,
+            self.commission_report or ibi.CommissionReport(),
+            self.time,
+        )
+
     def encode(self) -> dict[str, Any]:
         """Return a persistence-ready normalized fill document."""
 
@@ -220,6 +229,65 @@ class OrderInfo:
         self.fills = (*self.fills, record)
         self._applied_fill_keys.add(record.deduplication_key)
         return True
+
+    def execution_trade(self, extra_fills: Sequence[ibi.Fill] = ()) -> ibi.Trade:
+        """Reconstruct fill quantity and price from normalized execution evidence.
+
+        Saved fills and new broker fills are merged by execution identity.
+        This does not account or persist new fills; Controller owns that step.
+        Combo-leg fills do not count as additional BAG fills.
+
+        Args:
+            extra_fills: Broker fills belonging to this order.
+
+        Raises:
+            ValueError: If repeated executions disagree or quantities are invalid.
+        """
+        records = {record.deduplication_key: record for record in self.fills}
+        for fill in extra_fills:
+            record = FillRecord.from_fill(self.trade, fill)
+            previous = records.get(record.deduplication_key)
+            if previous is not None and (
+                previous.execution.shares != record.execution.shares
+                or previous.execution.price != record.execution.price
+                or previous.execution.side != record.execution.side
+                or previous.contract != record.contract
+            ):
+                raise ValueError(f"Conflicting execution {record.deduplication_key!r}")
+            if previous is None:
+                records[record.deduplication_key] = record
+        fills = [record.to_fill() for record in records.values()]
+        quantity = 0.0
+        cost = 0.0
+        for fill in fills:
+            if (
+                isinstance(self.trade.contract, ibi.Bag)
+                and fill.contract.secType != "BAG"
+            ):
+                continue
+            shares = finite_number(fill.execution.shares, "Execution shares")
+            price = finite_number(fill.execution.price, "Execution price")
+            if shares <= 0:
+                raise ValueError("Execution shares must be positive")
+            quantity += shares
+            cost += shares * price
+        if quantity > self.trade.order.totalQuantity:
+            raise ValueError("Execution quantity exceeds submitted order quantity")
+        status = replace(
+            self.trade.orderStatus,
+            filled=quantity,
+            remaining=self.trade.order.totalQuantity - quantity,
+            avgFillPrice=cost / quantity if quantity else 0.0,
+        )
+        if quantity and status.remaining == 0:
+            status.status = ibi.OrderStatus.Filled
+        return ibi.Trade(
+            contract=self.trade.contract,
+            order=self.trade.order,
+            orderStatus=status,
+            fills=fills,
+            log=list(self.trade.log),
+        )
 
     def encode(self) -> dict[str, Any]:
         """Return the complete order document stored by Book."""

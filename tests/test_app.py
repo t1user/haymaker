@@ -229,6 +229,9 @@ async def test_app_closes_runtime_tasks_and_queues(monkeypatch) -> None:
 async def test_live_runtime_propagates_startup_failure() -> None:
     """Unexpected controller failures must reach the supervisor task."""
 
+    async def initialize() -> None:
+        """Supply the contract-initialization phase without broker requests."""
+
     class FailingController:
         def set_future_roll_policies(self, policies: dict[str, bool]) -> None:
             pass
@@ -237,6 +240,7 @@ async def test_live_runtime_propagates_startup_failure() -> None:
             raise RuntimeError("controller failed")
 
     runtime = object.__new__(LiveRuntime)
+    runtime.startup_jobs = cast(StartupJobs, SimpleNamespace(init_data=initialize))
     runtime.context = cast(
         RuntimeContext,
         SimpleNamespace(
@@ -265,6 +269,10 @@ async def test_live_runtime_runs_startup_jobs_after_controller(monkeypatch) -> N
             return SyncOutcome.FAILED
 
     class FakeStartupJobs:
+        async def init_data(self) -> None:
+            """Make Contract details available before Controller recovery."""
+            events.append("contract-details")
+
         async def run(self) -> None:
             events.append("startup-jobs")
 
@@ -287,6 +295,7 @@ async def test_live_runtime_runs_startup_jobs_after_controller(monkeypatch) -> N
 
     assert events == [
         ("policies", {"manual": False}),
+        "contract-details",
         "controller",
         "startup-jobs",
         "timeouts",
@@ -310,6 +319,10 @@ async def test_live_runtime_skips_startup_jobs_after_aborted_controller(
             return SyncOutcome.ABORTED
 
     class FakeStartupJobs:
+        async def init_data(self) -> None:
+            """Prepare Contract details without starting streamers."""
+            events.append("contract-details")
+
         async def run(self) -> None:
             events.append("startup-jobs")
 
@@ -330,7 +343,7 @@ async def test_live_runtime_skips_startup_jobs_after_aborted_controller(
 
     await runtime.start()
 
-    assert events == ["controller", "timeouts"]
+    assert events == ["contract-details", "controller", "timeouts"]
 
 
 @pytest.mark.asyncio
