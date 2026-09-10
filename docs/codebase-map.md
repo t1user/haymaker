@@ -610,6 +610,9 @@ extension rules in the owning package:
 - [Dataloader guidance](../haymaker/dataloader/AGENTS.md): historical requests,
   persistence and resume invariants.
 - [Research guidance](../haymaker/research/AGENTS.md): dataframe timing semantics.
+- [Log-review guidance](log-review-guidance.md): trace configured destinations
+  and assess runtime evidence. Machine paths, selected launch profiles and
+  account/port preferences belong in the user's strategy project's `AGENTS.md`.
 
 User-facing API explanations and examples remain in `docs/source`; agent
 guidance links to those guides rather than duplicating their tutorials.

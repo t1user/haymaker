@@ -7,17 +7,12 @@ custom storage configuration is in [the storage guide](../../docs/source/storage
 
 ## Package and public API
 
-- Built-in components belong here; Atom/Pipe, Runtime, Book, Controller, Trader,
-  storage and contract management stay outside. Execution models, routing,
-  bracket legs and roll executors belong in `execution/`.
 - Each public leaf module owns `__all__`. Package initializers aggregate those
   lists; each leaf export is promoted to the public toolbox. Names must be
   unique across modules. Do not maintain duplicate hand-written export lists.
 - Keep `aggregators.py` (IB bar transformations) separate from
   `dataframe_aggregators.py` (pandas history, persistence and transformations).
   The latter is public, not an implementation detail.
-- Preserve arbitrary-message Atom composition and identity equality. No
-  compatibility layers, graph message declarations or automatic emission checks.
 
 ## Choose the strategy path
 
@@ -135,8 +130,8 @@ a shared Portfolio or make execution models own direct allocation policy.
   so IB cancels the other exits when one fills.
 - Live completion and offline initial recovery share `ensure_entry_brackets`.
   Use the exact episode's saved inputs and normalized weighted entry price, not
-  new target inputs or broker net cost. Controller calls recovery after
-  reconciliation, before missing-bracket remediation, with Contract ticks ready.
+  new target inputs or broker net cost. Recovery needs Contract ticks ready;
+  it must not depend on a new Signal or commission callback.
 - Existing stop evidence, including terminal history, prevents automatic
   reinstallation. A surviving take-profit lends its OCA group/type; a missing
   optional take-profit alone is not repaired. Partial entries, active exits and
@@ -151,10 +146,9 @@ a shared Portfolio or make execution models own direct allocation policy.
 
 ## Futures rolling
 
-- Controller owns the single process-lifetime timer, discovery and recovery
-  coordination. One configured FutureRollExecutor family owns durable
-  sequencing; direct and bracket families cannot mix. Preserve mode/executor
-  name while a roll is incomplete.
+- Controller owns discovery and recovery coordination. One configured
+  FutureRollExecutor family owns durable sequencing; direct and bracket
+  families cannot mix. Preserve mode/executor name while a roll is incomplete.
 - Default PastToActiveRollPolicy rolls only selector `past_contracts` into ACTIVE,
   retaining NEXT and later eligible expiries. Custom FutureRollPolicy selects
   triggers and same-series destinations from a date-refreshed selector.
@@ -177,8 +171,7 @@ a shared Portfolio or make execution models own direct allocation policy.
 - FuturesPandasAggregator maintains/saves complete futures dataframe history;
   HistoricalDataStreamer reads its saved endpoint to shorten backfills. They
   share runtime-default market stores by bar size, data type and RTH policy.
-  Custom stores are fully configured injections. `datastore=False` disables
-  only streamer lookup; the aggregator requires storage.
+  `datastore=False` disables only streamer lookup; the aggregator requires storage.
 - Initial historical requests intentionally use `timeout=0`: a long backfill
   alone is not grounds for cancellation/restart. Keep subsequent stale-update
   monitoring separate.
@@ -192,7 +185,7 @@ a shared Portfolio or make execution models own direct allocation policy.
   calculation under changed ACTIVE writes the full frame; later saves append
   new rows. Failed calculation/adjustment creates no generation; previous
   generations stay unchanged. Supervised restart continues the run; a new
-  process starts a new run. Use an ordered DRAIN sink.
+  process starts a new run.
 - Audit metadata records source, run start and ACTIVE Contract. Futures history
   may be back-adjusted without downstream notification; append-only storage is
   not a record of every historical revision.
@@ -202,14 +195,14 @@ a shared Portfolio or make execution models own direct allocation policy.
   and supervisor policy. Runtime cancels market-data monitors on workload stop.
   Closed markets restart the deadline at next open; restart-triggered monitors
   remain disarmed even if another transition caused the request to be rejected.
+  Open but non-liquid sessions still require fresh data; liquidity is not the
+  market-open test.
 
 ## Extension checks
 
-Every public export needs usage-focused Google/Sphinx documentation and tests.
-Use the root validation commands and runtime fixtures. Cover changed transition
-matrices, message/connection validation, allocation, target supersession, order
-ownership, duplicate fills/callbacks, orderId/permId rebinding, episode attribution,
-OCA, partial/full fills, offline recovery, rolling and ACTIVE/NEXT audit boundaries.
-Keep the independent end-to-end suites as well as existing integration tests.
-Do not claim complete live safety from the fake broker; migration tests never
-touch real databases.
+Use the root validation commands and runtime fixtures; test public exports.
+Cover changed transition matrices, message/connection validation, allocation,
+target supersession, order ownership, duplicate fills/callbacks, orderId/permId
+rebinding, episode attribution, OCA, partial/full fills, offline recovery,
+rolling and ACTIVE/NEXT audit boundaries.
+Do not claim complete live safety from the fake broker.

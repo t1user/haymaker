@@ -1,120 +1,110 @@
-# Log Review Guidance
+# Reviewing Haymaker logs
 
-Use this note when asked to review Haymaker logs. It is a checklist for agents,
-not a replacement for the user's specific question.
+Use this guide for log discovery and operational evidence. Keep the review
+within the requested incident, component, strategy or time window; connectivity
+is only one possible focus.
 
-## First Clarify Scope
+## Locate the run's destinations
 
-- If the user asks about a specific incident, component, symbol, order, strategy,
-  or time window, answer that question first.
-- Do not force every log review into a supervisor investigation. Supervisor
-  recovery is one important case, but log reviews can also be about controller
-  sync, order reconciliation, strategy behavior, dataloader work, persistence,
-  futures rolling, or research jobs.
-- Keep timestamps explicit. When possible, build a chronological sequence of
-  events before explaining cause or proposing code changes.
-- Separate facts from inference. Quote or summarize the log line that supports
-  each important conclusion.
+- Start with any supplied log path and the strategy project's own `AGENTS.md`,
+  launcher and selected configuration. Local operational notes are leads;
+  confirm they describe the run being reviewed.
+- Haymaker configuration precedence is bundled profile, environment-selected
+  YAML, `-f/--file` YAML, then `-s/--set-option PATH VALUE`. The environment
+  selectors are `HAYMAKER_HAYMAKER_CONFIG_OVERRIDES` for live trading and
+  `HAYMAKER_DATALOADER_CONFIG_OVERRIDES` for the dataloader. They select files,
+  not individual setting values. See
+  [configuration](source/configuration.rst) and
+  [the loader](../haymaker/config/loader.py).
+- Trace effective `logging.config_file`, `logging.directory` and
+  `storage.base_directory`. The CLI passes these to
+  [setup_logging](../haymaker/logging/setup.py) before building the runtime
+  or importing a strategy. A logging config filename is tried relative to the
+  process working directory, then under `haymaker/logging/`.
+- Built-in handler factories resolve their output directory as
+  `Path.home() / storage.base_directory / logging.directory`. Absolute
+  base or log directories override preceding path segments. Bundled defaults
+  are `ib_data` and `logs`, giving `~/ib_data/logs`; this is a fallback,
+  not evidence of the actual destination.
+- Inspect the selected logging YAML's handlers and logger assignments.
+  Built-in factories join bare filenames to the resolved directory, defaulting
+  to `haymakerLog` when none is supplied. Filenames with a directory component
+  are kept as configured; relative ones are relative to the process working
+  directory, not the YAML file. Custom handlers may have their own path rules
+  or send output elsewhere. See
+  [handler factories](../haymaker/logging/handlers.py) and
+  [logging configuration](source/logging.rst).
+- If configuration is unavailable or may have changed since launch, the
+  running process's open log destinations and service output can establish
+  where it actually writes. Do not launch a strategy or call logging setup
+  merely to discover paths: those entrypoints have runtime/output side effects.
+  If unresolved, request the launch command, selected profile or log location.
 
-## Supervisor Recovery Focus
+Bundled destinations are:
 
-When the review is about IB connectivity, broker recovery, or the supervisor,
-track whether each broker event preserves:
+| Run/logger | File | Evidence |
+| --- | --- | --- |
+| Live `haymaker` | `haymakerLog` | Framework lifecycle, reconciliation, backfill and execution |
+| Live `strategy` | `strategies.log` | Strategy/component output, including data updates when logged |
+| Live `broker` | `broker.log` | Raw IB events; requires `logging.log_broker: true` |
+| Dataloader `haymaker` | `dataloaderLog_YYYYMMDD_HHMM` | Historical requests, pacing and persistence |
 
-- API socket connectivity: did `IB.isConnected()` remain true, did
-  `disconnectedEvent` fire, or did the supervisor reconnect?
-- Broker request usability: did probes, controller sync, historical-data
-  requests, or market-data requests succeed after the event?
-- Subscriptions: did existing live market-data, realtime-bar, historical-update,
-  or streamer subscriptions keep delivering data without being rebuilt?
-- Workload continuity: did the live runtime or dataloader workload continue,
-  stop, restart, or get cancelled?
+Live defaults rotate at midnight, producing files such as
+`haymakerLog.YYYY-MM-DD`. Dataloader filenames receive a UTC creation-time
+suffix. Bundled record formatters use UTC; rotation follows the selected
+handler's timezone settings. Include rotations spanning the requested window.
+Custom logging configuration can change names, formats, levels and destinations.
 
-The key observation is not just "which code arrived." The key observation is
-what was still working afterward.
+## Establish the evidence
 
-## Broker Codes To Track
+- Identify the actual strategy module, runtime/process start and log cutoff.
+  A supervised workload restart does not reload Python code. When attributing
+  behavior to a framework change, check the running version; the current
+  checkout alone is insufficient.
+- State the time window and timezone. File presence alone does not prove the
+  current process writes it, and a logger may be silent because of its level.
+- Match records across relevant logs by timestamps and Contract/order/execution
+  identifiers. Raw broker `ERROR` labels include informational status messages;
+  interpret the code and resulting behavior. Use the
+  [IB message guide](source/ib_message_codes.rst).
+- For accounting or roll questions, logs may need corroboration from Book's
+  persisted order/fill and state evidence. Distinguish repeated callbacks from
+  repeated broker executions or persisted transactions.
+- Quote or summarize supporting records. Separate confirmed facts, inference
+  and missing evidence; absence of logged strategy data is not proof of a stall.
 
-- `1100`: IB reports connectivity between IB and TWS/Gateway is lost. Check
-  whether Haymaker moves into broker-connectivity recovery, whether the API
-  socket stays open, and whether subscriptions resume or later become stale.
-- `1101`: Connectivity restored with data lost. Expect a restart/rebuild path;
-  verify that subscriptions are resubmitted and workload restarts cleanly.
-- `1102`: Connectivity restored with data maintained. Verify whether existing
-  subscriptions actually keep producing data. A successful probe only proves
-  current request connectivity, not subscription freshness.
-- `1300`: API socket port reset. Expect reconnect/rebuild behavior; verify no
-  stale workload keeps running on the old socket.
-- `2110`: Broker connectivity between TWS/Gateway and IB servers is broken.
-  Check whether Haymaker enters broker-connectivity recovery and probes after
-  `1102` or grace expiry.
-- `2103`, `2105`, `2157`, `2104`, `2106`, `2158`: Data-farm status messages.
-  These are log context only; look for `timeoutEvent`, failed probes,
-  `1100`/`2110`, `1101`, `1300`, or `disconnectedEvent` before attributing a
-  restart to them.
-- `10182`: Stale-subscription warning. A `10182` message starts a 180-second
-  stale-subscription restart timer, and later `10182` messages reset that timer.
+## Connectivity and recovery investigations
 
-Also note repeated request errors, pacing violations, `ConnectionError`,
-streamer timeout messages, controller sync skips, and order/position mismatch
-logs around the same time window.
+Use the [supervisor guide](../haymaker/supervisor/AGENTS.md) for state transitions,
+code policy and hold ordering. Verify four separate outcomes: API connectivity,
+broker request usability, resumed subscriptions and order/position reconciliation.
+A successful probe alone does not prove the other outcomes.
 
-## Event Order To Reconstruct
+Reconstruct the relevant sequence, allowing for probe-only recovery:
 
-For supervisor-related logs, reconstruct this sequence when possible:
+1. Last healthy subscription update, request or sync.
+2. Direct trigger: broker code, disconnect, idle/stale timeout, explicit
+   restart/stop, or workload completion.
+3. State transition, connection-unavailable state and Controller hold where
+   applicable; note whether sync skipped or aborted.
+4. Cleanup, reconnect attempts and probe results, with configured retry delays.
+5. Workload start, order rebinding, hold release and reconciliation.
+6. First resumed update for each relevant streamer and the backfill range.
+7. Later stale-data, duplicate-execution, sync-failure or trading-disable symptoms.
 
-1. Last known healthy data point or heartbeat before the broker event.
-2. Broker code, `timeoutEvent`, `updateEvent`, or `disconnectedEvent`.
-3. Supervisor state transition, if logged.
-4. Probe attempt and result.
-5. Workload stop/start/restart, if any.
-6. Reconnect attempt count and whether connection parameters changed.
-7. First successful broker request after recovery.
-8. First resumed subscription update after recovery.
-9. Any later streamer timeout or stale-data symptom.
+Attribute each restart to its direct trigger, not adjacent farm-status chatter.
+Look for repeated rebuilds, stop followed by reconnect, work starting before
+probe success, stale state timers firing later, or corrections continuing after
+connection loss. For replayed executions, verify fill idempotence rather than
+assuming repeated records changed accounting.
 
-If the logs do not show enough detail for one of these points, say that rather
-than filling the gap.
+When assessing efficiency, count rebuilds and measure cleanup, retry, probe, sync
+and first-data times against the effective settings. Distinguish external service
+relaunches from internal workload restarts.
 
-## Signs Of Healthy Recovery
+## Report
 
-- `1100` or `2110` enters broker-connectivity recovery without immediate
-  reconnect when the socket remains connected.
-- `1102` or grace expiry is followed by a probe while broker connectivity is
-  marked lost.
-- A `1101`, `1300`, failed probe, or unexpected socket disconnect causes one
-  coherent reconnect/rebuild cycle, not repeated overlapping restarts.
-- Workload cleanup happens once per restart/shutdown and a new workload starts
-  only after connection probing succeeds.
-- Existing subscriptions either continue producing updates after maintained
-  recovery or stale subscriptions are detected promptly by streamer timeouts and
-  handled by restart.
-
-## Warning Signs
-
-- Connection appears restored, but streamers stop receiving updates and no
-  timeout/restart follows.
-- Repeated broker-connectivity recovery cycles hide a condition that clearly
-  requires reconnect.
-- Multiple restart requests overlap, or a stop request is followed by reconnect.
-- Controller sync treats a routine outage as an unsafe unreconciled trading
-  state instead of a recoverable missing-connection condition.
-- Dataloader logs suggest attached work is restarting or disconnecting a socket
-  owned by live trading.
-- Log severity is misleading: routine broker recovery should not look like an
-  unrecoverable trading safety failure unless reconciliation or order/position
-  state is actually unsafe.
-
-## Output Expectations
-
-Prefer a compact incident report:
-
-- Time window reviewed.
-- Timeline of important log events.
-- What was observed about connectivity, request usability, subscriptions, and
-  workload continuity.
-- What is confirmed, what is inferred, and what is unknown.
-- Suggested next observation or instrumentation if the logs are insufficient.
-
-Do not propose code changes until the log evidence supports a specific failure
-mode or the user explicitly asks for implementation.
+Give the paths and time window reviewed, important events, confirmed outcome,
+uncertainties and any useful next observation. For recovery, report the four
+outcomes separately. Recommend a code change only when evidence supports a
+specific failure mode or the user asks for implementation.

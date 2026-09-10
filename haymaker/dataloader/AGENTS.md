@@ -1,25 +1,19 @@
 # Dataloader Package Guidance
 
-This package is the standalone Interactive Brokers historical-data downloader.
-It never places orders. Changes can consume IB pacing allowance, rewrite large
-Arctic series, or alter historical boundaries, so keep edits narrow and cover
-request, restart, and date-policy behavior with focused tests.
+Read the [root guidance](../../AGENTS.md) for workflow and shared contracts.
+This package is the standalone Interactive Brokers historical-data downloader;
+it never places orders. Changes can consume IB pacing allowance, rewrite large
+Arctic series, or alter historical boundaries.
 
 ## Architecture
 
-- The shared `App` is the process composition root. `DataloaderRuntime` creates
-  its owned `IB` client and `DataloaderSession`, then adapts resumable work to
-  the common runtime `start()` / `stop()` / `close()` contract.
-- The dataloader has no connection-mode abstraction or setting. Its CLI loads
-  `DataloaderConfig`, creates `DataloaderRuntime(config)`, and always runs it
-  through the shared `App` and `ConnectionSupervisor`. The runtime decomposes
-  the `download` mapping across `Manager` and `DataloaderSession`; contract
-  selectors retain the target-owned `FuturesSelectionPolicy`. Keep `download`
+- `DataloaderRuntime` owns its `IB` client and `DataloaderSession` and always
+  runs through the shared `App` and `ConnectionSupervisor`. The runtime
+  decomposes the `download` mapping across `Manager` and `DataloaderSession`;
+  contract selectors retain the target-owned `FuturesSelectionPolicy`. Keep `download`
   as a user-facing run group rather than splitting out worker count solely to
-  mirror these internal constructors. The bundled dataloader profile must list
-  every supported setting with a concise inline comment. Its `storage` group
-  is deliberately narrow: only `base_directory` and `mongodb.client` belong to
-  this runtime. The library name is derived from `what_to_show` and `bar_size`.
+  mirror these internal constructors. The library name is derived from
+  `what_to_show` and `bar_size`.
 - The dataloader defaults to client ID `1`, distinct from the live runtime's
   expected client ID `0`. A duplicate client ID is a configuration failure; do
   not retry automatically with another ID.
@@ -48,12 +42,10 @@ request, restart, and date-policy behavior with focused tests.
 - `AsyncStoreView` loads existing data and metadata once for planning. It
   requires explicit bar-size policy and exposes normalized boundaries without
   hiding broker or datastore refreshes behind properties.
-- `DataloaderSession` reads request policy from generated jobs and `Manager`; do
-  not restore independent compatibility defaults such as session-level
-  `bar_size` or `whatToShow`.
+- `DataloaderSession` reads request policy from generated jobs and `Manager`.
 
-See `docs/source/dataloader.rst` for user-facing behavior and
-`docs/codebase-map.md` for repository-level flow.
+See [the dataloader guide](../../docs/source/dataloader.rst) for usage and
+[supervisor guidance](../supervisor/AGENTS.md) for lifecycle changes.
 
 ## Historical Time Policy
 
@@ -93,11 +85,7 @@ See `docs/source/dataloader.rst` for user-facing behavior and
 - Reject unknown CSV headers before constructing selectors or making broker
   requests. Programmatic selector construction must follow the same rule; do
   not silently discard unsupported contract fields.
-- Keep `ConnectionSupervisor` workload-agnostic. Dataloader-specific behavior
-  belongs in this package, and live runtime remains the owner of live-trading
-  recovery.
-- Dataloader logging is separate from live Telegram alerts. Reserve high
-  severity for failures requiring attention, not ordinary recovery waits.
+- Keep dataloader-specific request and resume behavior in this package.
 - Preserve request-stage wording in diagnostics: `prepared` is pre-pacer,
   `Local pacer delaying` is a client-side wait, and `Submitted ... to IB` means
   broker response time has begun. Locally inferred availability skips must say
@@ -134,17 +122,15 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   correctness boundaries.
 - Stop workers before the final flush so persistence cannot race an active
   download.
-- `HistorySink` uses awaited dataframe and metadata mutations. Once an awaited
-  mutation starts, let its database call settle before propagating cancellation;
-  failures must surface at the await site. Apply one downloaded response as a
+- `HistorySink` uses awaited dataframe and metadata mutations, with the root
+  datastore cancellation contract. Apply one downloaded response as a
   single cancellation-safe transition so successful persistence is followed by
   buffer clearing, completion metadata, and range progression before restart.
 - The dataloader consumes only the awaited `AsyncDataStore` contract and does
   not submit datastore mutations through a background queue.
 - Standalone Ctrl-C cancellation must finish the session flush before shared
-  application shutdown closes other background queues. Do not restore
-  `ib_insync.util.patchAsyncio()` in the CLI; nested-loop patching is for
-  notebooks, not this standalone command.
+  application shutdown closes other background queues. The standalone CLI owns
+  its event loop; nested-loop patching belongs to notebook callers.
 - A supervisor restart preserves active jobs in memory and queues those jobs
   before starting a fresh discovery pass. The pass skips contracts already
   planned in this process and retries the contract whose planning was
@@ -189,18 +175,9 @@ See `docs/source/dataloader.rst` for user-facing behavior and
   positive. Preserve the existing bar-size, data-type, gap-mode, and futures
   validators.
 
-- Do not change `haymaker/durationStr_converters.py` as part of dataloader
-  helper cleanup; it is trading-specific and has separate risk.
-- Do not add gateway process management or Watchdog/IBC behavior to
-  `ConnectionSupervisor` without an explicit architecture decision.
-- Never place orders during IB integration experiments. When the user requests
-  live dataloader testing, use the explicitly supplied paper-account settings;
-  the current standing port preference is `4002`.
+- For user-requested IB integration checks, use the supplied paper-account
+  connection settings; a port number alone does not establish account mode.
 - Start with focused checks:
   `.venv/bin/python -m pytest tests/test_dataloader*.py tests/test_dataloder_helpers.py --tb=short`.
 - Run typing after package changes:
   `.venv/bin/python -m mypy haymaker/dataloader tests/test_dataloader*.py tests/test_dataloder_helpers.py`.
-- For lifecycle, persistence, or shared-boundary changes, also run the full
-  suite with `.venv/bin/python -m pytest --tb=short`.
-- Run the package-wide Black command from the root `AGENTS.md`; use an
-  outside-sandbox execution if sandbox restrictions prevent completion.

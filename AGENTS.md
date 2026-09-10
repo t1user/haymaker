@@ -14,6 +14,9 @@ execution, reconciliation and futures rolling are high-risk code.
 - Update relevant user and agent documentation when behavior, architecture,
   setup or conventions change. Document current contracts, not implementation
   history or historical test counts.
+- Keep shared rules here and subsystem rules in the owning scoped guide; link
+  instead of repeating them. Machine paths, launch profiles and account/port
+  preferences belong in the user's strategy project's `AGENTS.md`.
 - Use type hints, `pathlib`, pytest and Black. New public APIs need usage-focused,
   Google-style, Sphinx-compatible docstrings; internal documentation should
   explain ownership, ordering and non-obvious invariants.
@@ -34,7 +37,8 @@ execution, reconciliation and futures rolling are high-risk code.
 
 - For strategy composition or component changes, read
   [components guidance](haymaker/components/AGENTS.md), including when helping
-  with a user strategy outside that package.
+  with a user strategy outside that package. Also read that strategy project's
+  own guidance for its configuration, data locations and operational choices.
 - Read the scoped guidance before work in
   [supervisor](haymaker/supervisor/AGENTS.md),
   [dataloader](haymaker/dataloader/AGENTS.md), or
@@ -42,7 +46,8 @@ execution, reconciliation and futures rolling are high-risk code.
 - [Codebase map](docs/codebase-map.md): module ownership and runtime flow.
 - [Execution guide](docs/source/execution.rst): public composition and recovery
   examples; [storage guide](docs/source/storage.rst): defaults and advanced
-  persistence configuration.
+  persistence configuration; [configuration guide](docs/source/configuration.rst):
+  profiles and CLI overrides.
 - Read [log-review guidance](docs/log-review-guidance.md) before reviewing logs;
   apply its general evidence discipline without expanding the requested scope.
 - Dashboard is experimental and should not be inspected. The event-driven
@@ -62,18 +67,13 @@ and distinguish pre-existing failures from regressions.
 ```
 
 - Sphinx reference checks need external inventories; do not suppress missing
-  references to get a clean result. If sandbox restrictions prevent Black from
-  completing, rerun the same command outside the sandbox.
-- For research changes, use `tests/test_research`, mypy on
-  `haymaker/research tests/test_research`, and flake8 with
-  `--select=F401,F821,F841,E501`; consult its scoped guidance.
+  references to get a clean result.
 - Use `tests/runtime_helpers.py` and `atom_runtime` / `atom_runtime_factory`
   for IB, Book, registry, Controller, restart callbacks and storage dependencies.
   Do not scatter ad hoc Atom runtime monkeypatches.
 - Avoid importing `haymaker.app` in focused tests unless testing that entrypoint.
   Prefer lower-level components to avoid logging/runtime side effects.
-- Preserve the signal-processor matrices and existing integration suite.
-  Independent broker-boundary coverage uses `tests/episode_harness.py`,
+- Independent broker-boundary coverage uses `tests/episode_harness.py`,
   `test_episode_end_to_end.py`, `test_direct_end_to_end.py`,
   `test_roll_end_to_end.py`, and `test_bracket_recovery.py`.
   Test durable recovery without replaying transient callbacks.
@@ -128,8 +128,8 @@ and distinguish pre-existing failures from regressions.
   alone is not unsafe trading state; disable trading for failed recovery or
   confirmed unreconciled order/position safety problems.
 - Timers for Controller sync and daily rolling are process-owned. Reconnects
-  must not duplicate them. LiveRuntime cancels workload-owned market-data
-  timeouts, never user-owned EventTimeout instances.
+  must not duplicate them. Component timeout lifetimes are described in the
+  components guide.
 - CLI owns logging setup/shutdown; each destination has its own queue/listener.
   Messaging handlers are optional configuration, not runtime dependencies.
 - First SIGTERM requests graceful supervisor stop; a second may terminate
@@ -164,9 +164,8 @@ and distinguish pre-existing failures from regressions.
   one-to-one corrections align both quantity and target to broker authority;
   flattening clears episode recovery inputs but preserves the direction block.
 - After order/fill and position reconciliation, Controller invokes model-owned
-  initial-protection recovery before missing-bracket remediation. ExecutionModel
-  owns bracket calculations and needs complete evidence, not a new Signal or
-  commission callback. See component guidance for installation limits.
+  initial-protection recovery before missing-bracket remediation. See the
+  components guide for model inputs and installation limits.
 - Target verification waits for OPEN/CLOSE/TARGET_ADJUSTMENT and pending roll
   work, not standing STOP_LOSS/TAKE_PROFIT orders. Superseded checks are abandoned.
 - Explicit reset gives cancellations a bounded grace period, then liquidates
@@ -182,8 +181,8 @@ and distinguish pre-existing failures from regressions.
   cancellation.
 - DRAIN is critical: failures/drain timeouts propagate. DISCARD is best effort.
   Book and default Signal dataframe persistence drain; other queued Arctic
-  sinks default to DISCARD. The dataloader uses awaited storage and completes
-  persistence and in-memory transitions before resuming after a restart.
+  sinks default to DISCARD. Final queue shutdown is bounded and belongs to
+  process shutdown, not an ordinary supervisor reconnect.
 - Injected stores are fully configured. Naming is chosen at construction and
   is not replaced afterward. `RuntimeContext.frame_store_provider` supports
   custom strategy-owned stores; default component choices are documented in
@@ -191,10 +190,10 @@ and distinguish pre-existing failures from regressions.
 - CLI loads configuration once; owning subsystems construct themselves from
   their mappings. Controller one-run actions live under `controller.startup`;
   logging and dataloader `download` remain subsystem groups.
-- Live storage has `base_directory`, `mongodb.client`, `mongodb.database`;
-  dataloader storage has only the first two. Default libraries belong under
-  `market_data_store.library` and `signal_persistence.library`; custom libraries
-  belong to strategy composition, save frequency to the consumer.
+- Live storage has `base_directory`, `mongodb.client`, `mongodb.database`.
+  The dataloader guide owns its narrower schema. Default live libraries belong
+  under `market_data_store.library` and `signal_persistence.library`; custom
+  libraries belong to strategy composition, save frequency to the consumer.
 - Bundled profiles enumerate supported settings, pin effective defaults and
   include concise inline comments. Environment variables select profile files,
   not individual setting overrides. Strategy parameters stay in user Python.

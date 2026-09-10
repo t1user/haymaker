@@ -1,14 +1,15 @@
 # Research Package Guidance
 
-This package is timing-sensitive trading research code. Small alignment changes can
-materially change results. Prefer narrow, well-tested edits and verify semantics
-against focused examples before refactoring.
+Read the [root guidance](../../AGENTS.md) for workflow and shared validation.
+This package is timing-sensitive trading research code; small alignment changes
+can materially change results.
 
 ## Core Timing Rules
 
 - Treat event timing as the primary invariant. Do not "simplify" by moving
   signals, stops, or execution prices across bars without an explicit test.
-- Read definitions of key terms used in the package from module level docstrings in `haymaker.research.signal_converters.py`
+- Read the terminology in the module docstring of
+  `haymaker.research.signal_converters` before changing signal timing.
 - Left-labeled lower-frequency data means each timestamp marks the beginning of
   its group. A grouped value becomes usable only when that grouped bar completes.
 - `blip` and `close_blip` are event columns. Preserve their raw provenance as
@@ -23,8 +24,7 @@ against focused examples before refactoring.
 - Public function lives in `haymaker.research.upsampling`.
 - Use `hf_df` / `lf_df` names for high-frequency and low-frequency frames.
 - Ordinary lower-frequency columns are propagated from their availability point.
-- `sparse` is the single exception-list knob for event-like columns. Do not
-  restore older `keep` / `propagate` style options.
+- `sparse` is the exception list for event-like columns.
 - Passing a literal `position` column must raise. Columns containing
   `"position"` should warn because they are often already-shifted state.
 - Tests for timing regressions belong first in `tests/test_research/test_utils.py`.
@@ -34,8 +34,7 @@ against focused examples before refactoring.
 - Public entrypoint is `haymaker.research.stop.stop_loss`.
 - The caller is responsible for pre-shifting blips to the intended execution bar;
   keep future-leakage warnings explicit in docs.
-- `distance` is already in final price units. Do not reintroduce multiplier
-  handling inside `stop_loss`.
+- `distance` is already in final price units; callers apply any multiplier.
 - If `distance` is a Series, its index must exactly match `df.index`. Raise on
   mismatch; do not silently reindex.
 - `scheduled_close` accepts `datetime.time`, a tuple accepted by `datetime.time`,
@@ -52,10 +51,9 @@ against focused examples before refactoring.
 
 ## Backtester / `perf()`
 
-- Current `perf()` expects a transaction dataframe with the prepared columns
+- `perf()` expects a transaction dataframe with the prepared columns
   produced by `stop_loss()` / `no_stop()`:
   `bar_price`, `open_price`, `close_price`, `stop_price`, `position`.
-- Do not reintroduce old tuple-unpacking call paths such as `perf(*data, ...)`.
 - Same-bar open/stop rows are real zero-duration trades:
   open at `open_price`, close at `stop_price`, end flat, charge two slippage
   legs, and include `-(open_price + stop_price)` in gross trade PnL.
@@ -76,7 +74,7 @@ against focused examples before refactoring.
   by `data["close"].iloc[0]`.
 - OHLC is represented as log distances from previous close. `volume` and
   `barCount` are sampled as raw bar attributes. Unknown columns, including
-  `average`, are dropped unless a future change explicitly defines semantics.
+  `average`, are dropped.
 - Avoid `iterrows()` and row-wise `apply()` for reconstruction. Prefer vectorized
   pandas/NumPy operations; use Numba only when vectorization is not suitable.
 - `regime_bootstrap()` accepts user-provided hard state labels. Labels can be
@@ -89,9 +87,9 @@ against focused examples before refactoring.
 ## Validation Defaults
 
 - Focused research checks:
-  `python -m pytest tests/test_research`.
-- For typing/formatting when touching research code:
-  `python -m mypy haymaker/research tests/test_research`
-  and `python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E501`.
+  `.venv/bin/python -m pytest tests/test_research`.
+- Research typing and lint checks:
+  `.venv/bin/python -m mypy haymaker/research tests/test_research`
+  and `.venv/bin/python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E501`.
 - Preserve imports from `haymaker.research` when moving public
   functions, unless the user explicitly asks to break compatibility.
