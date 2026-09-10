@@ -1,342 +1,209 @@
-# General Coding Rules
+# Working in Haymaker
 
-- Prefer minimal, surgical changes.
-- Do not rewrite unrelated code.
-- Preserve existing architecture unless instructed otherwise.
-- Explain tradeoffs before major refactors.
-- Prefer readability over cleverness.
-- Avoid adding dependencies unless justified.
-- Run tests after changes when possible.
-- If tests fail, explain whether the failure is related to your changes.
-- Keep functions focused and short.
-- Avoid unnecessary abstraction.
-- Prefer explicit code over metaprogramming.
+Haymaker is an event-driven Interactive Brokers framework built on `ib_insync`,
+with a historical dataloader and separate dataframe research tools. Live order
+execution, reconciliation and futures rolling are high-risk code.
 
-# Workflow
+## Workflow and scope
 
-- Before editing, briefly explain understanding of the task.
-- For non-trivial tasks, create a short implementation plan.
-- After changes, summarize modified files and rationale.
-- Update relevant documentation when architecture, setup, commands, conventions,
-  workflows, or important assumptions change.
-- For research code under `haymaker/research`, read
-  `haymaker/research/AGENTS.md` before editing.
-- Avoid importing `haymaker.app` in tests unless explicitly needed. It sets up
-  logging and imports runtime singletons; prefer lower-level modules for
-  focused tests.
-- When asked to review logs, check `docs/log-review-guidance.md` first. If the
-  requested review is not supervisor-related, use that file only for general
-  review discipline and focus on the specific component or behavior the user
-  asked about.
-- Create docstrings for any new functions/classes/methods
-- Use google-style, sphinx compatible docstrings
-- If changing user-relevant behaviour, scan existing documentation and update any sections relevant to this newly changed behaviour
+- Explain your understanding before editing; make a short plan for non-trivial
+  work. Reviews and discussions are read-only unless changes are requested.
+- Prefer minimal, explicit changes and short functions. Preserve unrelated
+  work. Ask before architecture changes or adding dependencies; explain the
+  tradeoffs.
+- Update relevant user and agent documentation when behavior, architecture,
+  setup or conventions change. Document current contracts, not implementation
+  history or historical test counts.
+- Use type hints, `pathlib`, pytest and Black. New public APIs need usage-focused,
+  Google-style, Sphinx-compatible docstrings; internal documentation should
+  explain ownership, ordering and non-obvious invariants.
+- Direct event callbacks use camelCase matching the event name
+  (`orderStatusEvent -> onOrderStatusEvent`). The IB `errorEvent` callback is
+  `onErrEvent`, since many messages are informational. Helpers, internal hooks
+  and injected callbacks use snake_case.
+- Operational logs use the word `error` only for genuine failures needing
+  attention. Routine recovered outages must not leak exception names such as
+  `TimeoutError` into lifecycle messages.
+- Never commit without explicit instruction; append `[llm]` to commit messages.
+  Never push. Before committing, run pytest and mypy successfully and ensure
+  secrets are ignored. Do not modify `.env` or credential files.
+- Explain deletions. Do not execute database migrations or change production
+  configuration as part of implementation.
 
-# Git
+## Where to look
 
-- Never commit unless explicitly instructed.
-- When committing, add `[llm]` at the end of the commit message.
-- Before committing, make sure any file with secrets is included in `.gitignore`.
-- Never push.
-- Do not modify `.env` files.
-- Do not delete files without explanation.
-- Run `mypy` and `pytest`, do not commit if there are any issues.
+- For strategy composition or component changes, read
+  [components guidance](haymaker/components/AGENTS.md), including when helping
+  with a user strategy outside that package.
+- Read the scoped guidance before work in
+  [supervisor](haymaker/supervisor/AGENTS.md),
+  [dataloader](haymaker/dataloader/AGENTS.md), or
+  [research](haymaker/research/AGENTS.md).
+- [Codebase map](docs/codebase-map.md): module ownership and runtime flow.
+- [Execution guide](docs/source/execution.rst): public composition and recovery
+  examples; [storage guide](docs/source/storage.rst): defaults and advanced
+  persistence configuration.
+- Read [log-review guidance](docs/log-review-guidance.md) before reviewing logs;
+  apply its general evidence discipline without expanding the requested scope.
+- Dashboard is experimental and should not be inspected. The event-driven
+  backtester is also experimental; do not imply it certifies live recovery.
 
-# Python Preferences
+## Validation
 
-- Prefer type hints.
-- Prefer `pathlib` over `os.path`.
-- Use `pytest` to create tests.
-- Use `black` for formatting.
-- Add docstrings for new functions and classes.
-
-# Naming
-
-- Event handlers connected directly to `eventkit.Event` or `ib_insync` events
-  should use camelCase callback names.
-- For `ib_insync` events, prefer direct correspondence with the event name:
-  `orderStatusEvent` -> `onOrderStatusEvent`,
-  `updateEvent` -> `onUpdateEvent`,
-  `timeoutEvent` -> `onTimeoutEvent`.
-- Exception: handlers for `ib.errorEvent` should be named `onErrEvent`, not
-  `onErrorEvent`, because IB uses this event for many informational broker
-  messages that are not real errors, and callback names can surface in logs.
-- Internal lifecycle hooks, injected callbacks, helpers, and ordinary methods
-  should use standard Python snake_case.
-
-# Logging
-
-- Normal operational logs must not contain the word `error` unless they report
-  a genuine error requiring attention. Expected, successfully recovered
-  connection interruptions are lifecycle events, not errors. Avoid leaking
-  exception class names such as `TimeoutError` into routine recovery messages.
-
-# Validation
-
-- Run the narrowest meaningful test command for the changed area first.
-- For broad Python changes, run:
+Use the project interpreter, `.venv/bin/python`. Run the narrowest meaningful
+tests first; for broad Python changes run the full suite. Report failing checks
+and distinguish pre-existing failures from regressions.
 
 ```bash
-python -m pytest
+.venv/bin/python -m pytest
+.venv/bin/python -m mypy haymaker
+.venv/bin/python -m black --check --fast --target-version py312 <changed-python-paths>
+.venv/bin/python -m sphinx -n -W --keep-going -b html docs/source /tmp/haymaker-docs
 ```
 
-- For focused research changes, run:
+- Sphinx reference checks need external inventories; do not suppress missing
+  references to get a clean result. If sandbox restrictions prevent Black from
+  completing, rerun the same command outside the sandbox.
+- For research changes, use `tests/test_research`, mypy on
+  `haymaker/research tests/test_research`, and flake8 with
+  `--select=F401,F821,F841,E501`; consult its scoped guidance.
+- Use `tests/runtime_helpers.py` and `atom_runtime` / `atom_runtime_factory`
+  for IB, Book, registry, Controller, restart callbacks and storage dependencies.
+  Do not scatter ad hoc Atom runtime monkeypatches.
+- Avoid importing `haymaker.app` in focused tests unless testing that entrypoint.
+  Prefer lower-level components to avoid logging/runtime side effects.
+- Preserve the signal-processor matrices and existing integration suite.
+  Independent broker-boundary coverage uses `tests/episode_harness.py`,
+  `test_episode_end_to_end.py`, `test_direct_end_to_end.py`,
+  `test_roll_end_to_end.py`, and `test_bracket_recovery.py`.
+  Test durable recovery without replaying transient callbacks.
 
-```bash
-python -m pytest tests/test_research
-```
+## Architecture and Atom contracts
 
-- For typing and lint checks when touching research code, run when practical:
+- Built-in trading components live only in `haymaker.components`; execution,
+  routing, bracket legs and roll executors are under `components.execution`.
+  Atom/Pipe, Runtime, Book, Controller, Trader, storage and contract management
+  remain outside. Do not add compatibility modules, aliases or dual schemas.
+- `Atom` is an arbitrary-message composition primitive. Base `onData` raises;
+  subclasses emit explicitly. Synchronous `onStart(data, source)` propagates
+  arbitrary startup data without automatic mutation or reserved fields.
+  Preserve `onFeedback` and reverse feedback connections.
+- `connect` validates every target before wiring any. `validate_source` must
+  raise for missing upstream capabilities; message-value validation belongs in
+  `onData`. Use real classes/protocols, not class-name checks. Do not add
+  `input_type`/`output_type`, graph-wide type negotiation or emission detection.
+- Fan-out shares one object reference. Mutating branches must copy explicitly;
+  do not add blanket deep copies of dataframes or broker objects.
+- Dataclass Atoms require `@dataclass(eq=False)` at every decorated inheritance
+  level to retain node identity equality.
+- Reuse `haymaker.validators` for primitive normalization; keep domain-specific
+  checks with their owning component.
 
-```bash
-python -m mypy haymaker/research tests/test_research
-python -m flake8 haymaker/research tests/test_research --select=F401,F821,F841,E501
-```
+## Runtime and contract ownership
 
-- Run Black normally across all relevant paths. If sandbox restrictions prevent
-  Black from completing, run the same command outside the sandbox:
+- Linux, one user strategy module and one `RuntimeContext` per process are the
+  supported live lifecycle. Process registries such as `Streamer.instances`
+  are not reset for same-process application reuse.
+- `LiveRuntime` builds services and installs a ready, passive RuntimeContext
+  before importing the strategy. Runtime does not inspect module data.
+  `run_started_at` stays fixed; `workload_generation` increments before each
+  supervised workload. These do not replace generic startup data.
+- Contract blueprints are registered at component construction. Runtime
+  initializes Contract details/selectors before Controller reconciliation;
+  streamers start afterward. Rebuild selectors using one naive UTC timestamp
+  per workload; supervised daily restarts refresh ACTIVE/NEXT roles.
+- `Atom.contract` resolves `which_contract`; `contract_blueprint` returns a
+  copy of the declaration. Accessing `contract_selector` raises until both
+  Contract registration and selector initialization are available.
+- Registry identity is derived from the snapshotted user Contract declaration;
+  qualified members map explicitly to that blueprint. Overlapping qualification
+  results from different declarations must fail atomically, never be guessed
+  from symbol fields.
+- ACTIVE is the market-data/roll reference, NEXT an early-entry candidate.
+  `which_contract` does not redefine ACTIVE. Full-chain membership is public;
+  explicit `nth_contract(n)` raises out of range, while NEXT retains its
+  intentional last-available fallback.
+- `ConnectionSupervisor` owns IB socket recovery for live and dataloader runs,
+  not gateway process management. Route restart requests through it. An outage
+  alone is not unsafe trading state; disable trading for failed recovery or
+  confirmed unreconciled order/position safety problems.
+- Timers for Controller sync and daily rolling are process-owned. Reconnects
+  must not duplicate them. LiveRuntime cancels workload-owned market-data
+  timeouts, never user-owned EventTimeout instances.
+- CLI owns logging setup/shutdown; each destination has its own queue/listener.
+  Messaging handlers are optional configuration, not runtime dependencies.
+- First SIGTERM requests graceful supervisor stop; a second may terminate
+  stuck cleanup. Keep shutdown changes narrow and drain critical queues with
+  bounded waits rather than introducing a broader lifecycle framework.
 
-```bash
-.venv/bin/python -m black --check --fast --target-version py312 <paths>
-```
+## Book, Controller and recovery safety
 
-# Project Notes
+- Haymaker owns every order/position in the connected account or subaccount.
+  `Book` owns typed accounting, recovery, fill idempotence, persistence and
+  optional blotter access. It performs neither broker calls nor Portfolio
+  calculations. Controller owns broker submission/cancellation, immediate
+  OrderInfo registration, rebinding, fills/commissions and reconciliation.
+- Persist complete Trade diagnostics and authoritative normalized
+  Fill/Execution evidence with actual IB orderId/clientId/permId. Rebind by
+  orderId with permId fallback; deduplicate normally by execId. Commission
+  updates must persist even with blotter output disabled; blotter is never
+  required to reconstruct accounting.
+- Physical collections are `orders`, `state`, `blotter`. State identities:
+  `position:{source_key}`, `target:{conId}`, `roll:{series_key}`,
+  `portfolio:{portfolio_key}`. Do not add snapshot/decision/lock collections
+  without an explicit design change.
+- Queue Book mutations through one ordered critical DRAIN queue: order evidence
+  precedes derived projections. Recover completed as well as active order
+  evidence. An explicit reset retains fills and persists concrete-target
+  cutoffs so old fills do not resurrect cleared direct exposure.
+- Reconcile aggregate logical quantity against broker net quantity per concrete
+  Contract, including opposing logical one-to-one positions. Use one successful
+  `reqPositionsAsync()` snapshot per pass. Cached/fresh disagreement retries
+  locally; timeout/unavailable requests use supervisor recovery.
+- Defer position corrections while attributed OPEN/CLOSE orders work. Applied
+  one-to-one corrections align both quantity and target to broker authority;
+  flattening clears episode recovery inputs but preserves the direction block.
+- After order/fill and position reconciliation, Controller invokes model-owned
+  initial-protection recovery before missing-bracket remediation. ExecutionModel
+  owns bracket calculations and needs complete evidence, not a new Signal or
+  commission callback. See component guidance for installation limits.
+- Target verification waits for OPEN/CLOSE/TARGET_ADJUSTMENT and pending roll
+  work, not standing STOP_LOSS/TAKE_PROFIT orders. Superseded checks are abandoned.
+- Explicit reset gives cancellations a bounded grace period, then liquidates
+  even if some cancellations are unconfirmed: getting flat is the priority.
+  Incomplete liquidation preserves Book recovery state and prevents trading
+  from being enabled.
 
-- This is an Interactive Brokers trading framework built around `ib_insync`,
-  event-driven runtime components, a historical dataloader, dataframe-first
-  research tools.
-- Live trading, controller sync, futures rolling, and order reconciliation are
-  high-risk areas. Keep changes especially narrow and well verified there.
-- Futures roll scheduling is app-lifetime behavior. Schedule the daily roll once
-  for the app process, not per supervisor connection/workload cycle; reconnects
-  and workload restarts must not create additional roll timers.
-- Futures contract roles are intentionally distinct. A selector's `ACTIVE` is
-  the current market-data and roll-reference contract, while `NEXT` is an
-  early entry candidate used by SignalModels to avoid opening
-  positions close to a roll. `Atom.which_contract` selects the role exposed by
-  that atom; it does not redefine which contract is ACTIVE. OPEN uses the
-  signal-selected contract, CLOSE uses Book's persisted held contract, and
-  REVERSE completely closes the old episode before opening the incoming
-  Contract. Book keeps held and pending-target Contracts and bracket inputs
-  separate; PortfolioWrapper never resolves the held Contract. Recovery derives
-  continuation from persisted state rather than a transient filled callback.
-  `FutureRoller` defaults to rolling only selector `past_contracts` into ACTIVE,
-  retaining NEXT and all later eligible expiries. Custom FutureRollPolicy
-  instances select triggers and destinations; stable occurrence labels prevent
-  repeated fixed-schedule rolls after recovery. ContractRegistry maps qualified expiry
-  `conId` values to their registered blueprint series; rolling never guesses
-  identity from symbol fields. A NEXT-only
-  change does not require market-data back-adjustment. Selectors are rebuilt on
-  each supervised workload start using one timezone-naive UTC timestamp, and
-  live operation relies on the IB-driven daily workload restarts to refresh
-  these roles. Signal audit generations use ACTIVE `localSymbol` plus the
-  process `run_started_at`; a NEXT-only change does not rotate audit history.
-  `Atom.contract_selector` is a required runtime-backed property: access raises
-  until the Atom has a Contract and the registry has initialized its selector.
-  `Atom.contract_blueprint` returns a copy of the registered declaration.
-  Registry lookup accepts qualified members and covers the full chain. Distinct
-  declarations with overlapping qualified conIds fail rather than creating
-  ambiguous identity. Explicit nth selection raises when unavailable; NEXT
-  alone retains its intentional last-available fallback.
-- IB/TWS connection outages, especially around a broker's daily restart period,
-  are expected and should normally be recoverable. Do not treat a connection
-  outage alone as an unsafe broker/local state; emergency trading disablement
-  should be reserved for failed recovery, unreconciled state, or confirmed
-  order/position safety issues.
-- `haymaker.supervisor.ConnectionSupervisor` owns IB socket recovery for live
-  trading and dataloader runs. It does not manage or restart the gateway
-  process. Route new restart triggers through its `request_restart()` method.
-  Broker messages are categorized as restart requests, broker-wait signals, or
-  recovery hints: broker-wait signals move the supervisor into broker recovery
-  wait while connected, `timeoutEvent` and probes remain active health checks,
-  and `updateEvent` or `1102` may probe recovery while already waiting.
-  The dataloader has no connection modes: `DataloaderRuntime` creates its own
-  `IB` object and always runs through the shared application and supervisor;
-  see `haymaker/dataloader/AGENTS.md`.
-- Controller sync treats a successful `reqPositionsAsync()` result as the
-  authoritative broker-position snapshot for that pass. Cached/fresh
-  disagreement retries locally; request timeout or failure requests
-  supervisor-owned recovery. Position correction is deferred while attributed
-  OPEN/CLOSE work remains active. An applied one-to-one correction aligns the
-  persisted target to the corrected quantity, clears a flattened episode's
-  recovery inputs, and preserves its direction block.
-- Graceful shutdown is not currently a broad architecture priority. Terminal
-  `Ctrl-C` has historically been acceptable. Before service-manager deployment,
-  prefer minimal signal hardening for `SIGINT`/`SIGTERM`: request supervisor stop,
-  allow normal runtime cleanup to unwind, and drain critical async save queues
-  with a short timeout. Do not introduce a broad shutdown framework unless a
-  concrete cleanup need is identified.
-- Linux is the supported runtime OS. The shared `App` handles the first
-  `SIGTERM` as a graceful supervisor stop and restores default signal handling
-  so a second `SIGTERM` can terminate stuck cleanup.
-- The supported live execution model is one user strategy and one
-  `RuntimeContext` per process. Process-global registries such as
-  `Streamer.instances` are not reset for same-process application reuse.
-- `LiveRuntime` assembles live services and installs a ready, passive
-  `RuntimeContext` before the CLI imports the strategy module. SignalModels
-  register their Contract blueprints while they are constructed but do not own
-  futures-roll policy. User SignalModels return
-  `SignalCalculation(value, metadata, as_of)` while the base supplies source,
-  resolved Contract, SignalType, and `created_at`. Observation `as_of` remains
-  distinct because IB bars are left-labelled. Strategy composition may use the
-  context's narrow `FrameStoreProvider` to build fully configured persistence
-  dependencies. `PandasSignalModel(persistence=True)` is the narrow exception:
-  it resolves one model-owned default persistence object from a runtime factory.
-  The runtime still does not inspect imported module data.
-- `EventTimeout` is a general user-owned event inactivity monitor; supervised
-  workload restarts never cancel it. Positive intervals must be constructed
-  on the running event loop, and owners must call `cancel()` when their own
-  lifetime ends. `MarketDataTimeout.from_atom()` adds Contract-session and
-  supervisor behavior and must be created from `onStart()` or later, after
-  details and the restart callback are available. `LiveRuntime` cancels all
-  market-data timeouts when each supervised workload stops. Runtime defaults
-  live in `haymaker.config.TimeoutPolicy`, not in the public components
-  package.
-- `HistoricalDataStreamer` initial `reqHistoricalDataAsync()` requests
-  intentionally use `timeout=0`. Legitimate large backfills may take many
-  minutes, so elapsed time alone must not cancel the request or trigger a
-  restart. Keep post-initialization stale-update monitoring separate. Prefer
-  non-cancelling elapsed-time logging for diagnostics, and add a configurable
-  hard limit only if there is evidence of requests hanging while the broker
-  connection remains healthy.
-- CLI entrypoints own logging setup and shutdown. Every configured destination
-  handler runs behind its own queue/listener thread; messenger handlers such as
-  Telegram are optional YAML configuration, not runtime dependencies.
-- Queue shutdown uses one policy: `DRAIN` is critical and propagates processing
-  failures or drain timeouts, while `DISCARD` is best effort and logs failures.
-  Book mutations and default Signal frame persistence queues drain. Async
-  Arctic queued sinks otherwise default to `DISCARD`.
-  Awaited `AsyncDataStore` mutations finish an already-started database call
-  before propagating cancellation. The dataloader uses only this awaited
-  contract and completes each response's persistence and in-memory state
-  transition before a supervised restart can resume the job.
-- `AsyncDataStore` methods are all awaited; successful mutation return means
-  backend completion. Queue-only persistence uses the separate `QueuedDataSink`
-  contract and explicit `enqueue_*` methods, whose return means queue acceptance.
-- Datastore symbol naming is supplied when a store is constructed and is not
-  replaced afterward. Framework-provided naming policies are frozen, consumers
-  treat injected stores as fully configured, and each persisted
-  `PandasSignalModel` owns its `SignalFramePersistence` state rather than
-  sharing generations.
-- Strategy module composition may build custom stores through
-  `RuntimeContext.frame_store_provider` and inject them into both market-data
-  components. Otherwise, `FuturesPandasAggregator()` and
-  `HistoricalDataStreamer(datastore=True)` resolve the same runtime-cached
-  market-data store by bar size, data type, and RTH policy; custom stores
-  bypass that default and `False` disables only the streamer's lookup.
-  `PandasSignalModel.persistence` supports
-  `False`, runtime-default `True`, or a custom non-blocking
-  `SignalFramePersistence`; persistence enqueue failure never suppresses Signal
-  emission.
-- CLI entrypoints load framework configuration once. Live and dataloader
-  configuration stay grouped by owning target where practical until that target
-  constructs itself from its mapping. Controller one-run actions belong under
-  `controller.startup`. Logging and dataloader `download` remain user-facing
-  subsystem groups composed across closely related objects. Live storage contains
-  only `base_directory`, `mongodb.client`, and `mongodb.database`; dataloader
-  storage contains only `base_directory` and `mongodb.client`. Custom dataframe
-  library names belong to strategy composition. Runtime defaults are configured
-  under `market_data_store.library` for broker bars and
-  `signal_persistence.library` for Signal calculations; save frequency belongs
-  to its consumer.
-  Bundled base profiles must enumerate supported settings, pin effective
-  command defaults, and keep a concise inline comment after every setting.
-  Environment variables may select a profile YAML file but must not directly
-  override individual settings. Strategy parameters remain user-module Python
-  data. Do not change real local `.env` files or credential files.
-- `Atom` remains an arbitrary-message composition primitive. It never mutates
-  startup/data payloads automatically, base `onData` raises, connection
-  validation for required upstream capabilities occurs before wiring, message
-  envelopes are validated in `onData`, and fan-out shares one object reference.
-  Do not add `input_type` or `output_type` message declarations.
-  Dataclass-based Atoms use `@dataclass(eq=False)` at every decorated
-  inheritance level so graph nodes retain identity equality. Built-in trading
-  components live only under `haymaker.components`; routing, execution models,
-  and bracket execution are grouped under `haymaker.components.execution` and
-  re-exported by the root components package.
-- Built-in messages are frozen `Signal -> PositionProposal -> PositionTarget`
-  envelopes. Signal values are finite scalars or `SignalPair(entry, exit)`.
-  PositionTarget requires a concrete non-zero `conId` and its quantity is always
-  an absolute setpoint. Direct targets address their exact concrete conId and
-  omit source_key/intent; one-to-one targets identify their episode by source_key. Signal,
-  PositionProposal, and PositionTarget are intentionally unhashable; Contracts
-  and nested metadata remain shared mutable
-  objects. `PositionIntent` is mandatory only on the one-to-one
-  PortfolioWrapper/BracketExecutionModel path, where PortfolioWrapper transfers
-  it to the target as an initial assertion.
-- Reuse `haymaker.validators` for primitive normalization of aware datetimes,
-  finite numbers, copied read-only mappings, non-empty strings, and IB
-  Contracts. Keep domain-specific checks with their owning component.
-- `Book` owns typed position/target/order/roll recovery, Fill-derived direct
-  physical attribution, fill idempotence, the critical ordered persistence
-  queue, and blotter access. Explicit reset retains order/Fill evidence and
-  persists a per-target cutoff used when rebuilding direct exposure. Controller
-  owns broker calls, reconciliation, submission, rebinding, and fill/commission
-  event handling. Do not move Portfolio calculations or broker calls into Book.
-- Direct Portfolio consumes Signals and allocates among concrete Contracts.
-  Each target is the absolute setpoint for its conId; source allocations belong
-  to Portfolio, not to broker Fill attribution. Multiple expiries may coexist.
-  The one-to-one path uses a signal processor, `PortfolioWrapper`, and
-  `PositionAllocator`. Execution models have stable unique configured names;
-  preserving a name across deployments promises recovery-compatible behavior.
-  PortfolioStateMixin optionally exposes explicit load_state/save_state under
-  portfolio_key, defaulting to Book; independent persistence is permitted.
-  Execution targetReachedEvent forwards completion via Atom feedback, including
-  through Router. It follows fill accounting, carries persisted target fields,
-  and may repeat after recovery. Custom Portfolio feedback must be idempotent.
-  Current Router rules always select the model. At startup, every active direct
-  `TARGET_ADJUSTMENT` must still select its persisted owner; disagreement,
-  missing recovery state, or ambiguous ownership blocks that Router locally
-  without cancelling orders or disabling Controller trading. One-to-one and
-  non-adjustment orders do not participate. Held quantity or an idle latest
-  target does not pin an old model: current rules take ownership, and all idle
-  direct targets must be routable before any reassignment is applied. Final
-  process close warns if active adjustments remain so routing or model changes
-  can be deferred until they finish.
-- One-to-one scalar processors accept only `-1/0/1` and make opposing CLOSE
-  versus REVERSE policy explicit. Paired processors use SignalPair entry while
-  flat and exit while positioned. Protective STOP_LOSS and TAKE_PROFIT fills
-  set a direction block only when they flatten the episode; the first actual
-  fill of a permitted opposite OPEN clears it. CLOSE and ROLL preserve it.
-- Bracket-managed positions require critical stop-loss protection; take-profit
-  orders are optional and their absence is not a sync failure. Regular closes
-  join the active protective orders' OCA group so IB cancels the remaining
-  exits only after one exit fills.
-  Runtime initializes Contract details before Controller reconciliation.
-  After order/fill and position recovery, Controller calls registered model-owned
-  initial-protection hooks before missing-bracket remediation. Bracket models
-  share live/recovery installation using held episode inputs and normalized
-  quantity-weighted entry executions. Never require a new Signal or commission
-  report. Existing stop evidence prevents reinstallation; do not reconstruct a
-  previously active trailing stop from the original entry price. A surviving
-  take-profit supplies its OCA identity. Partial entries, active closes and
-  rolls retain their own sequencing; incomplete recovery evidence fails closed.
-- Target execution models register exactly one process-wide mode-specific
-  `FutureRollExecutor` family. Controller owns the single daily schedule,
-  stale-holding discovery, and startup recovery coordination; direct or bracket
-  executors own durable sequencing. Modes cannot be mixed. Direct rolls wait
-  for endpoint adjustments and persist an idempotent
-  target transfer: old target zero, destination target plus old target; newer
-  explicit targets supersede that snapshot. Bracket rolls preserve
-  `source_key`/`position_id`, roll broker-net exposure, and require an active
-  replacement stop before completion; take-profit replacement is optional.
-  `BracketExecutionModel` enables automatic rolling by default and
-  `auto_roll_futures=False` is the explicit per-source opt-out. Preserve mode and
-  executor name while persisted roll work is incomplete.
-  Before bracket roll submission, wait for all unprocessed source OPEN/CLOSE
-  orders and refresh episode quantities after accounting settles. Skip sources
-  that became flat, retain their completion attribution, and preserve offsets
-  from already processed sources. Changed episode identity or an impossible
-  remaining physical allocation blocks before further broker work.
-- Explicit account reset gives pre-existing order cancellations a bounded grace
-  period, then submits liquidation orders even when some cancellations remain
-  unconfirmed because flattening is the priority. An incomplete liquidation
-  leaves Book recovery state intact and prevents startup from enabling trading.
-- Use `tests/runtime_helpers.py` and the `atom_runtime` /
-  `atom_runtime_factory` fixtures for tests that need `Atom` runtime services.
-  Install custom `ib`, Book, contract registry, controller, restart
-  callbacks, frame-store provider, and contract details through those fixtures
-  instead of scattering ad hoc runtime monkeypatches.
-- See `docs/codebase-map.md` for the current repository map.
+## Storage and configuration
 
-Dashboard is experimental and should not be looked at.
+- `AsyncDataStore` operations are awaited; successful mutation return means
+  backend completion. `QueuedDataSink.enqueue_*` means queue acceptance only.
+  Awaited mutations finish an already-started database call before propagating
+  cancellation.
+- DRAIN is critical: failures/drain timeouts propagate. DISCARD is best effort.
+  Book and default Signal dataframe persistence drain; other queued Arctic
+  sinks default to DISCARD. The dataloader uses awaited storage and completes
+  persistence and in-memory transitions before resuming after a restart.
+- Injected stores are fully configured. Naming is chosen at construction and
+  is not replaced afterward. `RuntimeContext.frame_store_provider` supports
+  custom strategy-owned stores; default component choices are documented in
+  the components guide.
+- CLI loads configuration once; owning subsystems construct themselves from
+  their mappings. Controller one-run actions live under `controller.startup`;
+  logging and dataloader `download` remain subsystem groups.
+- Live storage has `base_directory`, `mongodb.client`, `mongodb.database`;
+  dataloader storage has only the first two. Default libraries belong under
+  `market_data_store.library` and `signal_persistence.library`; custom libraries
+  belong to strategy composition, save frequency to the consumer.
+- Bundled profiles enumerate supported settings, pin effective defaults and
+  include concise inline comments. Environment variables select profile files,
+  not individual setting overrides. Strategy parameters stay in user Python.
+
+## Conversion safety
+
+`scripts/migrate_components_state.py` is standalone, dry-run by default, and
+writes only with explicit `--apply` and distinct source/fresh target database
+names. Preserve complete evidence, IB identifiers, source/episode attribution,
+honest timestamps and deterministic provenance. Refuse ambiguous allocations,
+foreign/mixed target data and incompatible in-flight rolls. Test conversion
+with fakes only; never run a real migration during code work.

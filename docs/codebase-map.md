@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-08-12.
+Last updated: 2026-09-10.
 
 ## High-Level Purpose
 
@@ -596,17 +596,22 @@ dataloader contracts.csv -f settings.yaml
 
 ## AGENTS.md Notes
 
-The repo-root `AGENTS.md` contains the project-wide development rules. Scoped
-guidance lives in `haymaker/components/AGENTS.md` for public trading contracts,
-in `haymaker/dataloader/AGENTS.md` for historical request,
-persistence, schema, and validation invariants and in
-`haymaker/research/AGENTS.md` for timing-sensitive research code.
-The root guidance records the standard focused checks, warns against importing
-`haymaker.app` in focused tests, and identifies
-`haymaker.supervisor.ConnectionSupervisor` as the owner of IB socket recovery.
-It also records the timeout/probe-first recovery rule and points runtime work
-away from treating every broker message as a direct restart trigger. During
-broker-degraded waits, `updateEvent` and `1102` are only hints to probe
-recovery; failed probes should not reset the recovery grace timer.
+Agent guidance records current contracts, not design proposals or checkpoint
+history. Keep common ownership and safety rules at project level and detailed
+extension rules in the owning package:
+
+- [Project guidance](../AGENTS.md): workflow, validation, Atom/runtime, contract
+  identity, Book/Controller accounting, storage and conversion safety.
+- [Components guidance](../haymaker/components/AGENTS.md): strategy composition,
+  message contracts, Portfolio policy, execution/rolling, persistence and tests.
+  Read this for user strategy work as well as changes inside the package.
+- [Supervisor guidance](../haymaker/supervisor/AGENTS.md): connection lifecycle
+  and broker-recovery policy.
+- [Dataloader guidance](../haymaker/dataloader/AGENTS.md): historical requests,
+  persistence and resume invariants.
+- [Research guidance](../haymaker/research/AGENTS.md): dataframe timing semantics.
+
+User-facing API explanations and examples remain in `docs/source`; agent
+guidance links to those guides rather than duplicating their tutorials.
 
 Dashboard is experimental and should not be looked at.

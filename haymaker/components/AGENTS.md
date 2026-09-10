@@ -1,282 +1,215 @@
-# Components package guidance
+# Components: strategy composition and extension
 
-`haymaker.components` is the discoverable public toolbox for user-composed
-trading pipelines. Keep `Atom`, `Pipe`, `Controller`, `Book`, runtime services,
-persistence infrastructure, contract selection, and broker infrastructure
-outside this package. Every public leaf module owns an explicit module-level
-`__all__`. A public subpackage may aggregate those declarations, and each
-package initializer builds its `__all__` from the ordered set of registered
-leaf modules. A leaf module's `__all__` therefore means both public within that
-module and promoted to the root toolbox; keep submodule-only and private
-helpers out. Export names must be unique across the complete toolbox.
+Read the root `AGENTS.md` for workflow, Atom/runtime contracts, accounting and
+safety rules. This file owns component-specific guidance. Usage examples and
+full APIs are in [the execution guide](../../docs/source/execution.rst);
+custom storage configuration is in [the storage guide](../../docs/source/storage.rst).
 
-## Message boundaries
+## Package and public API
 
-- `Signal` is a frozen, keyword-only input with a stable `source_key`, Contract,
-  finite scalar or `SignalPair(entry, exit)` value, mandatory `SignalType`,
-  aware timestamps, and copied read-only top-level metadata. `STATE` replaces a
-  source's prior desired state; each `EVENT` is a new event and an EVENT zero
-  is normally ignored by one-to-one processors.
-- `PositionProposal` is the frozen one-to-one boundary. It preserves the
-  original Signal, adds direction `-1`, `0`, or `1`, and always has
-  `PositionIntent.OPEN`, `CLOSE`, or `REVERSE`.
-- `PositionTarget` is a frozen absolute signed setpoint for a concrete Contract
-  with non-zero `conId`. It never carries a captured current quantity or
-  proposed delta. Its numeric target remains authoritative after acceptance.
-  Direct targets address a concrete conId and omit source_key/intent;
-  one-to-one targets address a managed source episode.
-- `PositionIntent` is optional on general targets. It is mandatory only at the
-  `PortfolioWrapper -> BracketExecutionModel` boundary and is an initial
-  lifecycle assertion, not a lasting execution command.
+- Built-in components belong here; Atom/Pipe, Runtime, Book, Controller, Trader,
+  storage and contract management stay outside. Execution models, routing,
+  bracket legs and roll executors belong in `execution/`.
+- Each public leaf module owns `__all__`. Package initializers aggregate those
+  lists; each leaf export is promoted to the public toolbox. Names must be
+  unique across modules. Do not maintain duplicate hand-written export lists.
+- Keep `aggregators.py` (IB bar transformations) separate from
+  `dataframe_aggregators.py` (pandas history, persistence and transformations).
+  The latter is public, not an implementation detail.
+- Preserve arbitrary-message Atom composition and identity equality. No
+  compatibility layers, graph message declarations or automatic emission checks.
 
-Signal, PositionProposal, and PositionTarget are intentionally unhashable.
-Freezing prevents field reassignment, not mutation of contained objects.
-Metadata is only shallowly protected and Contracts remain shared, so a branch
-that mutates either must copy explicitly.
-
-## Supported flows
-
-The dedicated one-to-one flow is:
+## Choose the strategy path
 
 ```text
-SignalModel -> one-to-one processor -> PositionProposal
-    -> PortfolioWrapper(PositionAllocator) -> PositionTarget
-    -> BracketExecutionModel -> Controller
+One-to-one:
+SignalModel -> signal processor -> PositionProposal
+  -> PortfolioWrapper(PositionAllocator) -> PositionTarget
+  -> BracketExecutionModel -> Controller
+
+Direct:
+SignalModel paths -> Portfolio -> PositionTarget(s)
+  -> ExecutionRouter (optional) -> SerialTargetExecutionModel -> Controller
 ```
 
-The account-wide flow is:
+A process uses one-to-one or direct execution, not both. Do not make the wrapper
+a shared Portfolio or make execution models own direct allocation policy.
 
-```text
-multiple SignalModels -> Portfolio -> PositionTarget(s)
-    -> ExecutionRouter (optional) -> SerialTargetExecutionModel -> Controller
-```
+## Messages and signal production
 
-`PortfolioWrapper` calls `PositionAllocator.target_for()`, supplies proposal
-intent on the returned target, and emits at most one target. Allocators own
-quantity calculation and preserve Contract, source, and metadata. Direct
-`Portfolio` implementations own source state, synchronization,
-`as_of`, duplicate/late input, timeout, and recomputation policies. Every direct
-output addresses an exact Contract. Portfolio owns allocations among concrete
-expiries; SerialTargetExecutionModel must not substitute another held Contract. Do not put
-those policies in the abstract base.
+- `Signal` carries stable `source_key`, Contract, scalar value or
+  `SignalPair(entry, exit)`, SignalType, timestamps and metadata.
+  STATE replaces desired state; EVENT is a new occurrence, including repetition.
+  Raw Signals never carry PositionIntent.
+- `PositionProposal` preserves the original Signal, adds direction -1/0/1, and
+  requires OPEN/CLOSE/REVERSE intent.
+- `PositionTarget` is an absolute signed setpoint, never a captured current
+  quantity or delta. It requires a concrete non-zero conId. Direct targets omit
+  source_key/intent; one-to-one targets identify a source episode and require
+  intent at acceptance. Numeric target remains authoritative afterward.
+- Messages are frozen, keyword-only, intentionally unhashable and validate
+  finite values/aware timestamps. Metadata is copied/read-only only at the top
+  level; Contracts and nested values remain mutable/shared.
+- `as_of` labels the observation; `created_at` is local creation time. Keep
+  both: IB bars are left-labelled. Do not reinterpret a bar label as its close.
+- Custom SignalModels implement `calculate_signal(data)` and return
+  `SignalCalculation(value, metadata, as_of)`; the framework builds the envelope.
+  Override `validate_signal_value` for additional domain checks.
+- `select_signal_contract()` defaults to `self.contract`. It may choose a
+  qualified chain member or `contract_blueprint` for a custom direct Portfolio.
+  One-to-one allocation needs a concrete opening Contract. SignalModels do not
+  own futures-roll policy.
+- Pandas models implement `df(data)`; its last row is authoritative. User code
+  owns ordering, duplicate rows and calculation correctness. `signal_fields`
+  accepts a field name or an (entry, exit) tuple. `metadata_fields=None` selects
+  non-signal fields, an empty collection none, an explicit collection selected
+  fields. Override `row_to_calculation(row)`, not envelope construction.
 
-Portfolio `positions_for_blueprint` queries filled concrete holdings using
-registry membership, not desired source allocations. PortfolioStateMixin is
-opt-in and supplies explicit load_state/save_state with a portfolio_key;
-independent storage can override these methods. Execution targetReachedEvent
-also travels upstream as normal Atom feedback, forwarded by Router. Completion
-follows Book accounting and may repeat after restart; user policy must be
-idempotent and must not depend on replay of an old callback or target metadata.
+## One-to-one processing and allocation
 
-## Market-data aggregation
+- Processors query `Book.effective_quantity(source_key)`, including working
+  orders, and suppress inputs requiring no action. STATE zero requests flat;
+  EVENT zero is ignored.
+- `BinarySignalProcessor` accepts only -1/0/1. OpposingSignalPolicy.CLOSE closes
+  first; REVERSE requests reversal. `BinaryEntryExitSignalProcessor` accepts
+  SignalPair, uses entry while flat and exit while positioned, and never
+  directly reverses. Preserve the full transition matrices and paired input.
+- Lock-aware behavior is opt-in. A STOP_LOSS or TAKE_PROFIT fill that flattens
+  the episode blocks re-entry in that direction. The first actual fill of a
+  permitted opposite OPEN clears it; CLOSE and ROLL preserve it.
+- Allocators implement `target_for(proposal) -> PositionTarget | None`, preserving
+  source, Contract and metadata. FixedSizeAllocator accepts a positive size,
+  source-keyed mapping or callable; missing mappings raise. Use None, not a zero
+  OPEN allocation, to suppress a proposal.
+- PortfolioWrapper transfers mandatory proposal intent and emits at most one
+  target. It never selects the held Contract or orchestrates closes/reversals.
 
-Keep the two public aggregation families distinct. `aggregators.py` operates
-on `ib_insync` bar objects through `BarAggregator` and its count, volume, tick,
-time, and pass-through filters. `dataframe_aggregators.py` maintains complete
-pandas DataFrames through `FuturesPandasAggregator` and contains
-DataFrame-native transformations such as `VolumeGrouper`.
+## Direct Portfolio policy
 
-`FuturesPandasAggregator` is the futures-only persistence companion to
-`HistoricalDataStreamer`. Its default datastore and
-`HistoricalDataStreamer(datastore=True)` resolve the same runtime-cached store
-for bar size, data type, and RTH policy. Supplying the same custom awaited
-datastore to both bypasses the runtime default. The aggregator restores and
-saves complete history; the streamer consults the persisted endpoint to
-shorten its next IB request. `False` is valid only for the streamer;
-FuturesPandasAggregator requires stored history.
-Do not collapse the DataFrame components into `aggregators.py` or treat their
-public module as an implementation detail.
+- Construct/share a Portfolio instance explicitly; it is not a singleton.
+  Implement `process(signal)` yielding zero or more concrete targets. One input
+  may change several Contracts.
+- `sources=None` permits dynamic membership with no completeness policy. An
+  explicit collection rejects unknown sources; use a collection, not a bare str.
+  Concrete Portfolios own input state, supported SignalTypes, EVENT accumulation,
+  synchronization, `as_of`, duplicate/late inputs and recomputation policy.
+- Portfolio chooses source allocations and concrete Contracts, including which
+  held expiries to reduce. Execution must not substitute a different expiry.
+  `positions_for_blueprint` queries filled holdings via registry membership;
+  it does not reconstruct desired per-source allocations from broker net fills.
+- Optional `PortfolioStateMixin` exposes explicit `load_state/save_state` under
+  `portfolio_key`, defaulting to Book. Persist normalized recovery mappings,
+  not raw Signals. Custom backends are allowed but own their lifecycle and
+  have no transaction spanning their state and execution targets.
+- `targetReachedEvent` follows Book accounting and forwards through Atom
+  feedback/Router. It contains persisted target fields, not arbitrary metadata,
+  and may repeat after recovery. Roll completion events are likewise not a
+  durable queue: custom policies reconcile Book and handle callbacks idempotently.
 
-SignalModels are identity-based dataclasses used by both flows. They own
-`source_key`, the Signal Contract, SignalType, `created_at`, and standard
-emission, but do not own futures-roll policy. User implementations return only
-`SignalCalculation(value, metadata, as_of)`; do not make them reconstruct or
-override the framework-owned Signal envelope.
-`select_signal_contract()` is the narrow Contract-selection hook: default
-`self.contract`, or another qualified chain member, or `contract_blueprint` for
-a custom direct Portfolio. A blueprint Signal is not accepted by one-to-one
-allocation, which requires a concrete opening Contract. `as_of` is the
-observation label and remains distinct from local creation time, notably for IB's left-labelled
-bars. PandasSignalModel treats the last row returned by `df()` as authoritative;
-user calculations own ordering, duplicates, and correctness. Its
-`metadata_fields` distinguishes all non-signal fields (`None`), no fields (an
-empty collection), and an explicit selection. Custom row conversion returns a
-SignalCalculation by overriding `row_to_calculation(row)`.
+## Execution, routing and brackets
 
-`PandasSignalModel.persistence` is its only persistence option. `False`
-disables it, `True` resolves a new model-owned default from RuntimeContext, and
-a `SignalFramePersistence` object supplies custom non-blocking behavior.
-Persistence queue acceptance precedes Signal emission so an accepted lookup
-reference can be attached, but enqueue failure is logged and never suppresses
-the Signal. Calling `create_signal()` directly has no persistence side effect.
+- Stateful models validate before saving/submitting, retain the newest target
+  for their identity, and derive work from Book rather than replaying intent.
+  Rebind callbacks to current live Trades during recovery.
+- Stable model names promise recovery-compatible implementation/configuration.
+  Router rules are fixed, ordered, first-match; no default means fail closed.
+  The same model instance may serve several rules and the default, but distinct
+  instances must have distinct names. Start models once per workload generation.
+- Current rules, not persisted affinity, select models. Active direct
+  TARGET_ADJUSTMENT orders must still select their persisted owner. A mismatch,
+  missing state, ambiguity or unroutable recovery blocks that Router locally;
+  it does not cancel orders or disable Controller globally.
+- Idle targets/holdings do not pin a model. Resolve every idle reassignment
+  before applying any. Recovery predicates must work from Contract, quantity
+  and creation time; metadata-based recovery routing is unsupported.
+- SerialTargetExecutionModel permits one active adjustment per concrete conId,
+  supports same-side resizing and independently converges multiple expiries.
+- BracketExecutionModel owns one source episode: OPEN uses the incoming
+  Contract; CLOSE uses Book's held/pending-entry Contract; REVERSE closes that
+  episode completely before opening the incoming Contract under a new
+  position_id. Hold `contract/bracket_inputs` separately from pending
+  `target_contract/target_bracket_inputs`; target acceptance cannot overwrite
+  a holding. Reject non-zero same-side resizing.
+- Attach protection only after complete entry filling. Stop-loss is critical;
+  take-profit is optional. Regular closes join the protective orders' OCA group
+  so IB cancels the other exits when one fills.
+- Live completion and offline initial recovery share `ensure_entry_brackets`.
+  Use the exact episode's saved inputs and normalized weighted entry price, not
+  new target inputs or broker net cost. Controller calls recovery after
+  reconciliation, before missing-bracket remediation, with Contract ticks ready.
+- Existing stop evidence, including terminal history, prevents automatic
+  reinstallation. A surviving take-profit lends its OCA group/type; a missing
+  optional take-profit alone is not repaired. Partial entries, active exits and
+  rolls keep their own sequencing. Missing evidence or failed required initial
+  stop installation fails explicitly.
+- Previously active/cancelled/rejected stops are not reconstructed from entry
+  price; broker-maintained trailing state may be lost. Remaining missing-stop
+  handling follows `controller.missing_brackets` (ignore/warn/remove, default
+  ignore). Do not imply all missing protection automatically disables trading.
+- Order options follow built-in fallback < global defaults < model constructor.
+  StandardOrderRole values are conventions; custom strings remain valid.
 
-`BinarySignalProcessor` accepts only scalar `-1/0/1` values and exposes
-`OpposingSignalPolicy.CLOSE` or `REVERSE`. `BinaryEntryExitSignalProcessor`
-accepts only SignalPair, uses entry while flat and exit while positioned, and
-never reverses directly. Both may opt into blocked-direction checks. A complete
-STOP_LOSS or TAKE_PROFIT fill that flattens the episode sets the block; the
-first actual fill of a permitted opposite OPEN clears it. CLOSE and ROLL do not
-change it.
+## Futures rolling
 
-## Event timeouts
+- Controller owns the single process-lifetime timer, discovery and recovery
+  coordination. One configured FutureRollExecutor family owns durable
+  sequencing; direct and bracket families cannot mix. Preserve mode/executor
+  name while a roll is incomplete.
+- Default PastToActiveRollPolicy rolls only selector `past_contracts` into ACTIVE,
+  retaining NEXT and later eligible expiries. Custom FutureRollPolicy selects
+  triggers and same-series destinations from a date-refreshed selector.
+  Stable RollDecision occurrence labels prevent repeated fixed-schedule rolls.
+  Custom schedulers may call `controller.future_roller.roll()`.
+- Bracket models default to `auto_roll_futures=True`; False is the per-source
+  opt-out. SignalModels do not declare this policy.
+- Direct rolls wait for endpoint adjustments and save repeat-safe target
+  transfers: old target zero, destination target plus old target. Newer explicit
+  targets take precedence; serial convergence resumes after completion.
+- Bracket rolls preserve source/position_id and move broker-net exposure.
+  Refresh all unprocessed episode quantities/identities after OPEN/CLOSE work
+  and accounting settle. Skip flattened sources without losing completed logical
+  offsets. Block replaced episodes or impossible net allocations before trading.
+- After movement, replace protection; the new critical stop must be active
+  before roll completion, while take-profit replacement is optional.
 
-`EventTimeout` is the general callback-based inactivity monitor for any
-`eventkit.Event`. It is user-owned, independent of Atom and supervisor
-lifecycle, fires once per stale episode, and rearms only after the source emits
-again. A positive interval must be armed on a running asyncio loop. The owner
-calls `cancel()`; ending the source event also cancels it.
+## Market data, persistence and timeouts
 
-`MarketDataTimeout` inherits the generic mechanism and adds Contract trading
-hours plus `haymaker.config.TimeoutPolicy`. The policy remains configuration,
-not a component export. Create `MarketDataTimeout` with `from_atom()` during
-`onStart()` or later, after contract qualification and supervisor binding.
-Closed markets pause until the next open and then start a full interval.
-Log-only timeouts rearm after fresh data. Restart-enabled timeouts request one
-workload rebuild and remain disarmed even when the request is rejected because
-another lifecycle transition is active. `LiveRuntime` alone cancels all
-market-data timeout instances when a workload stops; never include general
-`EventTimeout` instances in that registry.
+- FuturesPandasAggregator maintains/saves complete futures dataframe history;
+  HistoricalDataStreamer reads its saved endpoint to shorten backfills. They
+  share runtime-default market stores by bar size, data type and RTH policy.
+  Custom stores are fully configured injections. `datastore=False` disables
+  only streamer lookup; the aggregator requires storage.
+- Initial historical requests intentionally use `timeout=0`: a long backfill
+  alone is not grounds for cancellation/restart. Keep subsequent stale-update
+  monitoring separate.
+- `PandasSignalModel.persistence` accepts False (the default), True (runtime
+  storage defaults), or a custom non-blocking SignalFramePersistence. Each
+  model owns its persistence state. Queue acceptance precedes Signal emission
+  to attach a reference, but enqueue failure never suppresses the Signal.
+  Direct `create_signal()` calls do not save.
+- Audit symbols are `{source_key}_{ACTIVE.localSymbol}_{run_started_at}`.
+  ACTIVE, not transaction Contract/NEXT, determines generation. A successful
+  calculation under changed ACTIVE writes the full frame; later saves append
+  new rows. Failed calculation/adjustment creates no generation; previous
+  generations stay unchanged. Supervised restart continues the run; a new
+  process starts a new run. Use an ordered DRAIN sink.
+- Audit metadata records source, run start and ACTIVE Contract. Futures history
+  may be back-adjusted without downstream notification; append-only storage is
+  not a record of every historical revision.
+- EventTimeout is user-owned, rearms on new events and survives workload restart.
+  Positive intervals require a running loop; owners cancel at lifetime end.
+  MarketDataTimeout.from_atom is created in onStart or later; it adds sessions
+  and supervisor policy. Runtime cancels market-data monitors on workload stop.
+  Closed markets restart the deadline at next open; restart-triggered monitors
+  remain disarmed even if another transition caused the request to be rejected.
 
-## Atom and validation
+## Extension checks
 
-`Atom` accepts arbitrary messages. Base `onData` raises `NotImplementedError`;
-components must emit explicitly. `onStart(data, source)` receives and forwards
-arbitrary mutable startup data without reserving keys. Components do not
-declare `input_type` or `output_type`. Use `validate_source()` only for a
-concrete upstream capability required before values arrive, not for message
-envelopes; validate messages in `onData()`. `validate_source()` must return
-normally for a compatible source and raise for an incompatible source;
-returning a boolean has no effect. `connect()` validates every target before
-changing any connection. Fan-out passes one shared object reference.
-Dataclass-based Atoms use `@dataclass(eq=False)` at every decorated inheritance
-level so stateful graph nodes retain identity equality and object hashing.
-
-Prefer a real class, ABC, or minimal runtime protocol for structural checks.
-Validate conditional message values in `onData`; do not introduce graph-wide
-type inference, capability negotiation, or automatic emission checking.
-Reuse primitive normalizers from `haymaker.validators` for aware datetimes,
-finite numbers, read-only mapping copies, non-empty strings, and IB Contracts.
-Keep domain validation with the component that owns its meaning.
-
-## Execution and recovery
-
-Execution models consume absolute targets, retain only the newest target for
-their natural identity, and use Book state plus working orders to derive the
-next broker action. Every model has a stable unique configured `name`; persist
-and recover that name. Router rules are fixed, ordered, and first-match wins.
-Current rules always select the model. Before recovery, each active direct
-`TARGET_ADJUSTMENT` must still select its persisted owner. A mismatch, missing
-TargetState, ambiguous ownership, or unroutable target blocks that Router
-locally; it does not cancel the order or disable Controller trading. Other
-order roles, including one-to-one bracket work, do not participate. Without
-active adjustments, current rules own held quantity and recovered direct
-targets; startup requires every idle target to be routable before applying any
-reassignment and starting model recovery.
-Treat an unchanged model name as a promise that its implementation and
-configuration remain recovery-compatible. Recovery predicates must be
-deterministic from persisted TargetState fields.
-
-`SerialTargetExecutionModel` owns one active adjustment per concrete conId,
-supports same-side resizing, and allows independent targets in several
-expiries. Series grouping is Portfolio policy using registry membership.
-`BracketExecutionModel` owns one `source_key`, validates initial intent, rejects
-non-zero same-side resizing,
-uses the incoming Contract for OPEN, and uses Book's held or pending-entry
-Contract for CLOSE regardless of the incoming Contract. REVERSE fully closes
-the old episode before opening the incoming Contract. PositionState separates
-`contract`/`bracket_inputs` from `target_contract`/`target_bracket_inputs`.
-Acceptance never overwrites an existing holding. PortfolioWrapper only
-allocates and transfers intent; it does not resolve held Contracts. The model
-preserves `position_id` through an episode, and attaches brackets only after a
-complete entry fill. Its stop-loss is critical; take-profit is optional and a
-missing take-profit is not a sync failure. Regular closes share the active
-brackets' OCA group rather than cancelling protection before submitting the
-close. Execution components belong under `components/execution/`: keep the
-generic execution boundary and serial target model in `models.py`, routing and
-predicates in `router.py`, `BracketExecutionModel` together with its bracket-leg
-hierarchy in `brackets.py`, and mode-specific public roll executors in
-`future_roll.py`. Recovery must rebind callbacks to
-current live Trade objects and derive work from Book rather than replaying old
-intent.
-
-Initial protection recovery is model-owned, not Controller price calculation.
-Controller invokes the source-registered hook after order/position reconciliation
-and before missing-bracket remediation; Contract details are already initialized.
-Live entry callbacks defer until Fill accounting settles and share the same
-installation method. Use held bracket inputs and normalized entry executions,
-including weighted price; never use pending-target inputs or broker net cost.
-Existing stop evidence (including historical terminal stops) prevents automatic
-reinstallation. A surviving take-profit lends its OCA group and type; missing
-optional take-profit alone is not repaired. Complete evidence and exact episode
-identity are required. Keep partial entries, active exits and rolls separate.
-
-Target execution models register one process-wide `FutureRollExecutor` family.
-Direct and bracket modes are exclusive. Controller owns the app-lifetime
-schedule, stale-holding discovery, and recovery coordination; the executor owns
-durable order sequencing. Direct rolls persist absolute target-transfer snapshots; newer targets take
-precedence. Bracket
-rolls preserve `source_key`/`position_id` and do not complete before replacement
-stop protection is active. The bracket model registers automatic rolling for its
-source by default; `auto_roll_futures=False` is the explicit opt-out. Reject
-conflicting source policies, mode mixes, and incompatible executor names.
-SignalModels remain calculation components and must not own roll policy.
-
-Bracket roll plans refresh every unprocessed episode after all pending source
-OPEN/CLOSE work settles. A zero, non-trading RollParticipant records a source
-closed while waiting, so it receives completion without submitting a BAG or
-replacing protection. Rebuild net allocation with completed non-trading offsets;
-never reuse a stale quantity or discard an offset already applied logically.
-Reject changed non-flat episode identity or an unrepresentable remaining net.
-
-`roll_policies.py` owns FutureRollPolicy, RollDecision, and the default
-PastToActiveRollPolicy. Only selector past_contracts roll by default; all later
-eligible expiries remain held. Policies receive a date-refreshed selector and
-choose a same-series destination. Fixed schedules use stable occurrence labels;
-Book carries completion markers across series operations to prevent cascades.
-Controller's public roll() check may be called by a user-owned scheduler on the
-event loop, but reconnects must not duplicate process-lifetime timers.
-
-Book owns order/fill/state persistence and blotter queries. Controller alone
-submits/cancels broker orders, registers OrderInfo immediately, handles status,
-Fill and commission events, rebinds Trades, and reconciles aggregate Contract
-positions. Do not call the broker from Book or calculate Portfolio policy
-inside it.
-
-Synchronization consumes one successful fresh broker-position snapshot per
-pass. Cached/fresh disagreement retries without reconnecting, unavailable
-requests use supervisor recovery, and Contracts with active one-to-one
-OPEN/CLOSE work are deferred. Applied one-to-one corrections must align the
-persisted target with broker authority so recovery cannot replay a stale
-setpoint.
-
-Physical persistence is limited to `orders`, `state`, and `blotter`. State
-identities are `position:{source_key}`, `target:{conId}`,
-`roll:{series_key}`, and `portfolio:{portfolio_key}`. Orders use actual IB
-identifiers and preserve complete serialized Trade plus normalized
-Fill/Execution evidence. Fill evidence remains immutable across an explicit
-reset; Book persists a per-target cutoff so pre-reset direct Fills do not
-rebuild cleared exposure while later Fills remain authoritative. Fill
-application must stay idempotent by execution key and ordered before state
-projection writes.
-
-## Futures audit and testing
-
-PandasSignalModel audit symbols are
-`{source_key}_{ACTIVE.localSymbol}_{run_started_at}`. ACTIVE comes from the
-selector regardless of a transaction's Contract role; NEXT-only changes do not
-rotate history. A successful ACTIVE change writes a new complete generation,
-then only new rows append. Default persistence uses an ordered `DRAIN` sink; no
-failed calculation may create a generation. Saving uses the selector's ACTIVE
-Contract even when the emitted Signal uses `Atom.which_contract=NEXT`.
-
-Every public export needs a usage-focused Google-style, Sphinx-compatible
-docstring and focused pytest coverage. Tests must cover capability-based
-connection validation, runtime message validation, immutable messages,
-STATE/EVENT semantics, absolute target supersession, execution recovery, Fill
-deduplication, Router ownership validation, and one-to-one episode attribution
-as applicable.
-
-This is a direct-cutover package. Do not add forwarding modules, compatibility
-aliases, legacy schema reads, or dual writes. The standalone migration script
-may be tested against fakes; never execute it against a real database during
-implementation.
+Every public export needs usage-focused Google/Sphinx documentation and tests.
+Use the root validation commands and runtime fixtures. Cover changed transition
+matrices, message/connection validation, allocation, target supersession, order
+ownership, duplicate fills/callbacks, orderId/permId rebinding, episode attribution,
+OCA, partial/full fills, offline recovery, rolling and ACTIVE/NEXT audit boundaries.
+Keep the independent end-to-end suites as well as existing integration tests.
+Do not claim complete live safety from the fake broker; migration tests never
+touch real databases.
