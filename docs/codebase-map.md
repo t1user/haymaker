@@ -1,6 +1,6 @@
 # Haymaker Codebase Map
 
-Last updated: 2026-09-10.
+Last updated: 2026-09-15.
 
 ## High-Level Purpose
 
@@ -115,11 +115,13 @@ The research package is intentionally separate from live execution. It works dir
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/book.py`: typed order/fill evidence, one-to-one PositionState
   separating held Contract/bracket inputs from pending-target Contract/inputs,
-  conId-keyed direct TargetState, per-series RollState, Fill-derived direct
-  physical positions with durable per-target reset cutoffs, Portfolio recovery
-  mappings, rejection tracking, active-order ownership queries, blotter access,
-  and one ordered critical persistence queue. Book performs no broker calls or
-  allocation.
+  conId-keyed direct TargetState, per-series RollState, maintained conId-keyed
+  ContractPosition balances shared by both execution modes, durable reset cutoffs,
+  Portfolio recovery mappings, rejection tracking, active-order ownership queries,
+  blotter access,
+  and one ordered critical persistence queue. Balance queries read current state;
+  reconstruction verifies/repairs balances at startup and explicit reset.
+  Book performs no broker calls or allocation.
 - `haymaker/validators.py`: shared primitive normalization for aware datetimes,
   finite numbers, read-only mapping copies, non-empty strings, and IB Contract
   identity, plus IB request/order field validators. Domain-specific validation

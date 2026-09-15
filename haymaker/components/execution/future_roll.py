@@ -362,7 +362,7 @@ class DirectFutureRollExecutor(FutureRollExecutor):
     def holdings(self) -> tuple[RollHolding, ...]:
         """Return each non-flat concrete Future with its current target owner."""
         result = []
-        for contract, quantity in self.book.direct_positions().items():
+        for contract, quantity in self.book.logical_positions().items():
             state = self.book.target_state(contract)
             if isinstance(contract, ibi.Future) and state is not None and quantity:
                 result.append(
@@ -458,7 +458,7 @@ class DirectFutureRollExecutor(FutureRollExecutor):
             for info in active:
                 self._bind_adjustment(info.trade, state.series_key)
             return
-        quantity = self.book.direct_quantity(state.old_contract)
+        quantity = self.book.aggregate_quantity(state.old_contract)
         if not quantity:
             self._complete(state)
             return
@@ -513,7 +513,7 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         current = self.book.roll_state(state.series_key)
         if current is None or current.stage is not FutureRollStage.ROLL_FILLED:
             return
-        if self.book.direct_quantity(current.old_contract):
+        if self.book.aggregate_quantity(current.old_contract):
             self._block(current, "Direct roll did not flatten its old Contract")
             return
         if not current.target_transfers:

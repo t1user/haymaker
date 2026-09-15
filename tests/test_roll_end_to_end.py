@@ -155,7 +155,7 @@ async def test_direct_roll_transfers_once_and_respects_new_explicit_target(
         model.onData(PositionTarget(contract=active, target_quantity=5))
         assert broker.submitted[-1] is combo
     await broker.fill(combo, 1)
-    assert runtime.book.direct_quantity(old) == broker.quantities[old] == 1
+    assert runtime.book.aggregate_quantity(old) == broker.quantities[old] == 1
     assert notifications == []
     # Exercise recovery without the Trade's filledEvent callback.
     await broker.fill(combo, 1, notify_filled=False)
@@ -171,8 +171,8 @@ async def test_direct_roll_transfers_once_and_respects_new_explicit_target(
         assert adjustment.contract == active
         assert adjustment.order.totalQuantity == 2
         await broker.fill(adjustment)
-    assert runtime.book.direct_quantity(active) == broker.quantities[active]
-    assert runtime.book.direct_quantity(old) == broker.quantities[old] == 0
+    assert runtime.book.aggregate_quantity(active) == broker.quantities[active]
+    assert runtime.book.aggregate_quantity(old) == broker.quantities[old] == 0
     count = len(broker.submitted)
     controller.future_roller.recover()
     model.recover()

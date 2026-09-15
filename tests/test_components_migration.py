@@ -166,6 +166,23 @@ def test_latest_strategy_conversion_preserves_episode_and_lock():
     assert states[0]["bracket_inputs"] == {"atr": 5}
 
 
+def test_component_conversion_rebuilds_derived_balances_in_book():
+    """A saved account total must not become a second position in conversion."""
+    balance = {
+        "state_key": "balance:1",
+        "state_type": "balance",
+        "conId": 1,
+        "contract": tree(legacy_trade().contract),
+        "quantity": 1,
+        "updated_at": datetime.now(timezone.utc),
+    }
+    assert convert_component_states([balance], [], source_database="source") == []
+    with pytest.raises(ValueError, match="identity"):
+        convert_component_states(
+            [{**balance, "conId": 2}], [], source_database="source"
+        )
+
+
 def test_latest_strategy_conversion_recovers_custom_bracket_field():
     """Legacy bracket memos retain the configured volatility field."""
 

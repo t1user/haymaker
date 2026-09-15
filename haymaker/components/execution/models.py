@@ -233,7 +233,7 @@ class SerialTargetExecutionModel(ExecutionModel):
         state = self.book.target_state(contract)
         if state is None or state.execution_model_name != self.name:
             return
-        delta = state.target_quantity - self.book.direct_quantity(contract)
+        delta = state.target_quantity - self.book.aggregate_quantity(contract)
         if not delta:
             self._notify_target_reached(
                 PositionTarget(

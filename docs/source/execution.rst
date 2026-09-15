@@ -533,6 +533,12 @@ across all registered members of that blueprint, including held past expiries.
 The query requires initialized registry membership. Neither desired targets
 nor working quantities are actual fills.
 
+Both execution modes use the same maintained Contract balances. These queries
+read current state; they do not scan historical executions or contact IB.
+``self.book.logical_positions()`` returns a new mapping of all non-flat net
+balances by concrete Contract. For individual one-to-one episodes, use
+``self.book.position_state(source_key)`` instead.
+
 In direct mode, allocation to each ``source_key`` belongs to your Portfolio.
 Net fills cannot determine how much of a combined broker position belongs to
 each input. Keep that allocation mapping yourself.
@@ -701,7 +707,7 @@ Durable execution
 ~~~~~~~~~~~~~~~~~
 
 :class:`~haymaker.components.DirectFutureRollExecutor` waits for active
-TARGET_ADJUSTMENT work on both roll endpoints, re-reads Fill-derived quantity,
+TARGET_ADJUSTMENT work on both roll endpoints, reads the accounted balance,
 and submits a calendar-spread BAG. A durable target-transfer snapshot makes the
 old target zero and adds its target to the destination. Reapplying that snapshot
 after recovery is idempotent; newer explicit targets supersede it. Holdings in
@@ -829,11 +835,22 @@ Book and Controller ownership
 =============================
 
 :class:`~haymaker.book.Book` owns typed order, Fill, PositionState, TargetState,
-RollState, Portfolio recovery state, stopped-direction state, and blotter
-access. It rebuilds direct physical quantity from attributed Fill evidence and
-keeps incomplete roll projections stable while logical one-to-one states move
-serially. It uses one ordered critical ``DRAIN`` queue and performs no broker
-calls or Portfolio calculation. An explicit state clear stores a per-target
+RollState, ContractPosition balances, Portfolio recovery state, stopped-direction
+state, and blotter access. Both modes read the same contract-level balances,
+updated as episode, order and roll records change. During a bracket roll,
+physical movement remains distinct from serial episode updates so quantities
+are not counted twice.
+
+Book persists balances in the existing ``state`` collection under
+``balance:{conId}``, after the records establishing them in its critical
+``DRAIN`` queue. Startup verifies the balances once against saved accounting
+records, reconstructing missing or inconsistent totals after interrupted writes.
+These startup repairs complete synchronously before the runtime starts its loop;
+subsequent mutations use the configured persistence queue.
+Saved one-to-one corrections remain authoritative; offline executions are still
+accounted by Controller synchronization. No historical replay occurs in ordinary
+position queries. Book performs no broker calls or Portfolio allocation.
+An explicit state clear stores a per-target
 Fill-evidence cutoff: historical orders and Fills remain available, but
 pre-reset executions cannot recreate a cleared direct position after restart.
 Fills that actually arrive after the clear are still accounted.
@@ -863,6 +880,8 @@ not recreate a position that reconciliation intentionally removed.
 .. autoclass:: haymaker.book.PositionState
 
 .. autoclass:: haymaker.book.TargetState
+
+.. autoclass:: haymaker.book.ContractPosition
 
 .. autoclass:: haymaker.controller.Controller
    :members: trade, cancel
@@ -896,3 +915,5 @@ converter version are incompatible targets.
 The report distinguishes optional blotter totals from deduplicated Fill-level
 commission/P&L totals and includes source/episode order grouping even when
 blotter writing was disabled. No live schema fallback or dual writes exist.
+Derived balance documents are not copied by the converter: Book reconstructs
+them from the converted accounting records at startup.

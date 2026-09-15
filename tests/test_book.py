@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
@@ -30,23 +31,43 @@ def contract(con_id: int = 1) -> ibi.Future:
     )
 
 
-def test_compound_position_query_replays_direct_evidence_once(book, monkeypatch):
-    """Adding Contracts must not multiply the number of fill-history scans."""
-    direct = Mock(return_value={contract(1): 2.0, contract(2): 3.0})
-    monkeypatch.setattr(book, "direct_positions", direct)
+@pytest.mark.parametrize("source_key", [None, "alpha"])
+def test_position_queries_read_balances_without_history(book, monkeypatch, source_key):
+    """Both modes read maintained balances even when history is unavailable."""
+    for con_id, quantity in ((1, 2), (2, 3)):
+        trade_ = trade(order_id=con_id, con_id=con_id, quantity=quantity)
+        book.save_order(
+            order_info(
+                trade_, source_key=(f"{source_key}-{con_id}" if source_key else None)
+            )
+        )
+        book.apply_fill(
+            trade_, fill(trade_, exec_id=f"fill-{con_id}", quantity=quantity)
+        )
     book.update_position(
         PositionState(
-            source_key="alpha",
+            source_key="offset",
             execution_model_name="model",
             contract=contract(1),
             quantity=-1,
         )
     )
+    for method in (
+        "_order_positions",
+        "_episode_positions",
+        "_roll_physical_quantities",
+        "_rebuild_balances",
+    ):
+        monkeypatch.setattr(
+            book, method, Mock(side_effect=AssertionError("query rebuilt history"))
+        )
     assert book.logical_positions() == {contract(1): 1, contract(2): 3}
-    direct.assert_called_once_with()
-    direct.reset_mock()
     assert book.aggregate_quantity(contract(1)) == 1
-    direct.assert_called_once_with()
+    assert book.aggregate_quantity(contract(2)) == 3
+    assert book.aggregate_quantity(contract(3)) == 0
+    result = book.logical_positions()
+    result.clear()
+    assert book.logical_positions() == {contract(1): 1, contract(2): 3}
 
 
 def trade(
@@ -225,6 +246,260 @@ def test_order_lookup_uses_order_id_then_perm_id(book):
 
     assert book.order_by_id(1) is info
     assert book.order_by_perm_id(101) is info
+
+
+@pytest.mark.parametrize("source_key", [None, "alpha"])
+def test_shared_balances_follow_fills_not_targets(book, source_key):
+    """Partial fills, opposite executions and duplicate callbacks share accounting."""
+    opening = trade(quantity=3)
+    info = book.save_order(order_info(opening, source_key=source_key))
+    book.update_target(
+        TargetState(
+            execution_model_name="model",
+            contract=opening.contract,
+            target_quantity=10,
+            target_created_at=datetime.now(timezone.utc),
+        )
+    )
+    first = fill(opening, quantity=1)
+    assert book.apply_fill(opening, first)
+    assert not book.apply_fill(opening, first)
+    book.save_order(info)
+    assert book.aggregate_quantity(opening.contract) == 1
+    book.apply_fill(opening, fill(opening, exec_id="second", quantity=2))
+    closing = trade(order_id=2, side="SELL", quantity=4)
+    book.save_order(order_info(closing, source_key=source_key, role="CLOSE"))
+    book.apply_fill(closing, fill(closing, exec_id="close", quantity=3))
+    assert book.aggregate_quantity(opening.contract) == 0
+    assert book.logical_positions() == {}
+    # Same Contract, new execution; a zero balance is not an accounting cutoff.
+    book.apply_fill(closing, fill(closing, exec_id="short", quantity=1))
+    assert book.aggregate_quantity(opening.contract) == -1
+
+
+@pytest.mark.parametrize("source_key", [None, "alpha"])
+def test_balance_write_interruption_recovers_without_double_fill(
+    book, order_saver, state_saver, monkeypatch, source_key
+):
+    """Order/episode evidence recovers a missing subsequent balance write."""
+    opening = trade()
+    book.save_order(order_info(opening, source_key=source_key))
+    saved = state_saver.save
+
+    def interrupted(document):
+        """Simulate process loss after evidence but before the derived balance."""
+        if document.get("state_type") == "balance":
+            raise RuntimeError("interrupted balance write")
+        saved(document)
+
+    execution = fill(opening)
+    monkeypatch.setattr(state_saver, "save", interrupted)
+    with pytest.raises(RuntimeError, match="interrupted balance"):
+        book.apply_fill(opening, execution)
+    monkeypatch.setattr(state_saver, "save", saved)
+    for _ in range(2):
+        recovered = Book(
+            order_saver=order_saver,
+            state_saver=state_saver,
+            save_async=False,
+            restore=True,
+        )
+        assert recovered.aggregate_quantity(opening.contract) == 1
+        assert not recovered.apply_fill(opening, execution)
+        assert recovered.aggregate_quantity(opening.contract) == 1
+    assert state_saver.read({"state_key": "balance:1"})[0]["quantity"] == 1
+
+
+@pytest.mark.parametrize("source_key", [None, "alpha"])
+@pytest.mark.parametrize("saved_quantity", [None, -10, 10])
+def test_restore_verifies_missing_or_inconsistent_balance(
+    book, order_saver, state_saver, source_key, saved_quantity
+):
+    """The recovery balance is derived from accounting evidence, not a stale total."""
+    opening = trade()
+    book.save_order(order_info(opening, source_key=source_key))
+    book.apply_fill(opening, fill(opening))
+    balance = state_saver.store["state"].pop("balance:1")
+    if saved_quantity is not None:
+        state_saver.save({**balance, "quantity": saved_quantity})
+    recovered = Book(
+        order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
+    )
+    assert recovered.logical_positions() == {opening.contract: 1}
+    assert state_saver.read({"state_key": "balance:1"})[0]["quantity"] == 1
+
+
+def test_balance_restore_keeps_reconciled_episode_quantity(
+    book, order_saver, state_saver
+):
+    """A broker correction must not be undone by replaying old episode fills."""
+    opening = trade()
+    book.save_order(order_info(opening))
+    book.apply_fill(opening, fill(opening))
+    book.update_position(
+        replace(book.position_state("alpha"), quantity=0, target_quantity=0)
+    )
+    recovered = Book(
+        order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
+    )
+    assert recovered.logical_positions() == {}
+
+
+def test_balance_repair_is_passive_before_event_loop(book, order_saver, state_saver):
+    """LiveRuntime can restore/repair Book before its asyncio loop starts."""
+    opening = trade()
+    book.save_order(order_info(opening, source_key=None))
+    book.apply_fill(opening, fill(opening))
+    state_saver.store["state"].pop("balance:1")
+    recovered = Book(
+        order_saver=order_saver, state_saver=state_saver, save_async=True, restore=True
+    )
+    assert recovered.aggregate_quantity(opening.contract) == 1
+    assert state_saver.read({"state_key": "balance:1"})[0]["quantity"] == 1
+
+
+def test_balance_recovery_repairs_torn_roll_endpoints(
+    book, order_saver, state_saver, monkeypatch
+):
+    """A crash between the two roll balance writes cannot move only one leg."""
+    opening = trade(quantity=2)
+    book.save_order(order_info(opening, source_key=None))
+    book.apply_fill(opening, fill(opening, quantity=2))
+    roll = trade(order_id=2, quantity=2)
+    roll.contract = ibi.Bag(symbol="ES")
+    book.save_order(
+        order_info(
+            roll,
+            source_key=None,
+            role="ROLL",
+            params={"old_contract": contract(1), "new_contract": contract(2)},
+        )
+    )
+    save = state_saver.save
+
+    def interrupt_second_endpoint(document):
+        """Persist the old zero but lose the replacement balance."""
+        if document["state_key"] == "balance:2":
+            raise RuntimeError("second endpoint not saved")
+        save(document)
+
+    monkeypatch.setattr(state_saver, "save", interrupt_second_endpoint)
+    with pytest.raises(RuntimeError, match="second endpoint"):
+        book.apply_fill(roll, fill(roll, exec_id="roll-fill", quantity=2))
+    monkeypatch.setattr(state_saver, "save", save)
+    assert state_saver.read({"state_key": "balance:1"})[0]["quantity"] == 0
+    recovered = Book(
+        order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
+    )
+    assert recovered.logical_positions() == {contract(2): 2}
+
+
+def test_explicit_fill_cutoff_updates_current_balance(book):
+    """Installing a recovery cutoff is a mutation, not work deferred to queries."""
+    opening = trade()
+    book.save_order(order_info(opening, source_key=None))
+    book.apply_fill(opening, fill(opening))
+    now = datetime.now(timezone.utc)
+    book.update_target(
+        TargetState(
+            execution_model_name="model",
+            contract=opening.contract,
+            target_quantity=0,
+            target_created_at=now,
+            fill_evidence_start_at=now,
+        )
+    )
+    assert book.logical_positions() == {}
+
+
+def test_rebinding_and_commissions_do_not_reapply_balance(
+    book, state_saver, monkeypatch
+):
+    """A changed broker orderId and later commission retain accounted quantity."""
+    opening = trade(order_id=7, perm_id=900)
+    book.save_order(order_info(opening, source_key=None))
+    execution = fill(opening)
+    book.apply_fill(opening, execution)
+    save = Mock(wraps=state_saver.save)
+    monkeypatch.setattr(state_saver, "save", save)
+    rebound = trade(order_id=8, perm_id=900)
+    assert book.rebind_trade(rebound) is None
+    assert book.order_by_id(7) is None
+    assert not book.apply_fill(rebound, execution)
+    book.update_commission(rebound, execution, execution.commissionReport)
+    book.save_order(book.order_by_id(8))
+    assert book.aggregate_quantity(opening.contract) == 1
+    save.assert_not_called()
+    book.apply_fill(rebound, fill(rebound, exec_id="new-id"))
+    assert book.aggregate_quantity(opening.contract) == 2
+
+
+@pytest.mark.parametrize("source_key", [None, "alpha"])
+async def test_balance_saves_follow_evidence_on_critical_queue(
+    order_saver, state_saver, monkeypatch, source_key
+):
+    """DRAIN persists the shared balance only after the mutation establishing it."""
+    writes = []
+    save_order, save_state = order_saver.save, state_saver.save
+
+    def record_order(document):
+        """Capture the serialized evidence, not the subsequently mutable Trade."""
+        writes.append(("order", deepcopy(document)))
+        save_order(document)
+
+    def record_state(document):
+        """Record the ordered projection write."""
+        writes.append((document["state_type"], deepcopy(document)))
+        save_state(document)
+
+    monkeypatch.setattr(order_saver, "save", record_order)
+    monkeypatch.setattr(state_saver, "save", record_state)
+    book = Book(order_saver=order_saver, state_saver=state_saver, save_async=True)
+    opening = trade()
+    book.save_order(order_info(opening, source_key=source_key))
+    book.apply_fill(opening, fill(opening))
+    assert book.aggregate_quantity(opening.contract) == 1
+    await book.close()
+    kinds = [kind for kind, document in writes]
+    assert kinds == (
+        ["order", "order", "balance"]
+        if source_key is None
+        else ["order", "order", "position", "balance"]
+    )
+    assert writes[1][1]["fills"][0]["deduplication_key"] == "exec-1"
+    assert writes[-1][1]["quantity"] == 1
+
+
+def test_roll_leg_evidence_replaces_bag_contribution(book, order_saver, state_saver):
+    """Leg details replacing a BAG fallback must not double-count movement."""
+    opening = trade(quantity=2)
+    book.save_order(order_info(opening, source_key=None))
+    book.apply_fill(opening, fill(opening, quantity=2))
+    roll = trade(order_id=2, quantity=1)
+    roll.contract = ibi.Bag(symbol="ES")
+    book.save_order(
+        order_info(
+            roll,
+            source_key=None,
+            role="ROLL",
+            params={"old_contract": contract(1), "new_contract": contract(2)},
+        )
+    )
+    book.apply_fill(roll, fill(roll, exec_id="bag"))
+    assert book.logical_positions() == {contract(1): 1, contract(2): 1}
+    old_leg = fill(roll, exec_id="old-leg")
+    old_leg = old_leg._replace(
+        contract=contract(1), execution=replace(old_leg.execution, side="SLD")
+    )
+    new_leg = fill(roll, exec_id="new-leg")._replace(contract=contract(2))
+    book.apply_fill(roll, old_leg)
+    book.apply_fill(roll, new_leg)
+    assert book.logical_positions() == {contract(1): 1, contract(2): 1}
+    recovered = Book(
+        order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
+    )
+    assert recovered.logical_positions() == book.logical_positions()
+    assert not recovered.apply_fill(roll, old_leg)
 
 
 def test_active_order_filters_all_attribution_fields(book):
@@ -460,7 +735,7 @@ def test_roll_fill_preserves_block(book):
     assert book.position_state("alpha").blocked_direction == 1
 
 
-def test_direct_quantity_recovers_from_completed_order_evidence(
+def test_contract_balance_recovers_from_completed_order_evidence(
     order_saver, state_saver
 ):
     first = Book(
@@ -701,11 +976,11 @@ def test_clear_state_durably_resets_direct_fill_projection(
     )
     execution = fill(trade_, quantity=2)
     book.apply_fill(trade_, execution)
-    assert book.direct_quantity(contract()) == 2
+    assert book.aggregate_quantity(contract()) == 2
 
     book.clear_state()
 
-    assert book.direct_quantity(contract()) == 0
+    assert book.aggregate_quantity(contract()) == 0
     recovered = Book(
         order_saver=order_saver,
         state_saver=state_saver,
@@ -713,7 +988,7 @@ def test_clear_state_durably_resets_direct_fill_projection(
         restore=True,
     )
     assert recovered.target_state(contract()) is None
-    assert recovered.direct_quantity(contract()) == 0
+    assert recovered.aggregate_quantity(contract()) == 0
 
     recovered.update_target(
         TargetState(
@@ -723,7 +998,7 @@ def test_clear_state_durably_resets_direct_fill_projection(
             target_created_at=datetime.now(timezone.utc),
         )
     )
-    assert recovered.direct_quantity(contract()) == 0
+    assert recovered.aggregate_quantity(contract()) == 0
 
 
 def test_direct_fill_after_clear_cutoff_is_accounted(book):
@@ -750,7 +1025,7 @@ def test_direct_fill_after_clear_cutoff_is_accounted(book):
     late_fill = fill(trade_, exec_id="late-after-clear", quantity=1)
     book.apply_fill(trade_, late_fill)
 
-    assert book.direct_quantity(contract()) == 1
+    assert book.aggregate_quantity(contract()) == 1
 
 
 def test_roll_state_round_trips_through_book_persistence(

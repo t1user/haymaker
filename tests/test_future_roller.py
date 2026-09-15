@@ -339,8 +339,8 @@ def test_direct_roll_moves_fill_evidence_and_target_contract(book):
 
     apply_fill(book, roll_trade, 2, "direct-roll-fill")
 
-    assert book.direct_quantity(old) == 0
-    assert book.direct_quantity(active) == 2
+    assert book.aggregate_quantity(old) == 0
+    assert book.aggregate_quantity(active) == 2
     assert book.target_state(active).contract is active
     assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
 
@@ -575,7 +575,7 @@ def test_direct_transfer_recovery_after_only_first_target_was_written(
     assert book.target_state(active).target_quantity == 5
 
 
-def test_partial_bracket_roll_fill_projects_both_concrete_positions(book):
+def test_partial_bracket_roll_fill_projects_both_concrete_positions(book, monkeypatch):
     old = future(1, "NGQ26")
     active = future(2, "NGU26")
     next_ = future(3, "NGV26")
@@ -589,6 +589,11 @@ def test_partial_bracket_roll_fill_projects_both_concrete_positions(book):
     roll_trade = controller.trades[-1]
     apply_fill(book, roll_trade, 1, "partial-roll")
 
+    def no_query_reconstruction(*args):
+        """An in-flight roll must already have updated the shared balances."""
+        raise AssertionError("position query reconstructed roll fills")
+
+    monkeypatch.setattr(book, "_roll_physical_quantities", no_query_reconstruction)
     assert book.aggregate_quantity(old) == 1
     assert book.aggregate_quantity(active) == 1
     assert book.position_state("alpha").contract is old
@@ -902,7 +907,7 @@ def test_recovery_rebinds_active_roll_and_completes_from_fill(book):
     apply_fill(book, rebound, 2, "recovered-roll-fill")
 
     assert book.roll_state("ng-series").stage is FutureRollStage.COMPLETE
-    assert book.direct_quantity(active) == 2
+    assert book.aggregate_quantity(active) == 2
     assert book.target_state(active).contract is active
 
 

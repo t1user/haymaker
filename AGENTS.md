@@ -149,13 +149,19 @@ and distinguish pre-existing failures from regressions.
   updates must persist even with blotter output disabled; blotter is never
   required to reconstruct accounting.
 - Physical collections are `orders`, `state`, `blotter`. State identities:
-  `position:{source_key}`, `target:{conId}`, `roll:{series_key}`,
+  `position:{source_key}`, `balance:{conId}`, `target:{conId}`, `roll:{series_key}`,
   `portfolio:{portfolio_key}`. Do not add snapshot/decision/lock collections
   without an explicit design change.
 - Queue Book mutations through one ordered critical DRAIN queue: order evidence
   precedes derived projections. Recover completed as well as active order
   evidence. An explicit reset retains fills and persists concrete-target
   cutoffs so old fills do not resurrect cleared direct exposure.
+- Both execution modes use maintained `ContractPosition` balances through
+  `aggregate_quantity` and `logical_positions`; normal queries never scan fills.
+  Update balances with the underlying episode/order/roll mutation, not on read.
+  Startup verifies the shared balances against durable accounting records and
+  repairs interrupted balance writes. Preserve one-to-one broker corrections;
+  do not reconstruct corrected episodes blindly from historical fills.
 - Reconcile aggregate logical quantity against broker net quantity per concrete
   Contract, including opposing logical one-to-one positions. Use one successful
   `reqPositionsAsync()` snapshot per pass. Cached/fresh disagreement retries

@@ -427,6 +427,26 @@ class TargetState:
         aware_datetime(self.updated_at, "updated_at")
 
 
+@dataclass(frozen=True, kw_only=True)
+class ContractPosition:
+    """Persist an accounted net balance, independently of execution mode.
+
+    Book updates this balance with the underlying episode, order or roll
+    mutation. Recovery verifies it against those records before trading starts.
+    It is neither a desired target nor a broker-position snapshot.
+    """
+
+    contract: ibi.Contract
+    quantity: float
+    updated_at: datetime = field(default_factory=_utc_now)
+
+    def __post_init__(self) -> None:
+        """Validate a concrete Contract and finite signed balance."""
+        qualified_contract(self.contract)
+        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
+        aware_datetime(self.updated_at, "updated_at")
+
+
 class FutureRollMode(StrEnum):
     """Identify the process's mutually exclusive futures-roll accounting mode.
 
@@ -649,7 +669,8 @@ class Book:
     Book performs no allocation and no broker API calls. All mutations use one
     ordered critical queue when asynchronous saving is enabled, so order
     evidence and the resulting projections retain deterministic persistence
-    order.
+    order. Both execution modes query maintained concrete-Contract balances;
+    historical reconstruction is confined to startup verification and reset.
     """
 
     def __init__(
@@ -676,10 +697,17 @@ class Book:
         self._target_fill_cutoffs: dict[int, datetime] = {}
         self._rolls: dict[str, RollState] = {}
         self._portfolio_states: dict[str, Mapping[str, Any]] = {}
+        self._balances: dict[int, ContractPosition] = {}
+        self._contributions: dict[tuple[str, str | int], dict[ibi.Contract, float]] = {}
         self._rejected_orders: defaultdict[str, int] = defaultdict(int)
         self._save_async = save_async
+        self._mutation_queue: SyncQueueRunner | None = None
         if restore:
             self._restore_documents(*self._read_documents())
+            # Runtime constructs Book before a running loop exists. Finish
+            # startup repairs synchronously, just like the recovery reads.
+            for balance in self._rebuild_balances():
+                self._save_balance(balance)
         self._mutation_queue = (
             SyncQueueRunner(
                 "Book",
@@ -732,7 +760,7 @@ class Book:
         targets_to_clear = dict(self._targets)
         # Residual liquidation/manual evidence can exist without a Portfolio
         # target. It needs the same durable reset cutoff as attributed targets.
-        for contract in self.direct_positions():
+        for contract in self.logical_positions():
             targets_to_clear.setdefault(
                 contract.conId,
                 TargetState(
@@ -786,6 +814,8 @@ class Book:
         self._targets.clear()
         self._rolls.clear()
         self._portfolio_states.clear()
+        for balance in self._rebuild_balances():
+            self._save_balance(balance)
 
     def _restore_documents(
         self,
@@ -807,6 +837,8 @@ class Book:
         self._target_fill_cutoffs = {}
         self._rolls = {}
         self._portfolio_states = {}
+        self._balances = {}
+        self._contributions = {}
         for raw in state_documents:
             document = dict(raw)
             document.pop("_id", None)
@@ -829,6 +861,9 @@ class Book:
                 self._portfolio_states[str(document["portfolio_key"])] = (
                     MappingProxyType(decode_tree(document.get("state", {})))
                 )
+            elif state_type == "balance":
+                balance = self._decode_balance(document)
+                self._balances[balance.contract.conId] = balance
             else:
                 raise ValueError(f"Unknown Book state_type: {state_type!r}")
 
@@ -840,12 +875,25 @@ class Book:
         return self._order_saver.read({}), self._state_saver.read({})
 
     def save_order(self, info: OrderInfo) -> OrderInfo:
-        """Register or update one complete order record."""
+        """Persist one order, then account for changes to its recorded fills.
+
+        Re-saving status, commissions or a rebound Trade does not apply the
+        same quantity twice. Only this order's contribution is recalculated.
+        """
 
         if not info.orderId:
             raise ValueError("Cannot persist an order with orderId 0")
         self._orders[info.orderId] = info
         self._save(self._order_saver, info.encode())
+        changes: dict[tuple[str, str | int], dict[ibi.Contract, float]] = {
+            ("order", info.orderId): self._order_positions(info)
+        }
+        for roll in self._active_bracket_rolls():
+            if info.params.get("roll_state_key") == roll.series_key:
+                changes[("roll", roll.series_key)] = dict(
+                    self._roll_physical_quantities(roll)
+                )
+        self._update_balances(changes)
         return info
 
     def order_by_id(
@@ -940,6 +988,8 @@ class Book:
             info.trade = trade
             if old_order_id != info.orderId:
                 self._orders.pop(old_order_id, None)
+                contribution = self._contributions.pop(("order", old_order_id), {})
+                self._contributions[("order", info.orderId)] = contribution
             self.save_order(info)
         return None
 
@@ -958,6 +1008,9 @@ class Book:
 
         self._positions[state.source_key] = state
         self._save(self._state_saver, self._encode_position(state))
+        self._update_balances(
+            {("source", state.source_key): self._episode_positions(state)}
+        )
         return state
 
     def target_state(self, contract: ibi.Contract) -> TargetState | None:
@@ -982,6 +1035,9 @@ class Book:
             return current
         self._targets[state.contract.conId] = state
         self._save(self._state_saver, self._encode_target(state))
+        if cutoff is None and state.fill_evidence_start_at is not None:
+            for balance in self._rebuild_balances():
+                self._save_balance(balance)
         return state
 
     def target_states(
@@ -1018,8 +1074,32 @@ class Book:
     def update_roll(self, state: RollState) -> RollState:
         """Replace and persist one series roll recovery state."""
 
+        previous = self._rolls.get(state.series_key)
         self._rolls[state.series_key] = state
         self._save(self._state_saver, self._encode_roll(state))
+        changes: dict[tuple[str, str | int], dict[ibi.Contract, float]] = {
+            ("roll", state.series_key): (
+                dict(self._roll_physical_quantities(state))
+                if state.mode is FutureRollMode.BRACKET
+                and state.stage is not FutureRollStage.COMPLETE
+                else {}
+            )
+        }
+        # Replace the roll and its episodes together: a logical Contract move
+        # during a roll must not temporarily count both the old and new holding.
+        sources = {
+            p.source_key
+            for roll in (previous, state)
+            if roll is not None
+            for p in roll.participants
+            if p.source_key is not None
+        }
+        for source in sorted(sources):
+            position = self._positions.get(source)
+            changes[("source", source)] = (
+                self._episode_positions(position) if position is not None else {}
+            )
+        self._update_balances(changes)
         return state
 
     def roll_state_for_source(self, source_key: str) -> RollState | None:
@@ -1064,69 +1144,54 @@ class Book:
         )
         return quantity + working
 
-    def direct_positions(self) -> Mapping[ibi.Contract, float]:
-        """Rebuild direct physical quantities from normalized execution evidence.
+    def _order_positions(self, info: OrderInfo) -> dict[ibi.Contract, float]:
+        """Calculate one source-less order's contribution to account balances.
 
-        One-to-one orders are excluded by source attribution. For roll BAGs,
-        use explicit leg executions when available; otherwise project the BAG
-        execution onto its persisted old/new endpoints. Never count both.
-        Reset cutoffs apply independently to each concrete Contract.
+        Episodes already account for source-attributed orders. Roll leg evidence
+        replaces the BAG fallback, rather than adding the same movement twice.
+        This runs on mutation/recovery, never on a position query.
         """
+        if info.source_key is not None:
+            return {}
         quantities: defaultdict[int, float] = defaultdict(float)
         contracts: dict[int, ibi.Contract] = {}
-        for info in self._orders.values():
-            if info.source_key is not None:
-                continue
-            endpoints: tuple[ibi.Contract, ...] = ()
-            records = info.fills
-            if isinstance(info.trade.contract, ibi.Bag):
-                if info.role != "ROLL":
+        endpoints: tuple[ibi.Contract, ...] = ()
+        records = info.fills
+        if isinstance(info.trade.contract, ibi.Bag):
+            if info.role != "ROLL":
+                return {}
+            old = info.params.get("old_contract")
+            new = info.params.get("new_contract")
+            if not isinstance(old, ibi.Contract) or not isinstance(new, ibi.Contract):
+                raise ValueError(
+                    f"Direct ROLL orderId={info.orderId} lacks old/new Contracts"
+                )
+            endpoints = (old, new)
+            legs = tuple(
+                r for r in records if r.contract.conId in (old.conId, new.conId)
+            )
+            records = legs or records
+        for record in records:
+            direction = self._fill_direction(record)
+            movements = (
+                ((endpoints[0], -direction), (endpoints[1], direction))
+                if endpoints
+                and record.contract.conId not in {c.conId for c in endpoints}
+                else ((record.contract, direction),)
+            )
+            for contract, signed in movements:
+                if not contract.conId:
                     continue
-                old = info.params.get("old_contract")
-                new = info.params.get("new_contract")
-                if not isinstance(old, ibi.Contract) or not isinstance(
-                    new, ibi.Contract
-                ):
-                    raise ValueError(
-                        f"Direct ROLL orderId={info.orderId} lacks old/new Contracts"
-                    )
-                endpoints = (old, new)
-                legs = tuple(
-                    r for r in records if r.contract.conId in (old.conId, new.conId)
-                )
-                records = legs or records
-            for record in records:
-                direction = self._fill_direction(record)
-                movements = (
-                    ((endpoints[0], -direction), (endpoints[1], direction))
-                    if endpoints
-                    and record.contract.conId not in {c.conId for c in endpoints}
-                    else ((record.contract, direction),)
-                )
-                for contract, signed in movements:
-                    if not contract.conId:
-                        continue
-                    cutoff = self._target_fill_cutoffs.get(contract.conId)
-                    if cutoff is not None and record.time < cutoff:
-                        continue
-                    contracts[contract.conId] = contract
-                    quantities[contract.conId] += record.execution.shares * signed
-        return MappingProxyType(
-            {
-                contracts[con_id]: quantity
-                for con_id, quantity in quantities.items()
-                if quantity
-            }
-        )
-
-    def direct_quantity(self, contract: ibi.Contract) -> float:
-        """Return fill-accounted direct quantity in one exact Contract."""
-        con_id = _contract_key(contract)
-        return sum(
-            quantity
-            for held, quantity in self.direct_positions().items()
-            if held.conId == con_id
-        )
+                cutoff = self._target_fill_cutoffs.get(contract.conId)
+                if cutoff is not None and record.time < cutoff:
+                    continue
+                contracts[contract.conId] = contract
+                quantities[contract.conId] += record.execution.shares * signed
+        return {
+            contracts[con_id]: quantity
+            for con_id, quantity in quantities.items()
+            if quantity
+        }
 
     @staticmethod
     def _fill_direction(record: FillRecord) -> int:
@@ -1137,51 +1202,144 @@ class Book:
         raise ValueError(f"Ambiguous fill side: {record.execution.side}")
 
     def aggregate_quantity(self, contract: ibi.Contract) -> float:
-        """Return aggregate fill-accounted logical quantity for a Contract."""
+        """Read one maintained net balance by conId, in either execution mode.
 
-        con_id = _contract_key(contract)
-        return next(
-            (
-                quantity
-                for held, quantity in self.logical_positions().items()
-                if held.conId == con_id
-            ),
-            0.0,
-        )
+        This excludes desired targets and unfilled working quantities. It does
+        not query the broker or scan historical fills.
+        """
+        balance = self._balances.get(_contract_key(contract))
+        return balance.quantity if balance is not None else 0.0
 
     def logical_positions(self) -> dict[ibi.Contract, float]:
-        """Return aggregate holdings, replaying direct Fill evidence only once."""
+        """Read non-flat accounted balances, without reconstructing history.
 
-        contracts: dict[int, ibi.Contract] = {}
-        quantities: defaultdict[int, float] = defaultdict(float)
-        active_rolls = self._active_bracket_rolls()
-        rolling_sources = {
-            participant.source_key
-            for state in active_rolls
-            for participant in state.participants
-        }
-        for position_state in self._positions.values():
-            if (
-                position_state.source_key not in rolling_sources
-                and position_state.contract is not None
-                and position_state.contract.conId
-            ):
-                contracts[position_state.contract.conId] = position_state.contract
-                quantities[position_state.contract.conId] += position_state.quantity
-        for roll_state in active_rolls:
-            for contract, quantity in self._roll_physical_quantities(
-                roll_state
-            ).items():
-                contracts[contract.conId] = contract
-                quantities[contract.conId] += quantity
-        for contract, quantity in self.direct_positions().items():
-            contracts[contract.conId] = contract
-            quantities[contract.conId] += quantity
+        Both execution modes use this account-level view. One-to-one sources
+        are netted per concrete Contract; episode ownership remains available
+        separately through position_states(). The returned mapping is a copy.
+        """
         return {
-            contracts[con_id]: quantity
-            for con_id, quantity in quantities.items()
-            if quantity
+            balance.contract: balance.quantity
+            for balance in self._balances.values()
+            if balance.quantity
         }
+
+    def _episode_positions(self, state: PositionState) -> dict[ibi.Contract, float]:
+        """Return an episode's contribution when no roll owns its movement."""
+        if (
+            state.contract is None
+            or not state.contract.conId
+            or not state.quantity
+            or self.roll_state_for_source(state.source_key) is not None
+        ):
+            return {}
+        return {state.contract: state.quantity}
+
+    def _update_balances(
+        self,
+        changes: Mapping[tuple[str, str | int], dict[ibi.Contract, float]],
+        *,
+        persist: bool = True,
+    ) -> None:
+        """Apply changed accounting contributions through one balance path.
+
+        Replacing the prior contribution makes order re-saves and repeated roll
+        stages harmless. Only changed Contracts are persisted, after evidence.
+        """
+        deltas: defaultdict[int, float] = defaultdict(float)
+        contracts: dict[int, ibi.Contract] = {}
+        for owner, positions in changes.items():
+            previous = self._contributions.get(owner, {})
+            for multiplier, mapping in ((-1, previous), (1, positions)):
+                for contract, quantity in mapping.items():
+                    contracts[contract.conId] = contract
+                    deltas[contract.conId] += multiplier * quantity
+            if positions:
+                self._contributions[owner] = positions
+            else:
+                self._contributions.pop(owner, None)
+        for con_id, delta in deltas.items():
+            if not delta:
+                continue
+            current = self._balances.get(con_id)
+            balance = ContractPosition(
+                contract=contracts[con_id],
+                quantity=(current.quantity if current is not None else 0.0) + delta,
+            )
+            self._balances[con_id] = balance
+            if persist:
+                self._save_balance(balance)
+
+    def _rebuild_balances(self) -> tuple[ContractPosition, ...]:
+        """Verify saved balances once at restore/reset, repairing partial writes.
+
+        Episode state remains authoritative for one-to-one corrections; fills
+        recover source-less orders, and active rolls recover physical movement.
+        No second applied-execution ledger or multi-document transaction is
+        needed: order evidence precedes balances in the critical save queue.
+        """
+        saved = self._balances
+        self._balances = {}
+        self._contributions = {}
+        changes: dict[tuple[str, str | int], dict[ibi.Contract, float]] = {
+            ("order", info.orderId): self._order_positions(info)
+            for info in self._orders.values()
+        }
+        changes.update(
+            {
+                ("source", source): self._episode_positions(state)
+                for source, state in self._positions.items()
+            }
+        )
+        changes.update(
+            {
+                ("roll", state.series_key): dict(self._roll_physical_quantities(state))
+                for state in self._active_bracket_rolls()
+            }
+        )
+        self._update_balances(changes, persist=False)
+        repaired = []
+        for con_id in sorted(saved.keys() | self._balances.keys()):
+            previous = saved.get(con_id)
+            current = self._balances.get(con_id)
+            if current is None and previous is not None:
+                current = replace(previous, quantity=0.0, updated_at=_utc_now())
+            if current is None:
+                continue
+            if previous is not None and previous.quantity == current.quantity:
+                self._balances[con_id] = previous
+            else:
+                self._balances[con_id] = current
+                repaired.append(current)
+        return tuple(repaired)
+
+    def _save_balance(self, balance: ContractPosition) -> None:
+        """Persist a shared Contract balance under its natural identity."""
+        self._save(
+            self._state_saver,
+            {
+                "state_key": f"balance:{balance.contract.conId}",
+                "state_type": "balance",
+                "conId": balance.contract.conId,
+                "contract": tree(balance.contract),
+                "quantity": balance.quantity,
+                "updated_at": balance.updated_at,
+            },
+        )
+
+    @staticmethod
+    def _decode_balance(document: Mapping[str, Any]) -> ContractPosition:
+        """Validate the concrete identity of a persisted balance."""
+        balance = ContractPosition(
+            contract=decode_tree(document["contract"]),
+            quantity=document["quantity"],
+            updated_at=decode_tree(document["updated_at"]),
+        )
+        if (
+            document.get("state_key") != f"balance:{balance.contract.conId}"
+            or document.get("conId") != balance.contract.conId
+        ):
+            raise ValueError("Persisted balance identity does not match its Contract")
+        return balance
 
     def _active_bracket_rolls(self) -> tuple[RollState, ...]:
         """Return incomplete one-to-one rolls that own broker projections."""

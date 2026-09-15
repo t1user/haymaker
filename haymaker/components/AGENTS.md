@@ -92,6 +92,9 @@ a shared Portfolio or make execution models own direct allocation policy.
   held expiries to reduce. Execution must not substitute a different expiry.
   `positions_for_blueprint` queries filled holdings via registry membership;
   it does not reconstruct desired per-source allocations from broker net fills.
+- Use Book's `aggregate_quantity(contract)` and `logical_positions()` in either
+  execution mode. They read maintained balances; do not add mode-specific
+  quantity stores or query-time execution replay to components.
 - Optional `PortfolioStateMixin` exposes explicit `load_state/save_state` under
   `portfolio_key`, defaulting to Book. Persist normalized recovery mappings,
   not raw Signals. Custom backends are allowed but own their lifecycle and

@@ -652,7 +652,7 @@ class Controller(Atom):
         actual = (
             position.quantity
             if position is not None
-            else (self.book.direct_quantity(target.contract))
+            else (self.book.aggregate_quantity(target.contract))
         )
         if actual != target.target_quantity:
             log.error(

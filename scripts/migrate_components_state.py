@@ -292,6 +292,11 @@ def convert_component_states(
         result = dict(document)
         source_id = result.pop("_id", result.get("state_key"))
         kind = result.get("state_type")
+        if kind == "balance":
+            # Rebuild derived totals from converted episode/order/roll evidence
+            # at Book startup; copying them would duplicate active-state totals.
+            Book._decode_balance(result)
+            continue
         if kind == "position":
             if "target_contract" not in result:
                 result["target_contract"] = result.get("contract")
