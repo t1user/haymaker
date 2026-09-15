@@ -17,7 +17,14 @@ from typing import Any
 import ib_insync as ibi
 from pymongo import MongoClient  # type: ignore
 
-from haymaker.book import Book, FillRecord, OrderInfo
+from haymaker.book import (
+    ContractPosition,
+    FillRecord,
+    OrderInfo,
+    PositionState,
+    TargetState,
+    RollState,
+)
 from haymaker.misc import decode_tree, tree
 
 MIGRATION_VERSION = "components-book-v4-fill-checkpoints"
@@ -314,7 +321,7 @@ def convert_component_states(
         if kind == "balance":
             # Rebuild derived totals from converted episode/order/roll evidence
             # at Book startup; copying them would duplicate active-state totals.
-            Book._decode_balance(result)
+            ContractPosition.decode(result)
             continue
         if kind == "position":
             result.setdefault(
@@ -364,7 +371,7 @@ def convert_component_states(
                         )
                 elif not result.get("quantity"):
                     result["contract"] = None
-            Book._decode_position(result)
+            PositionState.decode(result)
         elif kind == "target":
             contract = decode_tree(result["contract"])
             key = result.pop("target_key", None)
@@ -391,7 +398,7 @@ def convert_component_states(
                 )
             result["conId"] = contract.conId
             result["state_key"] = f"target:{contract.conId}"
-            Book._decode_target(result)
+            TargetState.decode(result)
         elif kind == "roll":
             if result.get("stage") != "COMPLETE":
                 raise ValueError(
@@ -409,7 +416,7 @@ def convert_component_states(
                 raise ValueError(
                     "Review stored roll transfers before component schema conversion"
                 )
-            Book._decode_roll(result)
+            RollState.decode(result)
         elif kind != "portfolio":
             raise ValueError(f"Unknown component state_type: {kind!r}")
         identity = result["state_key"]

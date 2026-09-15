@@ -427,16 +427,14 @@ def component_order(*, source_key=None, target_key=None):
 
 def keyed_target(con_id=1, key="old-key"):
     """Represent the old logical-key direct state."""
-    from haymaker.book import Book, TargetState
+    from haymaker.book import TargetState
 
-    document = Book._encode_target(
-        TargetState(
-            contract=ibi.Future("ES", conId=con_id, exchange="CME"),
-            execution_model_name="model",
-            target_quantity=1,
-            target_created_at=datetime.now(timezone.utc),
-        )
-    )
+    document = TargetState(
+        contract=ibi.Future("ES", conId=con_id, exchange="CME"),
+        execution_model_name="model",
+        target_quantity=1,
+        target_created_at=datetime.now(timezone.utc),
+    ).encode()
     document["target_key"] = key
     document["state_key"] = f"target:{key}"
     return document
@@ -461,27 +459,25 @@ def test_component_order_keeps_authoritative_fills_and_commissions():
 
 def test_component_state_separates_held_and_pending_contract_and_inputs():
     """The overwritten old target Contract cannot be mistaken for the holding."""
-    from haymaker.book import Book, PositionState
+    from haymaker.book import PositionState
 
     incoming = ibi.Future("ES", conId=2, exchange="CME")
-    state = Book._encode_position(
-        PositionState(
-            source_key="alpha",
-            execution_model_name="model",
-            contract=incoming,
-            quantity=1,
-            target_quantity=-1,
-            target_created_at=datetime.now(timezone.utc),
-            position_id="episode",
-            bracket_inputs={"atr": 9},
-        )
-    )
+    state = PositionState(
+        source_key="alpha",
+        execution_model_name="model",
+        contract=incoming,
+        quantity=1,
+        target_quantity=-1,
+        target_created_at=datetime.now(timezone.utc),
+        position_id="episode",
+        bracket_inputs={"atr": 9},
+    ).encode()
     del state["target_contract"]
     del state["target_bracket_inputs"]
     result = convert_component_states(
         [state], [component_order(source_key="alpha")], source_database="old"
     )[0]
-    restored = Book._decode_position(result)
+    restored = PositionState.decode(result)
     assert restored.contract.conId == 1
     assert restored.target_contract == incoming
     assert restored.bracket_inputs == {"atr": 5}

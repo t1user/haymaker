@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import TYPE_CHECKING
@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 import ib_insync as ibi
 
 from haymaker import misc
-from haymaker.book import OrderInfo, PositionState
+from haymaker.book import OrderInfo
 from haymaker.components.messages import StandardOrderRole
 
 from .sync_brackets import BracketSyncAction, BracketSyncError
@@ -276,27 +276,6 @@ class SyncCoordinator:
                 actionable[contract] = difference
         return actionable
 
-    @staticmethod
-    def _corrected_position_state(
-        state: PositionState,
-        quantity: float,
-        corrected_at: datetime,
-    ) -> PositionState:
-        """Align one recovered episode and target to broker authority."""
-
-        flat = quantity == 0
-        return replace(
-            state,
-            quantity=quantity,
-            target_quantity=quantity,
-            target_contract=None if flat else state.contract,
-            target_bracket_inputs={} if flat else state.bracket_inputs,
-            target_created_at=corrected_at,
-            position_id=None if flat else state.position_id,
-            bracket_inputs={} if flat else state.bracket_inputs,
-            updated_at=corrected_at,
-        )
-
     def handle_error_positions(
         self,
         errors: dict[ibi.Contract, float],
@@ -316,8 +295,7 @@ class SyncCoordinator:
             if len(states) == 1:
                 state = states[0]
                 self.controller.book.update_position(
-                    self._corrected_position_state(
-                        state,
+                    state.corrected(
                         state.quantity - diff,
                         corrected_at,
                     )
@@ -331,8 +309,7 @@ class SyncCoordinator:
             elif states and broker_positions.get(contract, 0.0) == 0:
                 for state in states:
                     self.controller.book.update_position(
-                        self._corrected_position_state(
-                            state,
+                        state.corrected(
                             0.0,
                             corrected_at,
                         )
@@ -350,8 +327,7 @@ class SyncCoordinator:
                 for state in states:
                     if state.source_key in source_faults:
                         self.controller.book.update_position(
-                            self._corrected_position_state(
-                                state,
+                            state.corrected(
                                 0.0,
                                 corrected_at,
                             )

@@ -365,7 +365,7 @@ def test_pending_bracket_allocation_is_rebuilt_for_all_sources(book):
         ("alpha", 2, True),
         ("beta", 0, False),
     ]
-    assert book._decode_roll(book._encode_roll(refreshed)) == refreshed
+    assert RollState.decode(refreshed.encode()) == refreshed
 
 
 def test_completed_nonphysical_source_offset_survives_pending_refresh(book):
@@ -461,7 +461,7 @@ def test_fixed_schedule_does_not_cascade_after_completion_or_recovery(book):
     apply_fill(book, controller.trades[-1], 2, "scheduled-fill")
     completed = book.roll_state("ng-series")
     assert len(completed.completed_occurrences) == 2
-    assert book._decode_roll(book._encode_roll(completed)) == completed
+    assert RollState.decode(completed.encode()) == completed
     fresh = FutureRoller(controller)
     fresh.register_executor(FutureRollMode.DIRECT)
     fresh.register_policy(FixedSuccessorPolicy(), model_name="serial")
@@ -568,7 +568,7 @@ def test_direct_transfer_recovery_after_only_first_target_was_written(
     assert book.target_state(active).target_quantity == 3
     monkeypatch.setattr(book, "update_target", original)
     # Round-trip the journal to discard any reliance on the old Python object.
-    book.update_roll(book._decode_roll(book._encode_roll(book.roll_state("ng-series"))))
+    book.update_roll(RollState.decode(book.roll_state("ng-series").encode()))
     roller.recover()
     assert book.target_state(active).target_quantity == 5
     roller.recover()

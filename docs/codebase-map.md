@@ -113,7 +113,7 @@ The research package is intentionally separate from live execution. It works dir
   before comparison, and requests supervisor-owned recovery before correction
   where required.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
-- `haymaker/book.py`: typed order/fill evidence, one-to-one PositionState
+- `haymaker/book/`: typed order/fill evidence, one-to-one PositionState
   separating held Contract/bracket inputs from pending-target Contract/inputs,
   conId-keyed direct TargetState, per-series RollState, maintained conId-keyed
   ContractPosition balances shared by both execution modes, durable reset cutoffs,
@@ -121,7 +121,9 @@ The research package is intentionally separate from live execution. It works dir
   blotter access,
   and one ordered critical persistence queue. Balance queries read current state;
   reconstruction verifies/repairs balances at startup and explicit reset.
-  Book performs no broker calls or allocation.
+  Record codecs live in `orders.py`, `positions.py`, `targets.py` and `rolls.py`;
+  `persistence.py` owns the shared fail-stop writer. `core.py` coordinates
+  accounting and restoration. Book performs no broker calls or allocation.
 - `haymaker/validators.py`: shared primitive normalization for aware datetimes,
   finite numbers, read-only mapping copies, non-empty strings, and IB Contract
   identity, plus IB request/order field validators. Domain-specific validation

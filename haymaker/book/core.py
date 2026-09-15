@@ -1,673 +1,38 @@
-"""Typed persistent accounting and recovery state for live execution."""
+"""Coordinate local accounting across state owners; never call the broker."""
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
-from enum import StrEnum
+from dataclasses import replace
+from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Literal
 from uuid import uuid4
 
 import ib_insync as ibi
 
-from .async_wrappers import QueueProcessingError, QueueShutdownPolicy, SyncQueueRunner
-from .blotter import Blotter
-from .misc import action_to_signal, decode_tree, sign, tree
-from .saver import AbstractBaseSaver, MongoSaver
-from .validators import (
-    aware_datetime,
-    finite_number,
-    ib_contract,
-    non_empty_string,
-    qualified_contract,
-    readonly_mapping,
+from ..blotter import Blotter
+from ..misc import decode_tree, tree
+from ..saver import AbstractBaseSaver, MongoSaver
+from ..validators import non_empty_string, qualified_contract, readonly_mapping
+from .orders import OrderInfo, FillRecord, _execution_key
+from .positions import PositionState, ContractPosition
+from .targets import TargetState
+from .rolls import RollState, FutureRollMode, FutureRollStage
+from .persistence import (
+    DEFAULT_ORDER_COLLECTION_NAME,
+    DEFAULT_STATE_COLLECTION_NAME,
+    utc_now,
+    PersistenceWriter,
 )
 
 log = logging.getLogger(__name__)
 
-DEFAULT_ORDER_COLLECTION_NAME = "orders"
-DEFAULT_STATE_COLLECTION_NAME = "state"
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
 
 def _contract_key(contract: ibi.Contract) -> int:
     return qualified_contract(contract).conId
-
-
-def _execution_key(trade: ibi.Trade, fill: ibi.Fill) -> str:
-    """Return a stable broker execution identity."""
-
-    if fill.execution.execId:
-        return fill.execution.execId
-    execution = fill.execution
-    timestamp = execution.time.isoformat() if execution.time else ""
-    return (
-        f"{trade.order.permId}:{trade.order.orderId}:{timestamp}:"
-        f"{execution.side}:{execution.shares}:{execution.price}"
-    )
-
-
-@dataclass(frozen=True, kw_only=True)
-class FillRecord:
-    """Persist complete broker execution evidence for one fill."""
-
-    execution: ibi.Execution
-    time: datetime
-    contract: ibi.Contract
-    commission_report: ibi.CommissionReport | None = None
-    deduplication_key: str
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.execution, ibi.Execution):
-            raise TypeError("execution must be an ib_insync.Execution")
-        ib_contract(self.contract)
-        aware_datetime(self.time, "time")
-        if self.commission_report is not None and not isinstance(
-            self.commission_report, ibi.CommissionReport
-        ):
-            raise TypeError(
-                "commission_report must be None or an ib_insync.CommissionReport"
-            )
-        object.__setattr__(
-            self,
-            "deduplication_key",
-            non_empty_string(self.deduplication_key, "deduplication_key"),
-        )
-
-    @classmethod
-    def from_fill(cls, trade: ibi.Trade, fill: ibi.Fill) -> FillRecord:
-        """Create a normalized record from one IB fill callback."""
-
-        return cls(
-            execution=fill.execution,
-            time=aware_datetime(fill.time, "fill.time"),
-            contract=fill.contract,
-            commission_report=(
-                fill.commissionReport
-                if fill.commissionReport.execId
-                or fill.commissionReport.commission
-                or fill.commissionReport.realizedPNL
-                else None
-            ),
-            deduplication_key=_execution_key(trade, fill),
-        )
-
-    def to_fill(self) -> ibi.Fill:
-        """Return IB-shaped execution evidence, without requiring a commission."""
-        return ibi.Fill(
-            self.contract,
-            self.execution,
-            self.commission_report or ibi.CommissionReport(),
-            self.time,
-        )
-
-    def encode(self) -> dict[str, Any]:
-        """Return a persistence-ready normalized fill document."""
-
-        return {
-            "execution": tree(self.execution),
-            "time": self.time,
-            "contract": tree(self.contract),
-            "commission_report": (
-                tree(self.commission_report)
-                if self.commission_report is not None
-                else None
-            ),
-            "deduplication_key": self.deduplication_key,
-        }
-
-    @classmethod
-    def decode(cls, data: Mapping[str, Any]) -> FillRecord:
-        """Restore a FillRecord from its persisted representation."""
-
-        return cls(
-            execution=decode_tree(data["execution"]),
-            time=decode_tree(data["time"]),
-            contract=decode_tree(data["contract"]),
-            commission_report=decode_tree(data.get("commission_report")),
-            deduplication_key=str(data["deduplication_key"]),
-        )
-
-
-@dataclass(kw_only=True)
-class OrderInfo:
-    """Attribute one live or historical IB Trade to framework execution.
-
-    Args:
-        trade: Complete IB Trade object.
-        role: Standard or custom order role.
-        submitted_at: Time the controller accepted the submission.
-        execution_model_name: Stable configured model identity.
-        source_key: Optional one-to-one input identity.
-        position_id: Optional independently managed position episode.
-        params: Diagnostic inputs captured at submission.
-        fills: Normalized execution evidence already observed.
-    """
-
-    trade: ibi.Trade
-    role: str
-    submitted_at: datetime
-    execution_model_name: str
-    source_key: str | None = None
-    position_id: str | None = None
-    params: Mapping[str, Any] = field(default_factory=dict)
-    fills: Sequence[FillRecord] = field(default_factory=tuple)
-    _applied_fill_keys: set[str] = field(default_factory=set, repr=False)
-    previous_order_ids: tuple[int, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.trade, ibi.Trade):
-            raise TypeError("trade must be an ib_insync.Trade")
-        self.role = non_empty_string(self.role, "role")
-        aware_datetime(self.submitted_at, "submitted_at")
-        self.execution_model_name = non_empty_string(
-            self.execution_model_name, "execution_model_name"
-        )
-        if self.source_key is not None:
-            self.source_key = non_empty_string(self.source_key, "source_key")
-        self.params = readonly_mapping(self.params, "params")
-        self.fills = tuple(self.fills)
-        self._applied_fill_keys.update(
-            record.deduplication_key for record in self.fills
-        )
-
-    @property
-    def orderId(self) -> int:
-        """Return the broker client-local order id."""
-
-        return self.trade.order.orderId
-
-    @property
-    def permId(self) -> int:
-        """Return the broker permanent order id."""
-
-        return self.trade.order.permId
-
-    @property
-    def active(self) -> bool:
-        """Return whether IB reports this Trade as working."""
-
-        return self.trade.isActive()
-
-    @property
-    def priority(self) -> int:
-        """Return a monotonically useful order-status persistence priority."""
-
-        if not self.trade.log:
-            return int(self.submitted_at.timestamp() * 1000)
-        return int(max(entry.time.timestamp() for entry in self.trade.log) * 1000)
-
-    @property
-    def signed_total_quantity(self) -> float:
-        """Return the signed submitted order quantity."""
-
-        return self.trade.order.totalQuantity * action_to_signal(
-            self.trade.order.action
-        )
-
-    @property
-    def signed_working_quantity(self) -> float:
-        """Return the unfilled signed quantity still working at IB."""
-
-        if not self.active:
-            return 0.0
-        filled = sum(record.execution.shares for record in self.fills)
-        remaining = max(float(self.trade.order.totalQuantity) - filled, 0.0)
-        return remaining * action_to_signal(self.trade.order.action)
-
-    def add_fill(self, record: FillRecord) -> bool:
-        """Append unseen execution evidence and report whether it was new."""
-
-        if record.deduplication_key in self._applied_fill_keys:
-            return False
-        self.fills = (*self.fills, record)
-        self._applied_fill_keys.add(record.deduplication_key)
-        return True
-
-    def execution_trade(self, extra_fills: Sequence[ibi.Fill] = ()) -> ibi.Trade:
-        """Reconstruct fill quantity and price from normalized execution evidence.
-
-        Saved fills and new broker fills are merged by execution identity.
-        This does not account or persist new fills; Controller owns that step.
-        Combo-leg fills do not count as additional BAG fills.
-
-        Args:
-            extra_fills: Broker fills belonging to this order.
-
-        Raises:
-            ValueError: If repeated executions disagree or quantities are invalid.
-        """
-        records = {record.deduplication_key: record for record in self.fills}
-        for fill in extra_fills:
-            record = FillRecord.from_fill(self.trade, fill)
-            previous = records.get(record.deduplication_key)
-            if previous is not None and (
-                previous.execution.shares != record.execution.shares
-                or previous.execution.price != record.execution.price
-                or previous.execution.side != record.execution.side
-                or previous.contract != record.contract
-            ):
-                raise ValueError(f"Conflicting execution {record.deduplication_key!r}")
-            if previous is None:
-                records[record.deduplication_key] = record
-        fills = [record.to_fill() for record in records.values()]
-        quantity = 0.0
-        cost = 0.0
-        for fill in fills:
-            if (
-                isinstance(self.trade.contract, ibi.Bag)
-                and fill.contract.secType != "BAG"
-            ):
-                continue
-            shares = finite_number(fill.execution.shares, "Execution shares")
-            price = finite_number(fill.execution.price, "Execution price")
-            if shares <= 0:
-                raise ValueError("Execution shares must be positive")
-            quantity += shares
-            cost += shares * price
-        if quantity > self.trade.order.totalQuantity:
-            raise ValueError("Execution quantity exceeds submitted order quantity")
-        status = replace(
-            self.trade.orderStatus,
-            filled=quantity,
-            remaining=self.trade.order.totalQuantity - quantity,
-            avgFillPrice=cost / quantity if quantity else 0.0,
-        )
-        if quantity and status.remaining == 0:
-            status.status = ibi.OrderStatus.Filled
-        return ibi.Trade(
-            contract=self.trade.contract,
-            order=self.trade.order,
-            orderStatus=status,
-            fills=fills,
-            log=list(self.trade.log),
-        )
-
-    def encode(self) -> dict[str, Any]:
-        """Return the complete order document stored by Book."""
-
-        return {
-            "orderId": self.orderId,
-            "clientId": self.trade.order.clientId,
-            "permId": self.permId,
-            "trade": tree(self.trade),
-            "role": self.role,
-            "submitted_at": self.submitted_at,
-            "execution_model_name": self.execution_model_name,
-            "source_key": self.source_key,
-            "position_id": self.position_id,
-            "params": tree(dict(self.params)),
-            "fills": [record.encode() for record in self.fills],
-            "applied_fill_keys": sorted(self._applied_fill_keys),
-            "active": self.active,
-            "priority": self.priority,
-            "previous_order_ids": list(self.previous_order_ids),
-        }
-
-    @classmethod
-    def decode(cls, data: Mapping[str, Any]) -> OrderInfo:
-        """Restore an OrderInfo from the current Book schema."""
-
-        if "target_key" in data:
-            raise ValueError("Old keyed order schema requires standalone conversion")
-        return cls(
-            trade=decode_tree(data["trade"]),
-            role=str(data["role"]),
-            submitted_at=decode_tree(data["submitted_at"]),
-            execution_model_name=str(data["execution_model_name"]),
-            source_key=data.get("source_key"),
-            position_id=data.get("position_id"),
-            params=decode_tree(data.get("params", {})),
-            fills=tuple(FillRecord.decode(fill) for fill in data.get("fills", ())),
-            _applied_fill_keys=set(data.get("applied_fill_keys", ())),
-            previous_order_ids=tuple(data.get("previous_order_ids", ())),
-        )
-
-
-@dataclass(frozen=True, kw_only=True)
-class PositionState:
-    """Recover an episode separately from its latest accepted target.
-
-    ``contract`` and ``bracket_inputs`` belong to the holding or submitted
-    entry. ``target_contract`` and ``target_bracket_inputs`` belong to the
-    pending opening destination; accepting a reversal must not change the
-    Contract or protection inputs of the episode being closed.
-    """
-
-    source_key: str
-    execution_model_name: str
-    contract: ibi.Contract | None = None
-    quantity: float = 0.0
-    target_quantity: float | None = None
-    target_created_at: datetime | None = None
-    target_contract: ibi.Contract | None = None
-    target_bracket_inputs: Mapping[str, Any] = field(default_factory=dict)
-    position_id: str | None = None
-    blocked_direction: Literal[-1, 1] | None = None
-    bracket_inputs: Mapping[str, Any] = field(default_factory=dict)
-    updated_at: datetime = field(default_factory=_utc_now)
-    _applied_fill_keys: frozenset[str] = field(default_factory=frozenset, repr=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "_applied_fill_keys", frozenset(self._applied_fill_keys)
-        )
-        object.__setattr__(
-            self, "source_key", non_empty_string(self.source_key, "source_key")
-        )
-        object.__setattr__(
-            self,
-            "execution_model_name",
-            non_empty_string(self.execution_model_name, "execution_model_name"),
-        )
-        if self.contract is not None:
-            ib_contract(self.contract)
-        if self.target_contract is not None:
-            ib_contract(self.target_contract)
-        object.__setattr__(
-            self,
-            "target_bracket_inputs",
-            readonly_mapping(self.target_bracket_inputs, "target_bracket_inputs"),
-        )
-        if isinstance(self.blocked_direction, bool) or (
-            self.blocked_direction not in (None, -1, 1)
-        ):
-            raise ValueError("blocked_direction must be None, -1, or 1")
-        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
-        if self.target_quantity is not None:
-            object.__setattr__(
-                self,
-                "target_quantity",
-                finite_number(self.target_quantity, "target_quantity"),
-            )
-        if self.target_created_at is not None:
-            aware_datetime(self.target_created_at, "target_created_at")
-        aware_datetime(self.updated_at, "updated_at")
-        object.__setattr__(
-            self,
-            "bracket_inputs",
-            readonly_mapping(self.bracket_inputs, "bracket_inputs"),
-        )
-
-
-@dataclass(frozen=True, kw_only=True)
-class TargetState:
-    """Recover the latest shared direct-execution target.
-
-    ``fill_evidence_start_at`` is Book-owned reset state. It preserves order
-    and Fill history while excluding evidence that predates an explicit
-    account-state clear from the rebuilt direct position.
-    """
-
-    execution_model_name: str
-    contract: ibi.Contract
-    target_quantity: float
-    target_created_at: datetime
-    fill_evidence_start_at: datetime | None = None
-    updated_at: datetime = field(default_factory=_utc_now)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "execution_model_name",
-            non_empty_string(self.execution_model_name, "execution_model_name"),
-        )
-        _contract_key(self.contract)
-        object.__setattr__(
-            self,
-            "target_quantity",
-            finite_number(self.target_quantity, "target_quantity"),
-        )
-        aware_datetime(self.target_created_at, "target_created_at")
-        if self.fill_evidence_start_at is not None:
-            aware_datetime(
-                self.fill_evidence_start_at,
-                "fill_evidence_start_at",
-            )
-        aware_datetime(self.updated_at, "updated_at")
-
-
-@dataclass(frozen=True, kw_only=True)
-class ContractPosition:
-    """Persist an accounted net balance, independently of execution mode.
-
-    Book updates this balance with the underlying episode, order or roll
-    mutation. Recovery verifies it against those records before trading starts.
-    It is neither a desired target nor a broker-position snapshot.
-    """
-
-    contract: ibi.Contract
-    quantity: float
-    updated_at: datetime = field(default_factory=_utc_now)
-
-    def __post_init__(self) -> None:
-        """Validate a concrete Contract and finite signed balance."""
-        qualified_contract(self.contract)
-        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
-        aware_datetime(self.updated_at, "updated_at")
-
-
-class FutureRollMode(StrEnum):
-    """Identify the process's mutually exclusive futures-roll accounting mode.
-
-    ``DIRECT`` rolls account-wide concrete Contract targets.
-    ``BRACKET`` rolls one-to-one episodes attributed by ``source_key`` and
-    reinstalls their protective orders.
-    """
-
-    BRACKET = "BRACKET"
-    DIRECT = "DIRECT"
-
-
-class FutureRollStage(StrEnum):
-    """Record durable progress through one recoverable futures-series roll.
-
-    Values describe broker work as well as bracket-protection replacement.
-    ``BLOCKED`` is intentionally durable and requires operator review;
-    ``COMPLETE`` is the only state excluded from active recovery.
-    """
-
-    PLANNED = "PLANNED"
-    WAITING_FOR_ACTIVE_WORK = "WAITING_FOR_ACTIVE_WORK"
-    ROLL_ORDER_ACTIVE = "ROLL_ORDER_ACTIVE"
-    ROLL_FILLED = "ROLL_FILLED"
-    LOADING_REFERENCE_PRICE = "LOADING_REFERENCE_PRICE"
-    CANCELLING_PROTECTION = "CANCELLING_PROTECTION"
-    INSTALLING_STOP = "INSTALLING_STOP"
-    INSTALLING_TAKE_PROFIT = "INSTALLING_TAKE_PROFIT"
-    COMPLETE = "COMPLETE"
-    BLOCKED = "BLOCKED"
-
-
-@dataclass(frozen=True, kw_only=True)
-class RollParticipant:
-    """Persist one logical holding participating in a futures-series roll.
-
-    Args:
-        execution_model_name: Stable target-model name that owns the holding.
-        quantity: Signed quantity attributed to this participant. A zero
-            non-trading source records an episode that closed while waiting.
-        source_key: One-to-one identity in bracket mode.
-        position_id: Optional one-to-one position episode.
-        requires_trade: Whether this participant supplies the physical BAG
-            order. Offset logical sources may require only price adjustment and
-            protection replacement.
-
-    A source identifies a one-to-one episode; absence denotes direct mode.
-    """
-
-    execution_model_name: str
-    quantity: float
-    source_key: str | None = None
-    position_id: str | None = None
-    requires_trade: bool = True
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "execution_model_name",
-            non_empty_string(self.execution_model_name, "execution_model_name"),
-        )
-        if self.source_key is not None:
-            object.__setattr__(
-                self, "source_key", non_empty_string(self.source_key, "source_key")
-            )
-        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
-        if not self.quantity and (self.source_key is None or self.requires_trade):
-            raise ValueError("Zero roll quantity is only valid for a skipped source")
-        if not isinstance(self.requires_trade, bool):
-            raise TypeError("requires_trade must be a bool")
-
-
-@dataclass(frozen=True, kw_only=True)
-class RollState:
-    """Recover the current roll operation for one registered futures series.
-
-    Args:
-        series_key: ContractRegistry identity shared by all qualified expiries
-            of one registered blueprint.
-        mode: Exclusive direct or bracket accounting mode.
-        executor_name: Stable FutureRollExecutor recovery identity.
-        old_contract: Concrete held Future being left.
-        new_contract: Concrete policy-selected Future being entered.
-        participants: Frozen logical holdings included in this operation.
-        target_transfers: Idempotent concrete target snapshots for direct rolls.
-        occurrence_keys: Schedule markers to record upon successful completion.
-        completed_occurrences: Previously completed schedule markers retained
-            when the next operation replaces this series' current record.
-        participant_index: Durable cursor for serial participant processing.
-        stage: Last durably accepted roll stage.
-        roll_order_id: Current BAG order id, when one is active or filled.
-        old_protection_order_ids: Bracket orders being replaced.
-        replacement_stop_order_id: New critical stop order id.
-        replacement_take_profit_order_id: New optional take-profit order id.
-        reference_price: Filled or observed calendar-spread price used to shift
-            protective prices.
-        failure_reason: Actionable explanation when ``stage`` is ``BLOCKED``.
-        created_at: Start time of this roll generation.
-        updated_at: Time of the latest durable transition.
-
-    Book stores one current record per ``series_key``. Framework executors
-    normally construct and advance it; custom executors must persist each stage
-    before performing its broker side effect.
-    """
-
-    series_key: str
-    mode: FutureRollMode
-    executor_name: str
-    old_contract: ibi.Future
-    new_contract: ibi.Future
-    participants: Sequence[RollParticipant]
-    target_transfers: Sequence[TargetState] = ()
-    occurrence_keys: Sequence[str] = ()
-    completed_occurrences: Sequence[str] = ()
-    participant_index: int = 0
-    stage: FutureRollStage = FutureRollStage.PLANNED
-    roll_order_id: int | None = None
-    old_protection_order_ids: Sequence[int] = ()
-    replacement_stop_order_id: int | None = None
-    replacement_take_profit_order_id: int | None = None
-    reference_price: float | None = None
-    failure_reason: str | None = None
-    created_at: datetime = field(default_factory=_utc_now)
-    updated_at: datetime = field(default_factory=_utc_now)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "series_key", non_empty_string(self.series_key, "series_key")
-        )
-        object.__setattr__(
-            self,
-            "executor_name",
-            non_empty_string(self.executor_name, "executor_name"),
-        )
-        if not isinstance(self.mode, FutureRollMode):
-            raise TypeError("mode must be a FutureRollMode")
-        if not isinstance(self.stage, FutureRollStage):
-            raise TypeError("stage must be a FutureRollStage")
-        if not isinstance(self.old_contract, ibi.Future) or not isinstance(
-            self.new_contract, ibi.Future
-        ):
-            raise TypeError("old_contract and new_contract must be Futures")
-        qualified_contract(self.old_contract, "old_contract")
-        qualified_contract(self.new_contract, "new_contract")
-        if self.old_contract.conId == self.new_contract.conId:
-            raise ValueError("old_contract and new_contract must differ")
-        participants = tuple(self.participants)
-        if not participants or not all(
-            isinstance(participant, RollParticipant) for participant in participants
-        ):
-            raise ValueError("participants must contain RollParticipant values")
-        object.__setattr__(self, "participants", participants)
-        if any(
-            (p.source_key is None) != (self.mode is FutureRollMode.DIRECT)
-            for p in participants
-        ):
-            raise ValueError("Roll participant attribution does not match mode")
-        transfers = tuple(self.target_transfers)
-        if not all(isinstance(target, TargetState) for target in transfers):
-            raise TypeError("target_transfers must contain TargetState values")
-        object.__setattr__(self, "target_transfers", transfers)
-        for name in ("occurrence_keys", "completed_occurrences"):
-            keys = tuple(non_empty_string(key, name) for key in getattr(self, name))
-            object.__setattr__(self, name, tuple(dict.fromkeys(keys)))
-        if not isinstance(self.participant_index, int) or isinstance(
-            self.participant_index, bool
-        ):
-            raise TypeError("participant_index must be an integer")
-        if not 0 <= self.participant_index <= len(participants):
-            raise ValueError("participant_index is outside participants")
-        old_order_ids = tuple(self.old_protection_order_ids)
-        if not all(
-            isinstance(order_id, int) and order_id > 0 for order_id in old_order_ids
-        ):
-            raise ValueError("old_protection_order_ids must be positive integers")
-        object.__setattr__(self, "old_protection_order_ids", old_order_ids)
-        for name in (
-            "roll_order_id",
-            "replacement_stop_order_id",
-            "replacement_take_profit_order_id",
-        ):
-            value = getattr(self, name)
-            if value is not None and (
-                not isinstance(value, int) or isinstance(value, bool) or value <= 0
-            ):
-                raise ValueError(f"{name} must be None or a positive integer")
-        if self.reference_price is not None:
-            object.__setattr__(
-                self,
-                "reference_price",
-                finite_number(self.reference_price, "reference_price"),
-            )
-        if self.failure_reason is not None:
-            object.__setattr__(
-                self,
-                "failure_reason",
-                non_empty_string(self.failure_reason, "failure_reason"),
-            )
-        aware_datetime(self.created_at, "created_at")
-        aware_datetime(self.updated_at, "updated_at")
-
-    @property
-    def current_participant(self) -> RollParticipant | None:
-        """Return the participant at the durable cursor, if any."""
-
-        if self.participant_index == len(self.participants):
-            return None
-        return self.participants[self.participant_index]
-
-    @property
-    def terminal(self) -> bool:
-        """Return whether automatic work must no longer advance."""
-
-        return self.stage in {FutureRollStage.COMPLETE, FutureRollStage.BLOCKED}
 
 
 class Book:
@@ -707,9 +72,7 @@ class Book:
         self._balances: dict[int, ContractPosition] = {}
         self._contributions: dict[tuple[str, str | int], dict[ibi.Contract, float]] = {}
         self._rejected_orders: defaultdict[str, int] = defaultdict(int)
-        self._save_async = save_async
-        self._mutation_queue: SyncQueueRunner | None = None
-        self._write_failure: Exception | None = None
+        self._writer = PersistenceWriter()
         if restore:
             self._restore_documents(*self._read_documents())
             self._recover_position_fills()
@@ -717,43 +80,20 @@ class Book:
             # startup repairs synchronously, just like the recovery reads.
             for balance in self._rebuild_balances():
                 self._save_balance(balance)
-        self._mutation_queue = (
-            SyncQueueRunner(
-                "Book",
-                shutdown_policy=QueueShutdownPolicy.DRAIN,
-                max_failures=1,
-            )
-            if save_async
-            else None
-        )
+        if save_async:
+            self._writer.enable_async()
 
     def _save(self, saver: AbstractBaseSaver, document: dict[str, Any]) -> None:
-        """Persist one mutation in Book's deterministic write order."""
-
-        self.check_writable()
-        try:
-            if self._mutation_queue is None:
-                saver.save(document)
-            else:
-                self._mutation_queue.enqueue(saver.save, document)
-        except Exception as exc:
-            self._write_failure = exc
-            raise
+        """Submit a serialized state change to the shared writer."""
+        self._writer.save(saver, document)
 
     def check_writable(self) -> None:
         """Reject new broker work after critical persistence has halted."""
-        if self._write_failure is not None:
-            raise QueueProcessingError(
-                "Book persistence has halted"
-            ) from self._write_failure
-        if self._mutation_queue is not None:
-            self._mutation_queue.check_accepting_work()
+        self._writer.check_writable()
 
     async def close(self) -> None:
         """Drain critical pending mutations before shutdown."""
-
-        if self._mutation_queue is not None:
-            await self._mutation_queue.close()
+        await self._writer.close()
 
     def clear_state(self) -> None:
         """Durably flatten and clear typed recovery projections.
@@ -763,7 +103,7 @@ class Book:
         before in-memory removal so stale targets cannot return after restart.
         """
 
-        cleared_at = _utc_now()
+        cleared_at = utc_now()
         for position in self._positions.values():
             cleared_position = replace(
                 position,
@@ -779,7 +119,7 @@ class Book:
             )
             self._save(
                 self._state_saver,
-                self._encode_position(cleared_position),
+                cleared_position.encode(),
             )
         targets_to_clear = dict(self._targets)
         # Residual liquidation/manual evidence can exist without a Portfolio
@@ -802,14 +142,14 @@ class Book:
                 fill_evidence_start_at=cleared_at,
                 updated_at=cleared_at,
             )
-            document = self._encode_target(cleared_target)
+            document = cleared_target.encode()
             document["cleared"] = True
             self._save(self._state_saver, document)
             self._target_fill_cutoffs[target.contract.conId] = cleared_at
         for roll in self._rolls.values():
             self._save(
                 self._state_saver,
-                self._encode_roll(
+                (
                     replace(
                         roll,
                         participant_index=len(roll.participants),
@@ -820,7 +160,7 @@ class Book:
                         replacement_take_profit_order_id=None,
                         failure_reason=None,
                         updated_at=cleared_at,
-                    )
+                    ).encode()
                 ),
             )
         for portfolio_key in self._portfolio_states:
@@ -883,10 +223,10 @@ class Book:
             document.pop("_id", None)
             state_type = document.get("state_type")
             if state_type == "position":
-                position_state = self._decode_position(document)
+                position_state = PositionState.decode(document)
                 self._positions[position_state.source_key] = position_state
             elif state_type == "target":
-                target_state = self._decode_target(document)
+                target_state = TargetState.decode(document)
                 if target_state.fill_evidence_start_at is not None:
                     self._target_fill_cutoffs[target_state.contract.conId] = (
                         target_state.fill_evidence_start_at
@@ -894,14 +234,14 @@ class Book:
                 if not document.get("cleared", False):
                     self._targets[target_state.contract.conId] = target_state
             elif state_type == "roll":
-                roll_state = self._decode_roll(document)
+                roll_state = RollState.decode(document)
                 self._rolls[roll_state.series_key] = roll_state
             elif state_type == "portfolio":
                 self._portfolio_states[str(document["portfolio_key"])] = (
                     MappingProxyType(decode_tree(document.get("state", {})))
                 )
             elif state_type == "balance":
-                balance = self._decode_balance(document)
+                balance = ContractPosition.decode(document)
                 self._balances[balance.contract.conId] = balance
             else:
                 raise ValueError(f"Unknown Book state_type: {state_type!r}")
@@ -1077,7 +417,7 @@ class Book:
         """Persist an already checkpointed source state and its net contribution."""
 
         self._positions[state.source_key] = state
-        self._save(self._state_saver, self._encode_position(state))
+        self._save(self._state_saver, state.encode())
         self._update_balances(
             {("source", state.source_key): self._episode_positions(state)}
         )
@@ -1104,7 +444,7 @@ class Book:
         ):
             return current
         self._targets[state.contract.conId] = state
-        self._save(self._state_saver, self._encode_target(state))
+        self._save(self._state_saver, state.encode())
         if cutoff is None and state.fill_evidence_start_at is not None:
             for balance in self._rebuild_balances():
                 self._save_balance(balance)
@@ -1146,7 +486,7 @@ class Book:
 
         previous = self._rolls.get(state.series_key)
         self._rolls[state.series_key] = state
-        self._save(self._state_saver, self._encode_roll(state))
+        self._save(self._state_saver, state.encode())
         changes: dict[tuple[str, str | int], dict[ibi.Contract, float]] = {
             ("roll", state.series_key): (
                 dict(self._roll_physical_quantities(state))
@@ -1372,7 +712,7 @@ class Book:
             previous = saved.get(con_id)
             current = self._balances.get(con_id)
             if current is None and previous is not None:
-                current = replace(previous, quantity=0.0, updated_at=_utc_now())
+                current = replace(previous, quantity=0.0, updated_at=utc_now())
             if current is None:
                 continue
             if previous is not None and previous.quantity == current.quantity:
@@ -1384,32 +724,7 @@ class Book:
 
     def _save_balance(self, balance: ContractPosition) -> None:
         """Persist a shared Contract balance under its natural identity."""
-        self._save(
-            self._state_saver,
-            {
-                "state_key": f"balance:{balance.contract.conId}",
-                "state_type": "balance",
-                "conId": balance.contract.conId,
-                "contract": tree(balance.contract),
-                "quantity": balance.quantity,
-                "updated_at": balance.updated_at,
-            },
-        )
-
-    @staticmethod
-    def _decode_balance(document: Mapping[str, Any]) -> ContractPosition:
-        """Validate the concrete identity of a persisted balance."""
-        balance = ContractPosition(
-            contract=decode_tree(document["contract"]),
-            quantity=document["quantity"],
-            updated_at=decode_tree(document["updated_at"]),
-        )
-        if (
-            document.get("state_key") != f"balance:{balance.contract.conId}"
-            or document.get("conId") != balance.contract.conId
-        ):
-            raise ValueError("Persisted balance identity does not match its Contract")
-        return balance
+        self._save(self._state_saver, balance.encode())
 
     def _active_bracket_rolls(self) -> tuple[RollState, ...]:
         """Return incomplete one-to-one rolls that own broker projections."""
@@ -1515,7 +830,7 @@ class Book:
                 target_bracket_inputs={},
                 position_id=None,
                 bracket_inputs={},
-                updated_at=_utc_now(),
+                updated_at=utc_now(),
             )
         )
 
@@ -1534,7 +849,7 @@ class Book:
             raise ValueError("direction must be None, -1, or 1")
         state = self._positions[source_key]
         return self.update_position(
-            replace(state, blocked_direction=direction, updated_at=_utc_now())
+            replace(state, blocked_direction=direction, updated_at=utc_now())
         )
 
     def apply_fill(self, trade: ibi.Trade, fill: ibi.Fill) -> bool:
@@ -1576,51 +891,7 @@ class Book:
                 execution_model_name=info.execution_model_name,
                 contract=info.trade.contract,
             )
-            if record.deduplication_key in state._applied_fill_keys:
-                return None
-            old_quantity = state.quantity
-            quantity = old_quantity + record.execution.shares * self._fill_direction(
-                record
-            )
-            blocked = state.blocked_direction
-            if (
-                info.role in {"STOP_LOSS", "TAKE_PROFIT"}
-                and old_quantity
-                and quantity == 0
-            ):
-                blocked = 1 if old_quantity > 0 else -1
-            elif info.role == "OPEN" and quantity != 0:
-                blocked = None
-            episode_closed = quantity == 0 and info.role in {
-                "CLOSE",
-                "STOP_LOSS",
-                "TAKE_PROFIT",
-            }
-            protective_exit = quantity == 0 and info.role in {
-                "STOP_LOSS",
-                "TAKE_PROFIT",
-            }
-            target_quantity = 0.0 if protective_exit else state.target_quantity
-            return replace(
-                state,
-                contract=info.trade.contract,
-                quantity=quantity,
-                target_quantity=target_quantity,
-                target_contract=None if protective_exit else state.target_contract,
-                target_bracket_inputs=(
-                    {} if protective_exit else state.target_bracket_inputs
-                ),
-                blocked_direction=blocked,
-                position_id=None if episode_closed else state.position_id,
-                bracket_inputs=(
-                    {}
-                    if episode_closed and not target_quantity
-                    else state.bracket_inputs
-                ),
-                updated_at=_utc_now(),
-                _applied_fill_keys=state._applied_fill_keys
-                | {record.deduplication_key},
-            )
+            return state.with_fill(info, record)
         return None
 
     def _recover_position_fills(self) -> None:
@@ -1637,7 +908,7 @@ class Book:
             state = self._position_after_fill(info, record)
             if state is not None:
                 self._positions[state.source_key] = state
-                self._save(self._state_saver, self._encode_position(state))
+                self._save(self._state_saver, state.encode())
 
     def update_commission(
         self,
@@ -1688,7 +959,7 @@ class Book:
                 "state_type": "portfolio",
                 "portfolio_key": portfolio_key,
                 "state": tree(dict(copied)),
-                "updated_at": _utc_now(),
+                "updated_at": utc_now(),
             },
         )
 
@@ -1771,171 +1042,3 @@ class Book:
                 f"{sorted(candidates)}"
             )
         return next(iter(candidates), None)
-
-    @staticmethod
-    def _encode_position(state: PositionState) -> dict[str, Any]:
-        return {
-            "state_key": f"position:{state.source_key}",
-            "state_type": "position",
-            "source_key": state.source_key,
-            "execution_model_name": state.execution_model_name,
-            "contract": tree(state.contract),
-            "quantity": state.quantity,
-            "target_quantity": state.target_quantity,
-            "target_created_at": state.target_created_at,
-            "target_contract": tree(state.target_contract),
-            "target_bracket_inputs": tree(dict(state.target_bracket_inputs)),
-            "position_id": state.position_id,
-            "blocked_direction": state.blocked_direction,
-            "bracket_inputs": tree(dict(state.bracket_inputs)),
-            "updated_at": state.updated_at,
-            "applied_fill_keys": sorted(state._applied_fill_keys),
-        }
-
-    @staticmethod
-    def _decode_position(data: Mapping[str, Any]) -> PositionState:
-        if "applied_fill_keys" not in data:
-            raise ValueError(
-                "Position state lacks a fill checkpoint; standalone conversion required"
-            )
-        return PositionState(
-            source_key=str(data["source_key"]),
-            execution_model_name=str(data["execution_model_name"]),
-            contract=decode_tree(data.get("contract")),
-            quantity=float(data.get("quantity", 0.0)),
-            target_quantity=data.get("target_quantity"),
-            target_created_at=decode_tree(data.get("target_created_at")),
-            target_contract=decode_tree(data["target_contract"]),
-            target_bracket_inputs=decode_tree(data["target_bracket_inputs"]),
-            position_id=data.get("position_id"),
-            blocked_direction=data.get("blocked_direction"),
-            bracket_inputs=decode_tree(data.get("bracket_inputs", {})),
-            updated_at=decode_tree(data["updated_at"]),
-            _applied_fill_keys=frozenset(data["applied_fill_keys"]),
-        )
-
-    @staticmethod
-    def _encode_roll_participant(participant: RollParticipant) -> dict[str, Any]:
-        return {
-            "execution_model_name": participant.execution_model_name,
-            "quantity": participant.quantity,
-            "source_key": participant.source_key,
-            "position_id": participant.position_id,
-            "requires_trade": participant.requires_trade,
-        }
-
-    @staticmethod
-    def _decode_roll_participant(data: Mapping[str, Any]) -> RollParticipant:
-        if "target_key" in data:
-            raise ValueError("Old keyed roll schema requires standalone conversion")
-        return RollParticipant(
-            execution_model_name=str(data["execution_model_name"]),
-            quantity=float(data["quantity"]),
-            source_key=data.get("source_key"),
-            position_id=data.get("position_id"),
-            requires_trade=bool(data.get("requires_trade", True)),
-        )
-
-    @classmethod
-    def _encode_roll(cls, state: RollState) -> dict[str, Any]:
-        return {
-            "state_key": f"roll:{state.series_key}",
-            "state_type": "roll",
-            "series_key": state.series_key,
-            "mode": state.mode.value,
-            "executor_name": state.executor_name,
-            "old_contract": tree(state.old_contract),
-            "new_contract": tree(state.new_contract),
-            "participants": [
-                cls._encode_roll_participant(participant)
-                for participant in state.participants
-            ],
-            "target_transfers": [
-                Book._encode_target(t) for t in state.target_transfers
-            ],
-            "participant_index": state.participant_index,
-            "occurrence_keys": list(state.occurrence_keys),
-            "completed_occurrences": list(state.completed_occurrences),
-            "stage": state.stage.value,
-            "roll_order_id": state.roll_order_id,
-            "old_protection_order_ids": list(state.old_protection_order_ids),
-            "replacement_stop_order_id": state.replacement_stop_order_id,
-            "replacement_take_profit_order_id": (
-                state.replacement_take_profit_order_id
-            ),
-            "reference_price": state.reference_price,
-            "failure_reason": state.failure_reason,
-            "created_at": state.created_at,
-            "updated_at": state.updated_at,
-        }
-
-    @classmethod
-    def _decode_roll(cls, data: Mapping[str, Any]) -> RollState:
-        return RollState(
-            series_key=str(data["series_key"]),
-            mode=FutureRollMode(str(data["mode"])),
-            executor_name=str(data["executor_name"]),
-            old_contract=decode_tree(data["old_contract"]),
-            new_contract=decode_tree(data["new_contract"]),
-            participants=tuple(
-                cls._decode_roll_participant(participant)
-                for participant in data["participants"]
-            ),
-            target_transfers=tuple(
-                Book._decode_target(t) for t in data.get("target_transfers", ())
-            ),
-            participant_index=int(data.get("participant_index", 0)),
-            occurrence_keys=tuple(data.get("occurrence_keys", ())),
-            completed_occurrences=tuple(data.get("completed_occurrences", ())),
-            stage=FutureRollStage(str(data["stage"])),
-            roll_order_id=data.get("roll_order_id"),
-            old_protection_order_ids=tuple(data.get("old_protection_order_ids", ())),
-            replacement_stop_order_id=data.get("replacement_stop_order_id"),
-            replacement_take_profit_order_id=data.get(
-                "replacement_take_profit_order_id"
-            ),
-            reference_price=data.get("reference_price"),
-            failure_reason=data.get("failure_reason"),
-            created_at=decode_tree(data["created_at"]),
-            updated_at=decode_tree(data["updated_at"]),
-        )
-
-    @staticmethod
-    def _encode_target(state: TargetState) -> dict[str, Any]:
-        return {
-            "state_key": f"target:{state.contract.conId}",
-            "state_type": "target",
-            "execution_model_name": state.execution_model_name,
-            "conId": state.contract.conId,
-            "contract": tree(state.contract),
-            "target_quantity": state.target_quantity,
-            "target_created_at": state.target_created_at,
-            "fill_evidence_start_at": state.fill_evidence_start_at,
-            "updated_at": state.updated_at,
-        }
-
-    @staticmethod
-    def _decode_target(data: Mapping[str, Any]) -> TargetState:
-        if "target_key" in data or data.get("state_key") != f"target:{data['conId']}":
-            raise ValueError("Old keyed target schema requires standalone conversion")
-        return TargetState(
-            execution_model_name=str(data["execution_model_name"]),
-            contract=decode_tree(data["contract"]),
-            target_quantity=float(data["target_quantity"]),
-            target_created_at=decode_tree(data["target_created_at"]),
-            fill_evidence_start_at=decode_tree(data.get("fill_evidence_start_at")),
-            updated_at=decode_tree(data["updated_at"]),
-        )
-
-
-__all__ = [
-    "Book",
-    "FillRecord",
-    "FutureRollMode",
-    "FutureRollStage",
-    "OrderInfo",
-    "RollParticipant",
-    "RollState",
-    "PositionState",
-    "TargetState",
-]
