@@ -1,10 +1,11 @@
-*****************
-DataFrame Storage
-*****************
+*******
+Storage
+*******
 
 Haymaker provides separate storage defaults for broker market-data history and
 calculated Signal data. Most strategies only select whether to use those
 defaults; custom storage objects are an advanced extension point.
+Accounting storage is separate and described under the advanced interfaces below.
 
 Default storage
 ===============
@@ -144,6 +145,26 @@ accepted, the model must not mutate it.
 
 Advanced storage interfaces
 ---------------------------
+
+Accounting persistence
+~~~~~~~~~~~~~~~~~~~~~~
+
+LiveRuntime constructs Book's order and state savers from the ``book`` and
+``storage`` configuration. A custom Book backend implements synchronous
+``AbstractBaseSaver.save`` and ``read``; Book supplies the shared ordered queue.
+Do not put a second queue inside a custom saver: successful return must mean
+the write completed, and failures must raise. Orders use ``orderId`` as their
+update key; state records use ``state_key``. Reads must preserve aware datetimes.
+With ``MongoSaver``, use ``tz_aware=True`` for these accounting collections.
+
+The optional Blotter is a reporting service. Disabling it does not disable
+order, normalized Fill or CommissionReport persistence. See
+:ref:`execution:Book and Controller ownership` for the accounting query API and
+recovery guarantees.
+
+.. autoclass:: haymaker.saver.AbstractBaseSaver
+
+.. autoclass:: haymaker.blotter.Blotter
 
 Custom Portfolio recovery
 ~~~~~~~~~~~~~~~~~~~~~~~~~

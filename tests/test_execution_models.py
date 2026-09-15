@@ -145,7 +145,7 @@ def apply_fill(controller, trade, quantity, exec_id="exec-1", complete=True):
     if complete:
         trade.orderStatus.status = ibi.OrderStatus.Filled
     info = controller.book.orders.by_id(trade.order.orderId)
-    controller.register_position(info, fill)
+    controller.register_position(info.trade, fill)
     return fill
 
 

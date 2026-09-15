@@ -5,6 +5,7 @@ from runpy import run_path
 import ib_insync as ibi
 import pytest
 
+from haymaker.book import Book, PositionState
 from haymaker.misc import decode_tree, tree
 
 _MIGRATION = run_path(
@@ -68,6 +69,45 @@ def legacy_trade():
         ],
     )
     return trade
+
+
+@pytest.mark.parametrize("checkpoint", [None, [], ["exec-1"]])
+def test_conversion_preserves_or_establishes_source_fill_checkpoint(
+    checkpoint, order_saver, state_saver
+):
+    """Only old uncheckpointed snapshots establish an operator-reviewed baseline."""
+    trade = legacy_trade()
+    order = convert_order(
+        {"strategy": "alpha", "action": "OPEN", "trade": tree(trade)},
+        source_database="old",
+    )
+    state = PositionState(
+        source_key="alpha",
+        execution_model_name="legacy:alpha",
+        contract=trade.contract,
+        quantity=0,
+    ).encode()
+    if checkpoint is None:
+        state.pop("applied_fill_keys")
+        with pytest.raises(ValueError, match="fill checkpoint"):
+            PositionState.decode(state)
+    else:
+        state["applied_fill_keys"] = checkpoint
+    converted = convert_component_states([state], [order], source_database="old")[0]
+    assert converted["applied_fill_keys"] == (
+        ["exec-1"] if checkpoint is None else checkpoint
+    )
+    order_saver.save(order)
+    state_saver.save(converted)
+    recovered = Book(
+        order_saver=order_saver,
+        state_saver=state_saver,
+        save_async=False,
+        restore=True,
+    )
+    assert recovered.positions.for_source("alpha").quantity == (
+        1 if checkpoint == [] else 0
+    )
 
 
 @pytest.mark.parametrize(

@@ -874,6 +874,9 @@ Book persists balances in the existing ``state`` collection under
 records, reconstructing missing or inconsistent totals after interrupted writes.
 These startup repairs complete synchronously before the runtime starts its loop;
 subsequent mutations use the configured persistence queue.
+Injected ``AbstractBaseSaver`` backends must raise on failed writes and return
+timezone-aware datetimes. Framework Book Mongo savers request aware UTC decoding
+without changing the shared Mongo client's settings.
 Saved one-to-one corrections remain authoritative; offline executions are still
 accounted by Controller synchronization. No historical replay occurs in ordinary
 position queries. Book performs no broker calls or Portfolio allocation.
@@ -888,6 +891,10 @@ An explicit state clear stores a per-target
 Fill-evidence cutoff: historical orders and Fills remain available, but
 pre-reset executions cannot recreate a cleared direct position after restart.
 Fills that actually arrive after the clear are still accounted.
+Rebinding retains the previous broker IDs and persistence priority so a reconnect
+cannot duplicate an order's fills or discard new evidence because its live Trade
+has a shorter status log. Both roll modes account explicit combo-leg evidence in
+place of the BAG fallback, never in addition to it.
 
 :class:`~haymaker.controller.Controller` owns broker submission/cancellation,
 immediate OrderInfo registration, status and rejection handling, Fill and

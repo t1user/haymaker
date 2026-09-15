@@ -157,6 +157,9 @@ and distinguish pre-existing failures from regressions.
   orderId with permId fallback; deduplicate normally by execId. Commission
   updates must persist even with blotter output disabled; blotter is never
   required to reconstruct accounting.
+  Broker callbacks must use Book's fill/commission/rebinding methods, not replace
+  OrderInfo.trade directly. Book Mongo savers decode UTC dates as aware datetimes;
+  injected persistence backends must preserve that contract and raise on failure.
 - Physical collections are `orders`, `state`, `blotter`. State identities:
   `position:{source_key}`, `balance:{conId}`, `target:{conId}`, `roll:{series_key}`,
   `portfolio:{portfolio_key}`. Do not add snapshot/decision/lock collections
@@ -177,6 +180,8 @@ and distinguish pre-existing failures from regressions.
   Startup verifies the shared balances against durable accounting records and
   repairs interrupted balance writes. Preserve one-to-one broker corrections;
   do not reconstruct corrected episodes blindly from historical fills.
+  Both roll modes share BAG/explicit-leg contribution rules: explicit leg
+  evidence replaces the BAG fallback instead of counting it again.
 - Reconcile aggregate logical quantity against broker net quantity per concrete
   Contract, including opposing logical one-to-one positions. Use one successful
   `reqPositionsAsync()` snapshot per pass. Cached/fresh disagreement retries

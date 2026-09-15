@@ -372,6 +372,12 @@ class PositionStore:
         """
         if info.source_key is not None:
             return {}
+        return self._fill_contribution(info, cutoffs)
+
+    def _fill_contribution(
+        self, info: OrderInfo, cutoffs: Mapping[int, datetime]
+    ) -> dict[ibi.Contract, float]:
+        """Project concrete fill movement, sharing BAG/leg rules across both modes."""
         quantities: defaultdict[int, float] = defaultdict(float)
         contracts: dict[int, ibi.Contract] = {}
         endpoints: tuple[ibi.Contract, ...] = ()
@@ -382,9 +388,7 @@ class PositionStore:
             old = info.params.get("old_contract")
             new = info.params.get("new_contract")
             if not isinstance(old, ibi.Contract) or not isinstance(new, ibi.Contract):
-                raise ValueError(
-                    f"Direct ROLL orderId={info.orderId} lacks old/new Contracts"
-                )
+                raise ValueError(f"ROLL orderId={info.orderId} lacks old/new Contracts")
             endpoints = (old, new)
             legs = tuple(
                 r for r in records if r.contract.conId in (old.conId, new.conId)
@@ -520,21 +524,18 @@ class PositionStore:
     ) -> Mapping[ibi.Contract, float]:
         """Project broker-net old/new quantities from persisted roll Fills."""
 
-        old_quantity = sum(participant.quantity for participant in state.participants)
-        moved = sum(
-            record.execution.shares * fill_direction(record)
-            for info in orders
-            if info.role == "ROLL"
-            if info.submitted_at >= state.created_at
-            if info.params.get("roll_state_key") == state.series_key
-            and info.params.get("old_contract") == state.old_contract
-            and info.params.get("new_contract") == state.new_contract
-            for record in info.fills
-        )
-        quantities = {
-            state.old_contract: old_quantity - moved,
-            state.new_contract: moved,
-        }
+        quantities: defaultdict[ibi.Contract, float] = defaultdict(float)
+        quantities[state.old_contract] = sum(p.quantity for p in state.participants)
+        for info in orders:
+            if (
+                info.role == "ROLL"
+                and info.submitted_at >= state.created_at
+                and info.params.get("roll_state_key") == state.series_key
+                and info.params.get("old_contract") == state.old_contract
+                and info.params.get("new_contract") == state.new_contract
+            ):
+                for contract, movement in self._fill_contribution(info, {}).items():
+                    quantities[contract] += movement
         return MappingProxyType(
             {
                 contract: quantity
@@ -543,13 +544,20 @@ class PositionStore:
             }
         )
 
-    def _after_fill(self, info: OrderInfo, record: FillRecord) -> PositionState | None:
+    def _after_fill(
+        self,
+        info: OrderInfo,
+        record: FillRecord,
+        *,
+        initial_checkpoint: frozenset[str] = frozenset(),
+    ) -> PositionState | None:
         """Calculate a source transition only when its checkpoint lacks the fill."""
         if info.source_key is not None and not isinstance(info.trade.contract, ibi.Bag):
             state = self._sources.get(info.source_key) or PositionState(
                 source_key=info.source_key,
                 execution_model_name=info.execution_model_name,
                 contract=info.trade.contract,
+                _applied_fill_keys=initial_checkpoint,
             )
             return state.with_fill(info, record)
         return None

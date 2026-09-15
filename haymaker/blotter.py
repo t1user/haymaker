@@ -15,16 +15,17 @@ log = logging.getLogger(__name__)
 
 
 class Blotter:
-    """
-    Log trade only after all commission reports arrive. Trader
-    will log commission after every commission event. It's up to blotter
-    to parse through those reports, determine when the trade is ready
-    to be logged and filter out some known issues with ib-insync reports.
+    """Collect optional trade reports after their commissions arrive.
 
-    Blotter works in one of two modes:
-    - trade by trade save to store: suitable for live trading
-    - save to store only full blotter: suitable for backtest (save time
-      on i/o)
+    Controller supplies each commission callback and source/episode attribution.
+    Reporting is independent of Book's authoritative order and Fill persistence;
+    disabling the blotter never disables accounting or commission recovery.
+
+    Args:
+        save_immediately: Queue each completed trade report when True (the
+            live default). When False, retain rows for an explicit save_many().
+        saver: Reporting backend; defaults to a CSV blotter. A backend used by
+            save_many() must additionally support that bulk-writing method.
     """
 
     def __init__(

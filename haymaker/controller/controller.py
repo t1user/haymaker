@@ -10,14 +10,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import partial
-from typing import Any, Literal, Self
+from typing import Any, Self
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
 from haymaker import misc
 from haymaker.base import Atom
-from haymaker.book import OrderInfo, PositionState
+from haymaker.book import OrderInfo
 from haymaker.components.messages import PositionTarget, StandardOrderRole
 from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
@@ -526,43 +526,34 @@ class Controller(Atom):
 
     def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
         """Persist status changes and rebind current live Trade objects."""
-
         if self._hold:
             return
-        info = self.book.orders.by_id(
-            trade.order.orderId
-        ) or self.book.orders.by_perm_id(trade.order.permId)
-        if info is None:
+        if self.book.rebind_trade(trade) is not None:
             if not trade.order.orderId:
                 log.warning(
                     "Skipping unknown order status with orderId 0, permId=%s",
                     trade.order.permId,
                 )
                 return
-            info = self._unknown_order_info(trade)
-        else:
-            info.trade = trade
-        self.book.save_order(info)
+            self.book.save_order(self._unknown_order_info(trade))
 
-    def register_position(self, order_info: OrderInfo, fill: ibi.Fill) -> None:
+    def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """Apply one execution idempotently to Book projections."""
 
-        if isinstance(order_info.trade.contract, ibi.Bag):
+        if isinstance(trade.contract, ibi.Bag):
             log.debug("Combo fill retained as order evidence without projection.")
-            self.book.apply_fill(order_info.trade, fill)
+            self.book.apply_fill(trade, fill)
             return
         try:
-            changed = self.book.apply_fill(order_info.trade, fill)
+            changed = self.book.apply_fill(trade, fill)
         except (KeyError, ValueError):
-            log.exception(
-                "Cannot apply fill for orderId=%s", order_info.trade.order.orderId
-            )
+            log.exception("Cannot apply fill for orderId=%s", trade.order.orderId)
             return
         if not changed:
             log.warning(
                 "Abandoned duplicate fill execId=%s orderId=%s",
                 fill.execution.execId,
-                order_info.trade.order.orderId,
+                trade.order.orderId,
             )
 
     async def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
@@ -571,12 +562,11 @@ class Controller(Atom):
         info = (
             self.assign_manual_trade(trade)
             or self.book.orders.by_id(trade.order.orderId)
-            or self.match_by_permId(trade, fill)
+            or self.book.orders.by_perm_id(trade.order.permId)
             or self.assign_unknown_trade(trade)
         )
         if info is not None:
-            info.trade = trade
-            self.register_position(info, fill)
+            self.register_position(trade, fill)
 
     async def onCommissionReport(
         self,
@@ -602,8 +592,6 @@ class Controller(Atom):
                 fill.execution.execId,
                 trade.order.orderId,
             )
-            info.trade = trade
-            self.book.save_order(info)
         blotter = self.book.blotter
         if blotter is None:
             return
@@ -722,23 +710,6 @@ class Controller(Atom):
                 logical,
                 broker,
             )
-
-    def match_by_permId(self, trade: ibi.Trade, fill: ibi.Fill) -> OrderInfo | None:
-        """Find and rebind an order using broker permanent id."""
-
-        info = self.book.orders.by_perm_id(trade.order.permId)
-        if info is not None:
-            if not trade.order.orderId:
-                trade.order.orderId = info.orderId
-            info.trade = trade
-            self.book.save_order(info)
-            log.debug(
-                "Matched execId=%s by permId=%s to orderId=%s",
-                fill.execution.execId,
-                trade.order.permId,
-                info.orderId,
-            )
-        return info
 
     def _source_for_unknown_trade(self, trade: ibi.Trade) -> str | None:
         """Attribute an unknown trade only when one logical position is clear."""

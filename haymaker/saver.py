@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 import pymongo  # type: ignore
+from bson.codec_options import CodecOptions  # type: ignore
 
 from .async_wrappers import SyncQueueRunner, make_async
 from .misc import default_path, name_str
@@ -137,6 +138,8 @@ class MongoSaver(AbstractBaseSaver):
         query_key: str | None = None,
         client: pymongo.MongoClient | None = None,
         database: str = "test_data",
+        *,
+        tz_aware: bool = False,
     ) -> None:
         """
         `query_key` if for type of records that need to be recalled
@@ -144,6 +147,9 @@ class MongoSaver(AbstractBaseSaver):
         course it's possible to find any record with standard pymongo
         methods, this is just a helper for a typical task done by Haymaker).
 
+        Set ``tz_aware=True`` for accounting collections: Mongo dates represent
+        UTC instants and Book requires aware datetimes on restoration. This
+        changes only this collection's decoding, not a shared client's settings.
         """
         if client is None:
             self.client = pymongo.MongoClient()
@@ -152,6 +158,10 @@ class MongoSaver(AbstractBaseSaver):
 
         self.db = self.client[database]
         self.collection = self.db[collection]
+        if tz_aware:
+            self.collection = self.collection.with_options(
+                codec_options=CodecOptions(tz_aware=True)
+            )
         self.query_key = query_key
 
         if self.query_key:

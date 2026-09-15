@@ -79,6 +79,25 @@ def test_rebound_order_is_counted_once_after_restart(book, order_saver, state_sa
         assert not book.apply_fill(rebound, execution)
 
 
+def test_live_replay_and_new_fill_after_reset_keep_checkpoint(
+    book, order_saver, state_saver
+):
+    """A cleared source cannot be resurrected by old callbacks, even after new work."""
+    opening = trade()
+    book.save_order(order_info(opening))
+    old = fill(opening)
+    book.apply_fill(opening, old)
+    book.clear_state()
+    assert not book.apply_fill(opening, old)
+    assert book.positions.for_source("alpha") is None
+    new = fill(opening, exec_id="post-reset")
+    assert book.apply_fill(opening, new)
+    assert not book.apply_fill(opening, old)
+    recovered = restore(order_saver, state_saver)
+    assert recovered.positions.for_source("alpha").quantity == 1
+    assert recovered.positions.quantity(opening.contract) == 1
+
+
 async def test_failed_evidence_write_stops_dependent_projections(
     order_saver, state_saver, monkeypatch
 ):

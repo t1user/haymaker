@@ -153,6 +153,7 @@ class OrderInfo:
     fills: Sequence[FillRecord] = field(default_factory=tuple)
     _applied_fill_keys: set[str] = field(default_factory=set, repr=False)
     previous_order_ids: tuple[int, ...] = ()
+    _persistence_priority: int = field(default=0, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.trade, ibi.Trade):
@@ -192,9 +193,10 @@ class OrderInfo:
     def priority(self) -> int:
         """Return a monotonically useful order-status persistence priority."""
 
-        if not self.trade.log:
-            return int(self.submitted_at.timestamp() * 1000)
-        return int(max(entry.time.timestamp() for entry in self.trade.log) * 1000)
+        timestamp = max(
+            (entry.time for entry in self.trade.log), default=self.submitted_at
+        )
+        return max(self._persistence_priority, int(timestamp.timestamp() * 1000))
 
     @property
     def signed_total_quantity(self) -> float:
@@ -320,6 +322,7 @@ class OrderInfo:
             fills=tuple(FillRecord.decode(fill) for fill in data.get("fills", ())),
             _applied_fill_keys=set(data.get("applied_fill_keys", ())),
             previous_order_ids=tuple(data.get("previous_order_ids", ())),
+            _persistence_priority=int(data.get("priority", 0)),
         )
 
 
@@ -342,6 +345,7 @@ class OrderStore:
         """Persist order evidence before the coordinator updates projections."""
         if not info.orderId:
             raise ValueError("Cannot persist an order with orderId 0")
+        info._persistence_priority = info.priority
         self._writer.save(self._saver, info.encode())
         self._items[info.orderId] = info
         self._index_fills(info)
@@ -379,9 +383,13 @@ class OrderStore:
                     not info.permId or previous.permId != info.permId
                 ):
                     raise ValueError("Rebound order history has conflicting permId")
-        self._items = {
+        current = {
             key: info for key, info in self._items.items() if key not in superseded
         }
+        owners = {info.permId for info in current.values()}
+        if any(info.permId not in owners for info in self._items.values()):
+            raise ValueError("Rebound order history has no unambiguous current record")
+        self._items = current
 
         self._received_keys.clear()
         for info in self._items.values():
@@ -389,27 +397,38 @@ class OrderStore:
 
     def _rebind(self, trade: ibi.Trade) -> tuple[OrderInfo | None, int]:
         """Bind a known live Trade and return its record and previous broker ID."""
-        info = self.by_id(trade.order.orderId) or self.by_perm_id(trade.order.permId)
+        info = self.by_id(trade.order.orderId)
+        if info is None:
+            info = self.by_perm_id(trade.order.permId)
+        elif info.permId and trade.order.permId and info.permId != trade.order.permId:
+            raise ValueError("Broker orderId and permId identify different orders")
         if info is None:
             return None, 0
-        if info.trade is not trade:
-            old_order_id = info.orderId
-            if not trade.order.orderId:
-                trade.order.orderId = old_order_id
-            existing = self._items.get(trade.order.orderId)
-            if existing is not None and existing is not info:
-                raise ValueError("Rebound orderId already belongs to another order")
-            if old_order_id != trade.order.orderId:
-                info.previous_order_ids = tuple(
-                    key
-                    for key in dict.fromkeys((*info.previous_order_ids, old_order_id))
-                    if key != trade.order.orderId
-                )
-            info.trade = trade
-            if old_order_id != info.orderId:
-                self._items.pop(old_order_id, None)
-            return info, old_order_id
-        return info, info.orderId
+        old_order_id = info.orderId
+        if self._items.get(old_order_id) is not info:
+            # IB may mutate the same Trade in place before delivering its event.
+            old_order_id = next(
+                key for key, saved in self._items.items() if saved is info
+            )
+        if not trade.order.orderId:
+            trade.order.orderId = old_order_id
+        if trade.order.orderId in info.previous_order_ids:
+            raise ValueError(
+                "Cannot reuse a superseded broker orderId during rebinding"
+            )
+        if old_order_id != trade.order.orderId:
+            info.previous_order_ids = tuple(
+                key
+                for key in dict.fromkeys((*info.previous_order_ids, old_order_id))
+                if key != trade.order.orderId
+            )
+        # Recovered Trades can have shorter logs. Their newer evidence must not
+        # lose MongoSaver's priority comparison against the prior document.
+        info._persistence_priority = info.priority
+        info.trade = trade
+        if old_order_id != info.orderId:
+            self._items.pop(old_order_id, None)
+        return info, old_order_id
 
     def by_id(self, order_id: int, *, active_only: bool = False) -> OrderInfo | None:
         """Look up an order by actual broker orderId."""

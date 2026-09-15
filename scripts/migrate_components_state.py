@@ -691,7 +691,7 @@ def main() -> None:
     """Run conversion and print its validation report as JSON."""
 
     args = parse_args()
-    client = MongoClient(args.mongo_uri)
+    client = MongoClient(args.mongo_uri, tz_aware=True)
     report = migrate(
         client,
         source_database=args.source_db,

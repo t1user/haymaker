@@ -41,7 +41,9 @@ class Book:
 
     Args:
         order_saver: Synchronous keyed order backend; defaults to Mongo orders.
-        state_saver: Synchronous keyed state backend; defaults to Mongo state.
+            Injected backends must restore aware datetimes and raise on failure.
+        state_saver: Synchronous keyed state backend with the same timestamp and
+            failure contract; defaults to Mongo state.
         blotter: Optional reporting service, never an accounting dependency.
         save_async: Queue normal writes on one critical writer; defaults to True.
         max_rejected_orders: Per-model process rejection threshold; defaults to 3.
@@ -68,10 +70,10 @@ class Book:
     ) -> None:
         """Assemble owners and finish any requested recovery before enabling queues."""
         order_saver = order_saver or MongoSaver(
-            DEFAULT_ORDER_COLLECTION_NAME, query_key="orderId"
+            DEFAULT_ORDER_COLLECTION_NAME, query_key="orderId", tz_aware=True
         )
         state_saver = state_saver or MongoSaver(
-            DEFAULT_STATE_COLLECTION_NAME, query_key="state_key"
+            DEFAULT_STATE_COLLECTION_NAME, query_key="state_key", tz_aware=True
         )
         self._writer = PersistenceWriter()
         self.orders = OrderStore(order_saver, self._writer)
@@ -157,14 +159,19 @@ class Book:
 
         Return an unmatched Trade unchanged; return None after a known rebind.
         """
-        self.check_writable()
-        info, previous_id = self.orders._rebind(trade)
+        info = self._bind_trade(trade)
         if info is None:
             return trade
-        if previous_id != info.orderId:
-            self.positions._rekey_order(previous_id, info.orderId)
         self.save_order(info)
         return None
+
+    def _bind_trade(self, trade: ibi.Trade) -> OrderInfo | None:
+        """Resolve a broker callback and move, rather than duplicate, its contribution."""
+        self.check_writable()
+        info, previous_id = self.orders._rebind(trade)
+        if info is not None and previous_id != info.orderId:
+            self.positions._rekey_order(previous_id, info.orderId)
+        return info
 
     def prune_order(self, order_id: int) -> None:
         """Retire working status while preserving evidence and accounted quantity."""
@@ -310,9 +317,7 @@ class Book:
             ``False`` for a replayed execution.
         """
 
-        info = self.orders.by_id(trade.order.orderId) or self.orders.by_perm_id(
-            trade.order.permId
-        )
+        info = self._bind_trade(trade)
         if info is None:
             raise KeyError(
                 f"No order record for orderId={trade.order.orderId} "
@@ -321,11 +326,18 @@ class Book:
         record = FillRecord.from_fill(trade, fill)
         if not isinstance(trade.contract, ibi.Bag):
             fill_direction(record)
+        received = (
+            self.orders.received_fill_keys(info.source_key)
+            if info.source_key and self.positions.for_source(info.source_key) is None
+            else frozenset()
+        )
         new = info.add_fill(record)
-        if new:
-            # Evidence must precede the source checkpoint and net balance.
-            self.save_order(info)
-        state = self.positions._after_fill(info, record)
+        # Persist the live Trade even on a replay: its ID/status may have changed.
+        # Evidence must precede the source checkpoint and net balance.
+        self.save_order(info)
+        # A source first seen after an explicit clear starts beyond previously
+        # accounted evidence. Startup repairs intentionally omit this baseline.
+        state = self.positions._after_fill(info, record, initial_checkpoint=received)
         if state is not None:
             self._save_position(state)
             return True
@@ -337,6 +349,8 @@ class Book:
             (
                 (record.time, info.orderId, index, info, record)
                 for info in self.orders.query()
+                if info.source_key is not None
+                and not isinstance(info.trade.contract, ibi.Bag)
                 for index, record in enumerate(info.fills)
             ),
             key=lambda item: item[:3],
@@ -352,7 +366,7 @@ class Book:
         fill: ibi.Fill,
         report: ibi.CommissionReport,
     ) -> bool:
-        """Attach a late CommissionReport to normalized Fill evidence.
+        """Persist the live Trade and attach a late report to matching Fill evidence.
 
         Returns:
             ``True`` when matching fill evidence was updated, otherwise
@@ -361,9 +375,7 @@ class Book:
 
         if not isinstance(report, ibi.CommissionReport):
             raise TypeError("report must be an ib_insync.CommissionReport")
-        info = self.orders.by_id(trade.order.orderId) or self.orders.by_perm_id(
-            trade.order.permId
-        )
+        info = self._bind_trade(trade)
         if info is None:
             return False
         key = _execution_key(trade, fill)
@@ -374,10 +386,11 @@ class Book:
                     record,
                     commission_report=report,
                 )
-                info.trade = trade
                 info.fills = tuple(records)
                 self.save_order(info)
                 return True
+        # Complete Trade diagnostics still matter when no normalized fill matches.
+        self.save_order(info)
         return False
 
     def blotter_records(

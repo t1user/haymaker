@@ -11,7 +11,8 @@ import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.book import OrderInfo, PositionState
+from haymaker.async_wrappers import QueueProcessingError
+from haymaker.book import Book, OrderInfo, PositionState
 from haymaker.components import (
     BracketExecutionModel,
     FixedStop,
@@ -2017,13 +2018,74 @@ async def test_clean_sync_releases_hold(controller_runtime, monkeypatch):
 @pytest.mark.asyncio
 async def test_controller_run_does_not_restore_book(controller_runtime, monkeypatch):
     runtime, controller, _ = controller_runtime
-    restore = AsyncMock()
-    monkeypatch.setattr(runtime.book, "read_from_store", restore, raising=False)
+    restore = Mock(side_effect=AssertionError("Controller must not restore Book"))
+    monkeypatch.setattr(runtime.book, "_restore_documents", restore)
     sync = AsyncMock(return_value=SyncOutcome.OK)
     monkeypatch.setattr(controller, "sync", sync)
 
     assert await controller.run() is SyncOutcome.OK
-    restore.assert_not_awaited()
+    restore.assert_not_called()
+
+
+@pytest.mark.parametrize("event", ["status", "fill", "commission"])
+async def test_callbacks_rebind_accounting_before_recovery(
+    controller_runtime, order_saver, state_saver, event
+):
+    """Every broker callback preserves one order identity across ID changes."""
+    runtime, controller, _ = controller_runtime
+    controller.release_hold()
+    opening = controller.trade(
+        contract(),
+        ibi.MarketOrder("BUY", 2),
+        role=StandardOrderRole.TARGET_ADJUSTMENT,
+        execution_model_name="serial",
+    )
+    execution = fill(opening)
+    await controller.onExecDetailsEvent(opening, execution)
+    previous_id = opening.order.orderId
+    rebound = ibi.Trade(
+        contract=opening.contract,
+        order=deepcopy(opening.order),
+        orderStatus=replace(opening.orderStatus, orderId=55),
+        fills=[execution],
+    )
+    rebound.order.orderId = 55
+    report = ibi.CommissionReport(execId=execution.execution.execId, commission=2.5)
+    if event == "status":
+        controller.onOrderStatusEvent(rebound)
+    elif event == "fill":
+        await controller.onExecDetailsEvent(rebound, execution)
+    else:
+        await controller.onCommissionReport(rebound, execution, report)
+    assert runtime.book.orders.by_id(previous_id) is None
+    assert runtime.book.orders.by_id(55).trade is rebound
+    for _ in range(2):
+        recovered = Book(
+            order_saver=order_saver,
+            state_saver=state_saver,
+            save_async=False,
+            restore=True,
+        )
+        assert len(recovered.orders.query()) == 1
+        assert recovered.positions.quantity(contract()) == 1
+        if event == "commission":
+            assert recovered.orders.by_id(55).fills[0].commission_report == report
+
+
+def test_controller_refuses_submission_after_persistence_halts(
+    controller_runtime, order_saver, monkeypatch
+):
+    """No second broker order may precede a known failed accounting write."""
+    _, controller, trader = controller_runtime
+    monkeypatch.setattr(order_saver, "save", Mock(side_effect=RuntimeError("offline")))
+    args = (contract(), ibi.MarketOrder("BUY", 1))
+    kwargs = dict(role=StandardOrderRole.OPEN, execution_model_name="brackets")
+    with pytest.raises(RuntimeError, match="offline"):
+        controller.trade(*args, **kwargs)
+    assert len(trader.trades) == 1
+    with pytest.raises(QueueProcessingError):
+        controller.trade(*args, **kwargs)
+    assert len(trader.trades) == 1
 
 
 def test_rejections_are_scoped_by_execution_model(controller_runtime):
