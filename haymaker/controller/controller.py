@@ -439,6 +439,7 @@ class Controller(Atom):
     ) -> ibi.Trade:
         """Submit and register an order after caller-specific policy checks."""
 
+        self.book.check_writable()
         trade = self.trader.trade(contract, order)
         self.register_order(
             trade,

@@ -850,6 +850,13 @@ subsequent mutations use the configured persistence queue.
 Saved one-to-one corrections remain authoritative; offline executions are still
 accounted by Controller synchronization. No historical replay occurs in ordinary
 position queries. Book performs no broker calls or Portfolio allocation.
+Source positions persist their applied-fill checkpoint with their quantity.
+Startup completes a received fill whose position write was interrupted without
+reapplying older fills over a correction. Critical persistence stops on its first
+failed write; new broker submissions are rejected while that writer is unavailable.
+Records created without source fill checkpoints require the standalone converter;
+conversion takes the selected saved position as the accounting baseline and does
+not infer corrections from historical fills. Review/reconcile that baseline first.
 An explicit state clear stores a per-target
 Fill-evidence cutoff: historical orders and Fills remain available, but
 pre-reset executions cannot recreate a cleared direct position after restart.

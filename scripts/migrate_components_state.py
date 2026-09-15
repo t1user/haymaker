@@ -20,7 +20,7 @@ from pymongo import MongoClient  # type: ignore
 from haymaker.book import Book, FillRecord, OrderInfo
 from haymaker.misc import decode_tree, tree
 
-MIGRATION_VERSION = "components-book-v3-concrete-contracts"
+MIGRATION_VERSION = "components-book-v4-fill-checkpoints"
 
 KNOWN_ROLES = {
     "OPEN": "OPEN",
@@ -180,7 +180,10 @@ def convert_order(
 
 
 def convert_latest_strategy_snapshot(
-    document: Mapping[str, Any], *, source_database: str
+    document: Mapping[str, Any],
+    *,
+    source_database: str,
+    orders: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Convert useful latest strategy state and skip historical snapshots."""
 
@@ -224,10 +227,26 @@ def convert_latest_strategy_snapshot(
                 "blocked_direction": blocked_direction,
                 "bracket_inputs": tree(bracket_inputs),
                 "updated_at": snapshot_time,
+                "applied_fill_keys": _position_fill_checkpoint(source_key, orders),
                 **migration,
             }
         )
     return converted
+
+
+def _position_fill_checkpoint(
+    source_key: str, orders: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    """Treat converted state as the operator-selected accounting baseline."""
+    return sorted(
+        {
+            fill["deduplication_key"]
+            for order in orders
+            if order.get("source_key") == source_key
+            and not isinstance(decode_tree(order["trade"]).contract, ibi.Bag)
+            for fill in order.get("fills", ())
+        }
+    )
 
 
 def _exposure(
@@ -298,6 +317,10 @@ def convert_component_states(
             Book._decode_balance(result)
             continue
         if kind == "position":
+            result.setdefault(
+                "applied_fill_keys",
+                _position_fill_checkpoint(str(result["source_key"]), orders),
+            )
             if "target_contract" not in result:
                 result["target_contract"] = result.get("contract")
                 result["target_bracket_inputs"] = result.get("bracket_inputs", {})
@@ -580,7 +603,9 @@ def migrate(
     ]
     snapshot = _latest_snapshot(source["strategies"])
     states = (
-        convert_latest_strategy_snapshot(snapshot, source_database=source_database)
+        convert_latest_strategy_snapshot(
+            snapshot, source_database=source_database, orders=orders
+        )
         if snapshot is not None
         else []
     )

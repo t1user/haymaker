@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import ib_insync as ibi
 
-from .async_wrappers import QueueShutdownPolicy, SyncQueueRunner
+from .async_wrappers import QueueProcessingError, QueueShutdownPolicy, SyncQueueRunner
 from .blotter import Blotter
 from .misc import action_to_signal, decode_tree, sign, tree
 from .saver import AbstractBaseSaver, MongoSaver
@@ -160,6 +160,7 @@ class OrderInfo:
     params: Mapping[str, Any] = field(default_factory=dict)
     fills: Sequence[FillRecord] = field(default_factory=tuple)
     _applied_fill_keys: set[str] = field(default_factory=set, repr=False)
+    previous_order_ids: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.trade, ibi.Trade):
@@ -307,6 +308,7 @@ class OrderInfo:
             "applied_fill_keys": sorted(self._applied_fill_keys),
             "active": self.active,
             "priority": self.priority,
+            "previous_order_ids": list(self.previous_order_ids),
         }
 
     @classmethod
@@ -325,6 +327,7 @@ class OrderInfo:
             params=decode_tree(data.get("params", {})),
             fills=tuple(FillRecord.decode(fill) for fill in data.get("fills", ())),
             _applied_fill_keys=set(data.get("applied_fill_keys", ())),
+            previous_order_ids=tuple(data.get("previous_order_ids", ())),
         )
 
 
@@ -350,8 +353,12 @@ class PositionState:
     blocked_direction: Literal[-1, 1] | None = None
     bracket_inputs: Mapping[str, Any] = field(default_factory=dict)
     updated_at: datetime = field(default_factory=_utc_now)
+    _applied_fill_keys: frozenset[str] = field(default_factory=frozenset, repr=False)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "_applied_fill_keys", frozenset(self._applied_fill_keys)
+        )
         object.__setattr__(
             self, "source_key", non_empty_string(self.source_key, "source_key")
         )
@@ -702,8 +709,10 @@ class Book:
         self._rejected_orders: defaultdict[str, int] = defaultdict(int)
         self._save_async = save_async
         self._mutation_queue: SyncQueueRunner | None = None
+        self._write_failure: Exception | None = None
         if restore:
             self._restore_documents(*self._read_documents())
+            self._recover_position_fills()
             # Runtime constructs Book before a running loop exists. Finish
             # startup repairs synchronously, just like the recovery reads.
             for balance in self._rebuild_balances():
@@ -712,6 +721,7 @@ class Book:
             SyncQueueRunner(
                 "Book",
                 shutdown_policy=QueueShutdownPolicy.DRAIN,
+                max_failures=1,
             )
             if save_async
             else None
@@ -720,10 +730,24 @@ class Book:
     def _save(self, saver: AbstractBaseSaver, document: dict[str, Any]) -> None:
         """Persist one mutation in Book's deterministic write order."""
 
-        if self._mutation_queue is None:
-            saver.save(document)
-        else:
-            self._mutation_queue.enqueue(saver.save, document)
+        self.check_writable()
+        try:
+            if self._mutation_queue is None:
+                saver.save(document)
+            else:
+                self._mutation_queue.enqueue(saver.save, document)
+        except Exception as exc:
+            self._write_failure = exc
+            raise
+
+    def check_writable(self) -> None:
+        """Reject new broker work after critical persistence has halted."""
+        if self._write_failure is not None:
+            raise QueueProcessingError(
+                "Book persistence has halted"
+            ) from self._write_failure
+        if self._mutation_queue is not None:
+            self._mutation_queue.check_accepting_work()
 
     async def close(self) -> None:
         """Drain critical pending mutations before shutdown."""
@@ -832,6 +856,21 @@ class Book:
             if not info.orderId:
                 raise ValueError("Persisted order must have a non-zero orderId")
             self._orders[info.orderId] = info
+        superseded = {
+            order_id
+            for info in self._orders.values()
+            for order_id in info.previous_order_ids
+        }
+        for info in tuple(self._orders.values()):
+            for order_id in info.previous_order_ids:
+                previous = self._orders.get(order_id)
+                if previous is not None and (
+                    not info.permId or previous.permId != info.permId
+                ):
+                    raise ValueError("Rebound order history has conflicting permId")
+        self._orders = {
+            key: info for key, info in self._orders.items() if key not in superseded
+        }
         self._positions = {}
         self._targets = {}
         self._target_fill_cutoffs = {}
@@ -985,6 +1024,15 @@ class Book:
             old_order_id = info.orderId
             if not trade.order.orderId:
                 trade.order.orderId = old_order_id
+            existing = self._orders.get(trade.order.orderId)
+            if existing is not None and existing is not info:
+                raise ValueError("Rebound orderId already belongs to another order")
+            if old_order_id != trade.order.orderId:
+                info.previous_order_ids = tuple(
+                    key
+                    for key in dict.fromkeys((*info.previous_order_ids, old_order_id))
+                    if key != trade.order.orderId
+                )
             info.trade = trade
             if old_order_id != info.orderId:
                 self._orders.pop(old_order_id, None)
@@ -1004,7 +1052,29 @@ class Book:
         return MappingProxyType(self._positions)
 
     def update_position(self, state: PositionState) -> PositionState:
-        """Replace and persist one one-to-one state."""
+        """Record an authoritative source state including all received fills.
+
+        Reconciliation and episode transitions checkpoint the evidence already
+        known to Book. Fill application uses its own individual checkpoint so
+        startup can finish an interrupted evidence-to-position transition.
+        """
+        previous = self._positions.get(state.source_key)
+        keys = {
+            record.deduplication_key
+            for info in self.orders(source_key=state.source_key)
+            if not isinstance(info.trade.contract, ibi.Bag)
+            for record in info.fills
+        }
+        state = replace(
+            state,
+            _applied_fill_keys=state._applied_fill_keys
+            | (previous._applied_fill_keys if previous else frozenset())
+            | keys,
+        )
+        return self._save_position(state)
+
+    def _save_position(self, state: PositionState) -> PositionState:
+        """Persist an already checkpointed source state and its net contribution."""
 
         self._positions[state.source_key] = state
         self._save(self._state_saver, self._encode_position(state))
@@ -1484,28 +1554,34 @@ class Book:
                 f"permId={trade.order.permId}"
             )
         record = FillRecord.from_fill(trade, fill)
-        if not info.add_fill(record):
-            return False
-
-        # Queue order evidence before the projection based on it.
-        self.save_order(info)
-        if isinstance(trade.contract, ibi.Bag):
+        if not isinstance(trade.contract, ibi.Bag):
+            self._fill_direction(record)
+        new = info.add_fill(record)
+        if new:
+            # Evidence must precede the source checkpoint and net balance.
+            self.save_order(info)
+        state = self._position_after_fill(info, record)
+        if state is not None:
+            self._save_position(state)
             return True
-        if info.source_key is not None:
-            state = self._positions.get(info.source_key)
-            if state is None:
-                state = PositionState(
-                    source_key=info.source_key,
-                    execution_model_name=info.execution_model_name,
-                    contract=trade.contract,
-                )
+        return new
+
+    def _position_after_fill(
+        self, info: OrderInfo, record: FillRecord
+    ) -> PositionState | None:
+        """Calculate a source transition only when its checkpoint lacks the fill."""
+        if info.source_key is not None and not isinstance(info.trade.contract, ibi.Bag):
+            state = self._positions.get(info.source_key) or PositionState(
+                source_key=info.source_key,
+                execution_model_name=info.execution_model_name,
+                contract=info.trade.contract,
+            )
+            if record.deduplication_key in state._applied_fill_keys:
+                return None
             old_quantity = state.quantity
-            if fill.execution.side == "BOT":
-                quantity = old_quantity + fill.execution.shares
-            elif fill.execution.side == "SLD":
-                quantity = old_quantity - fill.execution.shares
-            else:
-                raise ValueError(f"Ambiguous fill side: {fill.execution.side}")
+            quantity = old_quantity + record.execution.shares * self._fill_direction(
+                record
+            )
             blocked = state.blocked_direction
             if (
                 info.role in {"STOP_LOSS", "TAKE_PROFIT"}
@@ -1525,9 +1601,9 @@ class Book:
                 "TAKE_PROFIT",
             }
             target_quantity = 0.0 if protective_exit else state.target_quantity
-            state = replace(
+            return replace(
                 state,
-                contract=trade.contract,
+                contract=info.trade.contract,
                 quantity=quantity,
                 target_quantity=target_quantity,
                 target_contract=None if protective_exit else state.target_contract,
@@ -1542,9 +1618,26 @@ class Book:
                     else state.bracket_inputs
                 ),
                 updated_at=_utc_now(),
+                _applied_fill_keys=state._applied_fill_keys
+                | {record.deduplication_key},
             )
-            self.update_position(state)
-        return True
+        return None
+
+    def _recover_position_fills(self) -> None:
+        """Finish missing source projections without replaying checkpointed fills."""
+        evidence = sorted(
+            (
+                (record.time, info.orderId, index, info, record)
+                for info in self._orders.values()
+                for index, record in enumerate(info.fills)
+            ),
+            key=lambda item: item[:3],
+        )
+        for _, _, _, info, record in evidence:
+            state = self._position_after_fill(info, record)
+            if state is not None:
+                self._positions[state.source_key] = state
+                self._save(self._state_saver, self._encode_position(state))
 
     def update_commission(
         self,
@@ -1696,10 +1789,15 @@ class Book:
             "blocked_direction": state.blocked_direction,
             "bracket_inputs": tree(dict(state.bracket_inputs)),
             "updated_at": state.updated_at,
+            "applied_fill_keys": sorted(state._applied_fill_keys),
         }
 
     @staticmethod
     def _decode_position(data: Mapping[str, Any]) -> PositionState:
+        if "applied_fill_keys" not in data:
+            raise ValueError(
+                "Position state lacks a fill checkpoint; standalone conversion required"
+            )
         return PositionState(
             source_key=str(data["source_key"]),
             execution_model_name=str(data["execution_model_name"]),
@@ -1713,6 +1811,7 @@ class Book:
             blocked_direction=data.get("blocked_direction"),
             bracket_inputs=decode_tree(data.get("bracket_inputs", {})),
             updated_at=decode_tree(data["updated_at"]),
+            _applied_fill_keys=frozenset(data["applied_fill_keys"]),
         )
 
     @staticmethod

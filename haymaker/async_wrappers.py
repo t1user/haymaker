@@ -152,6 +152,9 @@ class QueueRunner(Generic[T]):
                     if consecutive_failures >= self.max_failures:
                         self._fatal_error = e
                         log.critical(f"{self!s} halting due to repeated failures.")
+                        # Unblock a drain already waiting on join: no worker can
+                        # process these dependent items after a fatal failure.
+                        self._discard_pending()
                         break  # Kill the worker task
                 finally:
                     self._queue.task_done()
@@ -291,6 +294,10 @@ class SyncQueueRunner:
 
     def enqueue(self, fn: Callable[..., None], *args: Any) -> None:
         self._queue_runner.push((fn, args))
+
+    def check_accepting_work(self) -> None:
+        """Raise if shutdown or a critical processing failure prevents new work."""
+        self._queue_runner._ensure_accepting_work()
 
     async def _execute_store_task(self, data: _SyncTask) -> None:
         func, args = data

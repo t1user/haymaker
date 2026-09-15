@@ -153,7 +153,11 @@ and distinguish pre-existing failures from regressions.
   `portfolio:{portfolio_key}`. Do not add snapshot/decision/lock collections
   without an explicit design change.
 - Queue Book mutations through one ordered critical DRAIN queue: order evidence
-  precedes derived projections. Recover completed as well as active order
+  precedes derived projections, and the first failed write stops dependent work.
+  Source position documents checkpoint applied fill keys atomically with quantity;
+  startup finishes only uncheckpointed fills, preserving corrections and resets.
+  Rebound order records retain previous broker IDs so startup cannot count their
+  obsolete documents twice. Recover completed as well as active order
   evidence. An explicit reset retains fills and persists concrete-target
   cutoffs so old fills do not resurrect cleared direct exposure.
 - Both execution modes use maintained `ContractPosition` balances through
